@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import WovenMatterCore
 
 public enum LocalACPRuntimeInstallComponent: Sendable {
     case cli
@@ -129,23 +130,6 @@ public actor LocalACPManagedNodeRuntime {
             withIntermediateDirectories: true
         )
 
-        let data: Data
-        if let downloader {
-            data = try await downloader(artifact.downloadURL)
-        } else {
-            data = try await Self.download(artifact.downloadURL)
-        }
-        guard data.count <= Self.maximumArchiveBytes else {
-            throw LocalACPManagedNodeError.archiveTooLarge(data.count)
-        }
-        let actualHash = Self.sha256Hex(data)
-        guard actualHash == artifact.sha256.lowercased() else {
-            throw LocalACPManagedNodeError.hashMismatch(
-                expected: artifact.sha256,
-                actual: actualHash
-            )
-        }
-
         let token = UUID().uuidString
         let archiveURL = rootDirectory.appending(
             path: "\(artifact.archiveFileName).\(token).download"
@@ -159,7 +143,36 @@ public actor LocalACPManagedNodeRuntime {
             try? fileManager.removeItem(at: temporaryDirectory)
         }
 
-        try data.write(to: archiveURL, options: .atomic)
+        if let downloader {
+            let data = try await downloader(artifact.downloadURL)
+            guard data.count <= Self.maximumArchiveBytes else {
+                throw LocalACPManagedNodeError.archiveTooLarge(data.count)
+            }
+            try data.write(to: archiveURL, options: .atomic)
+        } else {
+            do {
+                _ = try await LocalACPBoundedHTTPSDownloader.download(
+                    artifact.downloadURL,
+                    to: archiveURL,
+                    maximumBytes: Self.maximumArchiveBytes
+                )
+            } catch let error as LocalACPBoundedDownloadError {
+                switch error {
+                case .tooLarge(let bytes):
+                    throw LocalACPManagedNodeError.archiveTooLarge(bytes)
+                case .unsafeURL, .invalidResponse, .transportFailed:
+                    throw LocalACPManagedNodeError.downloadFailed
+                }
+            }
+        }
+        let actualHash = try Self.sha256Hex(fileAt: archiveURL)
+        guard actualHash == artifact.sha256.lowercased() else {
+            throw LocalACPManagedNodeError.hashMismatch(
+                expected: artifact.sha256,
+                actual: actualHash
+            )
+        }
+
         try validateArchive(at: archiveURL)
         try fileManager.createDirectory(
             at: temporaryDirectory,
@@ -275,64 +288,335 @@ public actor LocalACPManagedNodeRuntime {
         }
     }
 
-    private static func download(_ url: URL) async throws -> Data {
-        var request = URLRequest(url: url)
-        request.timeoutInterval = 300
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse,
-              (200..<300).contains(http.statusCode) else {
-            throw LocalACPManagedNodeError.downloadFailed
-        }
-        return data
-    }
-
     static func sha256Hex(_ data: Data) -> String {
         SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    static func sha256Hex(fileAt url: URL) throws -> String {
+        let file = try FileHandle(forReadingFrom: url)
+        defer { try? file.close() }
+        var hash = SHA256()
+        while true {
+            let data = try file.read(upToCount: 1_048_576) ?? Data()
+            if data.isEmpty { break }
+            hash.update(data: data)
+        }
+        return hash.finalize().map { String(format: "%02x", $0) }.joined()
+    }
+}
+
+enum LocalACPBoundedDownloadError: Error, Equatable {
+    case unsafeURL
+    case invalidResponse
+    case tooLarge(Int)
+    case transportFailed
+}
+
+enum LocalACPBoundedHTTPSDownloader {
+    static func download(
+        _ url: URL,
+        to destination: URL,
+        maximumBytes: Int
+    ) async throws -> Int {
+        guard isSafeHTTPS(url), maximumBytes > 0 else {
+            throw LocalACPBoundedDownloadError.unsafeURL
+        }
+        let delegate = LocalACPBoundedDownloadDelegate(
+            destination: destination,
+            maximumBytes: maximumBytes
+        )
+        return try await delegate.download(url)
+    }
+
+    static func isSafeHTTPS(_ url: URL) -> Bool {
+        url.scheme?.lowercased() == "https"
+            && url.host?.isEmpty == false
+            && url.user == nil
+            && url.password == nil
+    }
+
+    static func validate(
+        byteCount: Int64,
+        maximumBytes: Int
+    ) throws {
+        guard byteCount <= Int64(maximumBytes) else {
+            throw LocalACPBoundedDownloadError.tooLarge(Int(byteCount))
+        }
+    }
+}
+
+private final class LocalACPBoundedDownloadDelegate:
+    NSObject,
+    URLSessionDownloadDelegate,
+    @unchecked Sendable
+{
+    private let destination: URL
+    private let maximumBytes: Int
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Int, any Error>?
+    private var session: URLSession?
+    private var completed = false
+
+    init(destination: URL, maximumBytes: Int) {
+        self.destination = destination
+        self.maximumBytes = maximumBytes
+    }
+
+    func download(_ url: URL) async throws -> Int {
+        try await withCheckedThrowingContinuation { continuation in
+            lock.lock()
+            self.continuation = continuation
+            lock.unlock()
+
+            let configuration = URLSessionConfiguration.ephemeral
+            configuration.timeoutIntervalForRequest = 60
+            configuration.timeoutIntervalForResource = 300
+            configuration.urlCache = nil
+            configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+            let session = URLSession(
+                configuration: configuration,
+                delegate: self,
+                delegateQueue: nil
+            )
+            self.session = session
+            session.downloadTask(with: url).resume()
+        }
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping (URLRequest?) -> Void
+    ) {
+        completionHandler(
+            request.url.map(LocalACPBoundedHTTPSDownloader.isSafeHTTPS) == true
+                ? request
+                : nil
+        )
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        downloadTask: URLSessionDownloadTask,
+        didWriteData bytesWritten: Int64,
+        totalBytesWritten: Int64,
+        totalBytesExpectedToWrite: Int64
+    ) {
+        do {
+            try validate(response: downloadTask.response)
+            try LocalACPBoundedHTTPSDownloader.validate(
+                byteCount: totalBytesWritten,
+                maximumBytes: maximumBytes
+            )
+        } catch {
+            downloadTask.cancel()
+            finish(.failure(error))
+        }
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        downloadTask: URLSessionDownloadTask,
+        didFinishDownloadingTo location: URL
+    ) {
+        do {
+            try validate(response: downloadTask.response)
+            let attributes = try FileManager.default.attributesOfItem(
+                atPath: location.path
+            )
+            let bytes = (attributes[.size] as? NSNumber)?.intValue ?? 0
+            guard bytes > 0, bytes <= maximumBytes else {
+                throw LocalACPBoundedDownloadError.tooLarge(bytes)
+            }
+            try FileManager.default.moveItem(at: location, to: destination)
+            finish(.success(bytes))
+        } catch let error as LocalACPBoundedDownloadError {
+            finish(.failure(error))
+        } catch {
+            finish(.failure(LocalACPBoundedDownloadError.transportFailed))
+        }
+    }
+
+    private func validate(response: URLResponse?) throws {
+        guard let http = response as? HTTPURLResponse,
+              (200..<300).contains(http.statusCode),
+              response?.url.map(LocalACPBoundedHTTPSDownloader.isSafeHTTPS) == true
+        else { throw LocalACPBoundedDownloadError.invalidResponse }
+        if response?.expectedContentLength ?? -1 > Int64(maximumBytes) {
+            throw LocalACPBoundedDownloadError.tooLarge(
+                Int(response?.expectedContentLength ?? 0)
+            )
+        }
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        didCompleteWithError error: (any Error)?
+    ) {
+        guard error != nil else { return }
+        finish(.failure(LocalACPBoundedDownloadError.transportFailed))
+    }
+
+    private func finish(_ result: Result<Int, any Error>) {
+        lock.lock()
+        guard !completed else {
+            lock.unlock()
+            return
+        }
+        completed = true
+        let continuation = self.continuation
+        self.continuation = nil
+        let session = self.session
+        self.session = nil
+        lock.unlock()
+        session?.finishTasksAndInvalidate()
+        continuation?.resume(with: result)
+    }
+}
+
+public struct LocalACPInstallerPreview: Equatable, Sendable {
+    public let runtimeKind: AgentRuntimeKind
+    public let source: URL
+    public let sha256: String?
+    public let bytes: Int?
+    public let packageSpec: String?
+    public let verification: String
+
+    public init(
+        runtimeKind: AgentRuntimeKind,
+        source: URL,
+        sha256: String?,
+        bytes: Int?,
+        packageSpec: String?,
+        verification: String
+    ) {
+        self.runtimeKind = runtimeKind
+        self.source = source
+        self.sha256 = sha256
+        self.bytes = bytes
+        self.packageSpec = packageSpec
+        self.verification = verification
     }
 }
 
 public actor LocalACPRuntimeInstaller {
+    public typealias InstallerFetcher = @Sendable (
+        URL,
+        URL,
+        Int
+    ) async throws -> Int
+
+    private static let maximumInstallerBytes = 5 * 1_024 * 1_024
+
     public let installPrefix: URL
     private let managedNodeRuntime: LocalACPManagedNodeRuntime
     private let npmExecutableURL: URL?
-    private let shellExecutableURL: URL
+    private let installerFetcher: InstallerFetcher?
     private let executableResolver: (@Sendable (String) -> URL?)?
 
     public init(
         installPrefix: URL = LocalACPManagedRuntimePaths.nodeToolsPrefix,
         managedNodeRuntime: LocalACPManagedNodeRuntime = LocalACPManagedNodeRuntime(),
         npmExecutableURL: URL? = nil,
-        shellExecutableURL: URL = URL(fileURLWithPath: "/bin/zsh"),
+        installerFetcher: InstallerFetcher? = nil,
         executableResolver: (@Sendable (String) -> URL?)? = nil
     ) {
         self.installPrefix = installPrefix
         self.managedNodeRuntime = managedNodeRuntime
         self.npmExecutableURL = npmExecutableURL
-        self.shellExecutableURL = shellExecutableURL
+        self.installerFetcher = installerFetcher
         self.executableResolver = executableResolver
+    }
+
+    public func prepareCLIInstall(
+        _ definition: LocalACPRuntimeDefinition
+    ) async throws -> LocalACPInstallerPreview {
+        if let packageSpec = definition.cliNpmPackageSpec {
+            guard Self.isExactPackageSpec(packageSpec) else {
+                throw LocalACPRuntimeInstallError.unpinnedPackage
+            }
+            guard let source = definition.cliInstallerSource,
+                  LocalACPBoundedHTTPSDownloader.isSafeHTTPS(source)
+            else { throw LocalACPRuntimeInstallError.unsafeSource }
+            return LocalACPInstallerPreview(
+                runtimeKind: definition.runtimeKind,
+                source: source,
+                sha256: nil,
+                bytes: nil,
+                packageSpec: packageSpec,
+                verification: "npm-registry-integrity"
+            )
+        }
+        let source = try cliInstallerSource(for: definition)
+        let file = temporaryInstallerURL(for: definition)
+        defer { try? FileManager.default.removeItem(at: file) }
+        let bytes = try await fetchInstaller(source, to: file)
+        return LocalACPInstallerPreview(
+            runtimeKind: definition.runtimeKind,
+            source: source,
+            sha256: try LocalACPManagedNodeRuntime.sha256Hex(fileAt: file),
+            bytes: bytes,
+            packageSpec: nil,
+            verification: "sha256-redownload"
+        )
     }
 
     public func install(
         _ definition: LocalACPRuntimeDefinition,
-        component: LocalACPRuntimeInstallComponent
+        component: LocalACPRuntimeInstallComponent,
+        expectedSourceSHA256: String? = nil,
+        expectedPackageSpec: String? = nil
     ) async throws -> URL {
         switch component {
         case .cli:
-            try installCLI(definition)
+            try await installCLI(
+                definition,
+                expectedSourceSHA256: expectedSourceSHA256,
+                expectedPackageSpec: expectedPackageSpec
+            )
         case .adapter:
             try await installAdapter(definition)
         }
     }
 
     private func installCLI(
-        _ definition: LocalACPRuntimeDefinition
-    ) throws -> URL {
-        guard let command = definition.cliInstallCommand else {
-            throw LocalACPRuntimeInstallError.notInstallable
+        _ definition: LocalACPRuntimeDefinition,
+        expectedSourceSHA256: String?,
+        expectedPackageSpec: String?
+    ) async throws -> URL {
+        if let packageSpec = definition.cliNpmPackageSpec {
+            guard Self.isExactPackageSpec(packageSpec) else {
+                throw LocalACPRuntimeInstallError.unpinnedPackage
+            }
+            guard expectedPackageSpec == packageSpec else {
+                throw LocalACPRuntimeInstallError.confirmationRequired
+            }
+            return try await installNpmPackage(
+                packageSpec,
+                executableName: definition.commandName
+            )
+        }
+        let source = try cliInstallerSource(for: definition)
+        guard let expectedSourceSHA256,
+              expectedSourceSHA256.count == 64,
+              expectedSourceSHA256.allSatisfy({ $0.isHexDigit })
+        else { throw LocalACPRuntimeInstallError.confirmationRequired }
+        guard let interpreter = definition.cliInstallerInterpreter,
+              ["sh", "bash"].contains(interpreter)
+        else { throw LocalACPRuntimeInstallError.unsafeInterpreter }
+        let file = temporaryInstallerURL(for: definition)
+        defer { try? FileManager.default.removeItem(at: file) }
+        _ = try await fetchInstaller(source, to: file)
+        let actualSHA256 = try LocalACPManagedNodeRuntime.sha256Hex(fileAt: file)
+        guard actualSHA256 == expectedSourceSHA256.lowercased() else {
+            throw LocalACPRuntimeInstallError.sourceDigestChanged
         }
         let result = try LocalACPProcessRunner.run(
-            executableURL: shellExecutableURL,
-            arguments: ["-l", "-c", command],
+            executableURL: URL(fileURLWithPath: "/bin/\(interpreter)"),
+            arguments: [file.path] + definition.cliInstallerArguments,
             currentDirectoryURL: FileManager.default.homeDirectoryForCurrentUser
         )
         guard result.succeeded else {
@@ -355,8 +639,25 @@ public actor LocalACPRuntimeInstaller {
     private func installAdapter(
         _ definition: LocalACPRuntimeDefinition
     ) async throws -> URL {
-        guard let package = definition.adapterPackage else {
+        guard let package = definition.adapterPackage,
+              let version = definition.minimumAdapterVersion,
+              Self.isExactSemanticVersion(version)
+        else {
             throw LocalACPRuntimeInstallError.notInstallable
+        }
+        let packageSpec = "\(package)@\(version)"
+        return try await installNpmPackage(
+            packageSpec,
+            executableName: definition.commandName
+        )
+    }
+
+    private func installNpmPackage(
+        _ packageSpec: String,
+        executableName: String
+    ) async throws -> URL {
+        guard Self.isExactPackageSpec(packageSpec) else {
+            throw LocalACPRuntimeInstallError.unpinnedPackage
         }
         let npm: URL
         if let npmExecutableURL {
@@ -386,7 +687,7 @@ public actor LocalACPRuntimeInstaller {
                 "--global",
                 "--prefix",
                 installPrefix.path,
-                package,
+                packageSpec,
             ],
             environment: environment,
             currentDirectoryURL: installPrefix
@@ -398,18 +699,99 @@ public actor LocalACPRuntimeInstaller {
         }
         let executable = installPrefix
             .appending(path: "bin", directoryHint: .isDirectory)
-            .appending(path: definition.commandName)
+            .appending(path: executableName)
         guard FileManager.default.isExecutableFile(atPath: executable.path) else {
             throw LocalACPRuntimeInstallError.executableMissing(
-                definition.commandName
+                executableName
             )
         }
         return executable
     }
+
+    private func cliInstallerSource(
+        for definition: LocalACPRuntimeDefinition
+    ) throws -> URL {
+        guard let source = definition.cliInstallerSource else {
+            throw LocalACPRuntimeInstallError.notInstallable
+        }
+        guard LocalACPBoundedHTTPSDownloader.isSafeHTTPS(source) else {
+            throw LocalACPRuntimeInstallError.unsafeSource
+        }
+        return source
+    }
+
+    private func fetchInstaller(_ source: URL, to file: URL) async throws -> Int {
+        do {
+            let reportedBytes: Int
+            if let installerFetcher {
+                reportedBytes = try await installerFetcher(
+                    source,
+                    file,
+                    Self.maximumInstallerBytes
+                )
+            } else {
+                reportedBytes = try await LocalACPBoundedHTTPSDownloader.download(
+                    source,
+                    to: file,
+                    maximumBytes: Self.maximumInstallerBytes
+                )
+            }
+            let attributes = try FileManager.default.attributesOfItem(
+                atPath: file.path
+            )
+            let actualBytes = (attributes[.size] as? NSNumber)?.intValue ?? 0
+            guard actualBytes > 0,
+                  actualBytes <= Self.maximumInstallerBytes,
+                  actualBytes == reportedBytes
+            else {
+                throw LocalACPRuntimeInstallError.invalidInstallerSize
+            }
+            return actualBytes
+        } catch let error as LocalACPBoundedDownloadError {
+            switch error {
+            case .unsafeURL:
+                throw LocalACPRuntimeInstallError.unsafeSource
+            case .tooLarge:
+                throw LocalACPRuntimeInstallError.invalidInstallerSize
+            case .invalidResponse, .transportFailed:
+                throw LocalACPRuntimeInstallError.downloadFailed
+            }
+        }
+    }
+
+    private func temporaryInstallerURL(
+        for definition: LocalACPRuntimeDefinition
+    ) -> URL {
+        FileManager.default.temporaryDirectory.appending(
+            path: "wovenmatter-\(definition.runtimeKind.rawValue)-\(UUID().uuidString).sh"
+        )
+    }
+
+    static func isExactSemanticVersion(_ value: String) -> Bool {
+        let parts = value.split(separator: ".", omittingEmptySubsequences: false)
+        return parts.count == 3
+            && parts.allSatisfy { !$0.isEmpty && $0.allSatisfy(\.isNumber) }
+    }
+
+    static func isExactPackageSpec(_ value: String) -> Bool {
+        guard let separator = value.lastIndex(of: "@"),
+              separator != value.startIndex
+        else { return false }
+        let name = value[..<separator]
+        let version = value[value.index(after: separator)...]
+        return !name.isEmpty && isExactSemanticVersion(String(version))
+    }
 }
 
-public enum LocalACPRuntimeInstallError: LocalizedError, Sendable {
+public enum LocalACPRuntimeInstallError: LocalizedError, Sendable, Equatable {
     case notInstallable
+    case confirmationRequired
+    case unsafeSource
+    case unsafeInterpreter
+    case downloadFailed
+    case invalidInstallerSize
+    case sourceDigestChanged
+    case unpinnedPackage
     case installFailed(String)
     case executableMissing(String)
 
@@ -417,6 +799,20 @@ public enum LocalACPRuntimeInstallError: LocalizedError, Sendable {
         switch self {
         case .notInstallable:
             "This runtime does not have an automatic installation step."
+        case .confirmationRequired:
+            "Review and confirm the installer source and integrity details before running it."
+        case .unsafeSource:
+            "The installer source must be an HTTPS URL without embedded credentials."
+        case .unsafeInterpreter:
+            "The installer requested an unsupported script interpreter."
+        case .downloadFailed:
+            "Woven Matter could not securely download the installer."
+        case .invalidInstallerSize:
+            "The installer was empty or exceeded the allowed size."
+        case .sourceDigestChanged:
+            "The installer changed after review, so Woven Matter refused to run it."
+        case .unpinnedPackage:
+            "The npm package must use an exact semantic version."
         case .installFailed(let detail):
             "The runtime could not be installed: \(detail)"
         case .executableMissing(let command):

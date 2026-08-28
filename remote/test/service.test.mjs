@@ -1,13 +1,135 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { connect, createServer as createNetServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
+import { downloadInstallerSource } from '../src/server.mjs'
 
 const repositoryRoot = resolve(import.meta.dirname, '../..')
 const catalogPath = resolve(repositoryRoot, 'harnesses/catalog.json')
+
+test('installer download follows only HTTPS redirects and hashes streamed bytes', async () => {
+  const calls = []
+  const redirect = installerResponse([], {
+    status: 302,
+    url: 'https://downloads.example.test/install',
+    headers: { location: '/releases/current.sh' },
+  })
+  const payload = [Buffer.from('#!/bin/sh\n'), Buffer.from('exit 0\n')]
+  const destination = installerResponse(payload, {
+    url: 'https://downloads.example.test/releases/current.sh',
+  })
+  const result = await downloadInstallerSource(
+    'https://downloads.example.test/install',
+    {
+      maximumBytes: 64,
+      fetchImplementation: async (url, options) => {
+        calls.push({ url: String(url), redirect: options.redirect })
+        return calls.length === 1 ? redirect.response : destination.response
+      },
+    }
+  )
+
+  const expected = Buffer.concat(payload)
+  assert.deepEqual(result.data, expected)
+  assert.equal(
+    result.sha256,
+    createHash('sha256').update(expected).digest('hex')
+  )
+  assert.deepEqual(calls, [
+    { url: 'https://downloads.example.test/install', redirect: 'manual' },
+    { url: 'https://downloads.example.test/releases/current.sh', redirect: 'manual' },
+  ])
+})
+
+test('installer download rejects non-HTTPS sources and redirect destinations', async () => {
+  let requests = 0
+  const fetchImplementation = async () => {
+    requests += 1
+    return installerResponse([], {
+      status: 302,
+      url: 'https://downloads.example.test/install',
+      headers: { location: 'http://downloads.example.test/insecure.sh' },
+    }).response
+  }
+
+  await assert.rejects(
+    downloadInstallerSource('http://downloads.example.test/install', {
+      fetchImplementation,
+    }),
+    { message: 'installer_https_required' }
+  )
+  assert.equal(requests, 0)
+
+  await assert.rejects(
+    downloadInstallerSource('https://downloads.example.test/install', {
+      fetchImplementation,
+    }),
+    { message: 'installer_https_required' }
+  )
+  assert.equal(requests, 1, 'an insecure redirect must be rejected before it is fetched')
+
+  const insecureFinal = installerResponse([Buffer.from('unsafe')], {
+    url: 'http://downloads.example.test/final.sh',
+  })
+  await assert.rejects(
+    downloadInstallerSource('https://downloads.example.test/install', {
+      fetchImplementation: async () => insecureFinal.response,
+    }),
+    { message: 'installer_https_required' }
+  )
+  assert.equal(insecureFinal.wasCancelled(), true)
+})
+
+test('installer download cancels a stream as soon as it exceeds the byte limit', async () => {
+  const oversized = installerResponse([
+    Buffer.alloc(4, 'a'),
+    Buffer.alloc(4, 'b'),
+    Buffer.alloc(4, 'c'),
+  ], { url: 'https://downloads.example.test/install.sh' })
+
+  await assert.rejects(
+    downloadInstallerSource('https://downloads.example.test/install.sh', {
+      maximumBytes: 5,
+      fetchImplementation: async () => oversized.response,
+    }),
+    { message: 'invalid_installer_size' }
+  )
+  assert.equal(oversized.pulls(), 2)
+  assert.equal(oversized.wasCancelled(), true)
+
+  const declaredOversized = installerResponse([Buffer.alloc(1)], {
+    url: 'https://downloads.example.test/declared.sh',
+    headers: { 'content-length': '6' },
+  })
+  await assert.rejects(
+    downloadInstallerSource('https://downloads.example.test/declared.sh', {
+      maximumBytes: 5,
+      fetchImplementation: async () => declaredOversized.response,
+    }),
+    { message: 'invalid_installer_size' }
+  )
+  assert.equal(declaredOversized.pulls(), 0)
+  assert.equal(declaredOversized.wasCancelled(), true)
+})
+
+test('installer download aborts a stalled request at its deadline', async () => {
+  let signal
+  await assert.rejects(
+    downloadInstallerSource('https://downloads.example.test/stalled.sh', {
+      timeoutMilliseconds: 10,
+      fetchImplementation: async (_url, options) => {
+        signal = options.signal
+        return new Promise(() => {})
+      },
+    }),
+    { message: 'installer_download_timed_out' }
+  )
+  assert.equal(signal.aborted, true)
+})
 
 test('service authentication exposes the reviewed harness catalog', async (context) => {
   const fixture = await temporaryFixture(context, 'wovenmatter-service-')
@@ -378,4 +500,35 @@ function socketText(socket) {
       resolvePromise(value)
     })
   })
+}
+
+function installerResponse(chunks, { status = 200, url = '', headers = {} } = {}) {
+  let chunkIndex = 0
+  let pullCount = 0
+  let cancelled = false
+  const body = new ReadableStream({
+    pull(controller) {
+      pullCount += 1
+      if (chunkIndex < chunks.length) {
+        controller.enqueue(new Uint8Array(chunks[chunkIndex]))
+        chunkIndex += 1
+      } else {
+        controller.close()
+      }
+    },
+    cancel() {
+      cancelled = true
+    },
+  }, { highWaterMark: 0 })
+  return {
+    response: {
+      body,
+      headers: new Headers(headers),
+      ok: status >= 200 && status < 300,
+      status,
+      url,
+    },
+    pulls: () => pullCount,
+    wasCancelled: () => cancelled,
+  }
 }

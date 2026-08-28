@@ -9,6 +9,7 @@
       "arguments": [],
       "cliCommand": "codex",
       "adapterPackage": "@agentclientprotocol/codex-acp",
+      "minimumAdapterVersion": "1.7.0",
       "install": {
         "kind": "official-script",
         "source": "https://chatgpt.com/codex/install.sh",
@@ -53,6 +54,7 @@
       "arguments": [],
       "cliCommand": "claude",
       "adapterPackage": "@agentclientprotocol/claude-agent-acp",
+      "minimumAdapterVersion": "0.70.0",
       "install": {
         "kind": "official-script",
         "source": "https://claude.ai/install.sh",
@@ -300,9 +302,9 @@
       "install": {
         "kind": "npm-global",
         "source": "https://www.npmjs.com/package/@earendil-works/pi-coding-agent",
-        "command": "npm install --global --prefix \"$HOME/.local\" @earendil-works/pi-coding-agent",
+        "command": "npm install --global --prefix \"$HOME/.local\" @earendil-works/pi-coding-agent@0.84.3",
         "arguments": [],
-        "package": "@earendil-works/pi-coding-agent"
+        "package": "@earendil-works/pi-coding-agent@0.84.3"
       },
       "authentication": {
         "statusCommands": [

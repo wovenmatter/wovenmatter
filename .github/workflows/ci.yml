@@ -22,9 +22,17 @@ jobs:
       macos: ${{ steps.paths.outputs.macos }}
       remote: ${{ steps.paths.outputs.remote }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
+
+      - name: Require immutable GitHub Action references
+        run: |
+          if grep -R -nE '^[[:space:]]*(-[[:space:]]+)?uses:[[:space:]]*' .github/workflows \
+            | grep -vE 'uses:[[:space:]]*(\./|docker://[^[:space:]#]+@sha256:[0-9a-f]{64}|[^[:space:]#]+@[0-9a-f]{40})([[:space:]]*#.*)?$'; then
+            echo "Every third-party action must use a full commit SHA." >&2
+            exit 1
+          fi
 
       - name: Scan the public tree
         run: scripts/scan-public-tree.sh
@@ -62,8 +70,8 @@ jobs:
     runs-on: macos-26
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
       - name: Test packages and build the unsigned app
@@ -76,8 +84,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
       - name: Run deterministic remote validation

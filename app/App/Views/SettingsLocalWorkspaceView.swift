@@ -18,6 +18,41 @@ struct SettingsLocalWorkspaceView: View {
             workspaceCard
             runtimesCard
         }
+        .confirmationDialog(
+            "Review installer source",
+            isPresented: Binding(
+                get: { model.preparedLocalACPRuntimeInstall != nil },
+                set: {
+                    if !$0 { model.cancelPreparedLocalACPRuntimeInstall() }
+                }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Confirm and Install") {
+                model.confirmPreparedLocalACPRuntimeInstall()
+            }
+            Button("Cancel", role: .cancel) {
+                model.cancelPreparedLocalACPRuntimeInstall()
+            }
+        } message: {
+            if let prepared = model.preparedLocalACPRuntimeInstall {
+                if let sha256 = prepared.preview.sha256,
+                   let bytes = prepared.preview.bytes {
+                    Text(
+                        "Source: \(prepared.preview.source.absoluteString)\n"
+                            + "SHA-256: \(sha256)\n"
+                            + "Size: \(bytes) bytes\n"
+                            + "Woven Matter will download this source again and refuse to run it if the digest changes."
+                    )
+                } else if let packageSpec = prepared.preview.packageSpec {
+                    Text(
+                        "Source: \(prepared.preview.source.absoluteString)\n"
+                            + "Package: \(packageSpec)\n"
+                            + "npm registry integrity verification applies to this exact package version."
+                    )
+                }
+            }
+        }
     }
 
     private var workspaceCard: some View {

@@ -31,6 +31,13 @@ struct PendingLocalACPInteraction: Equatable, Identifiable {
     let request: LocalACPInteractionRequest
 }
 
+struct PreparedLocalACPRuntimeInstall: Equatable, Identifiable {
+    let definition: LocalACPRuntimeDefinition
+    let preview: LocalACPInstallerPreview
+
+    var id: AgentRuntimeKind { definition.runtimeKind }
+}
+
 struct ConversationTitleGenerationSettings: Equatable {
     var isEnabled: Bool
     var model: String
@@ -971,6 +978,8 @@ final class ApplicationModel {
     private(set) var titleGenerationStatus = "Waiting for Codex"
     private(set) var isRefreshingTitleGenerationCapabilities = false
     private(set) var installingLocalACPRuntimeKinds: Set<AgentRuntimeKind> = []
+    private(set) var preparedLocalACPRuntimeInstall:
+        PreparedLocalACPRuntimeInstall?
     private(set) var pendingLocalACPPermissions: [PendingLocalACPPermission] = []
     private(set) var pendingLocalACPInteractions: [PendingLocalACPInteraction] = []
     private(set) var localRunningConversationIDs: Set<String> = []
@@ -3028,6 +3037,64 @@ final class ApplicationModel {
         } else {
             return
         }
+        if case .cli = component {
+            installingLocalACPRuntimeKinds.insert(runtimeKind)
+            localRunError = nil
+            Task {
+                defer { installingLocalACPRuntimeKinds.remove(runtimeKind) }
+                do {
+                    let preview = try await localACPRuntimeInstaller
+                        .prepareCLIInstall(definition)
+                    preparedLocalACPRuntimeInstall =
+                        PreparedLocalACPRuntimeInstall(
+                            definition: definition,
+                            preview: preview
+                        )
+                } catch {
+                    localRunError = error.localizedDescription
+                }
+            }
+            return
+        }
+        performLocalACPRuntimeInstall(definition, component: component)
+    }
+
+    func confirmPreparedLocalACPRuntimeInstall() {
+        guard let preparedLocalACPRuntimeInstall else { return }
+        self.preparedLocalACPRuntimeInstall = nil
+        let runtimeKind = preparedLocalACPRuntimeInstall.definition.runtimeKind
+        guard !installingLocalACPRuntimeKinds.contains(runtimeKind) else {
+            return
+        }
+        installingLocalACPRuntimeKinds.insert(runtimeKind)
+        localRunError = nil
+        Task {
+            defer { installingLocalACPRuntimeKinds.remove(runtimeKind) }
+            do {
+                _ = try await localACPRuntimeInstaller.install(
+                    preparedLocalACPRuntimeInstall.definition,
+                    component: .cli,
+                    expectedSourceSHA256:
+                        preparedLocalACPRuntimeInstall.preview.sha256,
+                    expectedPackageSpec:
+                        preparedLocalACPRuntimeInstall.preview.packageSpec
+                )
+                await refreshLocalACPRuntimes()
+            } catch {
+                localRunError = error.localizedDescription
+            }
+        }
+    }
+
+    func cancelPreparedLocalACPRuntimeInstall() {
+        preparedLocalACPRuntimeInstall = nil
+    }
+
+    private func performLocalACPRuntimeInstall(
+        _ definition: LocalACPRuntimeDefinition,
+        component: LocalACPRuntimeInstallComponent
+    ) {
+        let runtimeKind = definition.runtimeKind
         installingLocalACPRuntimeKinds.insert(runtimeKind)
         localRunError = nil
         Task {

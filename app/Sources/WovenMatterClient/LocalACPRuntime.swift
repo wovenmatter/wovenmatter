@@ -9,7 +9,10 @@ public struct LocalACPRuntimeDefinition: Equatable, Identifiable, Sendable {
     public let arguments: [String]
     public let environment: [String: String]
     public let underlyingCLIName: String?
-    public let cliInstallCommand: String?
+    public let cliInstallerSource: URL?
+    public let cliInstallerInterpreter: String?
+    public let cliInstallerArguments: [String]
+    public let cliNpmPackageSpec: String?
     public let adapterPackage: String?
     public let minimumAdapterVersion: String?
     public let adapterDescription: String
@@ -28,7 +31,10 @@ public struct LocalACPRuntimeDefinition: Equatable, Identifiable, Sendable {
         arguments: [String],
         environment: [String: String] = [:],
         underlyingCLIName: String?,
-        cliInstallCommand: String?,
+        cliInstallerSource: URL?,
+        cliInstallerInterpreter: String?,
+        cliInstallerArguments: [String] = [],
+        cliNpmPackageSpec: String? = nil,
         adapterPackage: String?,
         minimumAdapterVersion: String? = nil,
         adapterDescription: String,
@@ -41,7 +47,10 @@ public struct LocalACPRuntimeDefinition: Equatable, Identifiable, Sendable {
         self.arguments = arguments
         self.environment = environment
         self.underlyingCLIName = underlyingCLIName
-        self.cliInstallCommand = cliInstallCommand
+        self.cliInstallerSource = cliInstallerSource
+        self.cliInstallerInterpreter = cliInstallerInterpreter
+        self.cliInstallerArguments = cliInstallerArguments
+        self.cliNpmPackageSpec = cliNpmPackageSpec
         self.adapterPackage = adapterPackage
         self.minimumAdapterVersion = minimumAdapterVersion
         self.adapterDescription = adapterDescription
@@ -85,7 +94,12 @@ public enum LocalACPRuntimeCatalog {
                     && harness.id != .openclaw
                     ? nil
                     : harness.cliCommand,
-                cliInstallCommand: harness.install.command,
+                cliInstallerSource: harness.install.source,
+                cliInstallerInterpreter: harness.install.interpreter,
+                cliInstallerArguments: harness.install.arguments,
+                cliNpmPackageSpec: harness.install.kind == "npm-global"
+                    ? harness.install.package
+                    : nil,
                 adapterPackage: harness.adapterPackage,
                 minimumAdapterVersion: harness.minimumAdapterVersion,
                 adapterDescription: "Woven Matter uses \(harness.transport) transport for \(harness.displayName).",

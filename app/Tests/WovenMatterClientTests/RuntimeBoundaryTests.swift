@@ -126,6 +126,165 @@ struct RuntimeBoundaryTests {
     }
   }
 
+  @Test("local CLI install requires a reviewed digest and a matching redownload")
+  func localCLIInstallerDigestBoundary() async throws {
+    let reviewed = Data("#!/bin/sh\nexit 0\n".utf8)
+    let changed = Data("#!/bin/sh\nexit 1\n".utf8)
+    let downloads = InstallerDownloads([reviewed, changed])
+    let installer = LocalACPRuntimeInstaller(
+      installerFetcher: { source, destination, maximumBytes in
+        try await downloads.fetch(
+          source: source,
+          destination: destination,
+          maximumBytes: maximumBytes
+        )
+      },
+      executableResolver: { _ in URL(fileURLWithPath: "/bin/sh") }
+    )
+    let definition = cliDefinition()
+
+    do {
+      _ = try await installer.install(definition, component: .cli)
+      Issue.record("A CLI installer must require explicit digest confirmation")
+    } catch let error as LocalACPRuntimeInstallError {
+      #expect(error == .confirmationRequired)
+    }
+    #expect(await downloads.fetchCount() == 0)
+
+    let preview = try await installer.prepareCLIInstall(definition)
+    #expect(preview.source == URL(string: "https://example.com/install.sh"))
+    #expect(preview.bytes == reviewed.count)
+    #expect(preview.sha256 == LocalACPManagedNodeRuntime.sha256Hex(reviewed))
+
+    do {
+      _ = try await installer.install(
+        definition,
+        component: .cli,
+        expectedSourceSHA256: preview.sha256
+      )
+      Issue.record("A changed installer source must not execute")
+    } catch let error as LocalACPRuntimeInstallError {
+      #expect(error == .sourceDigestChanged)
+    }
+    #expect(await downloads.fetchCount() == 2)
+  }
+
+  @Test("local installer accepts only bounded HTTPS sources")
+  func localInstallerSourceAndSizeBoundary() throws {
+    #expect(LocalACPBoundedHTTPSDownloader.isSafeHTTPS(
+      URL(string: "https://example.com/install.sh")!
+    ))
+    #expect(!LocalACPBoundedHTTPSDownloader.isSafeHTTPS(
+      URL(string: "http://example.com/install.sh")!
+    ))
+    #expect(!LocalACPBoundedHTTPSDownloader.isSafeHTTPS(
+      URL(string: "https://user@example.com/install.sh")!
+    ))
+    try LocalACPBoundedHTTPSDownloader.validate(
+      byteCount: 5,
+      maximumBytes: 5
+    )
+    #expect(throws: LocalACPBoundedDownloadError.tooLarge(6)) {
+      try LocalACPBoundedHTTPSDownloader.validate(
+        byteCount: 6,
+        maximumBytes: 5
+      )
+    }
+  }
+
+  @Test("managed npm installs use exact reviewed package versions")
+  func exactNpmInstalls() async throws {
+    let fixture = try TemporaryDirectory(prefix: "wovenmatter-npm")
+    defer { fixture.remove() }
+    let npm = fixture.url.appending(path: "npm")
+    let argumentsFile = fixture.url.appending(path: "arguments")
+    try """
+      #!/bin/sh
+      printf '%s\\n' "$@" > "\(argumentsFile.path)"
+      prefix=''
+      while [ "$#" -gt 0 ]; do
+        if [ "$1" = '--prefix' ]; then
+          shift
+          prefix="$1"
+        fi
+        shift
+      done
+      mkdir -p "$prefix/bin"
+      touch "$prefix/bin/fake-acp"
+      touch "$prefix/bin/fake-cli"
+      chmod 700 "$prefix/bin/fake-acp"
+      chmod 700 "$prefix/bin/fake-cli"
+      """.write(to: npm, atomically: true, encoding: .utf8)
+    try FileManager.default.setAttributes(
+      [.posixPermissions: 0o700],
+      ofItemAtPath: npm.path
+    )
+    let prefix = fixture.url.appending(path: "prefix")
+    let installer = LocalACPRuntimeInstaller(
+      installPrefix: prefix,
+      npmExecutableURL: npm
+    )
+    let definition = LocalACPRuntimeDefinition(
+      runtimeKind: .codex,
+      displayName: "Fake",
+      commandName: "fake-acp",
+      arguments: [],
+      underlyingCLIName: "fake",
+      cliInstallerSource: nil,
+      cliInstallerInterpreter: nil,
+      adapterPackage: "@example/fake-acp",
+      minimumAdapterVersion: "1.2.3",
+      adapterDescription: "Fake adapter"
+    )
+
+    _ = try await installer.install(definition, component: .adapter)
+
+    let arguments = try String(contentsOf: argumentsFile, encoding: .utf8)
+      .split(whereSeparator: \.isNewline)
+      .map(String.init)
+    #expect(arguments.last == "@example/fake-acp@1.2.3")
+    #expect(LocalACPRuntimeInstaller.isExactSemanticVersion("1.2.3"))
+    #expect(!LocalACPRuntimeInstaller.isExactSemanticVersion("latest"))
+    #expect(!LocalACPRuntimeInstaller.isExactSemanticVersion("^1.2.3"))
+
+    let cliDefinition = LocalACPRuntimeDefinition(
+      runtimeKind: .pi,
+      displayName: "Fake CLI",
+      commandName: "fake-cli",
+      arguments: [],
+      underlyingCLIName: nil,
+      cliInstallerSource: URL(string: "https://www.npmjs.com/package/@example/fake-cli"),
+      cliInstallerInterpreter: nil,
+      cliNpmPackageSpec: "@example/fake-cli@4.5.6",
+      adapterPackage: nil,
+      adapterDescription: "Fake CLI"
+    )
+    let preview = try await installer.prepareCLIInstall(cliDefinition)
+    #expect(preview.packageSpec == "@example/fake-cli@4.5.6")
+    #expect(preview.verification == "npm-registry-integrity")
+    do {
+      _ = try await installer.install(cliDefinition, component: .cli)
+      Issue.record("An npm CLI install must require package confirmation")
+    } catch let error as LocalACPRuntimeInstallError {
+      #expect(error == .confirmationRequired)
+    }
+    _ = try await installer.install(
+      cliDefinition,
+      component: .cli,
+      expectedPackageSpec: preview.packageSpec
+    )
+    let cliArguments = try String(contentsOf: argumentsFile, encoding: .utf8)
+      .split(whereSeparator: \.isNewline)
+      .map(String.init)
+    #expect(cliArguments.last == "@example/fake-cli@4.5.6")
+    #expect(LocalACPRuntimeInstaller.isExactPackageSpec(
+      "@example/fake-cli@4.5.6"
+    ))
+    #expect(!LocalACPRuntimeInstaller.isExactPackageSpec(
+      "@example/fake-cli@latest"
+    ))
+  }
+
   private func entries(at root: URL) throws -> [String] {
     try FileManager.default.contentsOfDirectory(
       at: root,
@@ -134,6 +293,47 @@ struct RuntimeBoundaryTests {
   }
 
   private static let statusJSON = #"{"id":"container","name":"wovenmatter-work-1","state":"running","running":true,"health":null,"startedAt":"now","image":"wovenmatter/workspace:0.1","memoryBytes":8589934592,"swapBytes":4294967296,"swapMode":"additional","hostPort":7440,"persistentVolume":"wovenmatter-work-1-home","capabilities":{"memory":true,"swap":true},"storageKind":"named-volume","storageUsedBytes":1048576,"hostStorageCapacityBytes":107374182400,"hostStorageAvailableBytes":53687091200,"hostStorageLow":false,"storageWarning":null,"legacyStorage":false}"#
+
+  private func cliDefinition() -> LocalACPRuntimeDefinition {
+    LocalACPRuntimeDefinition(
+      runtimeKind: .codex,
+      displayName: "Fake",
+      commandName: "fake",
+      arguments: [],
+      underlyingCLIName: "fake",
+      cliInstallerSource: URL(string: "https://example.com/install.sh"),
+      cliInstallerInterpreter: "sh",
+      adapterPackage: nil,
+      adapterDescription: "Fake CLI"
+    )
+  }
+}
+
+private actor InstallerDownloads {
+  private var payloads: [Data]
+  private var count = 0
+
+  init(_ payloads: [Data]) { self.payloads = payloads }
+
+  func fetch(
+    source: URL,
+    destination: URL,
+    maximumBytes: Int
+  ) throws -> Int {
+    guard LocalACPBoundedHTTPSDownloader.isSafeHTTPS(source),
+          !payloads.isEmpty else {
+      throw LocalACPBoundedDownloadError.transportFailed
+    }
+    let payload = payloads.removeFirst()
+    guard payload.count <= maximumBytes else {
+      throw LocalACPBoundedDownloadError.tooLarge(payload.count)
+    }
+    try payload.write(to: destination, options: .atomic)
+    count += 1
+    return payload.count
+  }
+
+  func fetchCount() -> Int { count }
 }
 
 private actor EventCollector {

@@ -6,17 +6,23 @@ import { connect } from 'node:net'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const serviceRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+const modulePath = fileURLToPath(import.meta.url)
+const runningAsService = resolve(process.argv[1] ?? '') === modulePath
+const serviceRoot = resolve(dirname(modulePath), '..')
 const catalogPath = process.env.WOVENMATTER_HARNESS_CATALOG
   ?? resolve(serviceRoot, 'harnesses/catalog.json')
 const workspaceRoot = process.env.WOVENMATTER_WORKSPACE
   ?? resolve(process.env.HOME, '.woven-matter')
 const listenHost = process.env.WOVENMATTER_LISTEN_HOST ?? '127.0.0.1'
 const listenPort = parsePositiveInteger(process.env.WOVENMATTER_LISTEN_PORT, 7337)
-const apiToken = requiredEnvironment('WOVENMATTER_API_TOKEN')
+const apiToken = runningAsService
+  ? requiredEnvironment('WOVENMATTER_API_TOKEN')
+  : process.env.WOVENMATTER_API_TOKEN ?? ''
 const gatewayPort = parsePositiveInteger(process.env.WOVENMATTER_GATEWAY_PORT, 18789)
 
-const catalogDocument = JSON.parse(await readFile(catalogPath, 'utf8'))
+const catalogDocument = runningAsService
+  ? JSON.parse(await readFile(catalogPath, 'utf8'))
+  : { schemaVersion: 4, harnesses: [] }
 if (catalogDocument.schemaVersion !== 4 || !Array.isArray(catalogDocument.harnesses)) {
   throw new Error('Unsupported harness catalog')
 }
@@ -24,6 +30,9 @@ const catalog = new Map(catalogDocument.harnesses.map((entry) => [entry.id, entr
 const operations = new Map()
 const authenticationSessions = new Map()
 const maximumRetainedTerminalRecords = 64
+const maximumInstallerBytes = 5_242_880
+const installerDownloadTimeoutMilliseconds = 30_000
+const maximumInstallerRedirects = 5
 let gateway = { process: null, desired: false, restarts: 0, lastError: null }
 
 const server = createServer(async (request, response) => {
@@ -176,9 +185,11 @@ server.on('upgrade', (request, socket, head) => {
   upstream.on('error', () => socket.destroy())
 })
 
-server.listen(listenPort, listenHost, () => {
-  process.stdout.write(`Woven Matter remote service listening on ${listenHost}:${listenPort}\n`)
-})
+if (runningAsService) {
+  server.listen(listenPort, listenHost, () => {
+    process.stdout.write(`Woven Matter remote service listening on ${listenHost}:${listenPort}\n`)
+  })
+}
 
 function authorized(request) {
   const value = request.headers.authorization ?? ''
@@ -578,16 +589,152 @@ async function verifiedInstaller(harness, expectedSHA256) {
 }
 
 async function downloadInstaller(harness) {
-  const response = await fetch(harness.install.source, { redirect: 'follow' })
-  if (!response.ok) throw httpError(502, 'installer_download_failed')
-  const data = Buffer.from(await response.arrayBuffer())
-  if (data.length === 0 || data.length > 5_242_880) {
-    throw httpError(502, 'invalid_installer_size')
+  return downloadInstallerSource(harness.install.source)
+}
+
+export async function downloadInstallerSource(source, options = {}) {
+  const fetchImplementation = options.fetchImplementation ?? globalThis.fetch
+  const maximumBytes = options.maximumBytes ?? maximumInstallerBytes
+  const timeoutMilliseconds = options.timeoutMilliseconds
+    ?? installerDownloadTimeoutMilliseconds
+  if (typeof fetchImplementation !== 'function') throw new TypeError('fetchImplementation')
+  if (!Number.isSafeInteger(maximumBytes) || maximumBytes <= 0) {
+    throw new TypeError('maximumBytes')
   }
-  return {
-    data,
-    sha256: createHash('sha256').update(data).digest('hex'),
+  if (!Number.isSafeInteger(timeoutMilliseconds) || timeoutMilliseconds <= 0) {
+    throw new TypeError('timeoutMilliseconds')
   }
+
+  const initialURL = requireHTTPSInstallerURL(source)
+  const controller = new AbortController()
+  const timeoutError = httpError(502, 'installer_download_timed_out')
+  const timeout = setTimeout(() => controller.abort(timeoutError), timeoutMilliseconds)
+  try {
+    const response = await fetchInstallerResponse(
+      initialURL,
+      fetchImplementation,
+      controller.signal
+    )
+    if (!response.ok) {
+      cancelResponseBody(response, httpError(502, 'installer_download_failed'))
+      throw httpError(502, 'installer_download_failed')
+    }
+    const declaredBytes = response.headers?.get?.('content-length')
+    if (declaredBytes !== null && declaredBytes !== undefined) {
+      const parsedBytes = Number(declaredBytes)
+      if (!Number.isSafeInteger(parsedBytes)
+        || parsedBytes <= 0
+        || parsedBytes > maximumBytes) {
+        cancelResponseBody(response, httpError(502, 'invalid_installer_size'))
+        throw httpError(502, 'invalid_installer_size')
+      }
+    }
+    const data = await readBoundedResponseBody(response, maximumBytes, controller.signal)
+    if (data.length === 0) throw httpError(502, 'invalid_installer_size')
+    return {
+      data,
+      sha256: createHash('sha256').update(data).digest('hex'),
+    }
+  } catch (error) {
+    if (controller.signal.aborted) throw controller.signal.reason ?? timeoutError
+    if (error?.statusCode) throw error
+    throw httpError(502, 'installer_download_failed')
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
+async function fetchInstallerResponse(initialURL, fetchImplementation, signal) {
+  let currentURL = initialURL
+  for (let redirects = 0; redirects <= maximumInstallerRedirects; redirects += 1) {
+    const response = await awaitWithAbort(
+      Promise.resolve().then(() => fetchImplementation(currentURL, {
+        redirect: 'manual',
+        signal,
+      })),
+      signal
+    )
+    let responseURL = currentURL
+    try {
+      if (response.url) responseURL = requireHTTPSInstallerURL(response.url)
+    } catch (error) {
+      cancelResponseBody(response, error)
+      throw error
+    }
+    if (![301, 302, 303, 307, 308].includes(response.status)) return response
+
+    const location = response.headers?.get?.('location')
+    cancelResponseBody(response, httpError(502, 'installer_redirected'))
+    if (!location || redirects === maximumInstallerRedirects) {
+      throw httpError(502, 'installer_download_failed')
+    }
+    currentURL = requireHTTPSInstallerURL(new URL(location, responseURL))
+  }
+  throw httpError(502, 'installer_download_failed')
+}
+
+async function readBoundedResponseBody(response, maximumBytes, signal) {
+  if (!response.body || typeof response.body.getReader !== 'function') {
+    throw httpError(502, 'installer_download_failed')
+  }
+  const reader = response.body.getReader()
+  const chunks = []
+  let bytes = 0
+  let cancelled = false
+  try {
+    while (true) {
+      const { done, value } = await awaitWithAbort(reader.read(), signal)
+      if (done) break
+      const chunk = Buffer.from(value)
+      bytes += chunk.length
+      if (bytes > maximumBytes) {
+        cancelled = true
+        void reader.cancel(httpError(502, 'invalid_installer_size')).catch(() => {})
+        throw httpError(502, 'invalid_installer_size')
+      }
+      chunks.push(chunk)
+    }
+  } finally {
+    if (signal.aborted && !cancelled) {
+      void reader.cancel(signal.reason).catch(() => {})
+    }
+    reader.releaseLock()
+  }
+  return Buffer.concat(chunks, bytes)
+}
+
+function requireHTTPSInstallerURL(source) {
+  let url
+  try {
+    url = source instanceof URL ? source : new URL(source)
+  } catch {
+    throw httpError(502, 'installer_https_required')
+  }
+  if (url.protocol !== 'https:') throw httpError(502, 'installer_https_required')
+  return url
+}
+
+function cancelResponseBody(response, reason) {
+  if (!response.body || typeof response.body.cancel !== 'function') return
+  void response.body.cancel(reason).catch(() => {})
+}
+
+function awaitWithAbort(promise, signal) {
+  if (signal.aborted) return Promise.reject(signal.reason)
+  return new Promise((resolvePromise, reject) => {
+    const aborted = () => reject(signal.reason)
+    signal.addEventListener('abort', aborted, { once: true })
+    promise.then(
+      (value) => {
+        signal.removeEventListener('abort', aborted)
+        resolvePromise(value)
+      },
+      (error) => {
+        signal.removeEventListener('abort', aborted)
+        reject(error)
+      }
+    )
+  })
 }
 
 function harnessEnvironment() {
