@@ -6,6 +6,9 @@ fixture_root="$(mktemp -d "${TMPDIR:-/tmp}/wovenmatter-host-inspect.XXXXXX")"
 trap 'rm -rf "$fixture_root"' EXIT HUP INT TERM
 fake_bin="$fixture_root/bin"
 mkdir -p "$fake_bin"
+for tool in awk dirname; do
+  ln -s "$(command -v "$tool")" "$fake_bin/$tool"
+done
 
 cat > "$fixture_root/os-release" <<'EOF'
 ID=ubuntu
@@ -29,9 +32,9 @@ EOF
 chmod +x "$fake_bin/uname" "$fake_bin/id" "$fake_bin/dpkg-query"
 
 inspection="$(
-  PATH="$fake_bin:/usr/bin:/bin" \
+  PATH="$fake_bin" \
   WOVENMATTER_OS_RELEASE="$fixture_root/os-release" \
-  "$repo_root/scripts/remote-workspace.sh" inspect
+  /bin/bash "$repo_root/scripts/remote-workspace.sh" inspect
 )"
 jq -e '
   .ready == false
@@ -80,9 +83,9 @@ EOF
 chmod +x "$fake_bin/docker" "$fake_bin/df"
 
 inspection="$(
-  PATH="$fake_bin:/usr/bin:/bin" \
+  PATH="$fake_bin" \
   WOVENMATTER_OS_RELEASE="$fixture_root/os-release" \
-  "$repo_root/scripts/remote-workspace.sh" inspect
+  /bin/bash "$repo_root/scripts/remote-workspace.sh" inspect
 )"
 jq -e '
   .ready == true
@@ -96,10 +99,10 @@ jq -e '
 ' <<< "$inspection" >/dev/null
 
 inspection="$(
-  PATH="$fake_bin:/usr/bin:/bin" \
+  PATH="$fake_bin" \
   WOVENMATTER_OS_RELEASE="$fixture_root/os-release" \
   WOVENMATTER_FAKE_AVAILABLE_KIB=5242880 \
-  "$repo_root/scripts/remote-workspace.sh" inspect
+  /bin/bash "$repo_root/scripts/remote-workspace.sh" inspect
 )"
 jq -e '
   .ready == true
@@ -108,10 +111,10 @@ jq -e '
 ' <<< "$inspection" >/dev/null
 
 inspection="$(
-  PATH="$fake_bin:/usr/bin:/bin" \
+  PATH="$fake_bin" \
   WOVENMATTER_OS_RELEASE="$fixture_root/os-release" \
   WOVENMATTER_FAKE_PLATFORM='Podman Engine' \
-  "$repo_root/scripts/remote-workspace.sh" inspect
+  /bin/bash "$repo_root/scripts/remote-workspace.sh" inspect
 )"
 jq -e '
   .ready == false
@@ -119,19 +122,19 @@ jq -e '
 ' <<< "$inspection" >/dev/null
 
 inspection="$(
-  PATH="$fake_bin:/usr/bin:/bin" \
+  PATH="$fake_bin" \
   WOVENMATTER_OS_RELEASE="$fixture_root/os-release" \
   WOVENMATTER_FAKE_ENDPOINT='tcp://remote-docker:2376' \
-  "$repo_root/scripts/remote-workspace.sh" inspect
+  /bin/bash "$repo_root/scripts/remote-workspace.sh" inspect
 )"
 jq -e '
   .ready == false
   and (.blockingIssues | map(select(contains("remote Docker contexts"))) | length) == 1
 ' <<< "$inspection" >/dev/null
 
-if PATH="$fake_bin:/usr/bin:/bin" \
+if PATH="$fake_bin" \
   WOVENMATTER_OS_RELEASE="$fixture_root/os-release" \
-  "$repo_root/scripts/remote-workspace.sh" prepare NOT_AUTHORIZED \
+  /bin/bash "$repo_root/scripts/remote-workspace.sh" prepare NOT_AUTHORIZED \
   >"$fixture_root/unauthorized.out" 2>"$fixture_root/unauthorized.err"; then
   printf '%s\n' 'unauthorized host preparation unexpectedly succeeded' >&2
   exit 1
