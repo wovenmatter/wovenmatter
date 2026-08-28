@@ -1,0 +1,141 @@
+name: PR Size
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, ready_for_review, converted_to_draft]
+
+permissions:
+  contents: read
+
+jobs:
+  label:
+    runs-on: ubuntu-24.04
+    concurrency:
+      group: pr-size-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Ensure size labels exist
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const definitions = {
+              "size:XS": ["0e8a16", "0-9 effective changed lines (test files excluded in mixed PRs)."],
+              "size:S": ["5ebd3e", "10-29 effective changed lines (test files excluded in mixed PRs)."],
+              "size:M": ["fbca04", "30-99 effective changed lines (test files excluded in mixed PRs)."],
+              "size:L": ["fe7d37", "100-499 effective changed lines (test files excluded in mixed PRs)."],
+              "size:XL": ["d93f0b", "500-999 effective changed lines (test files excluded in mixed PRs)."],
+              "size:XXL": ["b60205", "1000+ effective changed lines (test files excluded in mixed PRs)."],
+            };
+
+            for (const [name, [color, description]] of Object.entries(definitions)) {
+              try {
+                await github.rest.issues.createLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name,
+                  color,
+                  description,
+                });
+              } catch (error) {
+                if (error.status !== 422) throw error;
+                await github.rest.issues.updateLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name,
+                  new_name: name,
+                  color,
+                  description,
+                });
+              }
+            }
+
+      - name: Check out the base repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # This workflow receives write-scoped permissions through
+      # pull_request_target. Fetch the pull-request commit only as Git data;
+      # never check it out or execute installs, builds, tests, or scripts here.
+      - name: Calculate effective changed lines
+        id: changes
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PULL_REQUEST: ${{ github.event.pull_request.number }}
+        run: |
+          git fetch --no-tags origin "$BASE_SHA"
+          git fetch --no-tags origin "+refs/pull/${PULL_REQUEST}/head:refs/remotes/origin/pr-head"
+          HEAD_SHA="$(git rev-parse refs/remotes/origin/pr-head)"
+
+          if [ "$HEAD_SHA" != "$EXPECTED_HEAD_SHA" ]; then
+            echo "::warning::Fetched head SHA does not match the pull request head SHA; using the fetched ref."
+          fi
+
+          git cat-file -e "${BASE_SHA}^{commit}"
+
+          total_lines="$({
+            git diff --numstat --ignore-all-space --ignore-blank-lines "$BASE_SHA...$HEAD_SHA"
+          } | awk '$1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ { total += $1 + $2 } END { print total + 0 }')"
+
+          source_lines="$({
+            git diff --numstat --ignore-all-space --ignore-blank-lines "$BASE_SHA...$HEAD_SHA" -- . \
+              ':(glob,exclude)**/Tests/**' \
+              ':(glob,exclude)**/Test/**' \
+              ':(glob,exclude)**/test/**' \
+              ':(glob,exclude)**/tests/**' \
+              ':(glob,exclude)**/*.test.*' \
+              ':(glob,exclude)**/*.spec.*' \
+              ':(glob,exclude)**/*.browser.*' \
+              ':(glob,exclude)**/*.integration.*'
+          } | awk '$1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ { total += $1 + $2 } END { print total + 0 }')"
+
+          if [ "$source_lines" -gt 0 ]; then
+            effective_lines="$source_lines"
+          else
+            effective_lines="$total_lines"
+          fi
+
+          echo "effective_lines=$effective_lines" >> "$GITHUB_OUTPUT"
+
+      - name: Apply size label
+        uses: actions/github-script@v8
+        env:
+          EFFECTIVE_LINES: ${{ steps.changes.outputs.effective_lines }}
+        with:
+          script: |
+            const lines = Number(process.env.EFFECTIVE_LINES);
+            const desired = lines < 10
+              ? "size:XS"
+              : lines < 30
+                ? "size:S"
+                : lines < 100
+                  ? "size:M"
+                  : lines < 500
+                    ? "size:L"
+                    : lines < 1000
+                      ? "size:XL"
+                      : "size:XXL";
+            const pullNumber = context.payload.pull_request.number;
+
+            for (const label of context.payload.pull_request.labels.map((item) => item.name)) {
+              if (label.startsWith("size:") && label !== desired) {
+                await github.rest.issues.removeLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: pullNumber,
+                  name: label,
+                });
+              }
+            }
+
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: pullNumber,
+              labels: [desired],
+            });

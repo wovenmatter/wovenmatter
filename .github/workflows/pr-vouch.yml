@@ -1,0 +1,155 @@
+name: PR Vouch
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, ready_for_review, converted_to_draft]
+  issue_comment:
+    types: [created]
+  push:
+    branches: [main]
+    paths:
+      - .github/VOUCHED.td
+      - .github/workflows/pr-vouch.yml
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  collect:
+    runs-on: ubuntu-24.04
+    outputs:
+      pull_requests: ${{ steps.collect.outputs.pull_requests }}
+    steps:
+      - name: Collect pull requests to classify
+        id: collect
+        uses: actions/github-script@v8
+        with:
+          script: |
+            let pullRequests = [];
+
+            if (context.eventName === "pull_request_target") {
+              pullRequests = [context.payload.pull_request];
+            } else if (context.eventName === "issue_comment") {
+              const body = context.payload.comment.body || "";
+              const requested = body.split(/\s+/).includes("/recheck-vouch");
+              if (!context.payload.issue.pull_request || !requested) {
+                core.setOutput("pull_requests", "[]");
+                return;
+              }
+
+              const { data: pullRequest } = await github.rest.pulls.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: context.payload.issue.number,
+              });
+              pullRequests = [pullRequest];
+            } else if (context.eventName === "push") {
+              pullRequests = await github.paginate(github.rest.pulls.list, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                state: "open",
+                per_page: 100,
+              });
+            }
+
+            const targets = pullRequests.map((pullRequest) => ({
+              number: pullRequest.number,
+              author: pullRequest.user.login,
+            }));
+            core.setOutput("pull_requests", JSON.stringify(targets));
+
+  label:
+    needs: collect
+    if: needs.collect.outputs.pull_requests != '[]'
+    runs-on: ubuntu-24.04
+    concurrency:
+      group: pr-vouch-${{ matrix.number }}
+      cancel-in-progress: true
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.collect.outputs.pull_requests) }}
+    steps:
+      - name: Check contributor trust
+        id: vouch
+        uses: mitchellh/vouch/action/check-user@v1
+        with:
+          user: ${{ matrix.author }}
+          allow-fail: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Apply vouch label
+        uses: actions/github-script@v8
+        env:
+          PULL_REQUEST: ${{ matrix.number }}
+          VOUCH_STATUS: ${{ steps.vouch.outputs.status }}
+        with:
+          script: |
+            const definitions = {
+              "vouch:trusted": {
+                color: "1f883d",
+                description: "PR author is trusted by repo permissions or the VOUCHED list.",
+              },
+              "vouch:unvouched": {
+                color: "fbca04",
+                description: "PR author is not yet trusted in the VOUCHED list.",
+              },
+              "vouch:denounced": {
+                color: "d1242f",
+                description: "PR author is explicitly blocked by the VOUCHED list.",
+              },
+            };
+
+            for (const [name, definition] of Object.entries(definitions)) {
+              try {
+                await github.rest.issues.createLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name,
+                  ...definition,
+                });
+              } catch (error) {
+                if (error.status !== 422) throw error;
+                await github.rest.issues.updateLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name,
+                  new_name: name,
+                  ...definition,
+                });
+              }
+            }
+
+            const status = process.env.VOUCH_STATUS;
+            const desired = status === "denounced"
+              ? "vouch:denounced"
+              : ["bot", "collaborator", "vouched"].includes(status)
+                ? "vouch:trusted"
+                : "vouch:unvouched";
+            const pullNumber = Number(process.env.PULL_REQUEST);
+            const { data: pullRequest } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pullNumber,
+            });
+
+            for (const label of pullRequest.labels.map((item) => item.name)) {
+              if (label.startsWith("vouch:") && label !== desired) {
+                await github.rest.issues.removeLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: pullNumber,
+                  name: label,
+                });
+              }
+            }
+
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: pullNumber,
+              labels: [desired],
+            });
