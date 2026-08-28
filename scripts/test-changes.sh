@@ -3,7 +3,12 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
-cache_root="${WOVENMATTER_TEST_CACHE_DIR:-/private/tmp/wovenmatter-validation}"
+if [ "$(uname -s)" = "Darwin" ]; then
+  default_cache_root="/private/tmp/wovenmatter-validation"
+else
+  default_cache_root="${TMPDIR:-/tmp}/wovenmatter-validation"
+fi
+cache_root="${WOVENMATTER_TEST_CACHE_DIR:-$default_cache_root}"
 swift_scratch="${cache_root}/SwiftPM"
 derived_data="${cache_root}/DerivedData"
 host_arch="$(uname -m)"
