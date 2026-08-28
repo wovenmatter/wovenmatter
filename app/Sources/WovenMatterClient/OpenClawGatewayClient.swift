@@ -69,6 +69,8 @@ public enum OpenClawGatewayClientError: LocalizedError, Equatable, Sendable {
   case connectionClosed
   case malformedFrame
   case challengeMissing
+  case authenticationMissing
+  case unavailable(String, retryAfterMilliseconds: Int?)
   case rejected(String)
   case unsupportedCapability(String)
   case requestTimedOut(String)
@@ -79,6 +81,8 @@ public enum OpenClawGatewayClientError: LocalizedError, Equatable, Sendable {
     case .connectionClosed: "The OpenClaw Gateway connection is unavailable."
     case .malformedFrame: "OpenClaw Gateway returned an invalid protocol frame."
     case .challengeMissing: "OpenClaw Gateway did not provide a connection challenge."
+    case .authenticationMissing: "OpenClaw Gateway authentication is missing."
+    case .unavailable(let message, _): "OpenClaw Gateway is starting: \(message)"
     case .rejected(let message): "OpenClaw Gateway rejected the request: \(message)"
     case .unsupportedCapability(let method): "This OpenClaw Gateway does not support \(method)."
     case .requestTimedOut(let method): "OpenClaw Gateway timed out while running \(method)."
@@ -148,24 +152,31 @@ public actor OpenClawGatewayClient {
     let challenge = try await receiveFrame()
     guard challenge.type == "event", challenge.event == "connect.challenge",
           let nonce = challenge.payload?.objectValue?["nonce"]?.stringValue,
-          !nonce.isEmpty else {
+          !nonce.isEmpty,
+          let signedAt = challenge.payload?.objectValue?["ts"]?.intValue,
+          signedAt >= 0 else {
       socket.cancel(with: .protocolError, reason: nil)
       throw OpenClawGatewayClientError.challengeMissing
     }
+    let token = Self.bearerToken(from: requestHeaders)
+    if endpoint.authorization == .remoteWorkspace, token == nil {
+      socket.cancel(with: .policyViolation, reason: nil)
+      throw OpenClawGatewayClientError.authenticationMissing
+    }
     let requestID = UUID().uuidString.lowercased()
-    let signedAt = Int(Date().timeIntervalSince1970 * 1_000)
     let scopes = ["operator.read", "operator.write", "operator.admin"]
     let publicKey = signingKey.publicKey.rawRepresentation.base64URLEncodedString()
     let deviceID = SHA256.hash(data: signingKey.publicKey.rawRepresentation)
       .map { String(format: "%02x", $0) }.joined()
     let signaturePayload = Self.deviceSignaturePayload(
-      deviceID: deviceID, scopes: scopes, signedAt: signedAt, nonce: nonce
+      deviceID: deviceID, scopes: scopes, signedAt: signedAt,
+      token: token ?? "", nonce: nonce
     )
     let signature = try signingKey.signature(for: Data(signaturePayload.utf8))
       .base64URLEncodedString()
     let connectParams = Self.connectParameters(
       deviceID: deviceID, publicKey: publicKey, signature: signature,
-      signedAt: signedAt, nonce: nonce, scopes: scopes
+      signedAt: signedAt, nonce: nonce, scopes: scopes, token: token
     )
     try await send(Frame(type: "req", id: requestID, method: "connect", params: connectParams))
     let response = try await receiveFrame()
@@ -204,9 +215,10 @@ public actor OpenClawGatewayClient {
     signature: String,
     signedAt: Int,
     nonce: String,
-    scopes: [String]
+    scopes: [String],
+    token: String? = nil
   ) -> GatewayJSONValue {
-    .object([
+    var parameters: [String: GatewayJSONValue] = [
       "minProtocol": .number(4), "maxProtocol": .number(4),
       "client": .object([
         "id": .string("gateway-client"),
@@ -228,7 +240,22 @@ public actor OpenClawGatewayClient {
       ]),
       "locale": .string("en-US"),
       "userAgent": .string("woven-matter-macos/1.0"),
-    ])
+    ]
+    if let token { parameters["auth"] = .object(["token": .string(token)]) }
+    return .object(parameters)
+  }
+
+  static func bearerToken(from headers: [String: String]) -> String? {
+    guard let value = headers.first(where: {
+      $0.key.caseInsensitiveCompare("Authorization") == .orderedSame
+    })?.value else { return nil }
+    let components = value.split(separator: " ", maxSplits: 1)
+    guard components.count == 2,
+          components[0].caseInsensitiveCompare("Bearer") == .orderedSame else {
+      return nil
+    }
+    let token = String(components[1]).trimmingCharacters(in: .whitespacesAndNewlines)
+    return token.isEmpty ? nil : token
   }
 
   static func capabilities(from payload: GatewayJSONValue) throws -> OpenClawGatewayCapabilities {
@@ -371,8 +398,27 @@ public actor OpenClawGatewayClient {
   }
 
   private static func responseError(_ value: GatewayJSONValue) -> any Error {
-    let message = value.objectValue?["message"]?.stringValue ?? "Unknown Gateway error"
+    let object = value.objectValue ?? [:]
+    let message = object["message"]?.stringValue ?? "Unknown Gateway error"
+    let details = object["details"]?.objectValue ?? [:]
+    let retryAfterMilliseconds = object["retryAfterMs"]?.intValue
+      ?? details["retryAfterMs"]?.intValue
+    if object["code"]?.stringValue == "UNAVAILABLE"
+      || object["retryable"]?.boolValue == true
+      || details["retryable"]?.boolValue == true {
+      return OpenClawGatewayClientError.unavailable(
+        message,
+        retryAfterMilliseconds: retryAfterMilliseconds
+      )
+    }
     return OpenClawGatewayClientError.rejected(message)
+  }
+}
+
+public extension OpenClawGatewayClientError {
+  var retryDelay: Duration? {
+    guard case .unavailable(_, let milliseconds) = self else { return nil }
+    return .milliseconds(max(100, min(milliseconds ?? 1_000, 5_000)))
   }
 }
 

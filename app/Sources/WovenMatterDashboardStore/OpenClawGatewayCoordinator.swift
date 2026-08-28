@@ -116,6 +116,11 @@ public actor OpenClawGatewayCoordinator {
     let attempts = requestedAttempts ?? (location == .buzzLocal
       || location == .localAgentWorkspace
       || location == .remoteWorkspace ? 12 : 1)
+    let clock = ContinuousClock()
+    let deadline = clock.now.advanced(
+      by: requestedAttempts == nil ? .seconds(20) : .seconds(45)
+    )
+    try? setLinkStatus(agentID: agentID, status: .reconnecting, error: nil)
     var lastError: any Error = OpenClawGatewayClientError.invalidEndpoint
     for attempt in 0..<attempts {
       do {
@@ -125,17 +130,40 @@ public actor OpenClawGatewayCoordinator {
         return capabilities
       } catch {
         lastError = error
+        await disconnect(agentID: agentID)
+        guard attempt + 1 < attempts,
+              Self.shouldRetryConnection(error),
+              clock.now < deadline else { break }
         try? setLinkStatus(
           agentID: agentID,
-          status: .unavailable,
+          status: .reconnecting,
           error: error.localizedDescription
         )
-        await disconnect(agentID: agentID)
-        guard attempt + 1 < attempts else { break }
-        try await Task.sleep(nanoseconds: 150_000_000)
+        let retryDelay = (error as? OpenClawGatewayClientError)?.retryDelay
+          ?? .milliseconds(250 * (1 << min(attempt, 3)))
+        let remaining = clock.now.duration(to: deadline)
+        try await Task.sleep(for: min(retryDelay, remaining))
       }
     }
+    try? setLinkStatus(
+      agentID: agentID,
+      status: .unavailable,
+      error: lastError.localizedDescription
+    )
     throw lastError
+  }
+
+  private static func shouldRetryConnection(_ error: any Error) -> Bool {
+    guard let gatewayError = error as? OpenClawGatewayClientError else {
+      return true
+    }
+    switch gatewayError {
+    case .invalidEndpoint, .authenticationMissing, .rejected,
+         .unsupportedCapability, .malformedFrame, .challengeMissing:
+      return false
+    case .connectionClosed, .unavailable, .requestTimedOut:
+      return true
+    }
   }
 
   public func disconnect(agentID: UUID) async {

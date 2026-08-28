@@ -632,13 +632,27 @@ final class RemoteWorkspacesModel {
         let tunnel = tunnels[configuration.id] ?? RemoteWorkspaceTunnel()
         tunnels[configuration.id] = tunnel
         let localPort = Self.localPort(for: configuration.id)
-        try await tunnel.start(configuration: configuration, localPort: localPort)
+        let readinessConfiguration = URLSessionConfiguration.ephemeral
+        readinessConfiguration.timeoutIntervalForRequest = 1
+        readinessConfiguration.timeoutIntervalForResource = 1
+        let readinessSession = URLSession(configuration: readinessConfiguration)
+        try await tunnel.start(
+            configuration: configuration,
+            localPort: localPort
+        ) { candidatePort in
+            let candidate = RemoteWorkspaceServiceClient(
+                baseURL: URL(string: "http://127.0.0.1:\(candidatePort)")!,
+                token: token,
+                session: readinessSession
+            )
+            guard let health = try? await candidate.health() else { return false }
+            return health.status == "ready"
+        }
         guard let activePort = await tunnel.localPort else {
             throw RemoteWorkspaceClientError.invalidResponse(
                 "The SSH loopback tunnel did not report a local port."
             )
         }
-        try await Task.sleep(for: .milliseconds(150))
         return RemoteWorkspaceServiceClient(
             baseURL: URL(string: "http://127.0.0.1:\(activePort)")!,
             token: token

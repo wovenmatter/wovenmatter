@@ -33,7 +33,14 @@ const maximumRetainedTerminalRecords = 64
 const maximumInstallerBytes = 5_242_880
 const installerDownloadTimeoutMilliseconds = 30_000
 const maximumInstallerRedirects = 5
-let gateway = { process: null, desired: false, restarts: 0, lastError: null }
+let gateway = {
+  process: null,
+  desired: false,
+  ready: false,
+  restarts: 0,
+  lastError: null,
+  startPromise: null,
+}
 
 const server = createServer(async (request, response) => {
   try {
@@ -157,8 +164,8 @@ const server = createServer(async (request, response) => {
     if (request.method === 'POST' && url.pathname === '/v1/openclaw/gateway/restart') {
       gateway.desired = true
       gateway.restarts = 0
-      gateway.process?.kill('SIGTERM')
-      if (!gateway.process) await startGateway()
+      await stopGateway()
+      await startGateway()
       return json(response, 202, gatewayStatus())
     }
     return json(response, 404, { error: 'not_found' })
@@ -201,22 +208,23 @@ function authorized(request) {
 
 async function harnessStatus(harness) {
   const cliInstalled = await commandExists(harness.cliCommand)
-  const adapterInstalled = harness.adapterPackage
-    ? await commandExists(harness.command)
-    : typeof harness.transportCheckCommand === 'string'
-      ? await commandSucceeded(harness.transportCheckCommand, 10_000)
-      : await commandExists(harness.command)
+  const adapterInstalled = await commandExists(harness.command)
   const [authenticationConfigured, detectedProviders] = cliInstalled && adapterInstalled
     ? await Promise.all([
       harnessAuthenticationConfigured(harness),
       discoverAuthenticationProviders(harness),
     ])
     : [false, []]
+  const transportProbe = authenticationConfigured
+    ? await probeHarnessTransport(harness, 8_000)
+    : { ready: false, error: null }
   let state = 'ready'
   if (!cliInstalled) state = 'cli_missing'
   else if (!adapterInstalled) state = 'adapter_missing'
   else if (!authenticationConfigured) {
     state = 'authentication_required'
+  } else if (!transportProbe.ready) {
+    state = 'transport_unavailable'
   }
   return {
     id: harness.id,
@@ -224,15 +232,98 @@ async function harnessStatus(harness) {
     transport: harness.transport,
     capabilities: harness.capabilities,
     state,
+    installationStatus: !cliInstalled
+      ? 'cli_missing' : !adapterInstalled ? 'adapter_missing' : 'installed',
     authenticationStatus: state === 'authentication_required'
       ? 'required'
-      : state === 'ready' ? 'configured' : 'unknown',
+      : authenticationConfigured ? 'configured' : 'unknown',
+    transportStatus: transportProbe.ready
+      ? 'ready' : authenticationConfigured ? 'unavailable' : 'unknown',
+    transportError: transportProbe.error,
     setupMethods: (harness.authentication.methods ?? []).map((method) => ({
       id: method.id,
       displayName: method.displayName,
     })),
     detectedProviders,
   }
+}
+
+function probeHarnessTransport(harness, timeoutMilliseconds) {
+  return new Promise((resolvePromise) => {
+    const probeID = `woven-matter-readiness-${randomUUID()}`
+    const isPiRPC = harness.transport === 'rpc'
+    const request = isPiRPC
+      ? { type: 'get_state', id: probeID }
+      : {
+          jsonrpc: '2.0',
+          id: probeID,
+          method: 'initialize',
+          params: {
+            protocolVersion: 2,
+            clientCapabilities: {},
+            clientInfo: { name: 'Woven Matter Readiness Probe', version: '1.0' },
+          },
+        }
+    const child = spawn(harness.command, harness.arguments ?? [], {
+      cwd: workspaceRoot,
+      env: harnessRuntimeEnvironment(harness),
+      stdio: ['pipe', 'pipe', 'pipe'],
+    })
+    let settled = false
+    let output = ''
+    const finish = (ready, error = null) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timeout)
+      child.stdout.removeAllListeners()
+      child.stderr.removeAllListeners()
+      child.stdin.destroy()
+      if (child.exitCode === null && !child.killed) child.kill('SIGTERM')
+      resolvePromise({ ready, error })
+    }
+    const inspectLine = (line) => {
+      let response
+      try { response = JSON.parse(line) } catch { return }
+      if (response.id !== probeID) return
+      if (isPiRPC) {
+        return response.type === 'response'
+          && response.success !== false
+          && response.error == null
+          ? finish(true) : finish(false, 'Pi RPC rejected the readiness probe.')
+      }
+      const version = response.result?.protocolVersion
+      return response.error == null && (version === 1 || version === 2)
+        ? finish(true)
+        : finish(false, 'ACP initialize negotiation failed.')
+    }
+    const timeout = setTimeout(
+      () => finish(false, 'The transport handshake timed out.'),
+      timeoutMilliseconds
+    )
+    child.stdout.on('data', (data) => {
+      output = (output + data.toString('utf8')).slice(-16_384)
+      const lines = output.split('\n')
+      output = lines.pop() ?? ''
+      for (const line of lines) inspectLine(line)
+    })
+    child.stderr.on('data', () => {})
+    child.once('spawn', () => child.stdin.end(`${JSON.stringify(request)}\n`))
+    child.once('error', () => finish(false, 'The transport process could not start.'))
+    child.once('close', (code) => {
+      if (output.trim()) inspectLine(output.trim())
+      finish(false, `The transport process exited before readiness (status ${code ?? -1}).`)
+    })
+  })
+}
+
+function harnessRuntimeEnvironment(harness) {
+  const environment = harnessEnvironment()
+  if (harness.id === 'codex') {
+    environment.CODEX_CONFIG = '{"approvals_reviewer":"auto_review"}'
+  } else if (harness.id === 'hermes') {
+    environment.HERMES_ACP_SKIP_CONFIGURED_MCP = '0'
+  }
+  return environment
 }
 
 async function discoverAuthenticationProviders(harness) {
@@ -359,7 +450,9 @@ function authenticationProcessLaunch(method) {
 }
 
 async function startGateway() {
-  if (gateway.process) return
+  if (gateway.ready && gateway.process) return
+  if (gateway.startPromise) return gateway.startPromise
+  if (gateway.process) throw httpError(503, 'openclaw_gateway_start_in_progress')
   if (!await commandExists('openclaw')) throw httpError(409, 'openclaw_not_installed')
   const child = spawn('openclaw', ['gateway', 'run', '--bind', 'loopback', '--port', String(gatewayPort)], {
     cwd: workspaceRoot,
@@ -367,6 +460,7 @@ async function startGateway() {
     stdio: ['ignore', 'pipe', 'pipe'],
   })
   gateway.process = child
+  gateway.ready = false
   gateway.lastError = null
   child.stdout.on('data', (data) => process.stdout.write(`[gateway] ${data}`))
   child.stderr.on('data', (data) => {
@@ -374,18 +468,76 @@ async function startGateway() {
     process.stderr.write(`[gateway] ${data}`)
   })
   child.on('close', () => {
-    gateway.process = null
+    if (gateway.process === child) gateway.process = null
+    gateway.ready = false
+    gateway.startPromise = null
     if (gateway.desired && gateway.restarts < 3) {
       gateway.restarts += 1
       setTimeout(() => startGateway().catch((error) => { gateway.lastError = error.message }), 1000 * gateway.restarts)
     }
+  })
+  const startup = waitForTCPListener(gatewayPort, child, 15_000)
+    .then(() => {
+      if (gateway.process !== child) throw httpError(503, 'openclaw_gateway_exited')
+      gateway.ready = true
+    })
+    .catch((error) => {
+      gateway.lastError = error.message
+      if (child.exitCode === null && !child.killed) child.kill('SIGTERM')
+      throw error
+    })
+    .finally(() => {
+      if (gateway.startPromise === startup) gateway.startPromise = null
+    })
+  gateway.startPromise = startup
+  return startup
+}
+
+async function stopGateway() {
+  const child = gateway.process
+  if (!child) return
+  gateway.desired = false
+  child.kill('SIGTERM')
+  await new Promise((resolvePromise) => {
+    const timeout = setTimeout(resolvePromise, 5_000)
+    child.once('close', () => {
+      clearTimeout(timeout)
+      resolvePromise()
+    })
+  })
+  gateway.desired = true
+}
+
+async function waitForTCPListener(port, child, timeoutMilliseconds) {
+  const deadline = Date.now() + timeoutMilliseconds
+  while (Date.now() < deadline) {
+    if (child.exitCode !== null) throw httpError(503, 'openclaw_gateway_exited')
+    if (await tcpListenerAvailable('127.0.0.1', port, 500)) return
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 100))
+  }
+  throw httpError(503, 'openclaw_gateway_start_timed_out')
+}
+
+function tcpListenerAvailable(host, port, timeoutMilliseconds) {
+  return new Promise((resolvePromise) => {
+    const socket = connect({ host, port })
+    const finish = (ready) => {
+      socket.removeAllListeners()
+      socket.destroy()
+      resolvePromise(ready)
+    }
+    socket.setTimeout(timeoutMilliseconds, () => finish(false))
+    socket.once('connect', () => finish(true))
+    socket.once('error', () => finish(false))
   })
 }
 
 function gatewayStatus() {
   return {
     desired: gateway.desired,
-    state: gateway.process ? 'running' : gateway.desired ? 'reconnecting' : 'stopped',
+    state: gateway.ready
+      ? 'running'
+      : gateway.process ? 'starting' : gateway.desired ? 'reconnecting' : 'stopped',
     pid: gateway.process?.pid ?? null,
     restarts: gateway.restarts,
     lastError: gateway.lastError,

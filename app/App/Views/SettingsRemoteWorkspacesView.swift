@@ -457,6 +457,19 @@ struct SettingsRemoteWorkspacesView: View {
                                 )
                                 .font(.system(size: 11.5))
                                 .foregroundStyle(DashboardPalette.mutedForeground)
+                                if let transportStatus = harness.transportStatus {
+                                    Text(
+                                        "Transport: \(transportStatus.replacingOccurrences(of: "_", with: " ").capitalized)"
+                                    )
+                                    .font(.system(size: 11.5))
+                                    .foregroundStyle(DashboardPalette.mutedForeground)
+                                }
+                                if let transportError = harness.transportError {
+                                    Text(transportError)
+                                        .font(.system(size: 11.5))
+                                        .foregroundStyle(DashboardPalette.mutedForeground)
+                                        .lineLimit(2)
+                                }
                                 if !harness.detectedProviders.isEmpty {
                                     Text("Detected: \(harness.detectedProviders.joined(separator: ", "))")
                                         .font(.system(size: 11.5))

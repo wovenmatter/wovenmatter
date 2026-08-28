@@ -172,11 +172,12 @@ test('native sign-in reports a real handoff and verifies provider state', async 
   const authenticated = resolve(fixture, 'authenticated')
   await mkdir(bin, { recursive: true })
   await mkdir(workspace, { recursive: true })
-  for (const command of ['codex', 'codex-acp']) {
-    const executable = resolve(bin, command)
-    await writeFile(executable, '#!/bin/sh\nexit 0\n')
-    await chmod(executable, 0o700)
-  }
+  const codexCLI = resolve(bin, 'codex')
+  await writeFile(codexCLI, '#!/bin/sh\nexit 0\n')
+  await chmod(codexCLI, 0o700)
+  const codexACP = resolve(bin, 'codex-acp')
+  await writeFile(codexACP, fakeACPExecutable())
+  await chmod(codexACP, 0o700)
 
   const catalog = JSON.parse(await readFile(catalogPath, 'utf8'))
   const codex = catalog.harnesses.find((value) => value.id === 'codex')
@@ -247,6 +248,73 @@ test('native sign-in reports a real handoff and verifies provider state', async 
   )
   assert.equal(terminalCancellation.status, 409)
   assert.equal((await terminalCancellation.json()).error, 'authentication_session_not_active')
+})
+
+test('harness readiness requires a real bounded transport handshake', async (context) => {
+  const fixture = await temporaryFixture(context, 'wovenmatter-transport-ready-')
+  const home = resolve(fixture, 'home')
+  const workspace = resolve(fixture, 'workspace')
+  const bin = resolve(home, '.local/bin')
+  const authenticated = resolve(fixture, 'authenticated')
+  await mkdir(bin, { recursive: true })
+  await mkdir(workspace, { recursive: true })
+  await writeFile(authenticated, 'ready')
+
+  const working = resolve(bin, 'working-acp')
+  await writeFile(working, fakeACPExecutable())
+  await chmod(working, 0o700)
+  const broken = resolve(bin, 'broken-acp')
+  await writeFile(broken, '#!/bin/sh\nexit 0\n')
+  await chmod(broken, 0o700)
+  const pi = resolve(bin, 'working-pi')
+  await writeFile(pi, fakePiRPCExecutable())
+  await chmod(pi, 0o700)
+
+  const harness = (id, displayName, command) => ({
+    id,
+    displayName,
+    transport: 'acp',
+    command,
+    arguments: [],
+    cliCommand: command,
+    install: { kind: 'npm-global', source: 'https://example.test', command: 'true' },
+    authentication: {
+      statusCommands: [`test -f '${authenticated}'`],
+      discoveries: [],
+      methods: [{ id: 'test', displayName: 'Test', command: 'true' }],
+    },
+    capabilities: ['conversations'],
+  })
+  const testCatalog = resolve(fixture, 'catalog.json')
+  await writeFile(testCatalog, JSON.stringify({
+    schemaVersion: 4,
+    harnesses: [
+      harness('codex', 'Working ACP', 'working-acp'),
+      harness('claude_code', 'Broken ACP', 'broken-acp'),
+      { ...harness('pi', 'Working Pi RPC', 'working-pi'), transport: 'rpc' },
+    ],
+  }))
+
+  const service = await startService({
+    workspace,
+    home,
+    catalog: testCatalog,
+    token: 'transport-token',
+  })
+  context.after(() => service.child.kill('SIGTERM'))
+  const response = await fetch(`${service.url}/v1/harnesses`, {
+    headers: { authorization: 'Bearer transport-token' },
+  })
+  assert.equal(response.status, 200)
+  const statuses = (await response.json()).harnesses
+  assert.equal(statuses[0].state, 'ready')
+  assert.equal(statuses[0].transportStatus, 'ready')
+  assert.equal(statuses[0].transportError, null)
+  assert.equal(statuses[1].state, 'transport_unavailable')
+  assert.equal(statuses[1].transportStatus, 'unavailable')
+  assert.match(statuses[1].transportError, /exited before readiness/)
+  assert.equal(statuses[2].state, 'ready')
+  assert.equal(statuses[2].transportStatus, 'ready')
 })
 
 test('Pi authentication locates its owning package from a nested npm bin target', async (context) => {
@@ -409,6 +477,43 @@ test('Gateway upgrades are authenticated and never forward the API token', async
   assert.doesNotMatch(upstreamRequest, /authorization:|gateway-token/i)
 })
 
+test('Gateway start reports running only after its listener accepts connections', async (context) => {
+  const fixture = await temporaryFixture(context, 'wovenmatter-gateway-ready-')
+  const home = resolve(fixture, 'home')
+  const bin = resolve(home, '.local/bin')
+  const gatewayPort = await unusedPort()
+  await mkdir(bin, { recursive: true })
+  const openclaw = resolve(bin, 'openclaw')
+  await writeFile(openclaw, `#!/usr/bin/env node
+const { createServer } = require('node:net')
+const port = Number(process.argv[process.argv.indexOf('--port') + 1])
+const server = createServer((socket) => socket.destroy())
+setTimeout(() => server.listen(port, '127.0.0.1'), 200)
+process.on('SIGTERM', () => server.close(() => process.exit(0)))
+`)
+  await chmod(openclaw, 0o700)
+
+  const service = await startService({
+    workspace: fixture,
+    home,
+    catalog: catalogPath,
+    token: 'gateway-ready-token',
+    gatewayPort,
+  })
+  context.after(() => service.child.kill('SIGTERM'))
+  const response = await fetch(`${service.url}/v1/openclaw/gateway/start`, {
+    method: 'POST',
+    headers: { authorization: 'Bearer gateway-ready-token' },
+  })
+  assert.equal(response.status, 202)
+  const status = await response.json()
+  context.after(() => {
+    try { process.kill(status.pid, 'SIGTERM') } catch {}
+  })
+  assert.equal(status.state, 'running')
+  assert.equal(await canConnect(gatewayPort), true)
+})
+
 async function temporaryFixture(context, prefix) {
   const directory = await mkdtemp(resolve(tmpdir(), prefix))
   context.after(() => rm(directory, { recursive: true, force: true }))
@@ -488,6 +593,20 @@ function listen(server) {
   })
 }
 
+function canConnect(port) {
+  return new Promise((resolvePromise) => {
+    const socket = connect({ host: '127.0.0.1', port })
+    const finish = (ready) => {
+      socket.removeAllListeners()
+      socket.destroy()
+      resolvePromise(ready)
+    }
+    socket.setTimeout(1_000, () => finish(false))
+    socket.once('connect', () => finish(true))
+    socket.once('error', () => finish(false))
+  })
+}
+
 function socketText(socket) {
   return new Promise((resolvePromise, reject) => {
     let value = ''
@@ -531,4 +650,35 @@ function installerResponse(chunks, { status = 200, url = '', headers = {} } = {}
     pulls: () => pullCount,
     wasCancelled: () => cancelled,
   }
+}
+
+function fakeACPExecutable() {
+  return `#!/usr/bin/env node
+let input = ''
+process.stdin.on('data', (data) => { input += data.toString('utf8') })
+process.stdin.on('end', () => {
+  const request = JSON.parse(input.trim())
+  process.stdout.write(JSON.stringify({
+    jsonrpc: '2.0',
+    id: request.id,
+    result: { protocolVersion: 2, agentInfo: { name: 'fixture' } },
+  }) + '\\n')
+})
+`
+}
+
+function fakePiRPCExecutable() {
+  return `#!/usr/bin/env node
+let input = ''
+process.stdin.on('data', (data) => { input += data.toString('utf8') })
+process.stdin.on('end', () => {
+  const request = JSON.parse(input.trim())
+  process.stdout.write(JSON.stringify({
+    type: 'response',
+    id: request.id,
+    success: true,
+    data: { sessionId: 'fixture' },
+  }) + '\\n')
+})
+`
 }

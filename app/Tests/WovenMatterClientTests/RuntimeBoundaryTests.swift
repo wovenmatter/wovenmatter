@@ -124,6 +124,30 @@ struct RuntimeBoundaryTests {
     #expect(throws: OpenClawGatewayClientError.malformedFrame) {
       _ = try OpenClawGatewayClient.capabilities(from: .object([:]))
     }
+
+    let token = "remote-gateway-token"
+    let signedAt = 1_772_000_123_456
+    #expect(OpenClawGatewayClient.bearerToken(from: [
+      "authorization": "Bearer \(token)",
+    ]) == token)
+    #expect(OpenClawGatewayClient.deviceSignaturePayload(
+      deviceID: "device",
+      scopes: ["operator.read"],
+      signedAt: signedAt,
+      token: token,
+      nonce: "challenge"
+    ).contains("|\(signedAt)|\(token)|challenge|"))
+    let parameters = OpenClawGatewayClient.connectParameters(
+      deviceID: "device",
+      publicKey: "public-key",
+      signature: "signature",
+      signedAt: signedAt,
+      nonce: "challenge",
+      scopes: ["operator.read"],
+      token: token
+    )
+    #expect(parameters.objectValue?["auth"]?.objectValue?["token"]?.stringValue == token)
+    #expect(parameters.objectValue?["device"]?.objectValue?["signedAt"]?.intValue == signedAt)
   }
 
   @Test("local CLI install requires a reviewed digest and a matching redownload")

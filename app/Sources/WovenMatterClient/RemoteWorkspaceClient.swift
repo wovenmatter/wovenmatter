@@ -185,7 +185,10 @@ public struct RemoteHarnessStatus: Codable, Equatable, Identifiable, Sendable {
     public let transport: String
     public let capabilities: [String]
     public let state: String
+    public let installationStatus: String?
     public let authenticationStatus: String
+    public let transportStatus: String?
+    public let transportError: String?
     public let setupMethods: [RemoteHarnessSetupMethod]
     public let detectedProviders: [String]
 }
@@ -737,12 +740,13 @@ public actor RemoteWorkspaceTunnel {
 
     public func start(
         configuration: RemoteWorkspaceConfiguration,
-        localPort: Int
+        localPort: Int,
+        readinessProbe: @escaping @Sendable (Int) async -> Bool
     ) async throws {
         if process?.isRunning == true,
            configurationID == configuration.id,
-           self.localPort != nil {
-            return
+           let activePort = self.localPort {
+            if await readinessProbe(activePort) { return }
         }
         stop()
         guard (1024...65535).contains(localPort) else {
@@ -772,12 +776,30 @@ public actor RemoteWorkspaceTunnel {
             ]
             candidateProcess.standardError = errors
             try candidateProcess.run()
-            try await Task.sleep(for: .milliseconds(150))
+            let clock = ContinuousClock()
+            let deadline = clock.now.advanced(by: .seconds(15))
+            while candidateProcess.isRunning, clock.now < deadline {
+                do { try Task.checkCancellation() }
+                catch {
+                    candidateProcess.terminate()
+                    throw error
+                }
+                if await readinessProbe(candidate) {
+                    process = candidateProcess
+                    configurationID = configuration.id
+                    self.localPort = candidate
+                    return
+                }
+                do { try await Task.sleep(for: .milliseconds(200)) }
+                catch {
+                    candidateProcess.terminate()
+                    throw error
+                }
+            }
             if candidateProcess.isRunning {
-                process = candidateProcess
-                configurationID = configuration.id
-                self.localPort = candidate
-                return
+                candidateProcess.terminate()
+                lastFailure = "The SSH tunnel opened, but the authenticated workspace health check timed out."
+                break
             }
             let detail = String(
                 decoding: errors.fileHandleForReading.readDataToEndOfFile(),
