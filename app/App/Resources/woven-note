@@ -1,0 +1,12 @@
+#!/bin/sh
+set -eu
+
+macos_dir="$(CDPATH= cd -- "$(dirname -- "$0")/../MacOS" && pwd)"
+for executable in "Woven Matter Dev" "Woven Matter"; do
+  if [ -x "$macos_dir/$executable" ]; then
+    exec "$macos_dir/$executable" --woven-note-cli "$@"
+  fi
+done
+
+printf '%s\n' 'woven-note: Woven Matter executable not found.' >&2
+exit 1

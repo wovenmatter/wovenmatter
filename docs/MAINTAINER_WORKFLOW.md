@@ -1,16 +1,79 @@
 # Maintainer workflow
 
-Woven Matter keeps validation behavior in repository-owned scripts so the same
+WovenMatter keeps validation behavior in repository-owned scripts so the same
 checks can run locally and in continuous integration.
+
+## Validation
+
+Run the complete deterministic suite with:
+
+```sh
+scripts/test-changes.sh --all
+```
+
+When container lifecycle behavior changes and Docker is available, also run:
+
+```sh
+scripts/test-container.sh
+```
+
+Tests must not receive provider credentials, make model calls, publish an app,
+deploy a remote workspace, or modify repository contents outside their
+documented temporary build and test locations.
+
+## Continuous integration
+
+Keep hosted validation small, path-aware, and on standard GitHub-hosted
+runners. The initial `CI` workflow contains only:
+
+1. **Change detection:** scan the public tree and decide which focused jobs are
+   relevant.
+2. **macOS:** run static checks, Swift package tests, and an unsigned native
+   application build on `macos-26` when app, harness, or macOS validation files
+   change.
+3. **Remote workspace:** run deterministic remote tests and build the workspace
+   image on `ubuntu-24.04` with Node.js 24 and Docker when remote, harness, or
+   lifecycle files change.
+4. **CI gate:** report one stable required result after relevant jobs pass or
+   are skipped.
+
+Run focused checks when a pull request targeting `main` is opened or updated
+and again when a change reaches `main`. Documentation-only changes run the
+lightweight public-tree scan and gate without consuming a macOS runner. Cancel
+superseded pull-request runs, but do not cancel or reorder validation for a
+commit that has reached `main`.
+
+Use read-only `contents` permission, short reasonable timeouts, native path
+checks, and no ambient credentials. Do not provide CI with provider
+credentials, signing materials, SSH access, Keychain contents, deployment
+tokens, or development or staging host access. Code from forks is untrusted;
+run it only on disposable, whole-job-isolated GitHub-hosted workers with clean
+checkouts and no persistent host state. A container alone is not a sufficient
+trust boundary for a macOS worker.
+
+Run `scripts/scan-public-tree.sh` manually before a source publication or other
+high-risk provenance review. Public-repository secret scanning provides the
+routine credential-leak baseline. Dependency updates remain deliberate
+maintainer changes; review the container base-image digest and harness catalog
+sources when updating them.
+
+The `pull_request_target` classification workflows may inspect metadata or
+fetch a pull-request commit as inert Git data. They must never check out or
+execute contributor-controlled code.
+
+Do not add paid runners, preview deployments, release automation, signing,
+notarization, staging automation, or another CI provider without a separate
+maintainer decision.
 
 ## Branch model
 
 - `main` is the stable branch.
-- Public contributors work in forks and open pull requests against `main`.
-- Only maintainers with write access can merge or push to the repository.
-- Required checks protect `main`; a mandatory human approval is not part of the
-  merge rule.
-- Do not create a permanent `dev` integration branch.
+- Contributors work in short-lived branches or forks and open pull requests
+  directly against `main`.
+- Focused checks run on the pull request and again after the accepted change
+  reaches `main`.
+- Approval from the repository code owner is the merge gate.
+- Do not create a permanent `dev` integration branch for v0.1.
 
 The vouch workflow classifies pull requests for review. Add a contributor to
 `.github/VOUCHED.td` as `github:username` after establishing trust. Prefix the
@@ -18,27 +81,25 @@ entry with `-` to mark a contributor as denounced. Updating the list on `main`
 reclassifies open pull requests, and `/recheck-vouch` in a pull-request comment
 rechecks one pull request. Vouch status never grants write access.
 
-## Continuous integration
-
-Keep hosted validation small, path-filtered, and on standard GitHub-hosted
-runners. Use read-only `contents` permission, reasonable timeouts, native path
-filters, and no ambient credentials. Code from forks is untrusted; run it only
-on disposable, whole-job-isolated workers with clean checkouts and no persistent
-host state.
-
-Do not provide CI with provider credentials, signing materials, SSH access,
-Keychain contents, deployment tokens, or development or staging host access.
-Do not add paid runners, preview deployments, release automation, signing,
-notarization, staging automation, or another CI provider without a separate
-maintainer decision.
-
-The `pull_request_target` classification workflows may inspect metadata or
-fetch a pull-request commit as inert Git data. They must never check out or
-execute contributor-controlled code.
-
 ## Environments
 
-Development, staging, and release use separate builds, credentials, data, and
-hosts. No repository script automatically promotes between them. Deployment,
-signing, notarization, and release publication remain explicit maintainer
-actions performed from an exact accepted commit.
+- **Development** uses the unsigned app produced by
+  `scripts/build_and_run.sh`, local test data, and disposable remote workspaces.
+- **Staging** uses an isolated app build and dedicated Linux workspace host with
+  separate credentials, data, workspace IDs, ports, and Keychain entries. It is
+  the place for container lifecycle and real harness-account acceptance after
+  deterministic validation passes. Staging runs only from an explicitly
+  approved commit in the primary repository; forked pull requests never receive
+  staging access.
+- **Release** is a separately approved, signed, notarized build from an exact
+  accepted commit. Development or staging credentials and data must never be
+  copied into it.
+
+No script in this repository automatically promotes between environments.
+Deployment, signing, notarization, and release publication remain explicit
+maintainer actions.
+
+Preview or staging automation, if added later, must be opt-in, scoped to trusted
+same-repository commits, and separated from read-only validation. Release
+automation must identify one exact accepted commit and must never reuse
+development or staging credentials.

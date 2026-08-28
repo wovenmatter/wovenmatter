@@ -1,0 +1,92 @@
+name: Bug report
+description: Report broken behavior, regressions, crashes, or reliability issues.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Search existing issues first and report one focused problem. Remove credentials, private hosts, personal paths, and provider transcripts.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues and did not find a duplicate.
+          required: true
+        - label: I can describe a reproducible problem or provide enough evidence to investigate it.
+          required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Native macOS app
+        - Local workspace or harness
+        - Remote workspace or container
+        - OpenClaw Gateway
+        - Build, validation, or release tooling
+        - Documentation
+        - Not sure
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Provide the smallest safe sequence that reproduces the issue.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: dropdown
+    id: impact
+    attributes:
+      label: Impact
+      options:
+        - Blocks work completely
+        - Major degradation or frequent failure
+        - Minor or occasional failure
+        - Cosmetic issue
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: macOS, Xcode, harness, and remote Docker details if relevant. Remove private host and account data.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Include only the smallest useful excerpt and redact sensitive data.
+      render: shell
+  - type: textarea
+    id: workaround
+    attributes:
+      label: Workaround
+      description: Include any temporary workaround you found.
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy check
+      options:
+        - label: I removed credentials, tokens, provider transcripts, private hostnames, IP addresses, and personal paths.
+          required: true

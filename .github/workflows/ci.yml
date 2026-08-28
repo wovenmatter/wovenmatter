@@ -1,0 +1,103 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      macos: ${{ steps.paths.outputs.macos }}
+      remote: ${{ steps.paths.outputs.remote }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Scan the public tree
+        run: scripts/scan-public-tree.sh
+
+      - name: Select focused validation
+        id: paths
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          base_sha="$BASE_SHA"
+          if [ -z "$base_sha" ] || [ "$base_sha" = "0000000000000000000000000000000000000000" ]; then
+            base_sha="$(git rev-parse "${HEAD_SHA}^")"
+          fi
+
+          git diff --name-only "$base_sha" "$HEAD_SHA" > "$RUNNER_TEMP/changed-files"
+
+          macos=false
+          if grep -Eq '^app/|^harnesses/|^scripts/(build_and_run|scan-public-tree|test-changes|test-remote-workspace|validate-native-app)\.sh$|^\.github/workflows/ci\.yml$' "$RUNNER_TEMP/changed-files"; then
+            macos=true
+          fi
+
+          remote=false
+          if grep -Eq '^remote/|^harnesses/|^\.dockerignore$|^scripts/(remote-workspace|scan-public-tree|test-changes|test-container|test-remote-workspace)\.sh$|^\.github/workflows/ci\.yml$' "$RUNNER_TEMP/changed-files"; then
+            remote=true
+          fi
+
+          echo "macos=$macos" >> "$GITHUB_OUTPUT"
+          echo "remote=$remote" >> "$GITHUB_OUTPUT"
+
+  macos:
+    name: macOS
+    needs: changes
+    if: needs.changes.outputs.macos == 'true'
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Test packages and build the unsigned app
+        run: scripts/test-changes.sh --macos
+
+  remote:
+    name: Remote workspace
+    needs: changes
+    if: needs.changes.outputs.remote == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Run deterministic remote validation
+        run: scripts/test-changes.sh --remote
+      - name: Build the remote workspace image
+        run: docker build --file remote/Dockerfile --tag wovenmatter-remote:ci .
+
+  gate:
+    name: CI
+    needs: [changes, macos, remote]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require relevant validation
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          MACOS_RESULT: ${{ needs.macos.result }}
+          REMOTE_RESULT: ${{ needs.remote.result }}
+        run: |
+          test "$CHANGES_RESULT" = success
+          case "$MACOS_RESULT" in success|skipped) ;; *) exit 1 ;; esac
+          case "$REMOTE_RESULT" in success|skipped) ;; *) exit 1 ;; esac

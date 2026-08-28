@@ -1,0 +1,545 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		0C11E0000000000000000001 /* WovenMatterClient in Frameworks */ = {isa = PBXBuildFile; productRef = 0C11E0000000000000000004 /* WovenMatterClient */; };
+		D46000000000000000000002 /* WovenMatterDashboardStore in Frameworks */ = {isa = PBXBuildFile; productRef = D46000000000000000000001 /* WovenMatterDashboardStore */; };
+		A11C00000000000000000001 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A11C00000000000000000002 /* Assets.xcassets */; };
+		073565BA0B01598641B11348 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C49C2130B0B0B01A795C7504 /* SettingsView.swift */; };
+		0C1A00000000000000000001 /* OpenClawGatewaySettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C1A00000000000000000002 /* OpenClawGatewaySettingsView.swift */; };
+		5E7A00000000000000000001 /* SettingsComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E7A00000000000000000002 /* SettingsComponents.swift */; };
+		5E7A00000000000000000003 /* SettingsGeneralView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E7A00000000000000000004 /* SettingsGeneralView.swift */; };
+		5E7A00000000000000000005 /* SettingsOpenClawView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E7A00000000000000000006 /* SettingsOpenClawView.swift */; };
+		5E7A00000000000000000007 /* SettingsLocalWorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E7A00000000000000000008 /* SettingsLocalWorkspaceView.swift */; };
+		5E7A0000000000000000000B /* SettingsBuzzWorkspacesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E7A0000000000000000000C /* SettingsBuzzWorkspacesView.swift */; };
+		5E7A0000000000000000000D /* SettingsUsageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E7A0000000000000000000E /* SettingsUsageView.swift */; };
+		49BB9C77C988D34AA1B69E70 /* ApplicationModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0B27571F91CCF38534BB90 /* ApplicationModel.swift */; };
+		5AECF7B494583F056FBE596C /* WovenMatterApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 624CEC46A7441DADEBBCE79E /* WovenMatterApp.swift */; };
+		5E64711B441F5A188A2862AC /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 489A29D04369BF898400D045 /* RootView.swift */; };
+		A11C00000000000000000003 /* WorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11C00000000000000000004 /* WorkspaceView.swift */; };
+		D45100000000000000000001 /* DashboardDesign.swift in Sources */ = {isa = PBXBuildFile; fileRef = D45100000000000000000002 /* DashboardDesign.swift */; };
+		D45300000000000000000001 /* DashboardCalendarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D45300000000000000000002 /* DashboardCalendarView.swift */; };
+		D45400000000000000000001 /* DashboardUsageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D45400000000000000000002 /* DashboardUsageView.swift */; };
+		D49000000000000000000001 /* ConversationMarkdown.swift in Sources */ = {isa = PBXBuildFile; fileRef = D49000000000000000000003 /* ConversationMarkdown.swift */; };
+		D49100000000000000000001 /* ConversationMarkdownDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = D49100000000000000000003 /* ConversationMarkdownDocument.swift */; };
+		D49200000000000000000001 /* ConversationWorkTranscript.swift in Sources */ = {isa = PBXBuildFile; fileRef = D49200000000000000000003 /* ConversationWorkTranscript.swift */; };
+		A12000000000000000000005 /* remote-workspace.sh in Resources */ = {isa = PBXBuildFile; fileRef = A12000000000000000000006 /* remote-workspace.sh */; };
+		A12000000000000000000007 /* remote in Resources */ = {isa = PBXBuildFile; fileRef = A12000000000000000000008 /* remote */; };
+		A12000000000000000000009 /* harnesses in Resources */ = {isa = PBXBuildFile; fileRef = A1200000000000000000000A /* harnesses */; };
+		E10000000000000000000001 /* NoteEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = E10000000000000000000002 /* NoteEditor.swift */; };
+		E10100000000000000000001 /* WovenNoteService.swift in Sources */ = {isa = PBXBuildFile; fileRef = E10100000000000000000002 /* WovenNoteService.swift */; };
+		E10200000000000000000001 /* woven-note in Resources */ = {isa = PBXBuildFile; fileRef = E10200000000000000000002 /* woven-note */; };
+		F10000000000000000000001 /* AgentDatabases.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000002 /* AgentDatabases.swift */; };
+		A13000000000000000000001 /* RemoteWorkspacesModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A13000000000000000000002 /* RemoteWorkspacesModel.swift */; };
+		A13000000000000000000003 /* SettingsRemoteWorkspacesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A13000000000000000000004 /* SettingsRemoteWorkspacesView.swift */; };
+		F10100000000000000000001 /* ArtifactEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10100000000000000000002 /* ArtifactEditor.swift */; };
+		F10200000000000000000001 /* DashboardDatabasesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10200000000000000000002 /* DashboardDatabasesView.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		A11C00000000000000000002 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		A11C00000000000000000004 /* WorkspaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceView.swift; sourceTree = "<group>"; };
+		37C9459F43D4462FD229B6B1 /* WovenMatter.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = WovenMatter.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		489A29D04369BF898400D045 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
+		5A0B27571F91CCF38534BB90 /* ApplicationModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApplicationModel.swift; sourceTree = "<group>"; };
+		624CEC46A7441DADEBBCE79E /* WovenMatterApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WovenMatterApp.swift; sourceTree = "<group>"; };
+		C49C2130B0B0B01A795C7504 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		0C1A00000000000000000002 /* OpenClawGatewaySettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenClawGatewaySettingsView.swift; sourceTree = "<group>"; };
+		5E7A00000000000000000002 /* SettingsComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsComponents.swift; sourceTree = "<group>"; };
+		5E7A00000000000000000004 /* SettingsGeneralView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsGeneralView.swift; sourceTree = "<group>"; };
+		5E7A00000000000000000006 /* SettingsOpenClawView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsOpenClawView.swift; sourceTree = "<group>"; };
+		5E7A00000000000000000008 /* SettingsLocalWorkspaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsLocalWorkspaceView.swift; sourceTree = "<group>"; };
+		5E7A0000000000000000000C /* SettingsBuzzWorkspacesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsBuzzWorkspacesView.swift; sourceTree = "<group>"; };
+		5E7A0000000000000000000E /* SettingsUsageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsUsageView.swift; sourceTree = "<group>"; };
+		DBB4B07F8994DA5A755EAF99 /* wovenmatter-macos */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "wovenmatter-macos"; path = .; sourceTree = SOURCE_ROOT; };
+		D45100000000000000000002 /* DashboardDesign.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardDesign.swift; sourceTree = "<group>"; };
+		D45300000000000000000002 /* DashboardCalendarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardCalendarView.swift; sourceTree = "<group>"; };
+		D45400000000000000000002 /* DashboardUsageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardUsageView.swift; sourceTree = "<group>"; };
+		D49000000000000000000003 /* ConversationMarkdown.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationMarkdown.swift; sourceTree = "<group>"; };
+		D49100000000000000000003 /* ConversationMarkdownDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationMarkdownDocument.swift; sourceTree = "<group>"; };
+		D49200000000000000000003 /* ConversationWorkTranscript.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationWorkTranscript.swift; sourceTree = "<group>"; };
+		A12000000000000000000006 /* remote-workspace.sh */ = {isa = PBXFileReference; lastKnownFileType = text.script.sh; path = "../../../scripts/remote-workspace.sh"; sourceTree = "<group>"; };
+		A12000000000000000000008 /* remote */ = {isa = PBXFileReference; lastKnownFileType = folder; path = "../../../remote"; sourceTree = "<group>"; };
+		A1200000000000000000000A /* harnesses */ = {isa = PBXFileReference; lastKnownFileType = folder; path = "../../../harnesses"; sourceTree = "<group>"; };
+		D50000000000000000000009 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		E10000000000000000000002 /* NoteEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteEditor.swift; sourceTree = "<group>"; };
+		E10100000000000000000002 /* WovenNoteService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WovenNoteService.swift; sourceTree = "<group>"; };
+		E10200000000000000000002 /* woven-note */ = {isa = PBXFileReference; lastKnownFileType = text.script.sh; path = "woven-note"; sourceTree = "<group>"; };
+		F10000000000000000000002 /* AgentDatabases.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentDatabases.swift; sourceTree = "<group>"; };
+		A13000000000000000000002 /* RemoteWorkspacesModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteWorkspacesModel.swift; sourceTree = "<group>"; };
+		A13000000000000000000004 /* SettingsRemoteWorkspacesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsRemoteWorkspacesView.swift; sourceTree = "<group>"; };
+		F10100000000000000000002 /* ArtifactEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArtifactEditor.swift; sourceTree = "<group>"; };
+		F10200000000000000000002 /* DashboardDatabasesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardDatabasesView.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		239FD586A9CC30792201F9E9 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				0C11E0000000000000000001 /* WovenMatterClient in Frameworks */,
+				D46000000000000000000002 /* WovenMatterDashboardStore in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		21F401DAE658C232D88E944F /* Packages */ = {
+			isa = PBXGroup;
+			children = (
+				DBB4B07F8994DA5A755EAF99 /* wovenmatter-macos */,
+			);
+			name = Packages;
+			sourceTree = "<group>";
+		};
+		614FCD38F579029AF08B9221 = {
+			isa = PBXGroup;
+			children = (
+				C67C8CBF1B7E40CA0F37A274 /* App */,
+				21F401DAE658C232D88E944F /* Packages */,
+				9959D7D4FDC4FD024F490589 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		9959D7D4FDC4FD024F490589 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				37C9459F43D4462FD229B6B1 /* WovenMatter.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		C67C8CBF1B7E40CA0F37A274 /* App */ = {
+			isa = PBXGroup;
+			children = (
+				A11C00000000000000000002 /* Assets.xcassets */,
+				5A0B27571F91CCF38534BB90 /* ApplicationModel.swift */,
+				D50000000000000000000009 /* Info.plist */,
+				624CEC46A7441DADEBBCE79E /* WovenMatterApp.swift */,
+				D49100000000000000000004 /* Models */,
+				D50000000000000000000007 /* Resources */,
+				D50000000000000000000008 /* Services */,
+				D0E0A91C0032120E4CDF1388 /* Views */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		D49100000000000000000004 /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				F10000000000000000000002 /* AgentDatabases.swift */,
+				A13000000000000000000002 /* RemoteWorkspacesModel.swift */,
+				D49100000000000000000003 /* ConversationMarkdownDocument.swift */,
+			);
+			path = Models;
+			sourceTree = "<group>";
+		};
+		D0E0A91C0032120E4CDF1388 /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				F10100000000000000000002 /* ArtifactEditor.swift */,
+				F10200000000000000000002 /* DashboardDatabasesView.swift */,
+				E10000000000000000000002 /* NoteEditor.swift */,
+				D49000000000000000000003 /* ConversationMarkdown.swift */,
+				D49200000000000000000003 /* ConversationWorkTranscript.swift */,
+				D45300000000000000000002 /* DashboardCalendarView.swift */,
+				D45400000000000000000002 /* DashboardUsageView.swift */,
+				D45100000000000000000002 /* DashboardDesign.swift */,
+				A11C00000000000000000004 /* WorkspaceView.swift */,
+				489A29D04369BF898400D045 /* RootView.swift */,
+				0C1A00000000000000000002 /* OpenClawGatewaySettingsView.swift */,
+				C49C2130B0B0B01A795C7504 /* SettingsView.swift */,
+				5E7A00000000000000000002 /* SettingsComponents.swift */,
+				5E7A00000000000000000004 /* SettingsGeneralView.swift */,
+				5E7A00000000000000000006 /* SettingsOpenClawView.swift */,
+				5E7A00000000000000000008 /* SettingsLocalWorkspaceView.swift */,
+				A13000000000000000000004 /* SettingsRemoteWorkspacesView.swift */,
+				5E7A0000000000000000000C /* SettingsBuzzWorkspacesView.swift */,
+				5E7A0000000000000000000E /* SettingsUsageView.swift */,
+			);
+			path = Views;
+			sourceTree = "<group>";
+		};
+		D50000000000000000000007 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				A12000000000000000000006 /* remote-workspace.sh */,
+				A12000000000000000000008 /* remote */,
+				A1200000000000000000000A /* harnesses */,
+				E10200000000000000000002 /* woven-note */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+		D50000000000000000000008 /* Services */ = {
+			isa = PBXGroup;
+			children = (
+				E10100000000000000000002 /* WovenNoteService.swift */,
+			);
+			path = Services;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		C3E9E7E7F43A9FF83FA1DB63 /* WovenMatter */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = DCA24CAEC4959697918945B6 /* Build configuration list for PBXNativeTarget "WovenMatter" */;
+			buildPhases = (
+				6214AC3EA07FDB2A111C07EA /* Sources */,
+				19757368FADFAA1B53E2802A /* Resources */,
+				239FD586A9CC30792201F9E9 /* Frameworks */,
+				DADA3FC513A8916F33AA46F4 /* Trim bundle resources before signing */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = WovenMatter;
+			packageProductDependencies = (
+				0C11E0000000000000000004 /* WovenMatterClient */,
+				D46000000000000000000001 /* WovenMatterDashboardStore */,
+			);
+			productName = WovenMatter;
+			productReference = 37C9459F43D4462FD229B6B1 /* WovenMatter.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		01308825FA357DD758C18D1F /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 2700;
+				TargetAttributes = {
+					C3E9E7E7F43A9FF83FA1DB63 = {
+						DevelopmentTeam = "";
+					};
+				};
+			};
+			buildConfigurationList = 7B7C314CA45D78F76278D126 /* Build configuration list for PBXProject "WovenMatter" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = 614FCD38F579029AF08B9221;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				03A429A1CC1E3FDB9062F0AE /* XCLocalSwiftPackageReference "." */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 9959D7D4FDC4FD024F490589 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				C3E9E7E7F43A9FF83FA1DB63 /* WovenMatter */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		19757368FADFAA1B53E2802A /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A12000000000000000000005 /* remote-workspace.sh in Resources */,
+				A12000000000000000000007 /* remote in Resources */,
+				A12000000000000000000009 /* harnesses in Resources */,
+				E10200000000000000000001 /* woven-note in Resources */,
+				A11C00000000000000000001 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		DADA3FC513A8916F33AA46F4 /* Trim bundle resources before signing */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(TARGET_BUILD_DIR)/$(EXECUTABLE_PATH)",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)",
+			);
+			name = "Trim bundle resources before signing";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(DERIVED_FILE_DIR)/bundle-metadata-cleaned.stamp",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -eu\n/usr/bin/xattr -cr \"${TARGET_BUILD_DIR}/${WRAPPER_NAME}\"\n/bin/rm -rf \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/remote/test\"\n/bin/rm -f \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/remote/.env.example\" \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/remote/compose.yaml\"\ntouch \"${DERIVED_FILE_DIR}/bundle-metadata-cleaned.stamp\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		6214AC3EA07FDB2A111C07EA /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				F10000000000000000000001 /* AgentDatabases.swift in Sources */,
+				A13000000000000000000001 /* RemoteWorkspacesModel.swift in Sources */,
+				A13000000000000000000003 /* SettingsRemoteWorkspacesView.swift in Sources */,
+				F10100000000000000000001 /* ArtifactEditor.swift in Sources */,
+				F10200000000000000000001 /* DashboardDatabasesView.swift in Sources */,
+				E10100000000000000000001 /* WovenNoteService.swift in Sources */,
+				E10000000000000000000001 /* NoteEditor.swift in Sources */,
+				49BB9C77C988D34AA1B69E70 /* ApplicationModel.swift in Sources */,
+				D49000000000000000000001 /* ConversationMarkdown.swift in Sources */,
+				D49100000000000000000001 /* ConversationMarkdownDocument.swift in Sources */,
+				D49200000000000000000001 /* ConversationWorkTranscript.swift in Sources */,
+				D45300000000000000000001 /* DashboardCalendarView.swift in Sources */,
+				D45400000000000000000001 /* DashboardUsageView.swift in Sources */,
+				D45100000000000000000001 /* DashboardDesign.swift in Sources */,
+				A11C00000000000000000003 /* WorkspaceView.swift in Sources */,
+				5E64711B441F5A188A2862AC /* RootView.swift in Sources */,
+				073565BA0B01598641B11348 /* SettingsView.swift in Sources */,
+				0C1A00000000000000000001 /* OpenClawGatewaySettingsView.swift in Sources */,
+				5E7A00000000000000000001 /* SettingsComponents.swift in Sources */,
+				5E7A00000000000000000003 /* SettingsGeneralView.swift in Sources */,
+				5E7A00000000000000000005 /* SettingsOpenClawView.swift in Sources */,
+				5E7A00000000000000000007 /* SettingsLocalWorkspaceView.swift in Sources */,
+				5E7A0000000000000000000B /* SettingsBuzzWorkspacesView.swift in Sources */,
+				5E7A0000000000000000000D /* SettingsUsageView.swift in Sources */,
+				5AECF7B494583F056FBE596C /* WovenMatterApp.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		AAF9E2A637B256FBD0957737 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEFINES_MODULE = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "Woven Matter";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright Woven Matter";
+				INFOPLIST_KEY_NSPrincipalClass = NSApplication;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				INFOPLIST_FILE = App/Info.plist;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = wovenmatter.desktop;
+				PRODUCT_MODULE_NAME = WovenMatter;
+				PRODUCT_NAME = "Woven Matter";
+				SDKROOT = macosx;
+			};
+			name = Release;
+		};
+		D3D231F1BDF4B1791E2AEAA7 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIconDev;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEFINES_MODULE = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = App/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "Woven Matter Dev";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright Woven Matter";
+				INFOPLIST_KEY_NSPrincipalClass = NSApplication;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = wovenmatter.desktop.dev;
+				PRODUCT_MODULE_NAME = WovenMatter;
+				PRODUCT_NAME = "Woven Matter Dev";
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+			};
+			name = Debug;
+		};
+		D792BB35A1FAC918C79C50F0 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		F15C7CABEEC545675A91EBC3 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = "";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		7B7C314CA45D78F76278D126 /* Build configuration list for PBXProject "WovenMatter" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				D792BB35A1FAC918C79C50F0 /* Debug */,
+				F15C7CABEEC545675A91EBC3 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		DCA24CAEC4959697918945B6 /* Build configuration list for PBXNativeTarget "WovenMatter" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				D3D231F1BDF4B1791E2AEAA7 /* Debug */,
+				AAF9E2A637B256FBD0957737 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		03A429A1CC1E3FDB9062F0AE /* XCLocalSwiftPackageReference "." */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = .;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		0C11E0000000000000000004 /* WovenMatterClient */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = WovenMatterClient;
+		};
+		D46000000000000000000001 /* WovenMatterDashboardStore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = WovenMatterDashboardStore;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = 01308825FA357DD758C18D1F /* Project object */;
+}
