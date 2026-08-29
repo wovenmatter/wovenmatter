@@ -1,0 +1,12 @@
+**
+!.dockerignore
+!remote/
+!remote/Dockerfile
+!remote/entrypoint.sh
+!remote/package.json
+!remote/src/
+!remote/src/pi-auth.mjs
+!remote/src/server.mjs
+!harnesses/
+!harnesses/catalog.json
+!harnesses/initialize-workspace.sh

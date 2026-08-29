@@ -1,0 +1,259 @@
+import SwiftUI
+import WovenMatterClient
+import WovenMatterCore
+
+struct SettingsGeneralView: View {
+    @Bindable var model: ApplicationModel
+    var reservesRailControlSpace = false
+    var onBack: () -> Void
+
+    @Environment(\.dashboardTheme) private var theme
+    @AppStorage(DashboardTheme.storageKey) private var storedTheme = DashboardTheme.green.rawValue
+    @AppStorage(DashboardSidebarStyle.storageKey) private var storedSidebarStyle = DashboardSidebarStyle.defaultStyle.rawValue
+    @AppStorage(DashboardCodexLogoStyle.storageKey) private var storedCodexLogoStyle =
+        DashboardCodexLogoStyle.defaultStyle.rawValue
+
+    private var codexLogoStyle: DashboardCodexLogoStyle {
+        DashboardCodexLogoStyle(rawValue: storedCodexLogoStyle) ?? .defaultStyle
+    }
+
+    var body: some View {
+        SettingsPage(
+            title: "General",
+            detail: "Appearance, updates, and app-wide behavior.",
+            reservesRailControlSpace: reservesRailControlSpace,
+            onBack: onBack
+        ) {
+            appearanceCard
+            conversationTitlesCard
+            supportedHarnessesCard
+        }
+        .onChange(of: storedTheme) { _, _ in
+            model.persistMacSurfaceProfileFromUserDefaults()
+        }
+        .onChange(of: storedSidebarStyle) { _, _ in
+            model.persistMacSurfaceProfileFromUserDefaults()
+        }
+    }
+
+    private var appearanceCard: some View {
+        SettingsCard(
+            title: "Appearance",
+            detail: "Choose the dashboard color treatment and how workspace navigation is arranged."
+        ) {
+            LazyVGrid(
+                columns: [GridItem(.adaptive(minimum: 230), spacing: 12)],
+                alignment: .leading,
+                spacing: 12
+            ) {
+                ForEach(DashboardTheme.allCases) { option in
+                    themeChoice(option)
+                }
+            }
+
+            Text("Theme changes apply immediately and stay with this Mac.")
+                .font(.system(size: 11))
+                .foregroundStyle(DashboardPalette.mutedForeground)
+
+            Divider()
+                .overlay(theme.palette.border)
+                .padding(.vertical, 2)
+
+            sidebarLayoutSelector
+        }
+    }
+
+    private var sidebarLayoutSelector: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 16) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Sidebar layout")
+                        .font(.system(size: 13, weight: .medium))
+                    Text("Use both navigation rails, or open folder contents inside one movable sidebar.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(DashboardPalette.mutedForeground)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 12)
+                Picker("Sidebar layout", selection: $storedSidebarStyle) {
+                    ForEach(DashboardSidebarStyle.allCases) { style in
+                        Text(style.title).tag(style.rawValue)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.segmented)
+                .frame(width: 260)
+            }
+
+            if storedSidebarStyle == DashboardSidebarStyle.single.rawValue {
+                Text("Open a folder to browse its chats and notes in place. Use the sidebar header to move it to the other side.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(DashboardPalette.mutedForeground)
+            }
+        }
+    }
+
+    private func themeChoice(_ option: DashboardTheme) -> some View {
+        let selected = theme == option
+        let description = option == .green
+            ? "White workspace with British Racing Green glass sidebars and controls."
+            : "Warm cognac surround with white sidebars and restrained green actions."
+
+        return Button {
+            storedTheme = option.rawValue
+        } label: {
+            VStack(alignment: .leading, spacing: 11) {
+                SettingsThemePreview(theme: option)
+                HStack(alignment: .top, spacing: 10) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(option.title)
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(DashboardPalette.foreground)
+                        Text(description)
+                            .font(.system(size: 11))
+                            .foregroundStyle(DashboardPalette.mutedForeground)
+                            .multilineTextAlignment(.leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 0)
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(DashboardPalette.primary)
+                        .opacity(selected ? 1 : 0)
+                }
+            }
+            .padding(12)
+            .background(selected ? theme.palette.themeSoft : theme.palette.themeWhisper)
+            .clipShape(DashboardShapes.card)
+            .overlay {
+                if selected {
+                    DashboardShapes.card
+                        .stroke(theme.palette.themeRing, lineWidth: 1.5)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(option.title) theme")
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+
+    private var conversationTitlesCard: some View {
+        SettingsCard(
+            title: "Conversation titles",
+            detail: "Automatically name new conversations using the Codex CLI account signed in on this Mac."
+        ) {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Text(model.titleGenerationStatus)
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(DashboardPalette.mutedForeground)
+                    Spacer()
+                    Toggle(
+                        "Generate with Codex",
+                        isOn: Binding(
+                            get: { model.titleGenerationSettings.isEnabled },
+                            set: { model.setTitleGenerationEnabled($0) }
+                        )
+                    )
+                    .toggleStyle(.switch)
+                }
+
+                if model.titleGenerationSettings.isEnabled {
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack(spacing: 16) {
+                            Text("Model")
+                                .font(.system(size: 13, weight: .medium))
+                            Spacer(minLength: 12)
+                            SettingsMenuPicker(
+                                selection: model.titleGenerationSettings.model,
+                                options: model.titleGenerationCapabilities?.models ?? []
+                            ) { option in
+                                model.setTitleGenerationModel(option)
+                            }
+                        }
+
+                        HStack(spacing: 16) {
+                            Text("Thinking level")
+                                .font(.system(size: 13, weight: .medium))
+                            Spacer(minLength: 12)
+                            SettingsMenuPicker(
+                                selection: model.titleGenerationSettings.thinking,
+                                options: model.titleGenerationCapabilities?.thinkingLevels ?? [],
+                                capitalizeOptions: true
+                            ) { option in
+                                model.setTitleGenerationThinking(option)
+                            }
+                        }
+
+                        HStack {
+                            Spacer()
+                            Button(
+                                model.isRefreshingTitleGenerationCapabilities
+                                    ? "Checking…" : "Refresh options"
+                            ) {
+                                model.refreshTitleGenerationCapabilitiesNow()
+                            }
+                            .buttonStyle(SettingsQuietButtonStyle())
+                            .disabled(model.isRefreshingTitleGenerationCapabilities)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private var supportedHarnessesCard: some View {
+        SettingsCard(
+            title: "Supported harnesses"
+        ) {
+            LazyVGrid(
+                columns: [GridItem(.adaptive(minimum: 112), spacing: 10)],
+                alignment: .leading,
+                spacing: 10
+            ) {
+                ForEach(DashboardHarnessLogo.displayCases, id: \.self) { harness in
+                    if harness == .codex {
+                        Button {
+                            storedCodexLogoStyle = codexLogoStyle.next.rawValue
+                        } label: {
+                            supportedHarnessTile(harness)
+                                .overlay(alignment: .topTrailing) {
+                                    Image(systemName: "arrow.triangle.2.circlepath")
+                                        .font(.system(size: 10, weight: .semibold))
+                                        .foregroundStyle(DashboardPalette.mutedForeground)
+                                        .padding(10)
+                                        .accessibilityHidden(true)
+                                }
+                        }
+                        .buttonStyle(.plain)
+                        .help("Switch Codex to the \(codexLogoStyle.next.displayName) logo")
+                        .accessibilityLabel("Codex harness logo")
+                        .accessibilityValue(codexLogoStyle.displayName)
+                        .accessibilityHint("Switches to the \(codexLogoStyle.next.displayName) logo")
+                    } else {
+                        supportedHarnessTile(harness)
+                    }
+                }
+            }
+        }
+    }
+
+    private func supportedHarnessTile(_ harness: DashboardHarnessLogo) -> some View {
+        VStack(spacing: 9) {
+            DashboardHarnessLogoIcon(logo: harness, size: 34)
+                .frame(height: 38)
+
+            Text(harness.displayName)
+                .font(.system(size: 12.5, weight: .medium))
+                .lineLimit(1)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 13)
+        .padding(.horizontal, 8)
+        .background(theme.palette.themeWhisper)
+        .clipShape(DashboardShapes.card)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(harness.displayName)
+    }
+
+}

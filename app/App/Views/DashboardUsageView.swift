@@ -1,0 +1,1191 @@
+import Charts
+import SwiftUI
+import WovenMatterCore
+
+private enum DashboardUsagePage: String, CaseIterable, Identifiable {
+    case analytics
+    case limits
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .analytics: "Usage Analytics"
+        case .limits: "Usage Limits"
+        }
+    }
+}
+
+struct DashboardUsageView: View {
+    @Environment(\.dashboardTheme) private var theme
+    @Bindable var model: ApplicationModel
+    @AppStorage("wovenmatter.usage.page") private var pageRaw = DashboardUsagePage.analytics.rawValue
+    @AppStorage("wovenmatter.usage.range") private var rangeRaw = UsageTimeRange.last30Days.rawValue
+    @State private var providerFilter = "all"
+    @State private var modelFilter = "all"
+    @State private var billingRouteFilter = "all"
+    @State private var harnessFilter = "all"
+    @State private var reasoningFilter = "all"
+    @State private var searchText = ""
+    @State private var openRouterAPIKey = ""
+
+    private var page: DashboardUsagePage {
+        DashboardUsagePage(rawValue: pageRaw) ?? .analytics
+    }
+
+    private var range: UsageTimeRange {
+        UsageTimeRange(rawValue: rangeRaw) ?? .last30Days
+    }
+
+    private var analytics: UsageAnalyticsSnapshot? { model.localUsage?.analytics }
+
+    private var filteredSamples: [UsageSample] {
+        guard let analytics else { return [] }
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return analytics.samples.filter { sample in
+            (providerFilter == "all" || sample.provider.rawValue == providerFilter)
+                && (modelFilter == "all" || sample.modelFamily == modelFilter)
+                && (billingRouteFilter == "all" || sample.billingRoute == billingRouteFilter)
+                && (harnessFilter == "all" || sample.harness == harnessFilter)
+                && (reasoningFilter == "all" || (sample.reasoningLevel ?? "Not reported") == reasoningFilter)
+                && (query.isEmpty || searchableText(sample).contains(query))
+        }
+    }
+
+    private var pageBinding: Binding<DashboardUsagePage> {
+        Binding(
+            get: { page },
+            set: { value in
+                pageRaw = value.rawValue
+                if value == .limits {
+                    Task {
+                        await model.refreshLocalUsage(
+                            range: range,
+                            refreshLimits: true,
+                            reason: .viewAppeared
+                        )
+                    }
+                }
+            }
+        )
+    }
+
+    private var rangeBinding: Binding<UsageTimeRange> {
+        Binding(
+            get: { range },
+            set: { value in
+                rangeRaw = value.rawValue
+                Task {
+                    await model.refreshLocalUsage(
+                        range: value,
+                        reason: .rangeChanged
+                    )
+                }
+            }
+        )
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                header
+                Picker("Usage page", selection: pageBinding) {
+                    ForEach(DashboardUsagePage.allCases) { page in
+                        Text(page.title).tag(page)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .frame(maxWidth: 360)
+
+                if let error = model.localUsageError {
+                    UsageErrorBanner(text: error)
+                }
+
+                if let snapshot = model.localUsage {
+                    switch page {
+                    case .analytics:
+                        analyticsPage(snapshot.analytics)
+                    case .limits:
+                        limitsPage(snapshot)
+                    }
+                } else {
+                    UsageLoadingCard(isLoading: model.isRefreshingLocalUsage)
+                }
+            }
+            .frame(maxWidth: 1180)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 32)
+            .padding(.vertical, 40)
+        }
+        .scrollIndicators(.never)
+        .background(theme.palette.workspace)
+        .task {
+            await model.refreshLocalUsage(
+                range: range,
+                refreshLimits: page == .limits,
+                reason: .viewAppeared
+            )
+        }
+    }
+
+    private var header: some View {
+        HStack(alignment: .top, spacing: 16) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Usage")
+                    .font(.system(size: 24, weight: .semibold))
+                    .tracking(-0.4)
+                Text("AI activity and account allowances across connected accounts and runtimes")
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(DashboardPalette.mutedForeground)
+            }
+            Spacer()
+            if let generatedAt = model.localUsage?.analytics.generatedAt {
+                Text("Updated \(generatedAt, format: .relative(presentation: .named))")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(DashboardPalette.mutedForeground)
+                    .padding(.top, 10)
+            }
+            Button {
+                Task {
+                    await model.refreshLocalUsage(
+                        range: range,
+                        refreshLimits: page == .limits,
+                        reason: .manual
+                    )
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    if model.isRefreshingLocalUsage {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        DashboardLucideIcon(glyph: .rotate, size: 14)
+                    }
+                    Text(model.isRefreshingLocalUsage ? "Refreshing…" : "Refresh")
+                }
+            }
+            .buttonStyle(DashboardQuietButtonStyle())
+            .disabled(model.isRefreshingLocalUsage)
+        }
+    }
+
+    @ViewBuilder
+    private func analyticsPage(_ snapshot: UsageAnalyticsSnapshot) -> some View {
+        analyticsControls(snapshot)
+
+        HStack(spacing: 7) {
+            Image(systemName: "externaldrive.badge.checkmark")
+                .foregroundStyle(theme.palette.themeAccent)
+            Text("Normalized usage metadata is persisted in Woven Matter; prompts and transcript contents remain in their provider-owned stores.")
+                .foregroundStyle(DashboardPalette.mutedForeground)
+            Spacer()
+        }
+        .font(.system(size: 10.5, weight: .medium))
+
+        let samples = filteredSamples
+        let summary = UsageAnalyticsSummary(samples: samples)
+        LazyVGrid(
+            columns: [GridItem(.adaptive(minimum: 210), spacing: 12)],
+            alignment: .leading,
+            spacing: 12
+        ) {
+            UsageMetricCard(
+                title: "Total tokens",
+                value: compact(summary.tokens.totalTokens),
+                detail: "\(summary.sessions.formatted()) sessions"
+            )
+            UsageMetricCard(
+                title: "Uncached input",
+                value: compact(summary.tokens.inputTokens),
+                detail: cacheRateDetail(summary.tokens)
+            )
+            UsageMetricCard(
+                title: "Cached input",
+                value: compact(summary.tokens.cachedInputTokens),
+                detail: compact(summary.tokens.cacheCreationTokens) + " cache write"
+            )
+            UsageMetricCard(
+                title: "Output",
+                value: compact(summary.tokens.outputTokens),
+                detail: compact(summary.tokens.reasoningTokens) + " reasoning"
+            )
+            UsageMetricCard(
+                title: "Model calls",
+                value: summary.requests.formatted(),
+                detail: modelCountDetail(samples)
+            )
+            UsageMetricCard(
+                title: "Reported cost",
+                value: summary.costUSD.map(currency) ?? "Not reported",
+                detail: "No API-equivalent estimates"
+            )
+        }
+
+        if samples.isEmpty {
+            UsageEmptyCard(
+                title: snapshot.samples.isEmpty ? "No attributable usage in this range" : "No usage matches these filters",
+                detail: snapshot.samples.isEmpty
+                    ? "Source coverage below shows what Woven Matter found on this Mac."
+                    : "Clear filters or broaden the time range."
+            )
+        } else {
+            modelBreakdown(samples)
+            usageChart(samples)
+            sessionTable(samples)
+        }
+
+        sourceCoverage(snapshot.sources)
+    }
+
+    private func analyticsControls(_ snapshot: UsageAnalyticsSnapshot) -> some View {
+        DashboardCard(showsBorder: false) {
+            VStack(alignment: .leading, spacing: 12) {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 12) {
+                        Picker("Range", selection: rangeBinding) {
+                            ForEach(UsageTimeRange.allCases) { range in
+                                Text(range.compactLabel).tag(range)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .frame(width: 430)
+
+                        Spacer(minLength: 8)
+                        TextField("Search model, harness, app, or agent", text: $searchText)
+                            .textFieldStyle(.plain)
+                            .padding(.horizontal, 10)
+                            .frame(height: 28)
+                            .background(theme.palette.input)
+                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                            .frame(width: 260)
+                    }
+                    VStack(alignment: .leading, spacing: 10) {
+                        Picker("Range", selection: rangeBinding) {
+                            ForEach(UsageTimeRange.allCases) { range in
+                                Text(range.compactLabel).tag(range)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        TextField("Search model, harness, app, or agent", text: $searchText)
+                            .textFieldStyle(.plain)
+                            .padding(.horizontal, 10)
+                            .frame(height: 28)
+                            .background(theme.palette.input)
+                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    }
+                }
+
+                LazyVGrid(
+                    columns: [GridItem(.adaptive(minimum: 145), spacing: 8)],
+                    alignment: .leading,
+                    spacing: 8
+                ) {
+                    filterPicker(
+                        title: "Provider",
+                        selection: $providerFilter,
+                        options: snapshot.samples.map { ($0.provider.rawValue, $0.provider.displayName) }
+                    )
+                    filterPicker(
+                        title: "Model",
+                        selection: $modelFilter,
+                        options: snapshot.samples.map { ($0.modelFamily, $0.modelFamily) }
+                    )
+                    filterPicker(
+                        title: "Billing route",
+                        selection: $billingRouteFilter,
+                        options: snapshot.samples.map { ($0.billingRoute, $0.billingRoute) }
+                    )
+                    filterPicker(
+                        title: "Harness",
+                        selection: $harnessFilter,
+                        options: snapshot.samples.map { ($0.harness, $0.harness) }
+                    )
+                    filterPicker(
+                        title: "Reasoning",
+                        selection: $reasoningFilter,
+                        options: snapshot.samples.map {
+                            let value = $0.reasoningLevel ?? "Not reported"
+                            return (value, value)
+                        }
+                    )
+                }
+                if hasActiveFilters {
+                    Button("Clear filters") { clearFilters() }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 11.5, weight: .medium))
+                        .foregroundStyle(theme.palette.themeAccent)
+                }
+            }
+        }
+    }
+
+    private func filterPicker(
+        title: String,
+        selection: Binding<String>,
+        options: [(String, String)]
+    ) -> some View {
+        let unique = Dictionary(options, uniquingKeysWith: { first, _ in first })
+            .sorted { $0.value.localizedCaseInsensitiveCompare($1.value) == .orderedAscending }
+        let allLabel = switch title {
+        case "Harness": "All harnesses"
+        case "Reasoning": "All reasoning levels"
+        default: "All \(title.lowercased())s"
+        }
+        return Picker(title, selection: selection) {
+            Text(allLabel).tag("all")
+            ForEach(unique, id: \.key) { key, label in
+                Text(label).tag(key)
+            }
+        }
+        .labelsHidden()
+        .pickerStyle(.menu)
+        .frame(maxWidth: 170)
+    }
+
+    private func usageChart(_ samples: [UsageSample]) -> some View {
+        let buckets = displayBuckets(samples)
+        let models = Array(Set(buckets.map(\.modelFamily))).sorted()
+        let summary = UsageAnalyticsSummary(samples: samples)
+        return VStack(alignment: .leading, spacing: 8) {
+            DashboardSectionHeading(title: "Model volume over time")
+            DashboardCard(showsBorder: false) {
+                Chart(buckets) { bucket in
+                    BarMark(
+                        x: .value(
+                            "Time",
+                            bucket.date,
+                            unit: range.usesHourlyBuckets ? .hour : .day
+                        ),
+                        y: .value("Tokens", bucket.tokens)
+                    )
+                    .foregroundStyle(by: .value("Model", bucket.modelFamily))
+                    .cornerRadius(2)
+                }
+                .chartForegroundStyleScale(
+                    domain: models,
+                    range: models.map(modelColor)
+                )
+                .chartLegend(position: .top, alignment: .leading, spacing: 12)
+                .chartXAxis {
+                    AxisMarks(values: .automatic(desiredCount: range.usesHourlyBuckets ? 8 : 10)) {
+                        AxisGridLine().foregroundStyle(theme.palette.border)
+                        AxisValueLabel(
+                            format: range.usesHourlyBuckets
+                                ? .dateTime.hour(.defaultDigits(amPM: .abbreviated))
+                                : .dateTime.month(.abbreviated).day()
+                        )
+                    }
+                }
+                .chartYAxis {
+                    AxisMarks(position: .leading) { value in
+                        AxisGridLine().foregroundStyle(theme.palette.border)
+                        AxisValueLabel {
+                            if let tokenValue = value.as(Int64.self) {
+                                Text(compact(tokenValue))
+                            }
+                        }
+                    }
+                }
+                .frame(height: 290)
+                .accessibilityLabel("Token volume by model family")
+                .accessibilityValue("\(compact(summary.tokens.totalTokens)) tokens across \(summary.sessions) sessions")
+            }
+        }
+    }
+
+    private func modelBreakdown(_ samples: [UsageSample]) -> some View {
+        let rollups = UsageModelRollup.aggregate(samples)
+        let maximum = max(1, rollups.map { $0.tokens.totalTokens }.max() ?? 1)
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                DashboardSectionHeading(title: "Models")
+                Spacer()
+                Text("Select a model to inspect subscriptions, accounts, and harnesses")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(DashboardPalette.mutedForeground)
+            }
+            DashboardCard(showsBorder: false) {
+                VStack(spacing: 0) {
+                    ForEach(rollups) { rollup in
+                        DisclosureGroup {
+                            VStack(alignment: .leading, spacing: 14) {
+                                HStack(spacing: 18) {
+                                    UsageInlineMetric(
+                                        title: "Input",
+                                        value: compact(rollup.tokens.inputTokens)
+                                    )
+                                    UsageInlineMetric(
+                                        title: "Cached",
+                                        value: compact(rollup.tokens.cachedInputTokens)
+                                    )
+                                    UsageInlineMetric(
+                                        title: "Output",
+                                        value: compact(rollup.tokens.outputTokens)
+                                    )
+                                    UsageInlineMetric(
+                                        title: "Reasoning",
+                                        value: compact(rollup.tokens.reasoningTokens)
+                                    )
+                                    Spacer()
+                                }
+                                if rollup.canonicalModels.count > 1 {
+                                    Text("Variants: " + rollup.canonicalModels.joined(separator: ", "))
+                                        .font(.system(size: 10.5))
+                                        .foregroundStyle(DashboardPalette.mutedForeground)
+                                }
+                                modelDimension(
+                                    title: "Subscriptions and billing routes",
+                                    rows: rollup.billingRoutes,
+                                    total: rollup.tokens.totalTokens,
+                                    color: modelColor(rollup.family)
+                                )
+                                modelDimension(
+                                    title: "Harnesses and applications",
+                                    rows: rollup.harnesses,
+                                    total: rollup.tokens.totalTokens,
+                                    color: modelColor(rollup.family)
+                                )
+                                modelDimension(
+                                    title: "Accounts",
+                                    rows: rollup.accounts,
+                                    total: rollup.tokens.totalTokens,
+                                    color: modelColor(rollup.family)
+                                )
+                            }
+                            .padding(.top, 12)
+                            .padding(.leading, 20)
+                            .padding(.bottom, 14)
+                        } label: {
+                            VStack(alignment: .leading, spacing: 7) {
+                                HStack(spacing: 8) {
+                                    Circle()
+                                        .fill(modelColor(rollup.family))
+                                        .frame(width: 8, height: 8)
+                                    Text(rollup.family)
+                                        .font(.system(size: 13, weight: .semibold))
+                                    Spacer()
+                                    Text(compact(rollup.tokens.totalTokens))
+                                        .font(.system(size: 13, weight: .semibold).monospacedDigit())
+                                    Text("\(rollup.requests.formatted()) calls")
+                                        .font(.system(size: 10.5))
+                                        .foregroundStyle(DashboardPalette.mutedForeground)
+                                        .frame(width: 76, alignment: .trailing)
+                                }
+                                GeometryReader { geometry in
+                                    ZStack(alignment: .leading) {
+                                        Capsule().fill(DashboardPalette.muted)
+                                        Capsule()
+                                            .fill(modelColor(rollup.family))
+                                            .frame(
+                                                width: geometry.size.width
+                                                    * CGFloat(rollup.tokens.totalTokens)
+                                                    / CGFloat(maximum)
+                                            )
+                                    }
+                                }
+                                .frame(height: 6)
+                            }
+                            .padding(.vertical, 12)
+                        }
+                        if rollup.id != rollups.last?.id {
+                            Divider().overlay(theme.palette.border)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func modelDimension(
+        title: String,
+        rows: [UsageBreakdownRow],
+        total: Int64,
+        color: Color
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Text(title.uppercased())
+                .font(.system(size: 9.5, weight: .semibold))
+                .tracking(0.8)
+                .foregroundStyle(DashboardPalette.mutedForeground)
+            ForEach(rows) { row in
+                HStack(spacing: 8) {
+                    Text(row.label)
+                        .font(.system(size: 11.5, weight: .medium))
+                        .lineLimit(1)
+                        .frame(width: 190, alignment: .leading)
+                    GeometryReader { geometry in
+                        ZStack(alignment: .leading) {
+                            Capsule().fill(DashboardPalette.muted)
+                            Capsule()
+                                .fill(color.opacity(0.78))
+                                .frame(
+                                    width: geometry.size.width
+                                        * CGFloat(row.tokens.totalTokens)
+                                        / CGFloat(max(1, total))
+                                )
+                        }
+                    }
+                    .frame(height: 5)
+                    Text(compact(row.tokens.totalTokens))
+                        .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                        .frame(width: 72, alignment: .trailing)
+                    Text("\(row.requests.formatted()) calls")
+                        .font(.system(size: 10))
+                        .foregroundStyle(DashboardPalette.mutedForeground)
+                        .frame(width: 66, alignment: .trailing)
+                }
+            }
+        }
+    }
+
+    private func sessionTable(_ samples: [UsageSample]) -> some View {
+        let rows = UsageSessionRow.rows(from: samples)
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                DashboardSectionHeading(title: "Sessions and attribution")
+                Spacer()
+                Text("Showing \(min(rows.count, 80)) of \(rows.count)")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(DashboardPalette.mutedForeground)
+            }
+            DashboardCard(showsBorder: false) {
+                ScrollView(.horizontal) {
+                    Grid(alignment: .leading, horizontalSpacing: 18, verticalSpacing: 0) {
+                        GridRow {
+                            tableHeading("Model / reasoning", width: 180)
+                            tableHeading("Subscription / provider", width: 180)
+                            tableHeading("Account", width: 120)
+                            tableHeading("Harness / app", width: 150)
+                            tableHeading("Latest", width: 120)
+                            tableHeading("Tokens", width: 105, alignment: .trailing)
+                            tableHeading("Cost", width: 82, alignment: .trailing)
+                        }
+                        Divider().gridCellColumns(7)
+                        ForEach(rows.prefix(80)) { row in
+                            GridRow {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(row.modelFamily).lineLimit(1)
+                                    Text(row.reasoningLevel ?? "Reasoning not reported")
+                                        .foregroundStyle(DashboardPalette.mutedForeground)
+                                }
+                                .frame(width: 180, alignment: .leading)
+
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(row.billingRoute).lineLimit(1)
+                                    Text(row.billingProvider)
+                                        .foregroundStyle(DashboardPalette.mutedForeground)
+                                }
+                                .frame(width: 180, alignment: .leading)
+
+                                Text(row.accountLabel)
+                                    .lineLimit(1)
+                                    .frame(width: 120, alignment: .leading)
+
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(row.harness).lineLimit(1)
+                                    Text(row.application).foregroundStyle(DashboardPalette.mutedForeground)
+                                }
+                                .frame(width: 150, alignment: .leading)
+
+                                Text(row.latest, format: .dateTime.month(.abbreviated).day().hour().minute())
+                                    .frame(width: 120, alignment: .leading)
+                                Text(compact(row.tokens.totalTokens))
+                                    .font(.system(size: 11.5, weight: .semibold).monospacedDigit())
+                                    .frame(width: 105, alignment: .trailing)
+                                Text(row.costUSD.map(currency) ?? "—")
+                                    .frame(width: 82, alignment: .trailing)
+                            }
+                            .font(.system(size: 11.5))
+                            .padding(.vertical, 9)
+                            .accessibilityElement(children: .combine)
+                            if row.id != rows.prefix(80).last?.id {
+                                Divider().gridCellColumns(7)
+                            }
+                        }
+                    }
+                }
+                .scrollIndicators(.never)
+            }
+        }
+    }
+
+    private func sourceCoverage(_ sources: [UsageSourceCoverage]) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            DashboardSectionHeading(title: "Source coverage")
+            LazyVGrid(
+                columns: [GridItem(.adaptive(minimum: 310), spacing: 12)],
+                alignment: .leading,
+                spacing: 12
+            ) {
+                ForEach(sources) { source in
+                    DashboardCard(showsBorder: false) {
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                ProviderDot(provider: source.provider)
+                                Text(source.sourceName)
+                                    .font(.system(size: 12.5, weight: .semibold))
+                                if let harness = source.harness,
+                                   harness != source.sourceName {
+                                    Text(harness)
+                                        .font(.system(size: 10.5))
+                                        .foregroundStyle(DashboardPalette.mutedForeground)
+                                }
+                                Spacer()
+                                UsageStatusPill(
+                                    text: source.status.title,
+                                    color: source.status.color
+                                )
+                            }
+                            HStack(spacing: 16) {
+                                Label("\(source.discoveredSessions) sessions", systemImage: "rectangle.stack")
+                                Label("\(source.attributedSamples) records", systemImage: "number")
+                            }
+                            .font(.system(size: 10.5, weight: .medium))
+                            .foregroundStyle(DashboardPalette.mutedForeground)
+                            Text(source.detail)
+                                .font(.system(size: 11.5))
+                                .foregroundStyle(DashboardPalette.mutedForeground)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Text(source.location)
+                                .font(.system(size: 10.5).monospaced())
+                                .foregroundStyle(DashboardPalette.mutedForeground.opacity(0.8))
+                                .lineLimit(1)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func limitsPage(_ snapshot: LocalUsageSnapshot) -> some View {
+        DashboardCard(showsBorder: false) {
+            HStack(alignment: .top, spacing: 12) {
+                DashboardLucideIcon(glyph: .keyRound, size: 18)
+                    .foregroundStyle(theme.palette.themeAccent)
+                    .padding(.top, 1)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Provider-owned credentials stay provider-owned")
+                        .font(.system(size: 12.5, weight: .semibold))
+                    Text("Woven Matter reuses provider-owned local sign-ins only for calls back to that provider. Explicit OpenRouter credentials stay in this Mac's Keychain; provider session tokens are never copied into Woven Matter storage.")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(DashboardPalette.mutedForeground)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+
+        openRouterCredential(snapshot)
+        DashboardSectionHeading(title: "Accounts and credentials")
+        LazyVGrid(
+            columns: [GridItem(.adaptive(minimum: 330), spacing: 12)],
+            alignment: .leading,
+            spacing: 12
+        ) {
+            ForEach(snapshot.limits) { account in
+                limitCard(account)
+            }
+        }
+    }
+
+    private func openRouterCredential(_ snapshot: LocalUsageSnapshot) -> some View {
+        DashboardCard(showsBorder: false) {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    ProviderDot(provider: .openRouter)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("OpenRouter credential")
+                            .font(.system(size: 12.5, weight: .semibold))
+                        Text(snapshot.hasOpenRouterCredential ? "Stored in Keychain" : "No key stored")
+                            .font(.system(size: 10.5))
+                            .foregroundStyle(DashboardPalette.mutedForeground)
+                    }
+                    Spacer()
+                    if snapshot.hasOpenRouterCredential {
+                        Button("Remove", role: .destructive) {
+                            Task {
+                                await model.deleteOpenRouterAPIKey(range: range)
+                                openRouterAPIKey = ""
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 11.5, weight: .medium))
+                        .foregroundStyle(DashboardPalette.danger)
+                    }
+                }
+                HStack(spacing: 8) {
+                    SecureField(
+                        snapshot.hasOpenRouterCredential ? "Enter a replacement key" : "OpenRouter API or management key",
+                        text: $openRouterAPIKey
+                    )
+                    .textFieldStyle(.roundedBorder)
+                    Button(snapshot.hasOpenRouterCredential ? "Replace key" : "Save key") {
+                        let key = openRouterAPIKey
+                        Task {
+                            await model.saveOpenRouterAPIKey(key, range: range)
+                            if model.localUsageError == nil { openRouterAPIKey = "" }
+                        }
+                    }
+                    .buttonStyle(DashboardPrimaryButtonStyle())
+                    .disabled(
+                        openRouterAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                            || model.isRefreshingLocalUsage
+                    )
+                }
+            }
+        }
+    }
+
+    private func limitCard(_ account: UsageLimitAccount) -> some View {
+        DashboardCard(showsBorder: false) {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .top, spacing: 9) {
+                    ProviderDot(provider: account.provider)
+                        .padding(.top, 4)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(account.provider.displayName)
+                            .font(.system(size: 13.5, weight: .semibold))
+                        Text(account.accountLabel)
+                            .font(.system(size: 11))
+                            .foregroundStyle(DashboardPalette.mutedForeground)
+                            .lineLimit(1)
+                    }
+                    Spacer()
+                    UsageStatusPill(
+                        text: account.status.title,
+                        color: account.status.color
+                    )
+                }
+
+                if account.quotaWindows.isEmpty,
+                   account.balance == nil,
+                   account.providerBudget == nil {
+                    Text(account.detail)
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(DashboardPalette.mutedForeground)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(minHeight: 48, alignment: .top)
+                } else {
+                    ForEach(account.quotaWindows) { window in
+                        UsageLimitWindowRow(window: window, color: account.provider.usageColor)
+                    }
+                    if let balance = account.balance {
+                        HStack {
+                            Text("Remaining balance")
+                            Spacer()
+                            Text(money(balance.amountMicros, currency: balance.currency))
+                                .fontWeight(.semibold)
+                        }
+                        .font(.system(size: 11.5))
+                    }
+                    if let budget = account.providerBudget {
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack {
+                                Text(budget.period?.capitalized ?? "Allowance")
+                                Spacer()
+                                Text("\(budget.remainingMicros == 0 ? "0" : money(budget.remainingMicros, currency: budget.currency)) left")
+                            }
+                            .font(.system(size: 11.5, weight: .medium))
+                            ProgressView(value: budget.usedPercent, total: 100)
+                                .tint(account.provider.usageColor)
+                            Text("\(money(budget.usedMicros, currency: budget.currency)) of \(money(budget.limitMicros, currency: budget.currency)) used")
+                                .font(.system(size: 10.5))
+                                .foregroundStyle(DashboardPalette.mutedForeground)
+                        }
+                    }
+                    Text(account.detail)
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(DashboardPalette.mutedForeground)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Divider().overlay(theme.palette.border)
+                HStack {
+                    Text(account.source)
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(DashboardPalette.mutedForeground)
+                        .lineLimit(1)
+                    Spacer()
+                    if let dashboardURL = account.dashboardURL {
+                        Link("Open dashboard", destination: dashboardURL)
+                            .font(.system(size: 10.5, weight: .medium))
+                    }
+                }
+            }
+        }
+    }
+
+    private func tableHeading(
+        _ title: String,
+        width: CGFloat,
+        alignment: Alignment = .leading
+    ) -> some View {
+        Text(title.uppercased())
+            .font(.system(size: 9.5, weight: .semibold))
+            .tracking(0.8)
+            .foregroundStyle(DashboardPalette.mutedForeground)
+            .frame(width: width, alignment: alignment)
+            .padding(.bottom, 8)
+    }
+
+    private var hasActiveFilters: Bool {
+        providerFilter != "all" || modelFilter != "all" || harnessFilter != "all"
+            || billingRouteFilter != "all" || reasoningFilter != "all"
+            || !searchText.isEmpty
+    }
+
+    private func clearFilters() {
+        providerFilter = "all"
+        modelFilter = "all"
+        billingRouteFilter = "all"
+        harnessFilter = "all"
+        reasoningFilter = "all"
+        searchText = ""
+    }
+
+    private func searchableText(_ sample: UsageSample) -> String {
+        [
+            sample.provider.displayName,
+            sample.model,
+            sample.canonicalModel,
+            sample.modelFamily,
+            sample.billingProvider,
+            sample.billingRoute,
+            sample.accountLabel,
+            sample.reasoningLevel,
+            sample.harness,
+            sample.application,
+            sample.agent,
+            sample.workspace,
+        ]
+        .compactMap { $0 }
+        .joined(separator: " ")
+        .lowercased()
+    }
+
+    private func compact(_ value: Int64) -> String {
+        let magnitude = Double(value)
+        if magnitude >= 1_000_000_000 { return String(format: "%.1fB", magnitude / 1_000_000_000) }
+        if magnitude >= 1_000_000 { return String(format: "%.1fM", magnitude / 1_000_000) }
+        if magnitude >= 1_000 { return String(format: "%.1fK", magnitude / 1_000) }
+        return value.formatted()
+    }
+
+    private func currency(_ value: Double) -> String {
+        value.formatted(.currency(code: "USD").precision(.fractionLength(value < 1 ? 3 : 2)))
+    }
+
+    private func money(_ micros: Int64, currency: String) -> String {
+        (Double(micros) / 1_000_000).formatted(
+            .currency(code: currency).precision(.fractionLength(2))
+        )
+    }
+
+    private func cacheRateDetail(_ tokens: UsageTokenCounts) -> String {
+        let input = tokens.inputTokens + tokens.cachedInputTokens + tokens.cacheCreationTokens
+        guard input > 0 else { return "No input reported" }
+        let percent = Double(tokens.cachedInputTokens) / Double(input) * 100
+        return "\(percent.formatted(.number.precision(.fractionLength(0))))% cache-read share"
+    }
+
+    private func modelCountDetail(_ samples: [UsageSample]) -> String {
+        let models = Set(samples.map(\.modelFamily)).count
+        return "\(models) model\(models == 1 ? "" : "s")"
+    }
+
+    private func displayBuckets(_ samples: [UsageSample]) -> [UsageChartBucket] {
+        let topModels = Set(
+            Dictionary(grouping: samples, by: \.modelFamily)
+                .map { ($0.key, $0.value.reduce(Int64(0)) { $0 + $1.tokens.totalTokens }) }
+                .sorted { $0.1 > $1.1 }
+                .prefix(6)
+                .map(\.0)
+        )
+        let raw = UsageChartBucket.aggregate(samples: samples, range: range)
+        var grouped: [String: (date: Date, model: String, tokens: Int64)] = [:]
+        for bucket in raw {
+            let model = topModels.contains(bucket.modelFamily) ? bucket.modelFamily : "Other"
+            let key = "\(bucket.date.timeIntervalSinceReferenceDate):\(model)"
+            grouped[key] = (
+                bucket.date,
+                model,
+                (grouped[key]?.tokens ?? 0) + bucket.tokens
+            )
+        }
+        return grouped.values
+            .map { UsageChartBucket(date: $0.date, modelFamily: $0.model, tokens: $0.tokens) }
+            .sorted {
+                $0.date == $1.date
+                    ? $0.modelFamily < $1.modelFamily
+                    : $0.date < $1.date
+            }
+    }
+
+    private func modelColor(_ model: String) -> Color {
+        let colors: [Color] = [
+            .hex(0x4D69D8),
+            .hex(0x0D8F5A),
+            .hex(0xC46B3C),
+            .hex(0x8B5CF6),
+            .hex(0xE05D8B),
+            .hex(0xC28A20),
+            .hex(0x535A63),
+        ]
+        let hash = model.utf8.reduce(UInt32(2_166_136_261)) {
+            ($0 ^ UInt32($1)) &* 16_777_619
+        }
+        return colors[Int(hash % UInt32(colors.count))]
+    }
+}
+
+private struct UsageInlineMetric: View {
+    let title: String
+    let value: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title.uppercased())
+                .font(.system(size: 9, weight: .semibold))
+                .tracking(0.7)
+                .foregroundStyle(DashboardPalette.mutedForeground)
+            Text(value)
+                .font(.system(size: 12, weight: .semibold).monospacedDigit())
+        }
+    }
+}
+
+private struct UsageMetricCard: View {
+    let title: String
+    let value: String
+    let detail: String
+
+    var body: some View {
+        DashboardCard(showsBorder: false) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(title.uppercased())
+                    .font(.system(size: 9.5, weight: .semibold))
+                    .tracking(1)
+                    .foregroundStyle(DashboardPalette.mutedForeground)
+                Text(value)
+                    .font(.system(size: 21, weight: .semibold).monospacedDigit())
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+                Text(detail)
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(DashboardPalette.mutedForeground)
+                    .lineLimit(1)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .accessibilityElement(children: .combine)
+    }
+}
+
+private struct UsageSessionRow: Identifiable {
+    let id: String
+    let modelFamily: String
+    let billingProvider: String
+    let billingRoute: String
+    let accountLabel: String
+    let reasoningLevel: String?
+    let harness: String
+    let application: String
+    let latest: Date
+    let tokens: UsageTokenCounts
+    let costUSD: Double?
+
+    static func rows(from samples: [UsageSample]) -> [UsageSessionRow] {
+        Dictionary(
+            grouping: samples,
+            by: {
+                "\($0.sourceID):\($0.sessionID):\($0.modelFamily):\($0.billingRoute)"
+            }
+        )
+        .compactMap { id, values in
+            guard let latest = values.max(by: { $0.timestamp < $1.timestamp }) else { return nil }
+            let tokens = values.reduce(.zero) { $0 + $1.tokens }
+            let costs = values.compactMap(\.costUSD)
+            return UsageSessionRow(
+                id: id,
+                modelFamily: latest.modelFamily,
+                billingProvider: latest.billingProvider,
+                billingRoute: latest.billingRoute,
+                accountLabel: latest.accountLabel,
+                reasoningLevel: latest.reasoningLevel,
+                harness: latest.harness,
+                application: latest.application,
+                latest: latest.timestamp,
+                tokens: tokens,
+                costUSD: costs.isEmpty ? nil : costs.reduce(0, +)
+            )
+        }
+        .sorted { $0.latest > $1.latest }
+    }
+}
+
+private struct ProviderDot: View {
+    let provider: ProviderKind
+
+    var body: some View {
+        Circle()
+            .fill(provider.usageColor)
+            .frame(width: 8, height: 8)
+            .accessibilityHidden(true)
+    }
+}
+
+private struct UsageStatusPill: View {
+    let text: String
+    let color: Color
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 9.5, weight: .semibold))
+            .foregroundStyle(color)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 4)
+            .background(color.opacity(0.10))
+            .clipShape(Capsule())
+    }
+}
+
+private struct UsageLimitWindowRow: View {
+    let window: ProviderQuotaWindow
+    let color: Color
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack {
+                Text(window.label)
+                    .font(.system(size: 11.5, weight: .medium))
+                Spacer()
+                Text(window.usageKnown ? "\(window.remainingPercent, specifier: "%.0f")% left" : "Unavailable")
+                    .font(.system(size: 11.5, weight: .semibold).monospacedDigit())
+            }
+            if window.usageKnown {
+                ProgressView(value: window.usedPercent, total: 100)
+                    .tint(color)
+                HStack {
+                    Text("\(window.usedPercent, specifier: "%.0f")% used")
+                    Spacer()
+                    if let resetsAt = window.resetsAt {
+                        Text("Resets \(resetsAt, format: .relative(presentation: .named))")
+                    } else if let resetDescription = window.resetDescription {
+                        Text(resetDescription)
+                    }
+                }
+                .font(.system(size: 10.5))
+                .foregroundStyle(DashboardPalette.mutedForeground)
+            }
+        }
+        .accessibilityElement(children: .combine)
+    }
+}
+
+private struct UsageErrorBanner: View {
+    let text: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 9) {
+            DashboardLucideIcon(glyph: .alertTriangle, size: 14)
+                .foregroundStyle(DashboardPalette.danger)
+                .padding(.top, 1)
+            Text(text)
+                .font(.system(size: 11.5))
+                .foregroundStyle(DashboardPalette.danger)
+            Spacer()
+        }
+        .padding(12)
+        .background(DashboardPalette.danger.opacity(0.07))
+        .clipShape(RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius, style: .continuous))
+    }
+}
+
+private struct UsageLoadingCard: View {
+    let isLoading: Bool
+
+    var body: some View {
+        DashboardCard(showsBorder: false) {
+            HStack(spacing: 10) {
+                if isLoading { ProgressView().controlSize(.small) }
+                Text(isLoading ? "Updating the persistent usage index…" : "Usage has not been loaded yet.")
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(DashboardPalette.mutedForeground)
+            }
+            .frame(maxWidth: .infinity, minHeight: 90, alignment: .center)
+        }
+    }
+}
+
+private struct UsageEmptyCard: View {
+    let title: String
+    let detail: String
+
+    var body: some View {
+        DashboardCard(showsBorder: false) {
+            VStack(spacing: 5) {
+                Text(title).font(.system(size: 13, weight: .semibold))
+                Text(detail)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(DashboardPalette.mutedForeground)
+            }
+            .frame(maxWidth: .infinity, minHeight: 110)
+        }
+    }
+}
+
+private extension ProviderKind {
+    var usageColor: Color {
+        switch self {
+        case .codex: Color.hex(0x0D8F5A)
+        case .claude: Color.hex(0xC46B3C)
+        case .grok: Color.hex(0x535A63)
+        case .cursor: Color.hex(0x4D69D8)
+        case .openCodeGo: Color.hex(0x8B5CF6)
+        case .openRouter: Color.hex(0xE05D8B)
+        case .unknown: DashboardPalette.mutedForeground
+        }
+    }
+}
+
+private extension UsageSourceStatus {
+    var title: String {
+        switch self {
+        case .available: "Available"
+        case .partial: "Partial"
+        case .notFound: "Not found"
+        case .unavailable: "Unavailable"
+        case .failed: "Needs attention"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .available: DashboardPalette.success
+        case .partial: DashboardPalette.warning
+        case .notFound, .unavailable: DashboardPalette.mutedForeground
+        case .failed: DashboardPalette.danger
+        }
+    }
+}
+
+private extension UsageLimitStatus {
+    var title: String {
+        switch self {
+        case .available: "Live"
+        case .signedIn: "Signed in"
+        case .needsCredential: "Needs sign-in"
+        case .unavailable: "Unavailable"
+        case .failed: "Needs attention"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .available: DashboardPalette.success
+        case .signedIn: Color.hex(0x4D69D8)
+        case .needsCredential: DashboardPalette.warning
+        case .unavailable: DashboardPalette.mutedForeground
+        case .failed: DashboardPalette.danger
+        }
+    }
+}

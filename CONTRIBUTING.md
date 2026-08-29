@@ -1,12 +1,14 @@
 # Contributing
 
-Thank you for helping improve Woven Matter.
+Thank you for helping improve WovenMatter.
 
 ## Before opening a change
 
 - Search existing issues and keep each change focused.
-- Fork the repository, create a short-lived branch, and open a pull request
-  against `main`.
+- If you do not have write access, fork the repository and create a short-lived
+  branch in your fork. Repository collaborators should also use a short-lived
+  branch rather than committing directly to `main`.
+- Open the pull request directly against `main`.
 - Do not include credentials, provider transcripts, personal paths, private
   hosts, generated build products, or proprietary assets.
 - Keep the local app useful without Buzz or a remote machine.
@@ -16,17 +18,36 @@ Thank you for helping improve Woven Matter.
 
 ## Validate
 
-Run the repository-owned validation documented by the codebase. Tests must be
-deterministic, need no provider credentials, and make no real LLM calls.
-Describe any platform or environment limitation in the pull request.
+Run:
 
-Dependency updates are reviewed and opened deliberately by maintainers. Review
-base-image digests and harness catalog sources when updating them.
+```sh
+scripts/test-changes.sh --all
+```
+
+When remote container behavior changes and Docker is available, also run:
+
+```sh
+scripts/test-container.sh
+```
+
+Tests must be deterministic, need no provider credentials, and make no real LLM
+calls. Describe any platform or environment limitation in the pull request.
+Continuous integration runs the same repository-owned validation without
+provider, release, deployment, or signing credentials.
+
+Dependency updates are reviewed and opened deliberately by maintainers. Check
+the container base-image digest and harness catalog sources as part of that
+manual review.
+
+See `docs/MAINTAINER_WORKFLOW.md` for the validation contract and environment
+boundaries.
 
 ## Pull requests
 
 Explain the product behavior that changed, list validation performed, and call
-out security, privacy, persistence, or third-party provenance impacts.
+out security, privacy, persistence, or third-party provenance impacts. Every
+pull request targeting `main` requires approval from the repository code owner
+before it can be merged.
 
 Pull requests are automatically assigned a `vouch:*` trust label and a `size:*`
 change-size label. External contributors begin as `vouch:unvouched`. A

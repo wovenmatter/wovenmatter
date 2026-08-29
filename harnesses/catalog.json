@@ -1,0 +1,468 @@
+{
+  "schemaVersion": 4,
+  "harnesses": [
+    {
+      "id": "codex",
+      "displayName": "Codex",
+      "transport": "acp",
+      "command": "codex-acp",
+      "arguments": [],
+      "cliCommand": "codex",
+      "adapterPackage": "@agentclientprotocol/codex-acp",
+      "minimumAdapterVersion": "1.7.0",
+      "install": {
+        "kind": "official-script",
+        "source": "https://chatgpt.com/codex/install.sh",
+        "command": "curl -fsSL https://chatgpt.com/codex/install.sh | sh",
+        "interpreter": "sh",
+        "arguments": []
+      },
+      "authentication": {
+        "statusCommands": ["codex login status"],
+        "discoveries": [
+          {
+            "displayName": "Codex account",
+            "statusCommand": "codex login status"
+          }
+        ],
+        "methods": [
+          {
+            "id": "chatgpt",
+            "displayName": "Sign in with Codex",
+            "kind": "device-code",
+            "command": "codex login --device-auth",
+            "acceptsInput": false
+          },
+          {
+            "id": "openai-api-key",
+            "displayName": "Use an OpenAI API key",
+            "kind": "api-key",
+            "command": "codex login --with-api-key",
+            "acceptsInput": true,
+            "inputLabel": "OpenAI API key",
+            "inputSecret": true
+          }
+        ]
+      },
+      "capabilities": ["conversations", "resume", "permissions", "attachments"]
+    },
+    {
+      "id": "claude_code",
+      "displayName": "Claude Code",
+      "transport": "acp",
+      "command": "claude-agent-acp",
+      "arguments": [],
+      "cliCommand": "claude",
+      "adapterPackage": "@agentclientprotocol/claude-agent-acp",
+      "minimumAdapterVersion": "0.70.0",
+      "install": {
+        "kind": "official-script",
+        "source": "https://claude.ai/install.sh",
+        "command": "curl -fsSL https://claude.ai/install.sh | bash",
+        "interpreter": "bash",
+        "arguments": []
+      },
+      "authentication": {
+        "statusCommands": ["claude auth status --json >/dev/null"],
+        "discoveries": [
+          {
+            "displayName": "Claude account",
+            "statusCommand": "claude auth status --json >/dev/null"
+          }
+        ],
+        "methods": [
+          {
+            "id": "claude-account",
+            "displayName": "Sign in with Claude",
+            "kind": "browser-code",
+            "command": "claude auth login --claudeai",
+            "acceptsInput": true,
+            "inputLabel": "Authorization code"
+          },
+          {
+            "id": "anthropic-console",
+            "displayName": "Sign in with Anthropic Console",
+            "kind": "browser-code",
+            "command": "claude auth login --console",
+            "acceptsInput": true,
+            "inputLabel": "Authorization code"
+          }
+        ]
+      },
+      "capabilities": ["conversations", "resume", "permissions", "attachments"]
+    },
+    {
+      "id": "grok_build",
+      "displayName": "Grok Build",
+      "transport": "agent-stdio",
+      "command": "grok",
+      "arguments": ["--permission-mode", "auto", "agent", "stdio"],
+      "cliCommand": "grok",
+      "transportCheckCommand": "grok agent stdio --help",
+      "install": {
+        "kind": "official-script",
+        "source": "https://x.ai/cli/install.sh",
+        "command": "curl -fsSL https://x.ai/cli/install.sh | bash",
+        "interpreter": "bash",
+        "arguments": []
+      },
+      "authentication": {
+        "statusCommands": ["grok models 2>/dev/null | grep -q '^You are logged in'"],
+        "discoveries": [
+          {
+            "displayName": "Grok account",
+            "statusCommand": "grok models 2>/dev/null | grep -q '^You are logged in'"
+          }
+        ],
+        "methods": [
+          {
+            "id": "grok-account",
+            "displayName": "Sign in with Grok",
+            "kind": "device-code",
+            "command": "grok login --device-auth",
+            "acceptsInput": false
+          }
+        ]
+      },
+      "capabilities": ["conversations", "resume", "permissions"]
+    },
+    {
+      "id": "hermes",
+      "displayName": "Hermes",
+      "transport": "acp",
+      "command": "hermes",
+      "arguments": ["acp"],
+      "cliCommand": "hermes",
+      "transportCheckCommand": "hermes acp --check",
+      "install": {
+        "kind": "official-script",
+        "source": "https://hermes-agent.nousresearch.com/install.sh",
+        "command": "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash",
+        "interpreter": "bash",
+        "arguments": []
+      },
+      "authentication": {
+        "statusCommands": [
+          "hermes auth status openai-codex 2>/dev/null | grep -q 'logged in'",
+          "hermes auth status anthropic 2>/dev/null | grep -q 'logged in'",
+          "hermes auth status xai-oauth 2>/dev/null | grep -q 'logged in'",
+          "hermes auth status xai 2>/dev/null | grep -q 'logged in'",
+          "hermes auth status openai 2>/dev/null | grep -q 'logged in'"
+        ],
+        "discoveries": [
+          {
+            "displayName": "Codex sign-in",
+            "statusCommand": "hermes auth status openai-codex 2>/dev/null | grep -q 'logged in'"
+          },
+          {
+            "displayName": "Claude sign-in",
+            "statusCommand": "hermes auth status anthropic 2>/dev/null | grep -q 'logged in'"
+          },
+          {
+            "displayName": "Grok sign-in",
+            "statusCommand": "hermes auth status xai-oauth 2>/dev/null | grep -q 'logged in'"
+          }
+        ],
+        "methods": [
+          {
+            "id": "codex",
+            "displayName": "Authorize Codex",
+            "kind": "oauth",
+            "command": "hermes auth add openai-codex --type oauth --no-browser",
+            "acceptsInput": false
+          },
+          {
+            "id": "claude",
+            "displayName": "Authorize Claude",
+            "kind": "oauth",
+            "command": "hermes auth add anthropic --type oauth --no-browser",
+            "acceptsInput": true,
+            "inputLabel": "Authorization code",
+            "notice": "Anthropic may count Hermes usage separately from Claude Code usage."
+          },
+          {
+            "id": "grok",
+            "displayName": "Authorize Grok",
+            "kind": "oauth",
+            "command": "hermes auth add xai-oauth --type oauth --no-browser",
+            "acceptsInput": false
+          },
+          {
+            "id": "openai-api-key",
+            "displayName": "Use an OpenAI API key",
+            "kind": "api-key",
+            "command": "hermes auth add openai --type api-key",
+            "acceptsInput": true,
+            "inputLabel": "OpenAI API key",
+            "inputSecret": true
+          },
+          {
+            "id": "anthropic-api-key",
+            "displayName": "Use an Anthropic API key",
+            "kind": "api-key",
+            "command": "hermes auth add anthropic --type api-key",
+            "acceptsInput": true,
+            "inputLabel": "Anthropic API key",
+            "inputSecret": true
+          },
+          {
+            "id": "xai-api-key",
+            "displayName": "Use an xAI API key",
+            "kind": "api-key",
+            "command": "hermes auth add xai --type api-key",
+            "acceptsInput": true,
+            "inputLabel": "xAI API key",
+            "inputSecret": true
+          }
+        ]
+      },
+      "capabilities": ["conversations", "permissions"]
+    },
+    {
+      "id": "cursor",
+      "displayName": "Cursor",
+      "transport": "acp",
+      "command": "cursor-agent",
+      "arguments": ["acp"],
+      "cliCommand": "cursor-agent",
+      "transportCheckCommand": "cursor-agent acp --help",
+      "install": {
+        "kind": "official-script",
+        "source": "https://cursor.com/install",
+        "command": "curl -fsSL https://cursor.com/install | bash",
+        "interpreter": "bash",
+        "arguments": []
+      },
+      "authentication": {
+        "statusCommands": ["cursor-agent status --format json >/dev/null"],
+        "discoveries": [
+          {
+            "displayName": "Cursor account",
+            "statusCommand": "cursor-agent status --format json >/dev/null"
+          }
+        ],
+        "methods": [
+          {
+            "id": "cursor-account",
+            "displayName": "Sign in with Cursor",
+            "kind": "browser",
+            "command": "NO_OPEN_BROWSER=1 cursor-agent login",
+            "acceptsInput": false
+          }
+        ]
+      },
+      "capabilities": ["conversations", "resume", "permissions"]
+    },
+    {
+      "id": "opencode",
+      "displayName": "OpenCode",
+      "transport": "acp",
+      "command": "opencode",
+      "arguments": ["acp"],
+      "cliCommand": "opencode",
+      "transportCheckCommand": "opencode acp --help",
+      "install": {
+        "kind": "official-script",
+        "source": "https://opencode.ai/install",
+        "command": "curl -fsSL https://opencode.ai/install | bash",
+        "interpreter": "bash",
+        "arguments": []
+      },
+      "authentication": {
+        "statusCommands": ["opencode auth list --pure 2>/dev/null | grep -q 'OpenCode Go'"],
+        "discoveries": [
+          {
+            "displayName": "OpenCode Go account",
+            "statusCommand": "opencode auth list --pure 2>/dev/null | grep -q 'OpenCode Go'"
+          }
+        ],
+        "methods": [
+          {
+            "id": "opencode-go",
+            "displayName": "Sign in with OpenCode Go",
+            "kind": "api-key",
+            "command": "opencode auth login --provider \"OpenCode Go\" --pure",
+            "acceptsInput": true,
+            "inputLabel": "OpenCode Go API key",
+            "inputSecret": true,
+            "verificationURL": "https://opencode.ai/auth"
+          }
+        ]
+      },
+      "capabilities": ["conversations", "resume", "permissions"]
+    },
+    {
+      "id": "pi",
+      "displayName": "Pi",
+      "transport": "rpc",
+      "command": "pi",
+      "arguments": ["--mode", "rpc"],
+      "cliCommand": "pi",
+      "transportCheckCommand": "pi --help 2>&1 | grep -q 'json, or rpc'",
+      "install": {
+        "kind": "npm-global",
+        "source": "https://www.npmjs.com/package/@earendil-works/pi-coding-agent",
+        "command": "npm install --global --prefix \"$HOME/.local\" @earendil-works/pi-coding-agent@0.84.3",
+        "arguments": [],
+        "package": "@earendil-works/pi-coding-agent@0.84.3"
+      },
+      "authentication": {
+        "statusCommands": [
+          "pi auth check --provider openai-codex --json --no-refresh 2>/dev/null | grep -q '\"status\":\"ready\"'",
+          "pi auth check --provider xai --json --no-refresh 2>/dev/null | grep -q '\"status\":\"ready\"'",
+          "pi auth check --provider openai --json --no-refresh 2>/dev/null | grep -q '\"status\":\"ready\"'"
+        ],
+        "discoveries": [
+          {
+            "displayName": "Codex sign-in",
+            "statusCommand": "pi auth check --provider openai-codex --json --no-refresh 2>/dev/null | grep -q '\"status\":\"ready\"'"
+          },
+          {
+            "displayName": "Grok sign-in",
+            "statusCommand": "pi auth check --provider xai --json --no-refresh 2>/dev/null | grep -q '\"status\":\"ready\"'"
+          },
+          {
+            "displayName": "OpenAI API key",
+            "statusCommand": "pi auth check --provider openai --json --no-refresh 2>/dev/null | grep -q '\"status\":\"ready\"'"
+          }
+        ],
+        "methods": [
+          {
+            "id": "codex",
+            "displayName": "Sign in with Codex",
+            "kind": "device-code",
+            "command": "node /opt/wovenmatter/src/pi-auth.mjs oauth openai-codex",
+            "acceptsInput": false
+          },
+          {
+            "id": "grok",
+            "displayName": "Sign in with Grok",
+            "kind": "device-code",
+            "command": "node /opt/wovenmatter/src/pi-auth.mjs oauth xai",
+            "acceptsInput": false
+          },
+          {
+            "id": "openai-api-key",
+            "displayName": "Use an OpenAI API key",
+            "kind": "api-key",
+            "command": "node /opt/wovenmatter/src/pi-auth.mjs api-key openai",
+            "acceptsInput": true,
+            "inputLabel": "OpenAI API key",
+            "inputSecret": true
+          },
+          {
+            "id": "xai-api-key",
+            "displayName": "Use an xAI API key",
+            "kind": "api-key",
+            "command": "node /opt/wovenmatter/src/pi-auth.mjs api-key xai",
+            "acceptsInput": true,
+            "inputLabel": "xAI API key",
+            "inputSecret": true
+          }
+        ]
+      },
+      "capabilities": ["conversations", "resume", "permissions"]
+    },
+    {
+      "id": "openclaw",
+      "displayName": "OpenClaw",
+      "transport": "acp-and-gateway",
+      "command": "openclaw",
+      "arguments": ["acp"],
+      "cliCommand": "openclaw",
+      "transportCheckCommand": "openclaw acp --help",
+      "install": {
+        "kind": "official-script",
+        "source": "https://openclaw.ai/install.sh",
+        "command": "curl -fsSL https://openclaw.ai/install.sh | bash -s -- --no-onboard",
+        "interpreter": "bash",
+        "arguments": ["--no-onboard"]
+      },
+      "authentication": {
+        "statusCommands": [
+          "openclaw models status --json 2>/dev/null | jq -e '((.auth.runtimeAuthRoutes // []) | any(.status == \"usable\")) or ((.auth.providers // []) | length > 0)' >/dev/null"
+        ],
+        "discoveries": [
+          {
+            "displayName": "Codex sign-in",
+            "statusCommand": "openclaw models status --json 2>/dev/null | jq -e '(.auth.runtimeAuthRoutes // []) | any((.runtime == \"codex\" or .provider == \"openai\") and .status == \"usable\")' >/dev/null"
+          },
+          {
+            "displayName": "Claude sign-in",
+            "statusCommand": "openclaw models status --json 2>/dev/null | jq -e '(.auth.runtimeAuthRoutes // []) | any((.runtime == \"claude\" or .runtime == \"claude-cli\" or .provider == \"anthropic\") and .status == \"usable\")' >/dev/null"
+          },
+          {
+            "displayName": "Grok sign-in",
+            "statusCommand": "openclaw models status --json 2>/dev/null | jq -e '(.auth.runtimeAuthRoutes // []) | any((.runtime == \"grok\" or .provider == \"xai\") and .status == \"usable\")' >/dev/null"
+          },
+          {
+            "displayName": "OpenCode Go sign-in",
+            "statusCommand": "openclaw models status --json 2>/dev/null | jq -e '(.auth.runtimeAuthRoutes // []) | any((.runtime == \"opencode\" or .provider == \"opencode\" or .provider == \"opencode-go\") and .status == \"usable\")' >/dev/null"
+          }
+        ],
+        "methods": [
+          {
+            "id": "codex",
+            "displayName": "Sign in with Codex",
+            "kind": "device-code",
+            "command": "openclaw onboard --non-interactive --accept-risk --mode local --flow quickstart --auth-choice openai-device-code --gateway-auth token --gateway-token-ref-env WOVENMATTER_API_TOKEN --gateway-bind loopback --gateway-port \"$WOVENMATTER_GATEWAY_PORT\" --no-install-daemon --skip-daemon --skip-channels --skip-skills --skip-hooks --skip-search --skip-ui --skip-health --suppress-gateway-token-output --json",
+            "acceptsInput": false
+          },
+          {
+            "id": "claude",
+            "displayName": "Sign in with Claude",
+            "kind": "browser-code",
+            "command": "claude auth login --claudeai && openclaw onboard --non-interactive --accept-risk --mode local --flow quickstart --auth-choice anthropic-cli --gateway-auth token --gateway-token-ref-env WOVENMATTER_API_TOKEN --gateway-bind loopback --gateway-port \"$WOVENMATTER_GATEWAY_PORT\" --no-install-daemon --skip-daemon --skip-channels --skip-skills --skip-hooks --skip-search --skip-ui --skip-health --suppress-gateway-token-output --json",
+            "acceptsInput": true,
+            "inputLabel": "Authorization code",
+            "notice": "Anthropic may count OpenClaw's Claude usage separately from Claude Code usage."
+          },
+          {
+            "id": "grok",
+            "displayName": "Sign in with Grok",
+            "kind": "device-code",
+            "command": "openclaw onboard --non-interactive --accept-risk --mode local --flow quickstart --auth-choice xai-device-code --gateway-auth token --gateway-token-ref-env WOVENMATTER_API_TOKEN --gateway-bind loopback --gateway-port \"$WOVENMATTER_GATEWAY_PORT\" --no-install-daemon --skip-daemon --skip-channels --skip-skills --skip-hooks --skip-search --skip-ui --skip-health --suppress-gateway-token-output --json",
+            "acceptsInput": false
+          },
+          {
+            "id": "openai-api-key",
+            "displayName": "Use an OpenAI API key",
+            "kind": "api-key",
+            "command": "read -r secret; export OPENAI_API_KEY=\"$secret\"; exec openclaw onboard --non-interactive --accept-risk --mode local --flow quickstart --auth-choice openai-api-key --gateway-auth token --gateway-token-ref-env WOVENMATTER_API_TOKEN --gateway-bind loopback --gateway-port \"$WOVENMATTER_GATEWAY_PORT\" --no-install-daemon --skip-daemon --skip-channels --skip-skills --skip-hooks --skip-search --skip-ui --skip-health --suppress-gateway-token-output --json",
+            "acceptsInput": true,
+            "inputLabel": "OpenAI API key",
+            "inputSecret": true
+          },
+          {
+            "id": "anthropic-api-key",
+            "displayName": "Use an Anthropic API key",
+            "kind": "api-key",
+            "command": "read -r secret; export ANTHROPIC_API_KEY=\"$secret\"; exec openclaw onboard --non-interactive --accept-risk --mode local --flow quickstart --auth-choice apiKey --gateway-auth token --gateway-token-ref-env WOVENMATTER_API_TOKEN --gateway-bind loopback --gateway-port \"$WOVENMATTER_GATEWAY_PORT\" --no-install-daemon --skip-daemon --skip-channels --skip-skills --skip-hooks --skip-search --skip-ui --skip-health --suppress-gateway-token-output --json",
+            "acceptsInput": true,
+            "inputLabel": "Anthropic API key",
+            "inputSecret": true
+          },
+          {
+            "id": "xai-api-key",
+            "displayName": "Use an xAI API key",
+            "kind": "api-key",
+            "command": "read -r secret; export XAI_API_KEY=\"$secret\"; exec openclaw onboard --non-interactive --accept-risk --mode local --flow quickstart --auth-choice xai-api-key --gateway-auth token --gateway-token-ref-env WOVENMATTER_API_TOKEN --gateway-bind loopback --gateway-port \"$WOVENMATTER_GATEWAY_PORT\" --no-install-daemon --skip-daemon --skip-channels --skip-skills --skip-hooks --skip-search --skip-ui --skip-health --suppress-gateway-token-output --json",
+            "acceptsInput": true,
+            "inputLabel": "xAI API key",
+            "inputSecret": true
+          },
+          {
+            "id": "opencode-go",
+            "displayName": "Use an OpenCode Go account",
+            "kind": "api-key",
+            "command": "read -r secret; export OPENCODE_API_KEY=\"$secret\"; exec openclaw onboard --non-interactive --accept-risk --mode local --flow quickstart --auth-choice opencode-go --gateway-auth token --gateway-token-ref-env WOVENMATTER_API_TOKEN --gateway-bind loopback --gateway-port \"$WOVENMATTER_GATEWAY_PORT\" --no-install-daemon --skip-daemon --skip-channels --skip-skills --skip-hooks --skip-search --skip-ui --skip-health --suppress-gateway-token-output --json",
+            "acceptsInput": true,
+            "inputLabel": "OpenCode Go API key",
+            "inputSecret": true
+          }
+        ]
+      },
+      "capabilities": ["conversations", "resume", "attachments", "events", "models", "sessions", "cron", "heartbeat", "gateway"]
+    }
+  ]
+}

@@ -1,0 +1,33 @@
+name: wovenmatter
+
+services:
+  workspace:
+    image: wovenmatter/workspace:0.1
+    build:
+      context: ..
+      dockerfile: remote/Dockerfile
+    container_name: ${WOVENMATTER_CONTAINER_NAME:-wovenmatter-workspace}
+    restart: unless-stopped
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=256m
+      - /run:rw,noexec,nosuid,size=16m
+    logging:
+      driver: local
+      options:
+        max-size: 20m
+        max-file: "5"
+    ports:
+      - 127.0.0.1:${WOVENMATTER_HOST_PORT:-7337}:7337
+    environment:
+      WOVENMATTER_API_TOKEN: ${WOVENMATTER_API_TOKEN:?set WOVENMATTER_API_TOKEN}
+    volumes:
+      - workspace-home:/home
+
+volumes:
+  workspace-home:
+    name: ${WOVENMATTER_VOLUME_NAME:-wovenmatter-workspace-home}
