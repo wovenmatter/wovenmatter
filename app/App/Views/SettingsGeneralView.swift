@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import WovenMatterClient
 import WovenMatterCore
@@ -12,6 +13,7 @@ struct SettingsGeneralView: View {
     @AppStorage(DashboardSidebarStyle.storageKey) private var storedSidebarStyle = DashboardSidebarStyle.defaultStyle.rawValue
     @AppStorage(DashboardCodexLogoStyle.storageKey) private var storedCodexLogoStyle =
         DashboardCodexLogoStyle.defaultStyle.rawValue
+    @State private var releaseUpdateState: ReleaseUpdateState = .idle
 
     private var codexLogoStyle: DashboardCodexLogoStyle {
         DashboardCodexLogoStyle(rawValue: storedCodexLogoStyle) ?? .defaultStyle
@@ -25,6 +27,7 @@ struct SettingsGeneralView: View {
             onBack: onBack
         ) {
             appearanceCard
+            releaseUpdateCard
             conversationTitlesCard
             supportedHarnessesCard
         }
@@ -33,6 +36,57 @@ struct SettingsGeneralView: View {
         }
         .onChange(of: storedSidebarStyle) { _, _ in
             model.persistMacSurfaceProfileFromUserDefaults()
+        }
+    }
+
+    private var releaseUpdateCard: some View {
+        SettingsCard(
+            title: "Software updates",
+            detail: "Production releases are signed, notarized, and downloaded from GitHub Releases."
+        ) {
+            HStack(alignment: .center, spacing: 16) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(releaseUpdateState.title(currentVersion: currentVersion))
+                        .font(.system(size: 13, weight: .medium))
+                    Text(releaseUpdateState.detail)
+                        .font(.system(size: 11))
+                        .foregroundStyle(DashboardPalette.mutedForeground)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 12)
+                Button(releaseUpdateState.buttonTitle) {
+                    performReleaseUpdateAction()
+                }
+                .buttonStyle(SettingsQuietButtonStyle())
+                .disabled(releaseUpdateState.isChecking)
+            }
+        }
+    }
+
+    private var currentVersion: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+            ?? "0.0.0"
+    }
+
+    private func performReleaseUpdateAction() {
+        if case .available(let manifest) = releaseUpdateState {
+            NSWorkspace.shared.open(manifest.downloadURL)
+            return
+        }
+        releaseUpdateState = .checking
+        Task {
+            do {
+                switch try await WovenMatterReleaseUpdateClient().check(
+                    currentVersion: currentVersion
+                ) {
+                case .current:
+                    releaseUpdateState = .current
+                case .available(let manifest):
+                    releaseUpdateState = .available(manifest)
+                }
+            } catch {
+                releaseUpdateState = .failed(error.localizedDescription)
+            }
         }
     }
 
@@ -256,4 +310,41 @@ struct SettingsGeneralView: View {
         .accessibilityLabel(harness.displayName)
     }
 
+}
+
+private enum ReleaseUpdateState {
+    case idle
+    case checking
+    case current
+    case available(WovenMatterReleaseManifest)
+    case failed(String)
+
+    var isChecking: Bool {
+        if case .checking = self { true } else { false }
+    }
+
+    var buttonTitle: String {
+        switch self {
+        case .idle, .current, .failed: "Check for Updates"
+        case .checking: "Checking…"
+        case .available: "Download Update"
+        }
+    }
+
+    func title(currentVersion: String) -> String {
+        switch self {
+        case .available(let manifest): "Woven Matter \(manifest.version) is available"
+        default: "Woven Matter \(currentVersion)"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .idle: "Check the latest published Apple Silicon release."
+        case .checking: "Checking the signed production release channel…"
+        case .current: "This Mac has the latest published version."
+        case .available: "Download the versioned DMG from the official GitHub Release."
+        case .failed(let message): message
+        }
+    }
 }

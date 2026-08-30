@@ -341,7 +341,8 @@
 					"@executable_path/../Frameworks",
 				);
 				INFOPLIST_FILE = App/Info.plist;
-				MARKETING_VERSION = 1.0;
+				INFOPLIST_KEY_WovenMatterSourceRevision = "$(WOVENMATTER_SOURCE_REVISION)";
+				MARKETING_VERSION = 0.1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = wovenmatter.desktop;
 				PRODUCT_MODULE_NAME = WovenMatter;
 				PRODUCT_NAME = "Woven Matter";
@@ -368,7 +369,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 0.1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = wovenmatter.desktop.dev;
 				PRODUCT_MODULE_NAME = WovenMatter;
 				PRODUCT_NAME = "Woven Matter Dev";
