@@ -24,6 +24,7 @@ jq -e '
 grep -Fq 'WovenMatter_X.Y.Z_arm64.dmg' docs/MAINTAINER_WORKFLOW.md
 grep -Fq "'v[0-9]+.[0-9]+.[0-9]+'" .github/workflows/release.yml
 grep -Fq 'scripts/build-release.sh "$version"' .github/workflows/release.yml
+grep -Fq 'OTHER_CODE_SIGN_FLAGS="--timestamp"' scripts/build-release.sh
 grep -Fq 'refusing to replace published assets' .github/workflows/release.yml
 grep -Fq 'if [[ "$is_draft" != "true" ]]' .github/workflows/release.yml
 grep -Fq 'gh release edit "$tag" --draft=false' .github/workflows/release.yml
