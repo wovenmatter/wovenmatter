@@ -82,12 +82,22 @@ jobs:
           tag="$GITHUB_REF_NAME"
           version="${tag#v}"
           if gh release view "$tag" >/dev/null 2>&1; then
-            echo "Release $tag already exists; refusing to replace published assets." >&2
-            exit 1
+            is_draft="$(gh release view "$tag" --json isDraft --jq '.isDraft')"
+            if [[ "$is_draft" != "true" ]]; then
+              echo "Release $tag is already published; refusing to replace published assets." >&2
+              exit 1
+            fi
+          else
+            gh release create "$tag" \
+              --draft \
+              --title "Woven Matter v${version}" \
+              --notes "Signed and notarized Apple Silicon release."
           fi
-          gh release create "$tag" dist/* \
-            --title "Woven Matter v${version}" \
-            --notes "Signed and notarized Apple Silicon release."
+          gh release upload "$tag" dist/* --clobber
+          expected="$(printf '%s\n' "SHA256SUMS.txt" "WovenMatter_${version}_arm64.dmg" "latest-mac.json" | sort)"
+          actual="$(gh release view "$tag" --json assets --jq '.assets[].name' | sort)"
+          test "$actual" = "$expected"
+          gh release edit "$tag" --draft=false
 
       - name: Remove temporary signing keychain
         if: always()

@@ -180,15 +180,16 @@ public struct WovenMatterReleaseUpdateClient: Sendable {
       throw WovenMatterReleaseUpdateError.invalidManifest
     }
     let validated = try manifest.validated()
+    guard let available = WovenMatterReleaseVersion(validated.version) else {
+      throw WovenMatterReleaseUpdateError.invalidManifest
+    }
+    guard available > current else { return .current }
     guard let minimumMacOS = WovenMatterMacOSVersion(validated.minimumMacOS) else {
       throw WovenMatterReleaseUpdateError.invalidManifest
     }
     guard WovenMatterMacOSVersion(currentOperatingSystemVersion()) >= minimumMacOS else {
       throw WovenMatterReleaseUpdateError.unsupportedSystem(minimumMacOS: validated.minimumMacOS)
     }
-    guard let available = WovenMatterReleaseVersion(validated.version) else {
-      throw WovenMatterReleaseUpdateError.invalidManifest
-    }
-    return available > current ? .available(validated) : .current
+    return .available(validated)
   }
 }

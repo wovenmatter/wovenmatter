@@ -80,6 +80,29 @@ struct ReleaseUpdateTests {
     }
   }
 
+  @Test("ignores minimum macOS for a release that is not newer")
+  func currentVersionIgnoresMinimumSystem() async throws {
+    let futureManifest = validManifest.replacingOccurrences(
+      of: "\"minimum_macos\": \"26.0\"",
+      with: "\"minimum_macos\": \"27.0\""
+    )
+    let client = WovenMatterReleaseUpdateClient(
+      fetch: { url in
+        let response = try #require(HTTPURLResponse(
+          url: url,
+          statusCode: 200,
+          httpVersion: "HTTP/1.1",
+          headerFields: nil
+        ))
+        return (Data(futureManifest.utf8), response)
+      },
+      currentOperatingSystemVersion: {
+        OperatingSystemVersion(majorVersion: 26, minorVersion: 0, patchVersion: 0)
+      }
+    )
+    #expect(try await client.check(currentVersion: "0.1.0") == .current)
+  }
+
   private let validManifest = """
   {
     "schema_version": 1,

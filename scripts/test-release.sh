@@ -25,8 +25,7 @@ grep -Fq 'WovenMatter_X.Y.Z_arm64.dmg' docs/MAINTAINER_WORKFLOW.md
 grep -Fq "'v[0-9]+.[0-9]+.[0-9]+'" .github/workflows/release.yml
 grep -Fq 'scripts/build-release.sh "$version"' .github/workflows/release.yml
 grep -Fq 'refusing to replace published assets' .github/workflows/release.yml
-if grep -Eq -- '--draft|--clobber' .github/workflows/release.yml; then
-  printf '%s\n' 'Release workflow must publish immutable assets.' >&2
-  exit 1
-fi
+grep -Fq 'if [[ "$is_draft" != "true" ]]' .github/workflows/release.yml
+grep -Fq 'gh release edit "$tag" --draft=false' .github/workflows/release.yml
+grep -Fq 'test "$actual" = "$expected"' .github/workflows/release.yml
 printf '%s\n' 'Release contract validation passed.'
