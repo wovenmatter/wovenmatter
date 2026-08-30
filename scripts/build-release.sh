@@ -57,6 +57,7 @@ xcodebuild -quiet \
   CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO \
   CODE_SIGN_STYLE=Manual \
   CODE_SIGN_IDENTITY="$signing_identity" \
+  OTHER_CODE_SIGN_FLAGS="--timestamp" \
   DEVELOPMENT_TEAM="$team_id" \
   MARKETING_VERSION="$version" \
   CURRENT_PROJECT_VERSION="$build_number" \
