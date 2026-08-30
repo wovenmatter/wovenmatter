@@ -102,11 +102,12 @@ struct DashboardUsageView: View {
                 }
 
                 if let snapshot = model.localUsage {
+                    accountConnections(snapshot)
                     switch page {
                     case .analytics:
                         analyticsPage(snapshot.analytics)
                     case .limits:
-                        limitsPage(snapshot)
+                        EmptyView()
                     }
                 } else {
                     UsageLoadingCard(isLoading: model.isRefreshingLocalUsage)
@@ -657,16 +658,16 @@ struct DashboardUsageView: View {
     }
 
     @ViewBuilder
-    private func limitsPage(_ snapshot: LocalUsageSnapshot) -> some View {
+    private func accountConnections(_ snapshot: LocalUsageSnapshot) -> some View {
         DashboardCard(showsBorder: false) {
             HStack(alignment: .top, spacing: 12) {
                 DashboardLucideIcon(glyph: .keyRound, size: 18)
                     .foregroundStyle(theme.palette.themeAccent)
                     .padding(.top, 1)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("Provider-owned credentials stay provider-owned")
+                    Text("Connect only the accounts you choose")
                         .font(.system(size: 12.5, weight: .semibold))
-                    Text("Woven Matter reuses provider-owned local sign-ins only for calls back to that provider. Explicit OpenRouter credentials stay in this Mac's Keychain; provider session tokens are never copied into Woven Matter storage.")
+                    Text("OpenAI/Codex, Claude, Grok, and Cursor use their subscription sign-in flows. OpenRouter uses only the API key you enter below. Opening this page does not read Woven Matter credentials from Keychain.")
                         .font(.system(size: 11.5))
                         .foregroundStyle(DashboardPalette.mutedForeground)
                         .fixedSize(horizontal: false, vertical: true)
@@ -674,33 +675,33 @@ struct DashboardUsageView: View {
             }
         }
 
-        openRouterCredential(snapshot)
-        DashboardSectionHeading(title: "Accounts and credentials")
+        DashboardSectionHeading(title: "Accounts")
         LazyVGrid(
             columns: [GridItem(.adaptive(minimum: 330), spacing: 12)],
             alignment: .leading,
             spacing: 12
         ) {
-            ForEach(snapshot.limits) { account in
+            ForEach(snapshot.limits.filter { $0.provider != .openRouter }) { account in
                 limitCard(account)
             }
         }
+        openRouterCredential
     }
 
-    private func openRouterCredential(_ snapshot: LocalUsageSnapshot) -> some View {
+    private var openRouterCredential: some View {
         DashboardCard(showsBorder: false) {
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
                     ProviderDot(provider: .openRouter)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("OpenRouter credential")
+                        Text("OpenRouter API key")
                             .font(.system(size: 12.5, weight: .semibold))
-                        Text(snapshot.hasOpenRouterCredential ? "Stored in Keychain" : "No key stored")
+                        Text(model.isOpenRouterCredentialConfigured ? "Connected" : "Not connected")
                             .font(.system(size: 10.5))
                             .foregroundStyle(DashboardPalette.mutedForeground)
                     }
                     Spacer()
-                    if snapshot.hasOpenRouterCredential {
+                    if model.isOpenRouterCredentialConfigured {
                         Button("Remove", role: .destructive) {
                             Task {
                                 await model.deleteOpenRouterAPIKey(range: range)
@@ -714,11 +715,13 @@ struct DashboardUsageView: View {
                 }
                 HStack(spacing: 8) {
                     SecureField(
-                        snapshot.hasOpenRouterCredential ? "Enter a replacement key" : "OpenRouter API or management key",
+                        model.isOpenRouterCredentialConfigured
+                            ? "Enter a replacement key"
+                            : "OpenRouter API or management key",
                         text: $openRouterAPIKey
                     )
                     .textFieldStyle(.roundedBorder)
-                    Button(snapshot.hasOpenRouterCredential ? "Replace key" : "Save key") {
+                    Button(model.isOpenRouterCredentialConfigured ? "Replace key" : "Save API key") {
                         let key = openRouterAPIKey
                         Task {
                             await model.saveOpenRouterAPIKey(key, range: range)
@@ -805,6 +808,22 @@ struct DashboardUsageView: View {
                         .foregroundStyle(DashboardPalette.mutedForeground)
                         .lineLimit(1)
                     Spacer()
+                    if account.provider != .openRouter,
+                       account.status != .available,
+                       account.status != .signedIn {
+                        Button(
+                            model.signingInUsageProviders.contains(account.provider)
+                                ? "Signing in…"
+                                : "Sign in"
+                        ) {
+                            model.signInUsageProvider(account.provider)
+                        }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 10.5, weight: .medium))
+                        .disabled(
+                            model.signingInUsageProviders.contains(account.provider)
+                        )
+                    }
                     if let dashboardURL = account.dashboardURL {
                         Link("Open dashboard", destination: dashboardURL)
                             .font(.system(size: 10.5, weight: .medium))

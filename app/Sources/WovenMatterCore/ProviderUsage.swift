@@ -10,7 +10,7 @@ public enum ProviderKind: String, Codable, CaseIterable, Identifiable, Sendable 
   case unknown
 
   public static let supportedAccounts: [ProviderKind] = [
-    .codex, .claude, .grok, .cursor, .openCodeGo, .openRouter,
+    .codex, .claude, .grok, .cursor, .openRouter,
   ]
 
   public var id: String { rawValue }

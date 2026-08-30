@@ -1,5 +1,4 @@
 import Foundation
-import Security
 
 public struct LocalACPWorkspaceAvailability: Equatable, Sendable {
     public enum State: String, Equatable, Sendable {
@@ -294,15 +293,18 @@ public actor LocalACPWorkspaceConfigurationStore {
         }
     }
 
-    private let service: String
-    private let account = "direct-workspace"
+    private let defaults: UserDefaults
+    private let storageKey: String
     private let homeDirectory: URL
 
     public init(
-        service: String,
-        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
+        defaultsSuiteName: String? = nil,
+        storageKey: String = "wovenmatter.local-agent-workspace.folders"
     ) {
-        self.service = service
+        self.defaults = defaultsSuiteName.flatMap(UserDefaults.init(suiteName:))
+            ?? .standard
+        self.storageKey = storageKey
         self.homeDirectory = homeDirectory
     }
 
@@ -473,43 +475,13 @@ public actor LocalACPWorkspaceConfigurationStore {
     }
 
     private func load() throws -> StoredConfiguration? {
-        var result: CFTypeRef?
-        let status = SecItemCopyMatching([
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-        ] as CFDictionary, &result)
-        if status == errSecItemNotFound { return nil }
-        guard status == errSecSuccess, let data = result as? Data else {
-            throw LocalACPWorkspaceError.keychain(status)
-        }
+        guard let data = defaults.data(forKey: storageKey) else { return nil }
         return try JSONDecoder().decode(StoredConfiguration.self, from: data)
     }
 
     private func save(_ configuration: StoredConfiguration) throws {
         let data = try JSONEncoder().encode(configuration)
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-        ]
-        let updateStatus = SecItemUpdate(
-            query as CFDictionary,
-            [kSecValueData as String: data] as CFDictionary
-        )
-        if updateStatus == errSecSuccess { return }
-        guard updateStatus == errSecItemNotFound else {
-            throw LocalACPWorkspaceError.keychain(updateStatus)
-        }
-        var newItem = query
-        newItem[kSecValueData as String] = data
-        newItem[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-        let addStatus = SecItemAdd(newItem as CFDictionary, nil)
-        guard addStatus == errSecSuccess else {
-            throw LocalACPWorkspaceError.keychain(addStatus)
-        }
+        defaults.set(data, forKey: storageKey)
     }
 }
 
@@ -567,7 +539,6 @@ public enum LocalACPWorkspaceError: LocalizedError, Equatable, Sendable {
     case defaultDatabasesNotEmpty
     case initializerUnavailable
     case initializerFailed(String)
-    case keychain(OSStatus)
 
     public var errorDescription: String? {
         switch self {
@@ -591,8 +562,6 @@ public enum LocalACPWorkspaceError: LocalizedError, Equatable, Sendable {
             "The shared Woven Matter workspace initializer is unavailable."
         case .initializerFailed(let detail):
             "The shared Woven Matter workspace initializer failed: \(detail)"
-        case .keychain(let status):
-            "The workspace folder preferences could not be stored in Keychain (status \(status))."
         }
     }
 }

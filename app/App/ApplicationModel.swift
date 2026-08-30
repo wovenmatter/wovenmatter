@@ -987,6 +987,8 @@ final class ApplicationModel {
     private(set) var localUsage: LocalUsageSnapshot?
     private(set) var localUsageError: String?
     private(set) var isRefreshingLocalUsage = false
+    private(set) var isOpenRouterCredentialConfigured = false
+    private(set) var signingInUsageProviders: Set<ProviderKind> = []
 
     private var dashboardStore: DashboardStore?
     private var noteWriteBehind: DashboardNoteWriteBehind?
@@ -1010,9 +1012,7 @@ final class ApplicationModel {
     @ObservationIgnored
     private let applicationDefaults: UserDefaults
     @ObservationIgnored
-    private let localACPWorkspaceStore = LocalACPWorkspaceConfigurationStore(
-        service: WovenMatterKeychainService.current
-    )
+    private let localACPWorkspaceStore: LocalACPWorkspaceConfigurationStore
     @ObservationIgnored
     private let localACPRuntimeInstaller = LocalACPRuntimeInstaller()
     @ObservationIgnored
@@ -1052,6 +1052,8 @@ final class ApplicationModel {
         "wovenmatter.title-generation.thinking"
     private static let buzzDiscoveryEnabledDefaultsKey =
         "wovenmatter.buzz.discovery-enabled"
+    private static let openRouterCredentialConfiguredDefaultsKey =
+        "wovenmatter.openrouter-credential.configured"
 
     init(
         applicationDefaults: UserDefaults = .standard,
@@ -1060,7 +1062,11 @@ final class ApplicationModel {
     ) {
         self.applicationDefaults = applicationDefaults
         self.remoteWorkspaces = RemoteWorkspacesModel(defaults: applicationDefaults)
+        self.localACPWorkspaceStore = LocalACPWorkspaceConfigurationStore()
         self.dashboardStore = dashboardStore
+        isOpenRouterCredentialConfigured = applicationDefaults.bool(
+            forKey: Self.openRouterCredentialConfiguredDefaultsKey
+        )
         if applicationDefaults.object(
             forKey: Self.titleGenerationEnabledDefaultsKey
         ) == nil {
@@ -1168,7 +1174,6 @@ final class ApplicationModel {
             self.noteEditingService = noteEditingService
             noteEditingSocketPath = noteSocketURL.path
             await refreshLocalACPWorkspace()
-            remoteWorkspaces.refreshAll()
             await refreshBuzzWorkspaces()
             await refreshOpenClawGateways()
             await restoreOpenClawGatewayLinks()
@@ -2165,7 +2170,9 @@ final class ApplicationModel {
         let snapshot = await localUsageService.snapshot(
             range: range,
             refreshLimits: refreshLimits,
-            refreshReason: reason
+            refreshReason: reason,
+            allowCredentialAccess: isOpenRouterCredentialConfigured
+                && (reason == .manual || reason == .credentialChanged)
         )
         guard generation == localUsageRefreshGeneration else { return }
         isRefreshingLocalUsage = false
@@ -2183,6 +2190,11 @@ final class ApplicationModel {
     func saveOpenRouterAPIKey(_ value: String, range: UsageTimeRange) async {
         do {
             try await localUsageService.saveOpenRouterAPIKey(value)
+            isOpenRouterCredentialConfigured = true
+            applicationDefaults.set(
+                true,
+                forKey: Self.openRouterCredentialConfiguredDefaultsKey
+            )
             await refreshLocalUsage(
                 range: range,
                 refreshLimits: true,
@@ -2196,6 +2208,11 @@ final class ApplicationModel {
     func deleteOpenRouterAPIKey(range: UsageTimeRange) async {
         do {
             try await localUsageService.deleteOpenRouterAPIKey()
+            isOpenRouterCredentialConfigured = false
+            applicationDefaults.set(
+                false,
+                forKey: Self.openRouterCredentialConfiguredDefaultsKey
+            )
             await refreshLocalUsage(
                 range: range,
                 refreshLimits: true,
@@ -2204,6 +2221,75 @@ final class ApplicationModel {
         } catch {
             localUsageError = error.localizedDescription
         }
+    }
+
+    func signInUsageProvider(_ provider: ProviderKind) {
+        guard !signingInUsageProviders.contains(provider) else { return }
+        guard let command = Self.usageProviderSignInCommand(provider) else {
+            localUsageError = "\(provider.displayName) sign-in is unavailable because its CLI is not installed."
+            return
+        }
+        signingInUsageProviders.insert(provider)
+        localUsageError = nil
+        Task {
+            defer { signingInUsageProviders.remove(provider) }
+            do {
+                try await Task.detached(priority: .userInitiated) {
+                    let process = Process()
+                    process.executableURL = command.executable
+                    process.arguments = command.arguments
+                    process.standardOutput = FileHandle.nullDevice
+                    process.standardError = FileHandle.nullDevice
+                    try process.run()
+                    process.waitUntilExit()
+                    guard process.terminationStatus == 0 else {
+                        throw UsageProviderSignInError.failed(
+                            provider.displayName,
+                            process.terminationStatus
+                        )
+                    }
+                }.value
+                await refreshLocalUsage(
+                    range: currentUsageRange,
+                    refreshLimits: true,
+                    reason: .viewAppeared
+                )
+            } catch {
+                localUsageError = error.localizedDescription
+            }
+        }
+    }
+
+    private nonisolated static func usageProviderSignInCommand(
+        _ provider: ProviderKind
+    ) -> UsageProviderSignInCommand? {
+        let executableName: String
+        let arguments: [String]
+        switch provider {
+        case .codex:
+            executableName = "codex"
+            arguments = ["login"]
+        case .claude:
+            executableName = "claude"
+            arguments = ["auth", "login", "--claudeai"]
+        case .grok:
+            executableName = "grok"
+            arguments = ["login", "--oauth"]
+        case .cursor:
+            executableName = LocalACPRuntimeResolver.resolveExecutable(
+                named: "cursor-agent"
+            ) == nil ? "agent" : "cursor-agent"
+            arguments = ["login"]
+        case .openRouter, .openCodeGo, .unknown:
+            return nil
+        }
+        guard let executable = LocalACPRuntimeResolver.resolveExecutable(
+            named: executableName
+        ) else { return nil }
+        return UsageProviderSignInCommand(
+            executable: executable,
+            arguments: arguments
+        )
     }
 
     private struct AgentNoteBinding {
@@ -4265,21 +4351,10 @@ final class ApplicationModel {
                         workingDirectory: workspace.rootURL
                     )
                 case .remoteWorkspace:
-                    guard let agent = openClawAgent(agentID: persisted.agentID),
-                          let remoteWorkspaceID = agent.runtimeDeviceID,
-                          let configuration = remoteWorkspaces.configuration(
-                            id: remoteWorkspaceID
-                          ) else {
-                        throw ApplicationModelError.remoteHarnessUnavailable
-                    }
-                    let connection = try await remoteWorkspaces
-                        .prepareOpenClawGateway(for: configuration)
-                    await dashboardStore.configureOpenClawGatewayTransport(
-                        agentID: persisted.agentID,
-                        endpoint: connection.endpoint,
-                        requestHeaders: connection.requestHeaders
-                    )
-                    link.endpoint = connection.endpoint
+                    // Remote workspace tokens are intentionally not read during
+                    // app startup. The user can reconnect this gateway from its
+                    // workspace controls when they want Keychain access.
+                    continue
                 }
                 _ = try await dashboardStore.linkOpenClawGateway(link)
             } catch {
@@ -4474,6 +4549,22 @@ enum ApplicationModelError: LocalizedError {
             "The open note could not be attached to this run. Wait for it to finish saving, then try again."
         case .noteDraftSaveFailed:
             "The latest note draft could not be saved on this Mac. Your draft is preserved; retry after saving succeeds."
+        }
+    }
+}
+
+private struct UsageProviderSignInCommand: Sendable {
+    let executable: URL
+    let arguments: [String]
+}
+
+private enum UsageProviderSignInError: LocalizedError {
+    case failed(String, Int32)
+
+    var errorDescription: String? {
+        switch self {
+        case .failed(let provider, let status):
+            "\(provider) sign-in did not complete (exit status \(status))."
         }
     }
 }

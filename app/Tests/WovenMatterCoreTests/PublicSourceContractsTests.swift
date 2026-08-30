@@ -5,6 +5,17 @@ import WovenMatterCore
 
 @Suite("Public source contracts", .serialized)
 struct PublicSourceContractsTests {
+  @Test("usage gateway supports only the approved account providers")
+  func usageGatewayProviders() {
+    #expect(ProviderKind.supportedAccounts == [
+      .codex,
+      .claude,
+      .grok,
+      .cursor,
+      .openRouter,
+    ])
+  }
+
   @Test("the bundled catalog is complete and executable")
   func harnessCatalog() throws {
     let document = try HarnessCatalog.loadBundled()

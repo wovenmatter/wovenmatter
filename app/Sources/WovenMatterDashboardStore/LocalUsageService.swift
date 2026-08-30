@@ -59,20 +59,25 @@ public actor LocalUsageService {
     range: UsageTimeRange,
     refreshLimits: Bool = false,
     refreshReason: UsageRefreshReason = .manual,
+    allowCredentialAccess: Bool = true,
     now: Date = Date()
   ) async -> LocalUsageSnapshot {
     let analytics = await analyticsSnapshot(
       range: range,
       refreshReason: refreshReason,
+      allowCredentialAccess: allowCredentialAccess,
       now: now
     )
     let limits: [UsageLimitAccount]
     if let cachedLimits, !refreshLimits || now.timeIntervalSince(cachedLimits.date) < 60 {
       limits = cachedLimits.accounts
     } else if refreshLimits {
+      let openRouterAPIKey = allowCredentialAccess
+        ? (try? credentialStore.loadOpenRouterAPIKey())
+        : nil
       limits = await ProviderLimitCollector.collect(
         homeDirectory: homeDirectory,
-        openRouterAPIKey: try? credentialStore.loadOpenRouterAPIKey(),
+        openRouterAPIKey: openRouterAPIKey,
         now: now
       )
       cachedLimits = (now, limits)
@@ -82,13 +87,15 @@ public actor LocalUsageService {
     return LocalUsageSnapshot(
       analytics: analytics,
       limits: limits,
-      hasOpenRouterCredential: (try? credentialStore.hasOpenRouterAPIKey()) == true
+      hasOpenRouterCredential: allowCredentialAccess
+        && (try? credentialStore.hasOpenRouterAPIKey()) == true
     )
   }
 
   public func analyticsSnapshot(
     range: UsageTimeRange,
     refreshReason: UsageRefreshReason = .manual,
+    allowCredentialAccess: Bool = true,
     now: Date = Date()
   ) async -> UsageAnalyticsSnapshot {
     let interval = range.interval(relativeTo: now)
@@ -130,7 +137,8 @@ public actor LocalUsageService {
         try? store.prune(before: now.addingTimeInterval(-Self.retention))
       }
     }
-    if shouldImportOpenRouter(store: store, reason: refreshReason, now: now) {
+    if allowCredentialAccess,
+       shouldImportOpenRouter(store: store, reason: refreshReason, now: now) {
       await importOpenRouterActivity(store: store, now: now)
       try? store.setMetadataDate(now, for: "usage.openrouter-attempt-at")
     }
@@ -152,7 +160,11 @@ public actor LocalUsageService {
       range: range,
       generatedAt: now,
       samples: samples,
-      sources: coverage(store: store, interval: interval)
+      sources: coverage(
+        store: store,
+        interval: interval,
+        allowCredentialAccess: allowCredentialAccess
+      )
     )
   }
 
@@ -634,7 +646,11 @@ public actor LocalUsageService {
     }
   }
 
-  private func coverage(store: UsageStore, interval: DateInterval) -> [UsageSourceCoverage] {
+  private func coverage(
+    store: UsageStore,
+    interval: DateInterval,
+    allowCredentialAccess: Bool
+  ) -> [UsageSourceCoverage] {
     var sources: [UsageSourceCoverage] = []
     sources.append(sourceCoverage(
       id: "codex",
@@ -733,7 +749,8 @@ public actor LocalUsageService {
       sourceIDPrefix: "openrouter:activity:",
       in: interval
     )
-    let hasCredential = (try? credentialStore.hasOpenRouterAPIKey()) == true
+    let hasCredential = allowCredentialAccess
+      && (try? credentialStore.hasOpenRouterAPIKey()) == true
     let remoteStatus: UsageSourceStatus = if !hasCredential {
       openRouterStats?.events ?? 0 > 0 ? .partial : .unavailable
     } else {
