@@ -1,5 +1,7 @@
 # WovenMatter
 
+[![Download WovenMatter for Apple silicon](https://img.shields.io/badge/Download-WovenMatter_for_Apple_silicon-000000?logo=apple&logoColor=white)](https://github.com/wovenmatter/wovenmatter/releases/download/v0.1.0/WovenMatter_0.1.0_arm64.dmg)
+
 WovenMatter is a native macOS workspace for coding agents. It keeps notes,
 conversations, runs, and agent sessions in a local SQLite store while giving
 supported harnesses one shared workspace rooted at `~/.woven-matter`.
