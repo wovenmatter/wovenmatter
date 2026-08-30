@@ -1012,10 +1012,21 @@ public actor RemoteWorkspaceCredentialStore {
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
         ]
-        SecItemDelete(query as CFDictionary)
+        let attributes: [String: Any] = [
+            kSecValueData as String: Data(token.utf8),
+            kSecAttrAccessible as String:
+                kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
+        ]
+        let updated = SecItemUpdate(
+            query as CFDictionary,
+            attributes as CFDictionary
+        )
+        if updated == errSecSuccess { return }
+        guard updated == errSecItemNotFound else {
+            throw RemoteWorkspaceClientError.keychain(updated)
+        }
         var item = query
-        item[kSecValueData as String] = Data(token.utf8)
-        item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        attributes.forEach { item[$0.key] = $0.value }
         let status = SecItemAdd(item as CFDictionary, nil)
         guard status == errSecSuccess else {
             throw RemoteWorkspaceClientError.keychain(status)

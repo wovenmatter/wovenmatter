@@ -5,6 +5,8 @@ import WovenMatterCore
 
 struct SettingsRemoteWorkspacesView: View {
     @Bindable var model: RemoteWorkspacesModel
+    let credentialDisclosureAcknowledged: Bool
+    let onAcknowledgeCredentialDisclosure: () -> Void
     var reservesRailControlSpace = false
     var onBack: () -> Void
     @State private var selectedWorkspaceID: UUID?
@@ -19,6 +21,7 @@ struct SettingsRemoteWorkspacesView: View {
     @State private var authorizationCode = ""
     @State private var managedMemoryLimit = ""
     @State private var managedSwapLimit = ""
+    @State private var showsCredentialDisclosure = false
 
     var body: some View {
         SettingsPage(
@@ -36,6 +39,7 @@ struct SettingsRemoteWorkspacesView: View {
             }
         ) {
             VStack(alignment: .leading, spacing: 16) {
+                credentialAccessCard
                 if let selectedWorkspace {
                     workspaceCard(selectedWorkspace)
                     resourceCard(selectedWorkspace)
@@ -55,12 +59,24 @@ struct SettingsRemoteWorkspacesView: View {
         }
         .id(selectedWorkspaceID)
         .task(id: selectedWorkspaceID) {
+            guard model.isCredentialAccessEnabled else { return }
             if let selectedWorkspace {
                 model.refresh(selectedWorkspace)
             } else {
                 model.discoverMachines()
                 for workspace in model.workspaces { model.refresh(workspace) }
             }
+        }
+        .sheet(isPresented: $showsCredentialDisclosure) {
+            CredentialAccessDisclosureView(
+                purpose: "Enable Remote Workspaces so Woven Matter can read their saved API tokens from this Mac's Keychain and reconnect automatically.",
+                onEnable: {
+                    onAcknowledgeCredentialDisclosure()
+                    showsCredentialDisclosure = false
+                    model.enableCredentialAccess()
+                },
+                onCancel: { showsCredentialDisclosure = false }
+            )
         }
         .onChange(of: model.workspaces.map(\.id)) { _, workspaceIDs in
             if let selectedWorkspaceID,
@@ -134,6 +150,38 @@ struct SettingsRemoteWorkspacesView: View {
                     Text("Source: \(prepared.preview.source)\nSHA-256: \(sha256)\nThe service will download the source again and refuse to run it if this digest changes.")
                 } else {
                     Text("Source: \(prepared.preview.source)\nPackage-manager integrity verification applies.\nCommand: \(prepared.preview.command)")
+                }
+            }
+        }
+    }
+
+    private var credentialAccessCard: some View {
+        SettingsCard(
+            title: "Credential access",
+            detail: model.isCredentialAccessEnabled
+                ? "Remote Workspaces can reconnect automatically using their saved Keychain tokens."
+                : "Saved workspace details remain visible, but Woven Matter will not read their Keychain tokens until you enable access."
+        ) {
+            HStack {
+                SettingsPill(
+                    model.isCredentialAccessEnabled ? "Enabled" : "Disabled",
+                    tone: model.isCredentialAccessEnabled ? .neutral : .warning
+                )
+                Spacer()
+                if model.isCredentialAccessEnabled {
+                    Button("Disable") {
+                        model.disableCredentialAccess()
+                    }
+                    .buttonStyle(SettingsQuietButtonStyle())
+                } else {
+                    Button("Enable credential access") {
+                        if credentialDisclosureAcknowledged {
+                            model.enableCredentialAccess()
+                        } else {
+                            showsCredentialDisclosure = true
+                        }
+                    }
+                    .buttonStyle(DashboardPrimaryButtonStyle())
                 }
             }
         }

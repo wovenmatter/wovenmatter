@@ -987,6 +987,11 @@ final class ApplicationModel {
     private(set) var localUsage: LocalUsageSnapshot?
     private(set) var localUsageError: String?
     private(set) var isRefreshingLocalUsage = false
+    private(set) var isOpenRouterCredentialConfigured = false
+    private(set) var signingInUsageProviders: Set<ProviderKind> = []
+    private(set) var hasAcknowledgedCredentialAccessDisclosure = false
+    private(set) var enabledUsageProviders: Set<ProviderKind> = []
+    private(set) var enabledLocalACPRuntimeKinds: Set<AgentRuntimeKind> = []
 
     private var dashboardStore: DashboardStore?
     private var noteWriteBehind: DashboardNoteWriteBehind?
@@ -1010,9 +1015,7 @@ final class ApplicationModel {
     @ObservationIgnored
     private let applicationDefaults: UserDefaults
     @ObservationIgnored
-    private let localACPWorkspaceStore = LocalACPWorkspaceConfigurationStore(
-        service: WovenMatterKeychainService.current
-    )
+    private let localACPWorkspaceStore: LocalACPWorkspaceConfigurationStore
     @ObservationIgnored
     private let localACPRuntimeInstaller = LocalACPRuntimeInstaller()
     @ObservationIgnored
@@ -1052,6 +1055,14 @@ final class ApplicationModel {
         "wovenmatter.title-generation.thinking"
     private static let buzzDiscoveryEnabledDefaultsKey =
         "wovenmatter.buzz.discovery-enabled"
+    private static let openRouterCredentialConfiguredDefaultsKey =
+        "wovenmatter.openrouter-credential.configured"
+    private static let credentialAccessDisclosureDefaultsKey =
+        "wovenmatter.credential-access.disclosure-acknowledged"
+    private static let enabledUsageProvidersDefaultsKey =
+        "wovenmatter.usage.enabled-providers"
+    private static let enabledLocalACPRuntimesDefaultsKey =
+        "wovenmatter.local-acp.enabled-runtimes"
 
     init(
         applicationDefaults: UserDefaults = .standard,
@@ -1060,7 +1071,24 @@ final class ApplicationModel {
     ) {
         self.applicationDefaults = applicationDefaults
         self.remoteWorkspaces = RemoteWorkspacesModel(defaults: applicationDefaults)
+        self.localACPWorkspaceStore = LocalACPWorkspaceConfigurationStore()
         self.dashboardStore = dashboardStore
+        isOpenRouterCredentialConfigured = applicationDefaults.bool(
+            forKey: Self.openRouterCredentialConfiguredDefaultsKey
+        )
+        hasAcknowledgedCredentialAccessDisclosure = applicationDefaults.bool(
+            forKey: Self.credentialAccessDisclosureDefaultsKey
+        )
+        enabledUsageProviders = Set(
+            applicationDefaults.stringArray(
+                forKey: Self.enabledUsageProvidersDefaultsKey
+            )?.compactMap(ProviderKind.init(rawValue:)) ?? []
+        )
+        enabledLocalACPRuntimeKinds = Set(
+            applicationDefaults.stringArray(
+                forKey: Self.enabledLocalACPRuntimesDefaultsKey
+            )?.compactMap(AgentRuntimeKind.init(rawValue:)) ?? []
+        )
         if applicationDefaults.object(
             forKey: Self.titleGenerationEnabledDefaultsKey
         ) == nil {
@@ -1168,7 +1196,6 @@ final class ApplicationModel {
             self.noteEditingService = noteEditingService
             noteEditingSocketPath = noteSocketURL.path
             await refreshLocalACPWorkspace()
-            remoteWorkspaces.refreshAll()
             await refreshBuzzWorkspaces()
             await refreshOpenClawGateways()
             await restoreOpenClawGatewayLinks()
@@ -2165,7 +2192,11 @@ final class ApplicationModel {
         let snapshot = await localUsageService.snapshot(
             range: range,
             refreshLimits: refreshLimits,
-            refreshReason: reason
+            refreshReason: reason,
+            enabledProviders: enabledUsageProviders,
+            allowCredentialAccess: isOpenRouterCredentialConfigured
+                && hasAcknowledgedCredentialAccessDisclosure
+                && enabledUsageProviders.contains(.openRouter)
         )
         guard generation == localUsageRefreshGeneration else { return }
         isRefreshingLocalUsage = false
@@ -2182,7 +2213,14 @@ final class ApplicationModel {
 
     func saveOpenRouterAPIKey(_ value: String, range: UsageTimeRange) async {
         do {
+            acknowledgeCredentialAccessDisclosure()
+            enableUsageProviderPreference(.openRouter)
             try await localUsageService.saveOpenRouterAPIKey(value)
+            isOpenRouterCredentialConfigured = true
+            applicationDefaults.set(
+                true,
+                forKey: Self.openRouterCredentialConfiguredDefaultsKey
+            )
             await refreshLocalUsage(
                 range: range,
                 refreshLimits: true,
@@ -2196,6 +2234,12 @@ final class ApplicationModel {
     func deleteOpenRouterAPIKey(range: UsageTimeRange) async {
         do {
             try await localUsageService.deleteOpenRouterAPIKey()
+            isOpenRouterCredentialConfigured = false
+            applicationDefaults.set(
+                false,
+                forKey: Self.openRouterCredentialConfiguredDefaultsKey
+            )
+            disableUsageProviderPreference(.openRouter)
             await refreshLocalUsage(
                 range: range,
                 refreshLimits: true,
@@ -2204,6 +2248,171 @@ final class ApplicationModel {
         } catch {
             localUsageError = error.localizedDescription
         }
+    }
+
+    func acknowledgeCredentialAccessDisclosure() {
+        guard !hasAcknowledgedCredentialAccessDisclosure else { return }
+        hasAcknowledgedCredentialAccessDisclosure = true
+        applicationDefaults.set(
+            true,
+            forKey: Self.credentialAccessDisclosureDefaultsKey
+        )
+    }
+
+    func isUsageProviderEnabled(_ provider: ProviderKind) -> Bool {
+        enabledUsageProviders.contains(provider)
+    }
+
+    func enableUsageProvider(
+        _ provider: ProviderKind,
+        range: UsageTimeRange
+    ) async {
+        acknowledgeCredentialAccessDisclosure()
+        enableUsageProviderPreference(provider)
+        await refreshLocalUsage(
+            range: range,
+            refreshLimits: true,
+            reason: .credentialChanged
+        )
+    }
+
+    func disableUsageProvider(
+        _ provider: ProviderKind,
+        range: UsageTimeRange
+    ) async {
+        disableUsageProviderPreference(provider)
+        await refreshLocalUsage(
+            range: range,
+            refreshLimits: true,
+            reason: .credentialChanged
+        )
+    }
+
+    private func enableUsageProviderPreference(_ provider: ProviderKind) {
+        guard enabledUsageProviders.insert(provider).inserted else { return }
+        persistEnabledUsageProviders()
+    }
+
+    private func disableUsageProviderPreference(_ provider: ProviderKind) {
+        guard enabledUsageProviders.remove(provider) != nil else { return }
+        persistEnabledUsageProviders()
+    }
+
+    private func persistEnabledUsageProviders() {
+        applicationDefaults.set(
+            enabledUsageProviders.map(\.rawValue).sorted(),
+            forKey: Self.enabledUsageProvidersDefaultsKey
+        )
+    }
+
+    func isLocalACPRuntimeCredentialAccessEnabled(
+        _ runtimeKind: AgentRuntimeKind
+    ) -> Bool {
+        enabledLocalACPRuntimeKinds.contains(runtimeKind)
+    }
+
+    func enableLocalACPRuntimeCredentialAccess(
+        _ runtimeKind: AgentRuntimeKind
+    ) {
+        acknowledgeCredentialAccessDisclosure()
+        guard enabledLocalACPRuntimeKinds.insert(runtimeKind).inserted else {
+            refreshLocalACPRuntimesNow()
+            return
+        }
+        applicationDefaults.set(
+            enabledLocalACPRuntimeKinds.map(\.rawValue).sorted(),
+            forKey: Self.enabledLocalACPRuntimesDefaultsKey
+        )
+        refreshLocalACPRuntimesNow()
+    }
+
+    func disableLocalACPRuntimeCredentialAccess(
+        _ runtimeKind: AgentRuntimeKind
+    ) {
+        guard enabledLocalACPRuntimeKinds.remove(runtimeKind) != nil else {
+            return
+        }
+        applicationDefaults.set(
+            enabledLocalACPRuntimeKinds.map(\.rawValue).sorted(),
+            forKey: Self.enabledLocalACPRuntimesDefaultsKey
+        )
+        refreshLocalACPRuntimesNow()
+    }
+
+    func signInUsageProvider(_ provider: ProviderKind) {
+        guard !signingInUsageProviders.contains(provider) else { return }
+        guard enabledUsageProviders.contains(provider) else {
+            localUsageError = "Enable \(provider.displayName) usage tracking before signing in."
+            return
+        }
+        guard let command = Self.usageProviderSignInCommand(provider) else {
+            localUsageError = "\(provider.displayName) sign-in is unavailable because its CLI is not installed."
+            return
+        }
+        signingInUsageProviders.insert(provider)
+        localUsageError = nil
+        Task {
+            defer { signingInUsageProviders.remove(provider) }
+            do {
+                try await Task.detached(priority: .userInitiated) {
+                    let process = Process()
+                    process.executableURL = command.executable
+                    process.arguments = command.arguments
+                    process.standardOutput = FileHandle.nullDevice
+                    process.standardError = FileHandle.nullDevice
+                    try process.run()
+                    process.waitUntilExit()
+                    guard process.terminationStatus == 0 else {
+                        throw UsageProviderSignInError.failed(
+                            provider.displayName,
+                            process.terminationStatus
+                        )
+                    }
+                }.value
+                await refreshLocalUsage(
+                    range: currentUsageRange,
+                    refreshLimits: true,
+                    reason: .credentialChanged
+                )
+            } catch {
+                localUsageError = error.localizedDescription
+            }
+        }
+    }
+
+    private nonisolated static func usageProviderSignInCommand(
+        _ provider: ProviderKind
+    ) -> UsageProviderSignInCommand? {
+        let executableName: String
+        let arguments: [String]
+        switch provider {
+        case .codex:
+            executableName = "codex"
+            arguments = ["login"]
+        case .claude:
+            executableName = "claude"
+            arguments = ["auth", "login", "--claudeai"]
+        case .grok:
+            executableName = "grok"
+            arguments = ["login", "--oauth"]
+        case .cursor:
+            executableName = LocalACPRuntimeResolver.resolveExecutable(
+                named: "cursor-agent"
+            ) == nil ? "agent" : "cursor-agent"
+            arguments = ["login"]
+        case .openCodeGo:
+            executableName = "opencode"
+            arguments = ["auth", "login", "--provider", "opencode-go"]
+        case .openRouter, .unknown:
+            return nil
+        }
+        guard let executable = LocalACPRuntimeResolver.resolveExecutable(
+            named: executableName
+        ) else { return nil }
+        return UsageProviderSignInCommand(
+            executable: executable,
+            arguments: arguments
+        )
     }
 
     private struct AgentNoteBinding {
@@ -3292,9 +3501,12 @@ final class ApplicationModel {
     private func refreshLocalACPRuntimes() async {
         localACPRuntimeRefreshGeneration &+= 1
         let generation = localACPRuntimeRefreshGeneration
+        let enabledRuntimeKinds = enabledLocalACPRuntimeKinds
         checkingLocalACPRuntimeKinds = Set(
             LocalACPRuntimeCatalog.definitions.compactMap {
-                $0.readinessProbe == nil ? nil : $0.runtimeKind
+                $0.readinessProbe == nil
+                    || !enabledRuntimeKinds.contains($0.runtimeKind)
+                    ? nil : $0.runtimeKind
             }
         )
         defer {
@@ -3312,6 +3524,25 @@ final class ApplicationModel {
                 let discovered = resolver.resolve(
                     runtimeKind: definition.runtimeKind
                 )
+                guard enabledRuntimeKinds.contains(definition.runtimeKind)
+                else {
+                    if let executablePath = discovered.availability.executablePath,
+                       discovered.launchConfiguration != nil {
+                        resolutions.append(LocalACPRuntimeResolution(
+                            availability: LocalACPRuntimeAvailability(
+                                runtimeKind: definition.runtimeKind,
+                                displayName: definition.displayName,
+                                state: .authenticationRequired,
+                                detail: "Enable \(definition.displayName) before Woven Matter starts it or checks its account credentials.",
+                                executablePath: executablePath
+                            ),
+                            launchConfiguration: nil
+                        ))
+                    } else {
+                        resolutions.append(discovered)
+                    }
+                    continue
+                }
                 resolutions.append(await LocalACPRuntimeVerifier.verify(
                     definition: definition,
                     resolution: discovered,
@@ -4265,21 +4496,10 @@ final class ApplicationModel {
                         workingDirectory: workspace.rootURL
                     )
                 case .remoteWorkspace:
-                    guard let agent = openClawAgent(agentID: persisted.agentID),
-                          let remoteWorkspaceID = agent.runtimeDeviceID,
-                          let configuration = remoteWorkspaces.configuration(
-                            id: remoteWorkspaceID
-                          ) else {
-                        throw ApplicationModelError.remoteHarnessUnavailable
-                    }
-                    let connection = try await remoteWorkspaces
-                        .prepareOpenClawGateway(for: configuration)
-                    await dashboardStore.configureOpenClawGatewayTransport(
-                        agentID: persisted.agentID,
-                        endpoint: connection.endpoint,
-                        requestHeaders: connection.requestHeaders
-                    )
-                    link.endpoint = connection.endpoint
+                    // Remote workspace tokens are intentionally not read during
+                    // app startup. The user can reconnect this gateway from its
+                    // workspace controls when they want Keychain access.
+                    continue
                 }
                 _ = try await dashboardStore.linkOpenClawGateway(link)
             } catch {
@@ -4474,6 +4694,22 @@ enum ApplicationModelError: LocalizedError {
             "The open note could not be attached to this run. Wait for it to finish saving, then try again."
         case .noteDraftSaveFailed:
             "The latest note draft could not be saved on this Mac. Your draft is preserved; retry after saving succeeds."
+        }
+    }
+}
+
+private struct UsageProviderSignInCommand: Sendable {
+    let executable: URL
+    let arguments: [String]
+}
+
+private enum UsageProviderSignInError: LocalizedError {
+    case failed(String, Int32)
+
+    var errorDescription: String? {
+        switch self {
+        case .failed(let provider, let status):
+            "\(provider) sign-in did not complete (exit status \(status))."
         }
     }
 }

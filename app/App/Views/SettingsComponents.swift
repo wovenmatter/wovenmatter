@@ -497,3 +497,71 @@ struct SettingsQuietButtonStyle: ButtonStyle {
             .onHover { isHovering = $0 }
     }
 }
+
+struct CredentialAccessDisclosureView: View {
+    let purpose: String
+    let onEnable: () -> Void
+    let onCancel: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: "key.fill")
+                    .font(.system(size: 18, weight: .medium))
+                    .foregroundStyle(DashboardPalette.primary)
+                    .frame(width: 34, height: 34)
+                    .background(
+                        Circle().fill(DashboardPalette.primary.opacity(0.1))
+                    )
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Allow credential access")
+                        .font(.system(size: 17, weight: .semibold))
+                    Text(purpose)
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(DashboardPalette.mutedForeground)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 9) {
+                disclosureRow(
+                    "Woven Matter may ask macOS Keychain for credentials that you have chosen to use."
+                )
+                disclosureRow(
+                    "Provider CLIs may check their own signed-in accounts and credential stores."
+                )
+                disclosureRow(
+                    "Cursor usage can read Cursor's local account session only after you enable Cursor usage tracking."
+                )
+            }
+
+            Text("macOS controls its password prompt. Choosing Always Allow normally prevents repeat prompts while the app's signing identity remains unchanged.")
+                .font(.system(size: 11.5))
+                .foregroundStyle(DashboardPalette.mutedForeground)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack {
+                Spacer()
+                Button("Not Now", role: .cancel, action: onCancel)
+                    .buttonStyle(SettingsQuietButtonStyle())
+                Button("Continue", action: onEnable)
+                    .buttonStyle(DashboardPrimaryButtonStyle())
+            }
+        }
+        .padding(24)
+        .frame(width: 500)
+        .background(DashboardPalette.background)
+    }
+
+    private func disclosureRow(_ text: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 12))
+                .foregroundStyle(DashboardPalette.primary)
+                .padding(.top, 2)
+            Text(text)
+                .font(.system(size: 12))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}

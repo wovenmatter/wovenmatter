@@ -28,6 +28,51 @@ struct RuntimeBoundaryTests {
     ) == "AGENTS.md")
   }
 
+  @Test("local workspace folder preferences persist outside Keychain")
+  func workspaceFolderPreferences() async throws {
+    let fixture = try TemporaryDirectory(prefix: "wovenmatter-workspace-preferences")
+    defer { fixture.remove() }
+    let repositories = fixture.url.appending(
+      path: "repositories",
+      directoryHint: .isDirectory
+    )
+    let databases = fixture.url.appending(
+      path: "databases",
+      directoryHint: .isDirectory
+    )
+    try FileManager.default.createDirectory(
+      at: repositories,
+      withIntermediateDirectories: true
+    )
+    try FileManager.default.createDirectory(
+      at: databases,
+      withIntermediateDirectories: true
+    )
+    let suiteName = "wovenmatter.workspace-preferences.\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suiteName))
+    defer { defaults.removePersistentDomain(forName: suiteName) }
+    let service = "Woven Matter.test.\(UUID().uuidString)"
+    let store = LocalACPWorkspaceConfigurationStore(
+      homeDirectory: fixture.url,
+      defaultsSuiteName: suiteName,
+      storageKey: service
+    )
+
+    try await store.configureRepositories(repositories)
+    try await store.configureDatabases(databases)
+
+    let restored = LocalACPWorkspaceConfigurationStore(
+      homeDirectory: fixture.url,
+      defaultsSuiteName: suiteName,
+      storageKey: service
+    )
+    let resolution = await restored.resolve()
+    #expect(resolution.availability.repositoriesPath == repositories.path)
+    #expect(resolution.availability.databasesPath == databases.path)
+    #expect(resolution.availability.usesExternalRepositories)
+    #expect(resolution.availability.usesExternalDatabases)
+  }
+
   @Test("a fake ACP process completes one streamed turn")
   func acpRoundTrip() async throws {
     let fixture = try FakeACPProcess()
