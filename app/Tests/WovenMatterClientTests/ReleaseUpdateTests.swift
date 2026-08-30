@@ -55,6 +55,31 @@ struct ReleaseUpdateTests {
     #expect(manifest.version == "0.1.0")
   }
 
+  @Test("rejects a release that requires a newer macOS")
+  func rejectsUnsupportedSystem() async throws {
+    let futureManifest = validManifest.replacingOccurrences(
+      of: "\"minimum_macos\": \"26.0\"",
+      with: "\"minimum_macos\": \"27.0\""
+    )
+    let client = WovenMatterReleaseUpdateClient(
+      fetch: { url in
+        let response = try #require(HTTPURLResponse(
+          url: url,
+          statusCode: 200,
+          httpVersion: "HTTP/1.1",
+          headerFields: nil
+        ))
+        return (Data(futureManifest.utf8), response)
+      },
+      currentOperatingSystemVersion: {
+        OperatingSystemVersion(majorVersion: 26, minorVersion: 0, patchVersion: 0)
+      }
+    )
+    await #expect(throws: WovenMatterReleaseUpdateError.unsupportedSystem(minimumMacOS: "27.0")) {
+      try await client.check(currentVersion: "0.0.9")
+    }
+  }
+
   private let validManifest = """
   {
     "schema_version": 1,

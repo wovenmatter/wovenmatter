@@ -27,6 +27,39 @@ public struct WovenMatterReleaseVersion: Comparable, Equatable, Sendable {
   }
 }
 
+private struct WovenMatterMacOSVersion: Comparable {
+  let major: Int
+  let minor: Int
+  let patch: Int
+
+  init?(_ value: String) {
+    let pieces = value.split(separator: ".", omittingEmptySubsequences: false)
+    guard (2...3).contains(pieces.count),
+          pieces.allSatisfy({ !$0.isEmpty && $0.allSatisfy(\.isNumber) }),
+          let major = Int(pieces[0]),
+          let minor = Int(pieces[1]),
+          major >= 0,
+          minor >= 0 else {
+      return nil
+    }
+    let patch = pieces.count == 3 ? Int(pieces[2]) : 0
+    guard let patch, patch >= 0 else { return nil }
+    self.major = major
+    self.minor = minor
+    self.patch = patch
+  }
+
+  init(_ value: OperatingSystemVersion) {
+    major = value.majorVersion
+    minor = value.minorVersion
+    patch = value.patchVersion
+  }
+
+  static func < (lhs: Self, rhs: Self) -> Bool {
+    (lhs.major, lhs.minor, lhs.patch) < (rhs.major, rhs.minor, rhs.patch)
+  }
+}
+
 public struct WovenMatterReleaseManifest: Decodable, Equatable, Sendable {
   public let schemaVersion: Int
   public let version: String
@@ -51,6 +84,7 @@ public struct WovenMatterReleaseManifest: Decodable, Equatable, Sendable {
   public func validated() throws -> Self {
     guard schemaVersion == 1,
           WovenMatterReleaseVersion(version) != nil,
+          WovenMatterMacOSVersion(minimumMacOS) != nil,
           build > 0,
           architecture == "arm64",
           downloadURL.scheme == "https",
@@ -81,6 +115,7 @@ public enum WovenMatterReleaseUpdateError: LocalizedError, Equatable, Sendable {
   case invalidManifest
   case invalidResponse
   case responseTooLarge
+  case unsupportedSystem(minimumMacOS: String)
 
   public var errorDescription: String? {
     switch self {
@@ -92,6 +127,8 @@ public enum WovenMatterReleaseUpdateError: LocalizedError, Equatable, Sendable {
       "GitHub did not return the Woven Matter release manifest."
     case .responseTooLarge:
       "The Woven Matter release manifest exceeded its size limit."
+    case .unsupportedSystem(let minimumMacOS):
+      "This Woven Matter release requires macOS \(minimumMacOS) or later."
     }
   }
 }
@@ -105,14 +142,21 @@ public struct WovenMatterReleaseUpdateClient: Sendable {
   public typealias Fetch = @Sendable (URL) async throws -> (Data, URLResponse)
 
   private let fetch: Fetch
+  private let currentOperatingSystemVersion: @Sendable () -> OperatingSystemVersion
 
-  public init(fetch: @escaping Fetch = { url in
-    var request = URLRequest(url: url)
-    request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
-    request.timeoutInterval = 20
-    return try await URLSession.shared.data(for: request)
-  }) {
+  public init(
+    fetch: @escaping Fetch = { url in
+      var request = URLRequest(url: url)
+      request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+      request.timeoutInterval = 20
+      return try await URLSession.shared.data(for: request)
+    },
+    currentOperatingSystemVersion: @escaping @Sendable () -> OperatingSystemVersion = {
+      ProcessInfo.processInfo.operatingSystemVersion
+    }
+  ) {
     self.fetch = fetch
+    self.currentOperatingSystemVersion = currentOperatingSystemVersion
   }
 
   public func check(currentVersion: String) async throws -> WovenMatterReleaseUpdateResult {
@@ -136,6 +180,12 @@ public struct WovenMatterReleaseUpdateClient: Sendable {
       throw WovenMatterReleaseUpdateError.invalidManifest
     }
     let validated = try manifest.validated()
+    guard let minimumMacOS = WovenMatterMacOSVersion(validated.minimumMacOS) else {
+      throw WovenMatterReleaseUpdateError.invalidManifest
+    }
+    guard WovenMatterMacOSVersion(currentOperatingSystemVersion()) >= minimumMacOS else {
+      throw WovenMatterReleaseUpdateError.unsupportedSystem(minimumMacOS: validated.minimumMacOS)
+    }
     guard let available = WovenMatterReleaseVersion(validated.version) else {
       throw WovenMatterReleaseUpdateError.invalidManifest
     }
