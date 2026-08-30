@@ -91,9 +91,10 @@ rechecks one pull request. Vouch status never grants write access.
   deterministic validation passes. Staging runs only from an explicitly
   approved commit in the primary repository; forked pull requests never receive
   staging access.
-- **Release** is a separately approved, signed, notarized build from an exact
-  accepted commit. Development or staging credentials and data must never be
-  copied into it.
+- **Release** is a signed, notarized build from an exact accepted commit. The
+  code-owner approval and merge is the approval gate; pushing its version tag
+  starts the release workflow without a second reviewer gate. Development or
+  staging credentials and data must never be copied into it.
 
 No script in this repository automatically promotes between environments.
 Deployment, signing, notarization, and release publication remain explicit

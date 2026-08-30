@@ -78,8 +78,8 @@ scripts/test-container.sh
 
 The Xcode project is `app/WovenMatter.xcodeproj`; the dependency-free Swift
 package is rooted at `app/`. Development scripts do not publish, install, or
-notarize an app. Production releases are separately approved Apple Silicon
-builds published as versioned GitHub Release assets named
+notarize an app. Production releases are Apple Silicon builds from reviewed
+and merged source, published as versioned GitHub Release assets named
 `WovenMatter_X.Y.Z_arm64.dmg`.
 
 Validation behavior lives in repository-owned scripts. See
