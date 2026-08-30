@@ -7,6 +7,7 @@ struct SettingsLocalWorkspaceView: View {
     @Bindable var model: ApplicationModel
     var reservesRailControlSpace = false
     var onBack: () -> Void
+    @State private var pendingCredentialRuntime: AgentRuntimeKind?
 
     var body: some View {
         SettingsPage(
@@ -51,6 +52,24 @@ struct SettingsLocalWorkspaceView: View {
                             + "npm registry integrity verification applies to this exact package version."
                     )
                 }
+            }
+        }
+        .sheet(
+            isPresented: Binding(
+                get: { pendingCredentialRuntime != nil },
+                set: { if !$0 { pendingCredentialRuntime = nil } }
+            )
+        ) {
+            if let runtimeKind = pendingCredentialRuntime {
+                CredentialAccessDisclosureView(
+                    purpose: "Enable \(runtimeKind.displayName) as a local harness. Woven Matter can then start its CLI and check the account credentials that CLI manages.",
+                    onEnable: {
+                        model.acknowledgeCredentialAccessDisclosure()
+                        pendingCredentialRuntime = nil
+                        model.enableLocalACPRuntimeCredentialAccess(runtimeKind)
+                    },
+                    onCancel: { pendingCredentialRuntime = nil }
+                )
             }
         }
     }
@@ -175,6 +194,10 @@ struct SettingsLocalWorkspaceView: View {
                                 SettingsPill(
                                     isChecking
                                         ? "Checking"
+                                        : !model.isLocalACPRuntimeCredentialAccessEnabled(
+                                            definition.runtimeKind
+                                        ) && availability?.executablePath != nil
+                                            ? "Not enabled"
                                         : availability?.isReady == true && !databaseIsReady
                                             ? "Workspace unavailable"
                                             : localACPRuntimeStatusLabel(availability),
@@ -217,9 +240,33 @@ struct SettingsLocalWorkspaceView: View {
                                 model.installingLocalACPRuntimeKinds
                                     .contains(definition.runtimeKind)
                             )
-                        } else if !isReady {
-                            Button(isChecking ? "Checking…" : "Recheck") {
-                                model.refreshLocalACPRuntimesNow()
+                        } else if isReady {
+                            Button("Disable") {
+                                model.disableLocalACPRuntimeCredentialAccess(
+                                    definition.runtimeKind
+                                )
+                            }
+                            .buttonStyle(SettingsQuietButtonStyle())
+                        } else {
+                            let credentialAccessEnabled = model
+                                .isLocalACPRuntimeCredentialAccessEnabled(
+                                    definition.runtimeKind
+                                )
+                            Button(
+                                isChecking ? "Checking…"
+                                    : credentialAccessEnabled ? "Recheck" : "Enable"
+                            ) {
+                                if credentialAccessEnabled {
+                                    model.refreshLocalACPRuntimesNow()
+                                } else if model
+                                    .hasAcknowledgedCredentialAccessDisclosure {
+                                    model.enableLocalACPRuntimeCredentialAccess(
+                                        definition.runtimeKind
+                                    )
+                                } else {
+                                    pendingCredentialRuntime =
+                                        definition.runtimeKind
+                                }
                             }
                             .buttonStyle(SettingsQuietButtonStyle())
                             .disabled(isChecking)

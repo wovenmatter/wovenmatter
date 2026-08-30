@@ -989,6 +989,9 @@ final class ApplicationModel {
     private(set) var isRefreshingLocalUsage = false
     private(set) var isOpenRouterCredentialConfigured = false
     private(set) var signingInUsageProviders: Set<ProviderKind> = []
+    private(set) var hasAcknowledgedCredentialAccessDisclosure = false
+    private(set) var enabledUsageProviders: Set<ProviderKind> = []
+    private(set) var enabledLocalACPRuntimeKinds: Set<AgentRuntimeKind> = []
 
     private var dashboardStore: DashboardStore?
     private var noteWriteBehind: DashboardNoteWriteBehind?
@@ -1054,6 +1057,12 @@ final class ApplicationModel {
         "wovenmatter.buzz.discovery-enabled"
     private static let openRouterCredentialConfiguredDefaultsKey =
         "wovenmatter.openrouter-credential.configured"
+    private static let credentialAccessDisclosureDefaultsKey =
+        "wovenmatter.credential-access.disclosure-acknowledged"
+    private static let enabledUsageProvidersDefaultsKey =
+        "wovenmatter.usage.enabled-providers"
+    private static let enabledLocalACPRuntimesDefaultsKey =
+        "wovenmatter.local-acp.enabled-runtimes"
 
     init(
         applicationDefaults: UserDefaults = .standard,
@@ -1066,6 +1075,19 @@ final class ApplicationModel {
         self.dashboardStore = dashboardStore
         isOpenRouterCredentialConfigured = applicationDefaults.bool(
             forKey: Self.openRouterCredentialConfiguredDefaultsKey
+        )
+        hasAcknowledgedCredentialAccessDisclosure = applicationDefaults.bool(
+            forKey: Self.credentialAccessDisclosureDefaultsKey
+        )
+        enabledUsageProviders = Set(
+            applicationDefaults.stringArray(
+                forKey: Self.enabledUsageProvidersDefaultsKey
+            )?.compactMap(ProviderKind.init(rawValue:)) ?? []
+        )
+        enabledLocalACPRuntimeKinds = Set(
+            applicationDefaults.stringArray(
+                forKey: Self.enabledLocalACPRuntimesDefaultsKey
+            )?.compactMap(AgentRuntimeKind.init(rawValue:)) ?? []
         )
         if applicationDefaults.object(
             forKey: Self.titleGenerationEnabledDefaultsKey
@@ -2171,8 +2193,10 @@ final class ApplicationModel {
             range: range,
             refreshLimits: refreshLimits,
             refreshReason: reason,
+            enabledProviders: enabledUsageProviders,
             allowCredentialAccess: isOpenRouterCredentialConfigured
-                && (reason == .manual || reason == .credentialChanged)
+                && hasAcknowledgedCredentialAccessDisclosure
+                && enabledUsageProviders.contains(.openRouter)
         )
         guard generation == localUsageRefreshGeneration else { return }
         isRefreshingLocalUsage = false
@@ -2189,6 +2213,8 @@ final class ApplicationModel {
 
     func saveOpenRouterAPIKey(_ value: String, range: UsageTimeRange) async {
         do {
+            acknowledgeCredentialAccessDisclosure()
+            enableUsageProviderPreference(.openRouter)
             try await localUsageService.saveOpenRouterAPIKey(value)
             isOpenRouterCredentialConfigured = true
             applicationDefaults.set(
@@ -2213,6 +2239,7 @@ final class ApplicationModel {
                 false,
                 forKey: Self.openRouterCredentialConfiguredDefaultsKey
             )
+            disableUsageProviderPreference(.openRouter)
             await refreshLocalUsage(
                 range: range,
                 refreshLimits: true,
@@ -2223,8 +2250,101 @@ final class ApplicationModel {
         }
     }
 
+    func acknowledgeCredentialAccessDisclosure() {
+        guard !hasAcknowledgedCredentialAccessDisclosure else { return }
+        hasAcknowledgedCredentialAccessDisclosure = true
+        applicationDefaults.set(
+            true,
+            forKey: Self.credentialAccessDisclosureDefaultsKey
+        )
+    }
+
+    func isUsageProviderEnabled(_ provider: ProviderKind) -> Bool {
+        enabledUsageProviders.contains(provider)
+    }
+
+    func enableUsageProvider(
+        _ provider: ProviderKind,
+        range: UsageTimeRange
+    ) async {
+        acknowledgeCredentialAccessDisclosure()
+        enableUsageProviderPreference(provider)
+        await refreshLocalUsage(
+            range: range,
+            refreshLimits: true,
+            reason: .credentialChanged
+        )
+    }
+
+    func disableUsageProvider(
+        _ provider: ProviderKind,
+        range: UsageTimeRange
+    ) async {
+        disableUsageProviderPreference(provider)
+        await refreshLocalUsage(
+            range: range,
+            refreshLimits: true,
+            reason: .credentialChanged
+        )
+    }
+
+    private func enableUsageProviderPreference(_ provider: ProviderKind) {
+        guard enabledUsageProviders.insert(provider).inserted else { return }
+        persistEnabledUsageProviders()
+    }
+
+    private func disableUsageProviderPreference(_ provider: ProviderKind) {
+        guard enabledUsageProviders.remove(provider) != nil else { return }
+        persistEnabledUsageProviders()
+    }
+
+    private func persistEnabledUsageProviders() {
+        applicationDefaults.set(
+            enabledUsageProviders.map(\.rawValue).sorted(),
+            forKey: Self.enabledUsageProvidersDefaultsKey
+        )
+    }
+
+    func isLocalACPRuntimeCredentialAccessEnabled(
+        _ runtimeKind: AgentRuntimeKind
+    ) -> Bool {
+        enabledLocalACPRuntimeKinds.contains(runtimeKind)
+    }
+
+    func enableLocalACPRuntimeCredentialAccess(
+        _ runtimeKind: AgentRuntimeKind
+    ) {
+        acknowledgeCredentialAccessDisclosure()
+        guard enabledLocalACPRuntimeKinds.insert(runtimeKind).inserted else {
+            refreshLocalACPRuntimesNow()
+            return
+        }
+        applicationDefaults.set(
+            enabledLocalACPRuntimeKinds.map(\.rawValue).sorted(),
+            forKey: Self.enabledLocalACPRuntimesDefaultsKey
+        )
+        refreshLocalACPRuntimesNow()
+    }
+
+    func disableLocalACPRuntimeCredentialAccess(
+        _ runtimeKind: AgentRuntimeKind
+    ) {
+        guard enabledLocalACPRuntimeKinds.remove(runtimeKind) != nil else {
+            return
+        }
+        applicationDefaults.set(
+            enabledLocalACPRuntimeKinds.map(\.rawValue).sorted(),
+            forKey: Self.enabledLocalACPRuntimesDefaultsKey
+        )
+        refreshLocalACPRuntimesNow()
+    }
+
     func signInUsageProvider(_ provider: ProviderKind) {
         guard !signingInUsageProviders.contains(provider) else { return }
+        guard enabledUsageProviders.contains(provider) else {
+            localUsageError = "Enable \(provider.displayName) usage tracking before signing in."
+            return
+        }
         guard let command = Self.usageProviderSignInCommand(provider) else {
             localUsageError = "\(provider.displayName) sign-in is unavailable because its CLI is not installed."
             return
@@ -2252,7 +2372,7 @@ final class ApplicationModel {
                 await refreshLocalUsage(
                     range: currentUsageRange,
                     refreshLimits: true,
-                    reason: .viewAppeared
+                    reason: .credentialChanged
                 )
             } catch {
                 localUsageError = error.localizedDescription
@@ -3381,9 +3501,12 @@ final class ApplicationModel {
     private func refreshLocalACPRuntimes() async {
         localACPRuntimeRefreshGeneration &+= 1
         let generation = localACPRuntimeRefreshGeneration
+        let enabledRuntimeKinds = enabledLocalACPRuntimeKinds
         checkingLocalACPRuntimeKinds = Set(
             LocalACPRuntimeCatalog.definitions.compactMap {
-                $0.readinessProbe == nil ? nil : $0.runtimeKind
+                $0.readinessProbe == nil
+                    || !enabledRuntimeKinds.contains($0.runtimeKind)
+                    ? nil : $0.runtimeKind
             }
         )
         defer {
@@ -3401,6 +3524,25 @@ final class ApplicationModel {
                 let discovered = resolver.resolve(
                     runtimeKind: definition.runtimeKind
                 )
+                guard enabledRuntimeKinds.contains(definition.runtimeKind)
+                else {
+                    if let executablePath = discovered.availability.executablePath,
+                       discovered.launchConfiguration != nil {
+                        resolutions.append(LocalACPRuntimeResolution(
+                            availability: LocalACPRuntimeAvailability(
+                                runtimeKind: definition.runtimeKind,
+                                displayName: definition.displayName,
+                                state: .authenticationRequired,
+                                detail: "Enable \(definition.displayName) before Woven Matter starts it or checks its account credentials.",
+                                executablePath: executablePath
+                            ),
+                            launchConfiguration: nil
+                        ))
+                    } else {
+                        resolutions.append(discovered)
+                    }
+                    continue
+                }
                 resolutions.append(await LocalACPRuntimeVerifier.verify(
                     definition: definition,
                     resolution: discovered,

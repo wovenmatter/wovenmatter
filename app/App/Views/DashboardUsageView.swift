@@ -16,6 +16,31 @@ private enum DashboardUsagePage: String, CaseIterable, Identifiable {
     }
 }
 
+private enum PendingUsageCredentialAction: Identifiable {
+    case enableProvider(ProviderKind)
+    case saveOpenRouter(String)
+    case deleteOpenRouter
+
+    var id: String {
+        switch self {
+        case .enableProvider(let provider): "enable-\(provider.rawValue)"
+        case .saveOpenRouter: "save-openrouter"
+        case .deleteOpenRouter: "delete-openrouter"
+        }
+    }
+
+    var purpose: String {
+        switch self {
+        case .enableProvider(let provider):
+            "Enable \(provider.displayName) so Woven Matter can check its local sign-in and usage when you open or refresh Usage."
+        case .saveOpenRouter:
+            "Save and use the OpenRouter API key you enter in this Mac's Keychain."
+        case .deleteOpenRouter:
+            "Access the saved OpenRouter item so it can be removed from this Mac's Keychain."
+        }
+    }
+}
+
 struct DashboardUsageView: View {
     @Environment(\.dashboardTheme) private var theme
     @Bindable var model: ApplicationModel
@@ -28,6 +53,7 @@ struct DashboardUsageView: View {
     @State private var reasoningFilter = "all"
     @State private var searchText = ""
     @State private var openRouterAPIKey = ""
+    @State private var pendingCredentialAction: PendingUsageCredentialAction?
 
     private var page: DashboardUsagePage {
         DashboardUsagePage(rawValue: pageRaw) ?? .analytics
@@ -125,6 +151,17 @@ struct DashboardUsageView: View {
                 range: range,
                 refreshLimits: page == .limits,
                 reason: .viewAppeared
+            )
+        }
+        .sheet(item: $pendingCredentialAction) { action in
+            CredentialAccessDisclosureView(
+                purpose: action.purpose,
+                onEnable: {
+                    model.acknowledgeCredentialAccessDisclosure()
+                    pendingCredentialAction = nil
+                    performCredentialAction(action)
+                },
+                onCancel: { pendingCredentialAction = nil }
             )
         }
     }
@@ -667,7 +704,7 @@ struct DashboardUsageView: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Connect only the accounts you choose")
                         .font(.system(size: 12.5, weight: .semibold))
-                    Text("OpenAI/Codex, Claude, Grok, Cursor, and OpenCode Go use their subscription sign-in flows. OpenRouter uses only the API key you enter below. Opening this page does not read Woven Matter credentials from Keychain.")
+                    Text("Nothing on this page checks credentials until you enable that account. Enabled subscription accounts use their provider CLI sign-in; OpenRouter uses only the API key you enter below.")
                         .font(.system(size: 11.5))
                         .foregroundStyle(DashboardPalette.mutedForeground)
                         .fixedSize(horizontal: false, vertical: true)
@@ -696,17 +733,14 @@ struct DashboardUsageView: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("OpenRouter API key")
                             .font(.system(size: 12.5, weight: .semibold))
-                        Text(model.isOpenRouterCredentialConfigured ? "Connected" : "Not connected")
+                        Text(openRouterConnectionLabel)
                             .font(.system(size: 10.5))
                             .foregroundStyle(DashboardPalette.mutedForeground)
                     }
                     Spacer()
                     if model.isOpenRouterCredentialConfigured {
                         Button("Remove", role: .destructive) {
-                            Task {
-                                await model.deleteOpenRouterAPIKey(range: range)
-                                openRouterAPIKey = ""
-                            }
+                            requestCredentialAction(.deleteOpenRouter)
                         }
                         .buttonStyle(.plain)
                         .font(.system(size: 11.5, weight: .medium))
@@ -723,16 +757,20 @@ struct DashboardUsageView: View {
                     .textFieldStyle(.roundedBorder)
                     Button(model.isOpenRouterCredentialConfigured ? "Replace key" : "Save API key") {
                         let key = openRouterAPIKey
-                        Task {
-                            await model.saveOpenRouterAPIKey(key, range: range)
-                            if model.localUsageError == nil { openRouterAPIKey = "" }
-                        }
+                        requestCredentialAction(.saveOpenRouter(key))
                     }
                     .buttonStyle(DashboardPrimaryButtonStyle())
                     .disabled(
                         openRouterAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                             || model.isRefreshingLocalUsage
                     )
+                }
+                if model.isOpenRouterCredentialConfigured,
+                   !model.isUsageProviderEnabled(.openRouter) {
+                    Button("Enable saved key") {
+                        requestCredentialAction(.enableProvider(.openRouter))
+                    }
+                    .buttonStyle(SettingsQuietButtonStyle())
                 }
             }
         }
@@ -808,9 +846,17 @@ struct DashboardUsageView: View {
                         .foregroundStyle(DashboardPalette.mutedForeground)
                         .lineLimit(1)
                     Spacer()
-                    if account.provider != .openRouter,
-                       account.status != .available,
-                       account.status != .signedIn {
+                    if !model.isUsageProviderEnabled(account.provider) {
+                        Button("Enable tracking") {
+                            requestCredentialAction(
+                                .enableProvider(account.provider)
+                            )
+                        }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 10.5, weight: .medium))
+                    } else if account.provider != .openRouter,
+                              account.status != .available,
+                              account.status != .signedIn {
                         Button(
                             model.signingInUsageProviders.contains(account.provider)
                                 ? "Signing in…"
@@ -824,11 +870,63 @@ struct DashboardUsageView: View {
                             model.signingInUsageProviders.contains(account.provider)
                         )
                     }
+                    if model.isUsageProviderEnabled(account.provider) {
+                        Button("Disable") {
+                            Task {
+                                await model.disableUsageProvider(
+                                    account.provider,
+                                    range: range
+                                )
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 10.5, weight: .medium))
+                        .foregroundStyle(DashboardPalette.mutedForeground)
+                    }
                     if let dashboardURL = account.dashboardURL {
                         Link("Open dashboard", destination: dashboardURL)
                             .font(.system(size: 10.5, weight: .medium))
                     }
                 }
+            }
+        }
+    }
+
+    private var openRouterConnectionLabel: String {
+        if model.isOpenRouterCredentialConfigured {
+            return model.isUsageProviderEnabled(.openRouter)
+                ? "Connected" : "Saved — access disabled"
+        }
+        return "Not connected"
+    }
+
+    private func requestCredentialAction(
+        _ action: PendingUsageCredentialAction
+    ) {
+        if model.hasAcknowledgedCredentialAccessDisclosure {
+            performCredentialAction(action)
+        } else {
+            pendingCredentialAction = action
+        }
+    }
+
+    private func performCredentialAction(
+        _ action: PendingUsageCredentialAction
+    ) {
+        switch action {
+        case .enableProvider(let provider):
+            Task {
+                await model.enableUsageProvider(provider, range: range)
+            }
+        case .saveOpenRouter(let key):
+            Task {
+                await model.saveOpenRouterAPIKey(key, range: range)
+                if model.localUsageError == nil { openRouterAPIKey = "" }
+            }
+        case .deleteOpenRouter:
+            Task {
+                await model.deleteOpenRouterAPIKey(range: range)
+                if model.localUsageError == nil { openRouterAPIKey = "" }
             }
         }
     }

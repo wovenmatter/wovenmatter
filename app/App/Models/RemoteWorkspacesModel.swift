@@ -47,6 +47,7 @@ final class RemoteWorkspacesModel {
     private(set) var progress: String?
     private(set) var errorMessage: String?
     private(set) var checkedPreflight: RemoteWorkspacePreflight?
+    private(set) var isCredentialAccessEnabled = false
     private var checkedHostKey: String?
 
     private let sshClient = RemoteWorkspaceSSHClient()
@@ -54,10 +55,37 @@ final class RemoteWorkspacesModel {
     private var tunnels: [UUID: RemoteWorkspaceTunnel] = [:]
     private let defaults: UserDefaults
     private let storageKey = "wovenmatter.remote-workspaces.v1"
+    private let credentialAccessDefaultsKey =
+        "wovenmatter.remote-workspaces.credential-access-enabled"
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        isCredentialAccessEnabled = defaults.bool(
+            forKey: credentialAccessDefaultsKey
+        )
         load()
+    }
+
+    func enableCredentialAccess() {
+        guard !isCredentialAccessEnabled else {
+            refreshAll()
+            return
+        }
+        isCredentialAccessEnabled = true
+        defaults.set(true, forKey: credentialAccessDefaultsKey)
+        refreshAll()
+    }
+
+    func disableCredentialAccess() {
+        isCredentialAccessEnabled = false
+        defaults.set(false, forKey: credentialAccessDefaultsKey)
+        statuses.removeAll()
+        harnesses.removeAll()
+        let activeTunnels = Array(tunnels.values)
+        tunnels.removeAll()
+        Task {
+            for tunnel in activeTunnels { await tunnel.stop() }
+        }
     }
 
     var readyChatTargets: [RemoteHarnessChatTarget] {
@@ -98,6 +126,7 @@ final class RemoteWorkspacesModel {
     }
 
     func refreshAll() {
+        guard isCredentialAccessEnabled else { return }
         for workspace in workspaces { refresh(workspace) }
     }
 
@@ -213,6 +242,10 @@ final class RemoteWorkspacesModel {
         memoryLimit: String,
         swapLimit: String
     ) {
+        guard isCredentialAccessEnabled else {
+            errorMessage = "Enable credential access before creating a remote workspace."
+            return
+        }
         guard !isCreating else { return }
         let cleanName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         let cleanID = workspaceID.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -360,6 +393,7 @@ final class RemoteWorkspacesModel {
     }
 
     func refresh(_ configuration: RemoteWorkspaceConfiguration) {
+        guard isCredentialAccessEnabled else { return }
         performBusy(configuration) {
             self.statuses[configuration.id] = try await self.sshClient.status(
                 configuration: configuration
@@ -431,6 +465,10 @@ final class RemoteWorkspacesModel {
         _ configuration: RemoteWorkspaceConfiguration,
         removePersistentData: Bool
     ) {
+        guard isCredentialAccessEnabled else {
+            errorMessage = "Enable credential access before deleting a remote workspace."
+            return
+        }
         performBusy(configuration) {
             try await self.sshClient.delete(
                 configuration: configuration,
@@ -624,6 +662,11 @@ final class RemoteWorkspacesModel {
     private func serviceClient(
         for configuration: RemoteWorkspaceConfiguration
     ) async throws -> RemoteWorkspaceServiceClient {
+        guard isCredentialAccessEnabled else {
+            throw RemoteWorkspaceClientError.invalidResponse(
+                "Enable Remote Workspace credential access before connecting."
+            )
+        }
         guard let token = try await credentials.token(for: configuration.id) else {
             throw RemoteWorkspaceClientError.invalidResponse(
                 "The workspace API token is missing from Keychain."

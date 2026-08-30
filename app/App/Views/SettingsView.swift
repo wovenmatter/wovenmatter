@@ -60,6 +60,11 @@ struct SettingsView: View {
             case .remoteWorkspaces:
                 SettingsRemoteWorkspacesView(
                     model: model.remoteWorkspaces,
+                    credentialDisclosureAcknowledged:
+                        model.hasAcknowledgedCredentialAccessDisclosure,
+                    onAcknowledgeCredentialDisclosure: {
+                        model.acknowledgeCredentialAccessDisclosure()
+                    },
                     reservesRailControlSpace: reservesRailControlSpace,
                     onBack: { section = .landing }
                 )

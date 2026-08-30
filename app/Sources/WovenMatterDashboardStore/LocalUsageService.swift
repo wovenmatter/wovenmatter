@@ -34,7 +34,11 @@ public actor LocalUsageService {
   private let databaseURL: URL
   private var usageStore: UsageStore?
   private var usageStoreFailure: String?
-  private var cachedLimits: (date: Date, accounts: [UsageLimitAccount])?
+  private var cachedLimits: (
+    date: Date,
+    providers: Set<ProviderKind>,
+    accounts: [UsageLimitAccount]
+  )?
   private var importOutcomes: [String: ImportOutcome] = [:]
   private var openRouterStatus: UsageSourceStatus = .unavailable
   private var openRouterDetail = "Add an OpenRouter management key to import official account activity."
@@ -59,17 +63,24 @@ public actor LocalUsageService {
     range: UsageTimeRange,
     refreshLimits: Bool = false,
     refreshReason: UsageRefreshReason = .manual,
+    enabledProviders: Set<ProviderKind> = [],
     allowCredentialAccess: Bool = true,
     now: Date = Date()
   ) async -> LocalUsageSnapshot {
     let analytics = await analyticsSnapshot(
       range: range,
       refreshReason: refreshReason,
+      enabledProviders: enabledProviders,
       allowCredentialAccess: allowCredentialAccess,
       now: now
     )
     let limits: [UsageLimitAccount]
-    if let cachedLimits, !refreshLimits || now.timeIntervalSince(cachedLimits.date) < 60 {
+    let mayReuseFreshLimits = refreshReason != .manual
+      && refreshReason != .credentialChanged
+    if let cachedLimits,
+       cachedLimits.providers == enabledProviders,
+       (!refreshLimits || (mayReuseFreshLimits
+         && now.timeIntervalSince(cachedLimits.date) < 60)) {
       limits = cachedLimits.accounts
     } else if refreshLimits {
       let openRouterAPIKey = allowCredentialAccess
@@ -78,11 +89,15 @@ public actor LocalUsageService {
       limits = await ProviderLimitCollector.collect(
         homeDirectory: homeDirectory,
         openRouterAPIKey: openRouterAPIKey,
+        enabledProviders: enabledProviders,
         now: now
       )
-      cachedLimits = (now, limits)
+      cachedLimits = (now, enabledProviders, limits)
     } else {
-      limits = ProviderLimitCollector.placeholderAccounts(now: now)
+      limits = ProviderLimitCollector.placeholderAccounts(
+        enabledProviders: enabledProviders,
+        now: now
+      )
     }
     return LocalUsageSnapshot(
       analytics: analytics,
@@ -95,6 +110,7 @@ public actor LocalUsageService {
   public func analyticsSnapshot(
     range: UsageTimeRange,
     refreshReason: UsageRefreshReason = .manual,
+    enabledProviders: Set<ProviderKind> = [],
     allowCredentialAccess: Bool = true,
     now: Date = Date()
   ) async -> UsageAnalyticsSnapshot {
@@ -142,7 +158,8 @@ public actor LocalUsageService {
       await importOpenRouterActivity(store: store, now: now)
       try? store.setMetadataDate(now, for: "usage.openrouter-attempt-at")
     }
-    if shouldImportCursorAccount(store: store, reason: refreshReason, now: now) {
+    if enabledProviders.contains(.cursor),
+       shouldImportCursorAccount(store: store, reason: refreshReason, now: now) {
       await importCursorAccountActivity(
         store: store,
         cutoff: now.addingTimeInterval(-Self.retention),

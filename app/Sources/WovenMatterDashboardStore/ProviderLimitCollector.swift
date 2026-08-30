@@ -5,14 +5,21 @@ import WovenMatterClient
 import WovenMatterCore
 
 enum ProviderLimitCollector {
-  static func placeholderAccounts(now: Date) -> [UsageLimitAccount] {
+  static func placeholderAccounts(
+    enabledProviders: Set<ProviderKind> = [],
+    now: Date
+  ) -> [UsageLimitAccount] {
     ProviderKind.supportedAccounts.map { provider in
       UsageLimitAccount(
         provider: provider,
         accountLabel: provider.displayName,
-        status: provider == .openRouter ? .needsCredential : .unavailable,
-        source: "Not checked yet",
-        detail: "Open Usage Limits or refresh this page to check the local account.",
+        status: enabledProviders.contains(provider)
+          ? .needsCredential : .unavailable,
+        source: enabledProviders.contains(provider)
+          ? "Ready to check" : "Not enabled",
+        detail: enabledProviders.contains(provider)
+          ? "Refresh Usage Limits to check this account."
+          : "Enable this account before Woven Matter checks its credentials or usage.",
         observedAt: now
       )
     }
@@ -21,15 +28,46 @@ enum ProviderLimitCollector {
   static func collect(
     homeDirectory: URL,
     openRouterAPIKey: String?,
+    enabledProviders: Set<ProviderKind>,
     now: Date
   ) async -> [UsageLimitAccount] {
-    async let codex = codex(now: now)
-    async let claude = claude(now: now)
-    async let grok = grok(now: now)
-    async let cursor = cursor(homeDirectory: homeDirectory, now: now)
-    async let openRouter = openRouter(apiKey: openRouterAPIKey, now: now)
-    let openCode = OpenCodeGoLimitReader(homeDirectory: homeDirectory).account(now: now)
-    return await [codex, claude, grok, cursor, openCode, openRouter]
+    let disabled = placeholderAccounts(
+      enabledProviders: enabledProviders,
+      now: now
+    ).filter { !enabledProviders.contains($0.provider) }
+    let enabled = await withTaskGroup(
+      of: UsageLimitAccount.self,
+      returning: [UsageLimitAccount].self
+    ) { group in
+      for provider in ProviderKind.supportedAccounts
+        where enabledProviders.contains(provider) {
+        group.addTask {
+          switch provider {
+          case .codex:
+            await codex(now: now)
+          case .claude:
+            await claude(now: now)
+          case .grok:
+            await grok(now: now)
+          case .cursor:
+            await cursor(homeDirectory: homeDirectory, now: now)
+          case .openCodeGo:
+            OpenCodeGoLimitReader(homeDirectory: homeDirectory).account(now: now)
+          case .openRouter:
+            await openRouter(apiKey: openRouterAPIKey, now: now)
+          case .unknown:
+            unavailable(.unknown, detail: "This provider is unavailable.", now: now)
+          }
+        }
+      }
+      var accounts: [UsageLimitAccount] = []
+      for await account in group { accounts.append(account) }
+      return accounts
+    }
+    let accountsByProvider = Dictionary(
+      uniqueKeysWithValues: (disabled + enabled).map { ($0.provider, $0) }
+    )
+    return ProviderKind.supportedAccounts.compactMap { accountsByProvider[$0] }
   }
 
   private static func codex(now: Date) async -> UsageLimitAccount {

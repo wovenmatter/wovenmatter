@@ -17,6 +17,40 @@ struct PublicSourceContractsTests {
     ])
   }
 
+  @Test("usage account checks stay passive until providers are enabled")
+  func passiveUsageAccounts() async {
+    let now = Date(timeIntervalSince1970: 1_800_000_000)
+    let accounts = await ProviderLimitCollector.collect(
+      homeDirectory: FileManager.default.temporaryDirectory,
+      openRouterAPIKey: nil,
+      enabledProviders: [],
+      now: now
+    )
+
+    #expect(accounts.map(\.provider) == ProviderKind.supportedAccounts)
+    #expect(accounts.allSatisfy { $0.source == "Not enabled" })
+    #expect(accounts.allSatisfy {
+      $0.detail.contains("before Woven Matter checks")
+    })
+  }
+
+  @Test("enabling one usage account does not probe the others")
+  func scopedUsageAccountEnablement() async throws {
+    let directory = try TemporaryDirectory(prefix: "wovenmatter-usage-consent")
+    defer { directory.remove() }
+    let accounts = await ProviderLimitCollector.collect(
+      homeDirectory: directory.url,
+      openRouterAPIKey: nil,
+      enabledProviders: [.openCodeGo],
+      now: Date(timeIntervalSince1970: 1_800_000_000)
+    )
+
+    #expect(accounts.first { $0.provider == .openCodeGo }?.source != "Not enabled")
+    #expect(accounts.filter { $0.provider != .openCodeGo }.allSatisfy {
+      $0.source == "Not enabled"
+    })
+  }
+
   @Test("the bundled catalog is complete and executable")
   func harnessCatalog() throws {
     let document = try HarnessCatalog.loadBundled()
