@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import SQLite3
 import WovenMatterClient
 import WovenMatterCore
 
@@ -27,7 +28,8 @@ enum ProviderLimitCollector {
     async let grok = grok(now: now)
     async let cursor = cursor(homeDirectory: homeDirectory, now: now)
     async let openRouter = openRouter(apiKey: openRouterAPIKey, now: now)
-    return await [codex, claude, grok, cursor, openRouter]
+    let openCode = OpenCodeGoLimitReader(homeDirectory: homeDirectory).account(now: now)
+    return await [codex, claude, grok, cursor, openCode, openRouter]
   }
 
   private static func codex(now: Date) async -> UsageLimitAccount {
@@ -739,6 +741,128 @@ private final class UsageCommandProcess: @unchecked Sendable {
       process.terminate()
       if process.isRunning { kill(identifier, SIGKILL) }
     }
+  }
+}
+
+private struct OpenCodeGoLimitReader {
+  private struct Row {
+    let createdAt: Date
+    let cost: Double
+  }
+
+  let homeDirectory: URL
+
+  func account(now: Date) -> UsageLimitAccount {
+    let root = homeDirectory.appending(path: ".local/share/opencode", directoryHint: .isDirectory)
+    let authURL = root.appending(path: "auth.json")
+    let databaseURL = root.appending(path: "opencode.db")
+    let authenticated = hasAuthKey(at: authURL)
+    guard FileManager.default.fileExists(atPath: databaseURL.path) else {
+      return UsageLimitAccount(
+        provider: .openCodeGo,
+        accountLabel: "OpenCode Go",
+        status: authenticated ? .signedIn : .unavailable,
+        source: "OpenCode local history",
+        detail: authenticated
+          ? "OpenCode Go is configured, but its local usage database was not found."
+          : "OpenCode Go was not detected.",
+        observedAt: now,
+        dashboardURL: URL(string: "https://opencode.ai/go")
+      )
+    }
+    guard let rows = try? readRows(databaseURL), authenticated || !rows.isEmpty else {
+      return UsageLimitAccount(
+        provider: .openCodeGo,
+        accountLabel: "OpenCode Go",
+        status: .unavailable,
+        source: "OpenCode local history",
+        detail: "OpenCode Go was not detected in local authentication or usage history.",
+        observedAt: now,
+        dashboardURL: URL(string: "https://opencode.ai/go")
+      )
+    }
+    guard !rows.isEmpty else {
+      return UsageLimitAccount(
+        provider: .openCodeGo,
+        accountLabel: "OpenCode Go",
+        status: .signedIn,
+        source: "OpenCode local history",
+        detail: "OpenCode Go is configured. Limits will be estimated after local usage appears.",
+        observedAt: now,
+        dashboardURL: URL(string: "https://opencode.ai/go")
+      )
+    }
+
+    let fiveHourStart = now.addingTimeInterval(-5 * 60 * 60)
+    var utc = Calendar(identifier: .gregorian)
+    utc.timeZone = TimeZone(secondsFromGMT: 0) ?? .current
+    utc.firstWeekday = 2
+    utc.minimumDaysInFirstWeek = 4
+    let weekComponents = utc.dateComponents([.yearForWeekOfYear, .weekOfYear], from: now)
+    let weekStart = utc.date(from: weekComponents) ?? now
+    let weekEnd = utc.date(byAdding: .day, value: 7, to: weekStart) ?? now
+    let monthStart = utc.date(from: utc.dateComponents([.year, .month], from: now)) ?? now
+    let monthEnd = utc.date(byAdding: .month, value: 1, to: monthStart) ?? now
+    let fiveHourRows = rows.filter { $0.createdAt >= fiveHourStart && $0.createdAt <= now }
+    let usedFive = fiveHourRows.reduce(0) { $0 + $1.cost }
+    let usedWeek = rows.filter { $0.createdAt >= weekStart && $0.createdAt < weekEnd }
+      .reduce(0) { $0 + $1.cost }
+    let usedMonth = rows.filter { $0.createdAt >= monthStart && $0.createdAt < monthEnd }
+      .reduce(0) { $0 + $1.cost }
+    return UsageLimitAccount(
+      provider: .openCodeGo,
+      accountLabel: "OpenCode Go",
+      status: .signedIn,
+      source: "OpenCode local cost history",
+      detail: "Local records report \(money(usedFive)) in the last five hours, \(money(usedWeek)) this UTC week, and \(money(usedMonth)) this UTC month. OpenCode Go did not expose live remaining counters, so Woven Matter does not infer an allowance.",
+      observedAt: now,
+      dashboardURL: URL(string: "https://opencode.ai/go")
+    )
+  }
+
+  private func readRows(_ url: URL) throws -> [Row] {
+    var database: OpaquePointer?
+    guard sqlite3_open_v2(url.path, &database, SQLITE_OPEN_READONLY, nil) == SQLITE_OK,
+          let database else {
+      sqlite3_close(database)
+      throw ProviderLimitCollectorError.invalidResponse
+    }
+    defer { sqlite3_close(database) }
+    sqlite3_busy_timeout(database, 250)
+    let sql = """
+      SELECT COALESCE(json_extract(p.data, '$.time.created'), p.time_created, m.time_created),
+             CAST(json_extract(p.data, '$.cost') AS REAL)
+      FROM part p
+      JOIN message m ON m.id = p.message_id
+      WHERE json_valid(p.data) AND json_valid(m.data)
+        AND json_extract(p.data, '$.type') = 'step-finish'
+        AND json_extract(m.data, '$.providerID') = 'opencode-go'
+        AND json_type(p.data, '$.cost') IN ('integer', 'real')
+      """
+    var statement: OpaquePointer?
+    guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
+          let statement else { throw ProviderLimitCollectorError.invalidResponse }
+    defer { sqlite3_finalize(statement) }
+    var rows: [Row] = []
+    while sqlite3_step(statement) == SQLITE_ROW {
+      let raw = sqlite3_column_int64(statement, 0)
+      let cost = sqlite3_column_double(statement, 1)
+      guard raw > 0, cost >= 0, cost.isFinite else { continue }
+      let seconds = Double(raw) / (raw > 10_000_000_000 ? 1_000 : 1)
+      rows.append(Row(createdAt: Date(timeIntervalSince1970: seconds), cost: cost))
+    }
+    return rows
+  }
+
+  private func hasAuthKey(at url: URL) -> Bool {
+    guard let data = try? Data(contentsOf: url),
+          let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          object["opencode-go"] != nil else { return false }
+    return true
+  }
+
+  private func money(_ value: Double) -> String {
+    value.formatted(.currency(code: "USD").precision(.fractionLength(2)))
   }
 }
 

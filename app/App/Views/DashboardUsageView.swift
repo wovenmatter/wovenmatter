@@ -667,7 +667,7 @@ struct DashboardUsageView: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Connect only the accounts you choose")
                         .font(.system(size: 12.5, weight: .semibold))
-                    Text("OpenAI/Codex, Claude, Grok, and Cursor use their subscription sign-in flows. OpenRouter uses only the API key you enter below. Opening this page does not read Woven Matter credentials from Keychain.")
+                    Text("OpenAI/Codex, Claude, Grok, Cursor, and OpenCode Go use their subscription sign-in flows. OpenRouter uses only the API key you enter below. Opening this page does not read Woven Matter credentials from Keychain.")
                         .font(.system(size: 11.5))
                         .foregroundStyle(DashboardPalette.mutedForeground)
                         .fixedSize(horizontal: false, vertical: true)

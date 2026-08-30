@@ -12,6 +12,7 @@ struct PublicSourceContractsTests {
       .claude,
       .grok,
       .cursor,
+      .openCodeGo,
       .openRouter,
     ])
   }

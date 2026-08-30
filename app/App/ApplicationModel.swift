@@ -2280,7 +2280,10 @@ final class ApplicationModel {
                 named: "cursor-agent"
             ) == nil ? "agent" : "cursor-agent"
             arguments = ["login"]
-        case .openRouter, .openCodeGo, .unknown:
+        case .openCodeGo:
+            executableName = "opencode"
+            arguments = ["auth", "login", "--provider", "opencode-go"]
+        case .openRouter, .unknown:
             return nil
         }
         guard let executable = LocalACPRuntimeResolver.resolveExecutable(
