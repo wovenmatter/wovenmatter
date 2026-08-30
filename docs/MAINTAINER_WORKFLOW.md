@@ -61,9 +61,9 @@ The `pull_request_target` classification workflows may inspect metadata or
 fetch a pull-request commit as inert Git data. They must never check out or
 execute contributor-controlled code.
 
-Do not add paid runners, preview deployments, release automation, signing,
-notarization, staging automation, or another CI provider without a separate
-maintainer decision.
+Do not add paid runners, preview deployments, staging automation, or another CI
+provider without a separate maintainer decision. The protected release workflow
+is limited to exact version tags and the dedicated `release` environment.
 
 ## Branch model
 
@@ -98,6 +98,31 @@ rechecks one pull request. Vouch status never grants write access.
 No script in this repository automatically promotes between environments.
 Deployment, signing, notarization, and release publication remain explicit
 maintainer actions.
+
+## Release artifact contract
+
+Public macOS production releases support Apple Silicon only. For marketing
+version `X.Y.Z`, use all of the following exact release identities:
+
+- Git tag: `vX.Y.Z`
+- GitHub release title: `Woven Matter vX.Y.Z`
+- macOS release asset: `WovenMatter_X.Y.Z_arm64.dmg`
+
+Do not publish Intel (`x64`) or universal macOS artifacts without a separate
+maintainer decision and validation on the added architecture. GitHub Releases
+is the canonical binary distribution channel, and the website download action
+must resolve to the corresponding versioned GitHub Release asset.
+
+Before publication, the application and disk image must be built from the
+release tag's exact commit, signed with the Woven Matter Developer ID
+Application identity, notarized by Apple, stapled where supported, and accepted
+by the repository's release validation and macOS Gatekeeper checks.
+
+The release also publishes `latest-mac.json`, a bounded update manifest for the
+production app. It identifies the versioned DMG, exact SHA-256 digest, release
+page, Apple Silicon architecture, and minimum macOS version. The app may open
+the official GitHub asset for an available update; it must not execute a
+downloaded installer or bypass Gatekeeper.
 
 Preview or staging automation, if added later, must be opt-in, scoped to trusted
 same-repository commits, and separated from read-only validation. Release

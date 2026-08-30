@@ -77,8 +77,10 @@ scripts/test-container.sh
 ```
 
 The Xcode project is `app/WovenMatter.xcodeproj`; the dependency-free Swift
-package is rooted at `app/`. The repository does not publish, install, or
-notarize an app as part of its development scripts.
+package is rooted at `app/`. Development scripts do not publish, install, or
+notarize an app. Production releases are separately approved Apple Silicon
+builds published as versioned GitHub Release assets named
+`WovenMatter_X.Y.Z_arm64.dmg`.
 
 Validation behavior lives in repository-owned scripts. See
 [docs/MAINTAINER_WORKFLOW.md](docs/MAINTAINER_WORKFLOW.md) for the continuous
@@ -172,8 +174,9 @@ transports are checked after installation instead of being assumed present.
 - Harness installers are fetched from their declared upstream URLs only after
   user approval; their contents are not pinned and may change independently of
   Woven Matter.
-- Distribution signing, notarization, and binary releases are separate release
-  work and are not configured by this source tree.
+- Distribution signing and notarization require maintainer-controlled Apple
+  credentials. A `vX.Y.Z` tag runs the protected release workflow and prepares
+  a draft `Woven Matter vX.Y.Z` GitHub Release for final acceptance.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md), and
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) before contributing or
