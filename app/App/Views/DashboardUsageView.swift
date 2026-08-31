@@ -877,12 +877,12 @@ struct DashboardUsageView: View {
                         .lineLimit(1)
                     Spacer()
                     if !model.isUsageProviderEnabled(account.provider) {
-                        Button("Enable tracking") {
+                        Button("Enable") {
                             requestCredentialAction(
                                 .enableProvider(account.provider)
                             )
                         }
-                        .buttonStyle(DashboardPrimaryButtonStyle())
+                        .buttonStyle(SettingsQuietButtonStyle())
                     } else if account.provider != .openRouter,
                               account.status != .available,
                               account.status != .signedIn {
