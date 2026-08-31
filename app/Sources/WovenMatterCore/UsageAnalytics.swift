@@ -263,6 +263,13 @@ public struct UsageTokenCounts: Codable, Equatable, Sendable {
       )
   }
 
+  public var totalInputTokens: Int64 {
+    saturatedAdd(
+      saturatedAdd(inputTokens, cachedInputTokens),
+      cacheCreationTokens
+    )
+  }
+
   public static let zero = UsageTokenCounts()
 
   private enum CodingKeys: String, CodingKey {

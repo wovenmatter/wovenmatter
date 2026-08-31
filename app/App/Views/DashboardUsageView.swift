@@ -218,14 +218,14 @@ struct DashboardUsageView: View {
                 detail: "\(summary.sessions.formatted()) sessions"
             )
             UsageMetricCard(
-                title: "Uncached input",
-                value: compact(summary.tokens.inputTokens),
-                detail: cacheRateDetail(summary.tokens)
+                title: "Input",
+                value: compact(summary.tokens.totalInputTokens),
+                detail: compact(summary.tokens.inputTokens) + " uncached"
             )
             UsageMetricCard(
                 title: "Cached input",
                 value: compact(summary.tokens.cachedInputTokens),
-                detail: compact(summary.tokens.cacheCreationTokens) + " cache write"
+                detail: cacheRateDetail(summary.tokens)
             )
             UsageMetricCard(
                 title: "Output",
@@ -499,19 +499,15 @@ struct DashboardUsageView: View {
                                 HStack(spacing: 18) {
                                     UsageInlineMetric(
                                         title: "Input",
-                                        value: compact(rollup.tokens.inputTokens)
+                                        value: compact(rollup.tokens.totalInputTokens)
                                     )
                                     UsageInlineMetric(
-                                        title: "Cached",
+                                        title: "Cached input",
                                         value: compact(rollup.tokens.cachedInputTokens)
                                     )
                                     UsageInlineMetric(
                                         title: "Output",
                                         value: compact(rollup.tokens.outputTokens)
-                                    )
-                                    UsageInlineMetric(
-                                        title: "Reasoning",
-                                        value: compact(rollup.tokens.reasoningTokens)
                                     )
                                     Spacer()
                                 }
@@ -1053,7 +1049,7 @@ struct DashboardUsageView: View {
     }
 
     private func cacheRateDetail(_ tokens: UsageTokenCounts) -> String {
-        let input = tokens.inputTokens + tokens.cachedInputTokens + tokens.cacheCreationTokens
+        let input = tokens.totalInputTokens
         guard input > 0 else { return "No input reported" }
         let percent = Double(tokens.cachedInputTokens) / Double(input) * 100
         return "\(percent.formatted(.number.precision(.fractionLength(0))))% cache-read share"
