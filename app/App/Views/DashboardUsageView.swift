@@ -45,7 +45,12 @@ struct DashboardUsageView: View {
     @Environment(\.dashboardTheme) private var theme
     @Bindable var model: ApplicationModel
     @State private var page = DashboardUsagePage.limits
-    @AppStorage("wovenmatter.usage.range") private var rangeRaw = UsageTimeRange.last30Days.rawValue
+    @State private var range: UsageTimeRange = {
+        let rawValue = UserDefaults.standard.string(
+            forKey: "wovenmatter.usage.range"
+        )
+        return rawValue.flatMap(UsageTimeRange.init(rawValue:)) ?? .last30Days
+    }()
     @State private var providerFilter = "all"
     @State private var modelFilter = "all"
     @State private var billingRouteFilter = "all"
@@ -54,10 +59,6 @@ struct DashboardUsageView: View {
     @State private var searchText = ""
     @State private var openRouterAPIKey = ""
     @State private var pendingCredentialAction: PendingUsageCredentialAction?
-
-    private var range: UsageTimeRange {
-        UsageTimeRange(rawValue: rangeRaw) ?? .last30Days
-    }
 
     private var analytics: UsageAnalyticsSnapshot? { model.localUsage?.analytics }
 
@@ -87,21 +88,6 @@ struct DashboardUsageView: View {
                             reason: .viewAppeared
                         )
                     }
-                }
-            }
-        )
-    }
-
-    private var rangeBinding: Binding<UsageTimeRange> {
-        Binding(
-            get: { range },
-            set: { value in
-                rangeRaw = value.rawValue
-                Task {
-                    await model.refreshLocalUsage(
-                        range: value,
-                        reason: .rangeChanged
-                    )
                 }
             }
         )
@@ -278,12 +264,8 @@ struct DashboardUsageView: View {
                         HStack(spacing: 10) {
                             Text("Range")
                                 .fixedSize()
-                            segmentedRangePicker
+                            usageRangeSelector
                                 .frame(width: 430)
-                                // NSSegmentedControl paints beyond its SwiftUI
-                                // layout bounds; compensate so the visible edge
-                                // keeps the same gap as the measured HStack.
-                                .padding(.leading, 18)
                         }
 
                         Spacer(minLength: 8)
@@ -297,7 +279,7 @@ struct DashboardUsageView: View {
                     }
                     VStack(alignment: .leading, spacing: 10) {
                         Text("Range")
-                        segmentedRangePicker
+                        usageRangeSelector
                         TextField("Search model, harness, app, or agent", text: $searchText)
                             .textFieldStyle(.plain)
                             .padding(.horizontal, 10)
@@ -351,14 +333,21 @@ struct DashboardUsageView: View {
         }
     }
 
-    private var segmentedRangePicker: some View {
-        Picker("", selection: rangeBinding) {
-            ForEach(UsageTimeRange.allCases) { range in
-                Text(range.compactLabel).tag(range)
+    private var usageRangeSelector: some View {
+        UsageRangeSelector(selection: range) { value in
+            guard value != range else { return }
+            range = value
+            UserDefaults.standard.set(
+                value.rawValue,
+                forKey: "wovenmatter.usage.range"
+            )
+            Task {
+                await model.refreshLocalUsage(
+                    range: value,
+                    reason: .rangeChanged
+                )
             }
         }
-        .labelsHidden()
-        .pickerStyle(.segmented)
     }
 
     private func filterPicker(
@@ -1073,6 +1062,85 @@ struct DashboardUsageView: View {
             ($0 ^ UInt32($1)) &* 16_777_619
         }
         return colors[Int(hash % UInt32(colors.count))]
+    }
+}
+
+private struct UsageRangeSelector: View {
+    @Environment(\.dashboardTheme) private var theme
+    let selection: UsageTimeRange
+    let onSelect: (UsageTimeRange) -> Void
+
+    private let ranges = UsageTimeRange.allCases
+
+    var body: some View {
+        HStack(spacing: 0) {
+            ForEach(Array(ranges.enumerated()), id: \.element.id) { index, range in
+                if index > 0 {
+                    let previous = ranges[index - 1]
+                    Rectangle()
+                        .fill(
+                            selection == range || selection == previous
+                                ? Color.clear
+                                : DashboardPalette.mutedForeground.opacity(0.28)
+                        )
+                        .frame(width: 1, height: 16)
+                }
+                UsageRangeButton(
+                    title: range.compactLabel,
+                    isSelected: selection == range,
+                    action: { onSelect(range) }
+                )
+            }
+        }
+        .padding(2)
+        .background(theme.palette.themeSoft.opacity(0.72))
+        .clipShape(
+            RoundedRectangle(
+                cornerRadius: DashboardMetrics.controlRadius,
+                style: .continuous
+            )
+        )
+        .transaction { transaction in
+            transaction.animation = nil
+        }
+    }
+}
+
+private struct UsageRangeButton: View {
+    @Environment(\.dashboardTheme) private var theme
+    let title: String
+    let isSelected: Bool
+    let action: () -> Void
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 12.5, weight: .medium))
+                .foregroundStyle(
+                    isSelected
+                        ? DashboardPalette.primaryForeground
+                        : DashboardPalette.foreground
+                )
+                .frame(maxWidth: .infinity, minHeight: 26)
+                .background(
+                    isSelected
+                        ? DashboardPalette.primary
+                        : isHovering
+                            ? theme.palette.themeWhisper
+                            : Color.clear
+                )
+                .clipShape(
+                    RoundedRectangle(
+                        cornerRadius: DashboardMetrics.controlRadius - 2,
+                        style: .continuous
+                    )
+                )
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovering = $0 }
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 }
 
