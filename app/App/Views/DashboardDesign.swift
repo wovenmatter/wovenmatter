@@ -974,6 +974,99 @@ struct DashboardCard<Content: View>: View {
     }
 }
 
+struct DashboardSegmentedSelector<Option: Hashable>: View {
+    @Environment(\.dashboardTheme) private var theme
+    let options: [Option]
+    @Binding var selection: Option
+    let label: (Option) -> String
+
+    var body: some View {
+        HStack(spacing: 0) {
+            ForEach(options, id: \.self) { option in
+                let isSelected = option == selection
+                Button {
+                    selection = option
+                } label: {
+                    Text(label(option))
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(
+                            isSelected
+                                ? DashboardPalette.foreground
+                                : DashboardPalette.mutedForeground
+                        )
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 27)
+                        .contentShape(Rectangle())
+                        .background(
+                            isSelected
+                                ? DashboardPalette.background
+                                : Color.clear
+                        )
+                        .clipShape(
+                            RoundedRectangle(
+                                cornerRadius: DashboardMetrics.controlRadius - 4,
+                                style: .continuous
+                            )
+                        )
+                        .shadow(
+                            color: isSelected
+                                ? DashboardPalette.foreground.opacity(0.06)
+                                : .clear,
+                            radius: 2,
+                            y: 1
+                        )
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(isSelected ? .isSelected : [])
+            }
+        }
+        .padding(4)
+        .background(theme.palette.themeWhisper)
+        .clipShape(
+            RoundedRectangle(
+                cornerRadius: DashboardMetrics.controlRadius,
+                style: .continuous
+            )
+        )
+        .transaction { transaction in
+            transaction.animation = nil
+        }
+    }
+}
+
+struct DashboardSearchField: View {
+    @Environment(\.dashboardTheme) private var theme
+    @Binding var text: String
+    let prompt: String
+
+    var body: some View {
+        HStack(spacing: 8) {
+            DashboardLucideIcon(glyph: .searchControl, size: 14)
+                .foregroundStyle(DashboardPalette.mutedForeground)
+            TextField(prompt, text: $text)
+                .textFieldStyle(.plain)
+                .font(.system(size: 13))
+                .foregroundStyle(DashboardPalette.foreground)
+            if !text.isEmpty {
+                Button("Clear") { text = "" }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(DashboardPalette.mutedForeground)
+            }
+        }
+        .padding(.horizontal, 12)
+        .frame(height: 34)
+        .frame(maxWidth: .infinity)
+        .background(theme.palette.themeWhisper)
+        .clipShape(
+            RoundedRectangle(
+                cornerRadius: DashboardMetrics.controlRadius,
+                style: .continuous
+            )
+        )
+    }
+}
+
 struct DashboardPrimaryButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
 

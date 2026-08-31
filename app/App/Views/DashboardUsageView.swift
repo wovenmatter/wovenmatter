@@ -97,13 +97,17 @@ struct DashboardUsageView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 header
-                Picker("Usage page", selection: pageBinding) {
-                    ForEach(DashboardUsagePage.allCases) { page in
-                        Text(page.title).tag(page)
+                HStack(spacing: 10) {
+                    Text("Usage page")
+                        .fixedSize()
+                    DashboardSegmentedSelector(
+                        options: DashboardUsagePage.allCases,
+                        selection: pageBinding
+                    ) { page in
+                        page.title
                     }
+                    .frame(width: 320)
                 }
-                .pickerStyle(.segmented)
-                .frame(maxWidth: 360)
 
                 if let error = model.localUsageError {
                     UsageErrorBanner(text: error)
@@ -264,28 +268,34 @@ struct DashboardUsageView: View {
                         HStack(spacing: 10) {
                             Text("Range")
                                 .fixedSize()
-                            usageRangeSelector
+                            DashboardSegmentedSelector(
+                                options: UsageTimeRange.allCases,
+                                selection: rangeSelectionBinding
+                            ) { range in
+                                range.compactLabel
+                            }
                                 .frame(width: 430)
                         }
 
                         Spacer(minLength: 8)
-                        TextField("Search model, harness, app, or agent", text: $searchText)
-                            .textFieldStyle(.plain)
-                            .padding(.horizontal, 10)
-                            .frame(height: 28)
-                            .background(theme.palette.input)
-                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        DashboardSearchField(
+                            text: $searchText,
+                            prompt: "Search model, harness, app, or agent"
+                        )
                             .frame(width: 260)
                     }
                     VStack(alignment: .leading, spacing: 10) {
                         Text("Range")
-                        usageRangeSelector
-                        TextField("Search model, harness, app, or agent", text: $searchText)
-                            .textFieldStyle(.plain)
-                            .padding(.horizontal, 10)
-                            .frame(height: 28)
-                            .background(theme.palette.input)
-                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        DashboardSegmentedSelector(
+                            options: UsageTimeRange.allCases,
+                            selection: rangeSelectionBinding
+                        ) { range in
+                            range.compactLabel
+                        }
+                        DashboardSearchField(
+                            text: $searchText,
+                            prompt: "Search model, harness, app, or agent"
+                        )
                     }
                 }
 
@@ -333,21 +343,24 @@ struct DashboardUsageView: View {
         }
     }
 
-    private var usageRangeSelector: some View {
-        UsageRangeSelector(selection: range) { value in
-            guard value != range else { return }
-            range = value
-            UserDefaults.standard.set(
-                value.rawValue,
-                forKey: "wovenmatter.usage.range"
-            )
-            Task {
-                await model.refreshLocalUsage(
-                    range: value,
-                    reason: .rangeChanged
+    private var rangeSelectionBinding: Binding<UsageTimeRange> {
+        Binding(
+            get: { range },
+            set: { value in
+                guard value != range else { return }
+                range = value
+                UserDefaults.standard.set(
+                    value.rawValue,
+                    forKey: "wovenmatter.usage.range"
                 )
+                Task {
+                    await model.refreshLocalUsage(
+                        range: value,
+                        reason: .rangeChanged
+                    )
+                }
             }
-        }
+        )
     }
 
     private func filterPicker(
@@ -362,15 +375,12 @@ struct DashboardUsageView: View {
         case "Reasoning": "All reasoning levels"
         default: "All \(title.lowercased())s"
         }
-        return Picker(title, selection: selection) {
-            Text(allLabel).tag("all")
-            ForEach(unique, id: \.key) { key, label in
-                Text(label).tag(key)
-            }
-        }
-        .labelsHidden()
-        .pickerStyle(.menu)
-        .frame(maxWidth: 170)
+        return UsageFilterSelector(
+            title: title,
+            selection: selection,
+            options: [(key: "all", label: allLabel)]
+                + unique.map { (key: $0.key, label: $0.value) }
+        )
     }
 
     private func providerUsageChart(_ samples: [UsageSample]) -> some View {
@@ -1065,82 +1075,72 @@ struct DashboardUsageView: View {
     }
 }
 
-private struct UsageRangeSelector: View {
-    @Environment(\.dashboardTheme) private var theme
-    let selection: UsageTimeRange
-    let onSelect: (UsageTimeRange) -> Void
-
-    private let ranges = UsageTimeRange.allCases
-
-    var body: some View {
-        HStack(spacing: 0) {
-            ForEach(Array(ranges.enumerated()), id: \.element.id) { index, range in
-                if index > 0 {
-                    let previous = ranges[index - 1]
-                    Rectangle()
-                        .fill(
-                            selection == range || selection == previous
-                                ? Color.clear
-                                : DashboardPalette.mutedForeground.opacity(0.28)
-                        )
-                        .frame(width: 1, height: 16)
-                }
-                UsageRangeButton(
-                    title: range.compactLabel,
-                    isSelected: selection == range,
-                    action: { onSelect(range) }
-                )
-            }
-        }
-        .padding(2)
-        .background(theme.palette.themeSoft.opacity(0.72))
-        .clipShape(
-            RoundedRectangle(
-                cornerRadius: DashboardMetrics.controlRadius,
-                style: .continuous
-            )
-        )
-        .transaction { transaction in
-            transaction.animation = nil
-        }
-    }
-}
-
-private struct UsageRangeButton: View {
+private struct UsageFilterSelector: View {
     @Environment(\.dashboardTheme) private var theme
     let title: String
-    let isSelected: Bool
-    let action: () -> Void
-    @State private var isHovering = false
+    @Binding var selection: String
+    let options: [(key: String, label: String)]
+    @State private var isPresented = false
 
     var body: some View {
-        Button(action: action) {
-            Text(title)
-                .font(.system(size: 12.5, weight: .medium))
-                .foregroundStyle(
-                    isSelected
-                        ? DashboardPalette.primaryForeground
-                        : DashboardPalette.foreground
+        Button {
+            isPresented.toggle()
+        } label: {
+            HStack(spacing: 8) {
+                Text(selectedLabel)
+                    .font(.system(size: 13))
+                    .foregroundStyle(DashboardPalette.foreground)
+                    .lineLimit(1)
+                Spacer(minLength: 4)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(DashboardPalette.mutedForeground)
+            }
+            .padding(.horizontal, 12)
+            .frame(maxWidth: .infinity, minHeight: 34, alignment: .leading)
+            .background(theme.palette.themeWhisper)
+            .clipShape(
+                RoundedRectangle(
+                    cornerRadius: DashboardMetrics.controlRadius,
+                    style: .continuous
                 )
-                .frame(maxWidth: .infinity, minHeight: 26)
-                .background(
-                    isSelected
-                        ? DashboardPalette.primary
-                        : isHovering
-                            ? theme.palette.themeWhisper
-                            : Color.clear
-                )
-                .clipShape(
-                    RoundedRectangle(
-                        cornerRadius: DashboardMetrics.controlRadius - 2,
-                        style: .continuous
-                    )
-                )
-                .contentShape(Rectangle())
+            )
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .onHover { isHovering = $0 }
-        .accessibilityAddTraits(isSelected ? .isSelected : [])
+        .accessibilityLabel(title)
+        .popover(isPresented: $isPresented, arrowEdge: .bottom) {
+            VStack(alignment: .leading, spacing: 2) {
+                ForEach(options, id: \.key) { option in
+                    Button {
+                        selection = option.key
+                        isPresented = false
+                    } label: {
+                        HStack {
+                            Text(option.label)
+                                .font(.system(size: 13))
+                                .foregroundStyle(DashboardPalette.foreground)
+                            Spacer()
+                            if option.key == selection {
+                                Image(systemName: "checkmark")
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .foregroundStyle(DashboardPalette.primary)
+                            }
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(6)
+            .frame(minWidth: 180)
+        }
+    }
+
+    private var selectedLabel: String {
+        options.first { $0.key == selection }?.label ?? options.first?.label ?? title
     }
 }
 
