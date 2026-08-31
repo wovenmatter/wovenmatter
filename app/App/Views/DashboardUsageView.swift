@@ -394,7 +394,7 @@ struct DashboardUsageView: View {
         }
         let summary = UsageAnalyticsSummary(samples: samples)
         return VStack(alignment: .leading, spacing: 8) {
-            DashboardSectionHeading(title: "Provider token usage over time")
+            DashboardSectionHeading(title: "Token breakdown over time")
             UsageSection {
                 Chart(buckets) { bucket in
                     BarMark(
