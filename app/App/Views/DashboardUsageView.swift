@@ -3,8 +3,8 @@ import SwiftUI
 import WovenMatterCore
 
 private enum DashboardUsagePage: String, CaseIterable, Identifiable {
-    case analytics
     case limits
+    case analytics
 
     var id: String { rawValue }
 
@@ -44,7 +44,7 @@ private enum PendingUsageCredentialAction: Identifiable {
 struct DashboardUsageView: View {
     @Environment(\.dashboardTheme) private var theme
     @Bindable var model: ApplicationModel
-    @AppStorage("wovenmatter.usage.page") private var pageRaw = DashboardUsagePage.analytics.rawValue
+    @State private var page = DashboardUsagePage.limits
     @AppStorage("wovenmatter.usage.range") private var rangeRaw = UsageTimeRange.last30Days.rawValue
     @State private var providerFilter = "all"
     @State private var modelFilter = "all"
@@ -54,10 +54,6 @@ struct DashboardUsageView: View {
     @State private var searchText = ""
     @State private var openRouterAPIKey = ""
     @State private var pendingCredentialAction: PendingUsageCredentialAction?
-
-    private var page: DashboardUsagePage {
-        DashboardUsagePage(rawValue: pageRaw) ?? .analytics
-    }
 
     private var range: UsageTimeRange {
         UsageTimeRange(rawValue: rangeRaw) ?? .last30Days
@@ -82,7 +78,7 @@ struct DashboardUsageView: View {
         Binding(
             get: { page },
             set: { value in
-                pageRaw = value.rawValue
+                page = value
                 if value == .limits {
                     Task {
                         await model.refreshLocalUsage(
@@ -128,12 +124,11 @@ struct DashboardUsageView: View {
                 }
 
                 if let snapshot = model.localUsage {
-                    accountConnections(snapshot)
                     switch page {
+                    case .limits:
+                        accountConnections(snapshot)
                     case .analytics:
                         analyticsPage(snapshot.analytics)
-                    case .limits:
-                        EmptyView()
                     }
                 } else {
                     UsageLoadingCard(isLoading: model.isRefreshingLocalUsage)
@@ -266,8 +261,9 @@ struct DashboardUsageView: View {
                     : "Clear filters or broaden the time range."
             )
         } else {
+            providerBreakdown(samples)
+            providerUsageChart(samples)
             modelBreakdown(samples)
-            usageChart(samples)
             sessionTable(samples)
         }
 
@@ -379,12 +375,17 @@ struct DashboardUsageView: View {
         .frame(maxWidth: 170)
     }
 
-    private func usageChart(_ samples: [UsageSample]) -> some View {
-        let buckets = displayBuckets(samples)
-        let models = Array(Set(buckets.map(\.modelFamily))).sorted()
+    private func providerUsageChart(_ samples: [UsageSample]) -> some View {
+        let buckets = ProviderUsageChartBucket.aggregate(
+            samples: samples,
+            range: range
+        )
+        let providers = Array(Set(buckets.map(\.provider))).sorted {
+            $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
+        }
         let summary = UsageAnalyticsSummary(samples: samples)
         return VStack(alignment: .leading, spacing: 8) {
-            DashboardSectionHeading(title: "Model volume over time")
+            DashboardSectionHeading(title: "Provider usage over time")
             DashboardCard(showsBorder: false) {
                 Chart(buckets) { bucket in
                     BarMark(
@@ -395,12 +396,12 @@ struct DashboardUsageView: View {
                         ),
                         y: .value("Tokens", bucket.tokens)
                     )
-                    .foregroundStyle(by: .value("Model", bucket.modelFamily))
+                    .foregroundStyle(by: .value("Provider", bucket.provider.displayName))
                     .cornerRadius(2)
                 }
                 .chartForegroundStyleScale(
-                    domain: models,
-                    range: models.map(modelColor)
+                    domain: providers.map(\.displayName),
+                    range: providers.map(providerColor)
                 )
                 .chartLegend(position: .top, alignment: .leading, spacing: 12)
                 .chartXAxis {
@@ -424,8 +425,37 @@ struct DashboardUsageView: View {
                     }
                 }
                 .frame(height: 290)
-                .accessibilityLabel("Token volume by model family")
+                .accessibilityLabel("Token volume by provider")
                 .accessibilityValue("\(compact(summary.tokens.totalTokens)) tokens across \(summary.sessions) sessions")
+            }
+        }
+    }
+
+    private func providerBreakdown(_ samples: [UsageSample]) -> some View {
+        let providers = Dictionary(grouping: samples, by: \.provider)
+            .map { provider, samples in
+                (provider, UsageAnalyticsSummary(samples: samples))
+            }
+            .sorted {
+                if $0.1.tokens.totalTokens == $1.1.tokens.totalTokens {
+                    return $0.0.displayName < $1.0.displayName
+                }
+                return $0.1.tokens.totalTokens > $1.1.tokens.totalTokens
+            }
+        return VStack(alignment: .leading, spacing: 8) {
+            DashboardSectionHeading(title: "Providers")
+            LazyVGrid(
+                columns: [GridItem(.adaptive(minimum: 180), spacing: 12)],
+                alignment: .leading,
+                spacing: 12
+            ) {
+                ForEach(providers, id: \.0) { provider, summary in
+                    UsageMetricCard(
+                        title: provider.displayName,
+                        value: compact(summary.tokens.totalTokens),
+                        detail: "\(summary.sessions.formatted()) sessions · \(summary.requests.formatted()) calls"
+                    )
+                }
             }
         }
     }
@@ -1008,32 +1038,16 @@ struct DashboardUsageView: View {
         return "\(models) model\(models == 1 ? "" : "s")"
     }
 
-    private func displayBuckets(_ samples: [UsageSample]) -> [UsageChartBucket] {
-        let topModels = Set(
-            Dictionary(grouping: samples, by: \.modelFamily)
-                .map { ($0.key, $0.value.reduce(Int64(0)) { $0 + $1.tokens.totalTokens }) }
-                .sorted { $0.1 > $1.1 }
-                .prefix(6)
-                .map(\.0)
-        )
-        let raw = UsageChartBucket.aggregate(samples: samples, range: range)
-        var grouped: [String: (date: Date, model: String, tokens: Int64)] = [:]
-        for bucket in raw {
-            let model = topModels.contains(bucket.modelFamily) ? bucket.modelFamily : "Other"
-            let key = "\(bucket.date.timeIntervalSinceReferenceDate):\(model)"
-            grouped[key] = (
-                bucket.date,
-                model,
-                (grouped[key]?.tokens ?? 0) + bucket.tokens
-            )
+    private func providerColor(_ provider: ProviderKind) -> Color {
+        switch provider {
+        case .codex: .hex(0x0D8F5A)
+        case .claude: .hex(0xC46B3C)
+        case .grok: .hex(0x535A63)
+        case .cursor: .hex(0x4D69D8)
+        case .openCodeGo: .hex(0x8B5CF6)
+        case .openRouter: .hex(0xE05D8B)
+        case .unknown: .hex(0x8A8F98)
         }
-        return grouped.values
-            .map { UsageChartBucket(date: $0.date, modelFamily: $0.model, tokens: $0.tokens) }
-            .sorted {
-                $0.date == $1.date
-                    ? $0.modelFamily < $1.modelFamily
-                    : $0.date < $1.date
-            }
     }
 
     private func modelColor(_ model: String) -> Color {
@@ -1050,6 +1064,38 @@ struct DashboardUsageView: View {
             ($0 ^ UInt32($1)) &* 16_777_619
         }
         return colors[Int(hash % UInt32(colors.count))]
+    }
+}
+
+private struct ProviderUsageChartBucket: Identifiable {
+    let date: Date
+    let provider: ProviderKind
+    let tokens: Int64
+
+    var id: String { "\(date.timeIntervalSinceReferenceDate):\(provider.rawValue)" }
+
+    static func aggregate(
+        samples: [UsageSample],
+        range: UsageTimeRange,
+        calendar: Calendar = .current
+    ) -> [ProviderUsageChartBucket] {
+        var totals: [String: (date: Date, provider: ProviderKind, tokens: Int64)] = [:]
+        for sample in samples {
+            let start = range.usesHourlyBuckets
+                ? calendar.dateInterval(of: .hour, for: sample.timestamp)?.start ?? sample.timestamp
+                : calendar.startOfDay(for: sample.timestamp)
+            let key = "\(start.timeIntervalSinceReferenceDate):\(sample.provider.rawValue)"
+            let current = totals[key]?.tokens ?? 0
+            let (sum, overflow) = current.addingReportingOverflow(sample.tokens.totalTokens)
+            totals[key] = (start, sample.provider, overflow ? Int64.max : sum)
+        }
+        return totals.values
+            .map { ProviderUsageChartBucket(date: $0.date, provider: $0.provider, tokens: $0.tokens) }
+            .sorted {
+                $0.date == $1.date
+                    ? $0.provider.rawValue < $1.provider.rawValue
+                    : $0.date < $1.date
+            }
     }
 }
 

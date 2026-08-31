@@ -125,7 +125,7 @@ enum ProviderLimitCollector {
           ? "Codex account state was available, but the CLI returned no numeric quota windows."
           : "Live account limits returned by the locally signed-in Codex CLI.",
         observedAt: now,
-        dashboardURL: URL(string: "https://chatgpt.com/codex/settings/usage")
+        dashboardURL: ProviderDashboardURL.codex
       )
     } catch {
       return codexLocalSignIn(now: now) ?? failed(
@@ -160,7 +160,7 @@ enum ProviderLimitCollector {
           ? "Signed in via \(method ?? "Claude CLI"). Claude does not expose numeric consumer limits through its noninteractive CLI, so Woven Matter does not infer them."
           : "Claude CLI is installed but not signed in.",
         observedAt: now,
-        dashboardURL: URL(string: "https://claude.ai/settings/usage")
+        dashboardURL: ProviderDashboardURL.claude
       )
     } catch {
       return failed(.claude, detail: "Claude sign-in state could not be read from the local CLI.", now: now)
@@ -236,7 +236,7 @@ enum ProviderLimitCollector {
           ? "Grok is reachable, but the signed-in account returned no numeric billing limit."
           : "Live billing-cycle credits returned by the locally signed-in Grok CLI.",
         observedAt: now,
-        dashboardURL: URL(string: "https://console.x.ai/team/default/billing")
+        dashboardURL: ProviderDashboardURL.grok
       )
     } catch {
       return grokLocalSignIn(now: now) ?? failed(
@@ -269,7 +269,7 @@ enum ProviderLimitCollector {
       source: "Codex local sign-in",
       detail: "Signed in locally. The Codex CLI did not return numeric quota windows during this refresh.",
       observedAt: now,
-      dashboardURL: URL(string: "https://chatgpt.com/codex/settings/usage")
+      dashboardURL: ProviderDashboardURL.codex
     )
   }
 
@@ -303,7 +303,7 @@ enum ProviderLimitCollector {
       source: "Grok local sign-in",
       detail: "Signed in locally. This Grok CLI version did not expose a numeric billing window during this refresh.",
       observedAt: now,
-      dashboardURL: URL(string: "https://console.x.ai/team/default/billing")
+      dashboardURL: ProviderDashboardURL.grok
     )
   }
 
@@ -329,7 +329,7 @@ enum ProviderLimitCollector {
         source: "Cursor Agent CLI",
         detail: "Signed in locally, but Cursor's account usage APIs were unavailable during this refresh.",
         observedAt: now,
-        dashboardURL: URL(string: "https://cursor.com/dashboard")
+        dashboardURL: ProviderDashboardURL.cursor
       )
     case .unauthenticated:
       return UsageLimitAccount(
@@ -339,7 +339,7 @@ enum ProviderLimitCollector {
         source: "Cursor Agent CLI",
         detail: "Cursor Agent is installed but not signed in.",
         observedAt: now,
-        dashboardURL: URL(string: "https://cursor.com/dashboard")
+        dashboardURL: ProviderDashboardURL.cursor
       )
     case .unknown:
       return failed(.cursor, detail: probe.message ?? "Cursor sign-in state could not be verified.", now: now)
@@ -355,7 +355,7 @@ enum ProviderLimitCollector {
         source: "OpenRouter API",
         detail: "Add an OpenRouter API or management key to retrieve its credit and key limits. The key stays in this Mac's Keychain.",
         observedAt: now,
-        dashboardURL: URL(string: "https://openrouter.ai/settings/credits")
+        dashboardURL: ProviderDashboardURL.openRouter
       )
     }
     do {
@@ -405,7 +405,7 @@ enum ProviderLimitCollector {
         source: "OpenRouter credits and key APIs",
         detail: "Live OpenRouter key allowance and credits. Management-key-only fields appear when the stored credential has that scope.",
         observedAt: now,
-        dashboardURL: URL(string: "https://openrouter.ai/settings/credits")
+        dashboardURL: ProviderDashboardURL.openRouter
       )
     } catch {
       return failed(.openRouter, detail: "OpenRouter rejected the stored key or did not return credit data.", now: now)
@@ -542,6 +542,15 @@ enum ProviderLimitCollector {
     formatter.formatOptions = [.withInternetDateTime]
     return formatter.date(from: value)
   }
+}
+
+enum ProviderDashboardURL {
+  static let codex = URL(string: "https://chatgpt.com/codex/settings/usage")
+  static let claude = URL(string: "https://claude.ai/settings/usage")
+  static let grok = URL(string: "https://grok.com/?_s=usage")
+  static let cursor = URL(string: "https://cursor.com/dashboard")
+  static let openCodeGo = URL(string: "https://opencode.ai/auth")
+  static let openRouter = URL(string: "https://openrouter.ai/settings/credits")
 }
 
 private enum JSONRPCUsageCommand {
@@ -805,7 +814,7 @@ private struct OpenCodeGoLimitReader {
           ? "OpenCode Go is configured, but its local usage database was not found."
           : "OpenCode Go was not detected.",
         observedAt: now,
-        dashboardURL: URL(string: "https://opencode.ai/go")
+        dashboardURL: ProviderDashboardURL.openCodeGo
       )
     }
     guard let rows = try? readRows(databaseURL), authenticated || !rows.isEmpty else {
@@ -816,7 +825,7 @@ private struct OpenCodeGoLimitReader {
         source: "OpenCode local history",
         detail: "OpenCode Go was not detected in local authentication or usage history.",
         observedAt: now,
-        dashboardURL: URL(string: "https://opencode.ai/go")
+        dashboardURL: ProviderDashboardURL.openCodeGo
       )
     }
     guard !rows.isEmpty else {
@@ -827,7 +836,7 @@ private struct OpenCodeGoLimitReader {
         source: "OpenCode local history",
         detail: "OpenCode Go is configured. Limits will be estimated after local usage appears.",
         observedAt: now,
-        dashboardURL: URL(string: "https://opencode.ai/go")
+        dashboardURL: ProviderDashboardURL.openCodeGo
       )
     }
 
@@ -854,7 +863,7 @@ private struct OpenCodeGoLimitReader {
       source: "OpenCode local cost history",
       detail: "Local records report \(money(usedFive)) in the last five hours, \(money(usedWeek)) this UTC week, and \(money(usedMonth)) this UTC month. OpenCode Go did not expose live remaining counters, so Woven Matter does not infer an allowance.",
       observedAt: now,
-      dashboardURL: URL(string: "https://opencode.ai/go")
+      dashboardURL: ProviderDashboardURL.openCodeGo
     )
   }
 
