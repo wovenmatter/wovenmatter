@@ -59,8 +59,7 @@ struct HermesUsageDatabase {
         )
         guard tokens.totalTokens > 0 else { continue }
         let actualCost = sqlite3_column_double(statement, 13)
-        let estimatedCost = sqlite3_column_double(statement, 12)
-        let cost = actualCost > 0 ? actualCost : (estimatedCost > 0 ? estimatedCost : nil)
+        let cost = actualCost > 0 ? actualCost : nil
         let sourceEventID = [
           sessionID,
           model,

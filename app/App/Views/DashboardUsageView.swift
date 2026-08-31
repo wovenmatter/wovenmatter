@@ -237,11 +237,6 @@ struct DashboardUsageView: View {
                 value: summary.requests.formatted(),
                 detail: "Across \(modelCountDetail(samples))"
             )
-            UsageMetricCard(
-                title: "Reported cost",
-                value: summary.costUSD.map(currency) ?? "Not reported",
-                detail: "No API-equivalent estimates."
-            )
         }
 
         if samples.isEmpty {
@@ -1289,7 +1284,7 @@ private struct UsageSessionRow: Identifiable {
         .compactMap { id, values in
             guard let latest = values.max(by: { $0.timestamp < $1.timestamp }) else { return nil }
             let tokens = values.reduce(.zero) { $0 + $1.tokens }
-            let costs = values.compactMap(\.costUSD)
+            let costs = values.compactMap(\.directCostUSD)
             return UsageSessionRow(
                 id: id,
                 modelFamily: latest.modelFamily,

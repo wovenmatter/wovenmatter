@@ -313,6 +313,18 @@ public struct UsageSample: Codable, Equatable, Identifiable, Sendable {
   public let sourceEventID: String
   public let dedupeKey: String?
 
+  /// Direct, usage-metered spend that the user is actually billed for.
+  /// Subscription-backed providers may report API-equivalent or estimated
+  /// values, which are intentionally excluded from product cost surfaces.
+  public var directCostUSD: Double? {
+    switch provider {
+    case .openRouter, .openCodeGo:
+      costUSD
+    case .codex, .claude, .grok, .cursor, .unknown:
+      nil
+    }
+  }
+
   public init(
     id: String,
     provider: ProviderKind,
@@ -438,7 +450,7 @@ public struct UsageAnalyticsSummary: Equatable, Sendable {
     tokens = samples.reduce(.zero) { $0 + $1.tokens }
     sessions = Set(samples.lazy.map { "\($0.sourceID):\($0.sessionID)" }).count
     requests = samples.reduce(0) { saturatedAdd($0, $1.requestCount) }
-    let costs = samples.compactMap(\.costUSD)
+    let costs = samples.compactMap(\.directCostUSD)
     costUSD = costs.isEmpty ? nil : costs.reduce(0, +)
   }
 }
@@ -497,7 +509,7 @@ public struct UsageBreakdownRow: Equatable, Identifiable, Sendable {
     self.label = label
     tokens = samples.reduce(.zero) { $0 + $1.tokens }
     requests = samples.reduce(0) { saturatedAdd($0, $1.requestCount) }
-    let costs = samples.compactMap(\.costUSD)
+    let costs = samples.compactMap(\.directCostUSD)
     costUSD = costs.isEmpty ? nil : costs.reduce(0, +)
   }
 }

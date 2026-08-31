@@ -700,7 +700,7 @@ public actor LocalUsageService {
       location: homeDirectory.appending(path: ".grok/sessions"),
       store: store,
       interval: interval,
-      detail: "Per-turn, per-model usage and provider-reported cost from Grok session updates."
+      detail: "Per-turn, per-model token usage from Grok session updates."
     ))
     sources.append(sourceCoverage(
       id: "opencode",

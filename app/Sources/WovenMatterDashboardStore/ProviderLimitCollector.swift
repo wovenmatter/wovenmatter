@@ -834,7 +834,7 @@ private struct OpenCodeGoLimitReader {
         accountLabel: "OpenCode Go",
         status: .signedIn,
         source: "OpenCode local history",
-        detail: "OpenCode Go is configured. Limits will be estimated after local usage appears.",
+        detail: "OpenCode Go is configured. Usage totals will appear after local usage is recorded.",
         observedAt: now,
         dashboardURL: ProviderDashboardURL.openCodeGo
       )
