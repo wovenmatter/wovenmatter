@@ -261,7 +261,7 @@ struct DashboardUsageView: View {
     }
 
     private func analyticsControls(_ snapshot: UsageAnalyticsSnapshot) -> some View {
-        DashboardCard(showsBorder: false) {
+        UsageSection {
             VStack(alignment: .leading, spacing: 12) {
                 ViewThatFits(in: .horizontal) {
                     HStack(spacing: 12) {
@@ -394,7 +394,7 @@ struct DashboardUsageView: View {
         let summary = UsageAnalyticsSummary(samples: samples)
         return VStack(alignment: .leading, spacing: 8) {
             DashboardSectionHeading(title: "Provider usage over time")
-            DashboardCard(showsBorder: false) {
+            UsageSection {
                 Chart(buckets) { bucket in
                     BarMark(
                         x: .value(
@@ -479,7 +479,7 @@ struct DashboardUsageView: View {
                     .font(.system(size: 10.5))
                     .foregroundStyle(DashboardPalette.mutedForeground)
             }
-            DashboardCard(showsBorder: false) {
+            UsageSection {
                 VStack(spacing: 0) {
                     ForEach(rollups) { rollup in
                         DisclosureGroup {
@@ -623,7 +623,7 @@ struct DashboardUsageView: View {
                     .font(.system(size: 10.5))
                     .foregroundStyle(DashboardPalette.mutedForeground)
             }
-            DashboardCard(showsBorder: false) {
+            UsageSection {
                 ScrollView(.horizontal) {
                     Grid(alignment: .leading, horizontalSpacing: 18, verticalSpacing: 0) {
                         GridRow {
@@ -693,7 +693,7 @@ struct DashboardUsageView: View {
                 spacing: 12
             ) {
                 ForEach(sources) { source in
-                    DashboardCard(showsBorder: false) {
+                    UsageSection {
                         VStack(alignment: .leading, spacing: 8) {
                             HStack {
                                 ProviderDot(provider: source.provider)
@@ -734,7 +734,7 @@ struct DashboardUsageView: View {
 
     @ViewBuilder
     private func accountConnections(_ snapshot: LocalUsageSnapshot) -> some View {
-        DashboardCard(showsBorder: false) {
+        UsageSection {
             HStack(alignment: .top, spacing: 12) {
                 DashboardLucideIcon(glyph: .keyRound, size: 18)
                     .foregroundStyle(theme.palette.themeAccent)
@@ -764,7 +764,7 @@ struct DashboardUsageView: View {
     }
 
     private var openRouterCredential: some View {
-        DashboardCard(showsBorder: false) {
+        UsageSection {
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
                     ProviderDot(provider: .openRouter)
@@ -815,7 +815,7 @@ struct DashboardUsageView: View {
     }
 
     private func limitCard(_ account: UsageLimitAccount) -> some View {
-        DashboardCard(showsBorder: false) {
+        UsageSection {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(alignment: .top, spacing: 9) {
                     ProviderDot(provider: account.provider)
@@ -1192,13 +1192,26 @@ private struct UsageInlineMetric: View {
     }
 }
 
+private struct UsageSection<Content: View>: View {
+    let content: Content
+
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+
+    var body: some View {
+        content
+            .padding(16)
+    }
+}
+
 private struct UsageMetricCard: View {
     let title: String
     let value: String
     let detail: String
 
     var body: some View {
-        DashboardCard(showsBorder: false) {
+        UsageSection {
             VStack(alignment: .leading, spacing: 6) {
                 Text(title.uppercased())
                     .font(.system(size: 9.5, weight: .semibold))
@@ -1343,7 +1356,7 @@ private struct UsageLoadingCard: View {
     let isLoading: Bool
 
     var body: some View {
-        DashboardCard(showsBorder: false) {
+        UsageSection {
             HStack(spacing: 10) {
                 if isLoading { ProgressView().controlSize(.small) }
                 Text(isLoading ? "Updating the persistent usage index…" : "Usage has not been loaded yet.")
@@ -1360,7 +1373,7 @@ private struct UsageEmptyCard: View {
     let detail: String
 
     var body: some View {
-        DashboardCard(showsBorder: false) {
+        UsageSection {
             VStack(spacing: 5) {
                 Text(title).font(.system(size: 13, weight: .semibold))
                 Text(detail)
