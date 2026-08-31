@@ -275,13 +275,16 @@ struct DashboardUsageView: View {
             VStack(alignment: .leading, spacing: 12) {
                 ViewThatFits(in: .horizontal) {
                     HStack(spacing: 12) {
-                        Picker("Range", selection: rangeBinding) {
-                            ForEach(UsageTimeRange.allCases) { range in
-                                Text(range.compactLabel).tag(range)
-                            }
+                        HStack(spacing: 10) {
+                            Text("Range")
+                                .fixedSize()
+                            segmentedRangePicker
+                                .frame(width: 430)
+                                // NSSegmentedControl paints beyond its SwiftUI
+                                // layout bounds; compensate so the visible edge
+                                // keeps the same gap as the measured HStack.
+                                .padding(.leading, 18)
                         }
-                        .pickerStyle(.segmented)
-                        .frame(width: 430)
 
                         Spacer(minLength: 8)
                         TextField("Search model, harness, app, or agent", text: $searchText)
@@ -293,12 +296,8 @@ struct DashboardUsageView: View {
                             .frame(width: 260)
                     }
                     VStack(alignment: .leading, spacing: 10) {
-                        Picker("Range", selection: rangeBinding) {
-                            ForEach(UsageTimeRange.allCases) { range in
-                                Text(range.compactLabel).tag(range)
-                            }
-                        }
-                        .pickerStyle(.segmented)
+                        Text("Range")
+                        segmentedRangePicker
                         TextField("Search model, harness, app, or agent", text: $searchText)
                             .textFieldStyle(.plain)
                             .padding(.horizontal, 10)
@@ -350,6 +349,16 @@ struct DashboardUsageView: View {
                 }
             }
         }
+    }
+
+    private var segmentedRangePicker: some View {
+        Picker("", selection: rangeBinding) {
+            ForEach(UsageTimeRange.allCases) { range in
+                Text(range.compactLabel).tag(range)
+            }
+        }
+        .labelsHidden()
+        .pickerStyle(.segmented)
     }
 
     private func filterPicker(
