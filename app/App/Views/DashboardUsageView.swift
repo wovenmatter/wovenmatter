@@ -852,8 +852,7 @@ struct DashboardUsageView: View {
                                 .enableProvider(account.provider)
                             )
                         }
-                        .buttonStyle(.plain)
-                        .font(.system(size: 10.5, weight: .medium))
+                        .buttonStyle(DashboardPrimaryButtonStyle())
                     } else if account.provider != .openRouter,
                               account.status != .available,
                               account.status != .signedIn {
