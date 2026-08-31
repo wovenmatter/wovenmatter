@@ -217,19 +217,19 @@ struct DashboardUsageView: View {
                 detail: "\(summary.sessions.formatted()) sessions"
             )
             UsageMetricCard(
-                title: "Uncached input",
+                title: "Uncached input tokens",
                 value: compact(summary.tokens.inputTokens),
                 detail: cacheRateDetail(summary.tokens)
             )
             UsageMetricCard(
-                title: "Cached input",
+                title: "Cached input tokens",
                 value: compact(summary.tokens.cachedInputTokens),
-                detail: compact(summary.tokens.cacheCreationTokens) + " cache write"
+                detail: compact(summary.tokens.cacheCreationTokens) + " cache-write tokens"
             )
             UsageMetricCard(
-                title: "Output",
+                title: "Output tokens",
                 value: compact(summary.tokens.outputTokens),
-                detail: compact(summary.tokens.reasoningTokens) + " reasoning"
+                detail: compact(summary.tokens.reasoningTokens) + " reasoning tokens"
             )
             UsageMetricCard(
                 title: "Model calls",
@@ -393,7 +393,7 @@ struct DashboardUsageView: View {
         }
         let summary = UsageAnalyticsSummary(samples: samples)
         return VStack(alignment: .leading, spacing: 8) {
-            DashboardSectionHeading(title: "Provider usage over time")
+            DashboardSectionHeading(title: "Provider token usage over time")
             UsageSection {
                 Chart(buckets) { bucket in
                     BarMark(
@@ -406,12 +406,15 @@ struct DashboardUsageView: View {
                     )
                     .foregroundStyle(by: .value("Provider", bucket.provider.displayName))
                     .cornerRadius(2)
+                    .accessibilityLabel(bucket.provider.displayName)
+                    .accessibilityValue("\(compact(bucket.tokens)) tokens")
                 }
                 .chartForegroundStyleScale(
                     domain: providers.map(\.displayName),
                     range: providers.map(providerColor)
                 )
                 .chartLegend(position: .top, alignment: .leading, spacing: 12)
+                .chartYAxisLabel("Tokens", position: .top, alignment: .leading)
                 .chartXAxis {
                     AxisMarks(values: .automatic(desiredCount: range.usesHourlyBuckets ? 8 : 10)) {
                         AxisGridLine().foregroundStyle(theme.palette.border)
@@ -461,7 +464,8 @@ struct DashboardUsageView: View {
                     UsageMetricCard(
                         title: provider.displayName,
                         value: compact(summary.tokens.totalTokens),
-                        detail: "\(summary.sessions.formatted()) sessions · \(summary.requests.formatted()) calls"
+                        detail: "\(summary.sessions.formatted()) sessions · \(summary.requests.formatted()) calls",
+                        unit: "tokens"
                     )
                 }
             }
@@ -486,19 +490,19 @@ struct DashboardUsageView: View {
                             VStack(alignment: .leading, spacing: 14) {
                                 HStack(spacing: 18) {
                                     UsageInlineMetric(
-                                        title: "Input",
+                                        title: "Input tokens",
                                         value: compact(rollup.tokens.inputTokens)
                                     )
                                     UsageInlineMetric(
-                                        title: "Cached",
+                                        title: "Cached tokens",
                                         value: compact(rollup.tokens.cachedInputTokens)
                                     )
                                     UsageInlineMetric(
-                                        title: "Output",
+                                        title: "Output tokens",
                                         value: compact(rollup.tokens.outputTokens)
                                     )
                                     UsageInlineMetric(
-                                        title: "Reasoning",
+                                        title: "Reasoning tokens",
                                         value: compact(rollup.tokens.reasoningTokens)
                                     )
                                     Spacer()
@@ -539,7 +543,7 @@ struct DashboardUsageView: View {
                                     Text(rollup.family)
                                         .font(.system(size: 13, weight: .semibold))
                                     Spacer()
-                                    Text(compact(rollup.tokens.totalTokens))
+                                    Text("\(compact(rollup.tokens.totalTokens)) tokens")
                                         .font(.system(size: 13, weight: .semibold).monospacedDigit())
                                     Text("\(rollup.requests.formatted()) calls")
                                         .font(.system(size: 10.5))
@@ -601,9 +605,9 @@ struct DashboardUsageView: View {
                         }
                     }
                     .frame(height: 5)
-                    Text(compact(row.tokens.totalTokens))
+                    Text("\(compact(row.tokens.totalTokens)) tokens")
                         .font(.system(size: 11, weight: .semibold).monospacedDigit())
-                        .frame(width: 72, alignment: .trailing)
+                        .frame(width: 106, alignment: .trailing)
                     Text("\(row.requests.formatted()) calls")
                         .font(.system(size: 10))
                         .foregroundStyle(DashboardPalette.mutedForeground)
@@ -1209,6 +1213,7 @@ private struct UsageMetricCard: View {
     let title: String
     let value: String
     let detail: String
+    var unit: String? = nil
 
     var body: some View {
         UsageSection {
@@ -1217,10 +1222,17 @@ private struct UsageMetricCard: View {
                     .font(.system(size: 9.5, weight: .semibold))
                     .tracking(1)
                     .foregroundStyle(DashboardPalette.mutedForeground)
-                Text(value)
-                    .font(.system(size: 21, weight: .semibold).monospacedDigit())
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.75)
+                HStack(alignment: .firstTextBaseline, spacing: 5) {
+                    Text(value)
+                        .font(.system(size: 21, weight: .semibold).monospacedDigit())
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
+                    if let unit {
+                        Text(unit)
+                            .font(.system(size: 10.5, weight: .medium))
+                            .foregroundStyle(DashboardPalette.mutedForeground)
+                    }
+                }
                 Text(detail)
                     .font(.system(size: 10.5))
                     .foregroundStyle(DashboardPalette.mutedForeground)
