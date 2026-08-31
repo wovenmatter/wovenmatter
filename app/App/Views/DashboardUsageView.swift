@@ -206,6 +206,7 @@ struct DashboardUsageView: View {
 
         let samples = filteredSamples
         let summary = UsageAnalyticsSummary(samples: samples)
+        DashboardSectionHeading(title: "Token breakdown")
         LazyVGrid(
             columns: [GridItem(.adaptive(minimum: 210), spacing: 12)],
             alignment: .leading,
@@ -234,7 +235,7 @@ struct DashboardUsageView: View {
             UsageMetricCard(
                 title: "Model calls",
                 value: summary.requests.formatted(),
-                detail: modelCountDetail(samples)
+                detail: "Across \(modelCountDetail(samples))"
             )
             UsageMetricCard(
                 title: "Reported cost",
@@ -393,7 +394,7 @@ struct DashboardUsageView: View {
         }
         let summary = UsageAnalyticsSummary(samples: samples)
         return VStack(alignment: .leading, spacing: 8) {
-            DashboardSectionHeading(title: "Provider usage over time")
+            DashboardSectionHeading(title: "Provider token usage over time")
             UsageSection {
                 Chart(buckets) { bucket in
                     BarMark(
@@ -451,7 +452,7 @@ struct DashboardUsageView: View {
                 return $0.1.tokens.totalTokens > $1.1.tokens.totalTokens
             }
         return VStack(alignment: .leading, spacing: 8) {
-            DashboardSectionHeading(title: "Providers")
+            DashboardSectionHeading(title: "Token breakdown by provider")
             LazyVGrid(
                 columns: [GridItem(.adaptive(minimum: 180), spacing: 12)],
                 alignment: .leading,
@@ -473,7 +474,7 @@ struct DashboardUsageView: View {
         let maximum = max(1, rollups.map { $0.tokens.totalTokens }.max() ?? 1)
         return VStack(alignment: .leading, spacing: 8) {
             HStack {
-                DashboardSectionHeading(title: "Models")
+                DashboardSectionHeading(title: "Breakdown by model")
                 Spacer()
                 Text("Select a model to inspect subscriptions, accounts, and harnesses")
                     .font(.system(size: 10.5))
@@ -481,6 +482,22 @@ struct DashboardUsageView: View {
             }
             UsageSection {
                 VStack(spacing: 0) {
+                    HStack(spacing: 8) {
+                        Text("Model")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.leading, 20)
+                        Text("Tokens")
+                            .frame(width: 110, alignment: .trailing)
+                        Text("Calls")
+                            .frame(width: 76, alignment: .trailing)
+                    }
+                    .font(.system(size: 10, weight: .semibold))
+                    .tracking(0.8)
+                    .foregroundStyle(DashboardPalette.mutedForeground)
+                    .padding(.bottom, 8)
+
+                    Divider().overlay(theme.palette.border)
+
                     ForEach(rollups) { rollup in
                         DisclosureGroup {
                             VStack(alignment: .leading, spacing: 14) {
@@ -541,7 +558,8 @@ struct DashboardUsageView: View {
                                     Spacer()
                                     Text(compact(rollup.tokens.totalTokens))
                                         .font(.system(size: 13, weight: .semibold).monospacedDigit())
-                                    Text("\(rollup.requests.formatted()) calls")
+                                        .frame(width: 110, alignment: .trailing)
+                                    Text(rollup.requests.formatted())
                                         .font(.system(size: 10.5))
                                         .foregroundStyle(DashboardPalette.mutedForeground)
                                         .frame(width: 76, alignment: .trailing)
