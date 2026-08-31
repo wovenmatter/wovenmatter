@@ -18,7 +18,7 @@ enum ProviderLimitCollector {
         source: enabledProviders.contains(provider)
           ? "Ready to check" : "Not enabled",
         detail: enabledProviders.contains(provider)
-          ? "Refresh Usage Limits to check this account."
+          ? "Refresh the Usage limits page to check this account."
           : "Enable this account before Woven Matter checks its credentials or usage.",
         observedAt: now
       )
@@ -96,7 +96,7 @@ enum ProviderLimitCollector {
       let plan = string(identity?["planType"] ?? identity?["plan_type"]
         ?? rateLimits?["planType"] ?? rateLimits?["plan_type"])
       var windows: [ProviderQuotaWindow] = []
-      if let value = quotaWindow(rateLimits?["primary"], id: "five-hour", label: "Five hour") {
+      if let value = quotaWindow(rateLimits?["primary"], id: "five-hour", label: "Five-hour") {
         windows.append(value)
       }
       if let value = quotaWindow(rateLimits?["secondary"], id: "weekly", label: "Weekly") {

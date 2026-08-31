@@ -10,8 +10,8 @@ private enum DashboardUsagePage: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .analytics: "Usage Analytics"
-        case .limits: "Usage Limits"
+        case .analytics: "Usage analytics"
+        case .limits: "Usage limits"
         }
     }
 }
@@ -157,7 +157,7 @@ struct DashboardUsageView: View {
                 Text("Usage")
                     .font(.system(size: 24, weight: .semibold))
                     .tracking(-0.4)
-                Text("AI activity and account allowances across connected accounts and runtimes")
+                Text("AI activity and account allowances across connected accounts and runtimes.")
                     .font(.system(size: 12.5))
                     .foregroundStyle(DashboardPalette.mutedForeground)
             }
@@ -206,7 +206,7 @@ struct DashboardUsageView: View {
 
         let samples = filteredSamples
         let summary = UsageAnalyticsSummary(samples: samples)
-        DashboardSectionHeading(title: "Token breakdown")
+        UsageSectionHeading(title: "Token breakdown")
         LazyVGrid(
             columns: [GridItem(.adaptive(minimum: 210), spacing: 12)],
             alignment: .leading,
@@ -240,7 +240,7 @@ struct DashboardUsageView: View {
             UsageMetricCard(
                 title: "Reported cost",
                 value: summary.costUSD.map(currency) ?? "Not reported",
-                detail: "No API-equivalent estimates"
+                detail: "No API-equivalent estimates."
             )
         }
 
@@ -394,7 +394,7 @@ struct DashboardUsageView: View {
         }
         let summary = UsageAnalyticsSummary(samples: samples)
         return VStack(alignment: .leading, spacing: 8) {
-            DashboardSectionHeading(title: "Token breakdown over time")
+            UsageSectionHeading(title: "Token breakdown over time")
             UsageSection {
                 Chart(buckets) { bucket in
                     BarMark(
@@ -452,7 +452,7 @@ struct DashboardUsageView: View {
                 return $0.1.tokens.totalTokens > $1.1.tokens.totalTokens
             }
         return VStack(alignment: .leading, spacing: 8) {
-            DashboardSectionHeading(title: "Token breakdown by provider")
+            UsageSectionHeading(title: "Token breakdown by provider")
             LazyVGrid(
                 columns: [GridItem(.adaptive(minimum: 180), spacing: 12)],
                 alignment: .leading,
@@ -474,9 +474,9 @@ struct DashboardUsageView: View {
         let maximum = max(1, rollups.map { $0.tokens.totalTokens }.max() ?? 1)
         return VStack(alignment: .leading, spacing: 8) {
             HStack {
-                DashboardSectionHeading(title: "Breakdown by model")
+                UsageSectionHeading(title: "Breakdown by model")
                 Spacer()
-                Text("Select a model to inspect subscriptions, accounts, and harnesses")
+                Text("Select a model to inspect subscriptions, accounts, and harnesses.")
                     .font(.system(size: 10.5))
                     .foregroundStyle(DashboardPalette.mutedForeground)
             }
@@ -492,7 +492,7 @@ struct DashboardUsageView: View {
                             .frame(width: 76, alignment: .trailing)
                     }
                     .font(.system(size: 10, weight: .semibold))
-                    .tracking(0.8)
+                    .tracking(0.2)
                     .foregroundStyle(DashboardPalette.mutedForeground)
                     .padding(.bottom, 8)
 
@@ -596,9 +596,9 @@ struct DashboardUsageView: View {
         color: Color
     ) -> some View {
         VStack(alignment: .leading, spacing: 7) {
-            Text(title.uppercased())
+            Text(title)
                 .font(.system(size: 9.5, weight: .semibold))
-                .tracking(0.8)
+                .tracking(0.2)
                 .foregroundStyle(DashboardPalette.mutedForeground)
             ForEach(rows) { row in
                 HStack(spacing: 8) {
@@ -635,7 +635,7 @@ struct DashboardUsageView: View {
         let rows = UsageSessionRow.rows(from: samples)
         return VStack(alignment: .leading, spacing: 8) {
             HStack {
-                DashboardSectionHeading(title: "Sessions and attribution")
+                UsageSectionHeading(title: "Sessions and attribution")
                 Spacer()
                 Text("Showing \(min(rows.count, 80)) of \(rows.count)")
                     .font(.system(size: 10.5))
@@ -704,7 +704,7 @@ struct DashboardUsageView: View {
 
     private func sourceCoverage(_ sources: [UsageSourceCoverage]) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            DashboardSectionHeading(title: "Source coverage")
+            UsageSectionHeading(title: "Source coverage")
             LazyVGrid(
                 columns: [GridItem(.adaptive(minimum: 310), spacing: 12)],
                 alignment: .leading,
@@ -768,7 +768,7 @@ struct DashboardUsageView: View {
             }
         }
 
-        DashboardSectionHeading(title: "Accounts")
+        UsageSectionHeading(title: "Accounts")
         LazyVGrid(
             columns: [GridItem(.adaptive(minimum: 330), spacing: 12)],
             alignment: .leading,
@@ -877,7 +877,7 @@ struct DashboardUsageView: View {
                     if let budget = account.providerBudget {
                         VStack(alignment: .leading, spacing: 4) {
                             HStack {
-                                Text(budget.period?.capitalized ?? "Allowance")
+                                Text(budget.period.map(sentenceCase) ?? "Allowance")
                                 Spacer()
                                 Text("\(budget.remainingMicros == 0 ? "0" : money(budget.remainingMicros, currency: budget.currency)) left")
                             }
@@ -991,9 +991,9 @@ struct DashboardUsageView: View {
         width: CGFloat,
         alignment: Alignment = .leading
     ) -> some View {
-        Text(title.uppercased())
+        Text(title)
             .font(.system(size: 9.5, weight: .semibold))
-            .tracking(0.8)
+            .tracking(0.2)
             .foregroundStyle(DashboardPalette.mutedForeground)
             .frame(width: width, alignment: alignment)
             .padding(.bottom, 8)
@@ -1040,6 +1040,11 @@ struct DashboardUsageView: View {
         if magnitude >= 1_000_000 { return String(format: "%.1fM", magnitude / 1_000_000) }
         if magnitude >= 1_000 { return String(format: "%.1fK", magnitude / 1_000) }
         return value.formatted()
+    }
+
+    private func sentenceCase(_ value: String) -> String {
+        guard let first = value.first else { return value }
+        return first.uppercased() + String(value.dropFirst())
     }
 
     private func currency(_ value: Double) -> String {
@@ -1200,9 +1205,9 @@ private struct UsageInlineMetric: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(title.uppercased())
+            Text(title)
                 .font(.system(size: 9, weight: .semibold))
-                .tracking(0.7)
+                .tracking(0.2)
                 .foregroundStyle(DashboardPalette.mutedForeground)
             Text(value)
                 .font(.system(size: 12, weight: .semibold).monospacedDigit())
@@ -1223,6 +1228,17 @@ private struct UsageSection<Content: View>: View {
     }
 }
 
+private struct UsageSectionHeading: View {
+    let title: String
+
+    var body: some View {
+        Text(title)
+            .font(.system(size: 10.5, weight: .semibold))
+            .tracking(0.2)
+            .foregroundStyle(DashboardPalette.mutedForeground)
+    }
+}
+
 private struct UsageMetricCard: View {
     let title: String
     let value: String
@@ -1231,9 +1247,9 @@ private struct UsageMetricCard: View {
     var body: some View {
         UsageSection {
             VStack(alignment: .leading, spacing: 6) {
-                Text(title.uppercased())
+                Text(title)
                     .font(.system(size: 9.5, weight: .semibold))
-                    .tracking(1)
+                    .tracking(0.2)
                     .foregroundStyle(DashboardPalette.mutedForeground)
                 Text(value)
                     .font(.system(size: 21, weight: .semibold).monospacedDigit())
