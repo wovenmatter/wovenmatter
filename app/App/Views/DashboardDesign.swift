@@ -822,6 +822,8 @@ enum DashboardMetrics {
     static let separatorWidth: CGFloat = 12
     static let shellInset: CGFloat = 8
     static let shellGap: CGFloat = 8
+    /// Keeps desktop content below the traffic lights while surfaces fill the title-bar area.
+    static let titleBarMinimumContentInset: CGFloat = 44
     static let windowAlignedSurfaceMinimumRadius: CGFloat = 12
     static let cardRadius: CGFloat = 14
     static let controlRadius: CGFloat = 10
