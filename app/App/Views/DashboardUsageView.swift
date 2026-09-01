@@ -218,13 +218,13 @@ struct DashboardUsageView: View {
                 detail: "\(summary.sessions.formatted()) sessions"
             )
             UsageMetricCard(
-                title: "Input",
-                value: compact(summary.tokens.totalInputTokens),
-                detail: compact(summary.tokens.inputTokens) + " uncached"
-            )
-            UsageMetricCard(
                 title: "Cached input",
                 value: compact(summary.tokens.cachedInputTokens),
+                detail: compact(summary.tokens.cacheCreationTokens) + " cache write"
+            )
+            UsageMetricCard(
+                title: "Uncached input",
+                value: compact(summary.tokens.inputTokens),
                 detail: cacheRateDetail(summary.tokens)
             )
             UsageMetricCard(
