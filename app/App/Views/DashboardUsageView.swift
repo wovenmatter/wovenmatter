@@ -3,15 +3,15 @@ import SwiftUI
 import WovenMatterCore
 
 private enum DashboardUsagePage: String, CaseIterable, Identifiable {
-    case analytics
     case limits
+    case analytics
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
-        case .analytics: "Usage Analytics"
-        case .limits: "Usage Limits"
+        case .analytics: "Usage analytics"
+        case .limits: "Usage limits"
         }
     }
 }
@@ -42,10 +42,17 @@ private enum PendingUsageCredentialAction: Identifiable {
 }
 
 struct DashboardUsageView: View {
+    private static let pageTopID = "usage-page-top"
+
     @Environment(\.dashboardTheme) private var theme
     @Bindable var model: ApplicationModel
-    @AppStorage("wovenmatter.usage.page") private var pageRaw = DashboardUsagePage.analytics.rawValue
-    @AppStorage("wovenmatter.usage.range") private var rangeRaw = UsageTimeRange.last30Days.rawValue
+    @State private var page = DashboardUsagePage.limits
+    @State private var range: UsageTimeRange = {
+        let rawValue = UserDefaults.standard.string(
+            forKey: "wovenmatter.usage.range"
+        )
+        return rawValue.flatMap(UsageTimeRange.init(rawValue:)) ?? .last30Days
+    }()
     @State private var providerFilter = "all"
     @State private var modelFilter = "all"
     @State private var billingRouteFilter = "all"
@@ -54,14 +61,6 @@ struct DashboardUsageView: View {
     @State private var searchText = ""
     @State private var openRouterAPIKey = ""
     @State private var pendingCredentialAction: PendingUsageCredentialAction?
-
-    private var page: DashboardUsagePage {
-        DashboardUsagePage(rawValue: pageRaw) ?? .analytics
-    }
-
-    private var range: UsageTimeRange {
-        UsageTimeRange(rawValue: rangeRaw) ?? .last30Days
-    }
 
     private var analytics: UsageAnalyticsSnapshot? { model.localUsage?.analytics }
 
@@ -82,7 +81,7 @@ struct DashboardUsageView: View {
         Binding(
             get: { page },
             set: { value in
-                pageRaw = value.rawValue
+                page = value
                 if value == .limits {
                     Task {
                         await model.refreshLocalUsage(
@@ -96,56 +95,53 @@ struct DashboardUsageView: View {
         )
     }
 
-    private var rangeBinding: Binding<UsageTimeRange> {
-        Binding(
-            get: { range },
-            set: { value in
-                rangeRaw = value.rawValue
-                Task {
-                    await model.refreshLocalUsage(
-                        range: value,
-                        reason: .rangeChanged
-                    )
-                }
-            }
-        )
-    }
-
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                header
-                Picker("Usage page", selection: pageBinding) {
-                    ForEach(DashboardUsagePage.allCases) { page in
-                        Text(page.title).tag(page)
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    header
+                        .id(Self.pageTopID)
+                    HStack(spacing: 10) {
+                        Text("Usage page")
+                            .fixedSize()
+                        DashboardSegmentedSelector(
+                            options: DashboardUsagePage.allCases,
+                            selection: pageBinding
+                        ) { page in
+                            page.title
+                        }
+                        .frame(width: 320)
+                    }
+
+                    if let error = model.localUsageError {
+                        UsageErrorBanner(text: error)
+                    }
+
+                    if let snapshot = model.localUsage {
+                        switch page {
+                        case .limits:
+                            accountConnections(snapshot)
+                        case .analytics:
+                            analyticsPage(snapshot.analytics)
+                        }
+                    } else {
+                        UsageLoadingCard(isLoading: model.isRefreshingLocalUsage)
                     }
                 }
-                .pickerStyle(.segmented)
-                .frame(maxWidth: 360)
-
-                if let error = model.localUsageError {
-                    UsageErrorBanner(text: error)
-                }
-
-                if let snapshot = model.localUsage {
-                    accountConnections(snapshot)
-                    switch page {
-                    case .analytics:
-                        analyticsPage(snapshot.analytics)
-                    case .limits:
-                        EmptyView()
-                    }
-                } else {
-                    UsageLoadingCard(isLoading: model.isRefreshingLocalUsage)
+                .frame(maxWidth: 1180)
+                .frame(maxWidth: .infinity)
+                .padding(.horizontal, 32)
+                .padding(.vertical, 40)
+            }
+            .scrollIndicators(.never)
+            .background(theme.palette.workspace)
+            .onChange(of: page) { _, _ in
+                Task { @MainActor in
+                    await Task.yield()
+                    proxy.scrollTo(Self.pageTopID, anchor: .top)
                 }
             }
-            .frame(maxWidth: 1180)
-            .frame(maxWidth: .infinity)
-            .padding(.horizontal, 32)
-            .padding(.vertical, 40)
         }
-        .scrollIndicators(.never)
-        .background(theme.palette.workspace)
         .task {
             await model.refreshLocalUsage(
                 range: range,
@@ -172,7 +168,7 @@ struct DashboardUsageView: View {
                 Text("Usage")
                     .font(.system(size: 24, weight: .semibold))
                     .tracking(-0.4)
-                Text("AI activity and account allowances across connected accounts and runtimes")
+                Text("AI activity and account allowances across connected accounts and runtimes.")
                     .font(.system(size: 12.5))
                     .foregroundStyle(DashboardPalette.mutedForeground)
             }
@@ -221,6 +217,7 @@ struct DashboardUsageView: View {
 
         let samples = filteredSamples
         let summary = UsageAnalyticsSummary(samples: samples)
+        UsageSectionHeading(title: "Token breakdown")
         LazyVGrid(
             columns: [GridItem(.adaptive(minimum: 210), spacing: 12)],
             alignment: .leading,
@@ -229,17 +226,19 @@ struct DashboardUsageView: View {
             UsageMetricCard(
                 title: "Total tokens",
                 value: compact(summary.tokens.totalTokens),
-                detail: "\(summary.sessions.formatted()) sessions"
+                detail: countDetail(summary.sessions, unit: "session")
+            )
+            UsageMetricCard(
+                title: "Cached input",
+                value: compact(summary.tokens.cachedInputTokens),
+                detail: compact(summary.tokens.cacheCreationTokens)
+                    + " cache write"
+                    + (summary.tokens.cacheCreationTokens == 1 ? "" : "s")
             )
             UsageMetricCard(
                 title: "Uncached input",
                 value: compact(summary.tokens.inputTokens),
                 detail: cacheRateDetail(summary.tokens)
-            )
-            UsageMetricCard(
-                title: "Cached input",
-                value: compact(summary.tokens.cachedInputTokens),
-                detail: compact(summary.tokens.cacheCreationTokens) + " cache write"
             )
             UsageMetricCard(
                 title: "Output",
@@ -249,12 +248,7 @@ struct DashboardUsageView: View {
             UsageMetricCard(
                 title: "Model calls",
                 value: summary.requests.formatted(),
-                detail: modelCountDetail(samples)
-            )
-            UsageMetricCard(
-                title: "Reported cost",
-                value: summary.costUSD.map(currency) ?? "Not reported",
-                detail: "No API-equivalent estimates"
+                detail: "Across \(modelCountDetail(samples))"
             )
         }
 
@@ -266,8 +260,9 @@ struct DashboardUsageView: View {
                     : "Clear filters or broaden the time range."
             )
         } else {
+            providerBreakdown(samples)
+            providerUsageChart(samples)
             modelBreakdown(samples)
-            usageChart(samples)
             sessionTable(samples)
         }
 
@@ -275,40 +270,41 @@ struct DashboardUsageView: View {
     }
 
     private func analyticsControls(_ snapshot: UsageAnalyticsSnapshot) -> some View {
-        DashboardCard(showsBorder: false) {
+        UsageSection {
             VStack(alignment: .leading, spacing: 12) {
                 ViewThatFits(in: .horizontal) {
                     HStack(spacing: 12) {
-                        Picker("Range", selection: rangeBinding) {
-                            ForEach(UsageTimeRange.allCases) { range in
-                                Text(range.compactLabel).tag(range)
+                        HStack(spacing: 10) {
+                            Text("Range")
+                                .fixedSize()
+                            DashboardSegmentedSelector(
+                                options: UsageTimeRange.allCases,
+                                selection: rangeSelectionBinding
+                            ) { range in
+                                range.compactLabel
                             }
+                                .frame(width: 430)
                         }
-                        .pickerStyle(.segmented)
-                        .frame(width: 430)
 
                         Spacer(minLength: 8)
-                        TextField("Search model, harness, app, or agent", text: $searchText)
-                            .textFieldStyle(.plain)
-                            .padding(.horizontal, 10)
-                            .frame(height: 28)
-                            .background(theme.palette.input)
-                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        DashboardSearchField(
+                            text: $searchText,
+                            prompt: "Search model, harness, app, or agent"
+                        )
                             .frame(width: 260)
                     }
                     VStack(alignment: .leading, spacing: 10) {
-                        Picker("Range", selection: rangeBinding) {
-                            ForEach(UsageTimeRange.allCases) { range in
-                                Text(range.compactLabel).tag(range)
-                            }
+                        Text("Range")
+                        DashboardSegmentedSelector(
+                            options: UsageTimeRange.allCases,
+                            selection: rangeSelectionBinding
+                        ) { range in
+                            range.compactLabel
                         }
-                        .pickerStyle(.segmented)
-                        TextField("Search model, harness, app, or agent", text: $searchText)
-                            .textFieldStyle(.plain)
-                            .padding(.horizontal, 10)
-                            .frame(height: 28)
-                            .background(theme.palette.input)
-                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        DashboardSearchField(
+                            text: $searchText,
+                            prompt: "Search model, harness, app, or agent"
+                        )
                     }
                 }
 
@@ -356,6 +352,26 @@ struct DashboardUsageView: View {
         }
     }
 
+    private var rangeSelectionBinding: Binding<UsageTimeRange> {
+        Binding(
+            get: { range },
+            set: { value in
+                guard value != range else { return }
+                range = value
+                UserDefaults.standard.set(
+                    value.rawValue,
+                    forKey: "wovenmatter.usage.range"
+                )
+                Task {
+                    await model.refreshLocalUsage(
+                        range: value,
+                        reason: .rangeChanged
+                    )
+                }
+            }
+        )
+    }
+
     private func filterPicker(
         title: String,
         selection: Binding<String>,
@@ -368,24 +384,26 @@ struct DashboardUsageView: View {
         case "Reasoning": "All reasoning levels"
         default: "All \(title.lowercased())s"
         }
-        return Picker(title, selection: selection) {
-            Text(allLabel).tag("all")
-            ForEach(unique, id: \.key) { key, label in
-                Text(label).tag(key)
-            }
-        }
-        .labelsHidden()
-        .pickerStyle(.menu)
-        .frame(maxWidth: 170)
+        return UsageFilterSelector(
+            title: title,
+            selection: selection,
+            options: [(key: "all", label: allLabel)]
+                + unique.map { (key: $0.key, label: $0.value) }
+        )
     }
 
-    private func usageChart(_ samples: [UsageSample]) -> some View {
-        let buckets = displayBuckets(samples)
-        let models = Array(Set(buckets.map(\.modelFamily))).sorted()
+    private func providerUsageChart(_ samples: [UsageSample]) -> some View {
+        let buckets = ProviderUsageChartBucket.aggregate(
+            samples: samples,
+            range: range
+        )
+        let providers = Array(Set(buckets.map(\.provider))).sorted {
+            $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
+        }
         let summary = UsageAnalyticsSummary(samples: samples)
         return VStack(alignment: .leading, spacing: 8) {
-            DashboardSectionHeading(title: "Model volume over time")
-            DashboardCard(showsBorder: false) {
+            UsageSectionHeading(title: "Token breakdown over time")
+            UsageSection {
                 Chart(buckets) { bucket in
                     BarMark(
                         x: .value(
@@ -395,12 +413,12 @@ struct DashboardUsageView: View {
                         ),
                         y: .value("Tokens", bucket.tokens)
                     )
-                    .foregroundStyle(by: .value("Model", bucket.modelFamily))
+                    .foregroundStyle(by: .value("Provider", bucket.provider.displayName))
                     .cornerRadius(2)
                 }
                 .chartForegroundStyleScale(
-                    domain: models,
-                    range: models.map(modelColor)
+                    domain: providers.map(\.displayName),
+                    range: providers.map(providerColor)
                 )
                 .chartLegend(position: .top, alignment: .leading, spacing: 12)
                 .chartXAxis {
@@ -424,8 +442,42 @@ struct DashboardUsageView: View {
                     }
                 }
                 .frame(height: 290)
-                .accessibilityLabel("Token volume by model family")
-                .accessibilityValue("\(compact(summary.tokens.totalTokens)) tokens across \(summary.sessions) sessions")
+                .accessibilityLabel("Token volume by provider")
+                .accessibilityValue(
+                    "\(compact(summary.tokens.totalTokens)) tokens across "
+                        + countDetail(summary.sessions, unit: "session")
+                )
+            }
+        }
+    }
+
+    private func providerBreakdown(_ samples: [UsageSample]) -> some View {
+        let providers = Dictionary(grouping: samples, by: \.provider)
+            .map { provider, samples in
+                (provider, UsageAnalyticsSummary(samples: samples))
+            }
+            .sorted {
+                if $0.1.tokens.totalTokens == $1.1.tokens.totalTokens {
+                    return $0.0.displayName < $1.0.displayName
+                }
+                return $0.1.tokens.totalTokens > $1.1.tokens.totalTokens
+            }
+        return VStack(alignment: .leading, spacing: 8) {
+            UsageSectionHeading(title: "Token breakdown by provider")
+            LazyVGrid(
+                columns: [GridItem(.adaptive(minimum: 180), spacing: 12)],
+                alignment: .leading,
+                spacing: 12
+            ) {
+                ForEach(providers, id: \.0) { provider, summary in
+                    UsageMetricCard(
+                        title: provider.displayName,
+                        value: compact(summary.tokens.totalTokens),
+                        detail: countDetail(summary.sessions, unit: "session")
+                            + " · "
+                            + countDetail(summary.requests, unit: "call")
+                    )
+                }
             }
         }
     }
@@ -435,33 +487,45 @@ struct DashboardUsageView: View {
         let maximum = max(1, rollups.map { $0.tokens.totalTokens }.max() ?? 1)
         return VStack(alignment: .leading, spacing: 8) {
             HStack {
-                DashboardSectionHeading(title: "Models")
+                UsageSectionHeading(title: "Breakdown by model")
                 Spacer()
-                Text("Select a model to inspect subscriptions, accounts, and harnesses")
+                Text("Select a model to inspect subscriptions, accounts, and harnesses.")
                     .font(.system(size: 10.5))
                     .foregroundStyle(DashboardPalette.mutedForeground)
             }
-            DashboardCard(showsBorder: false) {
+            UsageSection {
                 VStack(spacing: 0) {
+                    HStack(spacing: 8) {
+                        Text("Model")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.leading, 20)
+                        Text("Tokens")
+                            .frame(width: 110, alignment: .trailing)
+                        Text("Calls")
+                            .frame(width: 76, alignment: .trailing)
+                    }
+                    .font(.system(size: 10, weight: .semibold))
+                    .tracking(0.2)
+                    .foregroundStyle(DashboardPalette.mutedForeground)
+                    .padding(.bottom, 8)
+
+                    Divider().overlay(theme.palette.border)
+
                     ForEach(rollups) { rollup in
                         DisclosureGroup {
                             VStack(alignment: .leading, spacing: 14) {
                                 HStack(spacing: 18) {
                                     UsageInlineMetric(
                                         title: "Input",
-                                        value: compact(rollup.tokens.inputTokens)
+                                        value: compact(rollup.tokens.totalInputTokens)
                                     )
                                     UsageInlineMetric(
-                                        title: "Cached",
+                                        title: "Cached input",
                                         value: compact(rollup.tokens.cachedInputTokens)
                                     )
                                     UsageInlineMetric(
                                         title: "Output",
                                         value: compact(rollup.tokens.outputTokens)
-                                    )
-                                    UsageInlineMetric(
-                                        title: "Reasoning",
-                                        value: compact(rollup.tokens.reasoningTokens)
                                     )
                                     Spacer()
                                 }
@@ -503,7 +567,8 @@ struct DashboardUsageView: View {
                                     Spacer()
                                     Text(compact(rollup.tokens.totalTokens))
                                         .font(.system(size: 13, weight: .semibold).monospacedDigit())
-                                    Text("\(rollup.requests.formatted()) calls")
+                                        .frame(width: 110, alignment: .trailing)
+                                    Text(rollup.requests.formatted())
                                         .font(.system(size: 10.5))
                                         .foregroundStyle(DashboardPalette.mutedForeground)
                                         .frame(width: 76, alignment: .trailing)
@@ -540,9 +605,9 @@ struct DashboardUsageView: View {
         color: Color
     ) -> some View {
         VStack(alignment: .leading, spacing: 7) {
-            Text(title.uppercased())
+            Text(title)
                 .font(.system(size: 9.5, weight: .semibold))
-                .tracking(0.8)
+                .tracking(0.2)
                 .foregroundStyle(DashboardPalette.mutedForeground)
             ForEach(rows) { row in
                 HStack(spacing: 8) {
@@ -566,7 +631,7 @@ struct DashboardUsageView: View {
                     Text(compact(row.tokens.totalTokens))
                         .font(.system(size: 11, weight: .semibold).monospacedDigit())
                         .frame(width: 72, alignment: .trailing)
-                    Text("\(row.requests.formatted()) calls")
+                    Text(countDetail(row.requests, unit: "call"))
                         .font(.system(size: 10))
                         .foregroundStyle(DashboardPalette.mutedForeground)
                         .frame(width: 66, alignment: .trailing)
@@ -579,13 +644,13 @@ struct DashboardUsageView: View {
         let rows = UsageSessionRow.rows(from: samples)
         return VStack(alignment: .leading, spacing: 8) {
             HStack {
-                DashboardSectionHeading(title: "Sessions and attribution")
+                UsageSectionHeading(title: "Sessions and attribution")
                 Spacer()
                 Text("Showing \(min(rows.count, 80)) of \(rows.count)")
                     .font(.system(size: 10.5))
                     .foregroundStyle(DashboardPalette.mutedForeground)
             }
-            DashboardCard(showsBorder: false) {
+            UsageSection {
                 ScrollView(.horizontal) {
                     Grid(alignment: .leading, horizontalSpacing: 18, verticalSpacing: 0) {
                         GridRow {
@@ -648,14 +713,14 @@ struct DashboardUsageView: View {
 
     private func sourceCoverage(_ sources: [UsageSourceCoverage]) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            DashboardSectionHeading(title: "Source coverage")
+            UsageSectionHeading(title: "Source coverage")
             LazyVGrid(
                 columns: [GridItem(.adaptive(minimum: 310), spacing: 12)],
                 alignment: .leading,
                 spacing: 12
             ) {
                 ForEach(sources) { source in
-                    DashboardCard(showsBorder: false) {
+                    UsageSection {
                         VStack(alignment: .leading, spacing: 8) {
                             HStack {
                                 ProviderDot(provider: source.provider)
@@ -674,8 +739,14 @@ struct DashboardUsageView: View {
                                 )
                             }
                             HStack(spacing: 16) {
-                                Label("\(source.discoveredSessions) sessions", systemImage: "rectangle.stack")
-                                Label("\(source.attributedSamples) records", systemImage: "number")
+                                Label(
+                                    countDetail(source.discoveredSessions, unit: "session"),
+                                    systemImage: "rectangle.stack"
+                                )
+                                Label(
+                                    countDetail(source.attributedSamples, unit: "record"),
+                                    systemImage: "number"
+                                )
                             }
                             .font(.system(size: 10.5, weight: .medium))
                             .foregroundStyle(DashboardPalette.mutedForeground)
@@ -696,7 +767,7 @@ struct DashboardUsageView: View {
 
     @ViewBuilder
     private func accountConnections(_ snapshot: LocalUsageSnapshot) -> some View {
-        DashboardCard(showsBorder: false) {
+        UsageSection {
             HStack(alignment: .top, spacing: 12) {
                 DashboardLucideIcon(glyph: .keyRound, size: 18)
                     .foregroundStyle(theme.palette.themeAccent)
@@ -712,7 +783,7 @@ struct DashboardUsageView: View {
             }
         }
 
-        DashboardSectionHeading(title: "Accounts")
+        UsageSectionHeading(title: "Accounts")
         LazyVGrid(
             columns: [GridItem(.adaptive(minimum: 330), spacing: 12)],
             alignment: .leading,
@@ -726,7 +797,7 @@ struct DashboardUsageView: View {
     }
 
     private var openRouterCredential: some View {
-        DashboardCard(showsBorder: false) {
+        UsageSection {
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
                     ProviderDot(provider: .openRouter)
@@ -777,7 +848,7 @@ struct DashboardUsageView: View {
     }
 
     private func limitCard(_ account: UsageLimitAccount) -> some View {
-        DashboardCard(showsBorder: false) {
+        UsageSection {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(alignment: .top, spacing: 9) {
                     ProviderDot(provider: account.provider)
@@ -821,7 +892,7 @@ struct DashboardUsageView: View {
                     if let budget = account.providerBudget {
                         VStack(alignment: .leading, spacing: 4) {
                             HStack {
-                                Text(budget.period?.capitalized ?? "Allowance")
+                                Text(budget.period.map(sentenceCase) ?? "Allowance")
                                 Spacer()
                                 Text("\(budget.remainingMicros == 0 ? "0" : money(budget.remainingMicros, currency: budget.currency)) left")
                             }
@@ -847,13 +918,12 @@ struct DashboardUsageView: View {
                         .lineLimit(1)
                     Spacer()
                     if !model.isUsageProviderEnabled(account.provider) {
-                        Button("Enable tracking") {
+                        Button("Enable") {
                             requestCredentialAction(
                                 .enableProvider(account.provider)
                             )
                         }
-                        .buttonStyle(.plain)
-                        .font(.system(size: 10.5, weight: .medium))
+                        .buttonStyle(SettingsQuietButtonStyle())
                     } else if account.provider != .openRouter,
                               account.status != .available,
                               account.status != .signedIn {
@@ -936,9 +1006,9 @@ struct DashboardUsageView: View {
         width: CGFloat,
         alignment: Alignment = .leading
     ) -> some View {
-        Text(title.uppercased())
+        Text(title)
             .font(.system(size: 9.5, weight: .semibold))
-            .tracking(0.8)
+            .tracking(0.2)
             .foregroundStyle(DashboardPalette.mutedForeground)
             .frame(width: width, alignment: alignment)
             .padding(.bottom, 8)
@@ -987,6 +1057,11 @@ struct DashboardUsageView: View {
         return value.formatted()
     }
 
+    private func sentenceCase(_ value: String) -> String {
+        guard let first = value.first else { return value }
+        return first.uppercased() + String(value.dropFirst())
+    }
+
     private func currency(_ value: Double) -> String {
         value.formatted(.currency(code: "USD").precision(.fractionLength(value < 1 ? 3 : 2)))
     }
@@ -998,7 +1073,7 @@ struct DashboardUsageView: View {
     }
 
     private func cacheRateDetail(_ tokens: UsageTokenCounts) -> String {
-        let input = tokens.inputTokens + tokens.cachedInputTokens + tokens.cacheCreationTokens
+        let input = tokens.totalInputTokens
         guard input > 0 else { return "No input reported" }
         let percent = Double(tokens.cachedInputTokens) / Double(input) * 100
         return "\(percent.formatted(.number.precision(.fractionLength(0))))% cache-read share"
@@ -1009,32 +1084,20 @@ struct DashboardUsageView: View {
         return "\(models) model\(models == 1 ? "" : "s")"
     }
 
-    private func displayBuckets(_ samples: [UsageSample]) -> [UsageChartBucket] {
-        let topModels = Set(
-            Dictionary(grouping: samples, by: \.modelFamily)
-                .map { ($0.key, $0.value.reduce(Int64(0)) { $0 + $1.tokens.totalTokens }) }
-                .sorted { $0.1 > $1.1 }
-                .prefix(6)
-                .map(\.0)
-        )
-        let raw = UsageChartBucket.aggregate(samples: samples, range: range)
-        var grouped: [String: (date: Date, model: String, tokens: Int64)] = [:]
-        for bucket in raw {
-            let model = topModels.contains(bucket.modelFamily) ? bucket.modelFamily : "Other"
-            let key = "\(bucket.date.timeIntervalSinceReferenceDate):\(model)"
-            grouped[key] = (
-                bucket.date,
-                model,
-                (grouped[key]?.tokens ?? 0) + bucket.tokens
-            )
+    private func countDetail(_ count: Int, unit: String) -> String {
+        "\(count.formatted()) \(unit)\(count == 1 ? "" : "s")"
+    }
+
+    private func providerColor(_ provider: ProviderKind) -> Color {
+        switch provider {
+        case .codex: .hex(0x0D8F5A)
+        case .claude: .hex(0xC46B3C)
+        case .grok: .hex(0x535A63)
+        case .cursor: .hex(0x4D69D8)
+        case .openCodeGo: .hex(0x8B5CF6)
+        case .openRouter: .hex(0xE05D8B)
+        case .unknown: .hex(0x8A8F98)
         }
-        return grouped.values
-            .map { UsageChartBucket(date: $0.date, modelFamily: $0.model, tokens: $0.tokens) }
-            .sorted {
-                $0.date == $1.date
-                    ? $0.modelFamily < $1.modelFamily
-                    : $0.date < $1.date
-            }
     }
 
     private func modelColor(_ model: String) -> Color {
@@ -1054,19 +1117,145 @@ struct DashboardUsageView: View {
     }
 }
 
+private struct UsageFilterSelector: View {
+    @Environment(\.dashboardTheme) private var theme
+    let title: String
+    @Binding var selection: String
+    let options: [(key: String, label: String)]
+    @State private var isPresented = false
+
+    var body: some View {
+        Button {
+            isPresented.toggle()
+        } label: {
+            HStack(spacing: 8) {
+                Text(selectedLabel)
+                    .font(.system(size: 13))
+                    .foregroundStyle(DashboardPalette.foreground)
+                    .lineLimit(1)
+                Spacer(minLength: 4)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(DashboardPalette.mutedForeground)
+            }
+            .padding(.horizontal, 12)
+            .frame(maxWidth: .infinity, minHeight: 34, alignment: .leading)
+            .background(theme.palette.themeWhisper)
+            .clipShape(
+                RoundedRectangle(
+                    cornerRadius: DashboardMetrics.controlRadius,
+                    style: .continuous
+                )
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
+        .accessibilityValue(selectedLabel)
+        .popover(isPresented: $isPresented, arrowEdge: .bottom) {
+            VStack(alignment: .leading, spacing: 2) {
+                ForEach(options, id: \.key) { option in
+                    Button {
+                        selection = option.key
+                        isPresented = false
+                    } label: {
+                        HStack {
+                            Text(option.label)
+                                .font(.system(size: 13))
+                                .foregroundStyle(DashboardPalette.foreground)
+                            Spacer()
+                            if option.key == selection {
+                                Image(systemName: "checkmark")
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .foregroundStyle(DashboardPalette.primary)
+                            }
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(6)
+            .frame(minWidth: 180)
+        }
+    }
+
+    private var selectedLabel: String {
+        options.first { $0.key == selection }?.label ?? options.first?.label ?? title
+    }
+}
+
+private struct ProviderUsageChartBucket: Identifiable {
+    let date: Date
+    let provider: ProviderKind
+    let tokens: Int64
+
+    var id: String { "\(date.timeIntervalSinceReferenceDate):\(provider.rawValue)" }
+
+    static func aggregate(
+        samples: [UsageSample],
+        range: UsageTimeRange,
+        calendar: Calendar = .current
+    ) -> [ProviderUsageChartBucket] {
+        var totals: [String: (date: Date, provider: ProviderKind, tokens: Int64)] = [:]
+        for sample in samples {
+            let start = range.usesHourlyBuckets
+                ? calendar.dateInterval(of: .hour, for: sample.timestamp)?.start ?? sample.timestamp
+                : calendar.startOfDay(for: sample.timestamp)
+            let key = "\(start.timeIntervalSinceReferenceDate):\(sample.provider.rawValue)"
+            let current = totals[key]?.tokens ?? 0
+            let (sum, overflow) = current.addingReportingOverflow(sample.tokens.totalTokens)
+            totals[key] = (start, sample.provider, overflow ? Int64.max : sum)
+        }
+        return totals.values
+            .map { ProviderUsageChartBucket(date: $0.date, provider: $0.provider, tokens: $0.tokens) }
+            .sorted {
+                $0.date == $1.date
+                    ? $0.provider.rawValue < $1.provider.rawValue
+                    : $0.date < $1.date
+            }
+    }
+}
+
 private struct UsageInlineMetric: View {
     let title: String
     let value: String
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(title.uppercased())
+            Text(title)
                 .font(.system(size: 9, weight: .semibold))
-                .tracking(0.7)
+                .tracking(0.2)
                 .foregroundStyle(DashboardPalette.mutedForeground)
             Text(value)
                 .font(.system(size: 12, weight: .semibold).monospacedDigit())
         }
+    }
+}
+
+private struct UsageSection<Content: View>: View {
+    let content: Content
+
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+
+    var body: some View {
+        content
+            .padding(16)
+    }
+}
+
+private struct UsageSectionHeading: View {
+    let title: String
+
+    var body: some View {
+        Text(title)
+            .font(.system(size: 10.5, weight: .semibold))
+            .tracking(0.2)
+            .foregroundStyle(DashboardPalette.mutedForeground)
     }
 }
 
@@ -1076,11 +1265,11 @@ private struct UsageMetricCard: View {
     let detail: String
 
     var body: some View {
-        DashboardCard(showsBorder: false) {
+        UsageSection {
             VStack(alignment: .leading, spacing: 6) {
-                Text(title.uppercased())
+                Text(title)
                     .font(.system(size: 9.5, weight: .semibold))
-                    .tracking(1)
+                    .tracking(0.2)
                     .foregroundStyle(DashboardPalette.mutedForeground)
                 Text(value)
                     .font(.system(size: 21, weight: .semibold).monospacedDigit())
@@ -1120,7 +1309,7 @@ private struct UsageSessionRow: Identifiable {
         .compactMap { id, values in
             guard let latest = values.max(by: { $0.timestamp < $1.timestamp }) else { return nil }
             let tokens = values.reduce(.zero) { $0 + $1.tokens }
-            let costs = values.compactMap(\.costUSD)
+            let costs = values.compactMap(\.directCostUSD)
             return UsageSessionRow(
                 id: id,
                 modelFamily: latest.modelFamily,
@@ -1221,7 +1410,7 @@ private struct UsageLoadingCard: View {
     let isLoading: Bool
 
     var body: some View {
-        DashboardCard(showsBorder: false) {
+        UsageSection {
             HStack(spacing: 10) {
                 if isLoading { ProgressView().controlSize(.small) }
                 Text(isLoading ? "Updating the persistent usage index…" : "Usage has not been loaded yet.")
@@ -1238,7 +1427,7 @@ private struct UsageEmptyCard: View {
     let detail: String
 
     var body: some View {
-        DashboardCard(showsBorder: false) {
+        UsageSection {
             VStack(spacing: 5) {
                 Text(title).font(.system(size: 13, weight: .semibold))
                 Text(detail)

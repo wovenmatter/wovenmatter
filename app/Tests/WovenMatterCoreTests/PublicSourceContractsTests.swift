@@ -51,6 +51,16 @@ struct PublicSourceContractsTests {
     })
   }
 
+  @Test("provider dashboards use consumer account destinations")
+  func providerDashboardDestinations() {
+    #expect(ProviderDashboardURL.codex?.absoluteString == "https://chatgpt.com/codex/settings/usage")
+    #expect(ProviderDashboardURL.claude?.absoluteString == "https://claude.ai/settings/usage")
+    #expect(ProviderDashboardURL.grok?.absoluteString == "https://grok.com/?_s=usage")
+    #expect(ProviderDashboardURL.cursor?.absoluteString == "https://cursor.com/dashboard?tab=usage")
+    #expect(ProviderDashboardURL.openCodeGo?.absoluteString == "https://opencode.ai/auth")
+    #expect(ProviderDashboardURL.openRouter?.absoluteString == "https://openrouter.ai/settings/credits")
+  }
+
   @Test("the bundled catalog is complete and executable")
   func harnessCatalog() throws {
     let document = try HarnessCatalog.loadBundled()

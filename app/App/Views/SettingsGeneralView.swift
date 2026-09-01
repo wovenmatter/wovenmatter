@@ -19,6 +19,16 @@ struct SettingsGeneralView: View {
         DashboardCodexLogoStyle(rawValue: storedCodexLogoStyle) ?? .defaultStyle
     }
 
+    private var sidebarStyleBinding: Binding<DashboardSidebarStyle> {
+        Binding(
+            get: {
+                DashboardSidebarStyle(rawValue: storedSidebarStyle)
+                    ?? .defaultStyle
+            },
+            set: { storedSidebarStyle = $0.rawValue }
+        )
+    }
+
     var body: some View {
         SettingsPage(
             title: "General",
@@ -129,13 +139,12 @@ struct SettingsGeneralView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 12)
-                Picker("Sidebar layout", selection: $storedSidebarStyle) {
-                    ForEach(DashboardSidebarStyle.allCases) { style in
-                        Text(style.title).tag(style.rawValue)
-                    }
+                DashboardSegmentedSelector(
+                    options: DashboardSidebarStyle.allCases,
+                    selection: sidebarStyleBinding
+                ) { style in
+                    style.title
                 }
-                .labelsHidden()
-                .pickerStyle(.segmented)
                 .frame(width: 260)
             }
 

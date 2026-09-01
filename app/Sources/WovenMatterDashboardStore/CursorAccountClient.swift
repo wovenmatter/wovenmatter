@@ -159,7 +159,7 @@ struct CursorAccountClient: Sendable {
       source: "Cursor account usage APIs",
       detail: "Live account-wide Cursor usage from the same dashboard endpoints used by CodexBar (all devices).",
       observedAt: now,
-      dashboardURL: URL(string: "https://cursor.com/dashboard?tab=usage")
+      dashboardURL: ProviderDashboardURL.cursor
     )
   }
 

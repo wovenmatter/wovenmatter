@@ -380,7 +380,8 @@ struct WorkspaceView: View {
                     .background(DashboardRailBackground())
             }
         }
-        .padding(DashboardMetrics.shellInset)
+        .padding(.horizontal, DashboardMetrics.shellInset)
+        .padding(.bottom, DashboardMetrics.shellInset)
         .animation(reduceMotion ? nil : .snappy(duration: 0.3), value: layout)
     }
 
@@ -1038,7 +1039,7 @@ enum DashboardDestination: String, Equatable {
     case settings
 }
 
-private enum WorkspaceListMode: String {
+private enum WorkspaceListMode: String, CaseIterable {
     case chats
     case notes
 }
@@ -2472,6 +2473,13 @@ private struct DashboardSidebarWorkspacePage: View {
         nonmutating set { modeRawValue = newValue.rawValue }
     }
 
+    private var modeBinding: Binding<WorkspaceListMode> {
+        Binding(
+            get: { mode },
+            set: { mode = $0 }
+        )
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             railHeader
@@ -2726,57 +2734,19 @@ private struct DashboardSidebarWorkspacePage: View {
     }
 
     private var modePicker: some View {
-        HStack(spacing: 0) {
-            modeButton(.chats, title: "Chats")
-            modeButton(.notes, title: "Notes")
+        DashboardSegmentedSelector(
+            options: WorkspaceListMode.allCases,
+            selection: modeBinding
+        ) { value in
+            value == .chats ? "Chats" : "Notes"
         }
-        .padding(4)
-        .background(theme.palette.themeWhisper)
-        .clipShape(RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius, style: .continuous))
-    }
-
-    private func modeButton(_ value: WorkspaceListMode, title: String) -> some View {
-        Button {
-            mode = value
-        } label: {
-            Text(title)
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(value == mode ? DashboardPalette.foreground : DashboardPalette.mutedForeground)
-                .frame(maxWidth: .infinity)
-                .frame(height: 27)
-                .contentShape(Rectangle())
-                .background(value == mode ? DashboardPalette.background : .clear)
-                .clipShape(
-                    RoundedRectangle(
-                        cornerRadius: DashboardMetrics.controlRadius - 4,
-                        style: .continuous
-                    )
-                )
-                .shadow(color: value == mode ? DashboardPalette.foreground.opacity(0.06) : .clear, radius: 2, y: 1)
-        }
-        .buttonStyle(.plain)
     }
 
     private var searchField: some View {
-        HStack(spacing: 8) {
-            DashboardLucideIcon(glyph: .searchControl, size: 14)
-                .foregroundStyle(DashboardPalette.mutedForeground)
-            TextField(mode == .chats ? "Search chats" : "Search notes", text: $query)
-                .textFieldStyle(.plain)
-                .font(.system(size: 13))
-                .foregroundStyle(DashboardPalette.foreground)
-            if !query.isEmpty {
-                Button("Clear") { query = "" }
-                    .buttonStyle(.plain)
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(DashboardPalette.mutedForeground)
-            }
-        }
-        .padding(.horizontal, 12)
-        .frame(height: 34)
-        .frame(maxWidth: .infinity)
-        .background(theme.palette.themeWhisper)
-        .clipShape(RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius, style: .continuous))
+        DashboardSearchField(
+            text: $query,
+            prompt: mode == .chats ? "Search chats" : "Search notes"
+        )
     }
 
     private func conversationRow(_ presentation: DashboardConversationRowPresentation) -> some View {
