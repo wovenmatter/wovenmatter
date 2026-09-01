@@ -380,7 +380,8 @@ struct WorkspaceView: View {
                     .background(DashboardRailBackground())
             }
         }
-        .padding(DashboardMetrics.shellInset)
+        .padding(.horizontal, DashboardMetrics.shellInset)
+        .padding(.bottom, DashboardMetrics.shellInset)
         .animation(reduceMotion ? nil : .snappy(duration: 0.3), value: layout)
     }
 
