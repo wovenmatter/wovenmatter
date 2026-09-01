@@ -222,13 +222,7 @@ struct WorkspaceView: View {
                     if layout.compact {
                         compactShell(width: geometry.size.width)
                     } else {
-                        desktopShell(
-                            layout: layout,
-                            titleBarContentInset: max(
-                                geometry.safeAreaInsets.top,
-                                DashboardMetrics.titleBarMinimumContentInset
-                            )
-                        )
+                        desktopShell(layout: layout)
                     }
                 }
                 .background(theme.palette.workspace)
@@ -357,10 +351,7 @@ struct WorkspaceView: View {
         }
     }
 
-    private func desktopShell(
-        layout: DashboardLayoutState,
-        titleBarContentInset: CGFloat
-    ) -> some View {
+    private func desktopShell(layout: DashboardLayoutState) -> some View {
         let showLeftRailButton = sidebarStyle == .single
             ? !layout.showsLeftRail && singleSidebarSide == .left
             : !layout.showsLeftRail
@@ -371,7 +362,6 @@ struct WorkspaceView: View {
         return HStack(spacing: DashboardMetrics.shellGap) {
             if layout.showsLeftRail {
                 rail(side: .left)
-                    .padding(.top, titleBarContentInset)
                     .frame(width: DashboardMetrics.railWidth)
                     .background(DashboardRailBackground())
             }
@@ -382,20 +372,15 @@ struct WorkspaceView: View {
                 onLeftRail: { revealRail(side: .left) },
                 onRightRail: { revealRail(side: .right) }
             )
-            .padding(.top, titleBarContentInset)
             .frame(minWidth: DashboardMetrics.workspaceMinimumWidth)
-            .background(theme.palette.workspace)
 
             if layout.showsRightRail {
                 rail(side: .right)
-                    .padding(.top, titleBarContentInset)
                     .frame(width: DashboardMetrics.railWidth)
                     .background(DashboardRailBackground())
             }
         }
-        .padding(.horizontal, DashboardMetrics.shellInset)
-        .padding(.bottom, DashboardMetrics.shellInset)
-        .ignoresSafeArea(.container, edges: .top)
+        .padding(DashboardMetrics.shellInset)
         .animation(reduceMotion ? nil : .snappy(duration: 0.3), value: layout)
     }
 
