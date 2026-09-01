@@ -56,7 +56,7 @@ struct PublicSourceContractsTests {
     #expect(ProviderDashboardURL.codex?.absoluteString == "https://chatgpt.com/codex/settings/usage")
     #expect(ProviderDashboardURL.claude?.absoluteString == "https://claude.ai/settings/usage")
     #expect(ProviderDashboardURL.grok?.absoluteString == "https://grok.com/?_s=usage")
-    #expect(ProviderDashboardURL.cursor?.absoluteString == "https://cursor.com/dashboard")
+    #expect(ProviderDashboardURL.cursor?.absoluteString == "https://cursor.com/dashboard?tab=usage")
     #expect(ProviderDashboardURL.openCodeGo?.absoluteString == "https://opencode.ai/auth")
     #expect(ProviderDashboardURL.openRouter?.absoluteString == "https://openrouter.ai/settings/credits")
   }

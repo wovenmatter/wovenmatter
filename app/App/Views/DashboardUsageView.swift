@@ -42,6 +42,8 @@ private enum PendingUsageCredentialAction: Identifiable {
 }
 
 struct DashboardUsageView: View {
+    private static let pageTopID = "usage-page-top"
+
     @Environment(\.dashboardTheme) private var theme
     @Bindable var model: ApplicationModel
     @State private var page = DashboardUsagePage.limits
@@ -94,43 +96,52 @@ struct DashboardUsageView: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                header
-                HStack(spacing: 10) {
-                    Text("Usage page")
-                        .fixedSize()
-                    DashboardSegmentedSelector(
-                        options: DashboardUsagePage.allCases,
-                        selection: pageBinding
-                    ) { page in
-                        page.title
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    header
+                        .id(Self.pageTopID)
+                    HStack(spacing: 10) {
+                        Text("Usage page")
+                            .fixedSize()
+                        DashboardSegmentedSelector(
+                            options: DashboardUsagePage.allCases,
+                            selection: pageBinding
+                        ) { page in
+                            page.title
+                        }
+                        .frame(width: 320)
                     }
-                    .frame(width: 320)
-                }
 
-                if let error = model.localUsageError {
-                    UsageErrorBanner(text: error)
-                }
-
-                if let snapshot = model.localUsage {
-                    switch page {
-                    case .limits:
-                        accountConnections(snapshot)
-                    case .analytics:
-                        analyticsPage(snapshot.analytics)
+                    if let error = model.localUsageError {
+                        UsageErrorBanner(text: error)
                     }
-                } else {
-                    UsageLoadingCard(isLoading: model.isRefreshingLocalUsage)
+
+                    if let snapshot = model.localUsage {
+                        switch page {
+                        case .limits:
+                            accountConnections(snapshot)
+                        case .analytics:
+                            analyticsPage(snapshot.analytics)
+                        }
+                    } else {
+                        UsageLoadingCard(isLoading: model.isRefreshingLocalUsage)
+                    }
+                }
+                .frame(maxWidth: 1180)
+                .frame(maxWidth: .infinity)
+                .padding(.horizontal, 32)
+                .padding(.vertical, 40)
+            }
+            .scrollIndicators(.never)
+            .background(theme.palette.workspace)
+            .onChange(of: page) { _, _ in
+                Task { @MainActor in
+                    await Task.yield()
+                    proxy.scrollTo(Self.pageTopID, anchor: .top)
                 }
             }
-            .frame(maxWidth: 1180)
-            .frame(maxWidth: .infinity)
-            .padding(.horizontal, 32)
-            .padding(.vertical, 40)
         }
-        .scrollIndicators(.never)
-        .background(theme.palette.workspace)
         .task {
             await model.refreshLocalUsage(
                 range: range,
@@ -215,12 +226,14 @@ struct DashboardUsageView: View {
             UsageMetricCard(
                 title: "Total tokens",
                 value: compact(summary.tokens.totalTokens),
-                detail: "\(summary.sessions.formatted()) sessions"
+                detail: countDetail(summary.sessions, unit: "session")
             )
             UsageMetricCard(
                 title: "Cached input",
                 value: compact(summary.tokens.cachedInputTokens),
-                detail: compact(summary.tokens.cacheCreationTokens) + " cache write"
+                detail: compact(summary.tokens.cacheCreationTokens)
+                    + " cache write"
+                    + (summary.tokens.cacheCreationTokens == 1 ? "" : "s")
             )
             UsageMetricCard(
                 title: "Uncached input",
@@ -430,7 +443,10 @@ struct DashboardUsageView: View {
                 }
                 .frame(height: 290)
                 .accessibilityLabel("Token volume by provider")
-                .accessibilityValue("\(compact(summary.tokens.totalTokens)) tokens across \(summary.sessions) sessions")
+                .accessibilityValue(
+                    "\(compact(summary.tokens.totalTokens)) tokens across "
+                        + countDetail(summary.sessions, unit: "session")
+                )
             }
         }
     }
@@ -457,7 +473,9 @@ struct DashboardUsageView: View {
                     UsageMetricCard(
                         title: provider.displayName,
                         value: compact(summary.tokens.totalTokens),
-                        detail: "\(summary.sessions.formatted()) sessions · \(summary.requests.formatted()) calls"
+                        detail: countDetail(summary.sessions, unit: "session")
+                            + " · "
+                            + countDetail(summary.requests, unit: "call")
                     )
                 }
             }
@@ -613,7 +631,7 @@ struct DashboardUsageView: View {
                     Text(compact(row.tokens.totalTokens))
                         .font(.system(size: 11, weight: .semibold).monospacedDigit())
                         .frame(width: 72, alignment: .trailing)
-                    Text("\(row.requests.formatted()) calls")
+                    Text(countDetail(row.requests, unit: "call"))
                         .font(.system(size: 10))
                         .foregroundStyle(DashboardPalette.mutedForeground)
                         .frame(width: 66, alignment: .trailing)
@@ -721,8 +739,14 @@ struct DashboardUsageView: View {
                                 )
                             }
                             HStack(spacing: 16) {
-                                Label("\(source.discoveredSessions) sessions", systemImage: "rectangle.stack")
-                                Label("\(source.attributedSamples) records", systemImage: "number")
+                                Label(
+                                    countDetail(source.discoveredSessions, unit: "session"),
+                                    systemImage: "rectangle.stack"
+                                )
+                                Label(
+                                    countDetail(source.attributedSamples, unit: "record"),
+                                    systemImage: "number"
+                                )
                             }
                             .font(.system(size: 10.5, weight: .medium))
                             .foregroundStyle(DashboardPalette.mutedForeground)
@@ -1060,6 +1084,10 @@ struct DashboardUsageView: View {
         return "\(models) model\(models == 1 ? "" : "s")"
     }
 
+    private func countDetail(_ count: Int, unit: String) -> String {
+        "\(count.formatted()) \(unit)\(count == 1 ? "" : "s")"
+    }
+
     private func providerColor(_ provider: ProviderKind) -> Color {
         switch provider {
         case .codex: .hex(0x0D8F5A)
@@ -1123,6 +1151,7 @@ private struct UsageFilterSelector: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(title)
+        .accessibilityValue(selectedLabel)
         .popover(isPresented: $isPresented, arrowEdge: .bottom) {
             VStack(alignment: .leading, spacing: 2) {
                 ForEach(options, id: \.key) { option in

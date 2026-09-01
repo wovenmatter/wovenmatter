@@ -548,7 +548,7 @@ enum ProviderDashboardURL {
   static let codex = URL(string: "https://chatgpt.com/codex/settings/usage")
   static let claude = URL(string: "https://claude.ai/settings/usage")
   static let grok = URL(string: "https://grok.com/?_s=usage")
-  static let cursor = URL(string: "https://cursor.com/dashboard")
+  static let cursor = URL(string: "https://cursor.com/dashboard?tab=usage")
   static let openCodeGo = URL(string: "https://opencode.ai/auth")
   static let openRouter = URL(string: "https://openrouter.ai/settings/credits")
 }
