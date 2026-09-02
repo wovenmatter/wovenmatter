@@ -581,6 +581,7 @@ public enum UsageLimitStatus: String, Codable, Sendable {
 
 public struct UsageLimitAccount: Codable, Equatable, Identifiable, Sendable {
   public let provider: ProviderKind
+  public let accountScopeID: String?
   public let accountLabel: String
   public let status: UsageLimitStatus
   public let quotaWindows: [ProviderQuotaWindow]
@@ -599,6 +600,7 @@ public struct UsageLimitAccount: Codable, Equatable, Identifiable, Sendable {
 
   public init(
     provider: ProviderKind,
+    accountScopeID: String? = nil,
     accountLabel: String,
     status: UsageLimitStatus,
     quotaWindows: [ProviderQuotaWindow] = [],
@@ -614,6 +616,7 @@ public struct UsageLimitAccount: Codable, Equatable, Identifiable, Sendable {
     dashboardURL: URL? = nil
   ) {
     self.provider = provider
+    self.accountScopeID = accountScopeID
     self.accountLabel = accountLabel
     self.status = status
     self.quotaWindows = quotaWindows
@@ -636,6 +639,7 @@ public struct UsageLimitAccount: Codable, Equatable, Identifiable, Sendable {
   public func stale(refreshError: String? = nil) -> Self {
     Self(
       provider: provider,
+      accountScopeID: accountScopeID,
       accountLabel: accountLabel,
       status: status,
       quotaWindows: quotaWindows,
