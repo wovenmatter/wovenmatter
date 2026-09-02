@@ -18,12 +18,14 @@ private enum DashboardUsagePage: String, CaseIterable, Identifiable {
 
 private enum PendingUsageCredentialAction: Identifiable {
     case enableProvider(ProviderKind)
+    case retryProvider(ProviderKind)
     case saveOpenRouter(String)
     case deleteOpenRouter
 
     var id: String {
         switch self {
         case .enableProvider(let provider): "enable-\(provider.rawValue)"
+        case .retryProvider(let provider): "retry-\(provider.rawValue)"
         case .saveOpenRouter: "save-openrouter"
         case .deleteOpenRouter: "delete-openrouter"
         }
@@ -33,6 +35,8 @@ private enum PendingUsageCredentialAction: Identifiable {
         switch self {
         case .enableProvider(let provider):
             "Enable \(provider.displayName) so Woven Matter can check its local sign-in and usage when you open or refresh Usage."
+        case .retryProvider(let provider):
+            "Retry \(provider.displayName) credential access once. macOS may ask for permission now; future automatic refreshes remain noninteractive."
         case .saveOpenRouter:
             "Save and use the OpenRouter API key you enter in this Mac's Keychain."
         case .deleteOpenRouter:
@@ -787,7 +791,9 @@ struct DashboardUsageView: View {
                 alignment: .leading,
                 spacing: 12
             ) {
-                ForEach(accounts) { account in limitCard(account) }
+                ForEach(accounts) { account in
+                    limitCard(account, pinsFooter: true)
+                }
             }
             .frame(minWidth: 720)
 
@@ -795,12 +801,17 @@ struct DashboardUsageView: View {
                 columns: [GridItem(.flexible(), alignment: .topLeading)],
                 spacing: 12
             ) {
-                ForEach(accounts) { account in limitCard(account) }
+                ForEach(accounts) { account in
+                    limitCard(account, pinsFooter: false)
+                }
             }
         }
     }
 
-    private func limitCard(_ account: UsageLimitAccount) -> some View {
+    private func limitCard(
+        _ account: UsageLimitAccount,
+        pinsFooter: Bool
+    ) -> some View {
         UsageSection {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(alignment: .top, spacing: 9) {
@@ -901,6 +912,7 @@ struct DashboardUsageView: View {
                     openRouterCredentialControls
                 }
 
+                if pinsFooter { Spacer(minLength: 12) }
                 Divider().overlay(theme.palette.border)
                 HStack {
                     Text(account.source)
@@ -915,6 +927,16 @@ struct DashboardUsageView: View {
                             )
                         }
                         .buttonStyle(SettingsQuietButtonStyle())
+                    } else if account.provider == .claude,
+                              account.status == .signedIn
+                                || account.status == .unavailable
+                                || account.status == .failed
+                                || account.isStale {
+                        Button("Retry access") {
+                            requestCredentialAction(.retryProvider(.claude))
+                        }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 10.5, weight: .medium))
                     } else if account.provider != .openRouter,
                               account.status != .available,
                               account.status != .signedIn {
@@ -950,7 +972,17 @@ struct DashboardUsageView: View {
                     }
                 }
             }
+            .frame(
+                maxWidth: .infinity,
+                maxHeight: pinsFooter ? .infinity : nil,
+                alignment: .topLeading
+            )
         }
+        .frame(
+            maxWidth: .infinity,
+            maxHeight: pinsFooter ? .infinity : nil,
+            alignment: .topLeading
+        )
     }
 
     private var openRouterCredentialControls: some View {
@@ -1012,6 +1044,13 @@ struct DashboardUsageView: View {
         case .enableProvider(let provider):
             Task {
                 await model.enableUsageProvider(provider, range: range)
+            }
+        case .retryProvider(let provider):
+            Task {
+                await model.retryUsageProviderCredentialAccess(
+                    provider,
+                    range: range
+                )
             }
         case .saveOpenRouter(let key):
             Task {
