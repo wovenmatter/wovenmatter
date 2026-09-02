@@ -721,6 +721,7 @@ enum DashboardTheme: String, CaseIterable, Identifiable {
 }
 
 enum DashboardSidebarStyle: String, CaseIterable, Identifiable {
+    case adaptive
     case single
     case split
 
@@ -731,8 +732,17 @@ enum DashboardSidebarStyle: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .single: "Single sidebar"
-        case .split: "Split sidebars"
+        case .adaptive: "Adaptive Sidebar"
+        case .single: "Single Sidebar"
+        case .split: "Split Sidebar"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .adaptive: "Keep navigation visible and open folder contents beside it."
+        case .single: "Open folder contents in place of the movable navigation sidebar."
+        case .split: "Keep navigation and workspace sidebars visible on opposite sides."
         }
     }
 }
@@ -754,31 +764,39 @@ enum DashboardSidebarSide: String, CaseIterable, Identifiable {
     }
 }
 
-enum DashboardSidebarPage: Equatable, Sendable {
+enum DashboardSidebarPage: Hashable, Sendable {
     case navigation
     case workspace
 }
 
 struct DashboardSidebarNavigationState: Equatable, Sendable {
     private(set) var singlePage = DashboardSidebarPage.navigation
+    private(set) var adaptiveWorkspaceVisible = false
 
     mutating func selectFolder() {
         singlePage = .workspace
+        adaptiveWorkspaceVisible = true
     }
 
     mutating func showNavigation() {
         singlePage = .navigation
+        adaptiveWorkspaceVisible = false
     }
 
-    func page(
+    func pages(
         for side: DashboardSidebarSide,
         style: DashboardSidebarStyle
-    ) -> DashboardSidebarPage {
+    ) -> [DashboardSidebarPage] {
         switch style {
+        case .adaptive:
+            guard adaptiveWorkspaceVisible else { return [.navigation] }
+            return side == .left
+                ? [.navigation, .workspace]
+                : [.workspace, .navigation]
         case .single:
-            singlePage
+            return [singlePage]
         case .split:
-            side == .left ? .navigation : .workspace
+            return [side == .left ? .navigation : .workspace]
         }
     }
 }
@@ -867,7 +885,7 @@ struct DashboardLayoutState: Equatable {
         let showsLeftRail: Bool
         let showsRightRail: Bool
         switch sidebarStyle {
-        case .single:
+        case .adaptive, .single:
             showsLeftRail = !compact && singleRailRequested && singleSidebarSide == .left
             showsRightRail = !compact && singleRailRequested && singleSidebarSide == .right
         case .split:
