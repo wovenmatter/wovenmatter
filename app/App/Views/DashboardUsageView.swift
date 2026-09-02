@@ -1032,12 +1032,8 @@ struct DashboardUsageView: View {
                     }
                 }
             } label: {
-                HStack(spacing: 4) {
-                    Text(selectedCodexWorkspace?.name ?? "Choose workspace")
-                        .lineLimit(1)
-                    Image(systemName: "chevron.up.chevron.down")
-                        .font(.system(size: 8.5, weight: .semibold))
-                }
+                Text(selectedCodexWorkspace?.name ?? "Choose workspace")
+                    .lineLimit(1)
             }
             .menuStyle(.borderlessButton)
             .fixedSize()
