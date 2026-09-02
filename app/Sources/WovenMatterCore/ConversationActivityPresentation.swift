@@ -27,3 +27,16 @@ public enum ConversationActivityPresentation: Equatable, Sendable {
     self == .animatedTint
   }
 }
+
+public enum ConversationBottomOverlayLayout {
+  public static let bottomOffset = 24.0
+  public static let breathingRoom = 20.0
+
+  public static func scrollClearance(
+    stackHeight: Double,
+    bottomOffset: Double = bottomOffset,
+    breathingRoom: Double = breathingRoom
+  ) -> Double {
+    max(0, stackHeight) + max(0, bottomOffset) + max(0, breathingRoom)
+  }
+}

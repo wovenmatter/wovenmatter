@@ -32,3 +32,22 @@ struct ConversationActivityPresentationTests {
     #expect(!presentation.allowsMotion)
   }
 }
+
+@Suite("Conversation bottom overlay layout")
+struct ConversationBottomOverlayLayoutTests {
+  @Test("clearance tracks the complete live bottom stack")
+  func liveStackClearance() {
+    #expect(ConversationBottomOverlayLayout.scrollClearance(stackHeight: 112) == 156)
+    #expect(ConversationBottomOverlayLayout.scrollClearance(stackHeight: 188) == 232)
+  }
+
+  @Test("invalid measurements cannot remove the fixed clearance")
+  func measurementClamping() {
+    #expect(ConversationBottomOverlayLayout.scrollClearance(stackHeight: -1) == 44)
+    #expect(ConversationBottomOverlayLayout.scrollClearance(
+      stackHeight: 80,
+      bottomOffset: -8,
+      breathingRoom: -4
+    ) == 80)
+  }
+}
