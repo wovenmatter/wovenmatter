@@ -3594,6 +3594,7 @@ private struct DashboardWorkspaceSurface: View {
                     : nil,
                 onClosePanel: { onClosePanel(panelID) },
                 onAddPanel: { onAddPanel(panelID) },
+                onNavigatePanel: handleNavigationCommand,
                 onSend: { onSend(panelID) },
                 onAttachmentAction: { onAttachmentAction(panelID, $0) },
                 onRemoveAttachment: { onRemoveAttachment($0, panelID) },
@@ -3651,13 +3652,19 @@ private struct DashboardWorkspaceSurface: View {
         _ press: KeyPress,
         direction: DashboardChatPanelDirection
     ) -> KeyPress.Result {
-        guard press.modifiers == .command,
-              chatPanels.hasAuxiliaryPanels,
-              !chatPanels.assetPresented else {
+        guard press.modifiers == .command else {
             return .ignored
         }
+        return handleNavigationCommand(direction) ? .handled : .ignored
+    }
+
+    private func handleNavigationCommand(
+        _ direction: DashboardChatPanelDirection
+    ) -> Bool {
+        guard chatPanels.hasAuxiliaryPanels,
+              !chatPanels.assetPresented else { return false }
         _ = onNavigatePanel(direction)
-        return .handled
+        return true
     }
 
     private func chatWidth(for totalWidth: CGFloat) -> CGFloat {
@@ -3788,6 +3795,7 @@ private struct DashboardCloudConversation: View {
     let focusRequestGeneration: Int?
     let onClosePanel: () -> Void
     let onAddPanel: () -> Void
+    let onNavigatePanel: (DashboardChatPanelDirection) -> Bool
     let onSend: () -> Void
     let onAttachmentAction: (DashboardComposerAttachmentAction) -> Void
     let onRemoveAttachment: (String) -> Void
@@ -4072,6 +4080,7 @@ private struct DashboardCloudConversation: View {
                         onRemoveAttachment: onRemoveAttachment,
                         onDropFiles: onDropFiles,
                         onUnavailableAction: onUnavailableComposerAction,
+                        onNavigatePanel: onNavigatePanel,
                         onSend: onSend
                     )
                     if showsAddPanel {
@@ -4689,8 +4698,9 @@ private struct DashboardComposer: View {
     let onRemoveAttachment: (String) -> Void
     let onDropFiles: ([URL]) -> Bool
     let onUnavailableAction: (String) -> Void
+    let onNavigatePanel: (DashboardChatPanelDirection) -> Bool
     let onSend: () -> Void
-    @FocusState private var focused: Bool
+    @State private var focused = false
     @State private var openMenu: DashboardComposerMenuKind?
     @State private var isDropTarget = false
 
@@ -4723,28 +4733,18 @@ private struct DashboardComposer: View {
                 .scrollIndicators(.never)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
-            TextField(
-                "",
+            DashboardComposerTextEditor(
                 text: $draft,
-                prompt: Text(placeholder).foregroundStyle(DashboardPalette.mutedForeground),
-                axis: .vertical
+                isFocused: $focused,
+                placeholder: placeholder,
+                onSubmit: {
+                    if applyFirstSlashCommandIfNeeded() { return }
+                    if canSend { onSend() }
+                },
+                onTab: applyFirstSlashCommandIfNeeded,
+                onCommandNavigation: navigatePanel
             )
-            .font(.system(size: 15))
-            .lineSpacing(4)
-            .textFieldStyle(.plain)
-            .lineLimit(1...7)
-            .focused($focused)
-            .frame(minHeight: 32, alignment: .topLeading)
-            .onKeyPress(.return, phases: .down) { press in
-                if press.modifiers.contains(.shift) { return .ignored }
-                if applyFirstSlashCommandIfNeeded() { return .handled }
-                guard canSend else { return .handled }
-                onSend()
-                return .handled
-            }
-            .onKeyPress(.tab, phases: .down) { _ in
-                applyFirstSlashCommandIfNeeded() ? .handled : .ignored
-            }
+            .frame(minHeight: DashboardComposerScrollView.minimumHeight)
             .simultaneousGesture(TapGesture().onEnded { openMenu = nil })
 
             if !matchingSlashCommands.isEmpty {
@@ -4851,6 +4851,17 @@ private struct DashboardComposer: View {
         !sendDisabled
             && (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 || !attachments.isEmpty)
+    }
+
+    private func navigatePanel(
+        _ direction: DashboardComposerNavigationDirection
+    ) -> Bool {
+        switch direction {
+        case .left: onNavigatePanel(.left)
+        case .right: onNavigatePanel(.right)
+        case .up: onNavigatePanel(.up)
+        case .down: onNavigatePanel(.down)
+        }
     }
 
     private var slashQuery: String? {
