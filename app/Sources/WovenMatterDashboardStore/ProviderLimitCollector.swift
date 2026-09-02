@@ -6,20 +6,17 @@ import WovenMatterCore
 
 enum ProviderLimitCollector {
   static func placeholderAccounts(
-    enabledProviders: Set<ProviderKind> = [],
+    enabledProviders: Set<ProviderKind> = Set(ProviderKind.supportedAccounts),
     now: Date
   ) -> [UsageLimitAccount] {
-    ProviderKind.supportedAccounts.map { provider in
-      UsageLimitAccount(
+    ProviderKind.supportedAccounts.compactMap { provider in
+      guard enabledProviders.contains(provider) else { return nil }
+      return UsageLimitAccount(
         provider: provider,
         accountLabel: provider.displayName,
-        status: enabledProviders.contains(provider)
-          ? .needsCredential : .unavailable,
-        source: enabledProviders.contains(provider)
-          ? "Ready to check" : "Not enabled",
-        detail: enabledProviders.contains(provider)
-          ? "Refresh the Usage limits page to check this account."
-          : "Enable this account before Woven Matter checks its credentials or usage.",
+        status: .needsCredential,
+        source: "Ready to check",
+        detail: "Refresh the Usage limits page to check this account.",
         observedAt: now
       )
     }
@@ -31,10 +28,6 @@ enum ProviderLimitCollector {
     enabledProviders: Set<ProviderKind>,
     now: Date
   ) async -> [UsageLimitAccount] {
-    let disabled = placeholderAccounts(
-      enabledProviders: enabledProviders,
-      now: now
-    ).filter { !enabledProviders.contains($0.provider) }
     let enabled = await withTaskGroup(
       of: UsageLimitAccount.self,
       returning: [UsageLimitAccount].self
@@ -65,7 +58,7 @@ enum ProviderLimitCollector {
       return accounts
     }
     let accountsByProvider = Dictionary(
-      uniqueKeysWithValues: (disabled + enabled).map { ($0.provider, $0) }
+      uniqueKeysWithValues: enabled.map { ($0.provider, $0) }
     )
     return ProviderKind.supportedAccounts.compactMap { accountsByProvider[$0] }
   }
