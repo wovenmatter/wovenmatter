@@ -16,8 +16,11 @@ rail_rendering="$(
 navigation_state="$(sed -n '/^struct DashboardSidebarNavigationState:/,/^struct DashboardPalette/p' "$design_file")"
 sidebar_style="$(sed -n '/^enum DashboardSidebarStyle:/,/^enum DashboardSidebarSide:/p' "$design_file")"
 rail_group="$(sed -n '/^    private func railGroup(/,/^    private func rail(/p' "$workspace_file")"
+rail_background="$(sed -n '/^    private func railBackground(/,/^    private func rail(/p' "$workspace_file")"
 folder_selection="$(sed -n '/^    private func selectFolder(/,/^    private func selectConversation(/p' "$workspace_file")"
 sidebar_back="$(sed -n '/^    private func showSidebarNavigation()/,/^    private func centerSurface(/p' "$workspace_file")"
+navigation_page="$(sed -n '/^private struct DashboardSidebarNavigationPage: View {$/,/^private struct DashboardSidebarWorkspacePage: View {$/p' "$workspace_file")"
+workspace_page="$(sed -n '/^private struct DashboardSidebarWorkspacePage: View {$/,/^private struct DashboardSidebarEmptyState: View {$/p' "$workspace_file")"
 
 require_rail_source() {
   local needle="$1"
@@ -101,21 +104,53 @@ printf '%s\n' "$sidebar_back" | grep -Fq 'sidebarNavigation.showNavigation()'
 sed -n '/^        \.onChange(of: sidebarStyleRawValue)/,/^        \.onChange(of: singleSidebarSideRawValue)/p' \
   "$workspace_file" | grep -Fq 'compactDrawer = .none'
 
-# Adaptive renders the ordered pages as touching, fixed-width sibling rails on
-# the configured side. The right-side ordering above keeps navigation outermost.
+# Adaptive renders the ordered pages as touching, fixed-width sibling content
+# trees on the configured side. Only the expanded pair opts into one clipped,
+# outer rail surface; individual backgrounds remain the Single/Split path.
 printf '%s\n' "$rail_group" | grep -Fq \
-  'HStack(spacing: sidebarStyle == .adaptive ? 0 : DashboardMetrics.shellGap)'
+  'let usesUnifiedSurface = sidebarStyle == .adaptive && pages.count == 2'
 printf '%s\n' "$rail_group" | grep -Fq \
-  'ForEach(sidebarNavigation.pages(for: side, style: sidebarStyle), id: \.self)'
-printf '%s\n' "$rail_group" | grep -Fq 'rail(side: side, page: page)'
+  'HStack(spacing: usesUnifiedSurface ? 0 : DashboardMetrics.shellGap)'
+printf '%s\n' "$rail_group" | grep -Fq \
+  'ForEach(pages, id: \.self)'
+printf '%s\n' "$rail_group" | grep -Fq \
+  'rail(side: side, page: page, adaptiveExpanded: usesUnifiedSurface)'
+printf '%s\n' "$rail_group" | grep -Fq 'if !usesUnifiedSurface {'
+printf '%s\n' "$rail_group" | grep -Fq 'if usesUnifiedSurface {'
+printf '%s\n' "$rail_group" | grep -Fq \
+  '.clipShape(DashboardShapes.windowAlignedSurface)'
+printf '%s\n' "$rail_background" | grep -Fq 'DashboardRailBackground()'
+printf '%s\n' "$rail_background" | grep -Fq \
+  'DashboardShapes.windowAlignedSurface'
+if printf '%s\n' "$rail_group" | grep -Fq 'Divider'; then
+  printf '%s\n' 'Expanded Adaptive rail group must not draw a center divider.' >&2
+  exit 1
+fi
 sed -n '/^    private func desktopShell(/,/^    private func compactShell(/p' "$workspace_file" \
   | grep -Fq 'railGroup(side: .left)'
 sed -n '/^    private func desktopShell(/,/^    private func compactShell(/p' "$workspace_file" \
   | grep -Fq 'railGroup(side: .right)'
 
-# The shared workspace surface supplies Back to Single and Adaptive while Split
-# keeps its established controls.
+# Expanded Adaptive suppresses the navigation collapse action but retains its
+# trailing move action. The workspace owns the sole collapse action and moves it
+# to the leading outer edge for a right-side pair. Single/Split retain their
+# existing optional-control conditions, while Back still closes only workspace.
+printf '%s\n' "$rail_source" | grep -Fq 'let adaptiveExpanded: Bool'
 printf '%s\n' "$rail_source" | grep -Fq \
   'onBack: style == .split ? nil : actions.onShowNavigation'
+printf '%s\n' "$rail_source" | grep -Fq \
+  'onCollapse: adaptiveExpanded ? nil : { actions.onCollapse(side) }'
+printf '%s\n' "$rail_source" | grep -Fq \
+  'onMove: style == .split ? nil : actions.onMoveSingleRail'
+printf '%s\n' "$rail_source" | grep -Fq \
+  'collapseAtLeadingEdge: adaptiveExpanded && side == .right'
+grep -Fq 'let onCollapse: (() -> Void)?' <<<"$navigation_page"
+grep -Fq 'if let onMove {' <<<"$navigation_page"
+grep -Fq 'if let onCollapse {' <<<"$navigation_page"
+grep -Fq 'width: onCollapse == nil ? 36 : 32' <<<"$navigation_page"
+grep -Fq 'height: onCollapse == nil ? 36 : 32' <<<"$navigation_page"
+grep -Fq 'if collapseAtLeadingEdge {' <<<"$workspace_page"
+grep -Fq 'if onBack != nil && !collapseAtLeadingEdge {' <<<"$workspace_page"
+test "$(grep -Fc 'Button(action: onCollapse)' <<<"$workspace_page")" -eq 2
 
 printf '%s\n' 'Sidebar adaptive, single-page, and split-layout contracts passed.'
