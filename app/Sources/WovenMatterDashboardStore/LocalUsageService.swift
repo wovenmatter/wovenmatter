@@ -131,6 +131,12 @@ public actor LocalUsageService {
     now: Date = Date()
   ) async -> LocalUsageLimitsSnapshot {
     let accounts: [UsageLimitAccount]
+    let persistent = (try? openUsageStore()?.usageLimitAccounts(
+      providers: enabledProviders
+    )) ?? []
+    let persistentByProvider = Dictionary(
+      uniqueKeysWithValues: persistent.map { ($0.provider, $0) }
+    )
     let mayReuseFreshLimits = refreshReason != .manual
       && refreshReason != .credentialChanged
     if let cachedLimits,
@@ -143,18 +149,29 @@ public actor LocalUsageService {
         && enabledProviders.contains(.openRouter)
         ? (try? credentialStore.loadOpenRouterAPIKey())
         : nil
-      accounts = await ProviderLimitCollector.collect(
+      let refreshed = await ProviderLimitCollector.collect(
         homeDirectory: homeDirectory,
         openRouterAPIKey: openRouterAPIKey,
         enabledProviders: enabledProviders,
         now: now
       )
+      accounts = refreshed.map { account in
+        guard account.status == .failed || account.status == .unavailable,
+              let prior = persistentByProvider[account.provider]
+        else { return account }
+        return prior.retainingLastGood(after: account)
+      }
+      try? openUsageStore()?.saveUsageLimitAccounts(accounts, storedAt: now)
       cachedLimits = (now, enabledProviders, accounts)
     } else {
-      accounts = ProviderLimitCollector.placeholderAccounts(
+      let placeholders = ProviderLimitCollector.placeholderAccounts(
         enabledProviders: enabledProviders,
         now: now
       )
+      accounts = placeholders.map { placeholder in
+        persistentByProvider[placeholder.provider]?.stale()
+          ?? placeholder
+      }
     }
     return LocalUsageLimitsSnapshot(
       accounts: accounts,

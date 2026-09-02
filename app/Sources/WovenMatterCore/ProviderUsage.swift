@@ -99,3 +99,29 @@ public struct ProviderReportedBudget: Codable, Equatable, Sendable {
     self.scope = scope
   }
 }
+
+public struct ProviderUsageDetail: Codable, Equatable, Identifiable, Sendable {
+  public let id: String
+  public let label: String
+  public let value: String
+
+  public init(id: String? = nil, label: String, value: String) {
+    self.id = id ?? label.lowercased().replacingOccurrences(of: " ", with: "-")
+    self.label = label
+    self.value = value
+  }
+}
+
+public struct ProviderUsageHistoryPoint: Codable, Equatable, Identifiable, Sendable {
+  public let date: Date
+  public let valueMicros: Int64
+  public let currency: String
+
+  public var id: Date { date }
+
+  public init(date: Date, valueMicros: Int64, currency: String = "USD") {
+    self.date = date
+    self.valueMicros = max(0, valueMicros)
+    self.currency = currency.uppercased()
+  }
+}

@@ -44,14 +44,14 @@ struct PublicSourceContractsTests {
     #expect(accounts.map(\.provider) == [.openCodeGo])
   }
 
-  @Test("usage providers default to enabled and persist exact choices")
+  @Test("usage providers default disabled and persist exact choices")
   func usageProviderPreferences() throws {
     let suiteName = "wovenmatter-usage-provider-preferences-\(UUID().uuidString)"
     let defaults = try #require(UserDefaults(suiteName: suiteName))
     defer { defaults.removePersistentDomain(forName: suiteName) }
     let preferences = UsageProviderPreferences(defaults: defaults)
 
-    #expect(preferences.enabledProviders == Set(ProviderKind.supportedAccounts))
+    #expect(preferences.enabledProviders.isEmpty)
 
     preferences.save([.codex, .openCodeGo])
     #expect(
@@ -61,6 +61,105 @@ struct PublicSourceContractsTests {
 
     preferences.save([])
     #expect(UsageProviderPreferences(defaults: defaults).enabledProviders.isEmpty)
+  }
+
+  @Test("provider response fixtures preserve distinct quota semantics")
+  func providerResponseFixtures() throws {
+    let now = Date(timeIntervalSince1970: 1_800_000_000)
+    let codex = ProviderLimitCollector.mapCodexUsage([
+      "plan_type": "plus",
+      "rate_limit": [
+        "primary_window": ["used_percent": 25, "reset_at": 1_800_001_000, "limit_window_seconds": 18_000],
+        "secondary_window": ["used_percent": 40, "reset_at": 1_800_002_000, "limit_window_seconds": 604_800],
+      ],
+      "additional_rate_limits": [[
+        "limit_name": "Spark",
+        "rate_limit": ["primary_window": ["used_percent": 9, "reset_at": 1_800_003_000]],
+      ]],
+      "credits": ["balance": 12.5],
+    ], now: now)
+    #expect(codex.quotaWindows.map(\.label) == ["Five-hour", "Weekly", "Spark"])
+    #expect(codex.balance?.amountMicros == 12_500_000)
+
+    let claude = ProviderLimitCollector.mapClaudeUsage([
+      "five_hour": ["utilization": 12.5, "resets_at": "2027-01-15T08:00:00Z"],
+      "seven_day": ["utilization": 33.0],
+      "seven_day_sonnet": ["utilization": 44.0],
+      "seven_day_opus": ["utilization": 55.0],
+      "seven_day_routines": ["utilization": 5.0],
+      "limits": [[
+        "percent": 18.0,
+        "is_active": true,
+        "scope": ["model": ["display_name": "Fable"]],
+      ]],
+      "extra_usage": ["used_credits": 500, "monthly_limit": 2_000, "currency": "USD"],
+    ], now: now)
+    #expect(claude.quotaWindows.map(\.label) == [
+      "Five-hour", "Weekly", "Sonnet weekly", "Opus weekly", "Routines weekly", "Fable weekly",
+    ])
+    #expect(claude.providerBudget?.usedMicros == 5_000_000)
+
+    let grok = ProviderLimitCollector.mapGrokProxy([
+      "config": [
+        "creditUsagePercent": 35,
+        "onDemandUsed": 7.0,
+        "onDemandCap": 20.0,
+        "subscriptionTier": "SuperGrok",
+      ],
+    ], accountLabel: "fixture@example.com", now: now)
+    #expect(grok.quotaWindows.first?.usedPercent == 35)
+    #expect(grok.details.first?.value == "SuperGrok")
+
+    let openCode = ProviderLimitCollector.mapOpenCodeGoUsage([
+      "usage": [
+        "rolling": ["usagePercent": 10, "resetInSec": 300],
+        "weekly": ["usagePercent": 20, "resetInSec": 600],
+        "monthly": ["usagePercent": 30, "resetInSec": 900],
+      ],
+      "balance": 4.25,
+    ], now: now)
+    #expect(openCode.quotaWindows.map(\.label) == ["Rolling five-hour", "Weekly", "Monthly"])
+    #expect(openCode.balance?.amountMicros == 4_250_000)
+
+    let openRouter = ProviderLimitCollector.mapOpenRouter(
+      keyObject: ["data": [
+        "limit": 100.0,
+        "limit_remaining": 70.0,
+        "usage": 99.0,
+        "usage_daily": 1.0,
+        "usage_weekly": 4.0,
+        "usage_monthly": 8.0,
+        "limit_reset": "monthly",
+        "rate_limit": ["requests": 200, "interval": "10s"],
+      ]],
+      creditsObject: ["data": ["total_credits": 50.0, "total_usage": 20.0]],
+      now: now
+    )
+    #expect(openRouter.providerBudget?.usedMicros == 30_000_000)
+    #expect(openRouter.balance?.amountMicros == 30_000_000)
+    #expect(openRouter.details.contains { $0.label == "Rate limit" })
+  }
+
+  @Test("normalized last-good limit snapshots persist without credentials")
+  func limitSnapshotPersistence() throws {
+    let directory = try TemporaryDirectory(prefix: "wovenmatter-limit-cache")
+    defer { directory.remove() }
+    let store = try UsageStore(databaseURL: directory.url.appending(path: "workspace.sqlite"))
+    let account = UsageLimitAccount(
+      provider: .openRouter,
+      accountLabel: "Fixture key",
+      status: .available,
+      quotaWindows: [ProviderQuotaWindow(
+        id: "monthly", label: "Monthly", usedPercent: 20,
+        usageKnown: true, windowMinutes: nil, resetsAt: nil
+      )],
+      source: "Fixture",
+      detail: "Normalized fixture",
+      observedAt: Date(timeIntervalSince1970: 1_800_000_000)
+    )
+    try store.saveUsageLimitAccounts([account], storedAt: account.observedAt)
+    let restored = try #require(store.usageLimitAccounts(providers: [.openRouter]).first)
+    #expect(restored == account)
   }
 
   @Test("disabled providers are filtered from analytics and limits")

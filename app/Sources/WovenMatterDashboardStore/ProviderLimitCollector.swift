@@ -1,5 +1,7 @@
 import Darwin
 import Foundation
+import LocalAuthentication
+import Security
 import SQLite3
 import WovenMatterClient
 import WovenMatterCore
@@ -37,15 +39,15 @@ enum ProviderLimitCollector {
         group.addTask {
           switch provider {
           case .codex:
-            await codex(now: now)
+            await codex(homeDirectory: homeDirectory, now: now)
           case .claude:
-            await claude(now: now)
+            await claude(homeDirectory: homeDirectory, now: now)
           case .grok:
-            await grok(now: now)
+            await grok(homeDirectory: homeDirectory, now: now)
           case .cursor:
             await cursor(homeDirectory: homeDirectory, now: now)
           case .openCodeGo:
-            OpenCodeGoLimitReader(homeDirectory: homeDirectory).account(now: now)
+            await OpenCodeGoLimitReader(homeDirectory: homeDirectory).account(now: now)
           case .openRouter:
             await openRouter(apiKey: openRouterAPIKey, now: now)
           case .unknown:
@@ -63,7 +65,10 @@ enum ProviderLimitCollector {
     return ProviderKind.supportedAccounts.compactMap { accountsByProvider[$0] }
   }
 
-  private static func codex(now: Date) async -> UsageLimitAccount {
+  private static func codex(homeDirectory: URL, now: Date) async -> UsageLimitAccount {
+    if let direct = try? await codexOAuth(homeDirectory: homeDirectory, now: now) {
+      return direct
+    }
     guard let executable = LocalACPRuntimeResolver.resolveExecutable(named: "codex") else {
       return unavailable(.codex, detail: "Codex CLI is not installed.", now: now)
     }
@@ -129,7 +134,10 @@ enum ProviderLimitCollector {
     }
   }
 
-  private static func claude(now: Date) async -> UsageLimitAccount {
+  private static func claude(homeDirectory: URL, now: Date) async -> UsageLimitAccount {
+    if let direct = try? await claudeOAuth(homeDirectory: homeDirectory, now: now) {
+      return direct
+    }
     guard let executable = LocalACPRuntimeResolver.resolveExecutable(named: "claude") else {
       return unavailable(.claude, detail: "Claude CLI is not installed.", now: now)
     }
@@ -150,7 +158,7 @@ enum ProviderLimitCollector {
         status: loggedIn ? .signedIn : .needsCredential,
         source: "Claude CLI auth status",
         detail: loggedIn
-          ? "Signed in via \(method ?? "Claude CLI"). Claude does not expose numeric consumer limits through its noninteractive CLI, so Woven Matter does not infer them."
+          ? "Signed in via \(method ?? "Claude CLI"). The OAuth usage endpoint was unavailable, so no limits are inferred."
           : "Claude CLI is installed but not signed in.",
         observedAt: now,
         dashboardURL: ProviderDashboardURL.claude
@@ -160,7 +168,7 @@ enum ProviderLimitCollector {
     }
   }
 
-  private static func grok(now: Date) async -> UsageLimitAccount {
+  private static func grok(homeDirectory: URL, now: Date) async -> UsageLimitAccount {
     guard let executable = LocalACPRuntimeResolver.resolveExecutable(named: "grok") else {
       return unavailable(.grok, detail: "Grok CLI is not installed.", now: now)
     }
@@ -232,12 +240,360 @@ enum ProviderLimitCollector {
         dashboardURL: ProviderDashboardURL.grok
       )
     } catch {
+      if let proxy = try? await grokProxy(homeDirectory: homeDirectory, now: now) {
+        return proxy
+      }
       return grokLocalSignIn(now: now) ?? failed(
         .grok,
         detail: "Grok account billing was unavailable. Sign in with the Grok CLI to enable it.",
         now: now
       )
     }
+  }
+
+  private static func codexOAuth(
+    homeDirectory: URL,
+    now: Date
+  ) async throws -> UsageLimitAccount {
+    let configured = ProcessInfo.processInfo.environment["CODEX_HOME"].map {
+      URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath)
+    }
+    let root = try localJSONObject(
+      at: (configured ?? homeDirectory.appending(path: ".codex"))
+        .appending(path: "auth.json"),
+      maximumBytes: 1_048_576
+    )
+    let tokens = dictionary(root["tokens"])
+    guard let token = string(tokens?["access_token"] ?? tokens?["accessToken"]) else {
+      throw ProviderLimitCollectorError.invalidResponse
+    }
+    var headers: [String: String] = [:]
+    if let accountID = string(
+      tokens?["account_id"] ?? tokens?["accountId"]
+        ?? root["account_id"] ?? root["accountId"]
+    ) {
+      headers["ChatGPT-Account-Id"] = accountID
+    }
+    async let usageObject = authenticatedJSONObject(
+      url: URL(string: "https://chatgpt.com/backend-api/wham/usage")!,
+      bearer: token,
+      headers: headers
+    )
+    async let resetObject = try? authenticatedJSONObject(
+      url: URL(string: "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits")!,
+      bearer: token,
+      headers: headers.merging([
+        "OpenAI-Beta": "codex-1",
+        "originator": "Codex Desktop",
+      ], uniquingKeysWith: { current, _ in current })
+    )
+    let account = mapCodexUsage(try await usageObject, now: now)
+    guard let reset = await resetObject else { return account }
+    var details = account.details
+    if let credits = number(reset["credits"] ?? reset["balance"]
+      ?? reset["reset_credits"] ?? reset["resetCredits"]) {
+      details.append(.init(label: "Reset credits", value: credits.formatted()))
+    }
+    return UsageLimitAccount(
+      provider: account.provider,
+      accountLabel: account.accountLabel,
+      status: account.status,
+      quotaWindows: account.quotaWindows,
+      balance: account.balance,
+      providerBudget: account.providerBudget,
+      details: details,
+      history: account.history,
+      source: account.source,
+      detail: account.detail,
+      observedAt: account.observedAt,
+      dashboardURL: account.dashboardURL
+    )
+  }
+
+  static func mapCodexUsage(
+    _ object: [String: Any],
+    now: Date
+  ) -> UsageLimitAccount {
+    let rateLimit = dictionary(object["rate_limit"] ?? object["rateLimit"])
+    var windows: [ProviderQuotaWindow] = []
+    if let window = quotaWindow(
+      rateLimit?["primary_window"] ?? rateLimit?["primaryWindow"],
+      id: "five-hour",
+      label: "Five-hour"
+    ) { windows.append(window) }
+    if let window = quotaWindow(
+      rateLimit?["secondary_window"] ?? rateLimit?["secondaryWindow"],
+      id: "weekly",
+      label: "Weekly"
+    ) { windows.append(window) }
+    if let extra = object["additional_rate_limits"] as? [[String: Any]] {
+      for (index, item) in extra.enumerated() {
+        let nested = dictionary(item["rate_limit"] ?? item["rateLimit"])
+        let label = string(item["limit_name"] ?? item["limitName"]
+          ?? item["metered_feature"] ?? item["meteredFeature"])
+          ?? "Additional limit \(index + 1)"
+        if let window = quotaWindow(
+          nested?["primary_window"] ?? nested?["primaryWindow"],
+          id: "additional-\(index)-primary",
+          label: label
+        ) { windows.append(window) }
+        if let window = quotaWindow(
+          nested?["secondary_window"] ?? nested?["secondaryWindow"],
+          id: "additional-\(index)-secondary",
+          label: "\(label) weekly"
+        ) { windows.append(window) }
+      }
+    }
+    let credits = dictionary(object["credits"])
+    let balance = number(credits?["balance"] ?? credits?["remaining"])
+    let individual = dictionary(
+      object["individual_limit"] ?? object["individualLimit"]
+        ?? rateLimit?["individual_limit"] ?? rateLimit?["individualLimit"]
+        ?? dictionary(object["spend_control"] ?? object["spendControl"])?["individual_limit"]
+    )
+    let used = number(individual?["used"] ?? individual?["usage"]
+      ?? individual?["used_amount"] ?? individual?["usedAmount"])
+    let limit = number(individual?["limit"] ?? individual?["amount"]
+      ?? individual?["limit_amount"] ?? individual?["limitAmount"])
+    let budget = used.flatMap { used in limit.flatMap { limit in
+      limit > 0 ? ProviderReportedBudget(
+        usedMicros: micros(used), limitMicros: micros(limit), currency: "USD",
+        period: "monthly", resetsAt: nil, scope: "account"
+      ) : nil
+    }}
+    let plan = string(object["plan_type"] ?? object["planType"])
+    var details: [ProviderUsageDetail] = []
+    if let plan { details.append(.init(label: "Plan", value: plan.replacingOccurrences(of: "_", with: " ").capitalized)) }
+    if boolean(credits?["unlimited"]) == true {
+      details.append(.init(label: "Credits", value: "Unlimited"))
+    }
+    return UsageLimitAccount(
+      provider: .codex,
+      accountLabel: plan.map { "Codex \($0.replacingOccurrences(of: "_", with: " ").capitalized)" }
+        ?? "Codex account",
+      status: windows.isEmpty && budget == nil && balance == nil ? .signedIn : .available,
+      quotaWindows: windows,
+      balance: balance.map { ProviderMoney(amountMicros: micros($0), currency: "USD") },
+      providerBudget: budget,
+      details: details,
+      source: "OpenAI subscription usage API",
+      detail: "Live Codex subscription windows and credit controls from the signed-in OpenAI account.",
+      observedAt: now,
+      dashboardURL: ProviderDashboardURL.codex
+    )
+  }
+
+  private static func claudeOAuth(
+    homeDirectory: URL,
+    now: Date
+  ) async throws -> UsageLimitAccount {
+    let configured = ProcessInfo.processInfo.environment["CLAUDE_CONFIG_DIR"].map {
+      URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath)
+    }
+    let credentialURL = (configured ?? homeDirectory.appending(path: ".claude"))
+      .appending(path: ".credentials.json")
+    guard let token = claudeOAuthToken(credentialsURL: credentialURL) else {
+      throw ProviderLimitCollectorError.invalidResponse
+    }
+    let object = try await authenticatedJSONObject(
+      url: URL(string: "https://api.anthropic.com/api/oauth/usage")!,
+      bearer: token,
+      headers: [
+        "anthropic-beta": "oauth-2025-04-20",
+        "Content-Type": "application/json",
+        "User-Agent": "claude-code/2.1.0",
+      ]
+    )
+    return mapClaudeUsage(object, now: now)
+  }
+
+  private static func claudeOAuthToken(credentialsURL: URL) -> String? {
+    if let root = try? localJSONObject(at: credentialsURL, maximumBytes: 1_048_576),
+       let oauth = dictionary(root["claudeAiOauth"]),
+       let token = string(oauth["accessToken"] ?? oauth["access_token"]) {
+      return token
+    }
+    let context = LAContext()
+    context.interactionNotAllowed = true
+    let query: [String: Any] = [
+      kSecClass as String: kSecClassGenericPassword,
+      kSecAttrService as String: "Claude Code-credentials",
+      kSecMatchLimit as String: kSecMatchLimitOne,
+      kSecReturnData as String: true,
+      kSecUseAuthenticationContext as String: context,
+    ]
+    var result: CFTypeRef?
+    guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
+          let data = result as? Data,
+          data.count <= 1_048_576,
+          let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let oauth = dictionary(root["claudeAiOauth"])
+    else { return nil }
+    return string(oauth["accessToken"] ?? oauth["access_token"])
+  }
+
+  static func mapClaudeUsage(
+    _ object: [String: Any],
+    now: Date
+  ) -> UsageLimitAccount {
+    let mappings: [(String, String, String)] = [
+      ("five_hour", "five-hour", "Five-hour"),
+      ("seven_day", "weekly", "Weekly"),
+      ("seven_day_sonnet", "sonnet-weekly", "Sonnet weekly"),
+      ("seven_day_opus", "opus-weekly", "Opus weekly"),
+      ("seven_day_oauth_apps", "oauth-apps-weekly", "OAuth apps weekly"),
+      ("seven_day_routines", "routines-weekly", "Routines weekly"),
+      ("seven_day_claude_routines", "routines-weekly", "Routines weekly"),
+      ("iguana_necktie", "iguana-necktie", "Promotional weekly"),
+    ]
+    var seen = Set<String>()
+    var windows = mappings.compactMap { key, id, label -> ProviderQuotaWindow? in
+      guard seen.insert(id).inserted, let raw = dictionary(object[key]),
+            let utilization = number(raw["utilization"]), utilization >= 0 else { return nil }
+      return ProviderQuotaWindow(
+        id: id, label: label, usedPercent: utilization, usageKnown: true,
+        windowMinutes: nil, resetsAt: parseDate(string(raw["resets_at"])),
+        resetDescription: nil
+      )
+    }
+    if let scoped = object["limits"] as? [[String: Any]] {
+      for (index, limit) in scoped.enumerated() where boolean(limit["is_active"]) != false {
+        guard let percent = number(limit["percent"] ?? limit["utilization"]) else { continue }
+        let model = string(dictionary(dictionary(limit["scope"])?["model"])?["display_name"])
+        let label = model.map { "\($0) weekly" } ?? "Scoped weekly"
+        windows.append(ProviderQuotaWindow(
+          id: "scoped-weekly-\(index)", label: label, usedPercent: percent,
+          usageKnown: true, windowMinutes: nil,
+          resetsAt: parseDate(string(limit["resets_at"])), resetDescription: nil
+        ))
+      }
+    }
+    let extra = dictionary(object["extra_usage"])
+    let used = number(extra?["used_credits"])
+    let limit = number(extra?["monthly_limit"])
+    let currency = string(extra?["currency"]) ?? "USD"
+    let budget = used.flatMap { used in limit.flatMap { limit in
+      limit > 0 ? ProviderReportedBudget(
+        usedMicros: micros(used / 100), limitMicros: micros(limit / 100),
+        currency: currency, period: "monthly", resetsAt: nil, scope: "extra usage"
+      ) : nil
+    }}
+    return UsageLimitAccount(
+      provider: .claude,
+      accountLabel: "Claude account",
+      status: windows.isEmpty && budget == nil ? .signedIn : .available,
+      quotaWindows: windows,
+      providerBudget: budget,
+      source: "Anthropic OAuth usage API",
+      detail: "Live Claude session, weekly, model, routine, scoped, and extra-usage limits.",
+      observedAt: now,
+      dashboardURL: ProviderDashboardURL.claude
+    )
+  }
+
+  private static func grokProxy(
+    homeDirectory: URL,
+    now: Date
+  ) async throws -> UsageLimitAccount {
+    let configured = ProcessInfo.processInfo.environment["GROK_HOME"].map {
+      URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath)
+    }
+    let root = try localJSONObject(
+      at: (configured ?? homeDirectory.appending(path: ".grok"))
+        .appending(path: "auth.json"),
+      maximumBytes: 1_048_576
+    )
+    guard let entry = root.values.compactMap(dictionary).first(where: {
+      string($0["key"] ?? $0["access_token"] ?? $0["accessToken"]) != nil
+    }), let token = string(entry["key"] ?? entry["access_token"] ?? entry["accessToken"])
+    else { throw ProviderLimitCollectorError.invalidResponse }
+    let object = try await authenticatedJSONObject(
+      url: URL(string: "https://cli-chat-proxy.grok.com/v1/billing?format=credits")!,
+      bearer: token,
+      headers: ["x-xai-token-auth": "xai-grok-cli"]
+    )
+    return mapGrokProxy(object, accountLabel: string(entry["email"]), now: now)
+  }
+
+  static func mapGrokProxy(
+    _ object: [String: Any],
+    accountLabel: String?,
+    now: Date
+  ) -> UsageLimitAccount {
+    let config = dictionary(object["config"]) ?? object
+    let used = number(dictionary(config["onDemandUsed"] ?? config["on_demand_used"])?["val"]
+      ?? config["onDemandUsed"] ?? config["on_demand_used"])
+    let cap = number(dictionary(config["onDemandCap"] ?? config["on_demand_cap"])?["val"]
+      ?? config["onDemandCap"] ?? config["on_demand_cap"])
+    let directPercent = number(config["creditUsagePercent"] ?? config["credit_usage_percent"])
+    let percent = directPercent ?? used.flatMap { used in cap.flatMap { $0 > 0 ? used / $0 * 100 : nil } }
+    let reset = parseDate(string(config["billingPeriodEnd"] ?? config["billing_period_end"]
+      ?? config["resetAt"] ?? config["reset_at"]))
+    let windows = percent.map { [ProviderQuotaWindow(
+      id: "billing-cycle", label: "Monthly credits", usedPercent: $0,
+      usageKnown: true, windowMinutes: nil, resetsAt: reset
+    )] } ?? []
+    let tier = string(config["subscriptionTier"] ?? config["subscription_tier"])
+    return UsageLimitAccount(
+      provider: .grok,
+      accountLabel: accountLabel ?? tier ?? "Grok account",
+      status: windows.isEmpty ? .signedIn : .available,
+      quotaWindows: windows,
+      details: tier.map { [.init(label: "Plan", value: $0)] } ?? [],
+      source: "Grok CLI proxy billing API",
+      detail: "Live Grok credit allowance from the signed-in CLI proxy.",
+      observedAt: now,
+      dashboardURL: ProviderDashboardURL.grok
+    )
+  }
+
+  static func openCodeGo(apiKey: String, now: Date) async throws -> UsageLimitAccount {
+    let object = try await authenticatedJSONObject(
+      url: URL(string: "https://opencode.ai/zen/go/v1/usage")!,
+      bearer: apiKey,
+      headers: ["User-Agent": "WovenMatter"]
+    )
+    return mapOpenCodeGoUsage(object, now: now)
+  }
+
+  static func mapOpenCodeGoUsage(
+    _ object: [String: Any],
+    now: Date
+  ) -> UsageLimitAccount {
+    let usage = dictionary(object["usage"]) ?? object
+    let mappings: [(String, String, String, Int?)] = [
+      ("rolling", "rolling-five-hour", "Rolling five-hour", 5 * 60),
+      ("weekly", "weekly", "Weekly", 7 * 24 * 60),
+      ("monthly", "monthly", "Monthly", 30 * 24 * 60),
+    ]
+    let windows = mappings.compactMap { key, id, label, minutes -> ProviderQuotaWindow? in
+      guard let raw = dictionary(usage[key]),
+            let percent = number(raw["usagePercent"] ?? raw["usedPercent"]
+              ?? raw["usage_percent"] ?? raw["used_percent"] ?? raw["percent"])
+      else { return nil }
+      let resetSeconds = integer(raw["resetInSec"] ?? raw["reset_in_sec"]
+        ?? raw["resetSeconds"])
+      let reset = parseDate(string(raw["resetAt"] ?? raw["reset_at"]
+        ?? raw["renewsAt"] ?? raw["renews_at"]))
+        ?? resetSeconds.map { now.addingTimeInterval(TimeInterval(max(0, $0))) }
+      return ProviderQuotaWindow(
+        id: id, label: label, usedPercent: percent, usageKnown: true,
+        windowMinutes: minutes, resetsAt: reset
+      )
+    }
+    let balance = number(object["balance"] ?? object["balanceUSD"]
+      ?? usage["balance"] ?? usage["balanceUSD"])
+    return UsageLimitAccount(
+      provider: .openCodeGo,
+      accountLabel: "OpenCode Go",
+      status: windows.isEmpty && balance == nil ? .signedIn : .available,
+      quotaWindows: windows,
+      balance: balance.map { ProviderMoney(amountMicros: micros($0), currency: "USD") },
+      source: "OpenCode Go usage API",
+      detail: "Authoritative rolling, weekly, and monthly subscription windows; local database history is shown separately.",
+      observedAt: now,
+      dashboardURL: ProviderDashboardURL.openCodeGo
+    )
   }
 
   private static func codexLocalSignIn(now: Date) -> UsageLimitAccount? {
@@ -359,50 +715,84 @@ enum ProviderLimitCollector {
       guard keyObject != nil || creditsObject != nil else {
         throw ProviderLimitCollectorError.invalidResponse
       }
-      let keyData = dictionary(keyObject?["data"]) ?? keyObject
-      let creditData = dictionary(creditsObject?["data"]) ?? creditsObject
-      let limit = number(keyData?["limit"])
-      let usage = number(keyData?["usage"])
-        ?? number(creditData?["total_usage"] ?? creditData?["totalUsage"])
-      let totalCredits = number(creditData?["total_credits"] ?? creditData?["totalCredits"])
-      let remaining = number(keyData?["limit_remaining"] ?? keyData?["limitRemaining"])
-        ?? (totalCredits.flatMap { total in usage.map { max(0, total - $0) } })
-      let reset = string(keyData?["limit_reset"] ?? keyData?["limitReset"])
-      let budget: ProviderReportedBudget? = if let limit, limit > 0, let usage {
-        ProviderReportedBudget(
-          usedMicros: micros(usage),
-          limitMicros: micros(limit),
-          currency: "USD",
-          period: reset,
-          resetsAt: nil,
-          scope: "api-key"
-        )
-      } else if let totalCredits, let usage {
-        ProviderReportedBudget(
-          usedMicros: micros(usage),
-          limitMicros: micros(totalCredits),
-          currency: "USD",
-          period: "lifetime credits",
-          resetsAt: nil,
-          scope: "account"
-        )
-      } else {
-        nil
-      }
-      return UsageLimitAccount(
-        provider: .openRouter,
-        accountLabel: string(keyData?["label"] ?? keyData?["name"]) ?? "OpenRouter API key",
-        status: .available,
-        balance: remaining.map { ProviderMoney(amountMicros: micros($0), currency: "USD") },
-        providerBudget: budget,
-        source: "OpenRouter credits and key APIs",
-        detail: "Live OpenRouter key allowance and credits. Management-key-only fields appear when the stored credential has that scope.",
-        observedAt: now,
-        dashboardURL: ProviderDashboardURL.openRouter
-      )
+      return mapOpenRouter(keyObject: keyObject, creditsObject: creditsObject, now: now)
     } catch {
       return failed(.openRouter, detail: "OpenRouter rejected the stored key or did not return credit data.", now: now)
     }
+  }
+
+  static func mapOpenRouter(
+    keyObject: [String: Any]?,
+    creditsObject: [String: Any]?,
+    now: Date
+  ) -> UsageLimitAccount {
+    let key = dictionary(keyObject?["data"]) ?? keyObject
+    let credits = dictionary(creditsObject?["data"]) ?? creditsObject
+    let keyLimit = number(key?["limit"])
+    let keyUsage = number(key?["usage"])
+    let serverRemaining = number(key?["limit_remaining"] ?? key?["limitRemaining"])
+    let reset = string(key?["limit_reset"] ?? key?["limitReset"])
+    let matchingUsage: Double? = switch reset?.lowercased() {
+    case "daily": number(key?["usage_daily"] ?? key?["usageDaily"])
+    case "weekly": number(key?["usage_weekly"] ?? key?["usageWeekly"])
+    case "monthly": number(key?["usage_monthly"] ?? key?["usageMonthly"])
+    default: nil
+    }
+    let resolvedKeyUsed = keyLimit.flatMap { limit -> Double? in
+      if let serverRemaining { return max(0, limit - min(limit, max(0, serverRemaining))) }
+      return matchingUsage ?? keyUsage
+    }
+    let keyBudget = keyLimit.flatMap { limit in resolvedKeyUsed.flatMap { used in
+      limit > 0 ? ProviderReportedBudget(
+        usedMicros: micros(used), limitMicros: micros(limit), currency: "USD",
+        period: reset, resetsAt: nil, scope: "api-key"
+      ) : nil
+    }}
+    let totalCredits = number(credits?["total_credits"] ?? credits?["totalCredits"])
+    let totalUsage = number(credits?["total_usage"] ?? credits?["totalUsage"])
+    let accountBalance = totalCredits.flatMap { total in totalUsage.map { max(0, total - $0) } }
+    var details: [ProviderUsageDetail] = []
+    func add(_ label: String, _ value: Double?) {
+      guard let value else { return }
+      details.append(.init(label: label, value: value.formatted(.currency(code: "USD"))))
+    }
+    add("Credits remaining", accountBalance)
+    add("Credits used", totalUsage)
+    add("Credits total", totalCredits)
+    add("Key cap", keyLimit)
+    add("Key remaining", serverRemaining ?? keyBudget.map { Double($0.remainingMicros) / 1_000_000 })
+    add("Today", number(key?["usage_daily"] ?? key?["usageDaily"]))
+    add("This week", number(key?["usage_weekly"] ?? key?["usageWeekly"]))
+    add("This month", number(key?["usage_monthly"] ?? key?["usageMonthly"]))
+    if let rate = dictionary(key?["rate_limit"] ?? key?["rateLimit"]),
+       let requests = integer(rate["requests"]), requests >= 0,
+       let interval = string(rate["interval"]) {
+      details.append(.init(label: "Rate limit", value: "\(requests) requests / \(interval)"))
+    }
+    let windows = keyBudget.map { budget in [ProviderQuotaWindow(
+      id: "api-key-cap", label: "API key cap", usedPercent: budget.usedPercent,
+      usageKnown: true, windowMinutes: nil, resetsAt: nil,
+      resetDescription: reset.map { "Resets \($0)" }
+    )] } ?? []
+    return UsageLimitAccount(
+      provider: .openRouter,
+      accountLabel: safeOpenRouterLabel(key?["label"] ?? key?["name"]),
+      status: keyObject == nil && creditsObject == nil ? .failed : .available,
+      quotaWindows: windows,
+      balance: accountBalance.map { ProviderMoney(amountMicros: micros($0), currency: "USD") },
+      providerBudget: keyBudget,
+      details: details,
+      source: "OpenRouter credits and key APIs",
+      detail: "Account credits and the API key cap are independent. Values shown here come only from the stored API key.",
+      observedAt: now,
+      dashboardURL: ProviderDashboardURL.openRouter
+    )
+  }
+
+  private static func safeOpenRouterLabel(_ value: Any?) -> String {
+    guard let label = string(value),
+          !label.lowercased().hasPrefix("sk-") else { return "OpenRouter API key" }
+    return label
   }
 
   private static func openRouterRequest(path: String, apiKey: String) async throws -> [String: Any] {
@@ -423,6 +813,28 @@ enum ProviderLimitCollector {
           let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
       throw ProviderLimitCollectorError.invalidResponse
     }
+    return object
+  }
+
+  private static func authenticatedJSONObject(
+    url: URL,
+    bearer: String,
+    headers: [String: String] = [:]
+  ) async throws -> [String: Any] {
+    var request = URLRequest(url: url)
+    request.timeoutInterval = 12
+    request.setValue("Bearer \(bearer)", forHTTPHeaderField: "Authorization")
+    request.setValue("application/json", forHTTPHeaderField: "Accept")
+    for (name, value) in headers { request.setValue(value, forHTTPHeaderField: name) }
+    let (data, response) = try await BoundedHTTPResponse.data(
+      for: request,
+      using: .shared,
+      maximumBytes: 1_048_576
+    )
+    guard let http = response as? HTTPURLResponse,
+          (200..<300).contains(http.statusCode),
+          let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+    else { throw ProviderLimitCollectorError.invalidResponse }
     return object
   }
 
@@ -522,7 +934,7 @@ enum ProviderLimitCollector {
     if let value = value as? NSNumber { return value.boolValue }
     return nil
   }
-  private static func micros(_ dollars: Double) -> Int64 {
+  fileprivate static func micros(_ dollars: Double) -> Int64 {
     guard dollars.isFinite else { return 0 }
     let maximum = Double(Int64.max) / 1_000_000
     return Int64(min(maximum, max(0, dollars)) * 1_000_000)
@@ -792,11 +1204,33 @@ private struct OpenCodeGoLimitReader {
 
   let homeDirectory: URL
 
-  func account(now: Date) -> UsageLimitAccount {
+  func account(now: Date) async -> UsageLimitAccount {
     let root = homeDirectory.appending(path: ".local/share/opencode", directoryHint: .isDirectory)
     let authURL = root.appending(path: "auth.json")
     let databaseURL = root.appending(path: "opencode.db")
-    let authenticated = hasAuthKey(at: authURL)
+    let apiKey = authKey(at: authURL)
+    let authenticated = apiKey != nil
+    let rows = (try? readRows(databaseURL)) ?? []
+    let history = dailyHistory(rows)
+    if let apiKey, let live = try? await ProviderLimitCollector.openCodeGo(
+      apiKey: apiKey,
+      now: now
+    ) {
+      return UsageLimitAccount(
+        provider: live.provider,
+        accountLabel: live.accountLabel,
+        status: live.status,
+        quotaWindows: live.quotaWindows,
+        balance: live.balance,
+        providerBudget: live.providerBudget,
+        details: live.details,
+        history: history,
+        source: live.source,
+        detail: live.detail,
+        observedAt: live.observedAt,
+        dashboardURL: live.dashboardURL
+      )
+    }
     guard FileManager.default.fileExists(atPath: databaseURL.path) else {
       return UsageLimitAccount(
         provider: .openCodeGo,
@@ -810,7 +1244,7 @@ private struct OpenCodeGoLimitReader {
         dashboardURL: ProviderDashboardURL.openCodeGo
       )
     }
-    guard let rows = try? readRows(databaseURL), authenticated || !rows.isEmpty else {
+    guard authenticated || !rows.isEmpty else {
       return UsageLimitAccount(
         provider: .openCodeGo,
         accountLabel: "OpenCode Go",
@@ -853,6 +1287,7 @@ private struct OpenCodeGoLimitReader {
       provider: .openCodeGo,
       accountLabel: "OpenCode Go",
       status: .signedIn,
+      history: history,
       source: "OpenCode local cost history",
       detail: "Local records report \(money(usedFive)) in the last five hours, \(money(usedWeek)) this UTC week, and \(money(usedMonth)) this UTC month. OpenCode Go did not expose live remaining counters, so Woven Matter does not infer an allowance.",
       observedAt: now,
@@ -894,11 +1329,29 @@ private struct OpenCodeGoLimitReader {
     return rows
   }
 
-  private func hasAuthKey(at url: URL) -> Bool {
+  private func authKey(at url: URL) -> String? {
     guard let data = try? Data(contentsOf: url),
           let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-          object["opencode-go"] != nil else { return false }
-    return true
+          let entry = object["opencode-go"] as? [String: Any]
+    else { return nil }
+    let value = (entry["key"] as? String)?
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+    return value?.isEmpty == false ? value : nil
+  }
+
+  private func dailyHistory(_ rows: [Row]) -> [ProviderUsageHistoryPoint] {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = .current
+    return Dictionary(grouping: rows, by: { calendar.startOfDay(for: $0.createdAt) })
+      .map { day, values in
+        ProviderUsageHistoryPoint(
+          date: day,
+          valueMicros: ProviderLimitCollector.micros(
+            values.reduce(0) { $0 + $1.cost }
+          )
+        )
+      }
+      .sorted { $0.date < $1.date }
   }
 
   private func money(_ value: Double) -> String {

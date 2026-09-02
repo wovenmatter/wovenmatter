@@ -586,9 +586,13 @@ public struct UsageLimitAccount: Codable, Equatable, Identifiable, Sendable {
   public let quotaWindows: [ProviderQuotaWindow]
   public let balance: ProviderMoney?
   public let providerBudget: ProviderReportedBudget?
+  public let details: [ProviderUsageDetail]
+  public let history: [ProviderUsageHistoryPoint]
   public let source: String
   public let detail: String
   public let observedAt: Date
+  public let isStale: Bool
+  public let refreshError: String?
   public let dashboardURL: URL?
 
   public var id: String { provider.rawValue }
@@ -600,9 +604,13 @@ public struct UsageLimitAccount: Codable, Equatable, Identifiable, Sendable {
     quotaWindows: [ProviderQuotaWindow] = [],
     balance: ProviderMoney? = nil,
     providerBudget: ProviderReportedBudget? = nil,
+    details: [ProviderUsageDetail] = [],
+    history: [ProviderUsageHistoryPoint] = [],
     source: String,
     detail: String,
     observedAt: Date = Date(),
+    isStale: Bool = false,
+    refreshError: String? = nil,
     dashboardURL: URL? = nil
   ) {
     self.provider = provider
@@ -611,10 +619,37 @@ public struct UsageLimitAccount: Codable, Equatable, Identifiable, Sendable {
     self.quotaWindows = quotaWindows
     self.balance = balance
     self.providerBudget = providerBudget
+    self.details = details
+    self.history = history
     self.source = source
     self.detail = detail
     self.observedAt = observedAt
+    self.isStale = isStale
+    self.refreshError = refreshError
     self.dashboardURL = dashboardURL
+  }
+
+  public func retainingLastGood(after error: UsageLimitAccount) -> Self {
+    stale(refreshError: error.detail)
+  }
+
+  public func stale(refreshError: String? = nil) -> Self {
+    Self(
+      provider: provider,
+      accountLabel: accountLabel,
+      status: status,
+      quotaWindows: quotaWindows,
+      balance: balance,
+      providerBudget: providerBudget,
+      details: details,
+      history: history,
+      source: source,
+      detail: detail,
+      observedAt: observedAt,
+      isStale: true,
+      refreshError: refreshError,
+      dashboardURL: dashboardURL
+    )
   }
 }
 
