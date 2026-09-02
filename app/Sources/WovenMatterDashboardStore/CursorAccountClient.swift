@@ -155,13 +155,8 @@ struct CursorAccountClient: Sendable {
         ), resetsAt: resetsAt
       ))
     }
-    if sand?.hasNonZeroIncludedLimit == true, let grok = sand?.usagePercent {
-      windows.append(ProviderQuotaWindow(
-        id: "grok-bot", label: "Grok Bot", usedPercent: grok,
-        usageKnown: true, windowMinutes: Self.windowMinutes(
-          start: Self.date(sand?.currentPeriodStart), end: Self.date(sand?.nextResetTimestampUtc)
-        ), resetsAt: Self.date(sand?.nextResetTimestampUtc)
-      ))
+    if let grokBot = sand?.quotaWindow {
+      windows.append(grokBot)
     }
     let onDemand = usage.individualUsage?.onDemand ?? usage.teamUsage?.onDemand
     let budget: ProviderReportedBudget? = if let used = onDemand?.used,
@@ -290,13 +285,28 @@ struct CursorAccountClient: Sendable {
   }
 
   private func fetchSand(cookie: String) async throws -> CursorSandUsage {
-    var request = URLRequest(url: baseURL.appending(path: "api/dashboard/get-sand-usage-status"))
+    let request = Self.sandRequest(baseURL: baseURL, cookie: cookie)
+    return try JSONDecoder().decode(CursorSandUsage.self, from: await responseData(request))
+  }
+
+  static func sandRequest(baseURL: URL, cookie: String) -> URLRequest {
+    var request = URLRequest(
+      url: baseURL.appending(path: "api/dashboard/get-sand-usage-status")
+    )
     request.httpMethod = "POST"
     request.setValue(cookie, forHTTPHeaderField: "Cookie")
     request.setValue("application/json", forHTTPHeaderField: "Accept")
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    request.setValue(Self.origin(baseURL), forHTTPHeaderField: "Origin")
     request.httpBody = Data("{}".utf8)
-    return try JSONDecoder().decode(CursorSandUsage.self, from: await responseData(request))
+    return request
+  }
+
+  private static func origin(_ url: URL) -> String {
+    guard let scheme = url.scheme, let host = url.host else {
+      return "https://cursor.com"
+    }
+    return "\(scheme)://\(host)"
   }
 
   private func fetchUser(cookie: String) async throws -> CursorUserInfo {
@@ -501,11 +511,79 @@ private struct CursorUsageSummary: Decodable {
   }
 }
 
-private struct CursorSandUsage: Decodable {
+/// Cursor's weekly Grok Bot allowance, called "Sand" by the dashboard API.
+/// Percent values are already 0...100 percent-used units, not 0...1 fractions.
+struct CursorSandUsage: Decodable {
   let currentPeriodStart: String?
   let nextResetTimestampUtc: String?
   let usagePercent: Double?
+  let hasAvailableUsage: Bool?
   let hasNonZeroIncludedLimit: Bool?
+
+  private enum CodingKeys: String, CodingKey {
+    case currentPeriodStart
+    case currentPeriodStartSnake = "current_period_start"
+    case nextResetTimestampUtc
+    case nextResetTimestampUTC
+    case nextResetTimestampUtcSnake = "next_reset_timestamp_utc"
+    case usagePercent
+    case usagePercentSnake = "usage_percent"
+    case hasAvailableUsage
+    case hasAvailableUsageSnake = "has_available_usage"
+    case hasNonZeroIncludedLimit
+    case hasNonZeroIncludedLimitSnake = "has_non_zero_included_limit"
+  }
+
+  init(from decoder: any Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    currentPeriodStart = try container.decodeIfPresent(
+      String.self, forKey: .currentPeriodStart
+    ) ?? container.decodeIfPresent(String.self, forKey: .currentPeriodStartSnake)
+    nextResetTimestampUtc = try container.decodeIfPresent(
+      String.self, forKey: .nextResetTimestampUtc
+    ) ?? container.decodeIfPresent(String.self, forKey: .nextResetTimestampUTC)
+      ?? container.decodeIfPresent(String.self, forKey: .nextResetTimestampUtcSnake)
+    usagePercent = try container.decodeIfPresent(
+      Double.self, forKey: .usagePercent
+    ) ?? container.decodeIfPresent(Double.self, forKey: .usagePercentSnake)
+    hasAvailableUsage = try container.decodeIfPresent(
+      Bool.self, forKey: .hasAvailableUsage
+    ) ?? container.decodeIfPresent(Bool.self, forKey: .hasAvailableUsageSnake)
+    hasNonZeroIncludedLimit = try container.decodeIfPresent(
+      Bool.self, forKey: .hasNonZeroIncludedLimit
+    ) ?? container.decodeIfPresent(Bool.self, forKey: .hasNonZeroIncludedLimitSnake)
+  }
+
+  var quotaWindow: ProviderQuotaWindow? {
+    guard hasNonZeroIncludedLimit == true, let usagePercent else { return nil }
+    let start = Self.date(currentPeriodStart)
+    let reset = Self.date(nextResetTimestampUtc)
+    return ProviderQuotaWindow(
+      id: "grok-bot",
+      label: "Grok Bot",
+      usedPercent: usagePercent,
+      usageKnown: true,
+      windowMinutes: Self.windowMinutes(start: start, end: reset),
+      resetsAt: reset
+    )
+  }
+
+  private static func date(_ value: String?) -> Date? {
+    guard let value else { return nil }
+    if let date = try? Date.ISO8601FormatStyle(
+      includingFractionalSeconds: true
+    ).parse(value) {
+      return date
+    }
+    return try? Date.ISO8601FormatStyle(
+      includingFractionalSeconds: false
+    ).parse(value)
+  }
+
+  private static func windowMinutes(start: Date?, end: Date?) -> Int? {
+    guard let start, let end, end > start else { return nil }
+    return Int(end.timeIntervalSince(start) / 60)
+  }
 }
 
 private struct CursorUserInfo: Decodable {
