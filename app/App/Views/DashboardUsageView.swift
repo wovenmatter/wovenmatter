@@ -42,8 +42,6 @@ private enum PendingUsageCredentialAction: Identifiable {
 }
 
 struct DashboardUsageView: View {
-    private static let pageTopID = "usage-page-top"
-
     @Environment(\.dashboardTheme) private var theme
     @Bindable var model: ApplicationModel
     @State private var page = DashboardUsagePage.limits
@@ -92,52 +90,43 @@ struct DashboardUsageView: View {
     }
 
     var body: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    header
-                        .id(Self.pageTopID)
-                    HStack(spacing: 10) {
-                        Text("Usage page")
-                            .fixedSize()
-                        DashboardSegmentedSelector(
-                            options: DashboardUsagePage.allCases,
-                            selection: pageBinding
-                        ) { page in
-                            page.title
-                        }
-                        .frame(width: 320)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                header
+                HStack(spacing: 10) {
+                    Text("Usage page")
+                        .fixedSize()
+                    DashboardSegmentedSelector(
+                        options: DashboardUsagePage.allCases,
+                        selection: pageBinding
+                    ) { page in
+                        page.title
                     }
-
-                    if let error = model.localUsageError {
-                        UsageErrorBanner(text: error)
-                    }
-
-                    if let snapshot = model.localUsage {
-                        switch page {
-                        case .limits:
-                            accountConnections(snapshot)
-                        case .analytics:
-                            analyticsPage(snapshot.analytics)
-                        }
-                    } else {
-                        UsageLoadingCard(isLoading: model.isRefreshingLocalUsage)
-                    }
+                    .frame(width: 320)
                 }
-                .frame(maxWidth: 1180)
-                .frame(maxWidth: .infinity)
-                .padding(.horizontal, 32)
-                .padding(.vertical, 40)
-            }
-            .scrollIndicators(.never)
-            .background(theme.palette.workspace)
-            .onChange(of: page) { _, _ in
-                Task { @MainActor in
-                    await Task.yield()
-                    proxy.scrollTo(Self.pageTopID, anchor: .top)
+
+                if let error = model.localUsageError {
+                    UsageErrorBanner(text: error)
+                }
+
+                if let snapshot = model.localUsage {
+                    switch page {
+                    case .limits:
+                        accountConnections(snapshot)
+                    case .analytics:
+                        analyticsPage(snapshot.analytics)
+                    }
+                } else {
+                    UsageLoadingCard(isLoading: model.isRefreshingLocalUsage)
                 }
             }
+            .frame(maxWidth: 1180)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 32)
+            .padding(.vertical, 40)
         }
+        .scrollIndicators(.never)
+        .background(theme.palette.workspace)
         .task {
             await model.usageDestinationAppeared(range: range)
         }
