@@ -2988,6 +2988,11 @@ struct DashboardConversationDetailCardState: Equatable, Sendable {
         focusedConversationID = nil
         hoveredConversationID = nil
     }
+
+    mutating func completePrimaryAction(conversationID: String, hovered: Bool) {
+        focusedConversationID = conversationID
+        hoveredConversationID = hovered ? conversationID : nil
+    }
 }
 
 struct DashboardConversationRowAccessibility: Equatable, Sendable {
@@ -6276,7 +6281,15 @@ private struct DashboardConversationRow: View {
             time: presentation.time
         )
 
-        Button(action: action) {
+        // AppKit focuses a Button on mouse-down. Keep the popover state stable
+        // until this native action receives the matching mouse-up.
+        Button {
+            action()
+            detailCardState.completePrimaryAction(
+                conversationID: conversation.id,
+                hovered: hovered
+            )
+        } label: {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
                     Text(presentation.title)
@@ -6339,14 +6352,15 @@ private struct DashboardConversationRow: View {
             if isHovered {
                 hoverCardTask = Task { @MainActor in
                     try? await Task.sleep(for: .milliseconds(380))
-                    guard !Task.isCancelled, hovered else { return }
+                    guard !Task.isCancelled, hovered, !Self.isMouseButtonPressed else { return }
                     detailCardState.setHovered(true, conversationID: conversation.id)
                 }
-            } else {
+            } else if !Self.isMouseButtonPressed {
                 detailCardState.setHovered(false, conversationID: conversation.id)
             }
         }
         .onChange(of: focused) { _, isFocused in
+            guard !Self.isMouseButtonPressed else { return }
             detailCardState.setFocused(isFocused, conversationID: conversation.id)
         }
         .popover(isPresented: detailCardPresented, arrowEdge: .trailing) {
@@ -6378,6 +6392,10 @@ private struct DashboardConversationRow: View {
             return dashboardAgentGlyph(agent)
         }
         return presentation.conversation.localRuntimeKind == nil ? .bot : .terminal
+    }
+
+    private static var isMouseButtonPressed: Bool {
+        NSEvent.pressedMouseButtons != 0
     }
 
     private var harnessLogo: DashboardHarnessLogo? {
