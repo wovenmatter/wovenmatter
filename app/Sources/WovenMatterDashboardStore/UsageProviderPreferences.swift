@@ -12,7 +12,7 @@ public struct UsageProviderPreferences {
 
   public var enabledProviders: Set<ProviderKind> {
     guard defaults.object(forKey: Self.storageKey) != nil else {
-      return Set(ProviderKind.supportedAccounts)
+      return []
     }
     return Set(
       defaults.stringArray(forKey: Self.storageKey)?

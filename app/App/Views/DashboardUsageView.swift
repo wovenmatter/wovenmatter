@@ -1,6 +1,7 @@
 import Charts
 import SwiftUI
 import WovenMatterCore
+import WovenMatterDashboardStore
 
 private enum DashboardUsagePage: String, CaseIterable, Identifiable {
     case limits
@@ -18,12 +19,14 @@ private enum DashboardUsagePage: String, CaseIterable, Identifiable {
 
 private enum PendingUsageCredentialAction: Identifiable {
     case enableProvider(ProviderKind)
+    case retryProvider(ProviderKind)
     case saveOpenRouter(String)
     case deleteOpenRouter
 
     var id: String {
         switch self {
         case .enableProvider(let provider): "enable-\(provider.rawValue)"
+        case .retryProvider(let provider): "retry-\(provider.rawValue)"
         case .saveOpenRouter: "save-openrouter"
         case .deleteOpenRouter: "delete-openrouter"
         }
@@ -33,6 +36,8 @@ private enum PendingUsageCredentialAction: Identifiable {
         switch self {
         case .enableProvider(let provider):
             "Enable \(provider.displayName) so Woven Matter can check its local sign-in and usage when you open or refresh Usage."
+        case .retryProvider(let provider):
+            "Retry \(provider.displayName) credential access once. macOS may ask for permission now; future automatic refreshes remain noninteractive."
         case .saveOpenRouter:
             "Save and use the OpenRouter API key you enter in this Mac's Keychain."
         case .deleteOpenRouter:
@@ -765,72 +770,49 @@ struct DashboardUsageView: View {
         }
 
         UsageSectionHeading(title: "Accounts")
-        LazyVGrid(
-            columns: [GridItem(.adaptive(minimum: 330), spacing: 12)],
-            alignment: .leading,
-            spacing: 12
-        ) {
-            ForEach(snapshot.limits.filter { $0.provider != .openRouter }) { account in
-                limitCard(account)
+        let accountsByProvider = Dictionary(
+            uniqueKeysWithValues: snapshot.limits.map { ($0.provider, $0) }
+        )
+        let accounts = ProviderKind.supportedAccounts.map { provider in
+            accountsByProvider[provider] ?? UsageLimitAccount(
+                provider: provider,
+                accountLabel: provider.displayName,
+                status: .needsCredential,
+                source: "Disabled",
+                detail: "Enable this account to allow local credential discovery and usage checks.",
+                dashboardURL: provider.usageDashboardURL
+            )
+        }
+        ViewThatFits(in: .horizontal) {
+            LazyVGrid(
+                columns: [
+                    GridItem(.flexible(), alignment: .topLeading),
+                    GridItem(.flexible(), alignment: .topLeading),
+                ],
+                alignment: .leading,
+                spacing: 12
+            ) {
+                ForEach(accounts) { account in
+                    limitCard(account, pinsFooter: true)
+                }
             }
-        }
-        if model.isUsageProviderEnabled(.openRouter) {
-            openRouterCredential
-        }
-    }
+            .frame(minWidth: 720)
 
-    private var openRouterCredential: some View {
-        UsageSection {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack {
-                    ProviderDot(provider: .openRouter)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("OpenRouter API key")
-                            .font(.system(size: 12.5, weight: .semibold))
-                        Text(openRouterConnectionLabel)
-                            .font(.system(size: 10.5))
-                            .foregroundStyle(DashboardPalette.mutedForeground)
-                    }
-                    Spacer()
-                    if model.isOpenRouterCredentialConfigured {
-                        Button("Remove", role: .destructive) {
-                            requestCredentialAction(.deleteOpenRouter)
-                        }
-                        .buttonStyle(.plain)
-                        .font(.system(size: 11.5, weight: .medium))
-                        .foregroundStyle(DashboardPalette.danger)
-                    }
-                }
-                HStack(spacing: 8) {
-                    SecureField(
-                        model.isOpenRouterCredentialConfigured
-                            ? "Enter a replacement key"
-                            : "OpenRouter API or management key",
-                        text: $openRouterAPIKey
-                    )
-                    .textFieldStyle(.roundedBorder)
-                    Button(model.isOpenRouterCredentialConfigured ? "Replace key" : "Save API key") {
-                        let key = openRouterAPIKey
-                        requestCredentialAction(.saveOpenRouter(key))
-                    }
-                    .buttonStyle(DashboardPrimaryButtonStyle())
-                    .disabled(
-                        openRouterAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                            || model.isRefreshingLocalUsage
-                    )
-                }
-                if model.isOpenRouterCredentialConfigured,
-                   !model.isUsageProviderEnabled(.openRouter) {
-                    Button("Enable saved key") {
-                        requestCredentialAction(.enableProvider(.openRouter))
-                    }
-                    .buttonStyle(SettingsQuietButtonStyle())
+            LazyVGrid(
+                columns: [GridItem(.flexible(), alignment: .topLeading)],
+                spacing: 12
+            ) {
+                ForEach(accounts) { account in
+                    limitCard(account, pinsFooter: false)
                 }
             }
         }
     }
 
-    private func limitCard(_ account: UsageLimitAccount) -> some View {
+    private func limitCard(
+        _ account: UsageLimitAccount,
+        pinsFooter: Bool
+    ) -> some View {
         UsageSection {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(alignment: .top, spacing: 9) {
@@ -846,9 +828,14 @@ struct DashboardUsageView: View {
                     }
                     Spacer()
                     UsageStatusPill(
-                        text: account.status.title,
+                        text: account.isStale ? "Stale" : account.status.title,
                         color: account.status.color
                     )
+                }
+
+                if account.provider == .codex,
+                   model.codexUsageWorkspaces.count > 1 {
+                    codexWorkspaceSelector
                 }
 
                 if account.quotaWindows.isEmpty,
@@ -887,12 +874,51 @@ struct DashboardUsageView: View {
                                 .foregroundStyle(DashboardPalette.mutedForeground)
                         }
                     }
+                    if !account.details.isEmpty {
+                        VStack(spacing: 5) {
+                            ForEach(account.details) { detail in
+                                HStack(alignment: .firstTextBaseline) {
+                                    Text(detail.label)
+                                        .foregroundStyle(DashboardPalette.mutedForeground)
+                                    Spacer()
+                                    Text(detail.value)
+                                        .fontWeight(.medium)
+                                        .multilineTextAlignment(.trailing)
+                                }
+                                .font(.system(size: 10.5))
+                            }
+                        }
+                    }
+                    if !account.history.isEmpty {
+                        Chart(account.history) { point in
+                            BarMark(
+                                x: .value("Day", point.date, unit: .day),
+                                y: .value("Spend", Double(point.valueMicros) / 1_000_000)
+                            )
+                            .foregroundStyle(account.provider.usageColor.gradient)
+                        }
+                        .chartXAxis(.hidden)
+                        .chartYAxis(.hidden)
+                        .frame(height: 42)
+                        .accessibilityLabel("Daily local spend history")
+                    }
+                    if let refreshError = account.refreshError {
+                        Label(refreshError, systemImage: "exclamationmark.triangle")
+                            .font(.system(size: 10.5))
+                            .foregroundStyle(DashboardPalette.warning)
+                    }
                     Text(account.detail)
                         .font(.system(size: 10.5))
                         .foregroundStyle(DashboardPalette.mutedForeground)
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
+                if account.provider == .openRouter,
+                   model.isUsageProviderEnabled(.openRouter) {
+                    openRouterCredentialControls
+                }
+
+                if pinsFooter { Spacer(minLength: 12) }
                 Divider().overlay(theme.palette.border)
                 HStack {
                     Text(account.source)
@@ -907,6 +933,33 @@ struct DashboardUsageView: View {
                             )
                         }
                         .buttonStyle(SettingsQuietButtonStyle())
+                    } else if account.provider == .claude,
+                              account.status == .signedIn
+                                || account.status == .unavailable
+                                || account.status == .failed
+                                || account.isStale {
+                        Button("Retry access") {
+                            requestCredentialAction(.retryProvider(.claude))
+                        }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 10.5, weight: .medium))
+                    } else if account.provider == .codex,
+                              model.codexUsageWorkspaces.count > 1,
+                              account.status != .available,
+                              account.status != .signedIn {
+                        Button(
+                            model.signingInUsageProviders.contains(.codex)
+                                ? "Reconnecting…"
+                                : "Reconnect"
+                        ) {
+                            model.reconnectSelectedCodexUsageWorkspace()
+                        }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 10.5, weight: .medium))
+                        .disabled(
+                            model.signingInUsageProviders.contains(.codex)
+                                || model.isRefreshingLocalUsage
+                        )
                     } else if account.provider != .openRouter,
                               account.status != .available,
                               account.status != .signedIn {
@@ -942,6 +995,93 @@ struct DashboardUsageView: View {
                     }
                 }
             }
+            .frame(
+                maxWidth: .infinity,
+                maxHeight: pinsFooter ? .infinity : nil,
+                alignment: .topLeading
+            )
+        }
+        .frame(
+            maxWidth: .infinity,
+            maxHeight: pinsFooter ? .infinity : nil,
+            alignment: .topLeading
+        )
+    }
+
+    private var codexWorkspaceSelector: some View {
+        HStack(spacing: 8) {
+            Text("Workspace")
+                .font(.system(size: 10.5))
+                .foregroundStyle(DashboardPalette.mutedForeground)
+            Spacer()
+            Menu {
+                ForEach(model.codexUsageWorkspaces) { workspace in
+                    Button {
+                        Task {
+                            await model.selectCodexUsageWorkspace(
+                                workspace.id,
+                                range: range
+                            )
+                        }
+                    } label: {
+                        if workspace.id == model.selectedCodexUsageWorkspaceID {
+                            Label(workspace.selectionLabel, systemImage: "checkmark")
+                        } else {
+                            Text(workspace.selectionLabel)
+                        }
+                    }
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Text(selectedCodexWorkspace?.name ?? "Choose workspace")
+                        .lineLimit(1)
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.system(size: 8.5, weight: .semibold))
+                }
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .disabled(model.isRefreshingUsageLimits)
+        }
+    }
+
+    private var selectedCodexWorkspace: CodexUsageWorkspace? {
+        model.codexUsageWorkspaces.first {
+            $0.id == model.selectedCodexUsageWorkspaceID
+        }
+    }
+
+    private var openRouterCredentialControls: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(openRouterConnectionLabel)
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(DashboardPalette.mutedForeground)
+                Spacer()
+                if model.isOpenRouterCredentialConfigured {
+                    Button("Remove", role: .destructive) {
+                        requestCredentialAction(.deleteOpenRouter)
+                    }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 10.5, weight: .medium))
+                    .foregroundStyle(DashboardPalette.danger)
+                }
+            }
+            SecureField(
+                model.isOpenRouterCredentialConfigured
+                    ? "Enter a replacement key"
+                    : "OpenRouter API key",
+                text: $openRouterAPIKey
+            )
+            .textFieldStyle(.roundedBorder)
+            Button(model.isOpenRouterCredentialConfigured ? "Replace key" : "Save API key") {
+                requestCredentialAction(.saveOpenRouter(openRouterAPIKey))
+            }
+            .buttonStyle(DashboardPrimaryButtonStyle())
+            .disabled(
+                openRouterAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    || model.isRefreshingLocalUsage
+            )
         }
     }
 
@@ -970,6 +1110,13 @@ struct DashboardUsageView: View {
         case .enableProvider(let provider):
             Task {
                 await model.enableUsageProvider(provider, range: range)
+            }
+        case .retryProvider(let provider):
+            Task {
+                await model.retryUsageProviderCredentialAccess(
+                    provider,
+                    range: range
+                )
             }
         case .saveOpenRouter(let key):
             Task {
@@ -1432,6 +1579,18 @@ private extension ProviderKind {
         case .openCodeGo: Color.hex(0x8B5CF6)
         case .openRouter: Color.hex(0xE05D8B)
         case .unknown: DashboardPalette.mutedForeground
+        }
+    }
+
+    var usageDashboardURL: URL? {
+        switch self {
+        case .codex: URL(string: "https://chatgpt.com/codex/settings/usage")
+        case .claude: URL(string: "https://claude.ai/settings/usage")
+        case .grok: URL(string: "https://grok.com/?_s=usage")
+        case .cursor: URL(string: "https://cursor.com/dashboard?tab=usage")
+        case .openCodeGo: URL(string: "https://opencode.ai/auth")
+        case .openRouter: URL(string: "https://openrouter.ai/settings/credits")
+        case .unknown: nil
         }
     }
 }
