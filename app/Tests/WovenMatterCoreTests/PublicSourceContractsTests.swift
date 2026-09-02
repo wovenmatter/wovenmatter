@@ -232,6 +232,51 @@ struct PublicSourceContractsTests {
     #expect(openRouter.details.contains { $0.label == "Rate limit" })
   }
 
+  @Test("Codex primary window label follows the authoritative duration")
+  func codexPrimaryWindowDurationLabels() {
+    let now = Date(timeIntervalSince1970: 1_800_000_000)
+    let fiveHourFixture: [String: Any] = [
+      "rate_limit": [
+        "primary_window": [
+          "used_percent": 31,
+          "reset_at": 1_800_018_000,
+          "limit_window_seconds": 18_000,
+        ],
+      ],
+    ]
+    let weeklyFixture: [String: Any] = [
+      "rate_limit": [
+        "primary_window": [
+          "used_percent": 69,
+          "reset_at": 1_800_345_600,
+          "window_duration_mins": 10_080,
+        ],
+      ],
+      "additional_rate_limits": [[
+        "limit_name": "Codex Spark",
+        "rate_limit": [
+          "primary_window": ["used_percent": 12, "limit_window_seconds": 18_000],
+          "secondary_window": ["used_percent": 28, "limit_window_seconds": 604_800],
+        ],
+      ]],
+    ]
+
+    let fiveHour = ProviderLimitCollector.mapCodexUsage(fiveHourFixture, now: now)
+    #expect(fiveHour.quotaWindows.map(\.id) == ["five-hour"])
+    #expect(fiveHour.quotaWindows.map(\.label) == ["Five-hour"])
+    #expect(fiveHour.quotaWindows.map(\.windowMinutes) == [300])
+
+    let weekly = ProviderLimitCollector.mapCodexUsage(weeklyFixture, now: now)
+    #expect(weekly.quotaWindows.map(\.id) == [
+      "five-hour", "additional-0-primary", "additional-0-secondary",
+    ])
+    #expect(Set(weekly.quotaWindows.map(\.id)).count == weekly.quotaWindows.count)
+    #expect(weekly.quotaWindows.map(\.label) == [
+      "Weekly", "Codex Spark", "Codex Spark weekly",
+    ])
+    #expect(weekly.quotaWindows.map(\.windowMinutes) == [10_080, 300, 10_080])
+  }
+
   @Test("Keychain interaction is one-shot and explicit-only")
   func keychainInteractionPolicy() {
     let passiveReasons: [UsageRefreshReason] = [
