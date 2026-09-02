@@ -20,6 +20,7 @@ run_static_checks() {
     bash -n "$file"
   done
   scripts/test-conversation-row-click-contract.sh
+  scripts/test-sidebar-page-contract.sh
   scripts/test-usage-scroll-contract.sh
   scripts/test-release.sh
   scripts/test-remote-workspace.sh

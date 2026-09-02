@@ -1148,7 +1148,6 @@ private struct DashboardSidebarActions {
 }
 
 private struct DashboardSidebarRail: View {
-    @Environment(\.dashboardTheme) private var theme
     let side: DashboardSidebarSide
     let page: DashboardSidebarPage
     let style: DashboardSidebarStyle
@@ -1174,23 +1173,11 @@ private struct DashboardSidebarRail: View {
     let onSurfaceProfileChange: () -> Void
 
     var body: some View {
-        if style == .single {
-            ZStack {
-                navigationPage
-                    .allowsHitTesting(page == .navigation)
-                    .accessibilityHidden(page != .navigation)
-                if page == .workspace {
-                    workspacePage
-                        .background(theme.palette.railFill)
-                }
-            }
-        } else {
-            switch page {
-            case .navigation:
-                navigationPage
-            case .workspace:
-                workspacePage
-            }
+        switch page {
+        case .navigation:
+            navigationPage
+        case .workspace:
+            workspacePage
         }
     }
 
