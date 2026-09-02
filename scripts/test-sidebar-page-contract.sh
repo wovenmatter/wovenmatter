@@ -122,10 +122,16 @@ printf '%s\n' "$rail_group" | grep -Fq \
 printf '%s\n' "$rail_background" | grep -Fq 'DashboardRailBackground()'
 printf '%s\n' "$rail_background" | grep -Fq \
   'DashboardShapes.windowAlignedSurface'
-if printf '%s\n' "$rail_group" | grep -Fq 'Divider'; then
-  printf '%s\n' 'Expanded Adaptive rail group must not draw a center divider.' >&2
-  exit 1
-fi
+# The expanded Adaptive pair keeps one shared outer background and adds exactly
+# one noninteractive, theme-faint separator at the center. Center placement is
+# independent of whether navigation or workspace is first in the page order.
+test "$(printf '%s\n' "$rail_group" | grep -Fc '.background {')" -eq 2
+test "$(printf '%s\n' "$rail_group" | grep -Fc '.overlay {')" -eq 1
+printf '%s\n' "$rail_group" | grep -Fq 'Rectangle()'
+printf '%s\n' "$rail_group" | grep -Fq '.fill(theme.palette.border)'
+printf '%s\n' "$rail_group" | grep -Fq '.frame(width: 0.5)'
+printf '%s\n' "$rail_group" | grep -Fq '.allowsHitTesting(false)'
+printf '%s\n' "$rail_group" | grep -Fq '.accessibilityHidden(true)'
 sed -n '/^    private func desktopShell(/,/^    private func compactShell(/p' "$workspace_file" \
   | grep -Fq 'railGroup(side: .left)'
 sed -n '/^    private func desktopShell(/,/^    private func compactShell(/p' "$workspace_file" \
@@ -144,6 +150,8 @@ printf '%s\n' "$rail_source" | grep -Fq \
   'onMove: style == .split ? nil : actions.onMoveSingleRail'
 printf '%s\n' "$rail_source" | grep -Fq \
   'collapseAtLeadingEdge: adaptiveExpanded && side == .right'
+printf '%s\n' "$rail_source" | grep -Fq \
+  'showsQuickActions: !adaptiveExpanded'
 grep -Fq 'let onCollapse: (() -> Void)?' <<<"$navigation_page"
 grep -Fq 'if let onMove {' <<<"$navigation_page"
 grep -Fq 'if let onCollapse {' <<<"$navigation_page"
@@ -152,5 +160,14 @@ grep -Fq 'height: onCollapse == nil ? 36 : 32' <<<"$navigation_page"
 grep -Fq 'if collapseAtLeadingEdge {' <<<"$workspace_page"
 grep -Fq 'if onBack != nil && !collapseAtLeadingEdge {' <<<"$workspace_page"
 test "$(grep -Fc 'Button(action: onCollapse)' <<<"$workspace_page")" -eq 2
+
+# Workspace creation actions remain part of the shared page for Single and Split,
+# while the explicit Adaptive-expanded presentation flag removes both rows and
+# their bottom padding when navigation already exposes the same actions.
+grep -Fq 'let showsQuickActions: Bool' <<<"$workspace_page"
+grep -Fq 'if showsQuickActions {' <<<"$workspace_page"
+test "$(grep -Fc 'quickActions' <<<"$workspace_page")" -eq 2
+grep -Fq 'title: "New chat"' <<<"$workspace_page"
+grep -Fq 'DashboardNewArtifactButton(' <<<"$workspace_page"
 
 printf '%s\n' 'Sidebar adaptive, single-page, and split-layout contracts passed.'

@@ -487,6 +487,13 @@ struct WorkspaceView: View {
                 .background {
                     railBackground(compact: compact)
                 }
+                .overlay {
+                    Rectangle()
+                        .fill(theme.palette.border)
+                        .frame(width: 0.5)
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                }
                 .clipShape(DashboardShapes.windowAlignedSurface)
         } else {
             content
@@ -1281,6 +1288,7 @@ private struct DashboardSidebarRail: View {
             onBack: style == .split ? nil : actions.onShowNavigation,
             onMove: style == .single ? actions.onMoveSingleRail : nil,
             collapseAtLeadingEdge: adaptiveExpanded && side == .right,
+            showsQuickActions: !adaptiveExpanded,
             onCreateChat: actions.onCreateConversation,
             onCreateNote: actions.onCreateNote,
             onSelectConversation: actions.onSelectConversation,
@@ -2506,6 +2514,7 @@ private struct DashboardSidebarWorkspacePage: View {
     let onBack: (() -> Void)?
     let onMove: (() -> Void)?
     let collapseAtLeadingEdge: Bool
+    let showsQuickActions: Bool
     let onCreateChat: () -> Void
     let onCreateNote: () -> Void
     let onSelectConversation: (String) -> Void
@@ -2539,7 +2548,9 @@ private struct DashboardSidebarWorkspacePage: View {
     var body: some View {
         VStack(spacing: 0) {
             railHeader
-            quickActions
+            if showsQuickActions {
+                quickActions
+            }
             VStack(spacing: 8) {
                 modePicker
                 HStack(spacing: 8) {
