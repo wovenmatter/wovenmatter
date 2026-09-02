@@ -1059,8 +1059,6 @@ final class ApplicationModel {
         "wovenmatter.openrouter-credential.configured"
     private static let credentialAccessDisclosureDefaultsKey =
         "wovenmatter.credential-access.disclosure-acknowledged"
-    private static let enabledUsageProvidersDefaultsKey =
-        "wovenmatter.usage.enabled-providers"
     private static let enabledLocalACPRuntimesDefaultsKey =
         "wovenmatter.local-acp.enabled-runtimes"
 
@@ -1079,11 +1077,9 @@ final class ApplicationModel {
         hasAcknowledgedCredentialAccessDisclosure = applicationDefaults.bool(
             forKey: Self.credentialAccessDisclosureDefaultsKey
         )
-        enabledUsageProviders = Set(
-            applicationDefaults.stringArray(
-                forKey: Self.enabledUsageProvidersDefaultsKey
-            )?.compactMap(ProviderKind.init(rawValue:)) ?? []
-        )
+        enabledUsageProviders = UsageProviderPreferences(
+            defaults: applicationDefaults
+        ).enabledProviders
         enabledLocalACPRuntimeKinds = Set(
             applicationDefaults.stringArray(
                 forKey: Self.enabledLocalACPRuntimesDefaultsKey
@@ -2299,9 +2295,8 @@ final class ApplicationModel {
     }
 
     private func persistEnabledUsageProviders() {
-        applicationDefaults.set(
-            enabledUsageProviders.map(\.rawValue).sorted(),
-            forKey: Self.enabledUsageProvidersDefaultsKey
+        UsageProviderPreferences(defaults: applicationDefaults).save(
+            enabledUsageProviders
         )
     }
 

@@ -1,7 +1,14 @@
 import Foundation
 import Security
 
-struct UsageCredentialStore: Sendable {
+protocol UsageCredentialStoring: Sendable {
+  func hasOpenRouterAPIKey() throws -> Bool
+  func loadOpenRouterAPIKey() throws -> String?
+  func saveOpenRouterAPIKey(_ key: String) throws
+  func deleteOpenRouterAPIKey() throws
+}
+
+struct UsageCredentialStore: UsageCredentialStoring, Sendable {
   private let service: String
   private let openRouterAccount = "openrouter.api-key"
 

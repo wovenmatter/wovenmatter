@@ -30,7 +30,7 @@ public actor LocalUsageService {
 
   private let homeDirectory: URL
   private let fileManager: FileManager
-  private let credentialStore: UsageCredentialStore
+  private let credentialStore: any UsageCredentialStoring
   private let databaseURL: URL
   private var usageStore: UsageStore?
   private var usageStoreFailure: String?
@@ -59,11 +59,23 @@ public actor LocalUsageService {
     )
   }
 
+  init(
+    homeDirectory: URL,
+    fileManager: FileManager,
+    credentialStore: any UsageCredentialStoring,
+    usageDatabaseURL: URL
+  ) {
+    self.homeDirectory = homeDirectory
+    self.fileManager = fileManager
+    self.credentialStore = credentialStore
+    databaseURL = usageDatabaseURL
+  }
+
   public func snapshot(
     range: UsageTimeRange,
     refreshLimits: Bool = false,
     refreshReason: UsageRefreshReason = .manual,
-    enabledProviders: Set<ProviderKind> = [],
+    enabledProviders: Set<ProviderKind> = Set(ProviderKind.supportedAccounts),
     allowCredentialAccess: Bool = true,
     now: Date = Date()
   ) async -> LocalUsageSnapshot {
@@ -84,6 +96,7 @@ public actor LocalUsageService {
       limits = cachedLimits.accounts
     } else if refreshLimits {
       let openRouterAPIKey = allowCredentialAccess
+        && enabledProviders.contains(.openRouter)
         ? (try? credentialStore.loadOpenRouterAPIKey())
         : nil
       limits = await ProviderLimitCollector.collect(
@@ -103,6 +116,7 @@ public actor LocalUsageService {
       analytics: analytics,
       limits: limits,
       hasOpenRouterCredential: allowCredentialAccess
+        && enabledProviders.contains(.openRouter)
         && (try? credentialStore.hasOpenRouterAPIKey()) == true
     )
   }
@@ -110,7 +124,7 @@ public actor LocalUsageService {
   public func analyticsSnapshot(
     range: UsageTimeRange,
     refreshReason: UsageRefreshReason = .manual,
-    enabledProviders: Set<ProviderKind> = [],
+    enabledProviders: Set<ProviderKind> = Set(ProviderKind.supportedAccounts),
     allowCredentialAccess: Bool = true,
     now: Date = Date()
   ) async -> UsageAnalyticsSnapshot {
@@ -143,7 +157,12 @@ public actor LocalUsageService {
       requestedCutoff: requestedImportCutoff,
       now: now
     ) {
-      if importLocalSources(store: store, cutoff: requestedImportCutoff, now: now) {
+      if importLocalSources(
+        store: store,
+        cutoff: requestedImportCutoff,
+        enabledProviders: enabledProviders,
+        now: now
+      ) {
         try? store.setMetadataDate(now, for: "usage.local-import-at")
         let previousCutoff = try? store.metadataDate("usage.local-indexed-after")
         try? store.setMetadataDate(
@@ -153,7 +172,8 @@ public actor LocalUsageService {
         try? store.prune(before: now.addingTimeInterval(-Self.retention))
       }
     }
-    if allowCredentialAccess,
+    if enabledProviders.contains(.openRouter),
+       allowCredentialAccess,
        shouldImportOpenRouter(store: store, reason: refreshReason, now: now) {
       await importOpenRouterActivity(store: store, now: now)
       try? store.setMetadataDate(now, for: "usage.openrouter-attempt-at")
@@ -167,7 +187,9 @@ public actor LocalUsageService {
       )
       try? store.setMetadataDate(now, for: "usage.cursor-attempt-at")
     }
-    let storedSamples = (try? store.samples(in: interval)) ?? []
+    let storedSamples = ((try? store.samples(in: interval)) ?? []).filter {
+      enabledProviders.contains($0.provider)
+    }
     let samples = Self.reconcileOpenRouter(
       deduplicated(storedSamples)
     ).sorted { lhs, rhs in
@@ -180,6 +202,7 @@ public actor LocalUsageService {
       sources: coverage(
         store: store,
         interval: interval,
+        enabledProviders: enabledProviders,
         allowCredentialAccess: allowCredentialAccess
       )
     )
@@ -315,10 +338,20 @@ public actor LocalUsageService {
     }
   }
 
-  private func importLocalSources(store: UsageStore, cutoff: Date, now: Date) -> Bool {
+  private func importLocalSources(
+    store: UsageStore,
+    cutoff: Date,
+    enabledProviders: Set<ProviderKind>,
+    now: Date
+  ) -> Bool {
     do {
       try store.performTransaction {
-        importLocalSourcesWithinTransaction(store: store, cutoff: cutoff, now: now)
+        importLocalSourcesWithinTransaction(
+          store: store,
+          cutoff: cutoff,
+          enabledProviders: enabledProviders,
+          now: now
+        )
       }
       importOutcomes.removeValue(forKey: "wovenmatter:index")
       return true
@@ -334,127 +367,153 @@ public actor LocalUsageService {
   private func importLocalSourcesWithinTransaction(
     store: UsageStore,
     cutoff retentionCutoff: Date,
+    enabledProviders: Set<ProviderKind>,
     now: Date
   ) {
+    let providerFilterSignature = enabledProviders
+      .map(\.rawValue)
+      .sorted()
+      .joined(separator: ",")
 
-    let codexRoot = homeDirectory.appending(path: ".codex/sessions", directoryHint: .isDirectory)
-    importOutcomes["codex:file:"] = importTranscriptFiles(
-      root: codexRoot,
-      prefix: "codex:file:",
-      sourceName: "Codex rollout",
-      provider: .codex,
-      harness: "Codex",
-      store: store,
-      cutoff: retentionCutoff,
-      now: now
-    ) { url in
-      var state = CodexUsageScanState()
-      var records: [ParsedUsageSample] = []
-      let usageMarker = Data("\"token_count\"".utf8)
-      let contextMarker = Data("\"turn_context\"".utf8)
-      let metadataMarker = Data("\"session_meta\"".utf8)
-      try self.forEachLineData(in: url) { data, lineNumber in
-        guard data.range(of: usageMarker) != nil
-                || data.range(of: contextMarker) != nil
-                || data.range(of: metadataMarker) != nil else { return }
-        if let sample = LocalUsageTranscriptParser.parseCodex(
-          line: String(decoding: data, as: UTF8.self),
-          lineNumber: lineNumber,
-          state: &state
-        ) {
-          records.append(sample)
+    if enabledProviders.contains(.codex) {
+      let codexRoot = homeDirectory.appending(path: ".codex/sessions", directoryHint: .isDirectory)
+      importOutcomes["codex:file:"] = importTranscriptFiles(
+        root: codexRoot,
+        prefix: "codex:file:",
+        sourceName: "Codex rollout",
+        provider: .codex,
+        harness: "Codex",
+        providerFilterSignature: providerFilterSignature,
+        store: store,
+        cutoff: retentionCutoff,
+        now: now
+      ) { url in
+        var state = CodexUsageScanState()
+        var records: [ParsedUsageSample] = []
+        let usageMarker = Data("\"token_count\"".utf8)
+        let contextMarker = Data("\"turn_context\"".utf8)
+        let metadataMarker = Data("\"session_meta\"".utf8)
+        try self.forEachLineData(in: url) { data, lineNumber in
+          guard data.range(of: usageMarker) != nil
+                  || data.range(of: contextMarker) != nil
+                  || data.range(of: metadataMarker) != nil else { return }
+          if let sample = LocalUsageTranscriptParser.parseCodex(
+            line: String(decoding: data, as: UTF8.self),
+            lineNumber: lineNumber,
+            state: &state
+          ) {
+            records.append(sample)
+          }
         }
+        return records.map(\.sample)
       }
-      return records.map(\.sample)
     }
 
-    let claudeRoot = homeDirectory.appending(path: ".claude/projects", directoryHint: .isDirectory)
-    importOutcomes["claude:file:"] = importTranscriptFiles(
-      root: claudeRoot,
-      prefix: "claude:file:",
-      sourceName: "Claude transcript",
-      provider: .claude,
-      harness: "Claude Code",
-      store: store,
-      cutoff: retentionCutoff,
-      now: now
-    ) { url in
-      var records: [UsageSample] = []
-      try self.forEachLineData(in: url) { data, lineNumber in
-        guard data.range(of: Data("\"usage\"".utf8)) != nil else { return }
-        if let parsed = LocalUsageTranscriptParser.parseClaude(
-          line: String(decoding: data, as: UTF8.self),
-          lineNumber: lineNumber
-        ) {
-          records.append(parsed.sample)
+    if enabledProviders.contains(.claude) {
+      let claudeRoot = homeDirectory.appending(path: ".claude/projects", directoryHint: .isDirectory)
+      importOutcomes["claude:file:"] = importTranscriptFiles(
+        root: claudeRoot,
+        prefix: "claude:file:",
+        sourceName: "Claude transcript",
+        provider: .claude,
+        harness: "Claude Code",
+        providerFilterSignature: providerFilterSignature,
+        store: store,
+        cutoff: retentionCutoff,
+        now: now
+      ) { url in
+        var records: [UsageSample] = []
+        try self.forEachLineData(in: url) { data, lineNumber in
+          guard data.range(of: Data("\"usage\"".utf8)) != nil else { return }
+          if let parsed = LocalUsageTranscriptParser.parseClaude(
+            line: String(decoding: data, as: UTF8.self),
+            lineNumber: lineNumber
+          ) {
+            records.append(parsed.sample)
+          }
         }
+        return records
       }
-      return records
     }
 
-    let piRoot = homeDirectory.appending(path: ".pi/agent/sessions", directoryHint: .isDirectory)
-    importOutcomes["pi:file:"] = importHarnessFiles(
-      root: piRoot,
-      prefix: "pi:file:",
-      harness: "Pi",
-      store: store,
-      cutoff: retentionCutoff,
-      now: now
-    )
+    if !enabledProviders.isEmpty {
+      let piRoot = homeDirectory.appending(path: ".pi/agent/sessions", directoryHint: .isDirectory)
+      importOutcomes["pi:file:"] = importHarnessFiles(
+        root: piRoot,
+        prefix: "pi:file:",
+        harness: "Pi",
+        enabledProviders: enabledProviders,
+        providerFilterSignature: providerFilterSignature,
+        store: store,
+        cutoff: retentionCutoff,
+        now: now
+      )
 
-    let openClawRoot = homeDirectory.appending(
-      path: ".openclaw/agents",
-      directoryHint: .isDirectory
-    )
-    importOutcomes["openclaw:file:"] = importHarnessFiles(
-      root: openClawRoot,
-      prefix: "openclaw:file:",
-      harness: "OpenClaw",
-      store: store,
-      cutoff: retentionCutoff,
-      now: now
-    ) { url in
-      url.path.contains("/sessions/")
-        && url.lastPathComponent.hasSuffix(".jsonl")
-        && !url.lastPathComponent.hasSuffix(".trajectory.jsonl")
+      let openClawRoot = homeDirectory.appending(
+        path: ".openclaw/agents",
+        directoryHint: .isDirectory
+      )
+      importOutcomes["openclaw:file:"] = importHarnessFiles(
+        root: openClawRoot,
+        prefix: "openclaw:file:",
+        harness: "OpenClaw",
+        enabledProviders: enabledProviders,
+        providerFilterSignature: providerFilterSignature,
+        store: store,
+        cutoff: retentionCutoff,
+        now: now
+      ) { url in
+        url.path.contains("/sessions/")
+          && url.lastPathComponent.hasSuffix(".jsonl")
+          && !url.lastPathComponent.hasSuffix(".trajectory.jsonl")
+      }
+
+      let hermesDatabase = homeDirectory.appending(path: ".hermes/state.db")
+      importOutcomes["hermes:database"] = importDatabase(
+        databaseURL: hermesDatabase,
+        sourceID: "hermes:database",
+        sourceName: "Hermes usage ledger",
+        provider: .unknown,
+        harness: "Hermes",
+        providerFilterSignature: providerFilterSignature,
+        store: store,
+        cutoff: retentionCutoff,
+        now: now
+      ) { indexedAfter in
+        try HermesUsageDatabase(databaseURL: hermesDatabase)
+          .samples(cutoff: indexedAfter, now: now)
+          .filter { enabledProviders.contains($0.provider) }
+      }
     }
 
-    let grokRoot = homeDirectory.appending(path: ".grok/sessions", directoryHint: .isDirectory)
-    importOutcomes["grok:file:"] = importGrok(
-      root: grokRoot,
-      store: store,
-      cutoff: retentionCutoff,
-      now: now
-    )
-
-    let openCodeDatabase = homeDirectory.appending(path: ".local/share/opencode/opencode.db")
-    importOutcomes["opencode:database"] = importDatabase(
-      databaseURL: openCodeDatabase,
-      sourceID: "opencode:database",
-      sourceName: "OpenCode history",
-      provider: .openCodeGo,
-      harness: "OpenCode",
-      store: store,
-      cutoff: retentionCutoff,
-      now: now
-    ) { indexedAfter in
-      try OpenCodeUsageDatabase(databaseURL: openCodeDatabase)
-        .samples(cutoff: indexedAfter, now: now)
+    if enabledProviders.contains(.grok) {
+      let grokRoot = homeDirectory.appending(path: ".grok/sessions", directoryHint: .isDirectory)
+      importOutcomes["grok:file:"] = importGrok(
+        root: grokRoot,
+        providerFilterSignature: providerFilterSignature,
+        store: store,
+        cutoff: retentionCutoff,
+        now: now
+      )
     }
 
-    let hermesDatabase = homeDirectory.appending(path: ".hermes/state.db")
-    importOutcomes["hermes:database"] = importDatabase(
-      databaseURL: hermesDatabase,
-      sourceID: "hermes:database",
-      sourceName: "Hermes usage ledger",
-      provider: .unknown,
-      harness: "Hermes",
-      store: store,
-      cutoff: retentionCutoff,
-      now: now
-    ) { indexedAfter in
-      try HermesUsageDatabase(databaseURL: hermesDatabase)
-        .samples(cutoff: indexedAfter, now: now)
+    if enabledProviders.contains(.openCodeGo) {
+      let openCodeDatabase = homeDirectory.appending(path: ".local/share/opencode/opencode.db")
+      importOutcomes["opencode:database"] = importDatabase(
+        databaseURL: openCodeDatabase,
+        sourceID: "opencode:database",
+        sourceName: "OpenCode history",
+        provider: .openCodeGo,
+        harness: "OpenCode",
+        providerFilterSignature: providerFilterSignature,
+        store: store,
+        cutoff: retentionCutoff,
+        now: now
+      ) { indexedAfter in
+        try OpenCodeUsageDatabase(databaseURL: openCodeDatabase)
+          .samples(cutoff: indexedAfter, now: now)
+          .filter { $0.provider == .openCodeGo }
+      }
     }
   }
 
@@ -464,6 +523,7 @@ public actor LocalUsageService {
     sourceName: String,
     provider: ProviderKind,
     harness: String,
+    providerFilterSignature: String,
     store: UsageStore,
     cutoff: Date,
     now: Date,
@@ -478,9 +538,9 @@ public actor LocalUsageService {
       do {
         let currentFingerprint: String
         if let fingerprint {
-          currentFingerprint = try fingerprint(file)
+          currentFingerprint = try fingerprint(file) + ":" + providerFilterSignature
         } else {
-          currentFingerprint = try fileFingerprint(file)
+          currentFingerprint = try fileFingerprint(file) + ":" + providerFilterSignature
         }
         let sourceID = prefix + file.path
         let stored = try store.source(sourceID)
@@ -514,6 +574,8 @@ public actor LocalUsageService {
     root: URL,
     prefix: String,
     harness: String,
+    enabledProviders: Set<ProviderKind>,
+    providerFilterSignature: String,
     store: UsageStore,
     cutoff: Date,
     now: Date,
@@ -525,6 +587,7 @@ public actor LocalUsageService {
       sourceName: "\(harness) session",
       provider: .unknown,
       harness: harness,
+      providerFilterSignature: providerFilterSignature,
       store: store,
       cutoff: cutoff,
       now: now,
@@ -550,12 +613,13 @@ public actor LocalUsageService {
           records.append(parsed.sample)
         }
       }
-      return records
+      return records.filter { enabledProviders.contains($0.provider) }
     }
   }
 
   private func importGrok(
     root: URL,
+    providerFilterSignature: String,
     store: UsageStore,
     cutoff: Date,
     now: Date
@@ -566,6 +630,7 @@ public actor LocalUsageService {
       sourceName: "Grok session",
       provider: .grok,
       harness: "Grok Build",
+      providerFilterSignature: providerFilterSignature,
       store: store,
       cutoff: cutoff,
       now: now,
@@ -599,6 +664,7 @@ public actor LocalUsageService {
     sourceName: String,
     provider: ProviderKind,
     harness: String,
+    providerFilterSignature: String,
     store: UsageStore,
     cutoff: Date,
     now: Date,
@@ -606,7 +672,7 @@ public actor LocalUsageService {
   ) -> ImportOutcome {
     guard fileManager.fileExists(atPath: databaseURL.path) else { return .empty }
     do {
-      let fingerprint = try databaseFingerprint(databaseURL)
+      let fingerprint = try databaseFingerprint(databaseURL) + ":" + providerFilterSignature
       let stored = try store.source(sourceID)
       let indexedAfter = min(stored?.indexedAfter ?? cutoff, cutoff)
       if stored?.fingerprint != fingerprint
@@ -666,10 +732,11 @@ public actor LocalUsageService {
   private func coverage(
     store: UsageStore,
     interval: DateInterval,
+    enabledProviders: Set<ProviderKind>,
     allowCredentialAccess: Bool
   ) -> [UsageSourceCoverage] {
     var sources: [UsageSourceCoverage] = []
-    sources.append(sourceCoverage(
+    if enabledProviders.contains(.codex) { sources.append(sourceCoverage(
       id: "codex",
       prefix: "codex:file:",
       sourceName: "Codex",
@@ -679,8 +746,8 @@ public actor LocalUsageService {
       store: store,
       interval: interval,
       detail: "Exact rollout token deltas with model and reasoning metadata; fork-copy and repeated-delta suppression is applied."
-    ))
-    sources.append(sourceCoverage(
+    )) }
+    if enabledProviders.contains(.claude) { sources.append(sourceCoverage(
       id: "claude",
       prefix: "claude:file:",
       sourceName: "Claude Code",
@@ -690,8 +757,8 @@ public actor LocalUsageService {
       store: store,
       interval: interval,
       detail: "Exact assistant-message token usage, globally deduplicated across resumed transcript copies."
-    ))
-    sources.append(sourceCoverage(
+    )) }
+    if enabledProviders.contains(.grok) { sources.append(sourceCoverage(
       id: "grok",
       prefix: "grok:file:",
       sourceName: "Grok CLI",
@@ -701,8 +768,8 @@ public actor LocalUsageService {
       store: store,
       interval: interval,
       detail: "Per-turn, per-model token usage from Grok session updates."
-    ))
-    sources.append(sourceCoverage(
+    )) }
+    if enabledProviders.contains(.openCodeGo) { sources.append(sourceCoverage(
       id: "opencode",
       prefix: "opencode:database",
       sourceName: "OpenCode",
@@ -712,8 +779,8 @@ public actor LocalUsageService {
       store: store,
       interval: interval,
       detail: "Exact step-finish usage from OpenCode SQLite, including OpenCode Go and other identifiable billing routes."
-    ))
-    sources.append(sourceCoverage(
+    )) }
+    if !enabledProviders.isEmpty { sources.append(sourceCoverage(
       id: "pi",
       prefix: "pi:file:",
       sourceName: "Pi",
@@ -759,36 +826,41 @@ public actor LocalUsageService {
         detail: hermes.detail
       )
     }
-    sources.append(hermes)
-    sources.append(cursorCoverage(store: store, interval: interval))
+    sources.append(hermes) }
+    if enabledProviders.contains(.cursor) {
+      sources.append(cursorCoverage(store: store, interval: interval))
+    }
 
-    let openRouterStats = try? store.statistics(
-      sourceIDPrefix: "openrouter:activity:",
-      in: interval
-    )
-    let hasCredential = allowCredentialAccess
-      && (try? credentialStore.hasOpenRouterAPIKey()) == true
-    let remoteStatus: UsageSourceStatus = if !hasCredential {
-      openRouterStats?.events ?? 0 > 0 ? .partial : .unavailable
-    } else {
-      openRouterStatus
+    if enabledProviders.contains(.openRouter) {
+      let openRouterStats = try? store.statistics(
+        sourceIDPrefix: "openrouter:activity:",
+        in: interval
+      )
+      let hasCredential = allowCredentialAccess
+        && (try? credentialStore.hasOpenRouterAPIKey()) == true
+      let remoteStatus: UsageSourceStatus = if !hasCredential {
+        openRouterStats?.events ?? 0 > 0 ? .partial : .unavailable
+      } else {
+        openRouterStatus
+      }
+      let remoteDetail = if !hasCredential, (openRouterStats?.events ?? 0) > 0 {
+        "Previously imported OpenRouter activity remains in the persistent index, but no credential is stored for refresh."
+      } else {
+        openRouterDetail
+      }
+      sources.append(UsageSourceCoverage(
+        id: "openrouter",
+        sourceName: "OpenRouter",
+        provider: .openRouter,
+        status: remoteStatus,
+        location: "OpenRouter Activity API",
+        discoveredSessions: openRouterStats?.sessions ?? 0,
+        attributedSamples: openRouterStats?.events ?? 0,
+        detail: remoteDetail
+      ))
     }
-    let remoteDetail = if !hasCredential, (openRouterStats?.events ?? 0) > 0 {
-      "Previously imported OpenRouter activity remains in the persistent index, but no credential is stored for refresh."
-    } else {
-      openRouterDetail
-    }
-    sources.append(UsageSourceCoverage(
-      id: "openrouter",
-      sourceName: "OpenRouter",
-      provider: .openRouter,
-      status: remoteStatus,
-      location: "OpenRouter Activity API",
-      discoveredSessions: openRouterStats?.sessions ?? 0,
-      attributedSamples: openRouterStats?.events ?? 0,
-      detail: remoteDetail
-    ))
-    if (importOutcomes["wovenmatter:index"]?.failures ?? 0) > 0 {
+    if !enabledProviders.isEmpty,
+       (importOutcomes["wovenmatter:index"]?.failures ?? 0) > 0 {
       sources.append(UsageSourceCoverage(
         id: "wovenmatter:index",
         sourceName: "Woven Matter usage index",
