@@ -168,6 +168,12 @@ struct WorkspaceView: View {
             + model.buzzWorkspaceAgents
     }
 
+    private var sidebarAgents: [WorkspaceAgent] {
+        model.visibleOrderedLocalCLIAgents
+            + model.remoteWorkspaceAgents
+            + model.buzzWorkspaceAgents
+    }
+
     private var selectedDraft: Binding<String> {
         let conversationID = selectedConversationID ?? ""
         return Binding(
@@ -465,6 +471,7 @@ struct WorkspaceView: View {
             page: sidebarNavigation.page(for: side, style: sidebarStyle),
             style: sidebarStyle,
             agents: allAgents,
+            navigationAgents: sidebarAgents,
             remoteWorkspaces: model.remoteWorkspaces,
             buzzWorkspaceSnapshot: model.buzzWorkspaceSnapshot,
             folders: model.workspaceOverview?.folders ?? [],
@@ -1146,6 +1153,7 @@ private struct DashboardSidebarRail: View {
     let page: DashboardSidebarPage
     let style: DashboardSidebarStyle
     let agents: [WorkspaceAgent]
+    let navigationAgents: [WorkspaceAgent]
     let remoteWorkspaces: RemoteWorkspacesModel
     let buzzWorkspaceSnapshot: BuzzWorkspaceSnapshot
     let folders: [WorkspaceFolderRecord]
@@ -1189,7 +1197,7 @@ private struct DashboardSidebarRail: View {
     private var navigationPage: some View {
         DashboardSidebarNavigationPage(
             side: side,
-            agents: agents,
+            agents: navigationAgents,
             remoteWorkspaces: remoteWorkspaces,
             buzzWorkspaceSnapshot: buzzWorkspaceSnapshot,
             folders: folders,
