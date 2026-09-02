@@ -32,16 +32,54 @@ public enum UsageKeychainInteraction: String, Equatable, Sendable {
   var allowsInteraction: Bool { self == .oneShotExplicit }
 }
 
+public struct CodexUsageWorkspace: Equatable, Identifiable, Sendable {
+  public let id: String
+  public let name: String
+  public let email: String
+
+  public init(id: String, name: String, email: String) {
+    self.id = id
+    self.name = name
+    self.email = email
+  }
+
+  public var selectionLabel: String { "\(name) — \(email)" }
+}
+
+public struct CodexUsageWorkspacePreferences {
+  private static let selectedWorkspaceKey =
+    "wovenmatter.usage.codex.selected-workspace"
+  private let defaults: UserDefaults
+
+  public init(defaults: UserDefaults = .standard) {
+    self.defaults = defaults
+  }
+
+  public var selectedWorkspaceID: String? {
+    defaults.string(forKey: Self.selectedWorkspaceKey)
+  }
+
+  public func save(selectedWorkspaceID: String) {
+    defaults.set(selectedWorkspaceID, forKey: Self.selectedWorkspaceKey)
+  }
+}
+
 public struct LocalUsageLimitsSnapshot: Equatable, Sendable {
   public let accounts: [UsageLimitAccount]
   public let hasOpenRouterCredential: Bool
+  public let codexWorkspaces: [CodexUsageWorkspace]
+  public let selectedCodexWorkspaceID: String?
 
   public init(
     accounts: [UsageLimitAccount],
-    hasOpenRouterCredential: Bool
+    hasOpenRouterCredential: Bool,
+    codexWorkspaces: [CodexUsageWorkspace] = [],
+    selectedCodexWorkspaceID: String? = nil
   ) {
     self.accounts = accounts
     self.hasOpenRouterCredential = hasOpenRouterCredential
+    self.codexWorkspaces = codexWorkspaces
+    self.selectedCodexWorkspaceID = selectedCodexWorkspaceID
   }
 }
 
@@ -68,6 +106,7 @@ public actor LocalUsageService {
   private var cachedLimits: (
     date: Date,
     providers: Set<ProviderKind>,
+    codexWorkspaceID: String?,
     accounts: [UsageLimitAccount]
   )?
   private var importOutcomes: [String: ImportOutcome] = [:]
@@ -141,17 +180,34 @@ public actor LocalUsageService {
     )
   }
 
+  public func codexWorkspaceHomeDirectory(workspaceID: String) -> URL? {
+    ProviderLimitCollector.codexManagedWorkspaceHomeDirectory(
+      homeDirectory: homeDirectory,
+      workspaceID: workspaceID
+    )
+  }
+
   public func limitsSnapshot(
     refresh: Bool,
     refreshReason: UsageRefreshReason = .manual,
     enabledProviders: Set<ProviderKind> = [],
     allowCredentialAccess: Bool = true,
     keychainInteraction: UsageKeychainInteraction = .noninteractive,
+    selectedCodexWorkspaceID: String? = nil,
     now: Date = Date()
   ) async -> LocalUsageLimitsSnapshot {
+    let codexSources = enabledProviders.contains(.codex)
+      ? ProviderLimitCollector.codexWorkspaceSources(homeDirectory: homeDirectory)
+      : []
+    let selectedCodexSource = ProviderLimitCollector.resolveCodexWorkspaceSource(
+      codexSources,
+      selectedID: selectedCodexWorkspaceID
+    )
+    let resolvedCodexWorkspaceID = selectedCodexSource?.workspace.id
     let accounts: [UsageLimitAccount]
     let persistent = (try? openUsageStore()?.usageLimitAccounts(
-      providers: enabledProviders
+      providers: enabledProviders,
+      accountScopes: resolvedCodexWorkspaceID.map { [.codex: $0] } ?? [:]
     )) ?? []
     let persistentByProvider = Dictionary(
       uniqueKeysWithValues: persistent.map { ($0.provider, $0) }
@@ -160,6 +216,7 @@ public actor LocalUsageService {
       && refreshReason != .credentialChanged
     if let cachedLimits,
        cachedLimits.providers == enabledProviders,
+       cachedLimits.codexWorkspaceID == resolvedCodexWorkspaceID,
        (!refresh || (mayReuseFreshLimits
          && now.timeIntervalSince(cachedLimits.date) < 60)) {
       accounts = cachedLimits.accounts
@@ -173,6 +230,8 @@ public actor LocalUsageService {
         openRouterAPIKey: openRouterAPIKey,
         enabledProviders: enabledProviders,
         keychainInteraction: keychainInteraction,
+        codexWorkspaceSource: selectedCodexSource,
+        codexWorkspaceCount: codexSources.count,
         now: now
       )
       accounts = refreshed.map { account in
@@ -182,7 +241,7 @@ public actor LocalUsageService {
         return prior.retainingLastGood(after: account)
       }
       try? openUsageStore()?.saveUsageLimitAccounts(accounts, storedAt: now)
-      cachedLimits = (now, enabledProviders, accounts)
+      cachedLimits = (now, enabledProviders, resolvedCodexWorkspaceID, accounts)
     } else {
       let placeholders = ProviderLimitCollector.placeholderAccounts(
         enabledProviders: enabledProviders,
@@ -197,7 +256,9 @@ public actor LocalUsageService {
       accounts: accounts,
       hasOpenRouterCredential: allowCredentialAccess
         && enabledProviders.contains(.openRouter)
-        && (try? credentialStore.hasOpenRouterAPIKey()) == true
+        && (try? credentialStore.hasOpenRouterAPIKey()) == true,
+      codexWorkspaces: codexSources.map(\.workspace),
+      selectedCodexWorkspaceID: resolvedCodexWorkspaceID
     )
   }
 

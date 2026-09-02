@@ -6,6 +6,12 @@ import SQLite3
 import WovenMatterClient
 import WovenMatterCore
 
+struct CodexWorkspaceSource: Sendable {
+  let workspace: CodexUsageWorkspace
+  let credentialsURL: URL
+  let isLive: Bool
+}
+
 enum ProviderLimitCollector {
   static func placeholderAccounts(
     enabledProviders: Set<ProviderKind> = Set(ProviderKind.supportedAccounts),
@@ -29,6 +35,8 @@ enum ProviderLimitCollector {
     openRouterAPIKey: String?,
     enabledProviders: Set<ProviderKind>,
     keychainInteraction: UsageKeychainInteraction = .noninteractive,
+    codexWorkspaceSource: CodexWorkspaceSource? = nil,
+    codexWorkspaceCount: Int = 0,
     now: Date
   ) async -> [UsageLimitAccount] {
     let enabled = await withTaskGroup(
@@ -40,7 +48,12 @@ enum ProviderLimitCollector {
         group.addTask {
           switch provider {
           case .codex:
-            await codex(homeDirectory: homeDirectory, now: now)
+            await codex(
+              homeDirectory: homeDirectory,
+              workspaceSource: codexWorkspaceSource,
+              workspaceCount: codexWorkspaceCount,
+              now: now
+            )
           case .claude:
             await claude(
               homeDirectory: homeDirectory,
@@ -70,11 +83,169 @@ enum ProviderLimitCollector {
     return ProviderKind.supportedAccounts.compactMap { accountsByProvider[$0] }
   }
 
-  private static func codex(homeDirectory: URL, now: Date) async -> UsageLimitAccount {
-    if let direct = try? await codexOAuth(homeDirectory: homeDirectory, now: now) {
+  static func codexWorkspaceSources(homeDirectory: URL) -> [CodexWorkspaceSource] {
+    var sources = managedCodexWorkspaceSources(homeDirectory: homeDirectory)
+    let applicationSupport = homeDirectory.appending(
+      path: "Library/Application Support/CodexBar",
+      directoryHint: .isDirectory
+    )
+    let labelsURL = applicationSupport.appending(path: "codex-openai-workspaces.json")
+    let labelObject = (try? localJSONObject(at: labelsURL, maximumBytes: 1_048_576)) ?? [:]
+    let labels = dictionary(labelObject["labelsByWorkspaceAccountID"]) ?? [:]
+    let configured = ProcessInfo.processInfo.environment["CODEX_HOME"].map {
+      URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath, isDirectory: true)
+    }
+    let liveCredentialsURL = (configured ?? homeDirectory.appending(path: ".codex"))
+      .appending(path: "auth.json")
+    if let liveRoot = try? localJSONObject(at: liveCredentialsURL, maximumBytes: 1_048_576),
+       let tokens = dictionary(liveRoot["tokens"]),
+       let workspaceID = string(tokens["account_id"] ?? tokens["accountId"]
+         ?? liveRoot["account_id"] ?? liveRoot["accountId"]) {
+      if let index = sources.firstIndex(where: { $0.workspace.id == workspaceID }) {
+        let existing = sources[index]
+        sources[index] = CodexWorkspaceSource(
+          workspace: existing.workspace,
+          credentialsURL: liveCredentialsURL,
+          isLive: true
+        )
+      } else {
+        let email = codexIdentityEmail(root: liveRoot) ?? "OpenAI account"
+        let name = string(labels[workspaceID]) ?? "Current workspace"
+        sources.append(CodexWorkspaceSource(
+          workspace: CodexUsageWorkspace(id: workspaceID, name: name, email: email),
+          credentialsURL: liveCredentialsURL,
+          isLive: true
+        ))
+      }
+    }
+
+    var seen = Set<String>()
+    return sources
+      .filter { seen.insert($0.workspace.id).inserted }
+      .sorted {
+        if $0.isLive != $1.isLive { return $0.isLive }
+        return $0.workspace.selectionLabel.localizedCaseInsensitiveCompare(
+          $1.workspace.selectionLabel
+        ) == .orderedAscending
+      }
+  }
+
+  static func codexManagedWorkspaceHomeDirectory(
+    homeDirectory: URL,
+    workspaceID: String
+  ) -> URL? {
+    managedCodexWorkspaceSources(homeDirectory: homeDirectory)
+      .first { $0.workspace.id == workspaceID }?
+      .credentialsURL.deletingLastPathComponent()
+  }
+
+  private static func managedCodexWorkspaceSources(
+    homeDirectory: URL
+  ) -> [CodexWorkspaceSource] {
+    let applicationSupport = homeDirectory.appending(
+      path: "Library/Application Support/CodexBar",
+      directoryHint: .isDirectory
+    )
+    let managedHomes = applicationSupport.appending(
+      path: "managed-codex-homes",
+      directoryHint: .isDirectory
+    ).standardizedFileURL
+    let labelsURL = applicationSupport.appending(path: "codex-openai-workspaces.json")
+    let labelObject = (try? localJSONObject(at: labelsURL, maximumBytes: 1_048_576)) ?? [:]
+    let labels = dictionary(labelObject["labelsByWorkspaceAccountID"]) ?? [:]
+    let storeURL = applicationSupport.appending(path: "managed-codex-accounts.json")
+    let store = try? localJSONObject(at: storeURL, maximumBytes: 2_097_152)
+    let rawAccounts = store?["accounts"] as? [[String: Any]] ?? []
+    return rawAccounts.compactMap { raw in
+      guard let homePath = string(raw["managedHomePath"]),
+            let email = string(raw["email"]),
+            let workspaceID = string(raw["workspaceAccountID"] ?? raw["providerAccountID"]),
+            !workspaceID.isEmpty
+      else { return nil }
+      let homeURL = URL(fileURLWithPath: homePath, isDirectory: true).standardizedFileURL
+      guard homeURL.path.hasPrefix(managedHomes.path + "/") else { return nil }
+      let credentialsURL = homeURL.appending(path: "auth.json")
+      guard FileManager.default.fileExists(atPath: credentialsURL.path) else { return nil }
+      let name = string(raw["workspaceLabel"])
+        ?? string(labels[workspaceID])
+        ?? "OpenAI workspace"
+      return CodexWorkspaceSource(
+        workspace: CodexUsageWorkspace(id: workspaceID, name: name, email: email),
+        credentialsURL: credentialsURL,
+        isLive: false
+      )
+    }
+  }
+
+  static func resolveCodexWorkspaceSource(
+    _ sources: [CodexWorkspaceSource],
+    selectedID: String?
+  ) -> CodexWorkspaceSource? {
+    if let selectedID,
+       let selected = sources.first(where: { $0.workspace.id == selectedID }) {
+      return selected
+    }
+    return sources.first(where: \.isLive) ?? sources.first
+  }
+
+  static func codexEnvironmentOverrides(
+    for source: CodexWorkspaceSource?
+  ) -> [String: String] {
+    source.map {
+      ["CODEX_HOME": $0.credentialsURL.deletingLastPathComponent().path]
+    } ?? [:]
+  }
+
+  private static func codexIdentityEmail(root: [String: Any]) -> String? {
+    guard let tokens = dictionary(root["tokens"]),
+          let idToken = string(tokens["id_token"] ?? tokens["idToken"]),
+          let payload = decodeJWTPayload(idToken)
+    else { return nil }
+    return string(payload["email"])
+  }
+
+  private static func decodeJWTPayload(_ token: String) -> [String: Any]? {
+    let components = token.split(separator: ".", omittingEmptySubsequences: false)
+    guard components.count > 1 else { return nil }
+    var value = String(components[1])
+      .replacingOccurrences(of: "-", with: "+")
+      .replacingOccurrences(of: "_", with: "/")
+    value += String(repeating: "=", count: (4 - value.count % 4) % 4)
+    guard let data = Data(base64Encoded: value),
+          data.count <= 1_048_576,
+          let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+    else { return nil }
+    return object
+  }
+
+  private static func codex(
+    homeDirectory: URL,
+    workspaceSource: CodexWorkspaceSource?,
+    workspaceCount: Int,
+    now: Date
+  ) async -> UsageLimitAccount {
+    if let workspaceSource {
+      if let direct = try? await codexOAuth(
+        credentialsURL: workspaceSource.credentialsURL,
+        workspace: workspaceSource.workspace,
+        showsWorkspaceIdentity: workspaceCount > 1,
+        now: now
+      ) {
+        return direct
+      }
+    } else if let direct = try? await codexOAuth(homeDirectory: homeDirectory, now: now) {
       return direct
     }
     guard let executable = LocalACPRuntimeResolver.resolveExecutable(named: "codex") else {
+      if let workspaceSource {
+        return unavailable(
+          .codex,
+          accountScopeID: workspaceSource.workspace.id,
+          accountLabel: workspaceSource.workspace.selectionLabel,
+          detail: "Codex CLI is not installed, so this saved OpenAI workspace cannot refresh.",
+          now: now
+        )
+      }
       return unavailable(.codex, detail: "Codex CLI is not installed.", now: now)
     }
     do {
@@ -89,6 +260,7 @@ enum ProviderLimitCollector {
           ["jsonrpc": "2.0", "id": 2, "method": "account/rateLimits/read", "params": [:]],
           ["jsonrpc": "2.0", "id": 3, "method": "account/read", "params": [:]],
         ],
+        environmentOverrides: codexEnvironmentOverrides(for: workspaceSource),
         timeout: .seconds(8)
       )
       let limits = try responseResult(responses, id: 2)
@@ -118,7 +290,7 @@ enum ProviderLimitCollector {
         }
       }
       let signedIn = identity != nil || plan != nil
-      return UsageLimitAccount(
+      let result = UsageLimitAccount(
         provider: .codex,
         accountLabel: email ?? plan ?? "Codex account",
         status: windows.isEmpty ? (signedIn ? .signedIn : .unavailable) : .available,
@@ -130,12 +302,30 @@ enum ProviderLimitCollector {
         observedAt: now,
         dashboardURL: ProviderDashboardURL.codex
       )
+      if let workspaceSource {
+        return scopedCodexAccount(
+          result,
+          workspace: workspaceSource.workspace,
+          showsWorkspaceIdentity: workspaceCount > 1
+        )
+      }
+      return result
     } catch {
-      return codexLocalSignIn(now: now) ?? failed(
+      if let workspaceSource {
+        return failed(
+          .codex,
+          accountScopeID: workspaceSource.workspace.id,
+          accountLabel: workspaceSource.workspace.selectionLabel,
+          detail: "This saved OpenAI workspace could not refresh from its isolated Codex home.",
+          now: now
+        )
+      }
+      let result = codexLocalSignIn(now: now) ?? failed(
         .codex,
         detail: "Codex account limits could not be read from the local CLI.",
         now: now
       )
+      return result
     }
   }
 
@@ -274,11 +464,22 @@ enum ProviderLimitCollector {
     let configured = ProcessInfo.processInfo.environment["CODEX_HOME"].map {
       URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath)
     }
-    let root = try localJSONObject(
-      at: (configured ?? homeDirectory.appending(path: ".codex"))
+    return try await codexOAuth(
+      credentialsURL: (configured ?? homeDirectory.appending(path: ".codex"))
         .appending(path: "auth.json"),
-      maximumBytes: 1_048_576
+      workspace: nil,
+      showsWorkspaceIdentity: false,
+      now: now
     )
+  }
+
+  private static func codexOAuth(
+    credentialsURL: URL,
+    workspace: CodexUsageWorkspace?,
+    showsWorkspaceIdentity: Bool,
+    now: Date
+  ) async throws -> UsageLimitAccount {
+    let root = try localJSONObject(at: credentialsURL, maximumBytes: 1_048_576)
     let tokens = dictionary(root["tokens"])
     guard let token = string(tokens?["access_token"] ?? tokens?["accessToken"]) else {
       throw ProviderLimitCollectorError.invalidResponse
@@ -303,7 +504,14 @@ enum ProviderLimitCollector {
         "originator": "Codex Desktop",
       ], uniquingKeysWith: { current, _ in current })
     )
-    let account = mapCodexUsage(try await usageObject, now: now)
+    var account = mapCodexUsage(try await usageObject, now: now)
+    if let workspace {
+      account = scopedCodexAccount(
+        account,
+        workspace: workspace,
+        showsWorkspaceIdentity: showsWorkspaceIdentity
+      )
+    }
     guard let reset = await resetObject else { return account }
     var details = account.details
     if let credits = number(reset["credits"] ?? reset["balance"]
@@ -312,6 +520,7 @@ enum ProviderLimitCollector {
     }
     return UsageLimitAccount(
       provider: account.provider,
+      accountScopeID: account.accountScopeID,
       accountLabel: account.accountLabel,
       status: account.status,
       quotaWindows: account.quotaWindows,
@@ -322,6 +531,34 @@ enum ProviderLimitCollector {
       source: account.source,
       detail: account.detail,
       observedAt: account.observedAt,
+      dashboardURL: account.dashboardURL
+    )
+  }
+
+  static func scopedCodexAccount(
+    _ account: UsageLimitAccount,
+    workspace: CodexUsageWorkspace,
+    showsWorkspaceIdentity: Bool
+  ) -> UsageLimitAccount {
+    var details = account.details
+    if showsWorkspaceIdentity {
+      details.insert(.init(label: "Workspace", value: workspace.name), at: 0)
+    }
+    return UsageLimitAccount(
+      provider: account.provider,
+      accountScopeID: workspace.id,
+      accountLabel: showsWorkspaceIdentity ? workspace.selectionLabel : account.accountLabel,
+      status: account.status,
+      quotaWindows: account.quotaWindows,
+      balance: account.balance,
+      providerBudget: account.providerBudget,
+      details: details,
+      history: account.history,
+      source: account.source,
+      detail: account.detail,
+      observedAt: account.observedAt,
+      isStale: account.isStale,
+      refreshError: account.refreshError,
       dashboardURL: account.dashboardURL
     )
   }
@@ -921,12 +1158,15 @@ enum ProviderLimitCollector {
 
   private static func unavailable(
     _ provider: ProviderKind,
+    accountScopeID: String? = nil,
+    accountLabel: String? = nil,
     detail: String,
     now: Date
   ) -> UsageLimitAccount {
     UsageLimitAccount(
       provider: provider,
-      accountLabel: provider.displayName,
+      accountScopeID: accountScopeID,
+      accountLabel: accountLabel ?? provider.displayName,
       status: .unavailable,
       source: "Local CLI",
       detail: detail,
@@ -936,12 +1176,15 @@ enum ProviderLimitCollector {
 
   private static func failed(
     _ provider: ProviderKind,
+    accountScopeID: String? = nil,
+    accountLabel: String? = nil,
     detail: String,
     now: Date
   ) -> UsageLimitAccount {
     UsageLimitAccount(
       provider: provider,
-      accountLabel: provider.displayName,
+      accountScopeID: accountScopeID,
+      accountLabel: accountLabel ?? provider.displayName,
       status: .failed,
       source: "Local account probe",
       detail: detail,
@@ -1001,6 +1244,7 @@ private enum JSONRPCUsageCommand {
     executable: URL,
     arguments: [String],
     messages: [[String: Any]],
+    environmentOverrides: [String: String] = [:],
     timeout: Duration
   ) async throws -> [[String: Any]] {
     let frames = try messages.map { message -> JSONRPCUsageFrame in
@@ -1022,6 +1266,7 @@ private enum JSONRPCUsageCommand {
             executable: executable,
             arguments: arguments,
             frames: frames,
+            environmentOverrides: environmentOverrides,
             maximumBytes: 1_048_576
           ))
         }
@@ -1066,6 +1311,7 @@ private final class SequentialJSONRPCProcess: @unchecked Sendable {
     executable: URL,
     arguments: [String],
     frames: [JSONRPCUsageFrame],
+    environmentOverrides: [String: String],
     maximumBytes: Int
   ) throws -> Data {
     let process = command.process
@@ -1074,7 +1320,10 @@ private final class SequentialJSONRPCProcess: @unchecked Sendable {
     _ = fcntl(inputPipe.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1)
     process.executableURL = executable
     process.arguments = arguments
-    process.environment = usageCommandEnvironment()
+    process.environment = usageCommandEnvironment().merging(
+      environmentOverrides,
+      uniquingKeysWith: { _, override in override }
+    )
     process.standardInput = inputPipe
     process.standardOutput = outputPipe
     process.standardError = FileHandle.nullDevice

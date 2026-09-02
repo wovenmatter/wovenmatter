@@ -1,6 +1,7 @@
 import Charts
 import SwiftUI
 import WovenMatterCore
+import WovenMatterDashboardStore
 
 private enum DashboardUsagePage: String, CaseIterable, Identifiable {
     case limits
@@ -832,6 +833,11 @@ struct DashboardUsageView: View {
                     )
                 }
 
+                if account.provider == .codex,
+                   model.codexUsageWorkspaces.count > 1 {
+                    codexWorkspaceSelector
+                }
+
                 if account.quotaWindows.isEmpty,
                    account.balance == nil,
                    account.providerBudget == nil {
@@ -937,6 +943,23 @@ struct DashboardUsageView: View {
                         }
                         .buttonStyle(.plain)
                         .font(.system(size: 10.5, weight: .medium))
+                    } else if account.provider == .codex,
+                              model.codexUsageWorkspaces.count > 1,
+                              account.status != .available,
+                              account.status != .signedIn {
+                        Button(
+                            model.signingInUsageProviders.contains(.codex)
+                                ? "Reconnecting…"
+                                : "Reconnect"
+                        ) {
+                            model.reconnectSelectedCodexUsageWorkspace()
+                        }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 10.5, weight: .medium))
+                        .disabled(
+                            model.signingInUsageProviders.contains(.codex)
+                                || model.isRefreshingLocalUsage
+                        )
                     } else if account.provider != .openRouter,
                               account.status != .available,
                               account.status != .signedIn {
@@ -983,6 +1006,49 @@ struct DashboardUsageView: View {
             maxHeight: pinsFooter ? .infinity : nil,
             alignment: .topLeading
         )
+    }
+
+    private var codexWorkspaceSelector: some View {
+        HStack(spacing: 8) {
+            Text("Workspace")
+                .font(.system(size: 10.5))
+                .foregroundStyle(DashboardPalette.mutedForeground)
+            Spacer()
+            Menu {
+                ForEach(model.codexUsageWorkspaces) { workspace in
+                    Button {
+                        Task {
+                            await model.selectCodexUsageWorkspace(
+                                workspace.id,
+                                range: range
+                            )
+                        }
+                    } label: {
+                        if workspace.id == model.selectedCodexUsageWorkspaceID {
+                            Label(workspace.selectionLabel, systemImage: "checkmark")
+                        } else {
+                            Text(workspace.selectionLabel)
+                        }
+                    }
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Text(selectedCodexWorkspace?.name ?? "Choose workspace")
+                        .lineLimit(1)
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.system(size: 8.5, weight: .semibold))
+                }
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .disabled(model.isRefreshingUsageLimits)
+        }
+    }
+
+    private var selectedCodexWorkspace: CodexUsageWorkspace? {
+        model.codexUsageWorkspaces.first {
+            $0.id == model.selectedCodexUsageWorkspaceID
+        }
     }
 
     private var openRouterCredentialControls: some View {

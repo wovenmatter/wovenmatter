@@ -26,6 +26,10 @@ printf '%s\n' "$limit_card_body" | grep -Fq 'account.provider == .openRouter'
 printf '%s\n' "$limit_card_body" | grep -Fq 'openRouterCredentialControls'
 printf '%s\n' "$limit_card_body" | grep -Fq 'if pinsFooter { Spacer(minLength: 12) }'
 printf '%s\n' "$limit_card_body" | grep -Fq 'maxHeight: pinsFooter ? .infinity : nil'
+printf '%s\n' "$limit_card_body" | grep -Fq 'model.codexUsageWorkspaces.count > 1'
+grep -Fq 'await model.selectCodexUsageWorkspace(' "$source_file"
+grep -Fq 'model.reconnectSelectedCodexUsageWorkspace()' "$source_file"
+grep -Fq 'environment["CODEX_HOME"] = homeDirectory.path' "$model_file"
 
 explicit_claude_count="$(grep -Fc 'explicitCredentialAccess: provider == .claude' "$model_file")"
 test "$explicit_claude_count" -eq 3
