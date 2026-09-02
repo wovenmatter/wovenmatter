@@ -82,13 +82,9 @@ struct DashboardUsageView: View {
             get: { page },
             set: { value in
                 page = value
-                if value == .limits {
+                if value == .analytics {
                     Task {
-                        await model.refreshLocalUsage(
-                            range: range,
-                            refreshLimits: true,
-                            reason: .viewAppeared
-                        )
+                        await model.usageAnalyticsSelected(range: range)
                     }
                 }
             }
@@ -143,11 +139,7 @@ struct DashboardUsageView: View {
             }
         }
         .task {
-            await model.refreshLocalUsage(
-                range: range,
-                refreshLimits: page == .limits,
-                reason: .viewAppeared
-            )
+            await model.usageDestinationAppeared(range: range)
         }
         .sheet(item: $pendingCredentialAction) { action in
             CredentialAccessDisclosureView(

@@ -14,6 +14,19 @@ public enum UsageRefreshReason: Sendable {
   case credentialChanged
 }
 
+public struct LocalUsageLimitsSnapshot: Equatable, Sendable {
+  public let accounts: [UsageLimitAccount]
+  public let hasOpenRouterCredential: Bool
+
+  public init(
+    accounts: [UsageLimitAccount],
+    hasOpenRouterCredential: Bool
+  ) {
+    self.accounts = accounts
+    self.hasOpenRouterCredential = hasOpenRouterCredential
+  }
+}
+
 public actor LocalUsageService {
   private struct ImportOutcome: Sendable {
     let discoveredFiles: Int
@@ -86,35 +99,65 @@ public actor LocalUsageService {
       allowCredentialAccess: allowCredentialAccess,
       now: now
     )
-    let limits: [UsageLimitAccount]
+    let limits = await limitsSnapshot(
+      refresh: refreshLimits,
+      refreshReason: refreshReason,
+      enabledProviders: enabledProviders,
+      allowCredentialAccess: allowCredentialAccess,
+      now: now
+    )
+    return LocalUsageSnapshot(
+      analytics: analytics,
+      limits: limits.accounts,
+      hasOpenRouterCredential: limits.hasOpenRouterCredential
+    )
+  }
+
+  public nonisolated static func placeholderLimits(
+    enabledProviders: Set<ProviderKind> = [],
+    now: Date = Date()
+  ) -> [UsageLimitAccount] {
+    ProviderLimitCollector.placeholderAccounts(
+      enabledProviders: enabledProviders,
+      now: now
+    )
+  }
+
+  public func limitsSnapshot(
+    refresh: Bool,
+    refreshReason: UsageRefreshReason = .manual,
+    enabledProviders: Set<ProviderKind> = [],
+    allowCredentialAccess: Bool = true,
+    now: Date = Date()
+  ) async -> LocalUsageLimitsSnapshot {
+    let accounts: [UsageLimitAccount]
     let mayReuseFreshLimits = refreshReason != .manual
       && refreshReason != .credentialChanged
     if let cachedLimits,
        cachedLimits.providers == enabledProviders,
-       (!refreshLimits || (mayReuseFreshLimits
+       (!refresh || (mayReuseFreshLimits
          && now.timeIntervalSince(cachedLimits.date) < 60)) {
-      limits = cachedLimits.accounts
-    } else if refreshLimits {
+      accounts = cachedLimits.accounts
+    } else if refresh {
       let openRouterAPIKey = allowCredentialAccess
         && enabledProviders.contains(.openRouter)
         ? (try? credentialStore.loadOpenRouterAPIKey())
         : nil
-      limits = await ProviderLimitCollector.collect(
+      accounts = await ProviderLimitCollector.collect(
         homeDirectory: homeDirectory,
         openRouterAPIKey: openRouterAPIKey,
         enabledProviders: enabledProviders,
         now: now
       )
-      cachedLimits = (now, enabledProviders, limits)
+      cachedLimits = (now, enabledProviders, accounts)
     } else {
-      limits = ProviderLimitCollector.placeholderAccounts(
+      accounts = ProviderLimitCollector.placeholderAccounts(
         enabledProviders: enabledProviders,
         now: now
       )
     }
-    return LocalUsageSnapshot(
-      analytics: analytics,
-      limits: limits,
+    return LocalUsageLimitsSnapshot(
+      accounts: accounts,
       hasOpenRouterCredential: allowCredentialAccess
         && enabledProviders.contains(.openRouter)
         && (try? credentialStore.hasOpenRouterAPIKey()) == true
