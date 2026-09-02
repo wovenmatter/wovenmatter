@@ -139,7 +139,7 @@ struct PublicSourceContractsTests {
   @Test("provider response fixtures preserve distinct quota semantics")
   func providerResponseFixtures() throws {
     let now = Date(timeIntervalSince1970: 1_800_000_000)
-    let codex = ProviderLimitCollector.mapCodexUsage([
+    let fiveHourCodex = ProviderLimitCollector.mapCodexUsage([
       "plan_type": "plus",
       "rate_limit": [
         "primary_window": ["used_percent": 25, "reset_at": 1_800_001_000, "limit_window_seconds": 18_000],
@@ -147,14 +147,38 @@ struct PublicSourceContractsTests {
       ],
       "additional_rate_limits": [[
         "limit_name": "Spark",
-        "rate_limit": ["primary_window": ["used_percent": 9, "reset_at": 1_800_003_000]],
+        "rate_limit": [
+          "primary_window": ["used_percent": 9, "reset_at": 1_800_003_000],
+          "secondary_window": ["used_percent": 11, "reset_at": 1_800_004_000],
+        ],
       ]],
       "credits": ["balance": 12.5],
     ], now: now)
-    #expect(codex.quotaWindows.map(\.label) == ["Five-hour", "Weekly", "Spark"])
-    #expect(codex.balance?.amountMicros == 12_500_000)
+    #expect(fiveHourCodex.quotaWindows.map(\.label) == [
+      "Five-hour", "Weekly", "Spark", "Spark weekly",
+    ])
+    #expect(fiveHourCodex.quotaWindows.map(\.id) == [
+      "five-hour", "weekly", "additional-0-primary", "additional-0-secondary",
+    ])
+    #expect(Set(fiveHourCodex.quotaWindows.map(\.id)).count == fiveHourCodex.quotaWindows.count)
+    #expect(fiveHourCodex.balance?.amountMicros == 12_500_000)
+
+    let weeklyCodex = ProviderLimitCollector.mapCodexUsage([
+      "plan_type": "pro",
+      "rateLimit": [
+        "primaryWindow": [
+          "usedPercent": 63,
+          "resetAt": 1_800_345_600,
+          "windowDurationMins": 10_080,
+        ],
+      ],
+    ], now: now)
+    #expect(weeklyCodex.quotaWindows.map(\.label) == ["Weekly"])
+    #expect(weeklyCodex.quotaWindows.map(\.id) == ["five-hour"])
+    #expect(weeklyCodex.quotaWindows.first?.usedPercent == 63)
+    #expect(weeklyCodex.quotaWindows.first?.windowMinutes == 10_080)
     let scopedCodex = ProviderLimitCollector.scopedCodexAccount(
-      codex,
+      fiveHourCodex,
       workspace: CodexUsageWorkspace(
         id: "workspace-business",
         name: "Example Business",
@@ -164,7 +188,7 @@ struct PublicSourceContractsTests {
     )
     #expect(scopedCodex.accountScopeID == "workspace-business")
     #expect(scopedCodex.accountLabel == "Example Business — same@example.com")
-    #expect(scopedCodex.quotaWindows == codex.quotaWindows)
+    #expect(scopedCodex.quotaWindows == fiveHourCodex.quotaWindows)
 
     let claude = ProviderLimitCollector.mapClaudeUsage([
       "five_hour": ["utilization": 12.5, "resets_at": "2027-01-15T08:00:00Z"],

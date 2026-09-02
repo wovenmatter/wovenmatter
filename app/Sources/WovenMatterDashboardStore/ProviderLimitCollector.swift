@@ -271,7 +271,7 @@ enum ProviderLimitCollector {
       let plan = string(identity?["planType"] ?? identity?["plan_type"]
         ?? rateLimits?["planType"] ?? rateLimits?["plan_type"])
       var windows: [ProviderQuotaWindow] = []
-      if let value = quotaWindow(rateLimits?["primary"], id: "five-hour", label: "Five-hour") {
+      if let value = codexPrimaryWindow(rateLimits?["primary"]) {
         windows.append(value)
       }
       if let value = quotaWindow(rateLimits?["secondary"], id: "weekly", label: "Weekly") {
@@ -569,10 +569,8 @@ enum ProviderLimitCollector {
   ) -> UsageLimitAccount {
     let rateLimit = dictionary(object["rate_limit"] ?? object["rateLimit"])
     var windows: [ProviderQuotaWindow] = []
-    if let window = quotaWindow(
-      rateLimit?["primary_window"] ?? rateLimit?["primaryWindow"],
-      id: "five-hour",
-      label: "Five-hour"
+    if let window = codexPrimaryWindow(
+      rateLimit?["primary_window"] ?? rateLimit?["primaryWindow"]
     ) { windows.append(window) }
     if let window = quotaWindow(
       rateLimit?["secondary_window"] ?? rateLimit?["secondaryWindow"],
@@ -1130,11 +1128,7 @@ enum ProviderLimitCollector {
     guard let value = dictionary(raw),
           let used = number(value["usedPercent"] ?? value["used_percent"]),
           used >= 0, used <= 100 else { return nil }
-    let minutes = integer(value["windowDurationMins"] ?? value["window_duration_mins"])
-      .flatMap(Int.init(exactly:))
-      ?? integer(value["limitWindowSeconds"] ?? value["limit_window_seconds"])
-        .flatMap(Int.init(exactly:))
-        .map { $0 / 60 }
+    let minutes = quotaWindowDurationMinutes(value)
     let reset = integer(value["resetsAt"] ?? value["resets_at"] ?? value["reset_at"])
       .map { Date(timeIntervalSince1970: TimeInterval($0)) }
     return ProviderQuotaWindow(
@@ -1145,6 +1139,22 @@ enum ProviderLimitCollector {
       windowMinutes: minutes,
       resetsAt: reset
     )
+  }
+
+  private static func codexPrimaryWindow(_ raw: Any?) -> ProviderQuotaWindow? {
+    guard let value = dictionary(raw) else { return nil }
+    let label = quotaWindowDurationMinutes(value) == 7 * 24 * 60
+      ? "Weekly"
+      : "Five-hour"
+    return quotaWindow(value, id: "five-hour", label: label)
+  }
+
+  private static func quotaWindowDurationMinutes(_ value: [String: Any]) -> Int? {
+    integer(value["windowDurationMins"] ?? value["window_duration_mins"])
+      .flatMap(Int.init(exactly:))
+      ?? integer(value["limitWindowSeconds"] ?? value["limit_window_seconds"])
+        .flatMap(Int.init(exactly:))
+        .map { $0 / 60 }
   }
 
   private static func responseResult(_ responses: [[String: Any]], id: Int64) throws -> [String: Any] {
