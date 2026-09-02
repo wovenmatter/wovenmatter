@@ -3519,9 +3519,10 @@ private struct DashboardCloudConversation: View {
     @State private var pendingBottomConversationID: String?
     @State private var bottomPositionRevision = 0
     @State private var scrollPositionID: String?
+    @State private var bottomStackHeight: CGFloat = 0
 
     var body: some View {
-        VStack(spacing: 0) {
+        ZStack(alignment: .bottom) {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 32) {
@@ -3577,7 +3578,7 @@ private struct DashboardCloudConversation: View {
                             }
                         }
                         Color.clear
-                            .frame(height: 20)
+                            .frame(height: bottomScrollClearance)
                             .id(chatEndID)
                     }
                     .frame(maxWidth: 768)
@@ -3788,7 +3789,12 @@ private struct DashboardCloudConversation: View {
             .frame(maxWidth: 768)
             .padding(.horizontal, 32)
             .padding(.top, 8)
-            .padding(.bottom, 24)
+            .onGeometryChange(for: CGFloat.self) { geometry in
+                geometry.size.height
+            } action: { height in
+                bottomStackHeight = max(0, height)
+            }
+            .padding(.bottom, ConversationBottomOverlayLayout.bottomOffset)
         }
         .background(theme.palette.workspace)
         .task(id: sessionIdentity) {
@@ -3832,6 +3838,12 @@ private struct DashboardCloudConversation: View {
 
     private var chatEndID: String {
         "chat-end:\(conversation?.id ?? "none")"
+    }
+
+    private var bottomScrollClearance: CGFloat {
+        CGFloat(ConversationBottomOverlayLayout.scrollClearance(
+            stackHeight: Double(bottomStackHeight)
+        ))
     }
 
     private var runsByAssistantMessageID: [String: WorkspaceRunRecord] {
@@ -3902,10 +3914,10 @@ private struct DashboardCloudConversation: View {
     }
 
     private func scrollToConversationBottom(using proxy: ScrollViewProxy) {
-        scrollPositionID = visibleMessages.last?.id
+        scrollPositionID = chatEndID
         scrollWithoutAnimation(
             proxy,
-            to: visibleMessages.last?.id ?? chatEndID,
+            to: chatEndID,
             anchor: .bottom
         )
     }
@@ -4516,22 +4528,32 @@ private struct DashboardComposer: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
+        .glassEffect(
+            .regular.interactive(),
+            in: RoundedRectangle(
+                cornerRadius: DashboardMetrics.composerRadius,
+                style: .continuous
+            )
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: DashboardMetrics.composerRadius, style: .continuous)
+                .stroke(
+                    isDropTarget
+                        ? DashboardPalette.primary
+                        : DashboardPalette.foreground.opacity(0.06),
+                    lineWidth: isDropTarget ? 2 : 1
+                )
+        }
+        .shadow(
+            color: focused ? DashboardPalette.primary.opacity(0.18) : DashboardPalette.foreground.opacity(0.04),
+            radius: focused ? 14 : 2,
+            y: focused ? 8 : 1
+        )
         .background {
             RoundedRectangle(cornerRadius: DashboardMetrics.composerRadius, style: .continuous)
-                .fill(DashboardPalette.background.opacity(focused ? 0.85 : 0.65))
-                .overlay {
+                .fill(.clear)
+                .contentShape(
                     RoundedRectangle(cornerRadius: DashboardMetrics.composerRadius, style: .continuous)
-                        .stroke(
-                            isDropTarget
-                                ? DashboardPalette.primary
-                                : DashboardPalette.foreground.opacity(0.06),
-                            lineWidth: isDropTarget ? 2 : 1
-                        )
-                }
-                .shadow(
-                    color: focused ? DashboardPalette.primary.opacity(0.18) : DashboardPalette.foreground.opacity(0.04),
-                    radius: focused ? 14 : 2,
-                    y: focused ? 8 : 1
                 )
                 .onTapGesture {
                     openMenu = nil
