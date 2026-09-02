@@ -28,6 +28,7 @@ enum ProviderLimitCollector {
     homeDirectory: URL,
     openRouterAPIKey: String?,
     enabledProviders: Set<ProviderKind>,
+    keychainInteraction: UsageKeychainInteraction = .noninteractive,
     now: Date
   ) async -> [UsageLimitAccount] {
     let enabled = await withTaskGroup(
@@ -41,7 +42,11 @@ enum ProviderLimitCollector {
           case .codex:
             await codex(homeDirectory: homeDirectory, now: now)
           case .claude:
-            await claude(homeDirectory: homeDirectory, now: now)
+            await claude(
+              homeDirectory: homeDirectory,
+              keychainInteraction: keychainInteraction,
+              now: now
+            )
           case .grok:
             await grok(homeDirectory: homeDirectory, now: now)
           case .cursor:
@@ -134,8 +139,16 @@ enum ProviderLimitCollector {
     }
   }
 
-  private static func claude(homeDirectory: URL, now: Date) async -> UsageLimitAccount {
-    if let direct = try? await claudeOAuth(homeDirectory: homeDirectory, now: now) {
+  private static func claude(
+    homeDirectory: URL,
+    keychainInteraction: UsageKeychainInteraction,
+    now: Date
+  ) async -> UsageLimitAccount {
+    if let direct = try? await claudeOAuth(
+      homeDirectory: homeDirectory,
+      keychainInteraction: keychainInteraction,
+      now: now
+    ) {
       return direct
     }
     guard let executable = LocalACPRuntimeResolver.resolveExecutable(named: "claude") else {
@@ -226,12 +239,15 @@ enum ProviderLimitCollector {
       } else {
         nil
       }
+      let tier = string(billing["subscriptionTier"] ?? billing["subscription_tier"])
+      let email = string(billing["email"] ?? dictionary(billing["account"])?["email"])
       return UsageLimitAccount(
         provider: .grok,
-        accountLabel: "Grok account",
+        accountLabel: email ?? tier ?? "Grok account",
         status: windows.isEmpty ? .signedIn : .available,
         quotaWindows: windows,
         providerBudget: providerBudget,
+        details: tier.map { [.init(label: "Plan", value: $0)] } ?? [],
         source: "Grok CLI billing RPC",
         detail: windows.isEmpty
           ? "Grok is reachable, but the signed-in account returned no numeric billing limit."
@@ -385,6 +401,7 @@ enum ProviderLimitCollector {
 
   private static func claudeOAuth(
     homeDirectory: URL,
+    keychainInteraction: UsageKeychainInteraction,
     now: Date
   ) async throws -> UsageLimitAccount {
     let configured = ProcessInfo.processInfo.environment["CLAUDE_CONFIG_DIR"].map {
@@ -392,7 +409,10 @@ enum ProviderLimitCollector {
     }
     let credentialURL = (configured ?? homeDirectory.appending(path: ".claude"))
       .appending(path: ".credentials.json")
-    guard let token = claudeOAuthToken(credentialsURL: credentialURL) else {
+    guard let token = claudeOAuthToken(
+      credentialsURL: credentialURL,
+      keychainInteraction: keychainInteraction
+    ) else {
       throw ProviderLimitCollectorError.invalidResponse
     }
     let object = try await authenticatedJSONObject(
@@ -407,14 +427,16 @@ enum ProviderLimitCollector {
     return mapClaudeUsage(object, now: now)
   }
 
-  private static func claudeOAuthToken(credentialsURL: URL) -> String? {
+  private static func claudeOAuthToken(
+    credentialsURL: URL,
+    keychainInteraction: UsageKeychainInteraction
+  ) -> String? {
     if let root = try? localJSONObject(at: credentialsURL, maximumBytes: 1_048_576),
        let oauth = dictionary(root["claudeAiOauth"]),
        let token = string(oauth["accessToken"] ?? oauth["access_token"]) {
       return token
     }
-    let context = LAContext()
-    context.interactionNotAllowed = true
+    let context = claudeAuthenticationContext(for: keychainInteraction)
     let query: [String: Any] = [
       kSecClass as String: kSecClassGenericPassword,
       kSecAttrService as String: "Claude Code-credentials",
@@ -432,6 +454,14 @@ enum ProviderLimitCollector {
     return string(oauth["accessToken"] ?? oauth["access_token"])
   }
 
+  static func claudeAuthenticationContext(
+    for interaction: UsageKeychainInteraction
+  ) -> LAContext {
+    let context = LAContext()
+    context.interactionNotAllowed = !interaction.allowsInteraction
+    return context
+  }
+
   static func mapClaudeUsage(
     _ object: [String: Any],
     now: Date
@@ -444,11 +474,16 @@ enum ProviderLimitCollector {
       ("seven_day_oauth_apps", "oauth-apps-weekly", "OAuth apps weekly"),
       ("seven_day_routines", "routines-weekly", "Routines weekly"),
       ("seven_day_claude_routines", "routines-weekly", "Routines weekly"),
+      ("claude_routines", "routines-weekly", "Routines weekly"),
+      ("routines", "routines-weekly", "Routines weekly"),
+      ("routine", "routines-weekly", "Routines weekly"),
+      ("seven_day_cowork", "routines-weekly", "Routines weekly"),
+      ("cowork", "routines-weekly", "Routines weekly"),
       ("iguana_necktie", "iguana-necktie", "Promotional weekly"),
     ]
     var seen = Set<String>()
     var windows = mappings.compactMap { key, id, label -> ProviderQuotaWindow? in
-      guard seen.insert(id).inserted, let raw = dictionary(object[key]),
+      guard let raw = dictionary(object[key]), seen.insert(id).inserted,
             let utilization = number(raw["utilization"]), utilization >= 0 else { return nil }
       return ProviderQuotaWindow(
         id: id, label: label, usedPercent: utilization, usageKnown: true,
@@ -469,8 +504,9 @@ enum ProviderLimitCollector {
       }
     }
     let extra = dictionary(object["extra_usage"])
-    let used = number(extra?["used_credits"])
-    let limit = number(extra?["monthly_limit"])
+    let extraEnabled = boolean(extra?["is_enabled"]) == true
+    let used = extraEnabled ? number(extra?["used_credits"]) : nil
+    let limit = extraEnabled ? number(extra?["monthly_limit"]) : nil
     let currency = string(extra?["currency"]) ?? "USD"
     let budget = used.flatMap { used in limit.flatMap { limit in
       limit > 0 ? ProviderReportedBudget(
@@ -527,7 +563,9 @@ enum ProviderLimitCollector {
       ?? config["onDemandCap"] ?? config["on_demand_cap"])
     let directPercent = number(config["creditUsagePercent"] ?? config["credit_usage_percent"])
     let percent = directPercent ?? used.flatMap { used in cap.flatMap { $0 > 0 ? used / $0 * 100 : nil } }
-    let reset = parseDate(string(config["billingPeriodEnd"] ?? config["billing_period_end"]
+    let currentPeriod = dictionary(config["currentPeriod"] ?? config["current_period"])
+    let reset = parseDate(string(currentPeriod?["end"]
+      ?? config["billingPeriodEnd"] ?? config["billing_period_end"]
       ?? config["resetAt"] ?? config["reset_at"]))
     let windows = percent.map { [ProviderQuotaWindow(
       id: "billing-cycle", label: "Monthly credits", usedPercent: $0,

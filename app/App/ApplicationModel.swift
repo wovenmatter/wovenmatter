@@ -818,6 +818,7 @@ private struct UsageAnalyticsRefreshKey: Hashable, Sendable {
 private struct UsageLimitsRefreshKey: Hashable, Sendable {
     let enabledProviders: [String]
     let allowsCredentialAccess: Bool
+    let keychainInteraction: String
 }
 
 struct DashboardNoteDraft: Equatable {
@@ -2203,7 +2204,8 @@ final class ApplicationModel {
     func refreshLocalUsage(
         range: UsageTimeRange,
         refreshLimits: Bool = false,
-        reason: UsageRefreshReason = .manual
+        reason: UsageRefreshReason = .manual,
+        explicitCredentialAccess: Bool = false
     ) async {
         localUsageError = nil
         prepareUsageSnapshot(range: range)
@@ -2217,6 +2219,11 @@ final class ApplicationModel {
             .refresh
         }
         if refreshLimits {
+            let keychainInteraction = UsageKeychainInteraction.resolve(
+                refreshReason: reason,
+                disclosureAcknowledged: hasAcknowledgedCredentialAccessDisclosure,
+                explicitUserAction: explicitCredentialAccess
+            )
             async let analyticsRefresh: Void = refreshUsageAnalytics(
                 range: range,
                 reason: reason,
@@ -2224,7 +2231,8 @@ final class ApplicationModel {
             )
             async let limitsRefresh: Void = refreshUsageLimits(
                 reason: reason,
-                force: policy == .force
+                force: policy == .force,
+                keychainInteraction: keychainInteraction
             )
             _ = await (analyticsRefresh, limitsRefresh)
         } else {
@@ -2301,7 +2309,8 @@ final class ApplicationModel {
 
     private func refreshUsageLimits(
         reason: UsageRefreshReason,
-        force: Bool
+        force: Bool,
+        keychainInteraction: UsageKeychainInteraction
     ) async {
         let enabledProviders = enabledUsageProviders
         let allowsCredentialAccess = isOpenRouterCredentialConfigured
@@ -2309,7 +2318,8 @@ final class ApplicationModel {
             && enabledProviders.contains(.openRouter)
         let key = UsageLimitsRefreshKey(
             enabledProviders: enabledProviders.map(\.rawValue).sorted(),
-            allowsCredentialAccess: allowsCredentialAccess
+            allowsCredentialAccess: allowsCredentialAccess,
+            keychainInteraction: keychainInteraction.rawValue
         )
         isRefreshingUsageLimits = true
         do {
@@ -2321,7 +2331,8 @@ final class ApplicationModel {
                     refresh: true,
                     refreshReason: reason,
                     enabledProviders: enabledProviders,
-                    allowCredentialAccess: allowsCredentialAccess
+                    allowCredentialAccess: allowsCredentialAccess,
+                    keychainInteraction: keychainInteraction
                 )
             }
             let existing = localUsage
@@ -2429,7 +2440,22 @@ final class ApplicationModel {
         await refreshLocalUsage(
             range: range,
             refreshLimits: true,
-            reason: .credentialChanged
+            reason: .credentialChanged,
+            explicitCredentialAccess: provider == .claude
+        )
+    }
+
+    func retryUsageProviderCredentialAccess(
+        _ provider: ProviderKind,
+        range: UsageTimeRange
+    ) async {
+        guard enabledUsageProviders.contains(provider) else { return }
+        acknowledgeCredentialAccessDisclosure()
+        await refreshLocalUsage(
+            range: range,
+            refreshLimits: true,
+            reason: .credentialChanged,
+            explicitCredentialAccess: provider == .claude
         )
     }
 
@@ -2528,7 +2554,8 @@ final class ApplicationModel {
                 await refreshLocalUsage(
                     range: currentUsageRange,
                     refreshLimits: true,
-                    reason: .credentialChanged
+                    reason: .credentialChanged,
+                    explicitCredentialAccess: provider == .claude
                 )
             } catch {
                 localUsageError = error.localizedDescription

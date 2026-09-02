@@ -4,7 +4,7 @@ import SQLite3
 import WovenMatterClient
 import WovenMatterCore
 
-public enum UsageRefreshReason: Sendable {
+public enum UsageRefreshReason: Equatable, Sendable {
   case startup
   case viewAppeared
   case rangeChanged
@@ -12,6 +12,24 @@ public enum UsageRefreshReason: Sendable {
   case runCompleted
   case periodic
   case credentialChanged
+}
+
+public enum UsageKeychainInteraction: String, Equatable, Sendable {
+  case noninteractive
+  case oneShotExplicit
+
+  public static func resolve(
+    refreshReason: UsageRefreshReason,
+    disclosureAcknowledged: Bool,
+    explicitUserAction: Bool
+  ) -> Self {
+    guard refreshReason == .credentialChanged,
+          disclosureAcknowledged,
+          explicitUserAction else { return .noninteractive }
+    return .oneShotExplicit
+  }
+
+  var allowsInteraction: Bool { self == .oneShotExplicit }
 }
 
 public struct LocalUsageLimitsSnapshot: Equatable, Sendable {
@@ -128,6 +146,7 @@ public actor LocalUsageService {
     refreshReason: UsageRefreshReason = .manual,
     enabledProviders: Set<ProviderKind> = [],
     allowCredentialAccess: Bool = true,
+    keychainInteraction: UsageKeychainInteraction = .noninteractive,
     now: Date = Date()
   ) async -> LocalUsageLimitsSnapshot {
     let accounts: [UsageLimitAccount]
@@ -153,6 +172,7 @@ public actor LocalUsageService {
         homeDirectory: homeDirectory,
         openRouterAPIKey: openRouterAPIKey,
         enabledProviders: enabledProviders,
+        keychainInteraction: keychainInteraction,
         now: now
       )
       accounts = refreshed.map { account in

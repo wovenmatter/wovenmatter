@@ -3,6 +3,7 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source_file="${repo_root}/app/App/Views/DashboardUsageView.swift"
+model_file="${repo_root}/app/App/ApplicationModel.swift"
 
 usage_body="$(sed -n '/^    var body: some View {$/,/^        \.task {$/p' "$source_file")"
 if printf '%s\n' "$usage_body" | grep -Eq 'ScrollViewReader|\.onChange\(of: page\)|scrollTo\('; then
@@ -17,9 +18,16 @@ accounts_body="$(sed -n '/private func accountConnections/,/private func limitCa
 printf '%s\n' "$accounts_body" | grep -Fq 'ProviderKind.supportedAccounts.map'
 printf '%s\n' "$accounts_body" | grep -Fq 'ViewThatFits(in: .horizontal)'
 printf '%s\n' "$accounts_body" | grep -Fq 'GridItem(.flexible(), alignment: .topLeading)'
+printf '%s\n' "$accounts_body" | grep -Fq 'limitCard(account, pinsFooter: true)'
+printf '%s\n' "$accounts_body" | grep -Fq 'limitCard(account, pinsFooter: false)'
 
 limit_card_body="$(sed -n '/private func limitCard/,/private var openRouterCredentialControls/p' "$source_file")"
 printf '%s\n' "$limit_card_body" | grep -Fq 'account.provider == .openRouter'
 printf '%s\n' "$limit_card_body" | grep -Fq 'openRouterCredentialControls'
+printf '%s\n' "$limit_card_body" | grep -Fq 'if pinsFooter { Spacer(minLength: 12) }'
+printf '%s\n' "$limit_card_body" | grep -Fq 'maxHeight: pinsFooter ? .infinity : nil'
+
+explicit_claude_count="$(grep -Fc 'explicitCredentialAccess: provider == .claude' "$model_file")"
+test "$explicit_claude_count" -eq 3
 
 printf '%s\n' 'Usage page layout and scroll-position contract passed.'

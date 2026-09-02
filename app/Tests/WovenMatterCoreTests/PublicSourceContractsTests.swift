@@ -24,6 +24,7 @@ struct PublicSourceContractsTests {
       homeDirectory: FileManager.default.temporaryDirectory,
       openRouterAPIKey: nil,
       enabledProviders: [],
+      keychainInteraction: .oneShotExplicit,
       now: now
     )
 
@@ -86,13 +87,18 @@ struct PublicSourceContractsTests {
       "seven_day": ["utilization": 33.0],
       "seven_day_sonnet": ["utilization": 44.0],
       "seven_day_opus": ["utilization": 55.0],
-      "seven_day_routines": ["utilization": 5.0],
+      "cowork": ["utilization": 5.0],
       "limits": [[
         "percent": 18.0,
         "is_active": true,
         "scope": ["model": ["display_name": "Fable"]],
       ]],
-      "extra_usage": ["used_credits": 500, "monthly_limit": 2_000, "currency": "USD"],
+      "extra_usage": [
+        "is_enabled": true,
+        "used_credits": 500,
+        "monthly_limit": 2_000,
+        "currency": "USD",
+      ],
     ], now: now)
     #expect(claude.quotaWindows.map(\.label) == [
       "Five-hour", "Weekly", "Sonnet weekly", "Opus weekly", "Routines weekly", "Fable weekly",
@@ -105,9 +111,11 @@ struct PublicSourceContractsTests {
         "onDemandUsed": 7.0,
         "onDemandCap": 20.0,
         "subscriptionTier": "SuperGrok",
+        "currentPeriod": ["end": "2027-01-15T08:00:00Z"],
       ],
     ], accountLabel: "fixture@example.com", now: now)
     #expect(grok.quotaWindows.first?.usedPercent == 35)
+    #expect(grok.quotaWindows.first?.resetsAt != nil)
     #expect(grok.details.first?.value == "SuperGrok")
 
     let openCode = ProviderLimitCollector.mapOpenCodeGoUsage([
@@ -138,6 +146,42 @@ struct PublicSourceContractsTests {
     #expect(openRouter.providerBudget?.usedMicros == 30_000_000)
     #expect(openRouter.balance?.amountMicros == 30_000_000)
     #expect(openRouter.details.contains { $0.label == "Rate limit" })
+  }
+
+  @Test("Keychain interaction is one-shot and explicit-only")
+  func keychainInteractionPolicy() {
+    let passiveReasons: [UsageRefreshReason] = [
+      .startup, .viewAppeared, .rangeChanged, .manual, .runCompleted, .periodic,
+    ]
+    for reason in passiveReasons {
+      #expect(UsageKeychainInteraction.resolve(
+        refreshReason: reason,
+        disclosureAcknowledged: true,
+        explicitUserAction: true
+      ) == .noninteractive)
+    }
+    #expect(UsageKeychainInteraction.resolve(
+      refreshReason: .credentialChanged,
+      disclosureAcknowledged: false,
+      explicitUserAction: true
+    ) == .noninteractive)
+    #expect(UsageKeychainInteraction.resolve(
+      refreshReason: .credentialChanged,
+      disclosureAcknowledged: true,
+      explicitUserAction: false
+    ) == .noninteractive)
+    #expect(UsageKeychainInteraction.resolve(
+      refreshReason: .credentialChanged,
+      disclosureAcknowledged: true,
+      explicitUserAction: true
+    ) == .oneShotExplicit)
+
+    #expect(ProviderLimitCollector.claudeAuthenticationContext(
+      for: .noninteractive
+    ).interactionNotAllowed)
+    #expect(!ProviderLimitCollector.claudeAuthenticationContext(
+      for: .oneShotExplicit
+    ).interactionNotAllowed)
   }
 
   @Test("normalized last-good limit snapshots persist without credentials")
