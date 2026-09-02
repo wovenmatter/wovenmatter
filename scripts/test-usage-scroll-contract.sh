@@ -36,6 +36,22 @@ printf '%s\n' "$limit_card_body" | grep -Fq 'if pinsFooter { Spacer(minLength: 1
 printf '%s\n' "$limit_card_body" | grep -Fq 'maxHeight: pinsFooter ? .infinity : nil'
 printf '%s\n' "$limit_card_body" | grep -Fq 'model.codexUsageWorkspaces.count > 1'
 
+openrouter_controls="$(sed -n '/private var openRouterCredentialControls/,/private var openRouterConnectionLabel/p' "$source_file")"
+printf '%s\n' "$openrouter_controls" | grep -Fq '.textFieldStyle(.plain)'
+printf '%s\n' "$openrouter_controls" | grep -Fq '.focused($openRouterAPIKeyFocused)'
+printf '%s\n' "$openrouter_controls" | grep -Fq '.onSubmit(submitOpenRouterAPIKey)'
+printf '%s\n' "$openrouter_controls" | grep -Fq '.buttonStyle(DashboardIconButtonStyle())'
+printf '%s\n' "$openrouter_controls" | grep -Fq '.frame(height: 28)'
+printf '%s\n' "$openrouter_controls" | grep -Fq '.disabled(!canSubmitOpenRouterAPIKey)'
+if printf '%s\n' "$openrouter_controls" | grep -Fq 'DashboardPrimaryButtonStyle'; then
+  printf '%s\n' 'OpenRouter replacement must use the compact hover-only secondary action.' >&2
+  exit 1
+fi
+
+usage_body_and_focus="$(sed -n '/^    var body: some View {$/,/^    private var header:/p' "$source_file")"
+printf '%s\n' "$usage_body_and_focus" | grep -Fq 'SpatialTapGesture().onEnded'
+printf '%s\n' "$usage_body_and_focus" | grep -Fq 'openRouterAPIKeyFocused = false'
+
 codex_workspace_selector="$(sed -n '/private var codexWorkspaceSelector/,/private var selectedCodexWorkspace/p' "$source_file")"
 printf '%s\n' "$codex_workspace_selector" | grep -Fq 'Text(selectedCodexWorkspace?.name ?? "Choose workspace")'
 printf '%s\n' "$codex_workspace_selector" | grep -Fq '.menuStyle(.borderlessButton)'

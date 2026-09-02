@@ -73,7 +73,11 @@ struct DashboardUsageView: View {
     @State private var reasoningFilter = "all"
     @State private var searchText = ""
     @State private var openRouterAPIKey = ""
+    @State private var openRouterAPIKeyFieldFrame = CGRect.zero
     @State private var pendingCredentialAction: PendingUsageCredentialAction?
+    @FocusState private var openRouterAPIKeyFocused: Bool
+
+    private nonisolated static let coordinateSpaceName = "dashboard-usage-page"
 
     private var analytics: UsageAnalyticsSnapshot? { model.localUsage?.analytics }
 
@@ -141,6 +145,15 @@ struct DashboardUsageView: View {
             .padding(.vertical, 40)
         }
         .scrollIndicators(.never)
+        .coordinateSpace(.named(Self.coordinateSpaceName))
+        .simultaneousGesture(
+            SpatialTapGesture().onEnded { tap in
+                guard !openRouterAPIKeyFieldFrame.contains(tap.location) else {
+                    return
+                }
+                openRouterAPIKeyFocused = false
+            }
+        )
         .background(theme.palette.workspace)
         .task {
             await model.usageDestinationAppeared(range: range)
@@ -1070,6 +1083,7 @@ struct DashboardUsageView: View {
                 Spacer()
                 if model.isOpenRouterCredentialConfigured {
                     Button("Remove", role: .destructive) {
+                        openRouterAPIKeyFocused = false
                         requestCredentialAction(.deleteOpenRouter)
                     }
                     .buttonStyle(.plain)
@@ -1083,16 +1097,59 @@ struct DashboardUsageView: View {
                     : "OpenRouter API key",
                 text: $openRouterAPIKey
             )
-            .textFieldStyle(.roundedBorder)
-            Button(model.isOpenRouterCredentialConfigured ? "Replace key" : "Save API key") {
-                requestCredentialAction(.saveOpenRouter(openRouterAPIKey))
-            }
-            .buttonStyle(DashboardPrimaryButtonStyle())
-            .disabled(
-                openRouterAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                    || model.isRefreshingLocalUsage
+            .textFieldStyle(.plain)
+            .font(.system(size: 12.5))
+            .foregroundStyle(DashboardPalette.foreground)
+            .padding(.horizontal, 10)
+            .frame(height: 32)
+            .background(theme.palette.workspace)
+            .clipShape(
+                RoundedRectangle(
+                    cornerRadius: DashboardMetrics.controlRadius,
+                    style: .continuous
+                )
             )
+            .overlay {
+                RoundedRectangle(
+                    cornerRadius: DashboardMetrics.controlRadius,
+                    style: .continuous
+                )
+                .stroke(theme.palette.border, lineWidth: 1)
+            }
+            .focused($openRouterAPIKeyFocused)
+            .onGeometryChange(for: CGRect.self) { proxy in
+                proxy.frame(in: .named(Self.coordinateSpaceName))
+            } action: { frame in
+                openRouterAPIKeyFieldFrame = frame
+            }
+            .onSubmit(submitOpenRouterAPIKey)
+            .accessibilityLabel("OpenRouter API key")
+
+            Button(action: submitOpenRouterAPIKey) {
+                Text(model.isOpenRouterCredentialConfigured ? "Replace key" : "Save API key")
+                    .font(.system(size: 10.5, weight: .medium))
+                    .padding(.horizontal, 9)
+                    .frame(height: 28)
+                    .contentShape(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    )
+            }
+            .buttonStyle(DashboardIconButtonStyle())
+            .fixedSize()
+            .disabled(!canSubmitOpenRouterAPIKey)
+            .accessibilityHint("Saves the replacement key in this Mac's Keychain")
         }
+    }
+
+    private var canSubmitOpenRouterAPIKey: Bool {
+        !openRouterAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !model.isRefreshingLocalUsage
+    }
+
+    private func submitOpenRouterAPIKey() {
+        guard canSubmitOpenRouterAPIKey else { return }
+        openRouterAPIKeyFocused = false
+        requestCredentialAction(.saveOpenRouter(openRouterAPIKey))
     }
 
     private var openRouterConnectionLabel: String {
