@@ -793,7 +793,9 @@ struct DashboardUsageView: View {
                 limitCard(account)
             }
         }
-        openRouterCredential
+        if model.isUsageProviderEnabled(.openRouter) {
+            openRouterCredential
+        }
     }
 
     private var openRouterCredential: some View {
