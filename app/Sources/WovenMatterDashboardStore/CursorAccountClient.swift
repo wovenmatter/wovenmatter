@@ -112,6 +112,7 @@ struct CursorAccountClient: Sendable {
     async let user = fetchUser(cookie: session.cookie)
     async let summary = fetchSummary(cookie: session.cookie)
     let (account, usage) = try await (user, summary)
+    let sand = try? await fetchSand(cookie: session.cookie)
     let plan = usage.individualUsage?.plan
     let overall = usage.individualUsage?.overall
     let pooled = usage.teamUsage?.pooled
@@ -125,10 +126,10 @@ struct CursorAccountClient: Sendable {
     } else {
       nil
     }
-    let window = percent.map {
+    var windows: [ProviderQuotaWindow] = percent.map {
       ProviderQuotaWindow(
         id: "billing-cycle",
-        label: "Monthly included usage",
+        label: "Total",
         usedPercent: $0,
         usageKnown: true,
         windowMinutes: Self.windowMinutes(
@@ -137,25 +138,59 @@ struct CursorAccountClient: Sendable {
         ),
         resetsAt: resetsAt
       )
+    }.map { [$0] } ?? []
+    if let cursor = plan?.autoPercentUsed {
+      windows.append(ProviderQuotaWindow(
+        id: "cursor", label: "Cursor", usedPercent: cursor,
+        usageKnown: true, windowMinutes: Self.windowMinutes(
+          start: Self.date(usage.billingCycleStart), end: resetsAt
+        ), resetsAt: resetsAt
+      ))
     }
-    let budget: ProviderReportedBudget? = if let used, let limit, limit > 0 {
+    if let thirdParty = plan?.apiPercentUsed {
+      windows.append(ProviderQuotaWindow(
+        id: "third-party", label: "Third Party", usedPercent: thirdParty,
+        usageKnown: true, windowMinutes: Self.windowMinutes(
+          start: Self.date(usage.billingCycleStart), end: resetsAt
+        ), resetsAt: resetsAt
+      ))
+    }
+    if sand?.hasNonZeroIncludedLimit == true, let grok = sand?.usagePercent {
+      windows.append(ProviderQuotaWindow(
+        id: "grok-bot", label: "Grok Bot", usedPercent: grok,
+        usageKnown: true, windowMinutes: Self.windowMinutes(
+          start: Self.date(sand?.currentPeriodStart), end: Self.date(sand?.nextResetTimestampUtc)
+        ), resetsAt: Self.date(sand?.nextResetTimestampUtc)
+      ))
+    }
+    let onDemand = usage.individualUsage?.onDemand ?? usage.teamUsage?.onDemand
+    let budget: ProviderReportedBudget? = if let used = onDemand?.used,
+      let limit = onDemand?.limit, limit > 0 {
       ProviderReportedBudget(
         usedMicros: Self.amountMicros(cents: used),
         limitMicros: Self.amountMicros(cents: limit),
         currency: "USD",
         period: "monthly",
         resetsAt: resetsAt,
-        scope: "account"
+        scope: "on-demand"
       )
     } else {
       nil
     }
+    let details: [ProviderUsageDetail] = onDemand?.used.map { used in
+      let usedText = (Double(used) / 100).formatted(.currency(code: "USD"))
+      let value = onDemand?.limit.map {
+        "\(usedText) / \((Double($0) / 100).formatted(.currency(code: "USD")))"
+      } ?? usedText
+      return ProviderUsageDetail(label: "On-demand spend", value: value)
+    }.map { [$0] } ?? []
     return UsageLimitAccount(
       provider: .cursor,
       accountLabel: account.email ?? session.email ?? "Cursor account",
-      status: window == nil && budget == nil ? .signedIn : .available,
-      quotaWindows: window.map { [$0] } ?? [],
+      status: windows.isEmpty && budget == nil ? .signedIn : .available,
+      quotaWindows: windows,
       providerBudget: budget,
+      details: details,
       source: "Cursor account usage APIs",
       detail: "Live account-wide Cursor usage from the same dashboard endpoints used by CodexBar (all devices).",
       observedAt: now,
@@ -252,6 +287,16 @@ struct CursorAccountClient: Sendable {
       CursorUsageSummary.self,
       from: await responseData(request)
     )
+  }
+
+  private func fetchSand(cookie: String) async throws -> CursorSandUsage {
+    var request = URLRequest(url: baseURL.appending(path: "api/dashboard/get-sand-usage-status"))
+    request.httpMethod = "POST"
+    request.setValue(cookie, forHTTPHeaderField: "Cookie")
+    request.setValue("application/json", forHTTPHeaderField: "Accept")
+    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    request.httpBody = Data("{}".utf8)
+    return try JSONDecoder().decode(CursorSandUsage.self, from: await responseData(request))
   }
 
   private func fetchUser(cookie: String) async throws -> CursorUserInfo {
@@ -440,14 +485,27 @@ private struct CursorUsageSummary: Decodable {
   struct Individual: Decodable {
     let plan: Amount?
     let overall: Amount?
+    let onDemand: Amount?
   }
-  struct Team: Decodable { let pooled: Amount? }
+  struct Team: Decodable {
+    let pooled: Amount?
+    let onDemand: Amount?
+  }
   struct Amount: Decodable {
     let used: Int?
     let limit: Int?
     let remaining: Int?
     let totalPercentUsed: Double?
+    let autoPercentUsed: Double?
+    let apiPercentUsed: Double?
   }
+}
+
+private struct CursorSandUsage: Decodable {
+  let currentPeriodStart: String?
+  let nextResetTimestampUtc: String?
+  let usagePercent: Double?
+  let hasNonZeroIncludedLimit: Bool?
 }
 
 private struct CursorUserInfo: Decodable {

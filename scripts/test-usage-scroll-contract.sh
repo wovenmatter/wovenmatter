@@ -13,4 +13,13 @@ fi
 page_binding="$(sed -n '/^    private var pageBinding:/,/^    var body: some View {$/p' "$source_file")"
 printf '%s\n' "$page_binding" | grep -Fq 'await model.usageAnalyticsSelected(range: range)'
 
-printf '%s\n' 'Usage page scroll-position contract passed.'
+accounts_body="$(sed -n '/private func accountConnections/,/private func limitCard/p' "$source_file")"
+printf '%s\n' "$accounts_body" | grep -Fq 'ProviderKind.supportedAccounts.map'
+printf '%s\n' "$accounts_body" | grep -Fq 'ViewThatFits(in: .horizontal)'
+printf '%s\n' "$accounts_body" | grep -Fq 'GridItem(.flexible(), alignment: .topLeading)'
+
+limit_card_body="$(sed -n '/private func limitCard/,/private var openRouterCredentialControls/p' "$source_file")"
+printf '%s\n' "$limit_card_body" | grep -Fq 'account.provider == .openRouter'
+printf '%s\n' "$limit_card_body" | grep -Fq 'openRouterCredentialControls'
+
+printf '%s\n' 'Usage page layout and scroll-position contract passed.'

@@ -765,67 +765,37 @@ struct DashboardUsageView: View {
         }
 
         UsageSectionHeading(title: "Accounts")
-        LazyVGrid(
-            columns: [GridItem(.adaptive(minimum: 330), spacing: 12)],
-            alignment: .leading,
-            spacing: 12
-        ) {
-            ForEach(snapshot.limits.filter { $0.provider != .openRouter }) { account in
-                limitCard(account)
+        let accountsByProvider = Dictionary(
+            uniqueKeysWithValues: snapshot.limits.map { ($0.provider, $0) }
+        )
+        let accounts = ProviderKind.supportedAccounts.map { provider in
+            accountsByProvider[provider] ?? UsageLimitAccount(
+                provider: provider,
+                accountLabel: provider.displayName,
+                status: .needsCredential,
+                source: "Disabled",
+                detail: "Enable this account to allow local credential discovery and usage checks.",
+                dashboardURL: provider.usageDashboardURL
+            )
+        }
+        ViewThatFits(in: .horizontal) {
+            LazyVGrid(
+                columns: [
+                    GridItem(.flexible(), alignment: .topLeading),
+                    GridItem(.flexible(), alignment: .topLeading),
+                ],
+                alignment: .leading,
+                spacing: 12
+            ) {
+                ForEach(accounts) { account in limitCard(account) }
             }
-        }
-        if model.isUsageProviderEnabled(.openRouter) {
-            openRouterCredential
-        }
-    }
+            .frame(minWidth: 720)
 
-    private var openRouterCredential: some View {
-        UsageSection {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack {
-                    ProviderDot(provider: .openRouter)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("OpenRouter API key")
-                            .font(.system(size: 12.5, weight: .semibold))
-                        Text(openRouterConnectionLabel)
-                            .font(.system(size: 10.5))
-                            .foregroundStyle(DashboardPalette.mutedForeground)
-                    }
-                    Spacer()
-                    if model.isOpenRouterCredentialConfigured {
-                        Button("Remove", role: .destructive) {
-                            requestCredentialAction(.deleteOpenRouter)
-                        }
-                        .buttonStyle(.plain)
-                        .font(.system(size: 11.5, weight: .medium))
-                        .foregroundStyle(DashboardPalette.danger)
-                    }
-                }
-                HStack(spacing: 8) {
-                    SecureField(
-                        model.isOpenRouterCredentialConfigured
-                            ? "Enter a replacement key"
-                            : "OpenRouter API or management key",
-                        text: $openRouterAPIKey
-                    )
-                    .textFieldStyle(.roundedBorder)
-                    Button(model.isOpenRouterCredentialConfigured ? "Replace key" : "Save API key") {
-                        let key = openRouterAPIKey
-                        requestCredentialAction(.saveOpenRouter(key))
-                    }
-                    .buttonStyle(DashboardPrimaryButtonStyle())
-                    .disabled(
-                        openRouterAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                            || model.isRefreshingLocalUsage
-                    )
-                }
-                if model.isOpenRouterCredentialConfigured,
-                   !model.isUsageProviderEnabled(.openRouter) {
-                    Button("Enable saved key") {
-                        requestCredentialAction(.enableProvider(.openRouter))
-                    }
-                    .buttonStyle(SettingsQuietButtonStyle())
-                }
+            LazyVGrid(
+                columns: [GridItem(.flexible(), alignment: .topLeading)],
+                spacing: 12
+            ) {
+                ForEach(accounts) { account in limitCard(account) }
             }
         }
     }
@@ -846,7 +816,7 @@ struct DashboardUsageView: View {
                     }
                     Spacer()
                     UsageStatusPill(
-                        text: account.status.title,
+                        text: account.isStale ? "Stale" : account.status.title,
                         color: account.status.color
                     )
                 }
@@ -887,10 +857,48 @@ struct DashboardUsageView: View {
                                 .foregroundStyle(DashboardPalette.mutedForeground)
                         }
                     }
+                    if !account.details.isEmpty {
+                        VStack(spacing: 5) {
+                            ForEach(account.details) { detail in
+                                HStack(alignment: .firstTextBaseline) {
+                                    Text(detail.label)
+                                        .foregroundStyle(DashboardPalette.mutedForeground)
+                                    Spacer()
+                                    Text(detail.value)
+                                        .fontWeight(.medium)
+                                        .multilineTextAlignment(.trailing)
+                                }
+                                .font(.system(size: 10.5))
+                            }
+                        }
+                    }
+                    if !account.history.isEmpty {
+                        Chart(account.history) { point in
+                            BarMark(
+                                x: .value("Day", point.date, unit: .day),
+                                y: .value("Spend", Double(point.valueMicros) / 1_000_000)
+                            )
+                            .foregroundStyle(account.provider.usageColor.gradient)
+                        }
+                        .chartXAxis(.hidden)
+                        .chartYAxis(.hidden)
+                        .frame(height: 42)
+                        .accessibilityLabel("Daily local spend history")
+                    }
+                    if let refreshError = account.refreshError {
+                        Label(refreshError, systemImage: "exclamationmark.triangle")
+                            .font(.system(size: 10.5))
+                            .foregroundStyle(DashboardPalette.warning)
+                    }
                     Text(account.detail)
                         .font(.system(size: 10.5))
                         .foregroundStyle(DashboardPalette.mutedForeground)
                         .fixedSize(horizontal: false, vertical: true)
+                }
+
+                if account.provider == .openRouter,
+                   model.isUsageProviderEnabled(.openRouter) {
+                    openRouterCredentialControls
                 }
 
                 Divider().overlay(theme.palette.border)
@@ -942,6 +950,40 @@ struct DashboardUsageView: View {
                     }
                 }
             }
+        }
+    }
+
+    private var openRouterCredentialControls: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(openRouterConnectionLabel)
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(DashboardPalette.mutedForeground)
+                Spacer()
+                if model.isOpenRouterCredentialConfigured {
+                    Button("Remove", role: .destructive) {
+                        requestCredentialAction(.deleteOpenRouter)
+                    }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 10.5, weight: .medium))
+                    .foregroundStyle(DashboardPalette.danger)
+                }
+            }
+            SecureField(
+                model.isOpenRouterCredentialConfigured
+                    ? "Enter a replacement key"
+                    : "OpenRouter API key",
+                text: $openRouterAPIKey
+            )
+            .textFieldStyle(.roundedBorder)
+            Button(model.isOpenRouterCredentialConfigured ? "Replace key" : "Save API key") {
+                requestCredentialAction(.saveOpenRouter(openRouterAPIKey))
+            }
+            .buttonStyle(DashboardPrimaryButtonStyle())
+            .disabled(
+                openRouterAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    || model.isRefreshingLocalUsage
+            )
         }
     }
 
@@ -1432,6 +1474,18 @@ private extension ProviderKind {
         case .openCodeGo: Color.hex(0x8B5CF6)
         case .openRouter: Color.hex(0xE05D8B)
         case .unknown: DashboardPalette.mutedForeground
+        }
+    }
+
+    var usageDashboardURL: URL? {
+        switch self {
+        case .codex: URL(string: "https://chatgpt.com/codex/settings/usage")
+        case .claude: URL(string: "https://claude.ai/settings/usage")
+        case .grok: URL(string: "https://grok.com/?_s=usage")
+        case .cursor: URL(string: "https://cursor.com/dashboard?tab=usage")
+        case .openCodeGo: URL(string: "https://opencode.ai/auth")
+        case .openRouter: URL(string: "https://openrouter.ai/settings/credits")
+        case .unknown: nil
         }
     }
 }
