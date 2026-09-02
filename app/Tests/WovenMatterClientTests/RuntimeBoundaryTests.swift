@@ -5,6 +5,53 @@ import Testing
 
 @Suite("Runtime boundaries", .serialized)
 struct RuntimeBoundaryTests {
+  @Test("local runtime visibility defaults hidden and persists independently")
+  func localRuntimeVisibilityPreferences() throws {
+    let suiteName = "wovenmatter.runtime-visibility.\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suiteName))
+    defer { defaults.removePersistentDomain(forName: suiteName) }
+    let preferences = LocalACPRuntimePreferences(defaults: defaults)
+
+    #expect(preferences.state.enabledRuntimeKinds.isEmpty)
+    #expect(preferences.state.shownRuntimeKinds.isEmpty)
+
+    var state = preferences.enable(.codex)
+    #expect(state.enabledRuntimeKinds == [.codex])
+    #expect(state.shownRuntimeKinds == [.codex])
+
+    state = preferences.setShown(false, for: .codex)
+    #expect(state.enabledRuntimeKinds == [.codex])
+    #expect(state.shownRuntimeKinds.isEmpty)
+
+    state = preferences.setShown(true, for: .codex)
+    state = preferences.disable(.codex)
+    #expect(state.enabledRuntimeKinds.isEmpty)
+    #expect(state.shownRuntimeKinds == [.codex])
+
+    state = preferences.setShown(false, for: .codex)
+    state = preferences.setShown(true, for: .claudeCode)
+    #expect(state.enabledRuntimeKinds.isEmpty)
+    #expect(state.shownRuntimeKinds == [.claudeCode])
+
+    let restored = LocalACPRuntimePreferences(defaults: defaults).state
+    #expect(restored == state)
+  }
+
+  @Test("runtime visibility filters the full catalog without changing order")
+  func localRuntimeSidebarFilteringOrder() {
+    let catalogOrder = LocalACPRuntimeCatalog.definitions.map(\.runtimeKind)
+    #expect(catalogOrder.count == AgentRuntimeKind.allCases.count)
+
+    let shown: Set<AgentRuntimeKind> = [.pi, .codex, .openclaw]
+    let visible = LocalACPRuntimePreferences.visibleRuntimeKinds(
+      in: catalogOrder,
+      shownRuntimeKinds: shown
+    )
+
+    #expect(visible == catalogOrder.filter(shown.contains))
+    #expect(Set(visible) == shown)
+  }
+
   @Test("local and remote initializers produce the same workspace")
   func workspaceLayout() throws {
     let fixture = try TemporaryDirectory(prefix: "wovenmatter-layout")

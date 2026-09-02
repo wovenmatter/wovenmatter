@@ -992,6 +992,7 @@ final class ApplicationModel {
     private(set) var hasAcknowledgedCredentialAccessDisclosure = false
     private(set) var enabledUsageProviders: Set<ProviderKind> = []
     private(set) var enabledLocalACPRuntimeKinds: Set<AgentRuntimeKind> = []
+    private(set) var shownLocalACPRuntimeKinds: Set<AgentRuntimeKind> = []
 
     private var dashboardStore: DashboardStore?
     private var noteWriteBehind: DashboardNoteWriteBehind?
@@ -1014,6 +1015,8 @@ final class ApplicationModel {
     private let localUsageService = LocalUsageService()
     @ObservationIgnored
     private let applicationDefaults: UserDefaults
+    @ObservationIgnored
+    private let localACPRuntimePreferences: LocalACPRuntimePreferences
     @ObservationIgnored
     private let localACPWorkspaceStore: LocalACPWorkspaceConfigurationStore
     @ObservationIgnored
@@ -1061,8 +1064,6 @@ final class ApplicationModel {
         "wovenmatter.credential-access.disclosure-acknowledged"
     private static let enabledUsageProvidersDefaultsKey =
         "wovenmatter.usage.enabled-providers"
-    private static let enabledLocalACPRuntimesDefaultsKey =
-        "wovenmatter.local-acp.enabled-runtimes"
 
     init(
         applicationDefaults: UserDefaults = .standard,
@@ -1070,6 +1071,9 @@ final class ApplicationModel {
         startsAutomatically: Bool? = nil
     ) {
         self.applicationDefaults = applicationDefaults
+        self.localACPRuntimePreferences = LocalACPRuntimePreferences(
+            defaults: applicationDefaults
+        )
         self.remoteWorkspaces = RemoteWorkspacesModel(defaults: applicationDefaults)
         self.localACPWorkspaceStore = LocalACPWorkspaceConfigurationStore()
         self.dashboardStore = dashboardStore
@@ -1084,11 +1088,11 @@ final class ApplicationModel {
                 forKey: Self.enabledUsageProvidersDefaultsKey
             )?.compactMap(ProviderKind.init(rawValue:)) ?? []
         )
-        enabledLocalACPRuntimeKinds = Set(
-            applicationDefaults.stringArray(
-                forKey: Self.enabledLocalACPRuntimesDefaultsKey
-            )?.compactMap(AgentRuntimeKind.init(rawValue:)) ?? []
-        )
+        let localACPRuntimePreferenceState = localACPRuntimePreferences.state
+        enabledLocalACPRuntimeKinds =
+            localACPRuntimePreferenceState.enabledRuntimeKinds
+        shownLocalACPRuntimeKinds =
+            localACPRuntimePreferenceState.shownRuntimeKinds
         if applicationDefaults.object(
             forKey: Self.titleGenerationEnabledDefaultsKey
         ) == nil {
@@ -1369,6 +1373,17 @@ final class ApplicationModel {
             localCLIAgents,
             preferredOrder: macSurfaceProfile?.localCLIAgentOrder ?? []
         )
+    }
+
+    var visibleOrderedLocalCLIAgents: [WorkspaceAgent] {
+        let visibleRuntimeKinds = LocalACPRuntimePreferences.visibleRuntimeKinds(
+            in: orderedLocalCLIAgents.map(\.runtimeKind),
+            shownRuntimeKinds: shownLocalACPRuntimeKinds
+        )
+        let visibleRuntimeKindSet = Set(visibleRuntimeKinds)
+        return orderedLocalCLIAgents.filter {
+            visibleRuntimeKindSet.contains($0.runtimeKind)
+        }
     }
 
     var orderedLocalACPRuntimeDefinitions: [LocalACPRuntimeDefinition] {
@@ -2311,31 +2326,45 @@ final class ApplicationModel {
         enabledLocalACPRuntimeKinds.contains(runtimeKind)
     }
 
+    func isLocalACPRuntimeShown(_ runtimeKind: AgentRuntimeKind) -> Bool {
+        shownLocalACPRuntimeKinds.contains(runtimeKind)
+    }
+
+    func setLocalACPRuntimeShown(
+        _ isShown: Bool,
+        runtimeKind: AgentRuntimeKind
+    ) {
+        let state = localACPRuntimePreferences.setShown(
+            isShown,
+            for: runtimeKind
+        )
+        shownLocalACPRuntimeKinds = state.shownRuntimeKinds
+    }
+
     func enableLocalACPRuntimeCredentialAccess(
         _ runtimeKind: AgentRuntimeKind
     ) {
         acknowledgeCredentialAccessDisclosure()
-        guard enabledLocalACPRuntimeKinds.insert(runtimeKind).inserted else {
+        let wasEnabled = enabledLocalACPRuntimeKinds.contains(runtimeKind)
+        let state = localACPRuntimePreferences.enable(runtimeKind)
+        enabledLocalACPRuntimeKinds = state.enabledRuntimeKinds
+        shownLocalACPRuntimeKinds = state.shownRuntimeKinds
+        guard !wasEnabled else {
             refreshLocalACPRuntimesNow()
             return
         }
-        applicationDefaults.set(
-            enabledLocalACPRuntimeKinds.map(\.rawValue).sorted(),
-            forKey: Self.enabledLocalACPRuntimesDefaultsKey
-        )
         refreshLocalACPRuntimesNow()
     }
 
     func disableLocalACPRuntimeCredentialAccess(
         _ runtimeKind: AgentRuntimeKind
     ) {
-        guard enabledLocalACPRuntimeKinds.remove(runtimeKind) != nil else {
+        guard enabledLocalACPRuntimeKinds.contains(runtimeKind) else {
             return
         }
-        applicationDefaults.set(
-            enabledLocalACPRuntimeKinds.map(\.rawValue).sorted(),
-            forKey: Self.enabledLocalACPRuntimesDefaultsKey
-        )
+        let state = localACPRuntimePreferences.disable(runtimeKind)
+        enabledLocalACPRuntimeKinds = state.enabledRuntimeKinds
+        shownLocalACPRuntimeKinds = state.shownRuntimeKinds
         refreshLocalACPRuntimesNow()
     }
 

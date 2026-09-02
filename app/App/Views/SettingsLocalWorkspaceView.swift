@@ -222,54 +222,75 @@ struct SettingsLocalWorkspaceView: View {
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
 
-                        if let availability,
-                           availability.needsCLIInstallation
-                            || availability.needsAdapterInstallation {
-                            Button(
-                                model.installingLocalACPRuntimeKinds
-                                    .contains(definition.runtimeKind)
-                                    ? "Installing…"
-                                    : localACPInstallButtonLabel(availability)
-                            ) {
-                                model.installLocalACPRuntimeComponent(
-                                    definition.runtimeKind
-                                )
-                            }
-                            .buttonStyle(DashboardPrimaryButtonStyle())
-                            .disabled(
-                                model.installingLocalACPRuntimeKinds
-                                    .contains(definition.runtimeKind)
+                        HStack(spacing: 8) {
+                            let isShown = model.isLocalACPRuntimeShown(
+                                definition.runtimeKind
                             )
-                        } else if isReady {
-                            Button("Disable") {
-                                model.disableLocalACPRuntimeCredentialAccess(
-                                    definition.runtimeKind
+                            Button(isShown ? "Hide" : "Show") {
+                                model.setLocalACPRuntimeShown(
+                                    !isShown,
+                                    runtimeKind: definition.runtimeKind
                                 )
                             }
                             .buttonStyle(SettingsQuietButtonStyle())
-                        } else {
-                            let credentialAccessEnabled = model
-                                .isLocalACPRuntimeCredentialAccessEnabled(
-                                    definition.runtimeKind
-                                )
-                            Button(
-                                isChecking ? "Checking…"
-                                    : credentialAccessEnabled ? "Recheck" : "Enable"
-                            ) {
-                                if credentialAccessEnabled {
-                                    model.refreshLocalACPRuntimesNow()
-                                } else if model
-                                    .hasAcknowledgedCredentialAccessDisclosure {
-                                    model.enableLocalACPRuntimeCredentialAccess(
+                            .accessibilityLabel(
+                                "\(isShown ? "Hide" : "Show") \(definition.displayName) in the left sidebar"
+                            )
+                            .accessibilityHint(
+                                isShown
+                                    ? "Removes the runtime from the Local Agent Workspace sidebar without changing its enabled state."
+                                    : "Adds the runtime to the Local Agent Workspace sidebar without changing its enabled state."
+                            )
+
+                            if let availability,
+                               availability.needsCLIInstallation
+                                || availability.needsAdapterInstallation {
+                                Button(
+                                    model.installingLocalACPRuntimeKinds
+                                        .contains(definition.runtimeKind)
+                                        ? "Installing…"
+                                        : localACPInstallButtonLabel(availability)
+                                ) {
+                                    model.installLocalACPRuntimeComponent(
                                         definition.runtimeKind
                                     )
-                                } else {
-                                    pendingCredentialRuntime =
-                                        definition.runtimeKind
                                 }
+                                .buttonStyle(DashboardPrimaryButtonStyle())
+                                .disabled(
+                                    model.installingLocalACPRuntimeKinds
+                                        .contains(definition.runtimeKind)
+                                )
+                            } else if isReady {
+                                Button("Disable") {
+                                    model.disableLocalACPRuntimeCredentialAccess(
+                                        definition.runtimeKind
+                                    )
+                                }
+                                .buttonStyle(SettingsQuietButtonStyle())
+                            } else {
+                                let credentialAccessEnabled = model
+                                    .isLocalACPRuntimeCredentialAccessEnabled(
+                                        definition.runtimeKind
+                                    )
+                                Button(
+                                    isChecking ? "Checking…"
+                                        : credentialAccessEnabled ? "Recheck" : "Enable"
+                                ) {
+                                    if credentialAccessEnabled {
+                                        model.refreshLocalACPRuntimesNow()
+                                    } else if model
+                                        .hasAcknowledgedCredentialAccessDisclosure {
+                                        model.enableLocalACPRuntimeCredentialAccess(
+                                            definition.runtimeKind
+                                        )
+                                    } else {
+                                        pendingCredentialRuntime =
+                                            definition.runtimeKind
+                                    }
+                                }
+                                .buttonStyle(SettingsQuietButtonStyle())
+                                .disabled(isChecking)
                             }
-                            .buttonStyle(SettingsQuietButtonStyle())
-                            .disabled(isChecking)
                         }
                     }
                 }
