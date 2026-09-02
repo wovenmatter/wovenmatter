@@ -809,6 +809,17 @@ enum DashboardNoteDraftSaveState: Equatable {
     case failed(String)
 }
 
+private struct UsageAnalyticsRefreshKey: Hashable, Sendable {
+    let range: String
+    let enabledProviders: [String]
+    let allowsCredentialAccess: Bool
+}
+
+private struct UsageLimitsRefreshKey: Hashable, Sendable {
+    let enabledProviders: [String]
+    let allowsCredentialAccess: Bool
+}
+
 struct DashboardNoteDraft: Equatable {
     var title: String
     var content: String
@@ -986,7 +997,11 @@ final class ApplicationModel {
     private(set) var conversationStatesByID: [String: DashboardConversationState] = [:]
     private(set) var localUsage: LocalUsageSnapshot?
     private(set) var localUsageError: String?
-    private(set) var isRefreshingLocalUsage = false
+    private(set) var isRefreshingUsageAnalytics = false
+    private(set) var isRefreshingUsageLimits = false
+    var isRefreshingLocalUsage: Bool {
+        isRefreshingUsageAnalytics || isRefreshingUsageLimits
+    }
     private(set) var isOpenRouterCredentialConfigured = false
     private(set) var signingInUsageProviders: Set<ProviderKind> = []
     private(set) var hasAcknowledgedCredentialAccessDisclosure = false
@@ -1005,13 +1020,22 @@ final class ApplicationModel {
     private var conversationChangeWorkerTokens: [String: UUID] = [:]
     private var pendingConversationChanges: [String: [DashboardConversationChange]] = [:]
     private var terminalRunIDsByConversation: [String: String] = [:]
-    private var localUsageRefreshGeneration: UInt64 = 0
     private var surfaceProfilePersistenceTask: Task<Void, Never>?
     private var surfaceProfilePersistenceGeneration = 0
     @ObservationIgnored
     private let localACPRuntimeResolver = LocalACPRuntimeResolver()
     @ObservationIgnored
     private let localUsageService = LocalUsageService()
+    @ObservationIgnored
+    private let usageAnalyticsRefreshCoordinator = UsageRefreshCoordinator<
+        UsageAnalyticsRefreshKey,
+        UsageAnalyticsSnapshot
+    >()
+    @ObservationIgnored
+    private let usageLimitsRefreshCoordinator = UsageRefreshCoordinator<
+        UsageLimitsRefreshKey,
+        LocalUsageLimitsSnapshot
+    >()
     @ObservationIgnored
     private let applicationDefaults: UserDefaults
     @ObservationIgnored
@@ -2181,23 +2205,160 @@ final class ApplicationModel {
         refreshLimits: Bool = false,
         reason: UsageRefreshReason = .manual
     ) async {
-        localUsageRefreshGeneration &+= 1
-        let generation = localUsageRefreshGeneration
-        isRefreshingLocalUsage = true
         localUsageError = nil
-        let snapshot = await localUsageService.snapshot(
+        prepareUsageSnapshot(range: range)
+        let policy: UsageRefreshCoordinator<
+            UsageAnalyticsRefreshKey,
+            UsageAnalyticsSnapshot
+        >.Policy = switch reason {
+        case .manual, .credentialChanged:
+            .force
+        case .startup, .viewAppeared, .rangeChanged, .runCompleted, .periodic:
+            .refresh
+        }
+        if refreshLimits {
+            async let analyticsRefresh: Void = refreshUsageAnalytics(
+                range: range,
+                reason: reason,
+                policy: policy
+            )
+            async let limitsRefresh: Void = refreshUsageLimits(
+                reason: reason,
+                force: policy == .force
+            )
+            _ = await (analyticsRefresh, limitsRefresh)
+        } else {
+            await refreshUsageAnalytics(
+                range: range,
+                reason: reason,
+                policy: policy
+            )
+        }
+    }
+
+    func usageDestinationAppeared(range: UsageTimeRange) async {
+        await refreshLocalUsage(
             range: range,
-            refreshLimits: refreshLimits,
-            refreshReason: reason,
-            enabledProviders: enabledUsageProviders,
-            allowCredentialAccess: isOpenRouterCredentialConfigured
-                && hasAcknowledgedCredentialAccessDisclosure
-                && enabledUsageProviders.contains(.openRouter)
+            refreshLimits: true,
+            reason: .viewAppeared
         )
-        guard generation == localUsageRefreshGeneration else { return }
-        isRefreshingLocalUsage = false
-        guard !Task.isCancelled else { return }
-        localUsage = snapshot
+    }
+
+    func usageAnalyticsSelected(range: UsageTimeRange) async {
+        await refreshUsageAnalytics(
+            range: range,
+            reason: .viewAppeared,
+            policy: .reuse
+        )
+    }
+
+    private func refreshUsageAnalytics(
+        range: UsageTimeRange,
+        reason: UsageRefreshReason,
+        policy: UsageRefreshCoordinator<
+            UsageAnalyticsRefreshKey,
+            UsageAnalyticsSnapshot
+        >.Policy
+    ) async {
+        let enabledProviders = enabledUsageProviders
+        let allowsCredentialAccess = isOpenRouterCredentialConfigured
+            && hasAcknowledgedCredentialAccessDisclosure
+            && enabledProviders.contains(.openRouter)
+        let key = UsageAnalyticsRefreshKey(
+            range: range.rawValue,
+            enabledProviders: enabledProviders.map(\.rawValue).sorted(),
+            allowsCredentialAccess: allowsCredentialAccess
+        )
+        isRefreshingUsageAnalytics = true
+        do {
+            let analytics = try await usageAnalyticsRefreshCoordinator.value(
+                for: key,
+                policy: policy
+            ) { [localUsageService] in
+                await localUsageService.analyticsSnapshot(
+                    range: range,
+                    refreshReason: reason,
+                    enabledProviders: enabledProviders,
+                    allowCredentialAccess: allowsCredentialAccess
+                )
+            }
+            let existing = localUsage
+            localUsage = LocalUsageSnapshot(
+                analytics: analytics,
+                limits: existing?.limits ?? LocalUsageService.placeholderLimits(
+                    enabledProviders: enabledProviders
+                ),
+                hasOpenRouterCredential: existing?.hasOpenRouterCredential
+                    ?? isOpenRouterCredentialConfigured
+            )
+        } catch is CancellationError {
+            // A forced refresh superseded this request. Its replacement owns the state.
+        } catch {
+            localUsageError = error.localizedDescription
+        }
+        isRefreshingUsageAnalytics = await usageAnalyticsRefreshCoordinator.isRefreshing
+    }
+
+    private func refreshUsageLimits(
+        reason: UsageRefreshReason,
+        force: Bool
+    ) async {
+        let enabledProviders = enabledUsageProviders
+        let allowsCredentialAccess = isOpenRouterCredentialConfigured
+            && hasAcknowledgedCredentialAccessDisclosure
+            && enabledProviders.contains(.openRouter)
+        let key = UsageLimitsRefreshKey(
+            enabledProviders: enabledProviders.map(\.rawValue).sorted(),
+            allowsCredentialAccess: allowsCredentialAccess
+        )
+        isRefreshingUsageLimits = true
+        do {
+            let limits = try await usageLimitsRefreshCoordinator.value(
+                for: key,
+                policy: force ? .force : .refresh
+            ) { [localUsageService] in
+                await localUsageService.limitsSnapshot(
+                    refresh: true,
+                    refreshReason: reason,
+                    enabledProviders: enabledProviders,
+                    allowCredentialAccess: allowsCredentialAccess
+                )
+            }
+            let existing = localUsage
+            localUsage = LocalUsageSnapshot(
+                analytics: existing?.analytics ?? Self.emptyUsageAnalytics(range: currentUsageRange),
+                limits: limits.accounts,
+                hasOpenRouterCredential: limits.hasOpenRouterCredential
+                    || isOpenRouterCredentialConfigured
+            )
+        } catch is CancellationError {
+            // A forced refresh superseded this request. Its replacement owns the state.
+        } catch {
+            localUsageError = error.localizedDescription
+        }
+        isRefreshingUsageLimits = await usageLimitsRefreshCoordinator.isRefreshing
+    }
+
+    private func prepareUsageSnapshot(range: UsageTimeRange) {
+        guard localUsage == nil else { return }
+        localUsage = LocalUsageSnapshot(
+            analytics: Self.emptyUsageAnalytics(range: range),
+            limits: LocalUsageService.placeholderLimits(
+                enabledProviders: enabledUsageProviders
+            ),
+            hasOpenRouterCredential: isOpenRouterCredentialConfigured
+        )
+    }
+
+    private static func emptyUsageAnalytics(
+        range: UsageTimeRange
+    ) -> UsageAnalyticsSnapshot {
+        UsageAnalyticsSnapshot(
+            range: range,
+            generatedAt: Date(),
+            samples: [],
+            sources: []
+        )
     }
 
     private var currentUsageRange: UsageTimeRange {
