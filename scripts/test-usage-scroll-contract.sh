@@ -27,6 +27,16 @@ printf '%s\n' "$limit_card_body" | grep -Fq 'openRouterCredentialControls'
 printf '%s\n' "$limit_card_body" | grep -Fq 'if pinsFooter { Spacer(minLength: 12) }'
 printf '%s\n' "$limit_card_body" | grep -Fq 'maxHeight: pinsFooter ? .infinity : nil'
 printf '%s\n' "$limit_card_body" | grep -Fq 'model.codexUsageWorkspaces.count > 1'
+
+codex_workspace_selector="$(sed -n '/private var codexWorkspaceSelector/,/private var selectedCodexWorkspace/p' "$source_file")"
+printf '%s\n' "$codex_workspace_selector" | grep -Fq 'Text(selectedCodexWorkspace?.name ?? "Choose workspace")'
+printf '%s\n' "$codex_workspace_selector" | grep -Fq '.menuStyle(.borderlessButton)'
+printf '%s\n' "$codex_workspace_selector" | grep -Fq '.disabled(model.isRefreshingUsageLimits)'
+if printf '%s\n' "$codex_workspace_selector" | grep -Fq 'Image(systemName: "chevron.up.chevron.down")'; then
+  printf '%s\n' 'Codex workspace picker must use only the borderless Menu dropdown indicator.' >&2
+  exit 1
+fi
+
 grep -Fq 'await model.selectCodexUsageWorkspace(' "$source_file"
 grep -Fq 'model.reconnectSelectedCodexUsageWorkspace()' "$source_file"
 grep -Fq 'environment["CODEX_HOME"] = homeDirectory.path' "$model_file"
