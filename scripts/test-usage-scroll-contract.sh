@@ -18,8 +18,16 @@ accounts_body="$(sed -n '/private func accountConnections/,/private func limitCa
 printf '%s\n' "$accounts_body" | grep -Fq 'ProviderKind.supportedAccounts.map'
 printf '%s\n' "$accounts_body" | grep -Fq 'ViewThatFits(in: .horizontal)'
 printf '%s\n' "$accounts_body" | grep -Fq 'GridItem(.flexible(), alignment: .topLeading)'
+printf '%s\n' "$accounts_body" | grep -Fq 'idealWidth: UsageLimitsLayout.twoColumnProviderGridMinimumWidth'
+printf '%s\n' "$accounts_body" | grep -Fq 'maxWidth: .infinity'
 printf '%s\n' "$accounts_body" | grep -Fq 'limitCard(account, pinsFooter: true)'
 printf '%s\n' "$accounts_body" | grep -Fq 'limitCard(account, pinsFooter: false)'
+
+grep -Fq 'static let twoColumnProviderGridMinimumWidth: CGFloat = 700' "$source_file"
+if printf '%s\n' "$accounts_body" | grep -Eq '\.frame\(minWidth: (7[2-9][0-9]|[89][0-9][0-9]|[1-9][0-9]{3,})\)'; then
+  printf '%s\n' 'Usage provider grid must fit the standard two-sidebar desktop content width.' >&2
+  exit 1
+fi
 
 limit_card_body="$(sed -n '/private func limitCard/,/private var openRouterCredentialControls/p' "$source_file")"
 printf '%s\n' "$limit_card_body" | grep -Fq 'account.provider == .openRouter'

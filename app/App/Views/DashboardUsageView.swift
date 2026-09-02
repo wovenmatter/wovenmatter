@@ -46,6 +46,16 @@ private enum PendingUsageCredentialAction: Identifiable {
     }
 }
 
+private enum UsageLimitsLayout {
+    // The standard 1,320-point window leaves 712 points inside the Usage page
+    // with both 256-point sidebars visible, while the minimum compact window
+    // leaves 696. Keep two readable tracks at the standard size and fall back
+    // to one only at the genuinely narrower compact width.
+    // ViewThatFits measures the grid's content-driven ideal width, so the frame
+    // must state the intended ideal as well as the lower bound.
+    static let twoColumnProviderGridMinimumWidth: CGFloat = 700
+}
+
 struct DashboardUsageView: View {
     @Environment(\.dashboardTheme) private var theme
     @Bindable var model: ApplicationModel
@@ -796,7 +806,11 @@ struct DashboardUsageView: View {
                     limitCard(account, pinsFooter: true)
                 }
             }
-            .frame(minWidth: 720)
+            .frame(
+                minWidth: UsageLimitsLayout.twoColumnProviderGridMinimumWidth,
+                idealWidth: UsageLimitsLayout.twoColumnProviderGridMinimumWidth,
+                maxWidth: .infinity
+            )
 
             LazyVGrid(
                 columns: [GridItem(.flexible(), alignment: .topLeading)],
