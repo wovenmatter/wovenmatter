@@ -295,7 +295,7 @@ struct WorkspaceView: View {
             compactDrawer = .none
         }
         .onChange(of: singleSidebarSideRawValue) { oldValue, newValue in
-            guard sidebarStyle == .single,
+            guard sidebarStyle != .split,
                   let oldSide = DashboardSidebarSide(rawValue: oldValue),
                   let newSide = DashboardSidebarSide(rawValue: newValue),
                   compactDrawer == oldSide.compactDrawer else { return }
@@ -358,18 +358,16 @@ struct WorkspaceView: View {
     }
 
     private func desktopShell(layout: DashboardLayoutState) -> some View {
-        let showLeftRailButton = sidebarStyle == .single
+        let showLeftRailButton = sidebarStyle != .split
             ? !layout.showsLeftRail && singleSidebarSide == .left
             : !layout.showsLeftRail
-        let showRightRailButton = sidebarStyle == .single
+        let showRightRailButton = sidebarStyle != .split
             ? !layout.showsRightRail && singleSidebarSide == .right
             : !layout.showsRightRail
 
         return HStack(spacing: DashboardMetrics.shellGap) {
             if layout.showsLeftRail {
-                rail(side: .left)
-                    .frame(width: DashboardMetrics.railWidth)
-                    .background(DashboardRailBackground())
+                railGroup(side: .left)
             }
 
             centerSurface(
@@ -381,9 +379,7 @@ struct WorkspaceView: View {
             .frame(minWidth: DashboardMetrics.workspaceMinimumWidth)
 
             if layout.showsRightRail {
-                rail(side: .right)
-                    .frame(width: DashboardMetrics.railWidth)
-                    .background(DashboardRailBackground())
+                railGroup(side: .right)
             }
         }
         .padding(.horizontal, DashboardMetrics.shellInset)
@@ -395,10 +391,15 @@ struct WorkspaceView: View {
         let drawerWidth = min(width * 0.82, 320)
         let showLeftRailButton = sidebarStyle == .split || singleSidebarSide == .left
         let showRightRailButton = sidebarStyle == .split || singleSidebarSide == .right
+        let drawerPageCount = sidebarNavigation.pages(
+            for: singleSidebarSide,
+            style: sidebarStyle
+        ).count
+        let drawerTotalWidth = drawerWidth * CGFloat(drawerPageCount)
         let workspaceOffset: CGFloat = switch compactDrawer {
         case .none: 0
-        case .left: drawerWidth
-        case .right: -drawerWidth
+        case .left: drawerTotalWidth
+        case .right: -drawerTotalWidth
         }
 
         return ZStack(alignment: compactDrawer == .right ? .trailing : .leading) {
@@ -421,14 +422,10 @@ struct WorkspaceView: View {
             }
 
             if compactDrawer == .left {
-                rail(side: .left)
-                    .frame(width: drawerWidth)
-                    .background(theme.palette.railFill)
+                railGroup(side: .left, railWidth: drawerWidth, compact: true)
                     .transition(.move(edge: .leading).combined(with: .opacity))
             } else if compactDrawer == .right {
-                rail(side: .right)
-                    .frame(width: drawerWidth)
-                    .background(theme.palette.railFill)
+                railGroup(side: .right, railWidth: drawerWidth, compact: true)
                     .transition(.move(edge: .trailing).combined(with: .opacity))
             }
         }
@@ -465,10 +462,33 @@ struct WorkspaceView: View {
     }
 
     @ViewBuilder
-    private func rail(side: DashboardSidebarSide) -> some View {
+    private func railGroup(
+        side: DashboardSidebarSide,
+        railWidth: CGFloat = DashboardMetrics.railWidth,
+        compact: Bool = false
+    ) -> some View {
+        HStack(spacing: sidebarStyle == .adaptive ? 0 : DashboardMetrics.shellGap) {
+            ForEach(sidebarNavigation.pages(for: side, style: sidebarStyle), id: \.self) { page in
+                rail(side: side, page: page)
+                    .frame(width: railWidth)
+                    .background {
+                        if compact {
+                            theme.palette.railFill
+                        } else {
+                            DashboardRailBackground()
+                        }
+                    }
+            }
+        }
+    }
+
+    private func rail(
+        side: DashboardSidebarSide,
+        page: DashboardSidebarPage
+    ) -> some View {
         DashboardSidebarRail(
             side: side,
-            page: sidebarNavigation.page(for: side, style: sidebarStyle),
+            page: page,
             style: sidebarStyle,
             agents: allAgents,
             navigationAgents: sidebarAgents,
@@ -521,7 +541,7 @@ struct WorkspaceView: View {
     private func collapseRail(side: DashboardSidebarSide) {
         if compactDrawer == side.compactDrawer {
             compactDrawer = .none
-        } else if sidebarStyle == .single {
+        } else if sidebarStyle != .split {
             singleRailRequested = false
         } else if side == .left {
             leftRailRequested = false
@@ -531,7 +551,7 @@ struct WorkspaceView: View {
     }
 
     private func revealRail(side: DashboardSidebarSide) {
-        if sidebarStyle == .single {
+        if sidebarStyle != .split {
             singleRailRequested = true
         } else if side == .left {
             leftRailRequested = true
@@ -1195,7 +1215,7 @@ private struct DashboardSidebarRail: View {
             agentOrderRaw: $agentOrderRaw,
             agentDisclosureRaw: $agentDisclosureRaw,
             onCollapse: { actions.onCollapse(side) },
-            onMove: style == .single ? actions.onMoveSingleRail : nil,
+            onMove: style == .split ? nil : actions.onMoveSingleRail,
             onUtility: actions.onUtility,
             onSelectAgent: actions.onSelectAgent,
             onStartRemoteChat: actions.onStartRemoteChat,
@@ -1229,7 +1249,7 @@ private struct DashboardSidebarRail: View {
             selectedNoteID: selectedNoteID,
             selectedFolderName: folders.first(where: { $0.id == selectedFolderID })?.name,
             onCollapse: { actions.onCollapse(side) },
-            onBack: style == .single ? actions.onShowNavigation : nil,
+            onBack: style == .split ? nil : actions.onShowNavigation,
             onMove: style == .single ? actions.onMoveSingleRail : nil,
             onCreateChat: actions.onCreateConversation,
             onCreateNote: actions.onCreateNote,
