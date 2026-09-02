@@ -129,7 +129,7 @@ test "$(printf '%s\n' "$rail_group" | grep -Fc '.background {')" -eq 2
 test "$(printf '%s\n' "$rail_group" | grep -Fc '.overlay {')" -eq 1
 printf '%s\n' "$rail_group" | grep -Fq 'Rectangle()'
 printf '%s\n' "$rail_group" | grep -Fq '.fill(theme.palette.border)'
-printf '%s\n' "$rail_group" | grep -Fq '.frame(width: 1)'
+printf '%s\n' "$rail_group" | grep -Fq '.frame(width: 0.5)'
 printf '%s\n' "$rail_group" | grep -Fq '.allowsHitTesting(false)'
 printf '%s\n' "$rail_group" | grep -Fq '.accessibilityHidden(true)'
 sed -n '/^    private func desktopShell(/,/^    private func compactShell(/p' "$workspace_file" \

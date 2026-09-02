@@ -490,7 +490,7 @@ struct WorkspaceView: View {
                 .overlay {
                     Rectangle()
                         .fill(theme.palette.border)
-                        .frame(width: 1)
+                        .frame(width: 0.5)
                         .allowsHitTesting(false)
                         .accessibilityHidden(true)
                 }
