@@ -38,6 +38,7 @@ let package = Package(
       ],
       linkerSettings: [
         .linkedLibrary("sqlite3"),
+        .linkedFramework("LocalAuthentication"),
         .linkedFramework("Security")
       ]
     ),

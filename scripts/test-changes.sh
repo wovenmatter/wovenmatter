@@ -19,6 +19,7 @@ run_static_checks() {
   for file in harnesses/initialize-workspace.sh remote/entrypoint.sh scripts/*.sh; do
     bash -n "$file"
   done
+  scripts/test-usage-scroll-contract.sh
   scripts/test-conversation-row-click-contract.sh
   scripts/test-release.sh
   scripts/test-remote-workspace.sh
