@@ -6536,12 +6536,21 @@ private extension View {
 
 struct DashboardIconButtonStyle: ButtonStyle {
     @Environment(\.dashboardTheme) private var theme
+    @Environment(\.isEnabled) private var isEnabled
     @State private var hovered = false
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .foregroundStyle(DashboardPalette.mutedForeground)
-            .background(configuration.isPressed || hovered ? theme.palette.themeSoft : .clear)
+            .foregroundStyle(
+                isEnabled
+                    ? DashboardPalette.mutedForeground
+                    : DashboardPalette.mutedForeground.opacity(0.68)
+            )
+            .background(
+                isEnabled && (configuration.isPressed || hovered)
+                    ? theme.palette.themeSoft
+                    : .clear
+            )
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             .onHover { hovered = $0 }
     }

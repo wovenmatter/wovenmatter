@@ -112,6 +112,7 @@ struct CursorAccountClient: Sendable {
     async let user = fetchUser(cookie: session.cookie)
     async let summary = fetchSummary(cookie: session.cookie)
     let (account, usage) = try await (user, summary)
+    let sand = try? await fetchSand(cookie: session.cookie)
     let plan = usage.individualUsage?.plan
     let overall = usage.individualUsage?.overall
     let pooled = usage.teamUsage?.pooled
@@ -125,10 +126,10 @@ struct CursorAccountClient: Sendable {
     } else {
       nil
     }
-    let window = percent.map {
+    var windows: [ProviderQuotaWindow] = percent.map {
       ProviderQuotaWindow(
         id: "billing-cycle",
-        label: "Monthly included usage",
+        label: "Total",
         usedPercent: $0,
         usageKnown: true,
         windowMinutes: Self.windowMinutes(
@@ -137,25 +138,54 @@ struct CursorAccountClient: Sendable {
         ),
         resetsAt: resetsAt
       )
+    }.map { [$0] } ?? []
+    if let cursor = plan?.autoPercentUsed {
+      windows.append(ProviderQuotaWindow(
+        id: "cursor", label: "Cursor", usedPercent: cursor,
+        usageKnown: true, windowMinutes: Self.windowMinutes(
+          start: Self.date(usage.billingCycleStart), end: resetsAt
+        ), resetsAt: resetsAt
+      ))
     }
-    let budget: ProviderReportedBudget? = if let used, let limit, limit > 0 {
+    if let thirdParty = plan?.apiPercentUsed {
+      windows.append(ProviderQuotaWindow(
+        id: "third-party", label: "Third Party", usedPercent: thirdParty,
+        usageKnown: true, windowMinutes: Self.windowMinutes(
+          start: Self.date(usage.billingCycleStart), end: resetsAt
+        ), resetsAt: resetsAt
+      ))
+    }
+    if let grokBot = sand?.quotaWindow {
+      windows.append(grokBot)
+    }
+    let onDemand = usage.individualUsage?.onDemand ?? usage.teamUsage?.onDemand
+    let budget: ProviderReportedBudget? = if let used = onDemand?.used,
+      let limit = onDemand?.limit, limit > 0 {
       ProviderReportedBudget(
         usedMicros: Self.amountMicros(cents: used),
         limitMicros: Self.amountMicros(cents: limit),
         currency: "USD",
         period: "monthly",
         resetsAt: resetsAt,
-        scope: "account"
+        scope: "on-demand"
       )
     } else {
       nil
     }
+    let details: [ProviderUsageDetail] = onDemand?.used.map { used in
+      let usedText = (Double(used) / 100).formatted(.currency(code: "USD"))
+      let value = onDemand?.limit.map {
+        "\(usedText) / \((Double($0) / 100).formatted(.currency(code: "USD")))"
+      } ?? usedText
+      return ProviderUsageDetail(label: "On-demand spend", value: value)
+    }.map { [$0] } ?? []
     return UsageLimitAccount(
       provider: .cursor,
       accountLabel: account.email ?? session.email ?? "Cursor account",
-      status: window == nil && budget == nil ? .signedIn : .available,
-      quotaWindows: window.map { [$0] } ?? [],
+      status: windows.isEmpty && budget == nil ? .signedIn : .available,
+      quotaWindows: windows,
       providerBudget: budget,
+      details: details,
       source: "Cursor account usage APIs",
       detail: "Live account-wide Cursor usage from the same dashboard endpoints used by CodexBar (all devices).",
       observedAt: now,
@@ -252,6 +282,31 @@ struct CursorAccountClient: Sendable {
       CursorUsageSummary.self,
       from: await responseData(request)
     )
+  }
+
+  private func fetchSand(cookie: String) async throws -> CursorSandUsage {
+    let request = Self.sandRequest(baseURL: baseURL, cookie: cookie)
+    return try JSONDecoder().decode(CursorSandUsage.self, from: await responseData(request))
+  }
+
+  static func sandRequest(baseURL: URL, cookie: String) -> URLRequest {
+    var request = URLRequest(
+      url: baseURL.appending(path: "api/dashboard/get-sand-usage-status")
+    )
+    request.httpMethod = "POST"
+    request.setValue(cookie, forHTTPHeaderField: "Cookie")
+    request.setValue("application/json", forHTTPHeaderField: "Accept")
+    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    request.setValue(Self.origin(baseURL), forHTTPHeaderField: "Origin")
+    request.httpBody = Data("{}".utf8)
+    return request
+  }
+
+  private static func origin(_ url: URL) -> String {
+    guard let scheme = url.scheme, let host = url.host else {
+      return "https://cursor.com"
+    }
+    return "\(scheme)://\(host)"
   }
 
   private func fetchUser(cookie: String) async throws -> CursorUserInfo {
@@ -440,13 +495,94 @@ private struct CursorUsageSummary: Decodable {
   struct Individual: Decodable {
     let plan: Amount?
     let overall: Amount?
+    let onDemand: Amount?
   }
-  struct Team: Decodable { let pooled: Amount? }
+  struct Team: Decodable {
+    let pooled: Amount?
+    let onDemand: Amount?
+  }
   struct Amount: Decodable {
     let used: Int?
     let limit: Int?
     let remaining: Int?
     let totalPercentUsed: Double?
+    let autoPercentUsed: Double?
+    let apiPercentUsed: Double?
+  }
+}
+
+/// Cursor's weekly Grok Bot allowance, called "Sand" by the dashboard API.
+/// Percent values are already 0...100 percent-used units, not 0...1 fractions.
+struct CursorSandUsage: Decodable {
+  let currentPeriodStart: String?
+  let nextResetTimestampUtc: String?
+  let usagePercent: Double?
+  let hasAvailableUsage: Bool?
+  let hasNonZeroIncludedLimit: Bool?
+
+  private enum CodingKeys: String, CodingKey {
+    case currentPeriodStart
+    case currentPeriodStartSnake = "current_period_start"
+    case nextResetTimestampUtc
+    case nextResetTimestampUTC
+    case nextResetTimestampUtcSnake = "next_reset_timestamp_utc"
+    case usagePercent
+    case usagePercentSnake = "usage_percent"
+    case hasAvailableUsage
+    case hasAvailableUsageSnake = "has_available_usage"
+    case hasNonZeroIncludedLimit
+    case hasNonZeroIncludedLimitSnake = "has_non_zero_included_limit"
+  }
+
+  init(from decoder: any Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    currentPeriodStart = try container.decodeIfPresent(
+      String.self, forKey: .currentPeriodStart
+    ) ?? container.decodeIfPresent(String.self, forKey: .currentPeriodStartSnake)
+    nextResetTimestampUtc = try container.decodeIfPresent(
+      String.self, forKey: .nextResetTimestampUtc
+    ) ?? container.decodeIfPresent(String.self, forKey: .nextResetTimestampUTC)
+      ?? container.decodeIfPresent(String.self, forKey: .nextResetTimestampUtcSnake)
+    usagePercent = try container.decodeIfPresent(
+      Double.self, forKey: .usagePercent
+    ) ?? container.decodeIfPresent(Double.self, forKey: .usagePercentSnake)
+    hasAvailableUsage = try container.decodeIfPresent(
+      Bool.self, forKey: .hasAvailableUsage
+    ) ?? container.decodeIfPresent(Bool.self, forKey: .hasAvailableUsageSnake)
+    hasNonZeroIncludedLimit = try container.decodeIfPresent(
+      Bool.self, forKey: .hasNonZeroIncludedLimit
+    ) ?? container.decodeIfPresent(Bool.self, forKey: .hasNonZeroIncludedLimitSnake)
+  }
+
+  var quotaWindow: ProviderQuotaWindow? {
+    guard hasNonZeroIncludedLimit == true, let usagePercent else { return nil }
+    let start = Self.date(currentPeriodStart)
+    let reset = Self.date(nextResetTimestampUtc)
+    return ProviderQuotaWindow(
+      id: "grok-bot",
+      label: "Grok Bot",
+      usedPercent: usagePercent,
+      usageKnown: true,
+      windowMinutes: Self.windowMinutes(start: start, end: reset),
+      resetsAt: reset
+    )
+  }
+
+  private static func date(_ value: String?) -> Date? {
+    guard let value else { return nil }
+    if let date = try? Date.ISO8601FormatStyle(
+      includingFractionalSeconds: true
+    ).parse(value) {
+      return date
+    }
+    return try? Date.ISO8601FormatStyle(
+      includingFractionalSeconds: false
+    ).parse(value)
+  }
+
+  private static func windowMinutes(start: Date?, end: Date?) -> Int? {
+    guard let start, let end, end > start else { return nil }
+    return Int(end.timeIntervalSince(start) / 60)
   }
 }
 
