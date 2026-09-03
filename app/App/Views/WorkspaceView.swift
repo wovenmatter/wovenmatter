@@ -3852,6 +3852,7 @@ private struct DashboardCloudConversation: View {
                     onRemoveAttachment: onRemoveAttachment,
                     onDropFiles: onDropFiles,
                     onUnavailableAction: onUnavailableComposerAction,
+                    onCommandNavigation: { _ in false },
                     onSend: onSend
                 )
             }
@@ -4434,8 +4435,9 @@ private struct DashboardComposer: View {
     let onRemoveAttachment: (String) -> Void
     let onDropFiles: ([URL]) -> Bool
     let onUnavailableAction: (String) -> Void
+    let onCommandNavigation: (DashboardComposerNavigationDirection) -> Bool
     let onSend: () -> Void
-    @FocusState private var focused: Bool
+    @State private var focused = false
     @State private var openMenu: DashboardComposerMenuKind?
     @State private var isDropTarget = false
 
@@ -4468,28 +4470,18 @@ private struct DashboardComposer: View {
                 .scrollIndicators(.never)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
-            TextField(
-                "",
+            DashboardComposerTextEditor(
                 text: $draft,
-                prompt: Text(placeholder).foregroundStyle(DashboardPalette.mutedForeground),
-                axis: .vertical
+                isFocused: $focused,
+                placeholder: placeholder,
+                onSubmit: {
+                    if applyFirstSlashCommandIfNeeded() { return }
+                    if canSend { onSend() }
+                },
+                onTab: applyFirstSlashCommandIfNeeded,
+                onCommandNavigation: onCommandNavigation
             )
-            .font(.system(size: 15))
-            .lineSpacing(4)
-            .textFieldStyle(.plain)
-            .lineLimit(1...7)
-            .focused($focused)
-            .frame(minHeight: 32, alignment: .topLeading)
-            .onKeyPress(.return, phases: .down) { press in
-                if press.modifiers.contains(.shift) { return .ignored }
-                if applyFirstSlashCommandIfNeeded() { return .handled }
-                guard canSend else { return .handled }
-                onSend()
-                return .handled
-            }
-            .onKeyPress(.tab, phases: .down) { _ in
-                applyFirstSlashCommandIfNeeded() ? .handled : .ignored
-            }
+            .frame(minHeight: DashboardComposerScrollView.minimumHeight)
             .simultaneousGesture(TapGesture().onEnded { openMenu = nil })
 
             if !matchingSlashCommands.isEmpty {

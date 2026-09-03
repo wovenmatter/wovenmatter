@@ -22,6 +22,7 @@
 		5AECF7B494583F056FBE596C /* WovenMatterApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 624CEC46A7441DADEBBCE79E /* WovenMatterApp.swift */; };
 		5E64711B441F5A188A2862AC /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 489A29D04369BF898400D045 /* RootView.swift */; };
 		A11C00000000000000000003 /* WorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11C00000000000000000004 /* WorkspaceView.swift */; };
+		DC0A00000000000000000001 /* DashboardComposerTextEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC0A00000000000000000002 /* DashboardComposerTextEditor.swift */; };
 		D45100000000000000000001 /* DashboardDesign.swift in Sources */ = {isa = PBXBuildFile; fileRef = D45100000000000000000002 /* DashboardDesign.swift */; };
 		D45300000000000000000001 /* DashboardCalendarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D45300000000000000000002 /* DashboardCalendarView.swift */; };
 		D45400000000000000000001 /* DashboardUsageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D45400000000000000000002 /* DashboardUsageView.swift */; };
@@ -44,6 +45,7 @@
 /* Begin PBXFileReference section */
 		A11C00000000000000000002 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A11C00000000000000000004 /* WorkspaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceView.swift; sourceTree = "<group>"; };
+		DC0A00000000000000000002 /* DashboardComposerTextEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardComposerTextEditor.swift; sourceTree = "<group>"; };
 		37C9459F43D4462FD229B6B1 /* WovenMatter.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = WovenMatter.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		489A29D04369BF898400D045 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
 		5A0B27571F91CCF38534BB90 /* ApplicationModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApplicationModel.swift; sourceTree = "<group>"; };
@@ -143,6 +145,7 @@
 		D0E0A91C0032120E4CDF1388 /* Views */ = {
 			isa = PBXGroup;
 			children = (
+				DC0A00000000000000000002 /* DashboardComposerTextEditor.swift */,
 				F10100000000000000000002 /* ArtifactEditor.swift */,
 				F10200000000000000000002 /* DashboardDatabasesView.swift */,
 				E10000000000000000000002 /* NoteEditor.swift */,
@@ -291,6 +294,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				DC0A00000000000000000001 /* DashboardComposerTextEditor.swift in Sources */,
 				F10000000000000000000001 /* AgentDatabases.swift in Sources */,
 				A13000000000000000000001 /* RemoteWorkspacesModel.swift in Sources */,
 				A13000000000000000000003 /* SettingsRemoteWorkspacesView.swift in Sources */,
