@@ -168,6 +168,12 @@ struct WorkspaceView: View {
             + model.buzzWorkspaceAgents
     }
 
+    private var sidebarAgents: [WorkspaceAgent] {
+        model.visibleOrderedLocalCLIAgents
+            + model.remoteWorkspaceAgents
+            + model.buzzWorkspaceAgents
+    }
+
     private var selectedDraft: Binding<String> {
         let conversationID = selectedConversationID ?? ""
         return Binding(
@@ -289,7 +295,7 @@ struct WorkspaceView: View {
             compactDrawer = .none
         }
         .onChange(of: singleSidebarSideRawValue) { oldValue, newValue in
-            guard sidebarStyle == .single,
+            guard sidebarStyle != .split,
                   let oldSide = DashboardSidebarSide(rawValue: oldValue),
                   let newSide = DashboardSidebarSide(rawValue: newValue),
                   compactDrawer == oldSide.compactDrawer else { return }
@@ -352,18 +358,16 @@ struct WorkspaceView: View {
     }
 
     private func desktopShell(layout: DashboardLayoutState) -> some View {
-        let showLeftRailButton = sidebarStyle == .single
+        let showLeftRailButton = sidebarStyle != .split
             ? !layout.showsLeftRail && singleSidebarSide == .left
             : !layout.showsLeftRail
-        let showRightRailButton = sidebarStyle == .single
+        let showRightRailButton = sidebarStyle != .split
             ? !layout.showsRightRail && singleSidebarSide == .right
             : !layout.showsRightRail
 
         return HStack(spacing: DashboardMetrics.shellGap) {
             if layout.showsLeftRail {
-                rail(side: .left)
-                    .frame(width: DashboardMetrics.railWidth)
-                    .background(DashboardRailBackground())
+                railGroup(side: .left)
             }
 
             centerSurface(
@@ -375,9 +379,7 @@ struct WorkspaceView: View {
             .frame(minWidth: DashboardMetrics.workspaceMinimumWidth)
 
             if layout.showsRightRail {
-                rail(side: .right)
-                    .frame(width: DashboardMetrics.railWidth)
-                    .background(DashboardRailBackground())
+                railGroup(side: .right)
             }
         }
         .padding(.horizontal, DashboardMetrics.shellInset)
@@ -389,10 +391,15 @@ struct WorkspaceView: View {
         let drawerWidth = min(width * 0.82, 320)
         let showLeftRailButton = sidebarStyle == .split || singleSidebarSide == .left
         let showRightRailButton = sidebarStyle == .split || singleSidebarSide == .right
+        let drawerPageCount = sidebarNavigation.pages(
+            for: singleSidebarSide,
+            style: sidebarStyle
+        ).count
+        let drawerTotalWidth = drawerWidth * CGFloat(drawerPageCount)
         let workspaceOffset: CGFloat = switch compactDrawer {
         case .none: 0
-        case .left: drawerWidth
-        case .right: -drawerWidth
+        case .left: drawerTotalWidth
+        case .right: -drawerTotalWidth
         }
 
         return ZStack(alignment: compactDrawer == .right ? .trailing : .leading) {
@@ -415,14 +422,10 @@ struct WorkspaceView: View {
             }
 
             if compactDrawer == .left {
-                rail(side: .left)
-                    .frame(width: drawerWidth)
-                    .background(theme.palette.railFill)
+                railGroup(side: .left, railWidth: drawerWidth, compact: true)
                     .transition(.move(edge: .leading).combined(with: .opacity))
             } else if compactDrawer == .right {
-                rail(side: .right)
-                    .frame(width: drawerWidth)
-                    .background(theme.palette.railFill)
+                railGroup(side: .right, railWidth: drawerWidth, compact: true)
                     .transition(.move(edge: .trailing).combined(with: .opacity))
             }
         }
@@ -459,12 +462,66 @@ struct WorkspaceView: View {
     }
 
     @ViewBuilder
-    private func rail(side: DashboardSidebarSide) -> some View {
+    private func railGroup(
+        side: DashboardSidebarSide,
+        railWidth: CGFloat = DashboardMetrics.railWidth,
+        compact: Bool = false
+    ) -> some View {
+        let pages = sidebarNavigation.pages(for: side, style: sidebarStyle)
+        let usesUnifiedSurface = sidebarStyle == .adaptive && pages.count == 2
+
+        let content = HStack(spacing: usesUnifiedSurface ? 0 : DashboardMetrics.shellGap) {
+            ForEach(pages, id: \.self) { page in
+                rail(side: side, page: page, adaptiveExpanded: usesUnifiedSurface)
+                    .frame(width: railWidth)
+                    .background {
+                        if !usesUnifiedSurface {
+                            railBackground(compact: compact)
+                        }
+                }
+            }
+        }
+
+        if usesUnifiedSurface {
+            content
+                .background {
+                    railBackground(compact: compact)
+                }
+                .overlay {
+                    Rectangle()
+                        .fill(theme.palette.border)
+                        .frame(width: 0.5)
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                }
+                .clipShape(DashboardShapes.windowAlignedSurface)
+        } else {
+            content
+        }
+    }
+
+    @ViewBuilder
+    private func railBackground(compact: Bool) -> some View {
+        if compact {
+            DashboardShapes.windowAlignedSurface
+                .fill(theme.palette.railFill)
+        } else {
+            DashboardRailBackground()
+        }
+    }
+
+    private func rail(
+        side: DashboardSidebarSide,
+        page: DashboardSidebarPage,
+        adaptiveExpanded: Bool
+    ) -> some View {
         DashboardSidebarRail(
             side: side,
-            page: sidebarNavigation.page(for: side, style: sidebarStyle),
+            page: page,
             style: sidebarStyle,
+            adaptiveExpanded: adaptiveExpanded,
             agents: allAgents,
+            navigationAgents: sidebarAgents,
             remoteWorkspaces: model.remoteWorkspaces,
             buzzWorkspaceSnapshot: model.buzzWorkspaceSnapshot,
             folders: model.workspaceOverview?.folders ?? [],
@@ -515,7 +572,7 @@ struct WorkspaceView: View {
     private func collapseRail(side: DashboardSidebarSide) {
         if compactDrawer == side.compactDrawer {
             compactDrawer = .none
-        } else if sidebarStyle == .single {
+        } else if sidebarStyle != .split {
             singleRailRequested = false
         } else if side == .left {
             leftRailRequested = false
@@ -525,7 +582,7 @@ struct WorkspaceView: View {
     }
 
     private func revealRail(side: DashboardSidebarSide) {
-        if sidebarStyle == .single {
+        if sidebarStyle != .split {
             singleRailRequested = true
         } else if side == .left {
             leftRailRequested = true
@@ -1141,11 +1198,12 @@ private struct DashboardSidebarActions {
 }
 
 private struct DashboardSidebarRail: View {
-    @Environment(\.dashboardTheme) private var theme
     let side: DashboardSidebarSide
     let page: DashboardSidebarPage
     let style: DashboardSidebarStyle
+    let adaptiveExpanded: Bool
     let agents: [WorkspaceAgent]
+    let navigationAgents: [WorkspaceAgent]
     let remoteWorkspaces: RemoteWorkspacesModel
     let buzzWorkspaceSnapshot: BuzzWorkspaceSnapshot
     let folders: [WorkspaceFolderRecord]
@@ -1166,30 +1224,18 @@ private struct DashboardSidebarRail: View {
     let onSurfaceProfileChange: () -> Void
 
     var body: some View {
-        if style == .single {
-            ZStack {
-                navigationPage
-                    .allowsHitTesting(page == .navigation)
-                    .accessibilityHidden(page != .navigation)
-                if page == .workspace {
-                    workspacePage
-                        .background(theme.palette.railFill)
-                }
-            }
-        } else {
-            switch page {
-            case .navigation:
-                navigationPage
-            case .workspace:
-                workspacePage
-            }
+        switch page {
+        case .navigation:
+            navigationPage
+        case .workspace:
+            workspacePage
         }
     }
 
     private var navigationPage: some View {
         DashboardSidebarNavigationPage(
             side: side,
-            agents: agents,
+            agents: navigationAgents,
             remoteWorkspaces: remoteWorkspaces,
             buzzWorkspaceSnapshot: buzzWorkspaceSnapshot,
             folders: folders,
@@ -1203,8 +1249,8 @@ private struct DashboardSidebarRail: View {
             pinnedAgentIDsRaw: $pinnedAgentIDsRaw,
             agentOrderRaw: $agentOrderRaw,
             agentDisclosureRaw: $agentDisclosureRaw,
-            onCollapse: { actions.onCollapse(side) },
-            onMove: style == .single ? actions.onMoveSingleRail : nil,
+            onCollapse: adaptiveExpanded ? nil : { actions.onCollapse(side) },
+            onMove: style == .split ? nil : actions.onMoveSingleRail,
             onUtility: actions.onUtility,
             onSelectAgent: actions.onSelectAgent,
             onStartRemoteChat: actions.onStartRemoteChat,
@@ -1239,8 +1285,10 @@ private struct DashboardSidebarRail: View {
             selectedNoteID: selectedNoteID,
             selectedFolderName: folders.first(where: { $0.id == selectedFolderID })?.name,
             onCollapse: { actions.onCollapse(side) },
-            onBack: style == .single ? actions.onShowNavigation : nil,
+            onBack: style == .split ? nil : actions.onShowNavigation,
             onMove: style == .single ? actions.onMoveSingleRail : nil,
+            collapseAtLeadingEdge: adaptiveExpanded && side == .right,
+            showsQuickActions: !adaptiveExpanded,
             onCreateChat: actions.onCreateConversation,
             onCreateNote: actions.onCreateNote,
             onSelectConversation: actions.onSelectConversation,
@@ -1282,7 +1330,7 @@ private struct DashboardSidebarNavigationPage: View {
     @Binding var pinnedAgentIDsRaw: String
     @Binding var agentOrderRaw: String
     @Binding var agentDisclosureRaw: String
-    let onCollapse: () -> Void
+    let onCollapse: (() -> Void)?
     let onMove: (() -> Void)?
     let onUtility: (DashboardDestination) -> Void
     let onSelectAgent: (UUID) -> Void
@@ -1381,20 +1429,25 @@ private struct DashboardSidebarNavigationPage: View {
                         glyph: side == .left ? .panelRightOpen : .panelLeftOpen,
                         size: 16
                     )
-                    .frame(width: 32, height: 32)
+                    .frame(
+                        width: onCollapse == nil ? 36 : 32,
+                        height: onCollapse == nil ? 36 : 32
+                    )
                 }
                 .buttonStyle(DashboardIconButtonStyle())
                 .help(side == .left ? "Move sidebar right" : "Move sidebar left")
             }
-            Button(action: onCollapse) {
-                DashboardLucideIcon(
-                    glyph: side == .left ? .leftCollapse : .rightCollapse,
-                    size: 18
-                )
-                    .frame(width: 36, height: 36)
+            if let onCollapse {
+                Button(action: onCollapse) {
+                    DashboardLucideIcon(
+                        glyph: side == .left ? .leftCollapse : .rightCollapse,
+                        size: 18
+                    )
+                        .frame(width: 36, height: 36)
+                }
+                .buttonStyle(DashboardIconButtonStyle())
+                .help(onMove == nil ? "Hide agents" : "Hide sidebar")
             }
-            .buttonStyle(DashboardIconButtonStyle())
-            .help(onMove == nil ? "Hide agents" : "Hide sidebar")
         }
         .padding(.horizontal, 16)
         .frame(minHeight: 68)
@@ -2460,6 +2513,8 @@ private struct DashboardSidebarWorkspacePage: View {
     let onCollapse: () -> Void
     let onBack: (() -> Void)?
     let onMove: (() -> Void)?
+    let collapseAtLeadingEdge: Bool
+    let showsQuickActions: Bool
     let onCreateChat: () -> Void
     let onCreateNote: () -> Void
     let onSelectConversation: (String) -> Void
@@ -2493,7 +2548,9 @@ private struct DashboardSidebarWorkspacePage: View {
     var body: some View {
         VStack(spacing: 0) {
             railHeader
-            quickActions
+            if showsQuickActions {
+                quickActions
+            }
             VStack(spacing: 8) {
                 modePicker
                 HStack(spacing: 8) {
@@ -2621,6 +2678,9 @@ private struct DashboardSidebarWorkspacePage: View {
 
     private var railHeader: some View {
         HStack(spacing: 8) {
+            if collapseAtLeadingEdge {
+                collapseButton
+            }
             if let onBack {
                 Button(action: onBack) {
                     DashboardLucideIcon(glyph: .arrowLeft, size: 16)
@@ -2660,20 +2720,24 @@ private struct DashboardSidebarWorkspacePage: View {
                 .buttonStyle(DashboardIconButtonStyle())
                 .help(side == .left ? "Move sidebar right" : "Move sidebar left")
             }
-            if onBack != nil {
-                Button(action: onCollapse) {
-                    DashboardLucideIcon(
-                        glyph: side == .left ? .leftCollapse : .rightCollapse,
-                        size: 18
-                    )
-                    .frame(width: 36, height: 36)
-                }
-                .buttonStyle(DashboardIconButtonStyle())
-                .help("Hide sidebar")
+            if onBack != nil && !collapseAtLeadingEdge {
+                collapseButton
             }
         }
         .padding(.horizontal, 12)
         .frame(minHeight: 68)
+    }
+
+    private var collapseButton: some View {
+        Button(action: onCollapse) {
+            DashboardLucideIcon(
+                glyph: side == .left ? .leftCollapse : .rightCollapse,
+                size: 18
+            )
+            .frame(width: 36, height: 36)
+        }
+        .buttonStyle(DashboardIconButtonStyle())
+        .help("Hide sidebar")
     }
 
     private func filterMenu(inSearchRow: Bool) -> some View {

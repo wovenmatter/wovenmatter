@@ -21,6 +21,7 @@ run_static_checks() {
   done
   scripts/test-usage-scroll-contract.sh
   scripts/test-conversation-row-click-contract.sh
+  scripts/test-sidebar-page-contract.sh
   scripts/test-release.sh
   scripts/test-remote-workspace.sh
   for file in remote/src/*.mjs remote/test/*.test.mjs; do

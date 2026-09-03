@@ -129,30 +129,26 @@ struct SettingsGeneralView: View {
 
     private var sidebarLayoutSelector: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 16) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Sidebar layout")
-                        .font(.system(size: 13, weight: .medium))
-                    Text("Use both navigation rails, or open folder contents inside one movable sidebar.")
-                        .font(.system(size: 11))
-                        .foregroundStyle(DashboardPalette.mutedForeground)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Spacer(minLength: 12)
-                DashboardSegmentedSelector(
-                    options: DashboardSidebarStyle.allCases,
-                    selection: sidebarStyleBinding
-                ) { style in
-                    style.title
-                }
-                .frame(width: 260)
-            }
-
-            if storedSidebarStyle == DashboardSidebarStyle.single.rawValue {
-                Text("Open a folder to browse its chats and notes in place. Use the sidebar header to move it to the other side.")
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Sidebar layout")
+                    .font(.system(size: 13, weight: .medium))
+                Text("Choose how navigation and folder contents share the sidebar area.")
                     .font(.system(size: 11))
                     .foregroundStyle(DashboardPalette.mutedForeground)
+                    .fixedSize(horizontal: false, vertical: true)
             }
+
+            DashboardSegmentedSelector(
+                options: DashboardSidebarStyle.allCases,
+                selection: sidebarStyleBinding
+            ) { style in
+                style.title
+            }
+            .frame(maxWidth: 520)
+
+            Text(sidebarStyleBinding.wrappedValue.detail)
+                .font(.system(size: 11))
+                .foregroundStyle(DashboardPalette.mutedForeground)
         }
     }
 
