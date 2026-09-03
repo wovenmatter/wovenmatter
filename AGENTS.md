@@ -12,3 +12,9 @@ the shared harness catalog, and their deterministic tests.
 - Never make provider-consuming calls in tests.
 - Do not run release, installation, publication, or delivery workflows unless
   the user explicitly requests them.
+- For every request to cut or prepare a WovenMatter release, use
+  `.agents/skills/cut-release-wovenmatter/SKILL.md`. If the user did not supply
+  a version, propose one and wait for confirmation before creating a tag.
+  Agents may stage and verify a private release draft, but must never perform
+  the final publication action; hand that gate to `trey131` with the Actions
+  link and exact inputs.
