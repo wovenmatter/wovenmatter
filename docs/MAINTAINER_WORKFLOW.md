@@ -93,14 +93,15 @@ rechecks one pull request. Vouch status never grants write access.
   staging access.
 - **Release** is a signed, notarized build from an exact accepted commit. The
   code-owner approval and merge accepts the source. Pushing its version tag
-  builds the release and stages a private draft, but cannot publish it. Only
-  `trey131` can run the separate Publish Release workflow, which requires the
-  exact tag and the matching `publish vX.Y.Z` confirmation. Development or
-  staging credentials and data must never be copied into it.
+  builds the release and stages a private draft, but cannot publish it. An
+  explicit release request with a supplied or confirmed version authorizes the
+  release agent to verify and publish that draft through
+  `scripts/publish-release.sh`. Development or staging credentials and data
+  must never be copied into it.
 
-No script in this repository automatically promotes between environments.
-Deployment, signing, notarization, and release publication remain explicit
-maintainer actions.
+No background automation promotes between environments. Deployment, signing,
+notarization, and release publication remain explicit actions tied to a
+version-confirmed release request.
 
 ## Release artifact contract
 
@@ -123,10 +124,13 @@ by the repository's release validation and macOS Gatekeeper checks.
 
 Pushing `vX.Y.Z` runs the signed release workflow and leaves the verified asset
 set in a private GitHub draft. A tag push never makes that draft public. After
-reviewing the draft, `trey131` publishes it by manually running the Publish
-Release workflow with `tag` set to `vX.Y.Z` and `confirmation` set to
-`publish vX.Y.Z`. That workflow refuses non-drafts, unexpected asset sets,
-other actors, malformed tags, and mismatched confirmation text.
+the draft is verified, the release agent runs `scripts/publish-release.sh` with
+the exact tag and release commit. The script requires matching GitHub CLI and
+repository-specific SSH identities, then independently checks the remote tag,
+successful release run, private-draft state, exact asset set, manifest,
+checksums, Developer ID signature, notarization ticket, and Gatekeeper result
+before publishing. A request to stage or prepare only stops at the private
+draft.
 
 The release also publishes `latest-mac.json`, a bounded update manifest for the
 production app. It identifies the versioned DMG, exact SHA-256 digest, release

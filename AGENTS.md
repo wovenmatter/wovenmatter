@@ -15,6 +15,8 @@ the shared harness catalog, and their deterministic tests.
 - For every request to cut or prepare a WovenMatter release, use
   `.agents/skills/cut-release-wovenmatter/SKILL.md`. If the user did not supply
   a version, propose one and wait for confirmation before creating a tag.
-  Agents may stage and verify a private release draft, but must never perform
-  the final publication action; hand that gate to `trey131` with the Actions
-  link and exact inputs.
+  Once the exact version is supplied or confirmed, complete the release through
+  public publication unless the user explicitly asks to stop at a draft. After
+  verifying the signed private draft, publish only through
+  `scripts/publish-release.sh`; do not require a separate browser or Actions
+  handoff.

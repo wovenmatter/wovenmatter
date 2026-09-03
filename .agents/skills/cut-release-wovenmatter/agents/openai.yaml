@@ -1,4 +1,4 @@
 interface:
   display_name: "Cut Release WovenMatter"
-  short_description: "Stage a verified WovenMatter release for Trey to publish"
-  default_prompt: "Cut a WovenMatter release from exact main, stage the signed draft, and stop before final publication."
+  short_description: "Cut, verify, and publish a WovenMatter release"
+  default_prompt: "Use $cut-release-wovenmatter to cut and publish a WovenMatter release from exact main."
