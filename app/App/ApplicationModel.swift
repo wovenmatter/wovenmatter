@@ -809,6 +809,19 @@ enum DashboardNoteDraftSaveState: Equatable {
     case failed(String)
 }
 
+private struct UsageAnalyticsRefreshKey: Hashable, Sendable {
+    let range: String
+    let enabledProviders: [String]
+    let allowsCredentialAccess: Bool
+}
+
+private struct UsageLimitsRefreshKey: Hashable, Sendable {
+    let enabledProviders: [String]
+    let allowsCredentialAccess: Bool
+    let keychainInteraction: String
+    let selectedCodexWorkspaceID: String?
+}
+
 struct DashboardNoteDraft: Equatable {
     var title: String
     var content: String
@@ -986,11 +999,17 @@ final class ApplicationModel {
     private(set) var conversationStatesByID: [String: DashboardConversationState] = [:]
     private(set) var localUsage: LocalUsageSnapshot?
     private(set) var localUsageError: String?
-    private(set) var isRefreshingLocalUsage = false
+    private(set) var isRefreshingUsageAnalytics = false
+    private(set) var isRefreshingUsageLimits = false
+    var isRefreshingLocalUsage: Bool {
+        isRefreshingUsageAnalytics || isRefreshingUsageLimits
+    }
     private(set) var isOpenRouterCredentialConfigured = false
     private(set) var signingInUsageProviders: Set<ProviderKind> = []
     private(set) var hasAcknowledgedCredentialAccessDisclosure = false
     private(set) var enabledUsageProviders: Set<ProviderKind> = []
+    private(set) var codexUsageWorkspaces: [CodexUsageWorkspace] = []
+    private(set) var selectedCodexUsageWorkspaceID: String?
     private(set) var enabledLocalACPRuntimeKinds: Set<AgentRuntimeKind> = []
 
     private var dashboardStore: DashboardStore?
@@ -1005,13 +1024,22 @@ final class ApplicationModel {
     private var conversationChangeWorkerTokens: [String: UUID] = [:]
     private var pendingConversationChanges: [String: [DashboardConversationChange]] = [:]
     private var terminalRunIDsByConversation: [String: String] = [:]
-    private var localUsageRefreshGeneration: UInt64 = 0
     private var surfaceProfilePersistenceTask: Task<Void, Never>?
     private var surfaceProfilePersistenceGeneration = 0
     @ObservationIgnored
     private let localACPRuntimeResolver = LocalACPRuntimeResolver()
     @ObservationIgnored
     private let localUsageService = LocalUsageService()
+    @ObservationIgnored
+    private let usageAnalyticsRefreshCoordinator = UsageRefreshCoordinator<
+        UsageAnalyticsRefreshKey,
+        UsageAnalyticsSnapshot
+    >()
+    @ObservationIgnored
+    private let usageLimitsRefreshCoordinator = UsageRefreshCoordinator<
+        UsageLimitsRefreshKey,
+        LocalUsageLimitsSnapshot
+    >()
     @ObservationIgnored
     private let applicationDefaults: UserDefaults
     @ObservationIgnored
@@ -1059,8 +1087,6 @@ final class ApplicationModel {
         "wovenmatter.openrouter-credential.configured"
     private static let credentialAccessDisclosureDefaultsKey =
         "wovenmatter.credential-access.disclosure-acknowledged"
-    private static let enabledUsageProvidersDefaultsKey =
-        "wovenmatter.usage.enabled-providers"
     private static let enabledLocalACPRuntimesDefaultsKey =
         "wovenmatter.local-acp.enabled-runtimes"
 
@@ -1079,11 +1105,12 @@ final class ApplicationModel {
         hasAcknowledgedCredentialAccessDisclosure = applicationDefaults.bool(
             forKey: Self.credentialAccessDisclosureDefaultsKey
         )
-        enabledUsageProviders = Set(
-            applicationDefaults.stringArray(
-                forKey: Self.enabledUsageProvidersDefaultsKey
-            )?.compactMap(ProviderKind.init(rawValue:)) ?? []
-        )
+        selectedCodexUsageWorkspaceID = CodexUsageWorkspacePreferences(
+            defaults: applicationDefaults
+        ).selectedWorkspaceID
+        enabledUsageProviders = UsageProviderPreferences(
+            defaults: applicationDefaults
+        ).enabledProviders
         enabledLocalACPRuntimeKinds = Set(
             applicationDefaults.stringArray(
                 forKey: Self.enabledLocalACPRuntimesDefaultsKey
@@ -2183,25 +2210,177 @@ final class ApplicationModel {
     func refreshLocalUsage(
         range: UsageTimeRange,
         refreshLimits: Bool = false,
-        reason: UsageRefreshReason = .manual
+        reason: UsageRefreshReason = .manual,
+        explicitCredentialAccess: Bool = false
     ) async {
-        localUsageRefreshGeneration &+= 1
-        let generation = localUsageRefreshGeneration
-        isRefreshingLocalUsage = true
         localUsageError = nil
-        let snapshot = await localUsageService.snapshot(
+        prepareUsageSnapshot(range: range)
+        let policy: UsageRefreshCoordinator<
+            UsageAnalyticsRefreshKey,
+            UsageAnalyticsSnapshot
+        >.Policy = switch reason {
+        case .manual, .credentialChanged:
+            .force
+        case .startup, .viewAppeared, .rangeChanged, .runCompleted, .periodic:
+            .refresh
+        }
+        if refreshLimits {
+            let keychainInteraction = UsageKeychainInteraction.resolve(
+                refreshReason: reason,
+                disclosureAcknowledged: hasAcknowledgedCredentialAccessDisclosure,
+                explicitUserAction: explicitCredentialAccess
+            )
+            async let analyticsRefresh: Void = refreshUsageAnalytics(
+                range: range,
+                reason: reason,
+                policy: policy
+            )
+            async let limitsRefresh: Void = refreshUsageLimits(
+                reason: reason,
+                force: policy == .force,
+                keychainInteraction: keychainInteraction
+            )
+            _ = await (analyticsRefresh, limitsRefresh)
+        } else {
+            await refreshUsageAnalytics(
+                range: range,
+                reason: reason,
+                policy: policy
+            )
+        }
+    }
+
+    func usageDestinationAppeared(range: UsageTimeRange) async {
+        await refreshLocalUsage(
             range: range,
-            refreshLimits: refreshLimits,
-            refreshReason: reason,
-            enabledProviders: enabledUsageProviders,
-            allowCredentialAccess: isOpenRouterCredentialConfigured
-                && hasAcknowledgedCredentialAccessDisclosure
-                && enabledUsageProviders.contains(.openRouter)
+            refreshLimits: true,
+            reason: .viewAppeared
         )
-        guard generation == localUsageRefreshGeneration else { return }
-        isRefreshingLocalUsage = false
-        guard !Task.isCancelled else { return }
-        localUsage = snapshot
+    }
+
+    func usageAnalyticsSelected(range: UsageTimeRange) async {
+        await refreshUsageAnalytics(
+            range: range,
+            reason: .viewAppeared,
+            policy: .reuse
+        )
+    }
+
+    private func refreshUsageAnalytics(
+        range: UsageTimeRange,
+        reason: UsageRefreshReason,
+        policy: UsageRefreshCoordinator<
+            UsageAnalyticsRefreshKey,
+            UsageAnalyticsSnapshot
+        >.Policy
+    ) async {
+        let enabledProviders = enabledUsageProviders
+        let allowsCredentialAccess = isOpenRouterCredentialConfigured
+            && hasAcknowledgedCredentialAccessDisclosure
+            && enabledProviders.contains(.openRouter)
+        let key = UsageAnalyticsRefreshKey(
+            range: range.rawValue,
+            enabledProviders: enabledProviders.map(\.rawValue).sorted(),
+            allowsCredentialAccess: allowsCredentialAccess
+        )
+        isRefreshingUsageAnalytics = true
+        do {
+            let analytics = try await usageAnalyticsRefreshCoordinator.value(
+                for: key,
+                policy: policy
+            ) { [localUsageService] in
+                await localUsageService.analyticsSnapshot(
+                    range: range,
+                    refreshReason: reason,
+                    enabledProviders: enabledProviders,
+                    allowCredentialAccess: allowsCredentialAccess
+                )
+            }
+            let existing = localUsage
+            localUsage = LocalUsageSnapshot(
+                analytics: analytics,
+                limits: existing?.limits ?? LocalUsageService.placeholderLimits(
+                    enabledProviders: enabledProviders
+                ),
+                hasOpenRouterCredential: existing?.hasOpenRouterCredential
+                    ?? isOpenRouterCredentialConfigured
+            )
+        } catch is CancellationError {
+            // A forced refresh superseded this request. Its replacement owns the state.
+        } catch {
+            localUsageError = error.localizedDescription
+        }
+        isRefreshingUsageAnalytics = await usageAnalyticsRefreshCoordinator.isRefreshing
+    }
+
+    private func refreshUsageLimits(
+        reason: UsageRefreshReason,
+        force: Bool,
+        keychainInteraction: UsageKeychainInteraction
+    ) async {
+        let enabledProviders = enabledUsageProviders
+        let allowsCredentialAccess = isOpenRouterCredentialConfigured
+            && hasAcknowledgedCredentialAccessDisclosure
+            && enabledProviders.contains(.openRouter)
+        let requestedCodexWorkspaceID = selectedCodexUsageWorkspaceID
+        let key = UsageLimitsRefreshKey(
+            enabledProviders: enabledProviders.map(\.rawValue).sorted(),
+            allowsCredentialAccess: allowsCredentialAccess,
+            keychainInteraction: keychainInteraction.rawValue,
+            selectedCodexWorkspaceID: requestedCodexWorkspaceID
+        )
+        isRefreshingUsageLimits = true
+        do {
+            let limits = try await usageLimitsRefreshCoordinator.value(
+                for: key,
+                policy: force ? .force : .refresh
+            ) { [localUsageService] in
+                await localUsageService.limitsSnapshot(
+                    refresh: true,
+                    refreshReason: reason,
+                    enabledProviders: enabledProviders,
+                    allowCredentialAccess: allowsCredentialAccess,
+                    keychainInteraction: keychainInteraction,
+                    selectedCodexWorkspaceID: requestedCodexWorkspaceID
+                )
+            }
+            codexUsageWorkspaces = limits.codexWorkspaces
+            selectedCodexUsageWorkspaceID = limits.selectedCodexWorkspaceID
+            let existing = localUsage
+            localUsage = LocalUsageSnapshot(
+                analytics: existing?.analytics ?? Self.emptyUsageAnalytics(range: currentUsageRange),
+                limits: limits.accounts,
+                hasOpenRouterCredential: limits.hasOpenRouterCredential
+                    || isOpenRouterCredentialConfigured
+            )
+        } catch is CancellationError {
+            // A forced refresh superseded this request. Its replacement owns the state.
+        } catch {
+            localUsageError = error.localizedDescription
+        }
+        isRefreshingUsageLimits = await usageLimitsRefreshCoordinator.isRefreshing
+    }
+
+    private func prepareUsageSnapshot(range: UsageTimeRange) {
+        guard localUsage == nil else { return }
+        localUsage = LocalUsageSnapshot(
+            analytics: Self.emptyUsageAnalytics(range: range),
+            limits: LocalUsageService.placeholderLimits(
+                enabledProviders: enabledUsageProviders
+            ),
+            hasOpenRouterCredential: isOpenRouterCredentialConfigured
+        )
+    }
+
+    private static func emptyUsageAnalytics(
+        range: UsageTimeRange
+    ) -> UsageAnalyticsSnapshot {
+        UsageAnalyticsSnapshot(
+            range: range,
+            generatedAt: Date(),
+            samples: [],
+            sources: []
+        )
     }
 
     private var currentUsageRange: UsageTimeRange {
@@ -2272,6 +2451,40 @@ final class ApplicationModel {
         await refreshLocalUsage(
             range: range,
             refreshLimits: true,
+            reason: .credentialChanged,
+            explicitCredentialAccess: provider == .claude
+        )
+    }
+
+    func retryUsageProviderCredentialAccess(
+        _ provider: ProviderKind,
+        range: UsageTimeRange
+    ) async {
+        guard enabledUsageProviders.contains(provider) else { return }
+        acknowledgeCredentialAccessDisclosure()
+        await refreshLocalUsage(
+            range: range,
+            refreshLimits: true,
+            reason: .credentialChanged,
+            explicitCredentialAccess: provider == .claude
+        )
+    }
+
+    func selectCodexUsageWorkspace(
+        _ workspaceID: String,
+        range: UsageTimeRange
+    ) async {
+        guard enabledUsageProviders.contains(.codex),
+              hasAcknowledgedCredentialAccessDisclosure,
+              codexUsageWorkspaces.contains(where: { $0.id == workspaceID }),
+              selectedCodexUsageWorkspaceID != workspaceID
+        else { return }
+        selectedCodexUsageWorkspaceID = workspaceID
+        CodexUsageWorkspacePreferences(defaults: applicationDefaults)
+            .save(selectedWorkspaceID: workspaceID)
+        await refreshLocalUsage(
+            range: range,
+            refreshLimits: true,
             reason: .credentialChanged
         )
     }
@@ -2299,9 +2512,8 @@ final class ApplicationModel {
     }
 
     private func persistEnabledUsageProviders() {
-        applicationDefaults.set(
-            enabledUsageProviders.map(\.rawValue).sorted(),
-            forKey: Self.enabledUsageProvidersDefaultsKey
+        UsageProviderPreferences(defaults: applicationDefaults).save(
+            enabledUsageProviders
         )
     }
 
@@ -2365,6 +2577,55 @@ final class ApplicationModel {
                     guard process.terminationStatus == 0 else {
                         throw UsageProviderSignInError.failed(
                             provider.displayName,
+                            process.terminationStatus
+                        )
+                    }
+                }.value
+                await refreshLocalUsage(
+                    range: currentUsageRange,
+                    refreshLimits: true,
+                    reason: .credentialChanged,
+                    explicitCredentialAccess: provider == .claude
+                )
+            } catch {
+                localUsageError = error.localizedDescription
+            }
+        }
+    }
+
+    func reconnectSelectedCodexUsageWorkspace() {
+        guard !signingInUsageProviders.contains(.codex),
+              enabledUsageProviders.contains(.codex),
+              hasAcknowledgedCredentialAccessDisclosure,
+              let workspaceID = selectedCodexUsageWorkspaceID
+        else { return }
+        signingInUsageProviders.insert(.codex)
+        localUsageError = nil
+        Task {
+            defer { signingInUsageProviders.remove(.codex) }
+            do {
+                guard let homeDirectory = await localUsageService
+                    .codexWorkspaceHomeDirectory(workspaceID: workspaceID),
+                      let command = Self.usageProviderSignInCommand(.codex)
+                else {
+                    throw UsageProviderSignInError.unavailable(
+                        "The selected OpenAI workspace is no longer available."
+                    )
+                }
+                try await Task.detached(priority: .userInitiated) {
+                    let process = Process()
+                    process.executableURL = command.executable
+                    process.arguments = command.arguments
+                    var environment = ProcessInfo.processInfo.environment
+                    environment["CODEX_HOME"] = homeDirectory.path
+                    process.environment = environment
+                    process.standardOutput = FileHandle.nullDevice
+                    process.standardError = FileHandle.nullDevice
+                    try process.run()
+                    process.waitUntilExit()
+                    guard process.terminationStatus == 0 else {
+                        throw UsageProviderSignInError.failed(
+                            "Codex / OpenAI",
                             process.terminationStatus
                         )
                     }
@@ -4705,11 +4966,14 @@ private struct UsageProviderSignInCommand: Sendable {
 
 private enum UsageProviderSignInError: LocalizedError {
     case failed(String, Int32)
+    case unavailable(String)
 
     var errorDescription: String? {
         switch self {
         case .failed(let provider, let status):
             "\(provider) sign-in did not complete (exit status \(status))."
+        case .unavailable(let message):
+            message
         }
     }
 }

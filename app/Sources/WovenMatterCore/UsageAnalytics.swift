@@ -581,40 +581,79 @@ public enum UsageLimitStatus: String, Codable, Sendable {
 
 public struct UsageLimitAccount: Codable, Equatable, Identifiable, Sendable {
   public let provider: ProviderKind
+  public let accountScopeID: String?
   public let accountLabel: String
   public let status: UsageLimitStatus
   public let quotaWindows: [ProviderQuotaWindow]
   public let balance: ProviderMoney?
   public let providerBudget: ProviderReportedBudget?
+  public let details: [ProviderUsageDetail]
+  public let history: [ProviderUsageHistoryPoint]
   public let source: String
   public let detail: String
   public let observedAt: Date
+  public let isStale: Bool
+  public let refreshError: String?
   public let dashboardURL: URL?
 
   public var id: String { provider.rawValue }
 
   public init(
     provider: ProviderKind,
+    accountScopeID: String? = nil,
     accountLabel: String,
     status: UsageLimitStatus,
     quotaWindows: [ProviderQuotaWindow] = [],
     balance: ProviderMoney? = nil,
     providerBudget: ProviderReportedBudget? = nil,
+    details: [ProviderUsageDetail] = [],
+    history: [ProviderUsageHistoryPoint] = [],
     source: String,
     detail: String,
     observedAt: Date = Date(),
+    isStale: Bool = false,
+    refreshError: String? = nil,
     dashboardURL: URL? = nil
   ) {
     self.provider = provider
+    self.accountScopeID = accountScopeID
     self.accountLabel = accountLabel
     self.status = status
     self.quotaWindows = quotaWindows
     self.balance = balance
     self.providerBudget = providerBudget
+    self.details = details
+    self.history = history
     self.source = source
     self.detail = detail
     self.observedAt = observedAt
+    self.isStale = isStale
+    self.refreshError = refreshError
     self.dashboardURL = dashboardURL
+  }
+
+  public func retainingLastGood(after error: UsageLimitAccount) -> Self {
+    stale(refreshError: error.detail)
+  }
+
+  public func stale(refreshError: String? = nil) -> Self {
+    Self(
+      provider: provider,
+      accountScopeID: accountScopeID,
+      accountLabel: accountLabel,
+      status: status,
+      quotaWindows: quotaWindows,
+      balance: balance,
+      providerBudget: providerBudget,
+      details: details,
+      history: history,
+      source: source,
+      detail: detail,
+      observedAt: observedAt,
+      isStale: true,
+      refreshError: refreshError,
+      dashboardURL: dashboardURL
+    )
   }
 }
 
