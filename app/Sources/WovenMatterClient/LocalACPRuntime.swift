@@ -170,6 +170,96 @@ public enum LocalACPRuntimeCatalog {
     }
 }
 
+public struct LocalACPRuntimePreferences {
+    public struct State: Equatable, Sendable {
+        public var enabledRuntimeKinds: Set<AgentRuntimeKind>
+        public var shownRuntimeKinds: Set<AgentRuntimeKind>
+
+        public init(
+            enabledRuntimeKinds: Set<AgentRuntimeKind>,
+            shownRuntimeKinds: Set<AgentRuntimeKind>
+        ) {
+            self.enabledRuntimeKinds = enabledRuntimeKinds
+            self.shownRuntimeKinds = shownRuntimeKinds
+        }
+    }
+
+    public static let enabledRuntimeKindsKey =
+        "wovenmatter.local-acp.enabled-runtimes"
+    public static let shownRuntimeKindsKey =
+        "wovenmatter.local-acp.shown-runtimes"
+
+    private let defaults: UserDefaults
+
+    public init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+    }
+
+    public var state: State {
+        State(
+            enabledRuntimeKinds: runtimeKinds(forKey: Self.enabledRuntimeKindsKey),
+            shownRuntimeKinds: runtimeKinds(forKey: Self.shownRuntimeKindsKey)
+        )
+    }
+
+    @discardableResult
+    public func enable(_ runtimeKind: AgentRuntimeKind) -> State {
+        var state = state
+        state.enabledRuntimeKinds.insert(runtimeKind)
+        state.shownRuntimeKinds.insert(runtimeKind)
+        save(state)
+        return state
+    }
+
+    @discardableResult
+    public func disable(_ runtimeKind: AgentRuntimeKind) -> State {
+        var state = state
+        state.enabledRuntimeKinds.remove(runtimeKind)
+        save(state)
+        return state
+    }
+
+    @discardableResult
+    public func setShown(
+        _ isShown: Bool,
+        for runtimeKind: AgentRuntimeKind
+    ) -> State {
+        var state = state
+        if isShown {
+            state.shownRuntimeKinds.insert(runtimeKind)
+        } else {
+            state.shownRuntimeKinds.remove(runtimeKind)
+        }
+        save(state)
+        return state
+    }
+
+    public static func visibleRuntimeKinds(
+        in orderedRuntimeKinds: [AgentRuntimeKind],
+        shownRuntimeKinds: Set<AgentRuntimeKind>
+    ) -> [AgentRuntimeKind] {
+        orderedRuntimeKinds.filter(shownRuntimeKinds.contains)
+    }
+
+    private func runtimeKinds(forKey key: String) -> Set<AgentRuntimeKind> {
+        Set(
+            defaults.stringArray(forKey: key)?
+                .compactMap(AgentRuntimeKind.init(rawValue:)) ?? []
+        )
+    }
+
+    private func save(_ state: State) {
+        defaults.set(
+            state.enabledRuntimeKinds.map(\.rawValue).sorted(),
+            forKey: Self.enabledRuntimeKindsKey
+        )
+        defaults.set(
+            state.shownRuntimeKinds.map(\.rawValue).sorted(),
+            forKey: Self.shownRuntimeKindsKey
+        )
+    }
+}
+
 public struct LocalACPRuntimeAvailability: Equatable, Identifiable, Sendable {
     public enum State: String, Equatable, Sendable {
         case ready
