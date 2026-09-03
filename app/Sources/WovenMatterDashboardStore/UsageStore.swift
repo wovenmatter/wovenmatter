@@ -514,6 +514,66 @@ final class UsageStore: @unchecked Sendable {
     try stepDone(statement)
   }
 
+  func usageLimitAccounts(
+    providers: Set<ProviderKind>,
+    accountScopes: [ProviderKind: String] = [:]
+  ) throws -> [UsageLimitAccount] {
+    guard !providers.isEmpty else { return [] }
+    let decoder = JSONDecoder()
+    decoder.dateDecodingStrategy = .iso8601
+    let statement = try prepare("""
+      SELECT provider, account_scope, snapshot_json
+      FROM usage_limit_account_snapshots
+      ORDER BY provider, account_scope
+      """)
+    defer { sqlite3_finalize(statement) }
+    var accounts: [UsageLimitAccount] = []
+    while true {
+      switch sqlite3_step(statement) {
+      case SQLITE_DONE:
+        return accounts
+      case SQLITE_ROW:
+        guard let provider = ProviderKind(rawValue: text(statement, 0)),
+              providers.contains(provider),
+              text(statement, 1) == (accountScopes[provider] ?? ""),
+              let data = text(statement, 2).data(using: .utf8),
+              let account = try? decoder.decode(UsageLimitAccount.self, from: data)
+        else { continue }
+        accounts.append(account)
+      default:
+        throw stepError()
+      }
+    }
+  }
+
+  func saveUsageLimitAccounts(_ accounts: [UsageLimitAccount], storedAt: Date) throws {
+    let encoder = JSONEncoder()
+    encoder.dateEncodingStrategy = .iso8601
+    encoder.outputFormatting = [.sortedKeys]
+    let statement = try prepare("""
+      INSERT INTO usage_limit_account_snapshots (
+        provider, account_scope, snapshot_json, observed_at, stored_at
+      ) VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(provider, account_scope) DO UPDATE SET
+        snapshot_json = excluded.snapshot_json,
+        observed_at = excluded.observed_at,
+        stored_at = excluded.stored_at
+      """)
+    defer { sqlite3_finalize(statement) }
+    for account in accounts where account.status == .available {
+      let data = try encoder.encode(account)
+      guard let json = String(data: data, encoding: .utf8) else { continue }
+      sqlite3_reset(statement)
+      sqlite3_clear_bindings(statement)
+      bind(account.provider.rawValue, to: 1, in: statement)
+      bind(account.accountScopeID ?? "", to: 2, in: statement)
+      bind(json, to: 3, in: statement)
+      sqlite3_bind_double(statement, 4, account.observedAt.timeIntervalSince1970)
+      sqlite3_bind_double(statement, 5, storedAt.timeIntervalSince1970)
+      try stepDone(statement)
+    }
+  }
+
   func prune(before cutoff: Date) throws {
     let statement = try prepare("DELETE FROM usage_events WHERE timestamp < ?")
     defer { sqlite3_finalize(statement) }
@@ -619,6 +679,25 @@ final class UsageStore: @unchecked Sendable {
         status TEXT NOT NULL,
         detail TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS usage_limit_snapshots (
+        provider TEXT PRIMARY KEY,
+        snapshot_json TEXT NOT NULL,
+        observed_at REAL NOT NULL,
+        stored_at REAL NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS usage_limit_account_snapshots (
+        provider TEXT NOT NULL,
+        account_scope TEXT NOT NULL,
+        snapshot_json TEXT NOT NULL,
+        observed_at REAL NOT NULL,
+        stored_at REAL NOT NULL,
+        PRIMARY KEY(provider, account_scope)
+      );
+      INSERT OR IGNORE INTO usage_limit_account_snapshots (
+        provider, account_scope, snapshot_json, observed_at, stored_at
+      )
+      SELECT provider, '', snapshot_json, observed_at, stored_at
+      FROM usage_limit_snapshots;
       """)
     try ensureColumn(
       table: "usage_events",

@@ -76,6 +76,7 @@ struct SettingsView: View {
                 )
             case .usage:
                 SettingsUsageView(
+                    model: model,
                     reservesRailControlSpace: reservesRailControlSpace,
                     onBack: { section = .landing }
                 )
