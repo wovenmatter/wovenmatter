@@ -1090,7 +1090,6 @@ final class ApplicationModel {
         "wovenmatter.openrouter-credential.configured"
     private static let credentialAccessDisclosureDefaultsKey =
         "wovenmatter.credential-access.disclosure-acknowledged"
-
     init(
         applicationDefaults: UserDefaults = .standard,
         dashboardStore: DashboardStore? = nil,
