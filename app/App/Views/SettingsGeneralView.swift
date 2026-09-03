@@ -14,6 +14,7 @@ struct SettingsGeneralView: View {
     @AppStorage(DashboardCodexLogoStyle.storageKey) private var storedCodexLogoStyle =
         DashboardCodexLogoStyle.defaultStyle.rawValue
     @State private var releaseUpdateState: ReleaseUpdateState = .idle
+    private let releaseUpdateInstaller = WovenMatterReleaseUpdateInstaller()
 
     private var codexLogoStyle: DashboardCodexLogoStyle {
         DashboardCodexLogoStyle(rawValue: storedCodexLogoStyle) ?? .defaultStyle
@@ -68,7 +69,7 @@ struct SettingsGeneralView: View {
                     performReleaseUpdateAction()
                 }
                 .buttonStyle(SettingsQuietButtonStyle())
-                .disabled(releaseUpdateState.isChecking)
+                .disabled(releaseUpdateState.isWorking)
             }
         }
     }
@@ -79,10 +80,19 @@ struct SettingsGeneralView: View {
     }
 
     private func performReleaseUpdateAction() {
-        if case .available(let manifest) = releaseUpdateState {
-            NSWorkspace.shared.open(manifest.downloadURL)
-            return
+        switch releaseUpdateState {
+        case .available(let manifest), .downloadFailed(let manifest, _):
+            downloadRelease(manifest)
+        case .ready(let release), .installFailed(let release, _):
+            installRelease(release)
+        case .idle, .current, .failed:
+            checkForRelease()
+        case .checking, .downloading, .installing:
+            break
         }
+    }
+
+    private func checkForRelease() {
         releaseUpdateState = .checking
         Task {
             do {
@@ -92,10 +102,47 @@ struct SettingsGeneralView: View {
                 case .current:
                     releaseUpdateState = .current
                 case .available(let manifest):
-                    releaseUpdateState = .available(manifest)
+                    if let cached = try await releaseUpdateInstaller.cachedRelease(
+                        for: manifest
+                    ) {
+                        releaseUpdateState = .ready(cached)
+                    } else {
+                        releaseUpdateState = .available(manifest)
+                    }
                 }
             } catch {
                 releaseUpdateState = .failed(error.localizedDescription)
+            }
+        }
+    }
+
+    private func downloadRelease(_ manifest: WovenMatterReleaseManifest) {
+        releaseUpdateState = .downloading(manifest)
+        Task {
+            do {
+                releaseUpdateState = .ready(
+                    try await releaseUpdateInstaller.download(manifest)
+                )
+            } catch {
+                releaseUpdateState = .downloadFailed(
+                    manifest,
+                    error.localizedDescription
+                )
+            }
+        }
+    }
+
+    private func installRelease(_ release: WovenMatterDownloadedRelease) {
+        releaseUpdateState = .installing(release)
+        Task {
+            do {
+                try await releaseUpdateInstaller.beginInstallation(of: release)
+                NSApplication.shared.terminate(nil)
+            } catch {
+                releaseUpdateState = .installFailed(
+                    release,
+                    error.localizedDescription
+                )
             }
         }
     }
@@ -322,10 +369,18 @@ private enum ReleaseUpdateState {
     case checking
     case current
     case available(WovenMatterReleaseManifest)
+    case downloading(WovenMatterReleaseManifest)
+    case ready(WovenMatterDownloadedRelease)
+    case installing(WovenMatterDownloadedRelease)
+    case downloadFailed(WovenMatterReleaseManifest, String)
+    case installFailed(WovenMatterDownloadedRelease, String)
     case failed(String)
 
-    var isChecking: Bool {
-        if case .checking = self { true } else { false }
+    var isWorking: Bool {
+        switch self {
+        case .checking, .downloading, .installing: true
+        default: false
+        }
     }
 
     var buttonTitle: String {
@@ -333,12 +388,24 @@ private enum ReleaseUpdateState {
         case .idle, .current, .failed: "Check for Updates"
         case .checking: "Checking…"
         case .available: "Download Update"
+        case .downloading: "Downloading…"
+        case .ready: "Install Update"
+        case .installing: "Installing…"
+        case .downloadFailed: "Try Download Again"
+        case .installFailed: "Try Install Again"
         }
     }
 
     func title(currentVersion: String) -> String {
         switch self {
-        case .available(let manifest): "Woven Matter \(manifest.version) is available"
+        case .available(let manifest),
+             .downloading(let manifest),
+             .downloadFailed(let manifest, _):
+            "Woven Matter \(manifest.version) is available"
+        case .ready(let release),
+             .installing(let release),
+             .installFailed(let release, _):
+            "Woven Matter \(release.manifest.version) is ready"
         default: "Woven Matter \(currentVersion)"
         }
     }
@@ -348,7 +415,11 @@ private enum ReleaseUpdateState {
         case .idle: "Check the latest published Apple Silicon release."
         case .checking: "Checking the signed production release channel…"
         case .current: "This Mac has the latest published version."
-        case .available: "Download the versioned DMG from the official GitHub Release."
+        case .available: "Download and verify the signed update inside Woven Matter."
+        case .downloading: "Downloading the signed update…"
+        case .ready: "The update is downloaded and verified. Install it now to relaunch."
+        case .installing: "Preparing the update and relaunching Woven Matter…"
+        case .downloadFailed(_, let message), .installFailed(_, let message): message
         case .failed(let message): message
         }
     }
