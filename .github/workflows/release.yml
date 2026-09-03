@@ -75,7 +75,7 @@ jobs:
           version="${GITHUB_REF_NAME#v}"
           scripts/build-release.sh "$version"
 
-      - name: Publish immutable GitHub Release
+      - name: Stage immutable GitHub Release draft
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -97,7 +97,8 @@ jobs:
           expected="$(printf '%s\n' "SHA256SUMS.txt" "WovenMatter_${version}_arm64.dmg" "latest-mac.json" | sort)"
           actual="$(gh release view "$tag" --json assets --jq '.assets[].name' | sort)"
           test "$actual" = "$expected"
-          gh release edit "$tag" --draft=false
+          echo "Release $tag is staged as a private draft."
+          echo "Only trey131 can publish it through the Publish Release workflow."
 
       - name: Remove temporary signing keychain
         if: always()

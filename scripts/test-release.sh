@@ -27,6 +27,12 @@ grep -Fq 'scripts/build-release.sh "$version"' .github/workflows/release.yml
 grep -Fq 'OTHER_CODE_SIGN_FLAGS="--timestamp"' scripts/build-release.sh
 grep -Fq 'refusing to replace published assets' .github/workflows/release.yml
 grep -Fq 'if [[ "$is_draft" != "true" ]]' .github/workflows/release.yml
-grep -Fq 'gh release edit "$tag" --draft=false' .github/workflows/release.yml
 grep -Fq 'test "$actual" = "$expected"' .github/workflows/release.yml
+! grep -Fq -- '--draft=false' .github/workflows/release.yml
+grep -Fq 'workflow_dispatch:' .github/workflows/publish-release.yml
+grep -Fq 'test "$GITHUB_ACTOR" = "trey131"' .github/workflows/publish-release.yml
+grep -Fq 'test "$CONFIRMATION" = "publish $TAG"' .github/workflows/publish-release.yml
+grep -Fq 'test "$is_draft" = "true"' .github/workflows/publish-release.yml
+grep -Fq 'test "$actual" = "$expected"' .github/workflows/publish-release.yml
+grep -Fq 'gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false' .github/workflows/publish-release.yml
 printf '%s\n' 'Release contract validation passed.'
