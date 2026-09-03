@@ -968,6 +968,46 @@ struct DashboardSectionHeading: View {
     }
 }
 
+struct DashboardActiveConversationRowBackground: View {
+    @Environment(\.dashboardTheme) private var theme
+    let presentation: ConversationActivityPresentation
+    let selected: Bool
+    let hovered: Bool
+    let cornerRadius: CGFloat
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        ZStack {
+            shape.fill(presentation.isActive ? theme.palette.themeWhisper : .clear)
+            if presentation.allowsMotion {
+                TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
+                    GeometryReader { geometry in
+                        let progress = context.date.timeIntervalSinceReferenceDate
+                            .truncatingRemainder(dividingBy: 4.2) / 4.2
+                        LinearGradient(
+                            colors: [
+                                .clear,
+                                DashboardPalette.primary.opacity(0.055),
+                                .clear,
+                            ],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                        .frame(width: geometry.size.width * 1.7)
+                        .offset(x: geometry.size.width * (-1.7 + 2.7 * progress))
+                    }
+                    .clipShape(shape)
+                }
+            }
+            shape.fill(
+                selected
+                    ? theme.palette.themeStrong
+                    : hovered ? theme.palette.themeSoft : .clear
+            )
+        }
+    }
+}
+
 struct DashboardCard<Content: View>: View {
     @Environment(\.dashboardTheme) private var theme
     let showsBorder: Bool

@@ -527,6 +527,7 @@ struct WorkspaceView: View {
             folders: model.workspaceOverview?.folders ?? [],
             conversations: model.workspaceOverview?.conversations ?? [],
             notes: model.workspaceOverview?.notes ?? [],
+            runningConversationIDs: model.localRunningConversationIDs,
             selectedAgentID: selectedAgentID,
             selectedFolderID: selectedFolderID,
             selectedConversationID: selectedConversationID,
@@ -1208,6 +1209,7 @@ private struct DashboardSidebarRail: View {
     let folders: [WorkspaceFolderRecord]
     let conversations: [WorkspaceConversationRecord]
     let notes: [WorkspaceNoteRecord]
+    let runningConversationIDs: Set<String>
     let selectedAgentID: UUID?
     let selectedFolderID: String?
     let selectedConversationID: String?
@@ -1239,8 +1241,10 @@ private struct DashboardSidebarRail: View {
             folders: folders,
             conversations: conversations,
             notes: notes,
+            runningConversationIDs: runningConversationIDs,
             selectedAgentID: selectedAgentID,
             selectedFolderID: selectedFolderID,
+            selectedConversationID: selectedConversationID,
             destination: destination,
             pinnedAgentIDsRaw: $pinnedAgentIDsRaw,
             agentOrderRaw: $agentOrderRaw,
@@ -1270,6 +1274,7 @@ private struct DashboardSidebarRail: View {
             side: side,
             conversations: scopedConversations,
             notes: scopedNotes,
+            runningConversationIDs: runningConversationIDs,
             agents: agents,
             buzzWorkspaceSnapshot: buzzWorkspaceSnapshot,
             folders: folders,
@@ -1317,8 +1322,10 @@ private struct DashboardSidebarNavigationPage: View {
     let folders: [WorkspaceFolderRecord]
     let conversations: [WorkspaceConversationRecord]
     let notes: [WorkspaceNoteRecord]
+    let runningConversationIDs: Set<String>
     let selectedAgentID: UUID?
     let selectedFolderID: String?
+    let selectedConversationID: String?
     let destination: DashboardDestination
     @Binding var pinnedAgentIDsRaw: String
     @Binding var agentOrderRaw: String
@@ -1959,7 +1966,9 @@ private struct DashboardSidebarNavigationPage: View {
                             DashboardRailRow(
                                 icon: .messageSquare,
                                 title: conversation.title,
-                                hoverID: "recent-conversation:\(conversation.id)"
+                                hoverID: "recent-conversation:\(conversation.id)",
+                                selected: selectedConversationID == conversation.id,
+                                isRunningConversation: runningConversationIDs.contains(conversation.id)
                             ) {
                                 onSelectConversation(conversation.id)
                             }
@@ -2490,6 +2499,7 @@ private struct DashboardSidebarWorkspacePage: View {
     let side: DashboardSidebarSide
     let conversations: [WorkspaceConversationRecord]
     let notes: [WorkspaceNoteRecord]
+    let runningConversationIDs: Set<String>
     let agents: [WorkspaceAgent]
     let buzzWorkspaceSnapshot: BuzzWorkspaceSnapshot
     let folders: [WorkspaceFolderRecord]
@@ -2817,6 +2827,7 @@ private struct DashboardSidebarWorkspacePage: View {
         DashboardConversationRow(
             presentation: presentation,
             selected: selectedConversationID == presentation.id,
+            isRunning: runningConversationIDs.contains(presentation.id),
             detailCardState: $conversationDetailCardState,
             folders: folders,
             onMoveConversation: onMoveConversation,
@@ -3040,6 +3051,11 @@ struct DashboardConversationDetailCardState: Equatable, Sendable {
     mutating func dismiss() {
         focusedConversationID = nil
         hoveredConversationID = nil
+    }
+
+    mutating func completePrimaryAction(conversationID: String, hovered: Bool) {
+        focusedConversationID = conversationID
+        hoveredConversationID = hovered ? conversationID : nil
     }
 }
 
@@ -3572,9 +3588,10 @@ private struct DashboardCloudConversation: View {
     @State private var pendingBottomConversationID: String?
     @State private var bottomPositionRevision = 0
     @State private var scrollPositionID: String?
+    @State private var bottomStackHeight: CGFloat = 0
 
     var body: some View {
-        VStack(spacing: 0) {
+        ZStack(alignment: .bottom) {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 32) {
@@ -3630,7 +3647,7 @@ private struct DashboardCloudConversation: View {
                             }
                         }
                         Color.clear
-                            .frame(height: 20)
+                            .frame(height: bottomScrollClearance)
                             .id(chatEndID)
                     }
                     .frame(maxWidth: 768)
@@ -3841,7 +3858,12 @@ private struct DashboardCloudConversation: View {
             .frame(maxWidth: 768)
             .padding(.horizontal, 32)
             .padding(.top, 8)
-            .padding(.bottom, 24)
+            .onGeometryChange(for: CGFloat.self) { geometry in
+                geometry.size.height
+            } action: { height in
+                bottomStackHeight = max(0, height)
+            }
+            .padding(.bottom, ConversationBottomOverlayLayout.bottomOffset)
         }
         .background(theme.palette.workspace)
         .task(id: sessionIdentity) {
@@ -3885,6 +3907,12 @@ private struct DashboardCloudConversation: View {
 
     private var chatEndID: String {
         "chat-end:\(conversation?.id ?? "none")"
+    }
+
+    private var bottomScrollClearance: CGFloat {
+        CGFloat(ConversationBottomOverlayLayout.scrollClearance(
+            stackHeight: Double(bottomStackHeight)
+        ))
     }
 
     private var runsByAssistantMessageID: [String: WorkspaceRunRecord] {
@@ -3955,10 +3983,10 @@ private struct DashboardCloudConversation: View {
     }
 
     private func scrollToConversationBottom(using proxy: ScrollViewProxy) {
-        scrollPositionID = visibleMessages.last?.id
+        scrollPositionID = chatEndID
         scrollWithoutAnimation(
             proxy,
-            to: visibleMessages.last?.id ?? chatEndID,
+            to: chatEndID,
             anchor: .bottom
         )
     }
@@ -4569,22 +4597,32 @@ private struct DashboardComposer: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
+        .glassEffect(
+            .regular.interactive(),
+            in: RoundedRectangle(
+                cornerRadius: DashboardMetrics.composerRadius,
+                style: .continuous
+            )
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: DashboardMetrics.composerRadius, style: .continuous)
+                .stroke(
+                    isDropTarget
+                        ? DashboardPalette.primary
+                        : DashboardPalette.foreground.opacity(0.06),
+                    lineWidth: isDropTarget ? 2 : 1
+                )
+        }
+        .shadow(
+            color: focused ? DashboardPalette.primary.opacity(0.18) : DashboardPalette.foreground.opacity(0.04),
+            radius: focused ? 14 : 2,
+            y: focused ? 8 : 1
+        )
         .background {
             RoundedRectangle(cornerRadius: DashboardMetrics.composerRadius, style: .continuous)
-                .fill(DashboardPalette.background.opacity(focused ? 0.85 : 0.65))
-                .overlay {
+                .fill(.clear)
+                .contentShape(
                     RoundedRectangle(cornerRadius: DashboardMetrics.composerRadius, style: .continuous)
-                        .stroke(
-                            isDropTarget
-                                ? DashboardPalette.primary
-                                : DashboardPalette.foreground.opacity(0.06),
-                            lineWidth: isDropTarget ? 2 : 1
-                        )
-                }
-                .shadow(
-                    color: focused ? DashboardPalette.primary.opacity(0.18) : DashboardPalette.foreground.opacity(0.04),
-                    radius: focused ? 14 : 2,
-                    y: focused ? 8 : 1
                 )
                 .onTapGesture {
                     openMenu = nil
@@ -6100,7 +6138,7 @@ private struct DashboardNewArtifactButton: View {
 }
 
 private struct DashboardRailRow: View {
-    @Environment(\.dashboardTheme) private var theme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var hovered = false
     let icon: DashboardLucideGlyph
     var harnessLogo: DashboardHarnessLogo? = nil
@@ -6109,6 +6147,7 @@ private struct DashboardRailRow: View {
     var trailing: String? = nil
     var showsPin = false
     var selected = false
+    var isRunningConversation = false
     var iconColor: Color? = nil
     var pinMenuTitle: String? = nil
     var onTogglePin: (() -> Void)? = nil
@@ -6132,6 +6171,10 @@ private struct DashboardRailRow: View {
     }
 
     var body: some View {
+        let activityPresentation = ConversationActivityPresentation.resolve(
+            isRunning: isRunningConversation,
+            reduceMotion: reduceMotion
+        )
         Button(action: action) {
             HStack(spacing: 8) {
                 Group {
@@ -6162,10 +6205,14 @@ private struct DashboardRailRow: View {
             .foregroundStyle(DashboardPalette.foreground)
             .padding(.horizontal, 12)
             .frame(height: DashboardMetrics.rowHeight)
-            .background(
-                selected ? theme.palette.themeStrong : hovered ? theme.palette.themeSoft : .clear,
-                in: RoundedRectangle(cornerRadius: 8, style: .continuous)
-            )
+            .background {
+                DashboardActiveConversationRowBackground(
+                    presentation: activityPresentation,
+                    selected: selected,
+                    hovered: hovered,
+                    cornerRadius: 8
+                )
+            }
             .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
         .buttonStyle(DashboardRailButtonStyle())
@@ -6270,12 +6317,13 @@ private struct DashboardEmptyListRow: View {
 }
 
 private struct DashboardConversationRow: View {
-    @Environment(\.dashboardTheme) private var theme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var hovered = false
     @State private var hoverCardTask: Task<Void, Never>?
     @FocusState private var focused: Bool
     let presentation: DashboardConversationRowPresentation
     let selected: Bool
+    let isRunning: Bool
     @Binding var detailCardState: DashboardConversationDetailCardState
     let folders: [WorkspaceFolderRecord]
     let onMoveConversation: (String, String?) -> Void
@@ -6284,6 +6332,10 @@ private struct DashboardConversationRow: View {
 
     var body: some View {
         let conversation = presentation.conversation
+        let activityPresentation = ConversationActivityPresentation.resolve(
+            isRunning: isRunning,
+            reduceMotion: reduceMotion
+        )
         let meta = presentation.meta
         let accessibility = DashboardConversationRowAccessibility.resolve(
             conversation: conversation,
@@ -6293,7 +6345,15 @@ private struct DashboardConversationRow: View {
             time: presentation.time
         )
 
-        Button(action: action) {
+        // AppKit focuses a Button on mouse-down. Keep the popover state stable
+        // until this native action receives the matching mouse-up.
+        Button {
+            action()
+            detailCardState.completePrimaryAction(
+                conversationID: conversation.id,
+                hovered: hovered
+            )
+        } label: {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
                     Text(presentation.title)
@@ -6334,10 +6394,14 @@ private struct DashboardConversationRow: View {
             .padding(.vertical, 9)
             .frame(maxWidth: .infinity, alignment: .leading)
             .frame(minHeight: 54)
-            .background(
-                selected ? theme.palette.themeStrong : hovered ? theme.palette.themeSoft : .clear,
-                in: RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius, style: .continuous)
-            )
+            .background {
+                DashboardActiveConversationRowBackground(
+                    presentation: activityPresentation,
+                    selected: selected,
+                    hovered: hovered,
+                    cornerRadius: DashboardMetrics.controlRadius
+                )
+            }
             .contentShape(RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius, style: .continuous))
         }
         .buttonStyle(DashboardRailButtonStyle())
@@ -6352,14 +6416,15 @@ private struct DashboardConversationRow: View {
             if isHovered {
                 hoverCardTask = Task { @MainActor in
                     try? await Task.sleep(for: .milliseconds(380))
-                    guard !Task.isCancelled, hovered else { return }
+                    guard !Task.isCancelled, hovered, !Self.isMouseButtonPressed else { return }
                     detailCardState.setHovered(true, conversationID: conversation.id)
                 }
-            } else {
+            } else if !Self.isMouseButtonPressed {
                 detailCardState.setHovered(false, conversationID: conversation.id)
             }
         }
         .onChange(of: focused) { _, isFocused in
+            guard !Self.isMouseButtonPressed else { return }
             detailCardState.setFocused(isFocused, conversationID: conversation.id)
         }
         .popover(isPresented: detailCardPresented, arrowEdge: .trailing) {
@@ -6391,6 +6456,10 @@ private struct DashboardConversationRow: View {
             return dashboardAgentGlyph(agent)
         }
         return presentation.conversation.localRuntimeKind == nil ? .bot : .terminal
+    }
+
+    private static var isMouseButtonPressed: Bool {
+        NSEvent.pressedMouseButtons != 0
     }
 
     private var harnessLogo: DashboardHarnessLogo? {
