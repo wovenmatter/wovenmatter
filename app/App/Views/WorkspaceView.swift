@@ -995,6 +995,7 @@ struct WorkspaceView: View {
     }
 
     private func activatePanel(_ panelID: DashboardChatPanelID) {
+        guard chatPanels.activePanelID != panelID else { return }
         guard chatPanels.activatePanel(panelID) else { return }
         synchronizeSelectionToActivePanel()
     }
@@ -3601,6 +3602,7 @@ private struct DashboardWorkspaceSurface: View {
                 focusRequestGeneration: chatPanels.focusRequest?.panelID == panelID
                     ? chatPanels.focusRequest?.generation
                     : nil,
+                onActivatePanel: { onActivatePanel(panelID) },
                 onClosePanel: { onClosePanel(panelID) },
                 onAddPanel: { onAddPanel(panelID) },
                 onSend: { onSend(panelID) },
@@ -3623,10 +3625,6 @@ private struct DashboardWorkspaceSurface: View {
                 .padding(12)
             }
         }
-        .contentShape(Rectangle())
-        .simultaneousGesture(TapGesture().onEnded {
-            onActivatePanel(panelID)
-        })
         .task(id: conversation?.id) {
             guard let conversation else { return }
             await model.refreshConversation(id: conversation.id)
@@ -3809,6 +3807,7 @@ private struct DashboardCloudConversation: View {
     let showsClosePanel: Bool
     let showsAddPanel: Bool
     let focusRequestGeneration: Int?
+    let onActivatePanel: () -> Void
     let onClosePanel: () -> Void
     let onAddPanel: () -> Void
     let onSend: () -> Void
@@ -3948,6 +3947,7 @@ private struct DashboardCloudConversation: View {
                     }
                 }
             }
+            .simultaneousGesture(TapGesture().onEnded(onActivatePanel))
 
             VStack(spacing: 8) {
                 if let error = model.workspaceError
@@ -4057,6 +4057,7 @@ private struct DashboardCloudConversation: View {
                         } ?? false),
                         startsCollapsed: startsComposerCollapsed,
                         focusRequestGeneration: focusRequestGeneration,
+                        onActivate: onActivatePanel,
                         onSelectModel: { selection in
                             guard let conversation else { return }
                             if model.isOpenClawGatewayConversation(conversation.id) {
@@ -4703,6 +4704,7 @@ private struct DashboardComposer: View {
     let sendDisabled: Bool
     let startsCollapsed: Bool
     let focusRequestGeneration: Int?
+    let onActivate: () -> Void
     let onSelectModel: ((String) -> Void)?
     let onSelectThinking: ((String) -> Void)?
     let onAttachmentAction: (DashboardComposerAttachmentAction) -> Void
@@ -4855,13 +4857,19 @@ private struct DashboardComposer: View {
             openMenu = nil
         }
         .dropDestination(for: URL.self) { urls, _ in
-            onDropFiles(urls)
+            onActivate()
+            return onDropFiles(urls)
         } isTargeted: { targeted in
             isDropTarget = targeted
         }
         .onChange(of: focusRequestGeneration) { _, generation in
             guard generation != nil else { return }
             focused = true
+        }
+        .onChange(of: focused) { _, isFocused in
+            if isFocused {
+                onActivate()
+            }
         }
         .onAppear {
             if focusRequestGeneration != nil {
@@ -4946,6 +4954,7 @@ private struct DashboardComposer: View {
         menu: DashboardComposerMenuKind
     ) -> some View {
         Button {
+            onActivate()
             focused = false
             openMenu = openMenu == menu ? nil : menu
         } label: {
@@ -5043,6 +5052,7 @@ private struct DashboardComposer: View {
 
     private var collapseControl: some View {
         Button {
+            onActivate()
             openMenu = nil
             if isCollapsed {
                 permitsNarrowExpandedControls = true
@@ -5084,6 +5094,7 @@ private struct DashboardComposer: View {
 
     private var voiceControl: some View {
         Button {
+            onActivate()
             openMenu = nil
             focused = false
             onUnavailableAction("Voice input")
@@ -5098,7 +5109,10 @@ private struct DashboardComposer: View {
     }
 
     private var sendControl: some View {
-        Button(action: onSend) {
+        Button {
+            onActivate()
+            onSend()
+        } label: {
             DashboardLucideIcon(glyph: .arrowUp, size: 16)
                 .foregroundStyle(.white)
                 .frame(width: 36, height: 36)
@@ -5125,6 +5139,7 @@ private struct DashboardComposer: View {
         let unavailable = sessionControlsDisabled || options.count < 2 || action == nil
         return Button {
             guard !unavailable else { return }
+            onActivate()
             focused = false
             openMenu = openMenu == kind ? nil : kind
         } label: {
@@ -5170,6 +5185,7 @@ private struct DashboardComposer: View {
         let unavailable = sessionControlsDisabled || options.count < 2 || action == nil
         return Button {
             guard !unavailable else { return }
+            onActivate()
             focused = false
             openMenu = openMenu == kind ? nil : kind
         } label: {
