@@ -2,6 +2,7 @@ import AppKit
 import Darwin
 import Foundation
 import SwiftUI
+import WovenMatterClient
 
 struct WorkspaceProcessLeaseOwner: Equatable, Sendable {
     let processIdentifier: Int32
@@ -345,6 +346,29 @@ struct WovenMatterApp: App {
             ? nil
             : WorkspaceProcessLease.acquireOrExit()
         _applicationModel = State(initialValue: ApplicationModel())
+        if !isRunningUnitTests {
+            Self.markUpdateReadyIfRequested()
+        }
+    }
+
+    private static func markUpdateReadyIfRequested() {
+        guard let flagIndex = CommandLine.arguments.firstIndex(
+            of: "--woven-update-ready"
+        ),
+        CommandLine.arguments.indices.contains(flagIndex + 1) else {
+            return
+        }
+        let marker = URL(
+            fileURLWithPath: CommandLine.arguments[flagIndex + 1]
+        ).standardizedFileURL
+        let updatesDirectory = LocalACPManagedRuntimePaths.applicationSupportDirectory
+            .appending(path: "Updates", directoryHint: .isDirectory)
+            .standardizedFileURL
+        guard marker.deletingLastPathComponent() == updatesDirectory,
+              marker.lastPathComponent.hasPrefix(".ready-") else {
+            return
+        }
+        try? Data().write(to: marker, options: .atomic)
     }
 
     var body: some Scene {

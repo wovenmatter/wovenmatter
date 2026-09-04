@@ -177,8 +177,10 @@ transports are checked after installation instead of being assumed present.
   user approval; their contents are not pinned and may change independently of
   Woven Matter.
 - Distribution signing and notarization require maintainer-controlled Apple
-  credentials. A `vX.Y.Z` tag runs the release workflow, verifies its exact
-  assets in a private draft, and then publishes `Woven Matter vX.Y.Z`.
+  credentials. A `vX.Y.Z` tag runs the release workflow and stages its verified
+  assets in a private draft. After an explicit version-confirmed release
+  request, the release agent verifies that draft and publishes it through the
+  repository-owned guarded publication script.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md), and
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) before contributing or

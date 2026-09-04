@@ -721,6 +721,7 @@ enum DashboardTheme: String, CaseIterable, Identifiable {
 }
 
 enum DashboardSidebarStyle: String, CaseIterable, Identifiable {
+    case adaptive
     case single
     case split
 
@@ -731,8 +732,17 @@ enum DashboardSidebarStyle: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .single: "Single sidebar"
-        case .split: "Split sidebars"
+        case .adaptive: "Adaptive Sidebar"
+        case .single: "Single Sidebar"
+        case .split: "Split Sidebar"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .adaptive: "Keep navigation visible and open folder contents beside it."
+        case .single: "Open folder contents in place of the movable navigation sidebar."
+        case .split: "Keep navigation and workspace sidebars visible on opposite sides."
         }
     }
 }
@@ -754,31 +764,39 @@ enum DashboardSidebarSide: String, CaseIterable, Identifiable {
     }
 }
 
-enum DashboardSidebarPage: Equatable, Sendable {
+enum DashboardSidebarPage: Hashable, Sendable {
     case navigation
     case workspace
 }
 
 struct DashboardSidebarNavigationState: Equatable, Sendable {
     private(set) var singlePage = DashboardSidebarPage.navigation
+    private(set) var adaptiveWorkspaceVisible = false
 
     mutating func selectFolder() {
         singlePage = .workspace
+        adaptiveWorkspaceVisible = true
     }
 
     mutating func showNavigation() {
         singlePage = .navigation
+        adaptiveWorkspaceVisible = false
     }
 
-    func page(
+    func pages(
         for side: DashboardSidebarSide,
         style: DashboardSidebarStyle
-    ) -> DashboardSidebarPage {
+    ) -> [DashboardSidebarPage] {
         switch style {
+        case .adaptive:
+            guard adaptiveWorkspaceVisible else { return [.navigation] }
+            return side == .left
+                ? [.navigation, .workspace]
+                : [.workspace, .navigation]
         case .single:
-            singlePage
+            return [singlePage]
         case .split:
-            side == .left ? .navigation : .workspace
+            return [side == .left ? .navigation : .workspace]
         }
     }
 }
@@ -867,7 +885,7 @@ struct DashboardLayoutState: Equatable {
         let showsLeftRail: Bool
         let showsRightRail: Bool
         switch sidebarStyle {
-        case .single:
+        case .adaptive, .single:
             showsLeftRail = !compact && singleRailRequested && singleSidebarSide == .left
             showsRightRail = !compact && singleRailRequested && singleSidebarSide == .right
         case .split:
@@ -947,6 +965,46 @@ struct DashboardSectionHeading: View {
             .font(.system(size: 10, weight: .semibold))
             .tracking(1.8)
             .foregroundStyle(DashboardPalette.mutedForeground)
+    }
+}
+
+struct DashboardActiveConversationRowBackground: View {
+    @Environment(\.dashboardTheme) private var theme
+    let presentation: ConversationActivityPresentation
+    let selected: Bool
+    let hovered: Bool
+    let cornerRadius: CGFloat
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        ZStack {
+            shape.fill(presentation.isActive ? theme.palette.themeWhisper : .clear)
+            if presentation.allowsMotion {
+                TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
+                    GeometryReader { geometry in
+                        let progress = context.date.timeIntervalSinceReferenceDate
+                            .truncatingRemainder(dividingBy: 4.2) / 4.2
+                        LinearGradient(
+                            colors: [
+                                .clear,
+                                DashboardPalette.primary.opacity(0.055),
+                                .clear,
+                            ],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                        .frame(width: geometry.size.width * 1.7)
+                        .offset(x: geometry.size.width * (-1.7 + 2.7 * progress))
+                    }
+                    .clipShape(shape)
+                }
+            }
+            shape.fill(
+                selected
+                    ? theme.palette.themeStrong
+                    : hovered ? theme.palette.themeSoft : .clear
+            )
+        }
     }
 }
 

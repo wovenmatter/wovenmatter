@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 import Testing
 @testable import WovenMatterClient
 
@@ -101,6 +102,79 @@ struct ReleaseUpdateTests {
       }
     )
     #expect(try await client.check(currentVersion: "0.1.0") == .current)
+  }
+
+  @Test("downloads a verified release into app-managed storage")
+  func downloadsVerifiedRelease() async throws {
+    let payload = Data("signed release payload".utf8)
+    let digest = SHA256.hash(data: payload)
+      .map { String(format: "%02x", $0) }
+      .joined()
+    let verifiedManifest = try JSONDecoder().decode(
+      WovenMatterReleaseManifest.self,
+      from: Data(validManifest.replacingOccurrences(
+        of: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        with: digest
+      ).utf8)
+    )
+    let root = FileManager.default.temporaryDirectory.appending(
+      path: "wovenmatter-release-test-\(UUID().uuidString)",
+      directoryHint: .isDirectory
+    )
+    defer { try? FileManager.default.removeItem(at: root) }
+    let installer = WovenMatterReleaseUpdateInstaller(
+      rootDirectory: root,
+      downloadFile: { _, destination, _ in
+        try payload.write(to: destination)
+        return payload.count
+      }
+    )
+
+    let release = try await installer.download(verifiedManifest)
+
+    #expect(release.manifest == verifiedManifest)
+    #expect(release.fileURL.deletingLastPathComponent() == root)
+    #expect(try Data(contentsOf: release.fileURL) == payload)
+    #expect(try await installer.cachedRelease(for: verifiedManifest) == release)
+  }
+
+  @Test("rejects a downloaded release with the wrong checksum")
+  func rejectsChecksumMismatch() async throws {
+    let manifest = try JSONDecoder().decode(
+      WovenMatterReleaseManifest.self,
+      from: Data(validManifest.utf8)
+    )
+    let payload = Data("tampered release payload".utf8)
+    let root = FileManager.default.temporaryDirectory.appending(
+      path: "wovenmatter-release-test-\(UUID().uuidString)",
+      directoryHint: .isDirectory
+    )
+    defer { try? FileManager.default.removeItem(at: root) }
+    let installer = WovenMatterReleaseUpdateInstaller(
+      rootDirectory: root,
+      downloadFile: { _, destination, _ in
+        try payload.write(to: destination)
+        return payload.count
+      }
+    )
+
+    await #expect(
+      throws: WovenMatterReleaseInstallationError.checksumMismatch
+    ) {
+      try await installer.download(manifest)
+    }
+    #expect(try FileManager.default.contentsOfDirectory(atPath: root.path).isEmpty)
+  }
+
+  @Test("replacement helper is valid shell")
+  func replacementHelperSyntax() throws {
+    let result = try LocalACPProcessRunner.run(
+      executableURL: URL(fileURLWithPath: "/bin/sh"),
+      arguments: [
+        "-n", "-c", WovenMatterReleaseUpdateInstaller.replacementScript,
+      ]
+    )
+    #expect(result.succeeded)
   }
 
   private let validManifest = """
