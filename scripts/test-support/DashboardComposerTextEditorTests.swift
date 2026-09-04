@@ -12,6 +12,18 @@ private final class ScrollEventSpy: NSResponder {
 }
 
 @MainActor
+private final class FirstResponderWindowSpy: NSWindow {
+    private(set) var resignationRequestCount = 0
+
+    override func makeFirstResponder(_ responder: NSResponder?) -> Bool {
+        if responder == nil {
+            resignationRequestCount += 1
+        }
+        return super.makeFirstResponder(responder)
+    }
+}
+
+@MainActor
 private func keyEvent(
     keyCode: UInt16,
     characters: String,
@@ -308,7 +320,7 @@ struct DashboardComposerTextEditorTests {
             )
         }
 
-        let window = NSWindow(
+        let window = FirstResponderWindowSpy(
             contentRect: NSRect(x: 0, y: 0, width: 320, height: 80),
             styleMask: [.borderless],
             backing: .buffered,
@@ -332,8 +344,8 @@ struct DashboardComposerTextEditorTests {
         coordinator.reconcileFocus(for: textView)
         RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.01))
         expect(
-            window.firstResponder !== textView,
-            "a confirmed false binding must still resign the native editor"
+            window.resignationRequestCount == 1,
+            "a confirmed false binding must still request native editor resignation"
         )
     }
 
