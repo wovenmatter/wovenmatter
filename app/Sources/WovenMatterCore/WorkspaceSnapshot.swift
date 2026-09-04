@@ -47,7 +47,6 @@ public struct WorkspaceConversationRecord: Codable, Equatable, Identifiable, Sen
   public let openClawSessionKey: String?
   public let lastMessageAt: String?
   public let folderID: String?
-  public let isMain: Bool
   public let isPinned: Bool
   public let isArchived: Bool
 
@@ -63,7 +62,6 @@ public struct WorkspaceConversationRecord: Codable, Equatable, Identifiable, Sen
     case openClawSessionKey = "openclaw_session_key"
     case lastMessageAt = "last_message_at"
     case folderID = "folder_id"
-    case isMain = "is_main"
     case isPinned = "is_pinned"
     case isArchived = "is_archived"
   }
@@ -92,9 +90,27 @@ public struct WorkspaceConversationRecord: Codable, Equatable, Identifiable, Sen
     openClawSessionKey = try values.decodeIfPresent(String.self, forKey: .openClawSessionKey)
     lastMessageAt = try values.decodeIfPresent(String.self, forKey: .lastMessageAt)
     folderID = try values.decodeIfPresent(String.self, forKey: .folderID)
-    isMain = try values.sqliteBoolIfPresent(forKey: .isMain) ?? false
     isPinned = try values.sqliteBool(forKey: .isPinned)
     isArchived = try values.sqliteBool(forKey: .isArchived)
+  }
+}
+
+public enum DashboardConversationSelection {
+  public static func mostRecentAvailableConversationID(
+    in conversations: [WorkspaceConversationRecord],
+    excluding excludedConversationIDs: Set<String>
+  ) -> String? {
+    conversations
+      .filter {
+        !$0.isArchived && !excludedConversationIDs.contains($0.id)
+      }
+      .max { lhs, rhs in
+        let lhsDate = lhs.lastMessageAt.flatMap(dashboardDate(from:)) ?? .distantPast
+        let rhsDate = rhs.lastMessageAt.flatMap(dashboardDate(from:)) ?? .distantPast
+        if lhsDate != rhsDate { return lhsDate < rhsDate }
+        return lhs.id < rhs.id
+      }?
+      .id
   }
 }
 

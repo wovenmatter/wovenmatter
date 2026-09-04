@@ -139,7 +139,7 @@ struct WorkspaceView: View {
     @AppStorage(DashboardAgentOrderStore.storageKey) private var agentOrderRaw = "{}"
     @AppStorage(DashboardAgentDisclosureStore.storageKey) private var agentDisclosureRaw = "[]"
     @State private var selectedAgentID: UUID?
-    @State private var selectedConversationID: String?
+    @State private var chatPanels = DashboardChatPanelState()
     @State private var selectedNoteID: String?
     @State private var selectedFolderID: String?
     @State private var sidebarNavigation = DashboardSidebarNavigationState()
@@ -152,6 +152,7 @@ struct WorkspaceView: View {
     @State private var submittingConversationIDs: Set<String> = []
     @State private var showsAttachmentImporter = false
     @State private var attachmentPicker: DashboardAttachmentPickerKind?
+    @State private var attachmentTargetPanelID: DashboardChatPanelID?
     @State private var notice: String?
     @State private var noticeTask: Task<Void, Never>?
     @State private var showsNewChatChooser = false
@@ -168,26 +169,14 @@ struct WorkspaceView: View {
             + model.buzzWorkspaceAgents
     }
 
+    private var selectedConversationID: String? {
+        chatPanels.activeConversationID
+    }
+
     private var sidebarAgents: [WorkspaceAgent] {
         model.visibleOrderedLocalCLIAgents
             + model.remoteWorkspaceAgents
             + model.buzzWorkspaceAgents
-    }
-
-    private var selectedDraft: Binding<String> {
-        let conversationID = selectedConversationID ?? ""
-        return Binding(
-            get: { draftsByConversationID[conversationID, default: ""] },
-            set: { draftsByConversationID[conversationID] = $0 }
-        )
-    }
-
-    private var selectedConversationIsSubmitting: Bool {
-        selectedConversationID.map(submittingConversationIDs.contains) ?? false
-    }
-
-    private var selectedAttachments: [AgentMessageAttachmentDraft] {
-        selectedConversationID.flatMap { attachmentDraftsByConversation[$0] } ?? []
     }
 
     private var surfacePreferenceSignature: String {
@@ -283,12 +272,17 @@ struct WorkspaceView: View {
         .onChange(of: model.workspaceOverview?.conversations.map(\.id) ?? []) { _, ids in
             selectDefaults()
         }
-        .onChange(of: selectedAgentID) { _, _ in
-            selectConversationForCurrentAgent()
-        }
         .onChange(of: selectedConversationID) { _, conversationID in
             if let conversationID {
                 model.markConversationRead(id: conversationID)
+            }
+        }
+        .onChange(of: selectedNoteID) { _, noteID in
+            if noteID == nil {
+                chatPanels.dismissAsset()
+            } else {
+                chatPanels.presentAsset()
+                synchronizeSelectionToActivePanel()
             }
         }
         .onChange(of: sidebarStyleRawValue) { _, _ in
@@ -311,8 +305,14 @@ struct WorkspaceView: View {
             allowsMultipleSelection: true
         ) { result in
             switch result {
-            case .success(let urls): _ = attachFiles(urls)
-            case .failure(let error): showNotice(error.localizedDescription)
+            case .success(let urls):
+                if let panelID = attachmentTargetPanelID {
+                    _ = attachFiles(urls, to: panelID)
+                }
+                attachmentTargetPanelID = nil
+            case .failure(let error):
+                attachmentTargetPanelID = nil
+                showNotice(error.localizedDescription)
             }
         }
         .sheet(item: $attachmentPicker) { kind in
@@ -320,20 +320,31 @@ struct WorkspaceView: View {
                 kind: kind,
                 notes: model.workspaceOverview?.notes ?? [],
                 conversations: (model.workspaceOverview?.conversations ?? []).filter {
-                    $0.id != selectedConversationID
+                    $0.id != attachmentTargetPanelID.flatMap {
+                        chatPanels.panel(id: $0)?.conversationID
+                    }
                 },
                 onSelectNote: { note in
-                    appendAttachment(model.noteAttachmentDraft(note))
+                    if let panelID = attachmentTargetPanelID {
+                        appendAttachment(model.noteAttachmentDraft(note), to: panelID)
+                    }
                     attachmentPicker = nil
+                    attachmentTargetPanelID = nil
                 },
                 onSelectConversation: { conversation in
                     attachmentPicker = nil
                     Task { @MainActor in
                         do {
-                            appendAttachment(try await model.conversationAttachmentDraft(conversation))
+                            if let panelID = attachmentTargetPanelID {
+                                appendAttachment(
+                                    try await model.conversationAttachmentDraft(conversation),
+                                    to: panelID
+                                )
+                            }
                         } catch {
                             showNotice(error.localizedDescription)
                         }
+                        attachmentTargetPanelID = nil
                     }
                 }
             )
@@ -618,12 +629,13 @@ struct WorkspaceView: View {
                 case .workspace:
                     DashboardWorkspaceSurface(
                         model: model,
-                        agent: selectedAgent,
-                        conversation: selectedConversation,
+                        agents: allAgents,
+                        conversations: model.workspaceOverview?.conversations ?? [],
+                        chatPanels: chatPanels,
                         note: selectedNote,
-                        draft: selectedDraft,
-                        attachments: selectedAttachments,
-                        sendInProgress: selectedConversationIsSubmitting,
+                        draftsByConversationID: $draftsByConversationID,
+                        attachmentDraftsByConversation: attachmentDraftsByConversation,
+                        submittingConversationIDs: submittingConversationIDs,
                         compactPane: $compactWorkspacePane,
                         noteFocusMode: $noteFocusMode,
                         chatWidthPercent: $chatWidthPercent,
@@ -641,6 +653,10 @@ struct WorkspaceView: View {
                             compactWorkspacePane = .chat
                             noteFocusMode = false
                         },
+                        onActivatePanel: activatePanel,
+                        onAddPanel: addPanel,
+                        onClosePanel: closePanel,
+                        onNavigatePanel: navigatePanel,
                         onSend: send,
                         onAttachmentAction: handleAttachmentAction,
                         onRemoveAttachment: removeAttachment,
@@ -733,6 +749,10 @@ struct WorkspaceView: View {
             }
             return
         }
+        if selectedConversation == nil,
+           chatPanels.activePanelID != .primary || chatPanels.hasAuxiliaryPanels {
+            return
+        }
         if selectedAgent == nil {
             selectedAgentID = allAgents.first?.id
         }
@@ -747,12 +767,14 @@ struct WorkspaceView: View {
         if let selectedConversation, conversationsForSelectedAgent.contains(where: { $0.id == selectedConversation.id }) {
             return
         }
-        selectedConversationID = conversationsForSelectedAgent.first(where: \.isMain)?.id
-            ?? conversationsForSelectedAgent.first?.id
+        _ = chatPanels.replaceActiveConversation(
+            with: conversationsForSelectedAgent.first?.id
+        )
     }
 
     private func selectAgent(_ id: UUID) {
         selectedAgentID = id
+        selectConversationForCurrentAgent()
         destination = .workspace
         compactWorkspacePane = .chat
         compactDrawer = .none
@@ -769,7 +791,7 @@ struct WorkspaceView: View {
 
     private func selectConversation(_ id: String) {
         guard let conversation = model.workspaceOverview?.conversations.first(where: { $0.id == id }) else { return }
-        selectedConversationID = id
+        _ = chatPanels.replaceActiveConversation(with: id)
         if conversation.localRuntimeKind != nil {
             selectedAgentID = conversation.agentID.flatMap { agentID in
                 allAgents.first {
@@ -783,6 +805,7 @@ struct WorkspaceView: View {
     }
 
     private func selectNote(_ id: String) {
+        chatPanels.presentAsset()
         selectedNoteID = id
         destination = .workspace
         compactWorkspacePane = .note
@@ -971,8 +994,58 @@ struct WorkspaceView: View {
         }
     }
 
-    private func send() {
-        if let selectedConversation {
+    private func activatePanel(_ panelID: DashboardChatPanelID) {
+        guard chatPanels.activePanelID != panelID else { return }
+        guard chatPanels.activatePanel(panelID) else { return }
+        synchronizeSelectionToActivePanel()
+    }
+
+    private func addPanel(from panelID: DashboardChatPanelID) {
+        let newPanelID = DashboardChatPanelID(rawValue: UUID().uuidString.lowercased())
+        let openConversationIDs = Set(chatPanels.panels.compactMap(\.conversationID))
+        let conversationID = DashboardConversationSelection
+            .mostRecentAvailableConversationID(
+                in: model.workspaceOverview?.conversations ?? [],
+                excluding: openConversationIDs
+            )
+        guard chatPanels.addPanel(
+            from: panelID,
+            newPanelID: newPanelID,
+            conversationID: conversationID
+        ) else { return }
+        if selectedNoteID != nil {
+            selectedNoteID = nil
+            compactWorkspacePane = .chat
+            noteFocusMode = false
+        }
+        synchronizeSelectionToActivePanel()
+    }
+
+    private func closePanel(_ panelID: DashboardChatPanelID) {
+        guard chatPanels.closePanel(panelID) else { return }
+        synchronizeSelectionToActivePanel()
+    }
+
+    private func navigatePanel(_ direction: DashboardChatPanelDirection) -> Bool {
+        guard chatPanels.navigate(direction) != nil else { return false }
+        synchronizeSelectionToActivePanel()
+        return true
+    }
+
+    private func synchronizeSelectionToActivePanel() {
+        guard let conversation = selectedConversation else { return }
+        if conversation.localRuntimeKind != nil {
+            selectedAgentID = conversation.agentID.flatMap { agentID in
+                allAgents.first {
+                    $0.id.uuidString.lowercased() == agentID
+                }?.id
+            }
+        }
+        model.markConversationRead(id: conversation.id)
+    }
+
+    private func send(from panelID: DashboardChatPanelID) {
+        if let selectedConversation = conversation(in: panelID) {
             let conversationID = selectedConversation.id
             guard submittingConversationIDs.insert(conversationID).inserted else {
                 return
@@ -986,7 +1059,7 @@ struct WorkspaceView: View {
                         text: content,
                         attachments: submittedAttachments
                     ),
-                    note: selectedNote
+                    note: panelID == .primary ? selectedNote : nil
                 )
                 let result = DashboardSendResult.resolve(
                         submittedDraft: content,
@@ -1000,7 +1073,7 @@ struct WorkspaceView: View {
                         .removeAll { submittedIDs.contains($0.id) }
                 }
                 submittingConversationIDs.remove(conversationID)
-                if !accepted, selectedConversationID == conversationID {
+                if !accepted, chatPanels.activeConversationID == conversationID {
                     showNotice(
                         model.conversationError(for: conversationID)
                             ?? "The agent connection is unavailable. Your draft is preserved."
@@ -1013,11 +1086,16 @@ struct WorkspaceView: View {
         }
     }
 
-    private func handleAttachmentAction(_ action: DashboardComposerAttachmentAction) {
-        guard selectedConversationID != nil else {
+    private func handleAttachmentAction(
+        from panelID: DashboardChatPanelID,
+        _ action: DashboardComposerAttachmentAction
+    ) {
+        guard chatPanels.panel(id: panelID)?.conversationID != nil else {
             showNotice("Choose a conversation before attaching something.")
             return
         }
+        activatePanel(panelID)
+        attachmentTargetPanelID = panelID
         switch action {
         case .upload: showsAttachmentImporter = true
         case .note: attachmentPicker = .note
@@ -1026,8 +1104,11 @@ struct WorkspaceView: View {
     }
 
     @discardableResult
-    private func attachFiles(_ urls: [URL]) -> Bool {
-        guard selectedConversationID != nil else { return false }
+    private func attachFiles(
+        _ urls: [URL],
+        to panelID: DashboardChatPanelID
+    ) -> Bool {
+        guard chatPanels.panel(id: panelID)?.conversationID != nil else { return false }
         Task { @MainActor in
             let scoped = urls.filter { $0.startAccessingSecurityScopedResource() }
             defer { scoped.forEach { $0.stopAccessingSecurityScopedResource() } }
@@ -1037,7 +1118,7 @@ struct WorkspaceView: View {
                     return (url: url, mimeType: type?.preferredMIMEType ?? "application/octet-stream")
                 }
                 for attachment in try await model.stageMessageAttachments(files) {
-                    appendAttachment(attachment)
+                    appendAttachment(attachment, to: panelID)
                 }
             } catch {
                 showNotice(error.localizedDescription)
@@ -1046,8 +1127,11 @@ struct WorkspaceView: View {
         return true
     }
 
-    private func appendAttachment(_ attachment: AgentMessageAttachmentDraft) {
-        guard let conversationID = selectedConversationID else { return }
+    private func appendAttachment(
+        _ attachment: AgentMessageAttachmentDraft,
+        to panelID: DashboardChatPanelID
+    ) {
+        guard let conversationID = chatPanels.panel(id: panelID)?.conversationID else { return }
         var current = attachmentDraftsByConversation[conversationID] ?? []
         let duplicate = current.contains { existing in
             switch (existing, attachment) {
@@ -1079,10 +1163,22 @@ struct WorkspaceView: View {
         attachmentDraftsByConversation[conversationID] = current
     }
 
-    private func removeAttachment(_ id: String) {
-        guard let conversationID = selectedConversationID else { return }
+    private func removeAttachment(
+        _ id: String,
+        from panelID: DashboardChatPanelID
+    ) {
+        guard let conversationID = chatPanels.panel(id: panelID)?.conversationID else { return }
         attachmentDraftsByConversation[conversationID, default: []]
             .removeAll { $0.id == id }
+    }
+
+    private func conversation(
+        in panelID: DashboardChatPanelID
+    ) -> WorkspaceConversationRecord? {
+        guard let conversationID = chatPanels.panel(id: panelID)?.conversationID else {
+            return nil
+        }
+        return model.workspaceOverview?.conversations.first { $0.id == conversationID }
     }
 
 }
@@ -2016,7 +2112,7 @@ private struct DashboardSidebarNavigationPage: View {
             }
         }
 
-        for conversation in conversations where !conversation.isArchived && !conversation.isMain {
+        for conversation in conversations where !conversation.isArchived {
             insert(.conversation(conversation))
         }
         for note in notes {
@@ -3337,12 +3433,13 @@ private enum DashboardListTimeContext {
 
 private struct DashboardWorkspaceSurface: View {
     @Bindable var model: ApplicationModel
-    let agent: WorkspaceAgent?
-    let conversation: WorkspaceConversationRecord?
+    let agents: [WorkspaceAgent]
+    let conversations: [WorkspaceConversationRecord]
+    let chatPanels: DashboardChatPanelState
     let note: WorkspaceNoteRecord?
-    @Binding var draft: String
-    let attachments: [AgentMessageAttachmentDraft]
-    let sendInProgress: Bool
+    @Binding var draftsByConversationID: [String: String]
+    let attachmentDraftsByConversation: [String: [AgentMessageAttachmentDraft]]
+    let submittingConversationIDs: Set<String>
     @Binding var compactPane: CompactWorkspacePane
     @Binding var noteFocusMode: Bool
     @Binding var chatWidthPercent: Double
@@ -3352,10 +3449,14 @@ private struct DashboardWorkspaceSurface: View {
     let newlyCreatedNoteID: String?
     let onNewNoteFocusHandled: (String) -> Void
     let onCloseNote: () -> Void
-    let onSend: () -> Void
-    let onAttachmentAction: (DashboardComposerAttachmentAction) -> Void
-    let onRemoveAttachment: (String) -> Void
-    let onDropFiles: ([URL]) -> Bool
+    let onActivatePanel: (DashboardChatPanelID) -> Void
+    let onAddPanel: (DashboardChatPanelID) -> Void
+    let onClosePanel: (DashboardChatPanelID) -> Void
+    let onNavigatePanel: (DashboardChatPanelDirection) -> Bool
+    let onSend: (DashboardChatPanelID) -> Void
+    let onAttachmentAction: (DashboardChatPanelID, DashboardComposerAttachmentAction) -> Void
+    let onRemoveAttachment: (String, DashboardChatPanelID) -> Void
+    let onDropFiles: ([URL], DashboardChatPanelID) -> Bool
     let onUnavailableComposerAction: (String) -> Void
 
     var body: some View {
@@ -3381,7 +3482,7 @@ private struct DashboardWorkspaceSurface: View {
                         )
                         .id(note.id)
                     } else {
-                        chatPane(showNoteButton: true)
+                        chatPanel(.primary, showNoteButton: true)
                     }
                 } else if noteFocusMode {
                     notePane(note)
@@ -3391,10 +3492,10 @@ private struct DashboardWorkspaceSurface: View {
                             notePane(note)
                                 .frame(minWidth: DashboardMetrics.companionMinimumWidth)
                             splitSeparator(totalWidth: geometry.size.width)
-                            chatPane(showNoteButton: false)
+                            chatPanel(.primary, showNoteButton: false)
                                 .frame(width: chatWidth(for: geometry.size.width))
                         } else {
-                            chatPane(showNoteButton: false)
+                            chatPanel(.primary, showNoteButton: false)
                                 .frame(width: chatWidth(for: geometry.size.width))
                             splitSeparator(totalWidth: geometry.size.width)
                             notePane(note)
@@ -3404,46 +3505,30 @@ private struct DashboardWorkspaceSurface: View {
                     .coordinateSpace(name: "dashboard-workspace-split")
                 }
             } else {
-                chatPane(showNoteButton: false)
+                DashboardChatPanelGrid(state: chatPanels) { panelID in
+                    chatPanel(panelID, showNoteButton: false)
+                }
             }
         }
-        .task(id: conversation?.id) {
-            guard let conversation else { return }
-            await model.refreshConversation(id: conversation.id)
+        .onKeyPress(.leftArrow, phases: .down) { press in
+            handleNavigationKey(press, direction: .left)
+        }
+        .onKeyPress(.rightArrow, phases: .down) { press in
+            handleNavigationKey(press, direction: .right)
+        }
+        .onKeyPress(.upArrow, phases: .down) { press in
+            handleNavigationKey(press, direction: .up)
+        }
+        .onKeyPress(.downArrow, phases: .down) { press in
+            handleNavigationKey(press, direction: .down)
         }
     }
 
-    private var conversationState: DashboardConversationState? {
+    private func conversationState(
+        for conversation: WorkspaceConversationRecord?
+    ) -> DashboardConversationState? {
         guard let conversation else { return nil }
         return model.conversationState(for: conversation.id)
-    }
-
-    private var messages: [WorkspaceMessageRecord] {
-        conversationState?.content?.messages ?? []
-    }
-
-    private var activeRuns: [WorkspaceRunRecord] {
-        conversationState?.content?.runs ?? []
-    }
-
-    private var messageAttachments: [WorkspaceMessageAttachmentRecord] {
-        conversationState?.content?.attachments ?? []
-    }
-
-    private var messageReferences: [WorkspaceMessageReferenceRecord] {
-        conversationState?.content?.references ?? []
-    }
-
-    private var runActivities: [WorkspaceRunActivityRecord] {
-        conversationState?.runActivities ?? []
-    }
-
-    private var messagePresentations: [String: DashboardMessagePresentation] {
-        conversationState?.messagePresentations ?? [:]
-    }
-
-    private var runPresentations: [String: DashboardRunPresentation] {
-        conversationState?.runPresentations ?? [:]
     }
 
     private func notePane(_ note: WorkspaceNoteRecord) -> some View {
@@ -3473,29 +3558,50 @@ private struct DashboardWorkspaceSurface: View {
         )
     }
 
-    private func chatPane(showNoteButton: Bool) -> some View {
-        ZStack(alignment: .topTrailing) {
+    private func chatPanel(
+        _ panelID: DashboardChatPanelID,
+        showNoteButton: Bool
+    ) -> some View {
+        let conversation = conversation(for: panelID)
+        let conversationState = conversationState(for: conversation)
+        let attachments = conversation.flatMap {
+            attachmentDraftsByConversation[$0.id]
+        } ?? []
+        return ZStack(alignment: .topTrailing) {
             DashboardCloudConversation(
                 model: model,
-                agent: agent,
+                agent: agent(for: conversation),
                 conversation: conversation,
-                messages: messages,
-                messageAttachments: messageAttachments,
-                messageReferences: messageReferences,
-                messagePresentations: messagePresentations,
-                activeRuns: activeRuns,
-                runActivities: runActivities,
-                runPresentations: runPresentations,
-                attachedNoteTitle: model.canAgentEditOpenNote(conversation)
+                messages: conversationState?.content?.messages ?? [],
+                messageAttachments: conversationState?.content?.attachments ?? [],
+                messageReferences: conversationState?.content?.references ?? [],
+                messagePresentations: conversationState?.messagePresentations ?? [:],
+                activeRuns: conversationState?.content?.runs ?? [],
+                runActivities: conversationState?.runActivities ?? [],
+                runPresentations: conversationState?.runPresentations ?? [:],
+                attachedNoteTitle: panelID == .primary && model.canAgentEditOpenNote(conversation)
                     ? note.map { model.noteDraft(for: $0).title }
                     : nil,
-                draft: $draft,
+                draft: draftBinding(for: panelID),
                 attachments: attachments,
-                sendInProgress: sendInProgress,
-                onSend: onSend,
-                onAttachmentAction: onAttachmentAction,
-                onRemoveAttachment: onRemoveAttachment,
-                onDropFiles: onDropFiles,
+                sendInProgress: conversation.map {
+                    submittingConversationIDs.contains($0.id)
+                } ?? false,
+                startsComposerCollapsed: panelID != .primary,
+                usesCompactPanelSpacing: chatPanels.hasAuxiliaryPanels,
+                showsClosePanel: chatPanels.canClosePanel(panelID),
+                showsAddPanel: chatPanels.canAddPanel(from: panelID),
+                focusRequestGeneration: chatPanels.focusRequest?.panelID == panelID
+                    ? chatPanels.focusRequest?.generation
+                    : nil,
+                onActivatePanel: { onActivatePanel(panelID) },
+                onClosePanel: { onClosePanel(panelID) },
+                onAddPanel: { onAddPanel(panelID) },
+                onSend: { onSend(panelID) },
+                onAttachmentAction: { onAttachmentAction(panelID, $0) },
+                onRemoveAttachment: { onRemoveAttachment($0, panelID) },
+                onDropFiles: { onDropFiles($0, panelID) },
+                onCommandNavigation: handleComposerNavigation,
                 onUnavailableComposerAction: onUnavailableComposerAction
             )
             if showNoteButton {
@@ -3511,6 +3617,59 @@ private struct DashboardWorkspaceSurface: View {
                 .padding(12)
             }
         }
+        .task(id: conversation?.id) {
+            guard let conversation else { return }
+            await model.refreshConversation(id: conversation.id)
+        }
+    }
+
+    private func conversation(
+        for panelID: DashboardChatPanelID
+    ) -> WorkspaceConversationRecord? {
+        guard let conversationID = chatPanels.panel(id: panelID)?.conversationID else {
+            return nil
+        }
+        return conversations.first { $0.id == conversationID }
+    }
+
+    private func agent(
+        for conversation: WorkspaceConversationRecord?
+    ) -> WorkspaceAgent? {
+        guard let agentID = conversation?.agentID else { return nil }
+        return agents.first { $0.id.uuidString.lowercased() == agentID }
+    }
+
+    private func draftBinding(for panelID: DashboardChatPanelID) -> Binding<String> {
+        let conversationID = chatPanels.panel(id: panelID)?.conversationID ?? ""
+        return Binding(
+            get: { draftsByConversationID[conversationID, default: ""] },
+            set: { draftsByConversationID[conversationID] = $0 }
+        )
+    }
+
+    private func handleNavigationKey(
+        _ press: KeyPress,
+        direction: DashboardChatPanelDirection
+    ) -> KeyPress.Result {
+        guard press.modifiers == .command,
+              chatPanels.hasAuxiliaryPanels,
+              !chatPanels.assetPresented else {
+            return .ignored
+        }
+        _ = onNavigatePanel(direction)
+        return .handled
+    }
+
+    private func handleComposerNavigation(
+        _ direction: DashboardComposerNavigationDirection
+    ) -> Bool {
+        let panelDirection: DashboardChatPanelDirection = switch direction {
+        case .left: .left
+        case .right: .right
+        case .up: .up
+        case .down: .down
+        }
+        return onNavigatePanel(panelDirection)
     }
 
     private func chatWidth(for totalWidth: CGFloat) -> CGFloat {
@@ -3518,6 +3677,63 @@ private struct DashboardWorkspaceSurface: View {
         let bounds = dashboardChatWidthBounds(totalWidth: totalWidth)
         let normalized = min(max(chatWidthPercent, bounds.lowerBound), bounds.upperBound)
         return contentWidth * CGFloat(normalized / 100)
+    }
+}
+
+private struct DashboardChatPanelGrid<Content: View>: View {
+    @Environment(\.dashboardTheme) private var theme
+    let state: DashboardChatPanelState
+    @ViewBuilder let content: (DashboardChatPanelID) -> Content
+
+    var body: some View {
+        if state.auxiliaryRows.isEmpty {
+            content(.primary)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            HStack(spacing: 0) {
+                content(.primary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                verticalDivider
+                VStack(spacing: 0) {
+                    ForEach(Array(state.auxiliaryRows.enumerated()), id: \.offset) { index, row in
+                        panelRow(row)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        if index < state.auxiliaryRows.count - 1 {
+                            horizontalDivider
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+    }
+
+    private func panelRow(_ row: [DashboardChatPanel]) -> some View {
+        HStack(spacing: 0) {
+            ForEach(Array(row.enumerated()), id: \.element.id) { index, panel in
+                content(panel.id)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                if index < row.count - 1 {
+                    verticalDivider
+                }
+            }
+        }
+    }
+
+    private var verticalDivider: some View {
+        Rectangle()
+            .fill(theme.palette.border)
+            .frame(width: DashboardChatPanelMetrics.dividerThickness)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+    }
+
+    private var horizontalDivider: some View {
+        Rectangle()
+            .fill(theme.palette.border)
+            .frame(height: DashboardChatPanelMetrics.dividerThickness)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
     }
 }
 
@@ -3578,10 +3794,19 @@ private struct DashboardCloudConversation: View {
     @Binding var draft: String
     let attachments: [AgentMessageAttachmentDraft]
     let sendInProgress: Bool
+    let startsComposerCollapsed: Bool
+    let usesCompactPanelSpacing: Bool
+    let showsClosePanel: Bool
+    let showsAddPanel: Bool
+    let focusRequestGeneration: Int?
+    let onActivatePanel: () -> Void
+    let onClosePanel: () -> Void
+    let onAddPanel: () -> Void
     let onSend: () -> Void
     let onAttachmentAction: (DashboardComposerAttachmentAction) -> Void
     let onRemoveAttachment: (String) -> Void
     let onDropFiles: ([URL]) -> Bool
+    let onCommandNavigation: (DashboardComposerNavigationDirection) -> Bool
     let onUnavailableComposerAction: (String) -> Void
     @State private var scrollState = DashboardConversationScrollState()
     @State private var isPrependingHistory = false
@@ -3714,6 +3939,7 @@ private struct DashboardCloudConversation: View {
                     }
                 }
             }
+            .simultaneousGesture(TapGesture().onEnded(onActivatePanel))
 
             VStack(spacing: 8) {
                 if let error = model.workspaceError
@@ -3778,86 +4004,107 @@ private struct DashboardCloudConversation: View {
                     .background(theme.palette.themeWhisper)
                     .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
                 }
-                DashboardComposer(
-                    placeholder: dashboardComposerPlaceholder(
-                        agent: agent,
-                        runtimeKind: conversation?.localRuntimeKind
-                    ),
-                    draft: $draft,
-                    attachedNoteTitle: attachedNoteTitle,
-                    attachments: attachments,
-                    showsSessionControls: conversation.map {
-                        model.isOpenClawGatewayConversation($0.id)
-                            || $0.localRuntimeKind != nil
-                    } ?? false,
-                    sessionMetadata: conversation.flatMap {
-                        if model.isOpenClawGatewayConversation($0.id) {
-                            return model.openClawGatewaySessionMetadata[$0.id]
-                        }
-                        return model.localACPSessionMetadata[$0.id]
-                    },
-                    sessionControlsDisabled: conversation.map {
-                        if model.isOpenClawGatewayConversation($0.id) {
-                            return model.localRunningConversationIDs.contains($0.id)
-                        }
-                        if $0.localRuntimeKind != nil {
+                HStack(alignment: .center, spacing: 8) {
+                    if showsClosePanel {
+                        DashboardPanelControlButton(
+                            glyph: .panelRightOpen,
+                            accessibilityLabel: "Remove panel",
+                            help: "Remove panel",
+                            action: onClosePanel
+                        )
+                    }
+                    DashboardComposer(
+                        placeholder: dashboardComposerPlaceholder(
+                            agent: agent,
+                            runtimeKind: conversation?.localRuntimeKind
+                        ),
+                        draft: $draft,
+                        attachedNoteTitle: attachedNoteTitle,
+                        attachments: attachments,
+                        showsSessionControls: conversation.map {
+                            model.isOpenClawGatewayConversation($0.id)
+                                || $0.localRuntimeKind != nil
+                        } ?? false,
+                        sessionMetadata: conversation.flatMap {
+                            if model.isOpenClawGatewayConversation($0.id) {
+                                return model.openClawGatewaySessionMetadata[$0.id]
+                            }
+                            return model.localACPSessionMetadata[$0.id]
+                        },
+                        sessionControlsDisabled: conversation.map {
+                            if model.isOpenClawGatewayConversation($0.id) {
+                                return model.localRunningConversationIDs.contains($0.id)
+                            }
+                            if $0.localRuntimeKind != nil {
+                                return model.loadingLocalACPSessionIDs.contains($0.id)
+                                    || model.updatingLocalACPSessionIDs.contains($0.id)
+                                    || model.localRunningConversationIDs.contains($0.id)
+                            }
+                            return true
+                        } ?? true,
+                        sendDisabled: sendInProgress || (conversation.map {
+                            guard $0.localRuntimeKind != nil else { return true }
                             return model.loadingLocalACPSessionIDs.contains($0.id)
                                 || model.updatingLocalACPSessionIDs.contains($0.id)
-                                || model.localRunningConversationIDs.contains($0.id)
-                        }
-                        return true
-                    } ?? true,
-                    sendDisabled: sendInProgress || (conversation.map {
-                        guard $0.localRuntimeKind != nil else { return true }
-                        return model.loadingLocalACPSessionIDs.contains($0.id)
-                            || model.updatingLocalACPSessionIDs.contains($0.id)
-                    } ?? false),
-                    onSelectModel: { selection in
-                        guard let conversation else { return }
-                        if model.isOpenClawGatewayConversation(conversation.id) {
-                            model.patchOpenClawGatewaySession(
-                                conversationID: conversation.id,
-                                model: selection,
-                                thinkingLevel: nil
-                            )
-                            return
-                        }
-                        if conversation.localRuntimeKind != nil {
-                            model.updateLocalACPSession(
-                                conversation: conversation,
-                                model: selection
-                            )
-                            return
-                        }
-                    },
-                    onSelectThinking: { selection in
-                        guard let conversation else { return }
-                        if model.isOpenClawGatewayConversation(conversation.id) {
-                            model.patchOpenClawGatewaySession(
-                                conversationID: conversation.id,
-                                model: nil,
-                                thinkingLevel: selection
-                            )
-                            return
-                        }
-                        if conversation.localRuntimeKind != nil {
-                            model.updateLocalACPSession(
-                                conversation: conversation,
-                                thinking: selection
-                            )
-                            return
-                        }
-                    },
-                    onAttachmentAction: onAttachmentAction,
-                    onRemoveAttachment: onRemoveAttachment,
-                    onDropFiles: onDropFiles,
-                    onUnavailableAction: onUnavailableComposerAction,
-                    onCommandNavigation: { _ in false },
-                    onSend: onSend
-                )
+                        } ?? false),
+                        startsCollapsed: startsComposerCollapsed,
+                        focusRequestGeneration: focusRequestGeneration,
+                        onActivate: onActivatePanel,
+                        onSelectModel: { selection in
+                            guard let conversation else { return }
+                            if model.isOpenClawGatewayConversation(conversation.id) {
+                                model.patchOpenClawGatewaySession(
+                                    conversationID: conversation.id,
+                                    model: selection,
+                                    thinkingLevel: nil
+                                )
+                                return
+                            }
+                            if conversation.localRuntimeKind != nil {
+                                model.updateLocalACPSession(
+                                    conversation: conversation,
+                                    model: selection
+                                )
+                                return
+                            }
+                        },
+                        onSelectThinking: { selection in
+                            guard let conversation else { return }
+                            if model.isOpenClawGatewayConversation(conversation.id) {
+                                model.patchOpenClawGatewaySession(
+                                    conversationID: conversation.id,
+                                    model: nil,
+                                    thinkingLevel: selection
+                                )
+                                return
+                            }
+                            if conversation.localRuntimeKind != nil {
+                                model.updateLocalACPSession(
+                                    conversation: conversation,
+                                    thinking: selection
+                                )
+                                return
+                            }
+                        },
+                        onAttachmentAction: onAttachmentAction,
+                        onRemoveAttachment: onRemoveAttachment,
+                        onDropFiles: onDropFiles,
+                        onUnavailableAction: onUnavailableComposerAction,
+                        onCommandNavigation: onCommandNavigation,
+                        onSend: onSend
+                    )
+                    if showsAddPanel {
+                        DashboardPanelControlButton(
+                            glyph: .panelLeftOpen,
+                            accessibilityLabel: "Add panel",
+                            help: "Add panel",
+                            action: onAddPanel
+                        )
+                    }
+                }
             }
             .frame(maxWidth: 768)
-            .padding(.horizontal, 32)
+            .padding(.horizontal, usesCompactPanelSpacing ? 12 : 32)
             .padding(.top, 8)
             .onGeometryChange(for: CGFloat.self) { geometry in
                 geometry.size.height
@@ -4420,6 +4667,24 @@ private struct DashboardPersistedAttachmentChip: View {
     }
 }
 
+private struct DashboardPanelControlButton: View {
+    let glyph: DashboardLucideGlyph
+    let accessibilityLabel: String
+    let help: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            DashboardLucideIcon(glyph: glyph, size: 18)
+                .frame(width: 36, height: 36)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(DashboardIconButtonStyle())
+        .accessibilityLabel(accessibilityLabel)
+        .help(help)
+    }
+}
+
 private struct DashboardComposer: View {
     let placeholder: String
     @Binding var draft: String
@@ -4429,6 +4694,9 @@ private struct DashboardComposer: View {
     let sessionMetadata: LocalACPSessionMetadata?
     let sessionControlsDisabled: Bool
     let sendDisabled: Bool
+    let startsCollapsed: Bool
+    let focusRequestGeneration: Int?
+    let onActivate: () -> Void
     let onSelectModel: ((String) -> Void)?
     let onSelectThinking: ((String) -> Void)?
     let onAttachmentAction: (DashboardComposerAttachmentAction) -> Void
@@ -4440,6 +4708,12 @@ private struct DashboardComposer: View {
     @State private var focused = false
     @State private var openMenu: DashboardComposerMenuKind?
     @State private var isDropTarget = false
+    @State private var collapseOverride: Bool?
+    @State private var permitsNarrowExpandedControls = false
+
+    private var isCollapsed: Bool {
+        collapseOverride ?? startsCollapsed
+    }
 
     var body: some View {
         VStack(spacing: 6) {
@@ -4470,19 +4744,14 @@ private struct DashboardComposer: View {
                 .scrollIndicators(.never)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
-            DashboardComposerTextEditor(
-                text: $draft,
-                isFocused: $focused,
-                placeholder: placeholder,
-                onSubmit: {
-                    if applyFirstSlashCommandIfNeeded() { return }
-                    if canSend { onSend() }
-                },
-                onTab: applyFirstSlashCommandIfNeeded,
-                onCommandNavigation: onCommandNavigation
-            )
-            .frame(minHeight: DashboardComposerScrollView.minimumHeight)
-            .simultaneousGesture(TapGesture().onEnded { openMenu = nil })
+            if isCollapsed {
+                HStack(alignment: .bottom, spacing: 2) {
+                    composerTextEditor(maximumVisibleLines: 3)
+                    collapsedControls
+                }
+            } else {
+                composerTextEditor(maximumVisibleLines: 7)
+            }
 
             if !matchingSlashCommands.isEmpty {
                 VStack(alignment: .leading, spacing: 0) {
@@ -4517,74 +4786,21 @@ private struct DashboardComposer: View {
                 }
             }
 
-            HStack(spacing: 4) {
-                composerIconButton(
-                    icon: .plus,
-                    accessibilityLabel: "Add attachment",
-                    menu: .attachments
-                )
-                .overlay(alignment: .bottomLeading) {
-                    if openMenu == .attachments {
-                        DashboardComposerAttachmentMenu { action in
-                            openMenu = nil
-                            onAttachmentAction(action)
+            if !isCollapsed {
+                ViewThatFits(in: .horizontal) {
+                    regularControls
+                        .onAppear {
+                            permitsNarrowExpandedControls = false
                         }
-                        .offset(y: -44)
-                        .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .bottomLeading)))
-                    }
+                    compactControls
+                        .onAppear {
+                            if permitsNarrowExpandedControls {
+                                permitsNarrowExpandedControls = false
+                            } else {
+                                collapseOverride = true
+                            }
+                        }
                 }
-                .zIndex(openMenu == .attachments ? 3 : 0)
-
-                if showsSessionControls {
-                    sessionMenu(
-                        kind: .model,
-                        icon: .cpu,
-                        title: sessionMetadata?.model ?? "Model",
-                        menuTitle: "Model",
-                        accessibilityLabel: "Choose session model",
-                        options: sessionMetadata?.selectableModels ?? [],
-                        selection: sessionMetadata?.model,
-                        action: onSelectModel
-                    )
-                    sessionMenu(
-                        kind: .thinking,
-                        icon: .brain,
-                        title: sessionMetadata?.thinking.map(dashboardSessionThinkingLabel) ?? "Thinking",
-                        menuTitle: "Thinking",
-                        accessibilityLabel: "Choose thinking level",
-                        options: sessionMetadata?.selectableThinkingLevels ?? [],
-                        selection: sessionMetadata?.thinking,
-                        capitalizeOptions: true,
-                        action: onSelectThinking
-                    )
-                }
-
-                Spacer(minLength: 8)
-
-                Button {
-                    openMenu = nil
-                    focused = false
-                    onUnavailableAction("Voice input")
-                } label: {
-                    DashboardLucideIcon(glyph: .mic, size: 16)
-                        .frame(width: 36, height: 36)
-                        .contentShape(Circle())
-                }
-                .buttonStyle(DashboardComposerControlButtonStyle())
-                .foregroundStyle(DashboardPalette.mutedForeground)
-                .accessibilityLabel("Voice input unavailable")
-
-                Button(action: onSend) {
-                    DashboardLucideIcon(glyph: .arrowUp, size: 16)
-                        .foregroundStyle(.white)
-                        .frame(width: 36, height: 36)
-                        .background(DashboardPalette.primary)
-                        .clipShape(Circle())
-                }
-                .buttonStyle(.plain)
-                .disabled(!canSend)
-                .opacity(canSend ? 1 : 0.4)
-                .accessibilityLabel("Send")
             }
         }
         .padding(.horizontal, 12)
@@ -4633,11 +4849,47 @@ private struct DashboardComposer: View {
             openMenu = nil
         }
         .dropDestination(for: URL.self) { urls, _ in
-            onDropFiles(urls)
+            onActivate()
+            return onDropFiles(urls)
         } isTargeted: { targeted in
             isDropTarget = targeted
         }
+        .onChange(of: focusRequestGeneration) { _, generation in
+            guard generation != nil else { return }
+            focused = true
+        }
+        .onChange(of: focused) { _, isFocused in
+            if isFocused {
+                onActivate()
+            }
+        }
+        .onAppear {
+            if focusRequestGeneration != nil {
+                focused = true
+            }
+        }
         .animation(.easeOut(duration: 0.15), value: openMenu)
+        .animation(.easeOut(duration: 0.15), value: isCollapsed)
+    }
+
+    private func composerTextEditor(maximumVisibleLines: Int) -> some View {
+        DashboardComposerTextEditor(
+            text: $draft,
+            isFocused: $focused,
+            placeholder: placeholder,
+            maximumVisibleLines: maximumVisibleLines,
+            onSubmit: {
+                if applyFirstSlashCommandIfNeeded() { return }
+                if canSend { onSend() }
+            },
+            onTab: applyFirstSlashCommandIfNeeded,
+            onCommandNavigation: onCommandNavigation
+        )
+        .frame(
+            minHeight: isCollapsed ? 36 : 32,
+            alignment: .topLeading
+        )
+        .simultaneousGesture(TapGesture().onEnded { openMenu = nil })
     }
 
     private var canSend: Bool {
@@ -4694,6 +4946,7 @@ private struct DashboardComposer: View {
         menu: DashboardComposerMenuKind
     ) -> some View {
         Button {
+            onActivate()
             focused = false
             openMenu = openMenu == menu ? nil : menu
         } label: {
@@ -4701,10 +4954,213 @@ private struct DashboardComposer: View {
                 .frame(width: 36, height: 36)
                 .contentShape(Circle())
         }
-        .buttonStyle(DashboardComposerControlButtonStyle(active: openMenu == menu))
-        .foregroundStyle(DashboardPalette.mutedForeground)
+        .buttonStyle(DashboardComposerControlButtonStyle())
         .accessibilityLabel(accessibilityLabel)
         .accessibilityValue(openMenu == menu ? "Expanded" : "Collapsed")
+        .help(accessibilityLabel)
+    }
+
+    private var regularControls: some View {
+        HStack(spacing: 4) {
+            attachmentControl
+
+            if showsSessionControls {
+                sessionMenu(
+                    kind: .model,
+                    icon: .cpu,
+                    title: sessionMetadata?.model ?? "Model",
+                    menuTitle: "Model",
+                    accessibilityLabel: "Choose session model",
+                    options: sessionMetadata?.selectableModels ?? [],
+                    selection: sessionMetadata?.model,
+                    action: onSelectModel
+                )
+                sessionMenu(
+                    kind: .thinking,
+                    icon: .brain,
+                    title: sessionMetadata?.thinking.map(dashboardSessionThinkingLabel) ?? "Thinking",
+                    menuTitle: "Thinking",
+                    accessibilityLabel: "Choose thinking level",
+                    options: sessionMetadata?.selectableThinkingLevels ?? [],
+                    selection: sessionMetadata?.thinking,
+                    capitalizeOptions: true,
+                    action: onSelectThinking
+                )
+            }
+
+            Spacer(minLength: 8)
+            collapseControl
+            voiceControl
+            sendControl
+        }
+    }
+
+    private var compactControls: some View {
+        VStack(alignment: .trailing, spacing: 4) {
+            HStack(spacing: 4) {
+                attachmentControl
+                if showsSessionControls {
+                    compactSessionMenu(
+                        kind: .model,
+                        icon: .cpu,
+                        title: sessionMetadata?.model ?? "Model",
+                        menuTitle: "Model",
+                        accessibilityLabel: "Choose session model",
+                        options: sessionMetadata?.selectableModels ?? [],
+                        selection: sessionMetadata?.model,
+                        action: onSelectModel
+                    )
+                    compactSessionMenu(
+                        kind: .thinking,
+                        icon: .brain,
+                        title: sessionMetadata?.thinking.map(dashboardSessionThinkingLabel) ?? "Thinking",
+                        menuTitle: "Thinking",
+                        accessibilityLabel: "Choose thinking level",
+                        options: sessionMetadata?.selectableThinkingLevels ?? [],
+                        selection: sessionMetadata?.thinking,
+                        capitalizeOptions: true,
+                        action: onSelectThinking
+                    )
+                }
+            }
+
+            HStack(spacing: 4) {
+                collapseControl
+                voiceControl
+                sendControl
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .trailing)
+    }
+
+    private var collapsedControls: some View {
+        HStack(spacing: 4) {
+            collapseControl
+            voiceControl
+            sendControl
+        }
+        .fixedSize(horizontal: true, vertical: false)
+    }
+
+    private var collapseControl: some View {
+        Button {
+            onActivate()
+            openMenu = nil
+            if isCollapsed {
+                permitsNarrowExpandedControls = true
+                collapseOverride = false
+            } else {
+                permitsNarrowExpandedControls = false
+                collapseOverride = true
+            }
+        } label: {
+            DashboardLucideIcon(glyph: .chevronDown, size: 18)
+                .rotationEffect(.degrees(isCollapsed ? 0 : 180))
+                .frame(width: 36, height: 36)
+                .contentShape(Circle())
+        }
+        .buttonStyle(DashboardComposerControlButtonStyle())
+        .accessibilityLabel(isCollapsed ? "Expand composer" : "Collapse composer")
+        .accessibilityValue(isCollapsed ? "Collapsed" : "Expanded")
+        .help(isCollapsed ? "Expand composer" : "Collapse composer")
+    }
+
+    private var attachmentControl: some View {
+        composerIconButton(
+            icon: .plus,
+            accessibilityLabel: "Add files or photos",
+            menu: .attachments
+        )
+        .overlay(alignment: .bottomLeading) {
+            if openMenu == .attachments {
+                DashboardComposerAttachmentMenu { action in
+                    openMenu = nil
+                    onAttachmentAction(action)
+                }
+                .offset(y: -44)
+                .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .bottomLeading)))
+            }
+        }
+        .zIndex(openMenu == .attachments ? 3 : 0)
+    }
+
+    private var voiceControl: some View {
+        Button {
+            onActivate()
+            openMenu = nil
+            focused = false
+            onUnavailableAction("Voice input")
+        } label: {
+            DashboardLucideIcon(glyph: .mic, size: 16)
+                .frame(width: 36, height: 36)
+                .contentShape(Circle())
+        }
+        .buttonStyle(DashboardComposerControlButtonStyle())
+        .accessibilityLabel("Voice input unavailable")
+        .help("Dictation unavailable")
+    }
+
+    private var sendControl: some View {
+        Button {
+            onActivate()
+            onSend()
+        } label: {
+            DashboardLucideIcon(glyph: .arrowUp, size: 16)
+                .foregroundStyle(.white)
+                .frame(width: 36, height: 36)
+                .background(DashboardPalette.primary)
+                .clipShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!canSend)
+        .opacity(canSend ? 1 : 0.4)
+        .accessibilityLabel("Send")
+    }
+
+    private func compactSessionMenu(
+        kind: DashboardComposerMenuKind,
+        icon: DashboardLucideGlyph,
+        title: String,
+        menuTitle: String,
+        accessibilityLabel: String,
+        options: [String],
+        selection: String?,
+        capitalizeOptions: Bool = false,
+        action: ((String) -> Void)?
+    ) -> some View {
+        let unavailable = sessionControlsDisabled || options.count < 2 || action == nil
+        return Button {
+            guard !unavailable else { return }
+            onActivate()
+            focused = false
+            openMenu = openMenu == kind ? nil : kind
+        } label: {
+            DashboardLucideIcon(glyph: icon, size: 16)
+                .frame(width: 36, height: 36)
+                .contentShape(Circle())
+        }
+        .buttonStyle(DashboardComposerControlButtonStyle())
+        .disabled(unavailable)
+        .opacity(unavailable ? 0.4 : 1)
+        .accessibilityLabel(accessibilityLabel)
+        .accessibilityValue("\(title), \(openMenu == kind ? "Expanded" : "Collapsed")")
+        .help(accessibilityLabel)
+        .overlay(alignment: .bottomLeading) {
+            if openMenu == kind {
+                DashboardComposerOptionMenu(
+                    title: menuTitle,
+                    options: options,
+                    selection: selection,
+                    capitalizeOptions: capitalizeOptions
+                ) { option in
+                    openMenu = nil
+                    action?(option)
+                }
+                .offset(y: -44)
+                .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .bottomLeading)))
+            }
+        }
+        .zIndex(openMenu == kind ? 3 : 0)
     }
 
     private func sessionMenu(
@@ -4721,17 +5177,19 @@ private struct DashboardComposer: View {
         let unavailable = sessionControlsDisabled || options.count < 2 || action == nil
         return Button {
             guard !unavailable else { return }
+            onActivate()
             focused = false
             openMenu = openMenu == kind ? nil : kind
         } label: {
             DashboardComposerSessionLabel(icon: icon, title: title)
         }
-        .buttonStyle(DashboardComposerControlButtonStyle(active: openMenu == kind))
+        .buttonStyle(DashboardComposerControlButtonStyle())
         .disabled(unavailable)
         .opacity(unavailable ? 0.4 : 1)
         .fixedSize(horizontal: true, vertical: false)
         .accessibilityLabel(accessibilityLabel)
         .accessibilityValue("\(title), \(openMenu == kind ? "Expanded" : "Collapsed")")
+        .help(accessibilityLabel)
         .overlay(alignment: .bottomLeading) {
             if openMenu == kind {
                 DashboardComposerOptionMenu(
@@ -4893,7 +5351,6 @@ private struct DashboardComposerSessionLabel: View {
             DashboardLucideIcon(glyph: .chevronDown, size: 14)
         }
         .font(.system(size: 12, weight: .medium))
-        .foregroundStyle(DashboardPalette.mutedForeground)
         .padding(.horizontal, 10)
         .frame(height: 36)
         .contentShape(Capsule())
@@ -4901,15 +5358,15 @@ private struct DashboardComposerSessionLabel: View {
 }
 
 private struct DashboardComposerControlButtonStyle: ButtonStyle {
-    @Environment(\.dashboardTheme) private var theme
-    var active = false
+    @State private var hovered = false
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .background(
-                (active || configuration.isPressed ? theme.palette.themeSoft : .clear),
-                in: Capsule()
+            .foregroundStyle(
+                hovered ? DashboardPalette.primary : DashboardPalette.mutedForeground
             )
+            .onHover { hovered = $0 }
+            .animation(.easeOut(duration: 0.14), value: hovered)
     }
 }
 
@@ -6052,10 +6509,13 @@ private struct DashboardRevealRailButton: View {
 
     var body: some View {
         Button(action: action) {
-            DashboardLucideIcon(glyph: side == .left ? .panelLeftOpen : .panelRightOpen, size: 16)
-                .frame(width: 32, height: 32)
+            DashboardLucideIcon(
+                glyph: side == .left ? .rightCollapse : .leftCollapse,
+                size: 18
+            )
+            .frame(width: 36, height: 36)
         }
-        .buttonStyle(DashboardFloatingButtonStyle())
+        .buttonStyle(DashboardIconButtonStyle())
         .help(side == .left ? "Show agents" : "Show workspace")
     }
 }
@@ -6678,17 +7138,6 @@ struct DashboardIconButtonStyle: ButtonStyle {
             )
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             .onHover { hovered = $0 }
-    }
-}
-
-private struct DashboardFloatingButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .foregroundStyle(DashboardPalette.mutedForeground)
-            .background(DashboardPalette.background.opacity(configuration.isPressed ? 0.95 : 0.75))
-            .clipShape(Circle())
-            .overlay { Circle().stroke(DashboardPalette.foreground.opacity(0.04), lineWidth: 1) }
-            .shadow(color: DashboardPalette.foreground.opacity(0.05), radius: 2, y: 1)
     }
 }
 

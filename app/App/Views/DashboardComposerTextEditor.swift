@@ -6,6 +6,7 @@ struct DashboardComposerTextEditor: NSViewRepresentable {
     @Binding var text: String
     @Binding var isFocused: Bool
     let placeholder: String
+    let maximumVisibleLines: Int
     let onSubmit: () -> Void
     let onTab: () -> Bool
     let onCommandNavigation: (DashboardComposerNavigationDirection) -> Bool
@@ -16,6 +17,7 @@ struct DashboardComposerTextEditor: NSViewRepresentable {
 
     func makeNSView(context: Context) -> DashboardComposerScrollView {
         let scrollView = DashboardComposerScrollView()
+        scrollView.maximumVisibleLines = maximumVisibleLines
         let textView = scrollView.composerTextView
         textView.delegate = context.coordinator
         textView.placeholderString = placeholder
@@ -30,12 +32,16 @@ struct DashboardComposerTextEditor: NSViewRepresentable {
         textView.onCommandNavigation = { [weak coordinator = context.coordinator] direction in
             coordinator?.parent.onCommandNavigation(direction) ?? false
         }
+        textView.onBecomeFirstResponder = { [weak coordinator = context.coordinator] in
+            coordinator?.parent.isFocused = true
+        }
         scrollView.updateDocumentLayout()
         return scrollView
     }
 
     func updateNSView(_ scrollView: DashboardComposerScrollView, context: Context) {
         context.coordinator.parent = self
+        scrollView.maximumVisibleLines = maximumVisibleLines
         let textView = scrollView.composerTextView
         textView.placeholderString = placeholder
         textView.setAccessibilityLabel(placeholder)
@@ -48,6 +54,9 @@ struct DashboardComposerTextEditor: NSViewRepresentable {
         textView.onCommandNavigation = { [weak coordinator = context.coordinator] direction in
             coordinator?.parent.onCommandNavigation(direction) ?? false
         }
+        textView.onBecomeFirstResponder = { [weak coordinator = context.coordinator] in
+            coordinator?.parent.isFocused = true
+        }
 
         if textView.string != text, !textView.hasMarkedText() {
             let selection = textView.selectedRange()
@@ -59,15 +68,7 @@ struct DashboardComposerTextEditor: NSViewRepresentable {
         }
         scrollView.updateDocumentLayout()
 
-        guard let window = textView.window else { return }
-        if isFocused, window.firstResponder !== textView {
-            DispatchQueue.main.async { [weak textView] in
-                guard let textView, textView.window?.firstResponder !== textView else { return }
-                textView.window?.makeFirstResponder(textView)
-            }
-        } else if !isFocused, window.firstResponder === textView {
-            window.makeFirstResponder(nil)
-        }
+        context.coordinator.reconcileFocus(for: textView)
     }
 
     func sizeThatFits(
@@ -91,6 +92,45 @@ struct DashboardComposerTextEditor: NSViewRepresentable {
             self.parent = parent
         }
 
+        func reconcileFocus(for textView: DashboardComposerNativeTextView) {
+            guard let window = textView.window else { return }
+            if parent.isFocused, window.firstResponder !== textView {
+                DispatchQueue.main.async { [weak self, weak textView] in
+                    guard let self, let textView else { return }
+                    self.applyFocusReconciliation(
+                        expectedFocused: true,
+                        for: textView
+                    )
+                }
+            } else if !parent.isFocused, window.firstResponder === textView {
+                // AppKit can make the native editor first responder before the
+                // SwiftUI focus binding has observed textDidBeginEditing. Wait
+                // one turn and recheck the live binding so a manual click is
+                // not immediately undone by a stale updateNSView pass.
+                DispatchQueue.main.async { [weak self, weak textView] in
+                    guard let self, let textView else { return }
+                    self.applyFocusReconciliation(
+                        expectedFocused: false,
+                        for: textView
+                    )
+                }
+            }
+        }
+
+        func applyFocusReconciliation(
+            expectedFocused: Bool,
+            for textView: DashboardComposerNativeTextView
+        ) {
+            guard parent.isFocused == expectedFocused,
+                  let window = textView.window
+            else { return }
+            if expectedFocused, window.firstResponder !== textView {
+                window.makeFirstResponder(textView)
+            } else if !expectedFocused, window.firstResponder === textView {
+                window.makeFirstResponder(nil)
+            }
+        }
+
         func textDidBeginEditing(_ notification: Notification) {
             parent.isFocused = true
         }
@@ -110,7 +150,8 @@ struct DashboardComposerTextEditor: NSViewRepresentable {
 @MainActor
 final class DashboardComposerScrollView: NSScrollView {
     static let minimumHeight: CGFloat = 32
-    static let maximumVisibleLines = 7
+
+    var maximumVisibleLines = 7
 
     let composerTextView = DashboardComposerNativeTextView()
 
@@ -190,9 +231,9 @@ final class DashboardComposerScrollView: NSScrollView {
             for: DashboardComposerNativeTextView.composerFont
         ) ?? DashboardComposerNativeTextView.composerFont.pointSize
         return ceil(
-            lineHeight * CGFloat(Self.maximumVisibleLines)
+            lineHeight * CGFloat(max(1, maximumVisibleLines))
                 + DashboardComposerNativeTextView.lineSpacing
-                    * CGFloat(Self.maximumVisibleLines)
+                    * CGFloat(max(1, maximumVisibleLines))
                 + composerTextView.textContainerInset.height * 2
         )
     }
@@ -218,6 +259,7 @@ final class DashboardComposerNativeTextView: NSTextView {
     var onSubmit: (() -> Void)?
     var onTab: (() -> Bool)?
     var onCommandNavigation: ((DashboardComposerNavigationDirection) -> Bool)?
+    var onBecomeFirstResponder: (() -> Void)?
     var placeholderString = "" {
         didSet { needsDisplay = true }
     }
@@ -241,6 +283,14 @@ final class DashboardComposerNativeTextView: NSTextView {
     required init?(coder: NSCoder) {
         super.init(coder: coder)
         configure()
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        let accepted = super.becomeFirstResponder()
+        if accepted {
+            onBecomeFirstResponder?()
+        }
+        return accepted
     }
 
     override func keyDown(with event: NSEvent) {

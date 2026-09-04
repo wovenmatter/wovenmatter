@@ -512,6 +512,40 @@ struct PublicSourceContractsTests {
       conversationID: conversationID
     ).remoteWorkspaceID == workspaceID)
   }
+
+  @Test("workspace conversations are ordered by latest message activity")
+  func conversationActivityOrdering() throws {
+    let directory = try TemporaryDirectory(prefix: "wovenmatter-conversation-order")
+    defer { directory.remove() }
+    let database = try WorkspaceDatabase(
+      url: directory.url.appending(path: "workspace.sqlite")
+    )
+    let ownerDeviceID = UUID()
+    let oldest = try database.createLocalACPSession(
+      runtimeKind: .codex,
+      title: "Oldest",
+      ownerDeviceID: ownerDeviceID,
+      createdAt: Date(timeIntervalSince1970: 100)
+    )
+    let newest = try database.createLocalACPSession(
+      runtimeKind: .codex,
+      title: "Newest",
+      ownerDeviceID: ownerDeviceID,
+      createdAt: Date(timeIntervalSince1970: 300)
+    )
+    let middle = try database.createLocalACPSession(
+      runtimeKind: .codex,
+      title: "Middle",
+      ownerDeviceID: ownerDeviceID,
+      createdAt: Date(timeIntervalSince1970: 200)
+    )
+
+    #expect(try database.workspaceOverview().conversations.map(\.id) == [
+      newest,
+      middle,
+      oldest,
+    ])
+  }
 }
 
 private func usageSample(
