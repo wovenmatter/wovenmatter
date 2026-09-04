@@ -1019,14 +1019,6 @@ struct WorkspaceView: View {
             noteFocusMode = false
         }
         synchronizeSelectionToActivePanel()
-        // A button participates in the panel's simultaneous click gesture.
-        // Reassert the newly created panel after that gesture has completed.
-        Task { @MainActor in
-            await Task.yield()
-            guard chatPanels.panel(id: newPanelID) != nil else { return }
-            _ = chatPanels.activatePanel(newPanelID)
-            synchronizeSelectionToActivePanel()
-        }
     }
 
     private func closePanel(_ panelID: DashboardChatPanelID) {
