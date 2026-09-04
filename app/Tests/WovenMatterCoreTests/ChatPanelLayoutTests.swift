@@ -16,55 +16,63 @@ struct ChatPanelLayoutTests {
     #expect(!state.canClosePanel(.primary))
     #expect(state.normalizedFrames()[.primary]?.width == 1)
 
-    let addedA = state.addPanel(from: .primary, newPanelID: a)
+    let addedA = state.addPanel(
+      from: .primary,
+      newPanelID: a,
+      conversationID: "chat-a"
+    )
     #expect(addedA)
     #expect(state.auxiliaryRows.map { $0.map(\.id) } == [[a]])
     #expect(!state.canAddPanel(from: .primary))
     #expect(state.canAddPanel(from: a))
     #expect(state.canClosePanel(a))
-    #expect(state.panel(id: a)?.conversationID == "primary-chat")
+    #expect(state.panel(id: a)?.conversationID == "chat-a")
+    #expect(state.primary.conversationID == "primary-chat")
 
     let addedB = state.addPanel(from: a, newPanelID: b)
     #expect(addedB)
-    #expect(state.auxiliaryRows.map { $0.map(\.id) } == [[a], [b]])
+    #expect(state.auxiliaryRows.map { $0.map(\.id) } == [[b], [a]])
     #expect(state.canAddPanel(from: a))
     #expect(state.canAddPanel(from: b))
+    #expect(state.primary.conversationID == "primary-chat")
     #expect(state.normalizedFrames()[a] == DashboardChatPanelFrame(
       x: 0.5,
-      y: 0,
+      y: 0.5,
       width: 0.5,
       height: 0.5
     ))
     #expect(state.normalizedFrames()[b] == DashboardChatPanelFrame(
       x: 0.5,
-      y: 0.5,
+      y: 0,
       width: 0.5,
       height: 0.5
     ))
 
     let addedC = state.addPanel(from: a, newPanelID: c)
     #expect(addedC)
-    #expect(state.auxiliaryRows.map { $0.map(\.id) } == [[a, c], [b]])
+    #expect(state.auxiliaryRows.map { $0.map(\.id) } == [[b], [a, c]])
     #expect(!state.canAddPanel(from: a))
     #expect(!state.canAddPanel(from: c))
     #expect(state.canAddPanel(from: b))
+    #expect(state.primary.conversationID == "primary-chat")
     #expect(state.normalizedFrames()[a] == DashboardChatPanelFrame(
       x: 0.5,
-      y: 0,
+      y: 0.5,
       width: 0.25,
       height: 0.5
     ))
     #expect(state.normalizedFrames()[c] == DashboardChatPanelFrame(
       x: 0.75,
-      y: 0,
+      y: 0.5,
       width: 0.25,
       height: 0.5
     ))
 
     let addedD = state.addPanel(from: b, newPanelID: d)
     #expect(addedD)
-    #expect(state.auxiliaryRows.map { $0.map(\.id) } == [[a, c], [b, d]])
+    #expect(state.auxiliaryRows.map { $0.map(\.id) } == [[b, d], [a, c]])
     #expect(state.panelCount == DashboardChatPanelMetrics.maximumPanelCount)
+    #expect(state.primary.conversationID == "primary-chat")
     #expect(state.panels.allSatisfy { !state.canAddPanel(from: $0.id) })
     #expect(state.auxiliaryRows.flatMap { $0 }.allSatisfy {
       state.canClosePanel($0.id)
@@ -75,19 +83,19 @@ struct ChatPanelLayoutTests {
   func lowerRowFourPanelVariant() {
     var state = threePanelState()
 
-    let addedC = state.addPanel(from: b, newPanelID: c)
+    let addedC = state.addPanel(from: a, newPanelID: c)
     #expect(addedC)
-    #expect(state.auxiliaryRows.map { $0.map(\.id) } == [[a], [b, c]])
-    #expect(state.canAddPanel(from: a))
-    #expect(!state.canAddPanel(from: b))
+    #expect(state.auxiliaryRows.map { $0.map(\.id) } == [[b], [a, c]])
+    #expect(state.canAddPanel(from: b))
+    #expect(!state.canAddPanel(from: a))
     #expect(!state.canAddPanel(from: c))
-    #expect(state.normalizedFrames()[a] == DashboardChatPanelFrame(
+    #expect(state.normalizedFrames()[b] == DashboardChatPanelFrame(
       x: 0.5,
       y: 0,
       width: 0.5,
       height: 0.5
     ))
-    #expect(state.normalizedFrames()[b] == DashboardChatPanelFrame(
+    #expect(state.normalizedFrames()[a] == DashboardChatPanelFrame(
       x: 0.5,
       y: 0.5,
       width: 0.25,
@@ -100,9 +108,9 @@ struct ChatPanelLayoutTests {
       height: 0.5
     ))
 
-    let addedD = state.addPanel(from: a, newPanelID: d)
+    let addedD = state.addPanel(from: b, newPanelID: d)
     #expect(addedD)
-    #expect(state.auxiliaryRows.map { $0.map(\.id) } == [[a, d], [b, c]])
+    #expect(state.auxiliaryRows.map { $0.map(\.id) } == [[b, d], [a, c]])
   }
 
   @Test("invalid additions and a sixth panel are gated")
@@ -133,37 +141,37 @@ struct ChatPanelLayoutTests {
     #expect(onlyAuxiliary.canAddPanel(from: .primary))
 
     var closeUpper = threePanelState()
-    let closedUpper = closeUpper.closePanel(a)
+    let closedUpper = closeUpper.closePanel(b)
     #expect(closedUpper)
-    #expect(closeUpper.auxiliaryRows.map { $0.map(\.id) } == [[b]])
-    #expect(closeUpper.normalizedFrames()[b]?.height == 1)
+    #expect(closeUpper.auxiliaryRows.map { $0.map(\.id) } == [[a]])
+    #expect(closeUpper.normalizedFrames()[a]?.height == 1)
 
     var closeLower = threePanelState()
-    let closedLower = closeLower.closePanel(b)
+    let closedLower = closeLower.closePanel(a)
     #expect(closedLower)
-    #expect(closeLower.auxiliaryRows.map { $0.map(\.id) } == [[a]])
-    #expect(closeLower.normalizedFrames()[a]?.height == 1)
+    #expect(closeLower.auxiliaryRows.map { $0.map(\.id) } == [[b]])
+    #expect(closeLower.normalizedFrames()[b]?.height == 1)
 
     var upperDivided = threePanelState()
-    let dividedUpper = upperDivided.addPanel(from: a, newPanelID: c)
-    let closedUpperLeading = upperDivided.closePanel(a)
+    let dividedUpper = upperDivided.addPanel(from: b, newPanelID: c)
+    let closedUpperLeading = upperDivided.closePanel(b)
     #expect(dividedUpper)
     #expect(closedUpperLeading)
-    #expect(upperDivided.auxiliaryRows.map { $0.map(\.id) } == [[c], [b]])
+    #expect(upperDivided.auxiliaryRows.map { $0.map(\.id) } == [[c], [a]])
     #expect(upperDivided.canAddPanel(from: c))
     let closedUpperRemainder = upperDivided.closePanel(c)
     #expect(closedUpperRemainder)
-    #expect(upperDivided.auxiliaryRows.map { $0.map(\.id) } == [[b]])
+    #expect(upperDivided.auxiliaryRows.map { $0.map(\.id) } == [[a]])
 
     var lowerDivided = threePanelState()
-    let dividedLower = lowerDivided.addPanel(from: b, newPanelID: c)
+    let dividedLower = lowerDivided.addPanel(from: a, newPanelID: c)
     let closedLowerTrailing = lowerDivided.closePanel(c)
     #expect(dividedLower)
     #expect(closedLowerTrailing)
-    #expect(lowerDivided.auxiliaryRows.map { $0.map(\.id) } == [[a], [b]])
-    let closedLowerRemainder = lowerDivided.closePanel(b)
+    #expect(lowerDivided.auxiliaryRows.map { $0.map(\.id) } == [[b], [a]])
+    let closedLowerRemainder = lowerDivided.closePanel(a)
     #expect(closedLowerRemainder)
-    #expect(lowerDivided.auxiliaryRows.map { $0.map(\.id) } == [[a]])
+    #expect(lowerDivided.auxiliaryRows.map { $0.map(\.id) } == [[b]])
   }
 
   @Test("every five-panel close order returns to the unchanged primary")
@@ -216,6 +224,19 @@ struct ChatPanelLayoutTests {
     #expect(!activatedMissing)
   }
 
+  @Test("explicit panel assignments allow empty panels and manual duplicates")
+  func explicitAssignmentAndManualDuplicates() {
+    var state = DashboardChatPanelState(primaryConversationID: "primary")
+    let addedEmpty = state.addPanel(from: .primary, newPanelID: a)
+    #expect(addedEmpty)
+    #expect(state.panel(id: a)?.conversationID == nil)
+
+    let duplicated = state.replaceActiveConversation(with: "primary")
+    #expect(duplicated)
+    #expect(state.primary.conversationID == "primary")
+    #expect(state.panel(id: a)?.conversationID == "primary")
+  }
+
   @Test("assets and auxiliary panels are mutually exclusive in both directions")
   func assetExclusivity() {
     var state = threePanelState()
@@ -265,25 +286,25 @@ struct ChatPanelLayoutTests {
     #expect(leftFromPrimary == nil)
     #expect(upFromPrimary == nil)
     #expect(downFromPrimary == nil)
-    #expect(rightFromPrimary == a)
+    #expect(rightFromPrimary == b)
 
-    let rightFromA = state.navigate(.right)
-    let rightFromC = state.navigate(.right)
-    let downFromC = state.navigate(.down)
-    let leftFromD = state.navigate(.left)
-    let leftFromB = state.navigate(.left)
-    #expect(rightFromA == c)
-    #expect(rightFromC == nil)
-    #expect(downFromC == d)
-    #expect(leftFromD == b)
-    #expect(leftFromB == .primary)
+    let rightFromB = state.navigate(.right)
+    let rightFromD = state.navigate(.right)
+    let downFromD = state.navigate(.down)
+    let leftFromC = state.navigate(.left)
+    let leftFromA = state.navigate(.left)
+    #expect(rightFromB == d)
+    #expect(rightFromD == nil)
+    #expect(downFromD == c)
+    #expect(leftFromC == a)
+    #expect(leftFromA == .primary)
 
-    let activatedB = state.activatePanel(b)
-    let upFromB = state.navigate(.up)
+    let activatedA = state.activatePanel(a)
     let upFromA = state.navigate(.up)
-    #expect(activatedB)
-    #expect(upFromB == a)
-    #expect(upFromA == nil)
+    let upFromB = state.navigate(.up)
+    #expect(activatedA)
+    #expect(upFromA == b)
+    #expect(upFromB == nil)
   }
 
   @Test("successful navigation emits destination composer focus generations")
@@ -294,9 +315,9 @@ struct ChatPanelLayoutTests {
     let activatedPrimary = state.activatePanel(.primary)
     let navigatedRight = state.navigate(.right)
     #expect(activatedPrimary)
-    #expect(navigatedRight == a)
+    #expect(navigatedRight == b)
     #expect(state.focusRequest == DashboardChatPanelFocusRequest(
-      panelID: a,
+      panelID: b,
       generation: (generationAfterAdds ?? 0) + 1
     ))
     let request = state.focusRequest

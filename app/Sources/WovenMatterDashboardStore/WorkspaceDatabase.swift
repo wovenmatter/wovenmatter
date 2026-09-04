@@ -1628,11 +1628,11 @@ public final class WorkspaceDatabase: @unchecked Sendable {
         INSERT INTO dashboard_conversations (
           id, user_id, agent_id, agent_codename, governing_plane,
           authority_kind, authority_device_id, authority_agent_id,
-          title, unread, kind, is_main,
+          title, unread, kind,
           is_deletable, is_archived, last_message_at, is_pinned,
           created_at, updated_at, desktop_owned
         ) VALUES (?, ?, ?, ?, 'wovenmatter_macos', 'device_owned', ?, ?,
-          ?, 0, 'local_acp', 0, 1, 0, ?, 0, ?, ?, 1)
+          ?, 0, 'local_acp', 1, 0, ?, 0, ?, ?, 1)
         """)
       defer { sqlite3_finalize(conversation) }
       try bind(conversationID, at: 1, to: conversation)
@@ -1702,11 +1702,11 @@ public final class WorkspaceDatabase: @unchecked Sendable {
         INSERT INTO dashboard_conversations (
           id, user_id, agent_id, agent_codename, governing_plane,
           authority_kind, authority_device_id, authority_agent_id,
-          title, unread, kind, is_main,
+          title, unread, kind,
           is_deletable, is_archived, last_message_at, is_pinned,
           created_at, updated_at, desktop_owned
         ) VALUES (?, ?, ?, ?, 'wovenmatter_macos', 'device_owned', ?, ?,
-          ?, 0, 'remote_acp', 0, 1, 0, ?, 0, ?, ?, 1)
+          ?, 0, 'remote_acp', 1, 0, ?, 0, ?, ?, 1)
         """)
       defer { sqlite3_finalize(conversation) }
       try bind(conversationID, at: 1, to: conversation)
@@ -1787,11 +1787,11 @@ public final class WorkspaceDatabase: @unchecked Sendable {
         INSERT INTO dashboard_conversations (
           id, user_id, agent_id, agent_codename, governing_plane,
           authority_kind, authority_device_id, authority_agent_id,
-          title, unread, kind, is_main,
+          title, unread, kind,
           is_deletable, is_archived, last_message_at, is_pinned,
           created_at, updated_at, desktop_owned
         ) VALUES (?, ?, ?, ?, 'wovenmatter_macos', 'device_owned', ?, ?,
-          ?, 0, 'local_acp', 0, 1, 0, ?, 0, ?, ?, 1)
+          ?, 0, 'local_acp', 1, 0, ?, 0, ?, ?, 1)
         """)
       defer { sqlite3_finalize(conversation) }
       try bind(conversationID, at: 1, to: conversation)
@@ -3914,14 +3914,14 @@ public final class WorkspaceDatabase: @unchecked Sendable {
             'unread', unread, 'last_message_preview', last_message_preview,
             'openclaw_session_key', openclaw_session_key,
             'last_message_at', last_message_at, 'folder_id', folder_id,
-            'is_main', is_main, 'is_pinned', is_pinned,
+            'is_pinned', is_pinned,
             'is_archived', is_archived
           )
           FROM dashboard_conversations
           WHERE (user_id = ? OR desktop_owned = 1)
             AND deleted_at IS NULL AND is_archived = 0
             AND governing_plane = 'wovenmatter_macos'
-          ORDER BY is_main DESC, last_message_at DESC, id DESC
+          ORDER BY last_message_at DESC, id DESC
           """,
           operatorID: operatorID,
           as: WorkspaceConversationRecord.self
@@ -4511,7 +4511,7 @@ public final class WorkspaceDatabase: @unchecked Sendable {
         authority_agent_id TEXT, title TEXT NOT NULL DEFAULT 'New conversation',
         unread INTEGER NOT NULL DEFAULT 0, last_message_preview TEXT,
         openclaw_session_key TEXT, kind TEXT NOT NULL DEFAULT 'dashboard',
-        is_main INTEGER NOT NULL DEFAULT 0, is_deletable INTEGER NOT NULL DEFAULT 1,
+        is_deletable INTEGER NOT NULL DEFAULT 1,
         is_archived INTEGER NOT NULL DEFAULT 0, context_generation INTEGER NOT NULL DEFAULT 0,
         last_message_at TEXT NOT NULL DEFAULT '', folder_id TEXT, original_folder_id TEXT,
         is_pinned INTEGER NOT NULL DEFAULT 0, deleted_at TEXT, origin_device_id TEXT,

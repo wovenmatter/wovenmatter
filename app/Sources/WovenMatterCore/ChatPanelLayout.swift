@@ -124,7 +124,8 @@ public struct DashboardChatPanelState: Equatable, Sendable {
   @discardableResult
   public mutating func addPanel(
     from panelID: DashboardChatPanelID,
-    newPanelID: DashboardChatPanelID
+    newPanelID: DashboardChatPanelID,
+    conversationID: String? = nil
   ) -> Bool {
     guard newPanelID != .primary,
           panel(id: newPanelID) == nil,
@@ -133,17 +134,16 @@ public struct DashboardChatPanelState: Equatable, Sendable {
     }
 
     assetPresented = false
-    let inheritedConversationID = panel(id: panelID)?.conversationID
     let panel = DashboardChatPanel(
       id: newPanelID,
-      conversationID: inheritedConversationID
+      conversationID: conversationID
     )
 
     if auxiliaryRows.isEmpty {
       auxiliaryRows = [[panel]]
     } else if auxiliaryRows.count == 1 {
-      // The first auxiliary remains A in the upper row and the newcomer is B.
-      auxiliaryRows.append([panel])
+      // Splitting the right column keeps the invoking panel in the lower row.
+      auxiliaryRows.insert([panel], at: 0)
     } else if let location = auxiliaryLocation(of: panelID) {
       // A divided row preserves its invoking panel at the leading edge.
       auxiliaryRows[location.row].append(panel)

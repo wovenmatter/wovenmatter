@@ -266,9 +266,6 @@ struct WorkspaceView: View {
         .onChange(of: model.workspaceOverview?.conversations.map(\.id) ?? []) { _, ids in
             selectDefaults()
         }
-        .onChange(of: selectedAgentID) { _, _ in
-            selectConversationForCurrentAgent()
-        }
         .onChange(of: selectedConversationID) { _, conversationID in
             if let conversationID {
                 model.markConversationRead(id: conversationID)
@@ -694,6 +691,10 @@ struct WorkspaceView: View {
             }
             return
         }
+        if selectedConversation == nil,
+           chatPanels.activePanelID != .primary || chatPanels.hasAuxiliaryPanels {
+            return
+        }
         if selectedAgent == nil {
             selectedAgentID = allAgents.first?.id
         }
@@ -709,13 +710,13 @@ struct WorkspaceView: View {
             return
         }
         _ = chatPanels.replaceActiveConversation(
-            with: conversationsForSelectedAgent.first(where: \.isMain)?.id
-                ?? conversationsForSelectedAgent.first?.id
+            with: conversationsForSelectedAgent.first?.id
         )
     }
 
     private func selectAgent(_ id: UUID) {
         selectedAgentID = id
+        selectConversationForCurrentAgent()
         destination = .workspace
         compactWorkspacePane = .chat
         compactDrawer = .none
@@ -942,9 +943,16 @@ struct WorkspaceView: View {
 
     private func addPanel(from panelID: DashboardChatPanelID) {
         let newPanelID = DashboardChatPanelID(rawValue: UUID().uuidString.lowercased())
+        let openConversationIDs = Set(chatPanels.panels.compactMap(\.conversationID))
+        let conversationID = DashboardConversationSelection
+            .mostRecentAvailableConversationID(
+                in: model.workspaceOverview?.conversations ?? [],
+                excluding: openConversationIDs
+            )
         guard chatPanels.addPanel(
             from: panelID,
-            newPanelID: newPanelID
+            newPanelID: newPanelID,
+            conversationID: conversationID
         ) else { return }
         if selectedNoteID != nil {
             selectedNoteID = nil
@@ -2049,7 +2057,7 @@ private struct DashboardSidebarNavigationPage: View {
             }
         }
 
-        for conversation in conversations where !conversation.isArchived && !conversation.isMain {
+        for conversation in conversations where !conversation.isArchived {
             insert(.conversation(conversation))
         }
         for note in notes {
@@ -3506,6 +3514,7 @@ private struct DashboardWorkspaceSurface: View {
                 sendInProgress: conversation.map {
                     submittingConversationIDs.contains($0.id)
                 } ?? false,
+                startsComposerCollapsed: panelID != .primary,
                 usesCompactPanelSpacing: chatPanels.hasAuxiliaryPanels,
                 showsClosePanel: chatPanels.canClosePanel(panelID),
                 showsAddPanel: chatPanels.canAddPanel(from: panelID),
@@ -3702,6 +3711,7 @@ private struct DashboardCloudConversation: View {
     @Binding var draft: String
     let attachments: [AgentMessageAttachmentDraft]
     let sendInProgress: Bool
+    let startsComposerCollapsed: Bool
     let usesCompactPanelSpacing: Bool
     let showsClosePanel: Bool
     let showsAddPanel: Bool
@@ -3907,12 +3917,12 @@ private struct DashboardCloudConversation: View {
                     .background(theme.palette.themeWhisper)
                     .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
                 }
-                HStack(alignment: .bottom, spacing: 8) {
+                HStack(alignment: .center, spacing: 8) {
                     if showsClosePanel {
                         DashboardPanelControlButton(
-                            systemImage: "minus",
-                            accessibilityLabel: "Close Panel",
-                            help: "Close this chat panel",
+                            glyph: .panelRightOpen,
+                            accessibilityLabel: "Remove panel",
+                            help: "Remove panel",
                             action: onClosePanel
                         )
                     }
@@ -3950,6 +3960,7 @@ private struct DashboardCloudConversation: View {
                             return model.loadingLocalACPSessionIDs.contains($0.id)
                                 || model.updatingLocalACPSessionIDs.contains($0.id)
                         } ?? false),
+                        startsCollapsed: startsComposerCollapsed,
                         focusRequestGeneration: focusRequestGeneration,
                         onSelectModel: { selection in
                             guard let conversation else { return }
@@ -3995,9 +4006,9 @@ private struct DashboardCloudConversation: View {
                     )
                     if showsAddPanel {
                         DashboardPanelControlButton(
-                            systemImage: "plus",
-                            accessibilityLabel: "Add Panel",
-                            help: "Add another chat panel",
+                            glyph: .panelLeftOpen,
+                            accessibilityLabel: "Add panel",
+                            help: "Add panel",
                             action: onAddPanel
                         )
                     }
@@ -4557,25 +4568,18 @@ private struct DashboardPersistedAttachmentChip: View {
 }
 
 private struct DashboardPanelControlButton: View {
-    @Environment(\.dashboardTheme) private var theme
-    let systemImage: String
+    let glyph: DashboardLucideGlyph
     let accessibilityLabel: String
     let help: String
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            Image(systemName: systemImage)
-                .font(.system(size: 14, weight: .semibold))
+            DashboardLucideIcon(glyph: glyph, size: 18)
                 .frame(width: 36, height: 36)
-                .contentShape(Circle())
+                .contentShape(Rectangle())
         }
-        .buttonStyle(DashboardComposerControlButtonStyle())
-        .foregroundStyle(DashboardPalette.mutedForeground)
-        .background(.regularMaterial, in: Circle())
-        .overlay {
-            Circle().stroke(theme.palette.border, lineWidth: 1)
-        }
+        .buttonStyle(DashboardIconButtonStyle())
         .accessibilityLabel(accessibilityLabel)
         .help(help)
     }
@@ -4590,6 +4594,7 @@ private struct DashboardComposer: View {
     let sessionMetadata: LocalACPSessionMetadata?
     let sessionControlsDisabled: Bool
     let sendDisabled: Bool
+    let startsCollapsed: Bool
     let focusRequestGeneration: Int?
     let onSelectModel: ((String) -> Void)?
     let onSelectThinking: ((String) -> Void)?
@@ -4601,6 +4606,12 @@ private struct DashboardComposer: View {
     @FocusState private var focused: Bool
     @State private var openMenu: DashboardComposerMenuKind?
     @State private var isDropTarget = false
+    @State private var collapseOverride: Bool?
+    @State private var permitsNarrowExpandedControls = false
+
+    private var isCollapsed: Bool {
+        collapseOverride ?? startsCollapsed
+    }
 
     var body: some View {
         VStack(spacing: 6) {
@@ -4631,29 +4642,14 @@ private struct DashboardComposer: View {
                 .scrollIndicators(.never)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
-            TextField(
-                "",
-                text: $draft,
-                prompt: Text(placeholder).foregroundStyle(DashboardPalette.mutedForeground),
-                axis: .vertical
-            )
-            .font(.system(size: 15))
-            .lineSpacing(4)
-            .textFieldStyle(.plain)
-            .lineLimit(1...7)
-            .focused($focused)
-            .frame(minHeight: 32, alignment: .topLeading)
-            .onKeyPress(.return, phases: .down) { press in
-                if press.modifiers.contains(.shift) { return .ignored }
-                if applyFirstSlashCommandIfNeeded() { return .handled }
-                guard canSend else { return .handled }
-                onSend()
-                return .handled
+            if isCollapsed {
+                HStack(alignment: .bottom, spacing: 2) {
+                    composerTextField
+                    collapsedControls
+                }
+            } else {
+                composerTextField
             }
-            .onKeyPress(.tab, phases: .down) { _ in
-                applyFirstSlashCommandIfNeeded() ? .handled : .ignored
-            }
-            .simultaneousGesture(TapGesture().onEnded { openMenu = nil })
 
             if !matchingSlashCommands.isEmpty {
                 VStack(alignment: .leading, spacing: 0) {
@@ -4688,9 +4684,21 @@ private struct DashboardComposer: View {
                 }
             }
 
-            ViewThatFits(in: .horizontal) {
-                regularControls
-                compactControls
+            if !isCollapsed {
+                ViewThatFits(in: .horizontal) {
+                    regularControls
+                        .onAppear {
+                            permitsNarrowExpandedControls = false
+                        }
+                    compactControls
+                        .onAppear {
+                            if permitsNarrowExpandedControls {
+                                permitsNarrowExpandedControls = false
+                            } else {
+                                collapseOverride = true
+                            }
+                        }
+                }
             }
         }
         .padding(.horizontal, 12)
@@ -4743,6 +4751,37 @@ private struct DashboardComposer: View {
             }
         }
         .animation(.easeOut(duration: 0.15), value: openMenu)
+        .animation(.easeOut(duration: 0.15), value: isCollapsed)
+    }
+
+    private var composerTextField: some View {
+        TextField(
+            "",
+            text: $draft,
+            prompt: Text(placeholder).foregroundStyle(DashboardPalette.mutedForeground),
+            axis: .vertical
+        )
+        .font(.system(size: 15))
+        .lineSpacing(4)
+        .textFieldStyle(.plain)
+        .lineLimit(isCollapsed ? 1...3 : 1...7)
+        .fixedSize(horizontal: false, vertical: true)
+        .focused($focused)
+        .frame(
+            minHeight: isCollapsed ? 36 : 32,
+            alignment: .topLeading
+        )
+        .onKeyPress(.return, phases: .down) { press in
+            if press.modifiers.contains(.shift) { return .ignored }
+            if applyFirstSlashCommandIfNeeded() { return .handled }
+            guard canSend else { return .handled }
+            onSend()
+            return .handled
+        }
+        .onKeyPress(.tab, phases: .down) { _ in
+            applyFirstSlashCommandIfNeeded() ? .handled : .ignored
+        }
+        .simultaneousGesture(TapGesture().onEnded { openMenu = nil })
     }
 
     private var canSend: Bool {
@@ -4806,10 +4845,10 @@ private struct DashboardComposer: View {
                 .frame(width: 36, height: 36)
                 .contentShape(Circle())
         }
-        .buttonStyle(DashboardComposerControlButtonStyle(active: openMenu == menu))
-        .foregroundStyle(DashboardPalette.mutedForeground)
+        .buttonStyle(DashboardComposerControlButtonStyle())
         .accessibilityLabel(accessibilityLabel)
         .accessibilityValue(openMenu == menu ? "Expanded" : "Collapsed")
+        .help(accessibilityLabel)
     }
 
     private var regularControls: some View {
@@ -4841,14 +4880,15 @@ private struct DashboardComposer: View {
             }
 
             Spacer(minLength: 8)
+            collapseControl
             voiceControl
             sendControl
         }
     }
 
     private var compactControls: some View {
-        Grid(horizontalSpacing: 4, verticalSpacing: 4) {
-            GridRow {
+        VStack(alignment: .trailing, spacing: 4) {
+            HStack(spacing: 4) {
                 attachmentControl
                 if showsSessionControls {
                     compactSessionMenu(
@@ -4861,12 +4901,6 @@ private struct DashboardComposer: View {
                         selection: sessionMetadata?.model,
                         action: onSelectModel
                     )
-                } else {
-                    voiceControl
-                }
-            }
-            if showsSessionControls {
-                GridRow {
                     compactSessionMenu(
                         kind: .thinking,
                         icon: .brain,
@@ -4878,21 +4912,53 @@ private struct DashboardComposer: View {
                         capitalizeOptions: true,
                         action: onSelectThinking
                     )
-                    voiceControl
                 }
             }
-            GridRow {
-                Color.clear.frame(width: 36, height: 36)
+
+            HStack(spacing: 4) {
+                collapseControl
+                voiceControl
                 sendControl
             }
         }
         .frame(maxWidth: .infinity, alignment: .trailing)
     }
 
+    private var collapsedControls: some View {
+        HStack(spacing: 4) {
+            collapseControl
+            voiceControl
+            sendControl
+        }
+        .fixedSize(horizontal: true, vertical: false)
+    }
+
+    private var collapseControl: some View {
+        Button {
+            openMenu = nil
+            if isCollapsed {
+                permitsNarrowExpandedControls = true
+                collapseOverride = false
+            } else {
+                permitsNarrowExpandedControls = false
+                collapseOverride = true
+            }
+        } label: {
+            DashboardLucideIcon(glyph: .chevronDown, size: 18)
+                .rotationEffect(.degrees(isCollapsed ? 0 : 180))
+                .frame(width: 36, height: 36)
+                .contentShape(Circle())
+        }
+        .buttonStyle(DashboardComposerControlButtonStyle())
+        .accessibilityLabel(isCollapsed ? "Expand composer" : "Collapse composer")
+        .accessibilityValue(isCollapsed ? "Collapsed" : "Expanded")
+        .help(isCollapsed ? "Expand composer" : "Collapse composer")
+    }
+
     private var attachmentControl: some View {
         composerIconButton(
             icon: .plus,
-            accessibilityLabel: "Add attachment",
+            accessibilityLabel: "Add files or photos",
             menu: .attachments
         )
         .overlay(alignment: .bottomLeading) {
@@ -4919,8 +4985,8 @@ private struct DashboardComposer: View {
                 .contentShape(Circle())
         }
         .buttonStyle(DashboardComposerControlButtonStyle())
-        .foregroundStyle(DashboardPalette.mutedForeground)
         .accessibilityLabel("Voice input unavailable")
+        .help("Dictation unavailable")
     }
 
     private var sendControl: some View {
@@ -4958,12 +5024,12 @@ private struct DashboardComposer: View {
                 .frame(width: 36, height: 36)
                 .contentShape(Circle())
         }
-        .buttonStyle(DashboardComposerControlButtonStyle(active: openMenu == kind))
-        .foregroundStyle(DashboardPalette.mutedForeground)
+        .buttonStyle(DashboardComposerControlButtonStyle())
         .disabled(unavailable)
         .opacity(unavailable ? 0.4 : 1)
         .accessibilityLabel(accessibilityLabel)
         .accessibilityValue("\(title), \(openMenu == kind ? "Expanded" : "Collapsed")")
+        .help(accessibilityLabel)
         .overlay(alignment: .bottomLeading) {
             if openMenu == kind {
                 DashboardComposerOptionMenu(
@@ -5001,12 +5067,13 @@ private struct DashboardComposer: View {
         } label: {
             DashboardComposerSessionLabel(icon: icon, title: title)
         }
-        .buttonStyle(DashboardComposerControlButtonStyle(active: openMenu == kind))
+        .buttonStyle(DashboardComposerControlButtonStyle())
         .disabled(unavailable)
         .opacity(unavailable ? 0.4 : 1)
         .fixedSize(horizontal: true, vertical: false)
         .accessibilityLabel(accessibilityLabel)
         .accessibilityValue("\(title), \(openMenu == kind ? "Expanded" : "Collapsed")")
+        .help(accessibilityLabel)
         .overlay(alignment: .bottomLeading) {
             if openMenu == kind {
                 DashboardComposerOptionMenu(
@@ -5168,7 +5235,6 @@ private struct DashboardComposerSessionLabel: View {
             DashboardLucideIcon(glyph: .chevronDown, size: 14)
         }
         .font(.system(size: 12, weight: .medium))
-        .foregroundStyle(DashboardPalette.mutedForeground)
         .padding(.horizontal, 10)
         .frame(height: 36)
         .contentShape(Capsule())
@@ -5176,15 +5242,15 @@ private struct DashboardComposerSessionLabel: View {
 }
 
 private struct DashboardComposerControlButtonStyle: ButtonStyle {
-    @Environment(\.dashboardTheme) private var theme
-    var active = false
+    @State private var hovered = false
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .background(
-                (active || configuration.isPressed ? theme.palette.themeSoft : .clear),
-                in: Capsule()
+            .foregroundStyle(
+                hovered ? DashboardPalette.primary : DashboardPalette.mutedForeground
             )
+            .onHover { hovered = $0 }
+            .animation(.easeOut(duration: 0.14), value: hovered)
     }
 }
 
@@ -6327,10 +6393,13 @@ private struct DashboardRevealRailButton: View {
 
     var body: some View {
         Button(action: action) {
-            DashboardLucideIcon(glyph: side == .left ? .panelLeftOpen : .panelRightOpen, size: 16)
-                .frame(width: 32, height: 32)
+            DashboardLucideIcon(
+                glyph: side == .left ? .rightCollapse : .leftCollapse,
+                size: 18
+            )
+            .frame(width: 36, height: 36)
         }
-        .buttonStyle(DashboardFloatingButtonStyle())
+        .buttonStyle(DashboardIconButtonStyle())
         .help(side == .left ? "Show agents" : "Show workspace")
     }
 }
@@ -6913,17 +6982,6 @@ struct DashboardIconButtonStyle: ButtonStyle {
             .background(configuration.isPressed || hovered ? theme.palette.themeSoft : .clear)
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             .onHover { hovered = $0 }
-    }
-}
-
-private struct DashboardFloatingButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .foregroundStyle(DashboardPalette.mutedForeground)
-            .background(DashboardPalette.background.opacity(configuration.isPressed ? 0.95 : 0.75))
-            .clipShape(Circle())
-            .overlay { Circle().stroke(DashboardPalette.foreground.opacity(0.04), lineWidth: 1) }
-            .shadow(color: DashboardPalette.foreground.opacity(0.05), radius: 2, y: 1)
     }
 }
 
