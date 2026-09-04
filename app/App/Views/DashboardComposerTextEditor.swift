@@ -32,6 +32,9 @@ struct DashboardComposerTextEditor: NSViewRepresentable {
         textView.onCommandNavigation = { [weak coordinator = context.coordinator] direction in
             coordinator?.parent.onCommandNavigation(direction) ?? false
         }
+        textView.onBecomeFirstResponder = { [weak coordinator = context.coordinator] in
+            coordinator?.parent.isFocused = true
+        }
         scrollView.updateDocumentLayout()
         return scrollView
     }
@@ -51,6 +54,9 @@ struct DashboardComposerTextEditor: NSViewRepresentable {
         textView.onCommandNavigation = { [weak coordinator = context.coordinator] direction in
             coordinator?.parent.onCommandNavigation(direction) ?? false
         }
+        textView.onBecomeFirstResponder = { [weak coordinator = context.coordinator] in
+            coordinator?.parent.isFocused = true
+        }
 
         if textView.string != text, !textView.hasMarkedText() {
             let selection = textView.selectedRange()
@@ -62,15 +68,7 @@ struct DashboardComposerTextEditor: NSViewRepresentable {
         }
         scrollView.updateDocumentLayout()
 
-        guard let window = textView.window else { return }
-        if isFocused, window.firstResponder !== textView {
-            DispatchQueue.main.async { [weak textView] in
-                guard let textView, textView.window?.firstResponder !== textView else { return }
-                textView.window?.makeFirstResponder(textView)
-            }
-        } else if !isFocused, window.firstResponder === textView {
-            window.makeFirstResponder(nil)
-        }
+        context.coordinator.reconcileFocus(for: textView)
     }
 
     func sizeThatFits(
@@ -92,6 +90,33 @@ struct DashboardComposerTextEditor: NSViewRepresentable {
 
         init(parent: DashboardComposerTextEditor) {
             self.parent = parent
+        }
+
+        func reconcileFocus(for textView: DashboardComposerNativeTextView) {
+            guard let window = textView.window else { return }
+            if parent.isFocused, window.firstResponder !== textView {
+                DispatchQueue.main.async { [weak self, weak textView] in
+                    guard let self,
+                          self.parent.isFocused,
+                          let textView,
+                          textView.window?.firstResponder !== textView
+                    else { return }
+                    textView.window?.makeFirstResponder(textView)
+                }
+            } else if !parent.isFocused, window.firstResponder === textView {
+                // AppKit can make the native editor first responder before the
+                // SwiftUI focus binding has observed textDidBeginEditing. Wait
+                // one turn and recheck the live binding so a manual click is
+                // not immediately undone by a stale updateNSView pass.
+                DispatchQueue.main.async { [weak self, weak textView] in
+                    guard let self,
+                          !self.parent.isFocused,
+                          let textView,
+                          textView.window?.firstResponder === textView
+                    else { return }
+                    textView.window?.makeFirstResponder(nil)
+                }
+            }
         }
 
         func textDidBeginEditing(_ notification: Notification) {
@@ -222,6 +247,7 @@ final class DashboardComposerNativeTextView: NSTextView {
     var onSubmit: (() -> Void)?
     var onTab: (() -> Bool)?
     var onCommandNavigation: ((DashboardComposerNavigationDirection) -> Bool)?
+    var onBecomeFirstResponder: (() -> Void)?
     var placeholderString = "" {
         didSet { needsDisplay = true }
     }
@@ -245,6 +271,14 @@ final class DashboardComposerNativeTextView: NSTextView {
     required init?(coder: NSCoder) {
         super.init(coder: coder)
         configure()
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        let accepted = super.becomeFirstResponder()
+        if accepted {
+            onBecomeFirstResponder?()
+        }
+        return accepted
     }
 
     override func keyDown(with event: NSEvent) {

@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import SwiftUI
 
 @MainActor
 private final class ScrollEventSpy: NSResponder {
@@ -67,6 +68,8 @@ struct DashboardComposerTextEditorTests {
         testTabCompletionIsNarrowAndOptional()
         testSelectionAndPasteboardServicesRemainNative()
         testMultilineOverflowAndScrollRouting()
+        testNativeFocusUpdatesTheBindingImmediately()
+        testStaleBlurDoesNotCancelManualRefocus()
         print("Dashboard composer native text behavior passed.")
     }
 
@@ -290,5 +293,86 @@ struct DashboardComposerTextEditorTests {
         expect(!scrollView.hasVerticalOverflow, "short content must not claim vertical scrolling")
         scrollView.scrollWheel(with: scrollEvent(deltaY: -12))
         expect(spy.eventCount == 1, "a non-scrolling composer must pass wheel events to its responder chain")
+    }
+
+    private static func testStaleBlurDoesNotCancelManualRefocus() {
+        func editor(isFocused: Bool) -> DashboardComposerTextEditor {
+            DashboardComposerTextEditor(
+                text: .constant(""),
+                isFocused: .constant(isFocused),
+                placeholder: "Message Codex…",
+                maximumVisibleLines: 3,
+                onSubmit: {},
+                onTab: { false },
+                onCommandNavigation: { _ in false }
+            )
+        }
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 320, height: 80),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        let scrollView = DashboardComposerScrollView(frame: window.contentView!.bounds)
+        window.contentView = scrollView
+        let textView = scrollView.composerTextView
+        let coordinator = editor(isFocused: false).makeCoordinator()
+
+        expect(window.makeFirstResponder(textView), "the test editor must accept native focus")
+        coordinator.reconcileFocus(for: textView)
+        coordinator.parent = editor(isFocused: true)
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.01))
+        expect(
+            window.firstResponder === textView,
+            "a stale false binding must not cancel a mouse-driven native refocus"
+        )
+
+        coordinator.parent = editor(isFocused: false)
+        coordinator.reconcileFocus(for: textView)
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.01))
+        expect(
+            window.firstResponder !== textView,
+            "a confirmed false binding must still resign the native editor"
+        )
+    }
+
+    private static func testNativeFocusUpdatesTheBindingImmediately() {
+        final class FocusBox {
+            var value = false
+        }
+
+        let focus = FocusBox()
+        let editor = DashboardComposerTextEditor(
+            text: .constant(""),
+            isFocused: Binding(
+                get: { focus.value },
+                set: { focus.value = $0 }
+            ),
+            placeholder: "Message Codex…",
+            maximumVisibleLines: 3,
+            onSubmit: {},
+            onTab: { false },
+            onCommandNavigation: { _ in false }
+        )
+        let coordinator = editor.makeCoordinator()
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 320, height: 80),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        let scrollView = DashboardComposerScrollView(frame: window.contentView!.bounds)
+        window.contentView = scrollView
+        let textView = scrollView.composerTextView
+        textView.onBecomeFirstResponder = {
+            coordinator.parent.isFocused = true
+        }
+
+        expect(window.makeFirstResponder(textView), "the test editor must accept native focus")
+        expect(
+            focus.value,
+            "native first-responder acquisition must synchronously update the SwiftUI focus binding"
+        )
     }
 }
