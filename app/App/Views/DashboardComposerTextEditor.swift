@@ -96,12 +96,11 @@ struct DashboardComposerTextEditor: NSViewRepresentable {
             guard let window = textView.window else { return }
             if parent.isFocused, window.firstResponder !== textView {
                 DispatchQueue.main.async { [weak self, weak textView] in
-                    guard let self,
-                          self.parent.isFocused,
-                          let textView,
-                          textView.window?.firstResponder !== textView
-                    else { return }
-                    textView.window?.makeFirstResponder(textView)
+                    guard let self, let textView else { return }
+                    self.applyFocusReconciliation(
+                        expectedFocused: true,
+                        for: textView
+                    )
                 }
             } else if !parent.isFocused, window.firstResponder === textView {
                 // AppKit can make the native editor first responder before the
@@ -109,13 +108,26 @@ struct DashboardComposerTextEditor: NSViewRepresentable {
                 // one turn and recheck the live binding so a manual click is
                 // not immediately undone by a stale updateNSView pass.
                 DispatchQueue.main.async { [weak self, weak textView] in
-                    guard let self,
-                          !self.parent.isFocused,
-                          let textView,
-                          textView.window?.firstResponder === textView
-                    else { return }
-                    textView.window?.makeFirstResponder(nil)
+                    guard let self, let textView else { return }
+                    self.applyFocusReconciliation(
+                        expectedFocused: false,
+                        for: textView
+                    )
                 }
+            }
+        }
+
+        func applyFocusReconciliation(
+            expectedFocused: Bool,
+            for textView: DashboardComposerNativeTextView
+        ) {
+            guard parent.isFocused == expectedFocused,
+                  let window = textView.window
+            else { return }
+            if expectedFocused, window.firstResponder !== textView {
+                window.makeFirstResponder(textView)
+            } else if !expectedFocused, window.firstResponder === textView {
+                window.makeFirstResponder(nil)
             }
         }
 

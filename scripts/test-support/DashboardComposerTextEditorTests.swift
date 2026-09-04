@@ -332,17 +332,19 @@ struct DashboardComposerTextEditorTests {
         let coordinator = editor(isFocused: false).makeCoordinator()
 
         expect(window.makeFirstResponder(textView), "the test editor must accept native focus")
-        coordinator.reconcileFocus(for: textView)
         coordinator.parent = editor(isFocused: true)
-        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.01))
+        coordinator.applyFocusReconciliation(expectedFocused: false, for: textView)
         expect(
             window.firstResponder === textView,
             "a stale false binding must not cancel a mouse-driven native refocus"
         )
+        expect(
+            window.resignationRequestCount == 0,
+            "a stale false binding must not request native editor resignation"
+        )
 
         coordinator.parent = editor(isFocused: false)
-        coordinator.reconcileFocus(for: textView)
-        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.01))
+        coordinator.applyFocusReconciliation(expectedFocused: false, for: textView)
         expect(
             window.resignationRequestCount == 1,
             "a confirmed false binding must still request native editor resignation"
