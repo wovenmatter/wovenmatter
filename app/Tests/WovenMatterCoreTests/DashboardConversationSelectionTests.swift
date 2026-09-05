@@ -39,9 +39,36 @@ struct DashboardConversationSelectionTests {
     ) == nil)
   }
 
+  @Test("selection preserves date precision and deterministic fallback ordering")
+  func dateAndTieOrdering() throws {
+    let fallback = try [
+      conversation(id: "a", lastMessageAt: nil),
+      conversation(id: "z", lastMessageAt: "invalid"),
+    ]
+    #expect(DashboardConversationSelection.mostRecentAvailableConversationID(
+      in: fallback, excluding: []
+    ) == "z")
+    let dated = try fallback + [
+      conversation(id: "later", lastMessageAt: "2026-09-04T13:00:00.500Z"),
+      conversation(id: "earlier", lastMessageAt: "2026-09-04T13:00:00Z"),
+      conversation(id: "tie-z", lastMessageAt: "2026-09-04T13:00:00.500Z"),
+    ]
+    for records in [dated, Array(dated.reversed())] {
+      #expect(DashboardConversationSelection.mostRecentAvailableConversationID(
+        in: records, excluding: []
+      ) == "tie-z")
+      #expect(DashboardConversationSelection.mostRecentAvailableConversationID(
+        in: records, excluding: ["tie-z", "later"]
+      ) == "earlier")
+    }
+    #expect(DashboardConversationSelection.mostRecentAvailableConversationID(
+      in: [], excluding: []
+    ) == nil)
+  }
+
   private func conversation(
     id: String,
-    lastMessageAt: String,
+    lastMessageAt: String?,
     isPinned: Bool = false,
     isArchived: Bool = false
   ) throws -> WorkspaceConversationRecord {
@@ -49,7 +76,7 @@ struct DashboardConversationSelectionTests {
       "id": id,
       "title": id,
       "unread": false,
-      "last_message_at": lastMessageAt,
+      "last_message_at": lastMessageAt as Any? ?? NSNull(),
       "is_pinned": isPinned,
       "is_archived": isArchived,
     ]

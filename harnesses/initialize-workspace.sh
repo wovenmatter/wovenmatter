@@ -23,9 +23,8 @@ cat > "$managed_file" <<'EOF'
 # Woven Matter Workspace
 
 - Work in the appropriate checkout under `REPOS/`.
-- Follow repository-local instructions and preserve unrelated changes.
 - Put durable guides, plans, research, work summaries, and deliverables in the matching workspace folders.
-- Treat `.scratch/` as disposable and never store credentials in workspace documents.
+- `.scratch/` is disposable.
 <!-- END WOVEN MATTER MANAGED -->
 EOF
 

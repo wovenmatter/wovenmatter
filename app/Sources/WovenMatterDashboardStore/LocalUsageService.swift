@@ -83,12 +83,33 @@ public struct LocalUsageLimitsSnapshot: Equatable, Sendable {
   }
 }
 
+struct UsageLimitsRequest: Sendable {
+  let homeDirectory: URL
+  let openRouterAPIKey: String?
+  let enabledProviders: Set<ProviderKind>
+  let keychainInteraction: UsageKeychainInteraction
+  let codexWorkspaceSource: CodexWorkspaceSource?
+  let codexWorkspaceCount: Int
+  let now: Date
+
+  func collect() async -> [UsageLimitAccount] {
+    await ProviderLimitCollector.collect(
+      homeDirectory: homeDirectory,
+      openRouterAPIKey: openRouterAPIKey,
+      enabledProviders: enabledProviders,
+      keychainInteraction: keychainInteraction,
+      codexWorkspaceSource: codexWorkspaceSource,
+      codexWorkspaceCount: codexWorkspaceCount,
+      now: now
+    )
+  }
+}
+
 public actor LocalUsageService {
   private struct ImportOutcome: Sendable {
-    let discoveredFiles: Int
     let failures: Int
 
-    static let empty = ImportOutcome(discoveredFiles: 0, failures: 0)
+    static let empty = ImportOutcome(failures: 0)
   }
 
   private static let parserVersion = "usage-index-v3"
@@ -101,6 +122,9 @@ public actor LocalUsageService {
   private let fileManager: FileManager
   private let credentialStore: any UsageCredentialStoring
   private let databaseURL: URL
+  private let limitCollector: @Sendable (UsageLimitsRequest) async -> [UsageLimitAccount]
+  private var limitsGeneration = UUID()
+  private var analyticsGeneration = UUID()
   private var usageStore: UsageStore?
   private var usageStoreFailure: String?
   private var cachedLimits: (
@@ -124,6 +148,7 @@ public actor LocalUsageService {
     self.homeDirectory = homeDirectory
     self.fileManager = fileManager
     credentialStore = UsageCredentialStore(service: credentialService)
+    limitCollector = { await $0.collect() }
     databaseURL = usageDatabaseURL ?? homeDirectory.appending(
       path: "Library/Application Support/Woven Matter/workspace.sqlite"
     )
@@ -133,11 +158,15 @@ public actor LocalUsageService {
     homeDirectory: URL,
     fileManager: FileManager,
     credentialStore: any UsageCredentialStoring,
-    usageDatabaseURL: URL
+    usageDatabaseURL: URL,
+    limitCollector: @escaping @Sendable (UsageLimitsRequest) async -> [UsageLimitAccount] = {
+      await $0.collect()
+    }
   ) {
     self.homeDirectory = homeDirectory
     self.fileManager = fileManager
     self.credentialStore = credentialStore
+    self.limitCollector = limitCollector
     databaseURL = usageDatabaseURL
   }
 
@@ -148,21 +177,23 @@ public actor LocalUsageService {
     enabledProviders: Set<ProviderKind> = Set(ProviderKind.supportedAccounts),
     allowCredentialAccess: Bool = true,
     now: Date = Date()
-  ) async -> LocalUsageSnapshot {
-    let analytics = await analyticsSnapshot(
+  ) async throws -> LocalUsageSnapshot {
+    let analytics = try await analyticsSnapshot(
       range: range,
       refreshReason: refreshReason,
       enabledProviders: enabledProviders,
       allowCredentialAccess: allowCredentialAccess,
       now: now
     )
-    let limits = await limitsSnapshot(
+    let analyticsID = analyticsGeneration
+    let limits = try await limitsSnapshot(
       refresh: refreshLimits,
       refreshReason: refreshReason,
       enabledProviders: enabledProviders,
       allowCredentialAccess: allowCredentialAccess,
       now: now
     )
+    guard isCurrentAnalytics(analyticsID) else { throw CancellationError() }
     return LocalUsageSnapshot(
       analytics: analytics,
       limits: limits.accounts,
@@ -195,7 +226,10 @@ public actor LocalUsageService {
     keychainInteraction: UsageKeychainInteraction = .noninteractive,
     selectedCodexWorkspaceID: String? = nil,
     now: Date = Date()
-  ) async -> LocalUsageLimitsSnapshot {
+  ) async throws -> LocalUsageLimitsSnapshot {
+    try Task.checkCancellation()
+    let generation = UUID()
+    limitsGeneration = generation
     let codexSources = enabledProviders.contains(.codex)
       ? ProviderLimitCollector.codexWorkspaceSources(homeDirectory: homeDirectory)
       : []
@@ -205,13 +239,6 @@ public actor LocalUsageService {
     )
     let resolvedCodexWorkspaceID = selectedCodexSource?.workspace.id
     let accounts: [UsageLimitAccount]
-    let persistent = (try? openUsageStore()?.usageLimitAccounts(
-      providers: enabledProviders,
-      accountScopes: resolvedCodexWorkspaceID.map { [.codex: $0] } ?? [:]
-    )) ?? []
-    let persistentByProvider = Dictionary(
-      uniqueKeysWithValues: persistent.map { ($0.provider, $0) }
-    )
     let mayReuseFreshLimits = refreshReason != .manual
       && refreshReason != .credentialChanged
     if let cachedLimits,
@@ -220,36 +247,48 @@ public actor LocalUsageService {
        (!refresh || (mayReuseFreshLimits
          && now.timeIntervalSince(cachedLimits.date) < 60)) {
       accounts = cachedLimits.accounts
-    } else if refresh {
-      let openRouterAPIKey = allowCredentialAccess
-        && enabledProviders.contains(.openRouter)
-        ? (try? credentialStore.loadOpenRouterAPIKey())
-        : nil
-      let refreshed = await ProviderLimitCollector.collect(
-        homeDirectory: homeDirectory,
-        openRouterAPIKey: openRouterAPIKey,
-        enabledProviders: enabledProviders,
-        keychainInteraction: keychainInteraction,
-        codexWorkspaceSource: selectedCodexSource,
-        codexWorkspaceCount: codexSources.count,
-        now: now
-      )
-      accounts = refreshed.map { account in
-        guard account.status == .failed || account.status == .unavailable,
-              let prior = persistentByProvider[account.provider]
-        else { return account }
-        return prior.retainingLastGood(after: account)
-      }
-      try? openUsageStore()?.saveUsageLimitAccounts(accounts, storedAt: now)
-      cachedLimits = (now, enabledProviders, resolvedCodexWorkspaceID, accounts)
     } else {
-      let placeholders = ProviderLimitCollector.placeholderAccounts(
-        enabledProviders: enabledProviders,
-        now: now
+      let persistent = (try? openUsageStore()?.usageLimitAccounts(
+        providers: enabledProviders,
+        accountScopes: resolvedCodexWorkspaceID.map { [.codex: $0] } ?? [:]
+      )) ?? []
+      let persistentByProvider = Dictionary(
+        uniqueKeysWithValues: persistent.map { ($0.provider, $0) }
       )
-      accounts = placeholders.map { placeholder in
-        persistentByProvider[placeholder.provider]?.stale()
-          ?? placeholder
+      if refresh {
+        let openRouterAPIKey = allowCredentialAccess
+          && enabledProviders.contains(.openRouter)
+          ? (try? credentialStore.loadOpenRouterAPIKey())
+          : nil
+        let refreshed = await limitCollector(UsageLimitsRequest(
+          homeDirectory: homeDirectory,
+          openRouterAPIKey: openRouterAPIKey,
+          enabledProviders: enabledProviders,
+          keychainInteraction: keychainInteraction,
+          codexWorkspaceSource: selectedCodexSource,
+          codexWorkspaceCount: codexSources.count,
+          now: now
+        ))
+        guard limitsGeneration == generation, !Task.isCancelled else {
+          throw CancellationError()
+        }
+        accounts = refreshed.map { account in
+          guard account.status == .failed || account.status == .unavailable,
+                let prior = persistentByProvider[account.provider]
+          else { return account }
+          return prior.retainingLastGood(after: account)
+        }
+        try? openUsageStore()?.saveUsageLimitAccounts(accounts, storedAt: now)
+        cachedLimits = (now, enabledProviders, resolvedCodexWorkspaceID, accounts)
+      } else {
+        let placeholders = ProviderLimitCollector.placeholderAccounts(
+          enabledProviders: enabledProviders,
+          now: now
+        )
+        accounts = placeholders.map { placeholder in
+          persistentByProvider[placeholder.provider]?.stale()
+            ?? placeholder
+        }
       }
     }
     return LocalUsageLimitsSnapshot(
@@ -268,7 +307,10 @@ public actor LocalUsageService {
     enabledProviders: Set<ProviderKind> = Set(ProviderKind.supportedAccounts),
     allowCredentialAccess: Bool = true,
     now: Date = Date()
-  ) async -> UsageAnalyticsSnapshot {
+  ) async throws -> UsageAnalyticsSnapshot {
+    try Task.checkCancellation()
+    let generation = UUID()
+    analyticsGeneration = generation
     let interval = range.interval(relativeTo: now)
     guard let store = openUsageStore() else {
       return UsageAnalyticsSnapshot(
@@ -316,7 +358,8 @@ public actor LocalUsageService {
     if enabledProviders.contains(.openRouter),
        allowCredentialAccess,
        shouldImportOpenRouter(store: store, reason: refreshReason, now: now) {
-      await importOpenRouterActivity(store: store, now: now)
+      await importOpenRouterActivity(store: store, generation: generation, now: now)
+      guard isCurrentAnalytics(generation) else { throw CancellationError() }
       try? store.setMetadataDate(now, for: "usage.openrouter-attempt-at")
     }
     if enabledProviders.contains(.cursor),
@@ -324,8 +367,10 @@ public actor LocalUsageService {
       await importCursorAccountActivity(
         store: store,
         cutoff: now.addingTimeInterval(-Self.retention),
+        generation: generation,
         now: now
       )
+      guard isCurrentAnalytics(generation) else { throw CancellationError() }
       try? store.setMetadataDate(now, for: "usage.cursor-attempt-at")
     }
     let storedSamples = ((try? store.samples(in: interval)) ?? []).filter {
@@ -353,6 +398,8 @@ public actor LocalUsageService {
     let key = value.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !key.isEmpty else { throw LocalUsageServiceError.emptyCredential }
     try credentialStore.saveOpenRouterAPIKey(key)
+    limitsGeneration = UUID()
+    analyticsGeneration = UUID()
     cachedLimits = nil
     openRouterStatus = .unavailable
     openRouterDetail = "The new credential has not been checked yet."
@@ -360,6 +407,8 @@ public actor LocalUsageService {
 
   public func deleteOpenRouterAPIKey() throws {
     try credentialStore.deleteOpenRouterAPIKey()
+    limitsGeneration = UUID()
+    analyticsGeneration = UUID()
     cachedLimits = nil
     openRouterStatus = .unavailable
     openRouterDetail = "Add an OpenRouter management key to import official account activity."
@@ -441,17 +490,18 @@ public actor LocalUsageService {
   private func importCursorAccountActivity(
     store: UsageStore,
     cutoff: Date,
+    generation: UUID,
     now: Date
   ) async {
     do {
       let activity = try await CursorAccountClient(homeDirectory: homeDirectory)
         .activity(since: cutoff, until: now)
+      guard isCurrentAnalytics(generation) else { return }
       let retainedInterval = DateInterval(
         start: now.addingTimeInterval(-Self.retention),
         end: now
       )
-      let retained = ((try? store.samples(in: retainedInterval)) ?? [])
-        .filter { $0.sourceID == "cursor:account" }
+      let retained = (try? store.samples(in: retainedInterval, sourceID: "cursor:account")) ?? []
       var samplesByEvent = Dictionary(
         uniqueKeysWithValues: retained.map { ($0.sourceEventID, $0) }
       )
@@ -471,9 +521,11 @@ public actor LocalUsageService {
       cursorAccountStatus = .available
       cursorAccountDetail = "Account-wide usage from Cursor's dashboard API, authenticated by Cursor.app's local sign-in."
     } catch CursorAccountClientError.notSignedIn {
+      guard isCurrentAnalytics(generation) else { return }
       cursorAccountStatus = .unavailable
       cursorAccountDetail = "Sign in to Cursor.app to import account-wide usage from all devices."
     } catch {
+      guard isCurrentAnalytics(generation) else { return }
       cursorAccountStatus = .partial
       cursorAccountDetail = "Cursor account refresh failed: \(error.localizedDescription) Persisted history remains available."
     }
@@ -498,7 +550,6 @@ public actor LocalUsageService {
       return true
     } catch {
       importOutcomes["wovenmatter:index"] = ImportOutcome(
-        discoveredFiles: 0,
         failures: 1
       )
       return false
@@ -530,7 +581,7 @@ public actor LocalUsageService {
         now: now
       ) { url in
         var state = CodexUsageScanState()
-        var records: [ParsedUsageSample] = []
+        var records: [UsageSample] = []
         let usageMarker = Data("\"token_count\"".utf8)
         let contextMarker = Data("\"turn_context\"".utf8)
         let metadataMarker = Data("\"session_meta\"".utf8)
@@ -546,7 +597,7 @@ public actor LocalUsageService {
             records.append(sample)
           }
         }
-        return records.map(\.sample)
+        return records
       }
     }
 
@@ -564,13 +615,14 @@ public actor LocalUsageService {
         now: now
       ) { url in
         var records: [UsageSample] = []
+        let usageMarker = Data("\"usage\"".utf8)
         try self.forEachLineData(in: url) { data, lineNumber in
-          guard data.range(of: Data("\"usage\"".utf8)) != nil else { return }
+          guard data.range(of: usageMarker) != nil else { return }
           if let parsed = LocalUsageTranscriptParser.parseClaude(
             line: String(decoding: data, as: UTF8.self),
             lineNumber: lineNumber
           ) {
-            records.append(parsed.sample)
+            records.append(parsed)
           }
         }
         return records
@@ -708,7 +760,7 @@ public actor LocalUsageService {
         failures += 1
       }
     }
-    return ImportOutcome(discoveredFiles: files.count, failures: failures)
+    return ImportOutcome(failures: failures)
   }
 
   private func importHarnessFiles(
@@ -751,7 +803,7 @@ public actor LocalUsageService {
           harness: harness,
           state: &state
         ) {
-          records.append(parsed.sample)
+          records.append(parsed)
         }
       }
       return records.filter { enabledProviders.contains($0.provider) }
@@ -787,13 +839,14 @@ public actor LocalUsageService {
         summary = [:]
       }
       var records: [UsageSample] = []
+      let usageMarker = Data("\"usage\"".utf8)
       try self.forEachLineData(in: url) { data, lineNumber in
-        guard data.range(of: Data("\"usage\"".utf8)) != nil else { return }
+        guard data.range(of: usageMarker) != nil else { return }
         records += LocalUsageTranscriptParser.parseGrok(
           line: String(decoding: data, as: UTF8.self),
           lineNumber: lineNumber,
           summary: summary
-        ).map(\.sample)
+        )
       }
       return records
     }
@@ -835,13 +888,17 @@ public actor LocalUsageService {
           transactional: false
         )
       }
-      return ImportOutcome(discoveredFiles: 1, failures: 0)
+      return ImportOutcome(failures: 0)
     } catch {
-      return ImportOutcome(discoveredFiles: 1, failures: 1)
+      return ImportOutcome(failures: 1)
     }
   }
 
-  private func importOpenRouterActivity(store: UsageStore, now: Date) async {
+  private func isCurrentAnalytics(_ generation: UUID) -> Bool {
+    analyticsGeneration == generation && !Task.isCancelled
+  }
+
+  private func importOpenRouterActivity(store: UsageStore, generation: UUID, now: Date) async {
     let storedKey = (try? credentialStore.loadOpenRouterAPIKey()) ?? nil
     guard let key = storedKey else {
       openRouterStatus = .unavailable
@@ -850,6 +907,7 @@ public actor LocalUsageService {
     }
     do {
       let activity = try await OpenRouterActivityClient.fetch(apiKey: key)
+      guard isCurrentAnalytics(generation) else { return }
       for (date, samples) in activity.samplesByUTCDate {
         try store.replace(
           sourceID: "openrouter:activity:\(date)",
@@ -865,6 +923,7 @@ public actor LocalUsageService {
       openRouterStatus = .available
       openRouterDetail = activity.detail
     } catch {
+      guard isCurrentAnalytics(generation) else { return }
       openRouterStatus = error is OpenRouterActivityError ? .partial : .failed
       openRouterDetail = error.localizedDescription
     }
@@ -1388,7 +1447,10 @@ private struct OpenCodeUsageDatabase {
     sqlite3_bind_int64(statement, 2, Int64(now.timeIntervalSince1970 * 1_000))
 
     var samples: [UsageSample] = []
-    while sqlite3_step(statement) == SQLITE_ROW {
+    while true {
+      let status = sqlite3_step(statement)
+      if status == SQLITE_DONE { return samples }
+      guard status == SQLITE_ROW else { throw OpenCodeUsageDatabaseError.queryFailed }
       guard let partID = text(statement, column: 0),
             let sessionID = text(statement, column: 1),
             let messageJSON = text(statement, column: 2),
@@ -1403,7 +1465,6 @@ private struct OpenCodeUsageDatabase {
         samples.append(sample)
       }
     }
-    return samples
   }
 
   private func text(_ statement: OpaquePointer, column: Int32) -> String? {

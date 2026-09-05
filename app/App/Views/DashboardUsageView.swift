@@ -270,7 +270,7 @@ struct DashboardUsageView: View {
             )
         } else {
             providerBreakdown(samples)
-            providerUsageChart(samples)
+            providerUsageChart(samples, summary: summary)
             modelBreakdown(samples)
             sessionTable(samples)
         }
@@ -401,7 +401,10 @@ struct DashboardUsageView: View {
         )
     }
 
-    private func providerUsageChart(_ samples: [UsageSample]) -> some View {
+    private func providerUsageChart(
+        _ samples: [UsageSample],
+        summary: UsageAnalyticsSummary
+    ) -> some View {
         let buckets = ProviderUsageChartBucket.aggregate(
             samples: samples,
             range: range
@@ -409,7 +412,6 @@ struct DashboardUsageView: View {
         let providers = Array(Set(buckets.map(\.provider))).sorted {
             $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
         }
-        let summary = UsageAnalyticsSummary(samples: samples)
         return VStack(alignment: .leading, spacing: 8) {
             UsageSectionHeading(title: "Token breakdown over time")
             UsageSection {

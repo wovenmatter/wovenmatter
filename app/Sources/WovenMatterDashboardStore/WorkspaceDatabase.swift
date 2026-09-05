@@ -1,4 +1,3 @@
-import CoreFoundation
 import CryptoKit
 import Foundation
 import SQLite3
@@ -831,20 +830,6 @@ public final class WorkspaceDatabase: @unchecked Sendable {
     )
   }
 
-  public func buzzLocalAgentLaunchSource(
-    conversationID: String
-  ) throws -> BuzzLocalAgentLaunchSource {
-    let descriptor = try localACPSession(conversationID: conversationID)
-    guard let workspaceLinkID = descriptor.buzzWorkspaceLinkID,
-          let buzzAgentID = descriptor.buzzAgentID else {
-      throw BuzzWorkspaceDatabaseError.enrollmentNotFound
-    }
-    return try buzzLocalAgentLaunchSource(
-      workspaceLinkID: workspaceLinkID,
-      agentID: buzzAgentID
-    )
-  }
-
   public func buzzBoundLocalACPConversationIDs() throws -> Set<String> {
     try lock.withLock {
       let statement = try prepareUnlocked("""
@@ -1169,7 +1154,6 @@ public final class WorkspaceDatabase: @unchecked Sendable {
   public func moveConversation(
     id: String,
     toFolderID folderID: String?,
-    operationID: UUID = UUID(),
     updatedAt: Date = Date()
   ) throws -> Bool {
     try transaction {
@@ -1214,14 +1198,7 @@ public final class WorkspaceDatabase: @unchecked Sendable {
     let seed = Data(
       "wovenmatter.local-cli-agent.v1:\(ownerDeviceID.uuidString.lowercased()):\(runtimeKind.rawValue)".utf8
     )
-    var bytes = Array(SHA256.hash(data: seed).prefix(16))
-    bytes[6] = (bytes[6] & 0x0f) | 0x50
-    bytes[8] = (bytes[8] & 0x3f) | 0x80
-    let hex = bytes.map { String(format: "%02x", $0) }
-    return [
-      hex[0..<4].joined(), hex[4..<6].joined(), hex[6..<8].joined(),
-      hex[8..<10].joined(), hex[10..<16].joined(),
-    ].joined(separator: "-")
+    return deterministicAgentID(seed: seed)
   }
 
   private static func remoteHarnessAgentID(
@@ -1235,6 +1212,10 @@ public final class WorkspaceDatabase: @unchecked Sendable {
     let seed = Data(
       "wovenmatter.remote-harness-agent.v1:\(ownerDeviceID.uuidString.lowercased()):\(remoteWorkspaceID.uuidString.lowercased()):\(runtimeKind.rawValue)".utf8
     )
+    return deterministicAgentID(seed: seed)
+  }
+
+  private static func deterministicAgentID(seed: Data) -> String {
     var bytes = Array(SHA256.hash(data: seed).prefix(16))
     bytes[6] = (bytes[6] & 0x0f) | 0x50
     bytes[8] = (bytes[8] & 0x3f) | 0x80
@@ -1433,8 +1414,6 @@ public final class WorkspaceDatabase: @unchecked Sendable {
     guard changed || agentAlreadyExisted else {
       throw WorkspaceDatabaseError.execute("Local CLI agent identity collision")
     }
-    if changed {
-    }
     return id
   }
 
@@ -1528,8 +1507,6 @@ public final class WorkspaceDatabase: @unchecked Sendable {
     guard changed || alreadyExisted else {
       throw WorkspaceDatabaseError.execute("Buzz workspace agent identity collision")
     }
-    if changed {
-    }
   }
 
   public func reconcileBuzzWorkspaceAgent(
@@ -1572,8 +1549,6 @@ public final class WorkspaceDatabase: @unchecked Sendable {
       try bind(rawID, at: 3, to: statement)
       try bind(ownerDeviceID.uuidString.lowercased(), at: 4, to: statement)
       try stepDone(statement)
-      if sqlite3_changes(connection) == 1 {
-      }
     }
   }
 
@@ -2514,9 +2489,6 @@ public final class WorkspaceDatabase: @unchecked Sendable {
       try bind(assistantMessageID, at: 5, to: conversation)
       try bind(runID, at: 6, to: conversation)
       try stepDone(conversation)
-      let updatedConversation = sqlite3_changes(connection) == 1
-      if updatedConversation {
-      }
     }
   }
 
@@ -2568,9 +2540,6 @@ public final class WorkspaceDatabase: @unchecked Sendable {
       try bind(assistantMessageID, at: 5, to: conversation)
       try bind(runID, at: 6, to: conversation)
       try stepDone(conversation)
-      let updatedConversation = sqlite3_changes(connection) == 1
-      if updatedConversation {
-      }
     }
   }
 
@@ -2669,7 +2638,6 @@ public final class WorkspaceDatabase: @unchecked Sendable {
       try bind(Self.timestamp(createdAt), at: 9, to: statement)
       try bind(runID, at: 10, to: statement)
       try stepDone(statement)
-      guard sqlite3_changes(connection) == 1 else { return }
     }
   }
 
@@ -3167,7 +3135,6 @@ public final class WorkspaceDatabase: @unchecked Sendable {
   public func createFolder(
     id: UUID = UUID(),
     name: String,
-    operationID: UUID = UUID(),
     createdAt: Date = Date()
   ) throws -> String {
     let normalizedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -3215,7 +3182,6 @@ public final class WorkspaceDatabase: @unchecked Sendable {
   public func renameFolder(
     id: String,
     name: String,
-    operationID: UUID = UUID(),
     updatedAt: Date = Date()
   ) throws -> Bool {
     let normalizedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -3248,7 +3214,6 @@ public final class WorkspaceDatabase: @unchecked Sendable {
   public func setFolderPinned(
     id: String,
     isPinned: Bool,
-    operationID: UUID = UUID(),
     updatedAt: Date = Date()
   ) throws -> Bool {
     try transaction {
@@ -3353,7 +3318,7 @@ public final class WorkspaceDatabase: @unchecked Sendable {
         """)
       defer { sqlite3_finalize(update) }
       let timestamp = Self.timestamp(updatedAt)
-      var changedIDs: [String] = []
+      var changed = false
       for (offset, folder) in section.enumerated() {
         let position = Int64(offset)
         guard folder.position != position else { continue }
@@ -3369,18 +3334,16 @@ public final class WorkspaceDatabase: @unchecked Sendable {
         guard sqlite3_changes(connection) == 1 else {
           throw WorkspaceFolderMutationError.folderNotFound
         }
-        changedIDs.append(folder.id)
+        changed = true
       }
 
-      return !changedIDs.isEmpty
+      return changed
     }
   }
 
   @discardableResult
   public func deleteFolder(
-    id: String,
-    operationID: UUID = UUID(),
-    deletedAt: Date = Date()
+    id: String
   ) throws -> Bool {
     try transaction {
       let operatorID = try localMutationOperatorIDUnlocked()
@@ -3417,7 +3380,6 @@ public final class WorkspaceDatabase: @unchecked Sendable {
     title: String = "Untitled Note",
     content: String = "",
     kind: NoteArtifactKind = .note,
-    operationID: UUID = UUID(),
     createdAt: Date = Date()
   ) throws -> String {
     try transaction {
@@ -3462,7 +3424,6 @@ public final class WorkspaceDatabase: @unchecked Sendable {
     id: String,
     title: String,
     content: String,
-    operationID: UUID = UUID(),
     updatedAt: Date = Date()
   ) throws -> Bool {
     try transaction {
@@ -3496,7 +3457,6 @@ public final class WorkspaceDatabase: @unchecked Sendable {
     content: String,
     folderID: String? = nil,
     createdAt: String? = nil,
-    operationID: UUID = UUID(),
     updatedAt: Date = Date()
   ) throws -> Bool {
     try transaction {
@@ -3614,14 +3574,6 @@ public final class WorkspaceDatabase: @unchecked Sendable {
     )
   }
 
-  public func workspaceSnapshot() throws -> WorkspaceSnapshot {
-    try workspaceSnapshot(includeConversationContent: true)
-  }
-
-  public func workspaceOverview() throws -> WorkspaceSnapshot {
-    try workspaceSnapshot(includeConversationContent: false)
-  }
-
   public func dashboardRecordCounts() throws -> DashboardRecordCounts {
     try lock.withLock {
       let operatorID = try canonicalWorkspaceOperatorIDUnlocked()
@@ -3697,7 +3649,6 @@ public final class WorkspaceDatabase: @unchecked Sendable {
     startsAt: Date,
     endsAt: Date?,
     allDay: Bool,
-    operationID: UUID = UUID(),
     createdAt: Date = Date()
   ) throws -> String {
     let normalizedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -3869,17 +3820,14 @@ public final class WorkspaceDatabase: @unchecked Sendable {
       try bind(rawID, at: 3, to: statement)
       try bind(cleanName, at: 4, to: statement)
       try stepDone(statement)
-      guard sqlite3_changes(connection) == 1 else { return }
     }
   }
 
-  private func workspaceSnapshot(includeConversationContent: Bool) throws -> WorkspaceSnapshot {
+  public func workspaceOverview() throws -> WorkspaceSnapshot {
     try lock.withLock {
       var folders: [WorkspaceFolderRecord] = []
       var conversations: [WorkspaceConversationRecord] = []
-      var messages: [WorkspaceMessageRecord] = []
       var notes: [WorkspaceNoteRecord] = []
-      var runs: [WorkspaceRunRecord] = []
       if let operatorID = try canonicalWorkspaceOperatorIDUnlocked() {
         folders = try decodeCanonicalRowsUnlocked(
           """
@@ -3926,31 +3874,7 @@ public final class WorkspaceDatabase: @unchecked Sendable {
           operatorID: operatorID,
           as: WorkspaceConversationRecord.self
         )
-        if includeConversationContent {
-          messages = try decodeCanonicalRowsUnlocked(
-            """
-            SELECT json_object(
-              'id', message.id, 'conversation_id', message.conversation_id,
-              'client_message_id', message.client_message_id,
-              'run_id', message.run_id, 'role', message.role,
-              'governing_plane', message.governing_plane,
-              'authority_device_id', message.authority_device_id,
-              'content', message.content, 'status', message.status,
-              'created_at', message.created_at, 'updated_at', message.updated_at
-            )
-            FROM dashboard_messages AS message
-            JOIN dashboard_conversations AS conversation
-              ON conversation.id = message.conversation_id
-            WHERE (conversation.user_id = ? OR conversation.desktop_owned = 1)
-              AND conversation.deleted_at IS NULL
-              AND conversation.is_archived = 0
-              AND conversation.governing_plane = 'wovenmatter_macos'
-            ORDER BY message.created_at, message.id
-            """,
-            operatorID: operatorID,
-            as: WorkspaceMessageRecord.self
-          )
-        }
+
         notes = try decodeCanonicalRowsUnlocked(
           """
           SELECT json_object(
@@ -3965,33 +3889,6 @@ public final class WorkspaceDatabase: @unchecked Sendable {
           operatorID: operatorID,
           as: WorkspaceNoteRecord.self
         )
-        if includeConversationContent {
-          runs = try decodeCanonicalRowsUnlocked(
-            """
-            SELECT json_object(
-              'id', run.id, 'conversation_id', run.conversation_id,
-              'agent_id', run.agent_id,
-              'governing_plane', run.governing_plane,
-              'authority_device_id', run.authority_device_id,
-              'user_message_id', run.user_message_id,
-              'assistant_message_id', run.assistant_message_id,
-              'status', run.status, 'error', run.error,
-              'started_at', run.started_at, 'completed_at', run.completed_at,
-              'created_at', run.created_at, 'updated_at', run.updated_at
-            )
-            FROM dashboard_runs AS run
-            JOIN dashboard_conversations AS conversation
-              ON conversation.id = run.conversation_id
-            WHERE (conversation.user_id = ? OR conversation.desktop_owned = 1)
-              AND conversation.deleted_at IS NULL
-              AND conversation.is_archived = 0
-              AND conversation.governing_plane = 'wovenmatter_macos'
-            ORDER BY run.created_at, run.id
-            """,
-            operatorID: operatorID,
-            as: WorkspaceRunRecord.self
-          )
-        }
       }
 
       let revisionStatement = try prepareUnlocked(
@@ -4008,18 +3905,16 @@ public final class WorkspaceDatabase: @unchecked Sendable {
           return $0.id < $1.id
         },
         conversations: conversations,
-        messages: messages.sorted { $0.createdAt < $1.createdAt },
+        messages: [],
         notes: notes,
-        runs: runs.sorted { ($0.createdAt ?? "") < ($1.createdAt ?? "") }
+        runs: []
       )
     }
   }
 
   private static func dashboardDate(_ value: String?) -> Date? {
     guard let value, !value.isEmpty else { return nil }
-    let fractional = ISO8601DateFormatter()
-    fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-    return fractional.date(from: value) ?? ISO8601DateFormatter().date(from: value)
+    return date(value)
   }
 
   private static func agentRuntimeMetadata(
@@ -4722,6 +4617,15 @@ public final class WorkspaceDatabase: @unchecked Sendable {
         ON dashboard_messages(conversation_id, created_at);
       CREATE INDEX IF NOT EXISTS desktop_cache_messages_conversation_created_id
         ON dashboard_messages(conversation_id, created_at, id);
+      CREATE INDEX IF NOT EXISTS desktop_cache_attachments_message_created_id
+        ON dashboard_message_attachments(message_id, created_at, id);
+      CREATE INDEX IF NOT EXISTS desktop_cache_references_message_created_id
+        ON dashboard_message_references(message_id, created_at, id);
+      CREATE INDEX IF NOT EXISTS desktop_cache_events_run_created_id
+        ON dashboard_run_events(run_id, created_at, id);
+      CREATE INDEX IF NOT EXISTS desktop_cache_visible_traces_run_created_id
+        ON dashboard_run_trace_events(run_id, created_at, seq, id)
+        WHERE is_visible = 1;
       CREATE INDEX IF NOT EXISTS desktop_cache_runs_conversation_user_message
         ON dashboard_runs(conversation_id, user_message_id);
       CREATE INDEX IF NOT EXISTS desktop_cache_runs_conversation_assistant_message
@@ -4951,12 +4855,11 @@ public final class WorkspaceDatabase: @unchecked Sendable {
   private func decodeCanonicalRowsUnlocked<Value: Decodable>(
     _ sql: String,
     operatorID: String,
-    bindCount: Int = 1,
     as type: Value.Type
   ) throws -> [Value] {
     try decodeCanonicalRowsUnlocked(
       sql,
-      bindings: Array(repeating: operatorID, count: bindCount),
+      bindings: [operatorID],
       as: type
     )
   }

@@ -77,8 +77,8 @@ struct OpenClawGatewayEventProjection: Equatable, Sendable {
     let sequence = sequence(event: event, payload: payload)
 
     if stream == "assistant" {
-      let snapshot = string(data["text"])
-      let delta = string(data["delta"])
+      let snapshot = text(data["text"])
+      let delta = text(data["delta"])
       let update: AssistantUpdate? = if let snapshot {
         .replace(snapshot)
       } else if let delta {
@@ -117,7 +117,7 @@ struct OpenClawGatewayEventProjection: Equatable, Sendable {
         id: toolCallID,
         kind: .tool,
         phase: phase,
-        title: toolTitle(name: toolName, input: input),
+        title: toolTitle(name: toolName),
         detail: toolDetail(input: input),
         status: status,
         toolName: toolName,
@@ -145,8 +145,8 @@ struct OpenClawGatewayEventProjection: Equatable, Sendable {
     }
 
     if stream == "thinking" || stream == "reasoning" {
-      let delta = string(data["delta"])
-      let snapshot = string(data["text"]) ?? string(data["thinking"])
+      let delta = text(data["delta"])
+      let snapshot = text(data["text"]) ?? text(data["thinking"])
       let content = delta ?? snapshot
       let phase = string(data["phase"]) ?? "update"
       return Self(
@@ -259,7 +259,7 @@ struct OpenClawGatewayEventProjection: Equatable, Sendable {
       )
     case "command_output":
       let exitCode = data["exitCode"]?.intValue
-      content = string(data["output"])
+      content = text(data["output"])
       toolName = string(data["name"]) ?? "exec"
       eventType = phase == "end" ? "tool_result" : "tool_call"
       activity = AgentRunActivity(
@@ -348,7 +348,7 @@ struct OpenClawGatewayEventProjection: Equatable, Sendable {
       types: ["thinking", "reasoning"],
       fields: ["thinking", "text", "content"]
     )
-    let deltaText = string(payload["deltaText"])
+    let deltaText = text(payload["deltaText"])
     let assistantUpdate: AssistantUpdate?
     if let fullText {
       assistantUpdate = .replace(fullText)
@@ -459,6 +459,11 @@ struct OpenClawGatewayEventProjection: Equatable, Sendable {
     payload["seq"]?.intValue ?? event.sequence
   }
 
+  // Content is lossless; identifiers and labels still use normalized string().
+  private static func text(_ value: GatewayJSONValue?) -> String? {
+    value?.stringValue
+  }
+
   private static func string(_ value: GatewayJSONValue?) -> String? {
     guard let value = value?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines),
           !value.isEmpty else { return nil }
@@ -470,12 +475,12 @@ struct OpenClawGatewayEventProjection: Equatable, Sendable {
     types: Set<String>,
     fields: [String]
   ) -> String? {
-    if types.contains("text"), let text = string(message?["text"]) { return text }
+    if types.contains("text"), let text = text(message?["text"]) { return text }
     let parts = message?["content"]?.arrayValue ?? []
     let text = parts.compactMap { part -> String? in
       guard let object = part.objectValue,
             let type = string(object["type"]), types.contains(type) else { return nil }
-      return fields.lazy.compactMap { string(object[$0]) }.first
+      return fields.lazy.compactMap { text(object[$0]) }.first
     }.joined(separator: "\n")
     return text.isEmpty ? nil : text
   }
@@ -488,7 +493,7 @@ struct OpenClawGatewayEventProjection: Equatable, Sendable {
 
   private static func displayText(_ value: GatewayJSONValue?) -> String? {
     guard let value else { return nil }
-    if let string = string(value) { return string }
+    if let text = text(value) { return text }
     if let object = value.objectValue {
       for key in ["content", "text", "message", "output", "summary"] {
         if let result = displayText(object[key]) { return result }
@@ -502,8 +507,7 @@ struct OpenClawGatewayEventProjection: Equatable, Sendable {
   }
 
   static func toolTitle(
-    name: String,
-    input: GatewayJSONValue?
+    name: String
   ) -> String {
     let lower = name.lowercased()
     if lower.contains("websearch") || lower == "web_search" { return "Searched the web" }
@@ -529,23 +533,28 @@ struct OpenClawGatewayEventProjection: Equatable, Sendable {
 
   private static func locations(in values: [GatewayJSONValue?]) -> [AgentRunLocation] {
     var paths: [String] = []
+    var seen: Set<String> = []
     func collect(_ value: GatewayJSONValue?, depth: Int = 0) {
-      guard depth < 8, let value else { return }
+      guard paths.count < 50, depth < 8, let value else { return }
       if let object = value.objectValue {
         for (key, nested) in object {
+          guard paths.count < 50 else { return }
           let lower = key.lowercased()
           if ["path", "file", "file_path", "filepath"].contains(lower),
-             let path = string(nested), !paths.contains(path) {
+             let path = string(nested), seen.insert(path).inserted {
             paths.append(path)
           }
           collect(nested, depth: depth + 1)
         }
       } else if let array = value.arrayValue {
-        for nested in array { collect(nested, depth: depth + 1) }
+        for nested in array {
+          guard paths.count < 50 else { return }
+          collect(nested, depth: depth + 1)
+        }
       }
     }
     values.forEach { collect($0) }
-    return paths.prefix(50).map { AgentRunLocation(path: $0) }
+    return paths.map { AgentRunLocation(path: $0) }
   }
 
   private static func fileChanges(

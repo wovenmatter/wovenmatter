@@ -133,6 +133,7 @@ public struct AgentMessageInput: Equatable, Sendable {
 
   public func transportText(deliveryText: String? = nil) -> String {
     let baseText = deliveryText ?? text
+    let references = references
     guard !references.isEmpty else { return baseText }
     var sections: [String] = []
     let trimmed = baseText.trimmingCharacters(in: .whitespacesAndNewlines)

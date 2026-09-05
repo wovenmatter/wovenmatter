@@ -8,51 +8,72 @@ final class WovenNoteService: @unchecked Sendable {
     let socketURL: URL
     private let handler: Handler
     private let queue = DispatchQueue(label: "com.wovenmatter.note-service")
+    private let lock = NSLock()
+    private let maximumConnections: Int
+    private let ioTimeout: TimeInterval
     private var socket: Int32 = -1
     private var source: DispatchSourceRead?
+    private var connections: [UUID: WovenNoteConnection] = [:]
 
-    init(socketURL: URL, handler: @escaping Handler) {
+    init(
+        socketURL: URL,
+        maximumConnections: Int = 16,
+        ioTimeout: TimeInterval = 10,
+        handler: @escaping Handler
+    ) {
+        precondition(maximumConnections > 0 && ioTimeout.isFinite && ioTimeout > 0)
         self.socketURL = socketURL
+        self.maximumConnections = maximumConnections
+        self.ioTimeout = ioTimeout
         self.handler = handler
     }
 
     func start() throws {
-        try stop()
-        try FileManager.default.createDirectory(
-            at: socketURL.deletingLastPathComponent(),
-            withIntermediateDirectories: true
-        )
-        let descriptor = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
-        guard descriptor >= 0 else { throw WovenNoteSocketError.system(errno) }
-        do {
-            var address = try unixAddress(path: socketURL.path)
-            let result = withUnsafePointer(to: &address) { pointer in
-                pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                    Darwin.bind(descriptor, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+        try lock.withLock {
+            try stopLocked()
+            try FileManager.default.createDirectory(
+                at: socketURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            let descriptor = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
+            guard descriptor >= 0 else { throw WovenNoteSocketError.system(errno) }
+            do {
+                try configureSocket(descriptor)
+                var address = try unixAddress(path: socketURL.path)
+                let result = withUnsafePointer(to: &address) { pointer in
+                    pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                        Darwin.bind(descriptor, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+                    }
                 }
+                guard result == 0, Darwin.listen(descriptor, 8) == 0 else {
+                    throw WovenNoteSocketError.system(errno)
+                }
+                guard Darwin.chmod(socketURL.path, S_IRUSR | S_IWUSR) == 0 else {
+                    throw WovenNoteSocketError.system(errno)
+                }
+                socket = descriptor
+                let source = DispatchSource.makeReadSource(fileDescriptor: descriptor, queue: queue)
+                source.setEventHandler { [weak self] in self?.acceptConnection(on: descriptor) }
+                source.setCancelHandler { Darwin.close(descriptor) }
+                self.source = source
+                source.resume()
+            } catch {
+                Darwin.close(descriptor)
+                throw error
             }
-            guard result == 0, Darwin.listen(descriptor, 8) == 0 else {
-                throw WovenNoteSocketError.system(errno)
-            }
-            guard Darwin.chmod(socketURL.path, S_IRUSR | S_IWUSR) == 0 else {
-                throw WovenNoteSocketError.system(errno)
-            }
-            socket = descriptor
-            let source = DispatchSource.makeReadSource(fileDescriptor: descriptor, queue: queue)
-            source.setEventHandler { [weak self] in self?.acceptConnection() }
-            source.setCancelHandler { Darwin.close(descriptor) }
-            self.source = source
-            source.resume()
-        } catch {
-            Darwin.close(descriptor)
-            throw error
         }
     }
 
     func stop() throws {
+        try lock.withLock { try stopLocked() }
+    }
+
+    private func stopLocked() throws {
         source?.cancel()
         source = nil
         socket = -1
+        for connection in connections.values { connection.cancel() }
+        connections.removeAll()
         if FileManager.default.fileExists(atPath: socketURL.path) {
             try FileManager.default.removeItem(at: socketURL)
         }
@@ -60,28 +81,91 @@ final class WovenNoteService: @unchecked Sendable {
 
     deinit { try? stop() }
 
-    private func acceptConnection() {
-        guard socket >= 0 else { return }
-        let client = Darwin.accept(socket, nil, nil)
-        guard client >= 0 else { return }
-        let handler = handler
-        Task.detached {
-            defer { Darwin.close(client) }
-            let response: NoteEditingResponse
-            do {
-                let request = try JSONDecoder().decode(
-                    NoteEditingRequest.self,
-                    from: readMessage(from: client)
-                )
-                response = await handler(request)
-            } catch {
-                response = NoteEditingResponse(
-                    success: false,
-                    noteID: "",
-                    error: error.localizedDescription
-                )
+    private func acceptConnection(on listener: Int32) {
+        lock.withLock {
+            guard socket == listener else { return }
+            let client = Darwin.accept(listener, nil, nil)
+            guard client >= 0 else { return }
+            guard connections.count < maximumConnections else {
+                Darwin.close(client)
+                return
             }
-            try? writeMessage(try JSONEncoder().encode(response), to: client)
+            do { try configureSocket(client) }
+            catch { Darwin.close(client); return }
+            let id = UUID()
+            let connection = WovenNoteConnection(descriptor: client)
+            connections[id] = connection
+            let handler = handler
+            let timeout = ioTimeout
+            connection.setTask(Task.detached { [weak self] in
+                defer {
+                    connection.close()
+                    self?.removeConnection(id)
+                }
+                let response: NoteEditingResponse
+                do {
+                    let data = try await socketIO { try readMessage(from: client, timeout: timeout) }
+                    try Task.checkCancellation()
+                    let request = try JSONDecoder().decode(NoteEditingRequest.self, from: data)
+                    response = await handler(request)
+                } catch {
+                    response = NoteEditingResponse(success: false, noteID: "", error: error.localizedDescription)
+                }
+                guard !Task.isCancelled else { return }
+                try? await socketIO {
+                    try writeMessage(JSONEncoder().encode(response), to: client, timeout: timeout)
+                }
+            })
+        }
+    }
+
+    private func removeConnection(_ id: UUID) {
+        _ = lock.withLock { connections.removeValue(forKey: id) }
+    }
+}
+
+// The worker owns close; stop only shuts down the socket to wake pending I/O.
+// Keeping both operations under this lock prevents shutdown of a reused descriptor.
+private final class WovenNoteConnection: @unchecked Sendable {
+    private let lock = NSLock()
+    private var descriptor: Int32
+    private var task: Task<Void, Never>?
+    private var cancelled = false
+
+    init(descriptor: Int32) { self.descriptor = descriptor }
+
+    func setTask(_ task: Task<Void, Never>) {
+        let shouldCancel = lock.withLock {
+            guard descriptor >= 0, !cancelled else { return true }
+            self.task = task
+            return false
+        }
+        if shouldCancel { task.cancel() }
+    }
+
+    func cancel() {
+        let task = lock.withLock {
+            cancelled = true
+            if descriptor >= 0 { _ = Darwin.shutdown(descriptor, SHUT_RDWR) }
+            return self.task
+        }
+        task?.cancel()
+    }
+
+    func close() {
+        lock.withLock {
+            if descriptor >= 0 { Darwin.close(descriptor) }
+            descriptor = -1
+            task = nil
+        }
+    }
+}
+
+// Bounded socket waits run on dispatch workers, never the cooperative executor.
+private func socketIO<T: Sendable>(_ operation: @escaping @Sendable () throws -> T) async throws -> T {
+    try await withCheckedThrowingContinuation { continuation in
+        DispatchQueue.global(qos: .utility).async {
+            continuation.resume(with: Result { try operation() })
         }
     }
 }
@@ -300,21 +384,34 @@ enum WovenNoteCommandLine {
 
     static func send(
         _ request: NoteEditingRequest,
-        socketPath: String
+        socketPath: String,
+        timeout: TimeInterval = 30
     ) throws -> NoteEditingResponse {
         let socket = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
         guard socket >= 0 else { throw WovenNoteSocketError.system(errno) }
         defer { Darwin.close(socket) }
+        try configureSocket(socket)
         var address = try unixAddress(path: socketPath)
         let result = withUnsafePointer(to: &address) { pointer in
             pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
                 Darwin.connect(socket, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
             }
         }
-        guard result == 0 else { throw WovenNoteSocketError.system(errno) }
-        try writeMessage(try JSONEncoder().encode(request), to: socket)
+        if result != 0 {
+            guard errno == EINPROGRESS else { throw WovenNoteSocketError.system(errno) }
+            try waitForSocket(socket, events: POLLOUT, deadline: ProcessInfo.processInfo.systemUptime + timeout)
+            var error: Int32 = 0
+            var length = socklen_t(MemoryLayout<Int32>.size)
+            guard getsockopt(socket, SOL_SOCKET, SO_ERROR, &error, &length) == 0 else {
+                throw WovenNoteSocketError.system(errno)
+            }
+            guard error == 0 else { throw WovenNoteSocketError.system(error) }
+        }
+        try writeMessage(JSONEncoder().encode(request), to: socket, timeout: timeout)
         _ = Darwin.shutdown(socket, SHUT_WR)
-        return try JSONDecoder().decode(NoteEditingResponse.self, from: readMessage(from: socket))
+        return try JSONDecoder().decode(
+            NoteEditingResponse.self, from: readMessage(from: socket, timeout: timeout)
+        )
     }
 }
 
@@ -412,12 +509,14 @@ private enum WovenNoteCLIError: LocalizedError {
 private enum WovenNoteSocketError: LocalizedError {
     case pathTooLong
     case requestTooLarge
+    case timedOut
     case system(Int32)
 
     var errorDescription: String? {
         switch self {
         case .pathTooLong: "The Woven Matter note socket path is too long."
         case .requestTooLarge: "The Woven Matter note request exceeded 4 MB."
+        case .timedOut: "The Woven Matter note connection timed out."
         case .system(let code): String(cString: strerror(code))
         }
     }
@@ -436,26 +535,64 @@ private func unixAddress(path: String) throws -> sockaddr_un {
     return address
 }
 
-private func readMessage(from descriptor: Int32) throws -> Data {
+private func configureSocket(_ descriptor: Int32) throws {
+    var enabled: Int32 = 1
+    guard setsockopt(descriptor, SOL_SOCKET, SO_NOSIGPIPE, &enabled, socklen_t(MemoryLayout<Int32>.size)) == 0,
+          fcntl(descriptor, F_SETFD, FD_CLOEXEC) == 0 else {
+        throw WovenNoteSocketError.system(errno)
+    }
+    let flags = fcntl(descriptor, F_GETFL)
+    guard flags >= 0, fcntl(descriptor, F_SETFL, flags | O_NONBLOCK) == 0 else {
+        throw WovenNoteSocketError.system(errno)
+    }
+}
+
+private func waitForSocket(_ descriptor: Int32, events: Int32, deadline: TimeInterval) throws {
+    while true {
+        let remaining = deadline - ProcessInfo.processInfo.systemUptime
+        guard remaining > 0 else { throw WovenNoteSocketError.timedOut }
+        var descriptorState = pollfd(fd: descriptor, events: Int16(events), revents: 0)
+        let milliseconds = Int32(min(ceil(remaining * 1_000), Double(Int32.max)))
+        let result = Darwin.poll(&descriptorState, 1, milliseconds)
+        if result > 0 {
+            guard descriptorState.revents & Int16(POLLNVAL) == 0 else { throw WovenNoteSocketError.system(EBADF) }
+            return // read/write reports EOF or the actual socket error, including POLLHUP/POLLERR.
+        }
+        if result == 0 { throw WovenNoteSocketError.timedOut }
+        if errno != EINTR { throw WovenNoteSocketError.system(errno) }
+    }
+}
+
+private func readMessage(from descriptor: Int32, timeout: TimeInterval) throws -> Data {
+    let deadline = ProcessInfo.processInfo.systemUptime + timeout
     var data = Data()
     var buffer = [UInt8](repeating: 0, count: 16_384)
     while true {
+        try waitForSocket(descriptor, events: POLLIN, deadline: deadline)
         let count = Darwin.read(descriptor, &buffer, buffer.count)
-        if count == 0 { break }
-        guard count > 0 else { throw WovenNoteSocketError.system(errno) }
+        if count == 0 { return data }
+        if count < 0 {
+            if errno == EINTR || errno == EAGAIN { continue }
+            throw WovenNoteSocketError.system(errno)
+        }
         data.append(contentsOf: buffer.prefix(count))
         guard data.count <= 4 * 1_024 * 1_024 else { throw WovenNoteSocketError.requestTooLarge }
     }
-    return data
 }
 
-private func writeMessage(_ data: Data, to descriptor: Int32) throws {
+private func writeMessage(_ data: Data, to descriptor: Int32, timeout: TimeInterval) throws {
+    let deadline = ProcessInfo.processInfo.systemUptime + timeout
     try data.withUnsafeBytes { bytes in
         guard let base = bytes.baseAddress else { return }
         var offset = 0
         while offset < bytes.count {
+            try waitForSocket(descriptor, events: POLLOUT, deadline: deadline)
             let count = Darwin.write(descriptor, base.advanced(by: offset), bytes.count - offset)
-            guard count > 0 else { throw WovenNoteSocketError.system(errno) }
+            if count < 0 {
+                if errno == EINTR || errno == EAGAIN { continue }
+                throw WovenNoteSocketError.system(errno)
+            }
+            guard count > 0 else { throw WovenNoteSocketError.system(EPIPE) }
             offset += count
         }
     }

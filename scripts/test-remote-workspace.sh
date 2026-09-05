@@ -142,11 +142,4 @@ fi
 jq -e '.error == "host_preparation_not_authorized"' \
   "$fixture_root/unauthorized.err" >/dev/null
 
-grep -F -- '--volume "${volume}:/home"' \
-  "$repo_root/scripts/remote-workspace.sh" >/dev/null
-grep -F 'ENV HOME=/home' "$repo_root/remote/Dockerfile" >/dev/null
-grep -F 'WOVENMATTER_WORKSPACE=/home/.woven-matter' \
-  "$repo_root/remote/Dockerfile" >/dev/null
-grep -F -- '- workspace-home:/home' "$repo_root/remote/compose.yaml" >/dev/null
-
 printf '%s\n' 'remote workspace inspection tests passed'

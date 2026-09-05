@@ -436,7 +436,9 @@ private enum NoteAttributedDocument {
             guard case .table(let table) = block, let updated = tables[table.id] else { return block }
             return .table(updated)
         }
-        return NoteDocument(blocks: blocks).normalized()
+        var document = source
+        document.blocks = blocks
+        return document.normalized()
     }
 
     private static func append(_ block: NoteRichTextBlock, to result: NSMutableAttributedString) {
@@ -550,19 +552,6 @@ private enum NoteAttributedDocument {
         let last = string.character(at: NSMaxRange(range) - 1)
         return last == 10 || last == 13 ? 1 : 0
     }
-}
-
-@MainActor
-func dashboardRenderedNoteDocument(_ document: NoteDocument) -> NSAttributedString {
-    NoteAttributedDocument.render(document)
-}
-
-@MainActor
-func dashboardParsedNoteDocument(
-    _ attributed: NSAttributedString,
-    basedOn document: NoteDocument
-) -> NoteDocument {
-    NoteAttributedDocument.parse(attributed, basedOn: document)
 }
 
 private func paragraphStyle(for style: NoteParagraphStyle) -> NSParagraphStyle {

@@ -1,4 +1,0 @@
-interface:
-  display_name: "Cut Release WovenMatter"
-  short_description: "Cut, verify, and publish a WovenMatter release"
-  default_prompt: "Use $cut-release-wovenmatter to cut and publish a WovenMatter release from exact main."

@@ -1398,10 +1398,8 @@ private enum BoundedUsageCommand {
   static func run(
     executable: URL,
     arguments: [String],
-    input: Data = Data(),
     maximumBytes: Int,
-    timeout: Duration,
-    expectedResponseIDs: Set<Int64> = []
+    timeout: Duration
   ) async throws -> Result {
     let command = UsageCommandProcess()
     return try await withTaskCancellationHandler {
@@ -1418,7 +1416,6 @@ private enum BoundedUsageCommand {
         process.standardError = FileHandle.nullDevice
         try process.run()
         try? outputPipe.fileHandleForWriting.close()
-        inputPipe.fileHandleForWriting.write(input)
         try? inputPipe.fileHandleForWriting.close()
 
         group.addTask {
@@ -1429,11 +1426,6 @@ private enum BoundedUsageCommand {
             guard output.count <= maximumBytes else {
               command.terminate()
               throw ProviderLimitCollectorError.outputTooLarge
-            }
-            if !expectedResponseIDs.isEmpty,
-               expectedResponseIDs.isSubset(of: responseIDs(in: output)) {
-              command.terminate()
-              return Result(stdout: output)
             }
           }
           return Result(stdout: output)
@@ -1454,15 +1446,6 @@ private enum BoundedUsageCommand {
       command.terminate()
     }
   }
-
-  private static func responseIDs(in data: Data) -> Set<Int64> {
-    Set(data.split(separator: 0x0A).compactMap { line in
-      guard let object = try? JSONSerialization.jsonObject(with: Data(line)) as? [String: Any]
-      else { return nil }
-      return (object["id"] as? NSNumber)?.int64Value
-    })
-  }
-
 }
 
 private func usageCommandEnvironment() -> [String: String] {
@@ -1616,14 +1599,16 @@ private struct OpenCodeGoLimitReader {
           let statement else { throw ProviderLimitCollectorError.invalidResponse }
     defer { sqlite3_finalize(statement) }
     var rows: [Row] = []
-    while sqlite3_step(statement) == SQLITE_ROW {
+    while true {
+      let status = sqlite3_step(statement)
+      if status == SQLITE_DONE { return rows }
+      guard status == SQLITE_ROW else { throw ProviderLimitCollectorError.invalidResponse }
       let raw = sqlite3_column_int64(statement, 0)
       let cost = sqlite3_column_double(statement, 1)
       guard raw > 0, cost >= 0, cost.isFinite else { continue }
       let seconds = Double(raw) / (raw > 10_000_000_000 ? 1_000 : 1)
       rows.append(Row(createdAt: Date(timeIntervalSince1970: seconds), cost: cost))
     }
-    return rows
   }
 
   private func authKey(at url: URL) -> String? {
