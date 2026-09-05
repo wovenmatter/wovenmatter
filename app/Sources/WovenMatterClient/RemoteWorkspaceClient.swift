@@ -950,8 +950,7 @@ public struct RemoteWorkspaceServiceClient: Sendable {
     private func request<Value: Decodable>(
         path: String,
         method: String,
-        body: Data?,
-        queryItems: [URLQueryItem] = []
+        body: Data?
     ) async throws -> Value {
         let endpoint = baseURL.appending(path: path)
         guard var components = URLComponents(
@@ -960,7 +959,7 @@ public struct RemoteWorkspaceServiceClient: Sendable {
         ) else {
             throw RemoteWorkspaceClientError.invalidResponse("The workspace URL is invalid.")
         }
-        components.queryItems = queryItems.isEmpty ? nil : queryItems
+        components.queryItems = nil
         guard let url = components.url else {
             throw RemoteWorkspaceClientError.invalidResponse("The workspace URL is invalid.")
         }

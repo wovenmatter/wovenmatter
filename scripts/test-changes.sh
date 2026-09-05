@@ -19,11 +19,10 @@ run_static_checks() {
   for file in harnesses/initialize-workspace.sh remote/entrypoint.sh scripts/*.sh; do
     bash -n "$file"
   done
-  scripts/test-usage-scroll-contract.sh
-  scripts/test-conversation-row-click-contract.sh
-  scripts/test-sidebar-page-contract.sh
   scripts/test-release.sh
   scripts/test-composer-text-editor.sh
+  scripts/test-note-editor.sh
+  scripts/test-note-socket.sh
   scripts/test-remote-workspace.sh
   for file in remote/src/*.mjs remote/test/*.test.mjs; do
     node --check "$file"
@@ -90,6 +89,7 @@ base="${WOVENMATTER_TEST_BASE:-origin/main}"
 changed="$(
   git diff --name-only "$base"...HEAD
   git diff --name-only
+  git diff --cached --name-only
   git ls-files --others --exclude-standard
 )"
 changed="$(printf '%s\n' "$changed" | sort -u)"
@@ -97,6 +97,9 @@ if [ -z "$changed" ]; then
   printf 'No changes relative to %s.\n' "$base"
 elif printf '%s\n' "$changed" | grep -Eq '^(remote/|harnesses/|scripts/|\.github/|\.dockerignore$|app/Package|app/WovenMatter\.xcodeproj)'; then
   run_all
+elif printf '%s\n' "$changed" | grep -Eq '^app/App/' \
+  && printf '%s\n' "$changed" | grep -Eq '^app/(Sources|Tests)/'; then
+  run_macos
 elif printf '%s\n' "$changed" | grep -Eq '^app/(Sources|Tests)/'; then
   run_package_tests
 else

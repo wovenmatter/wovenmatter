@@ -45,18 +45,6 @@ struct DashboardComposerTextEditor: NSViewRepresentable {
         let textView = scrollView.composerTextView
         textView.placeholderString = placeholder
         textView.setAccessibilityLabel(placeholder)
-        textView.onSubmit = { [weak coordinator = context.coordinator] in
-            coordinator?.parent.onSubmit()
-        }
-        textView.onTab = { [weak coordinator = context.coordinator] in
-            coordinator?.parent.onTab() ?? false
-        }
-        textView.onCommandNavigation = { [weak coordinator = context.coordinator] direction in
-            coordinator?.parent.onCommandNavigation(direction) ?? false
-        }
-        textView.onBecomeFirstResponder = { [weak coordinator = context.coordinator] in
-            coordinator?.parent.isFocused = true
-        }
 
         if textView.string != text, !textView.hasMarkedText() {
             let selection = textView.selectedRange()

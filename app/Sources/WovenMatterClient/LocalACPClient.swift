@@ -998,12 +998,6 @@ public actor LocalACPClient {
     }
 
     private func beginActivePrompt(
-        _ text: String
-    ) throws -> Task<LocalACPStopReason?, any Error> {
-        try beginActivePrompt(AgentMessageInput(text: text))
-    }
-
-    private func beginActivePrompt(
         _ input: AgentMessageInput
     ) throws -> Task<LocalACPStopReason?, any Error> {
         let prompt = try beginPrompt(

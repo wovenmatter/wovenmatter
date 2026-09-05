@@ -209,8 +209,8 @@ public struct UsageModelIdentity: Codable, Equatable, Sendable {
 
     return Self(
       rawIdentifier: raw,
-      canonicalName: raw == "Unknown model" ? raw : raw,
-      family: raw == "Unknown model" ? raw : raw,
+      canonicalName: raw,
+      family: raw,
       publisher: publisher,
       confidence: raw == "Unknown model" ? .unknown : .exact
     )

@@ -40,6 +40,15 @@
 		A13000000000000000000003 /* SettingsRemoteWorkspacesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A13000000000000000000004 /* SettingsRemoteWorkspacesView.swift */; };
 		F10100000000000000000001 /* ArtifactEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10100000000000000000002 /* ArtifactEditor.swift */; };
 		F10200000000000000000001 /* DashboardDatabasesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10200000000000000000002 /* DashboardDatabasesView.swift */; };
+		ADB35226B01C45F520411F2C /* DashboardConversationState.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC6A850ACFC17DE4433439A7 /* DashboardConversationState.swift */; };
+		2A71A302AFFA410CB30E65F3 /* DashboardConversationReferencePreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87BA82494C4524C032235AAF /* DashboardConversationReferencePreview.swift */; };
+		8443106E4E46FD4C315E128F /* DashboardNoteDrafts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 879D531AEA3583A537B8BE1B /* DashboardNoteDrafts.swift */; };
+		97B76EB8D620C6E620196AC8 /* DashboardSidebar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 890F3602A18AF2215FAC1D3E /* DashboardSidebar.swift */; };
+		E8E4FA74C6587F81C8999942 /* DashboardConversation.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5CEADA1DA4AFBF4EFFC2CDC /* DashboardConversation.swift */; };
+		FE8DA980F8CFABCB8AAB3893 /* DashboardComposer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45C178F10C928BB5DF700830 /* DashboardComposer.swift */; };
+		2350EC32F0F50FD3DB4069F3 /* DashboardNotePane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 52C822631EDF91C6FE39C754 /* DashboardNotePane.swift */; };
+		BAAE9A1BC06C8AC78E67AA1B /* DashboardOpenClawCron.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3AB89D5EB3D93F04C3A5CB5E /* DashboardOpenClawCron.swift */; };
+		923D138C1F54FC887AA90493 /* DashboardSharedViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 40D1B5DEF1B0023CB8C52B6D /* DashboardSharedViews.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -77,6 +86,15 @@
 		A13000000000000000000004 /* SettingsRemoteWorkspacesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsRemoteWorkspacesView.swift; sourceTree = "<group>"; };
 		F10100000000000000000002 /* ArtifactEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArtifactEditor.swift; sourceTree = "<group>"; };
 		F10200000000000000000002 /* DashboardDatabasesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardDatabasesView.swift; sourceTree = "<group>"; };
+		FC6A850ACFC17DE4433439A7 /* DashboardConversationState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardConversationState.swift; sourceTree = "<group>"; };
+		87BA82494C4524C032235AAF /* DashboardConversationReferencePreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardConversationReferencePreview.swift; sourceTree = "<group>"; };
+		879D531AEA3583A537B8BE1B /* DashboardNoteDrafts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardNoteDrafts.swift; sourceTree = "<group>"; };
+		890F3602A18AF2215FAC1D3E /* DashboardSidebar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardSidebar.swift; sourceTree = "<group>"; };
+		B5CEADA1DA4AFBF4EFFC2CDC /* DashboardConversation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardConversation.swift; sourceTree = "<group>"; };
+		45C178F10C928BB5DF700830 /* DashboardComposer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardComposer.swift; sourceTree = "<group>"; };
+		52C822631EDF91C6FE39C754 /* DashboardNotePane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardNotePane.swift; sourceTree = "<group>"; };
+		3AB89D5EB3D93F04C3A5CB5E /* DashboardOpenClawCron.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardOpenClawCron.swift; sourceTree = "<group>"; };
+		40D1B5DEF1B0023CB8C52B6D /* DashboardSharedViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardSharedViews.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -135,6 +153,8 @@
 		D49100000000000000000004 /* Models */ = {
 			isa = PBXGroup;
 			children = (
+				87BA82494C4524C032235AAF /* DashboardConversationReferencePreview.swift */,
+				FC6A850ACFC17DE4433439A7 /* DashboardConversationState.swift */,
 				F10000000000000000000002 /* AgentDatabases.swift */,
 				A13000000000000000000002 /* RemoteWorkspacesModel.swift */,
 				D49100000000000000000003 /* ConversationMarkdownDocument.swift */,
@@ -145,6 +165,12 @@
 		D0E0A91C0032120E4CDF1388 /* Views */ = {
 			isa = PBXGroup;
 			children = (
+				40D1B5DEF1B0023CB8C52B6D /* DashboardSharedViews.swift */,
+				3AB89D5EB3D93F04C3A5CB5E /* DashboardOpenClawCron.swift */,
+				52C822631EDF91C6FE39C754 /* DashboardNotePane.swift */,
+				45C178F10C928BB5DF700830 /* DashboardComposer.swift */,
+				B5CEADA1DA4AFBF4EFFC2CDC /* DashboardConversation.swift */,
+				890F3602A18AF2215FAC1D3E /* DashboardSidebar.swift */,
 				DC0A00000000000000000002 /* DashboardComposerTextEditor.swift */,
 				F10100000000000000000002 /* ArtifactEditor.swift */,
 				F10200000000000000000002 /* DashboardDatabasesView.swift */,
@@ -183,6 +209,7 @@
 		D50000000000000000000008 /* Services */ = {
 			isa = PBXGroup;
 			children = (
+				879D531AEA3583A537B8BE1B /* DashboardNoteDrafts.swift */,
 				E10100000000000000000002 /* WovenNoteService.swift */,
 			);
 			path = Services;
@@ -294,6 +321,15 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				923D138C1F54FC887AA90493 /* DashboardSharedViews.swift in Sources */,
+				BAAE9A1BC06C8AC78E67AA1B /* DashboardOpenClawCron.swift in Sources */,
+				2350EC32F0F50FD3DB4069F3 /* DashboardNotePane.swift in Sources */,
+				FE8DA980F8CFABCB8AAB3893 /* DashboardComposer.swift in Sources */,
+				E8E4FA74C6587F81C8999942 /* DashboardConversation.swift in Sources */,
+				97B76EB8D620C6E620196AC8 /* DashboardSidebar.swift in Sources */,
+				8443106E4E46FD4C315E128F /* DashboardNoteDrafts.swift in Sources */,
+				2A71A302AFFA410CB30E65F3 /* DashboardConversationReferencePreview.swift in Sources */,
+				ADB35226B01C45F520411F2C /* DashboardConversationState.swift in Sources */,
 				DC0A00000000000000000001 /* DashboardComposerTextEditor.swift in Sources */,
 				F10000000000000000000001 /* AgentDatabases.swift in Sources */,
 				A13000000000000000000001 /* RemoteWorkspacesModel.swift in Sources */,

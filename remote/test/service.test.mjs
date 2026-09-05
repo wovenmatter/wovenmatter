@@ -368,9 +368,7 @@ test('Pi authentication locates its owning package from a nested npm bin target'
     {
       cwd: repositoryRoot,
       env: {
-        ...process.env,
-        HOME: home,
-        PATH: `${bin}:${process.env.PATH}`,
+        ...await fixtureEnvironment(home),
         WOVENMATTER_PI_AUTH_TEST_RESULT: resultPath,
       },
       input: 'fixture-key\n',
@@ -522,16 +520,17 @@ async function temporaryFixture(context, prefix) {
 
 async function startService({ workspace, home, catalog, token, gatewayPort }) {
   const port = await unusedPort()
+  const environment = await fixtureEnvironment(home)
   const child = spawn(process.execPath, [resolve(repositoryRoot, 'remote/src/server.mjs')], {
     cwd: repositoryRoot,
     env: {
-      ...process.env,
-      HOME: home,
+      ...environment,
       WOVENMATTER_API_TOKEN: token,
+      WOVENMATTER_LISTEN_HOST: '127.0.0.1',
       WOVENMATTER_LISTEN_PORT: String(port),
       WOVENMATTER_WORKSPACE: workspace,
       WOVENMATTER_HARNESS_CATALOG: catalog,
-      ...(gatewayPort ? { WOVENMATTER_GATEWAY_PORT: String(gatewayPort) } : {}),
+      WOVENMATTER_GATEWAY_PORT: String(gatewayPort ?? await unusedPort()),
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
@@ -545,6 +544,22 @@ async function startService({ workspace, home, catalog, token, gatewayPort }) {
     })
   })
   return { child, port, url: `http://127.0.0.1:${port}` }
+}
+
+async function fixtureEnvironment(home) {
+  const tools = resolve(home, '.fixture-bin')
+  const temporary = resolve(home, '.fixture-tmp')
+  await mkdir(tools, { recursive: true })
+  await mkdir(temporary, { recursive: true })
+  await symlink(process.execPath, resolve(tools, 'node'))
+  await symlink('/usr/bin/touch', resolve(tools, 'touch'))
+  await symlink('/usr/bin/grep', resolve(tools, 'grep'))
+  return {
+    HOME: home,
+    PATH: `${resolve(home, '.local/bin')}:${tools}`,
+    TMPDIR: temporary,
+    LANG: 'C',
+  }
 }
 
 async function waitFor(url, headers, predicate) {

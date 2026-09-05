@@ -9,9 +9,7 @@ struct ConversationMarkdownDocument: Sendable {
     }
 
     struct InlineText: Sendable {
-        let source: String
         let attributed: AttributedString
-        let renderedLines: [AttributedString]
         let rendered: AttributedString
 
         var plainText: String {
@@ -19,12 +17,10 @@ struct ConversationMarkdownDocument: Sendable {
         }
 
         init(_ source: String) {
-            self.source = source
             attributed = Self.render(source)
             let lines = source
                 .split(separator: "\n", omittingEmptySubsequences: false)
                 .map { Self.renderLine(String($0)) }
-            renderedLines = lines
             rendered = lines.enumerated().reduce(into: AttributedString()) { result, element in
                 if element.offset > 0 {
                     result.append(AttributedString("\n"))
@@ -70,12 +66,7 @@ struct ConversationMarkdownDocument: Sendable {
         let depth: Int
         let marker: String
         let checked: Bool?
-        let source: String
         let blocks: [Block]
-
-        var content: InlineText {
-            InlineText(source)
-        }
     }
 
     enum TableAlignment: Sendable {
@@ -100,11 +91,9 @@ struct ConversationMarkdownDocument: Sendable {
         case divider
     }
 
-    let rawContent: String
     let blocks: [Block]
 
     init(_ rawContent: String) {
-        self.rawContent = rawContent
         var parser = Parser(rawContent)
         blocks = parser.parse()
     }
@@ -324,7 +313,6 @@ private extension ConversationMarkdownDocument {
                         depth: $0.depth,
                         marker: $0.marker,
                         checked: $0.checked,
-                        source: $0.content,
                         blocks: parser.parse()
                     )
                 }

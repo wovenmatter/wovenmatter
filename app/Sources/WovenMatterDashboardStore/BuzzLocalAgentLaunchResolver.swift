@@ -185,7 +185,7 @@ public struct BuzzLocalAgentLaunchResolver: Sendable {
         "gateway", "--port", String(port), "--bind", "loopback", "--auth", "none",
       ]
     }
-    var environment = harness.defaultEnvironment
+    var environment: [String: String] = [:]
     environment["PATH"] = Self.searchPath(
       executable: executable,
       configured: executableSearchPath()
@@ -414,18 +414,15 @@ private struct Harness {
   let runtimeKind: AgentRuntimeKind
   let command: String
   let defaultArguments: [String]
-  let defaultEnvironment: [String: String]
 
   init(
     runtimeKind: AgentRuntimeKind,
     command: String,
-    defaultArguments: [String],
-    defaultEnvironment: [String: String] = [:]
+    defaultArguments: [String]
   ) {
     self.runtimeKind = runtimeKind
     self.command = command
     self.defaultArguments = defaultArguments
-    self.defaultEnvironment = defaultEnvironment
   }
 }
 

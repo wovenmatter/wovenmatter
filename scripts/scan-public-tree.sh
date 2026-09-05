@@ -27,22 +27,22 @@ patterns=(
   'github-ma[c]agent[0-9]+|ma[c]agent[0-9]+'
 )
 
-for pattern in "${patterns[@]}"; do
-  while IFS= read -r file; do
-    [ -f "$file" ] || continue
-    [ "$file" = scripts/scan-public-tree.sh ] && continue
-    if grep -Iq . "$file" && grep -Eq -- "$pattern" "$file"; then
-      printf 'Public-tree scan matched %s in %s\n' "$pattern" "$file" >&2
-      exit 1
-    fi
-  done <<< "$tracked"
-done
+secret_pattern="$(IFS='|'; printf '%s' "${patterns[*]}")"
 
 while IFS= read -r file; do
   [ -f "$file" ] || continue
   [ "$file" = scripts/scan-public-tree.sh ] && continue
-  case "$file" in *.svg) continue ;; esac
   grep -Iq . "$file" || continue
+  if grep -Eq -- "$secret_pattern" "$file"; then
+    for pattern in "${patterns[@]}"; do
+      if grep -Eq -- "$pattern" "$file"; then
+        printf 'Public-tree scan matched %s in %s\n' "$pattern" "$file" >&2
+        exit 1
+      fi
+    done
+  fi
+
+  case "$file" in *.svg) continue ;; esac
   if grep -Eo '([0-9]{1,3}\.){3}[0-9]{1,3}' "$file" | \
       grep -Ev '^(127\.0\.0\.1|0\.0\.0\.0)$' >/dev/null; then
     printf 'Public-tree scan found a non-loopback IPv4 address in %s\n' "$file" >&2
