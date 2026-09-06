@@ -23,6 +23,7 @@ struct LocalACPSessionDriver: Sendable {
     let activeInput: (@Sendable (
         _ input: AgentMessageInput
     ) async throws -> LocalACPActiveInputReceipt)?
+    let activeInputCapability: @Sendable () async -> LocalACPActiveInputRoute
     let cancel: @Sendable () async throws -> Void
     let shutdown: @Sendable () async -> Void
 
@@ -47,6 +48,7 @@ struct LocalACPSessionDriver: Sendable {
         activeInput: (@Sendable (
             _ input: AgentMessageInput
         ) async throws -> LocalACPActiveInputReceipt)? = nil,
+        activeInputCapability: @escaping @Sendable () async -> LocalACPActiveInputRoute = { .unsupported },
         cancel: @escaping @Sendable () async throws -> Void,
         shutdown: @escaping @Sendable () async -> Void
     ) {
@@ -55,6 +57,7 @@ struct LocalACPSessionDriver: Sendable {
         self.configuration = configuration
         self.setConfiguration = setConfiguration
         self.activeInput = activeInput
+        self.activeInputCapability = activeInputCapability
         self.cancel = cancel
         self.shutdown = shutdown
     }
@@ -104,6 +107,7 @@ struct LocalACPSessionDriver: Sendable {
                         completion: Task { nil }
                     )
                 },
+                activeInputCapability: { .piRPC },
                 cancel: {
                     await client.cancel()
                 },
@@ -149,6 +153,7 @@ struct LocalACPSessionDriver: Sendable {
                     throw LocalACPSessionDatabaseError.steeringUnsupported
                 }
             },
+            activeInputCapability: { await client.activeInputCapability() },
             cancel: {
                 try await client.cancel()
             },
@@ -635,6 +640,18 @@ public actor LocalACPSessionCoordinator {
         }
     }
 
+    public func activeInputCapability(conversationID: String) async -> LocalACPActiveInputRoute? {
+        guard let active = activeSessions[conversationID] else { return nil }
+        return await active.client.activeInputCapability()
+    }
+
+    public func cancel(conversationID: String, expectedRunID: String) async throws {
+        guard runIDsByConversation[conversationID] == expectedRunID else {
+            throw LocalACPSessionDatabaseError.runNotFound
+        }
+        await cancel(conversationID: conversationID)
+    }
+
     public func cancel(conversationID: String) async {
         if let runID = runIDsByConversation[conversationID] {
             cancellationRequestedRunIDs.insert(runID)
@@ -665,16 +682,28 @@ public actor LocalACPSessionCoordinator {
     public func sendActiveInput(
         conversationID: String,
         input: AgentMessageInput,
-        deliveryContent: String? = nil
+        deliveryContent: String? = nil,
+        expectedRunID: String? = nil
     ) async throws -> LocalACPSteeringIdentifiers {
         await acquireSteeringLock(conversationID: conversationID)
         defer { releaseSteeringLock(conversationID: conversationID) }
+        if let expectedRunID, runIDsByConversation[conversationID] != expectedRunID {
+            throw LocalACPSessionDatabaseError.runNotFound
+        }
         guard let runID = runIDsByConversation[conversationID],
               acceptingActiveInputRunIDs.contains(runID),
               let streamWriter = await streamWriter(runID: runID),
               let active = activeSessions[conversationID],
               let activeInput = active.client.activeInput else {
             throw LocalACPSessionDatabaseError.steeringUnsupported
+        }
+        guard await active.client.activeInputCapability() != .unsupported else {
+            throw LocalACPSessionDatabaseError.steeringUnsupported
+        }
+        // Capability lookup may suspend. Recheck the run before creating a turn.
+        guard runIDsByConversation[conversationID] == runID,
+              acceptingActiveInputRunIDs.contains(runID) else {
+            throw LocalACPSessionDatabaseError.runNotFound
         }
         if active.runtimeKind == .pi, !input.files.isEmpty {
             throw AgentMessageAttachmentError.unsupportedForAgent(

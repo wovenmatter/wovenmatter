@@ -465,7 +465,12 @@ public actor OpenClawGatewayCoordinator {
     }
   }
 
-  public func cancel(conversationID: String) async throws {
+  public func cancel(conversationID: String, expectedRunID: String? = nil) async throws {
+    if let expectedRunID, !activeRuns.values.contains(where: {
+      $0.conversationID == conversationID && $0.runID == expectedRunID
+    }) {
+      throw LocalACPSessionDatabaseError.runNotFound
+    }
     guard let active = activeRuns.values.first(where: {
       $0.conversationID == conversationID
     }) else { return }
@@ -509,10 +514,16 @@ public actor OpenClawGatewayCoordinator {
   public func sendActiveInput(
     conversationID: String,
     input: AgentMessageInput,
-    deliveryContent: String? = nil
+    deliveryContent: String? = nil,
+    expectedRunID: String? = nil
   ) async throws -> LocalACPSteeringIdentifiers {
     await acquireSteeringLock(conversationID: conversationID)
     defer { releaseSteeringLock(conversationID: conversationID) }
+    if let expectedRunID, !activeRuns.values.contains(where: {
+      $0.conversationID == conversationID && $0.runID == expectedRunID
+    }) {
+      throw LocalACPSessionDatabaseError.runNotFound
+    }
     guard runExecutor == nil else {
       throw LocalACPSessionDatabaseError.steeringUnsupported
     }

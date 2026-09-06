@@ -51,7 +51,7 @@ jobs:
           git diff --name-only "$base_sha" "$HEAD_SHA" > "$RUNNER_TEMP/changed-files"
 
           macos=false
-          if grep -Eq '^app/|^harnesses/|^scripts/.*\.sh$|^scripts/test-support/|^\.github/workflows/(ci|release)\.yml$' "$RUNNER_TEMP/changed-files"; then
+          if grep -Eq '^app/|^shared/|^ios/|^integration/|^harnesses/|^scripts/.*\.sh$|^scripts/test-support/|^\.github/workflows/(ci|release)\.yml$' "$RUNNER_TEMP/changed-files"; then
             macos=true
           fi
 
@@ -74,7 +74,9 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
-      - name: Test packages and build the unsigned app
+      - name: Test desktop and companion packages, unsigned apps, and simulator models
+        env:
+          WOVENMATTER_TEST_CACHE_DIR: ${{ runner.temp }}/wovenmatter-ci-${{ github.run_id }}-${{ github.run_attempt }}
         run: scripts/test-changes.sh --macos
 
   remote:

@@ -28,11 +28,11 @@ struct MessageInputTransportTests {
       )),
     ])
     let context = """
-      <wovenmatter-reference type="note" id="n" title="Note title">
+      <wovenmatter-reference type="note" id="n" revision="1" title="Note title">
       note body
       </wovenmatter-reference>
 
-      <wovenmatter-reference type="conversation" id="c" title="Chat title">
+      <wovenmatter-reference type="conversation" id="c" revision="2" title="Chat title">
       chat body
       </wovenmatter-reference>
       """

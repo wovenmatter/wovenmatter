@@ -141,7 +141,7 @@ public struct AgentMessageInput: Equatable, Sendable {
     for reference in references {
       let label = reference.kind == .note ? "Note" : "Conversation"
       sections.append("""
-        <wovenmatter-reference type="\(label.lowercased())" id="\(reference.resourceID)" title="\(reference.titleSnapshot)">
+        <wovenmatter-reference type="\(label.lowercased())" id="\(reference.resourceID)" revision="\(reference.revisionSnapshot)" title="\(reference.titleSnapshot)">
         \(reference.contentSnapshot)
         </wovenmatter-reference>
         """)
