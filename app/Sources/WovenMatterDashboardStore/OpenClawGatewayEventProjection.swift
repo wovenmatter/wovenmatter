@@ -480,7 +480,7 @@ struct OpenClawGatewayEventProjection: Equatable, Sendable {
     let text = parts.compactMap { part -> String? in
       guard let object = part.objectValue,
             let type = string(object["type"]), types.contains(type) else { return nil }
-      return fields.lazy.compactMap { text(object[$0]) }.first
+      return fields.lazy.compactMap { Self.text(object[$0]) }.first
     }.joined(separator: "\n")
     return text.isEmpty ? nil : text
   }
