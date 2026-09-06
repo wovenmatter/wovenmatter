@@ -5,6 +5,7 @@ import WovenMatterCore
 enum SettingsSection: Equatable {
     case landing
     case general
+    case companion
     case openClaw
     case openClawAgent(UUID)
     case localWorkspace
@@ -31,6 +32,10 @@ struct SettingsView: View {
             switch section {
             case .landing:
                 landing
+            case .companion:
+                SettingsCompanionView(model: model, host: model.companionHost,
+                    reservesRailControlSpace: reservesRailControlSpace,
+                    onBack: { section = .landing })
             case .general:
                 SettingsGeneralView(
                     model: model,
@@ -103,6 +108,12 @@ struct SettingsView: View {
                     detail: "Theme, sidebar layout, and conversation titles.",
                     icon: { DashboardLucideIcon(glyph: .settings, size: 15) },
                     action: { section = .general }
+                )
+                SettingsDestinationRow(
+                    title: "iPhone companion",
+                    detail: "Pair your iPhone and share this Mac's workspace over Tailscale.",
+                    icon: { Image(systemName: "iphone").font(.system(size: 15)) },
+                    action: { section = .companion }
                 )
                 SettingsDestinationRow(
                     title: "OpenClaw",

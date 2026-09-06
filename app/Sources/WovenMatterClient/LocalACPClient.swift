@@ -114,7 +114,7 @@ public struct LocalACPActiveInputReceipt: Sendable {
     }
 }
 
-enum LocalACPActiveInputRoute: Equatable, Sendable {
+public enum LocalACPActiveInputRoute: String, Codable, Equatable, Sendable {
     case acpSteering
     case grokInterjection
     case concurrentPrompt
@@ -1038,7 +1038,11 @@ public actor LocalACPClient {
         }
     }
 
-    nonisolated static func activeInputRoute(
+    public func activeInputCapability() -> LocalACPActiveInputRoute {
+        Self.activeInputRoute(runtimeKind: runtimeKind, steeringSupported: steeringSupported)
+    }
+
+    public nonisolated static func activeInputRoute(
         runtimeKind: AgentRuntimeKind,
         steeringSupported: Bool
     ) -> LocalACPActiveInputRoute {

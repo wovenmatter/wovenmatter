@@ -186,8 +186,8 @@ public enum LocalACPSessionDatabaseError: LocalizedError, Equatable, Sendable {
 }
 
 public final class WorkspaceDatabase: @unchecked Sendable {
-  private let lock = NSLock()
-  private var connection: OpaquePointer?
+  let lock = NSLock()
+  var connection: OpaquePointer?
 
   public init(url: URL) throws {
     var database: OpaquePointer?
@@ -215,7 +215,7 @@ public final class WorkspaceDatabase: @unchecked Sendable {
     if let connection { sqlite3_close(connection) }
   }
 
-  private func transaction<T>(_ operation: () throws -> T) throws -> T {
+  func transaction<T>(_ operation: () throws -> T) throws -> T {
     try lock.withLock {
       try executeUnlocked("BEGIN IMMEDIATE")
       do {
@@ -1576,7 +1576,10 @@ public final class WorkspaceDatabase: @unchecked Sendable {
     runtimeKind: AgentRuntimeKind,
     title: String,
     ownerDeviceID: UUID,
-    createdAt: Date = Date()
+    createdAt: Date = Date(),
+    conversationID: String = UUID().uuidString.lowercased(),
+    gatewayAgentID: UUID? = nil,
+    folderID: String? = nil
   ) throws -> String {
     guard LocalACPRuntimeCatalog.definition(for: runtimeKind) != nil,
           let codename = LocalACPRuntimeCatalog.conversationCodename(
@@ -1586,14 +1589,21 @@ public final class WorkspaceDatabase: @unchecked Sendable {
     }
     return try transaction {
       let operatorID = try localMutationOperatorIDUnlocked()
-      let agentID = try ensureLocalCLIAgentUnlocked(
-        runtimeKind: runtimeKind,
-        ownerDeviceID: ownerDeviceID,
-        operatorID: operatorID,
-        status: .ready,
-        updatedAt: createdAt
-      )
-      let conversationID = UUID().uuidString.lowercased()
+      try validateFolderUnlocked(id: folderID, operatorID: operatorID)
+      let agentID: String
+      if let gatewayAgentID {
+        guard runtimeKind == .openclaw else { throw LocalACPSessionDatabaseError.runtimeUnavailable }
+        let linked = try prepareUnlocked("SELECT 1 FROM desktop_openclaw_gateway_links WHERE agent_id = ?")
+        defer { sqlite3_finalize(linked) }
+        try bind(gatewayAgentID.uuidString.lowercased(), at: 1, to: linked)
+        guard sqlite3_step(linked) == SQLITE_ROW else { throw LocalACPSessionDatabaseError.runtimeUnavailable }
+        agentID = gatewayAgentID.uuidString.lowercased()
+      } else {
+        agentID = try ensureLocalCLIAgentUnlocked(
+          runtimeKind: runtimeKind, ownerDeviceID: ownerDeviceID,
+          operatorID: operatorID, status: .ready, updatedAt: createdAt
+        )
+      }
       let cleanTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
       let sessionTitle = cleanTitle.isEmpty
         ? "New \(runtimeKind.displayName) chat"
@@ -1605,9 +1615,9 @@ public final class WorkspaceDatabase: @unchecked Sendable {
           authority_kind, authority_device_id, authority_agent_id,
           title, unread, kind,
           is_deletable, is_archived, last_message_at, is_pinned,
-          created_at, updated_at, desktop_owned
+          created_at, updated_at, desktop_owned, folder_id
         ) VALUES (?, ?, ?, ?, 'wovenmatter_macos', 'device_owned', ?, ?,
-          ?, 0, 'local_acp', 1, 0, ?, 0, ?, ?, 1)
+          ?, 0, 'local_acp', 1, 0, ?, 0, ?, ?, 1, ?)
         """)
       defer { sqlite3_finalize(conversation) }
       try bind(conversationID, at: 1, to: conversation)
@@ -1620,6 +1630,7 @@ public final class WorkspaceDatabase: @unchecked Sendable {
       try bind(timestamp, at: 8, to: conversation)
       try bind(timestamp, at: 9, to: conversation)
       try bind(timestamp, at: 10, to: conversation)
+      try bindNullable(folderID, at: 11, to: conversation)
       try stepDone(conversation)
 
       let session = try prepareUnlocked("""
@@ -1639,6 +1650,17 @@ public final class WorkspaceDatabase: @unchecked Sendable {
       try bind(timestamp, at: 7, to: session)
       try bind(timestamp, at: 8, to: session)
       try stepDone(session)
+      if gatewayAgentID != nil {
+        let key = "agent:main:wovenmatter:\(conversationID)"
+        let gateway = try prepareUnlocked("""
+          INSERT INTO desktop_openclaw_gateway_sessions
+            (conversation_id, agent_id, session_key, created_at, updated_at) VALUES (?, ?, ?, ?, ?)
+          """)
+        defer { sqlite3_finalize(gateway) }
+        try bind(conversationID, at: 1, to: gateway); try bind(agentID, at: 2, to: gateway)
+        try bind(key, at: 3, to: gateway); try bind(timestamp, at: 4, to: gateway); try bind(timestamp, at: 5, to: gateway)
+        try stepDone(gateway)
+      }
       return conversationID
     }
   }
@@ -1650,13 +1672,16 @@ public final class WorkspaceDatabase: @unchecked Sendable {
     remoteWorkspaceName: String,
     title: String,
     ownerDeviceID: UUID,
-    createdAt: Date = Date()
+    createdAt: Date = Date(),
+    conversationID: String = UUID().uuidString.lowercased(),
+    folderID: String? = nil
   ) throws -> String {
     guard LocalACPRuntimeCatalog.definition(for: runtimeKind) != nil else {
       throw LocalACPSessionDatabaseError.runtimeUnavailable
     }
     return try transaction {
       let operatorID = try localMutationOperatorIDUnlocked()
+      try validateFolderUnlocked(id: folderID, operatorID: operatorID)
       let agentID = try ensureRemoteHarnessAgentUnlocked(
         runtimeKind: runtimeKind,
         remoteWorkspaceID: remoteWorkspaceID,
@@ -1666,7 +1691,6 @@ public final class WorkspaceDatabase: @unchecked Sendable {
         status: .ready,
         updatedAt: createdAt
       )
-      let conversationID = UUID().uuidString.lowercased()
       let cleanTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
       let sessionTitle = cleanTitle.isEmpty
         ? "New \(runtimeKind.displayName) chat"
@@ -1679,9 +1703,9 @@ public final class WorkspaceDatabase: @unchecked Sendable {
           authority_kind, authority_device_id, authority_agent_id,
           title, unread, kind,
           is_deletable, is_archived, last_message_at, is_pinned,
-          created_at, updated_at, desktop_owned
+          created_at, updated_at, desktop_owned, folder_id
         ) VALUES (?, ?, ?, ?, 'wovenmatter_macos', 'device_owned', ?, ?,
-          ?, 0, 'remote_acp', 1, 0, ?, 0, ?, ?, 1)
+          ?, 0, 'remote_acp', 1, 0, ?, 0, ?, ?, 1, ?)
         """)
       defer { sqlite3_finalize(conversation) }
       try bind(conversationID, at: 1, to: conversation)
@@ -1694,6 +1718,7 @@ public final class WorkspaceDatabase: @unchecked Sendable {
       try bind(timestamp, at: 8, to: conversation)
       try bind(timestamp, at: 9, to: conversation)
       try bind(timestamp, at: 10, to: conversation)
+      try bindNullable(folderID, at: 11, to: conversation)
       try stepDone(conversation)
 
       let session = try prepareUnlocked("""
@@ -1725,7 +1750,9 @@ public final class WorkspaceDatabase: @unchecked Sendable {
     title: String,
     ownerDeviceID: UUID,
     model: String? = nil,
-    createdAt: Date = Date()
+    createdAt: Date = Date(),
+    conversationID: String = UUID().uuidString.lowercased(),
+    folderID: String? = nil
   ) throws -> String {
     let enrollment = try buzzWorkspaceAgentEnrollments().first(where: {
       $0.id == enrollmentID
@@ -1744,6 +1771,7 @@ public final class WorkspaceDatabase: @unchecked Sendable {
 
     return try transaction {
       let operatorID = try localMutationOperatorIDUnlocked()
+      try validateFolderUnlocked(id: folderID, operatorID: operatorID)
       try reconcileBuzzWorkspaceAgentUnlocked(
         enrollment: enrollment,
         ownerDeviceID: ownerDeviceID,
@@ -1752,7 +1780,6 @@ public final class WorkspaceDatabase: @unchecked Sendable {
         updatedAt: createdAt
       )
       let rawAgentID = enrollment.id.uuidString.lowercased()
-      let conversationID = UUID().uuidString.lowercased()
       let cleanTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
       let sessionTitle = cleanTitle.isEmpty
         ? "New \(enrollment.displayNameSnapshot) chat"
@@ -1764,9 +1791,9 @@ public final class WorkspaceDatabase: @unchecked Sendable {
           authority_kind, authority_device_id, authority_agent_id,
           title, unread, kind,
           is_deletable, is_archived, last_message_at, is_pinned,
-          created_at, updated_at, desktop_owned
+          created_at, updated_at, desktop_owned, folder_id
         ) VALUES (?, ?, ?, ?, 'wovenmatter_macos', 'device_owned', ?, ?,
-          ?, 0, 'local_acp', 1, 0, ?, 0, ?, ?, 1)
+          ?, 0, 'local_acp', 1, 0, ?, 0, ?, ?, 1, ?)
         """)
       defer { sqlite3_finalize(conversation) }
       try bind(conversationID, at: 1, to: conversation)
@@ -1779,6 +1806,7 @@ public final class WorkspaceDatabase: @unchecked Sendable {
       try bind(timestamp, at: 8, to: conversation)
       try bind(timestamp, at: 9, to: conversation)
       try bind(timestamp, at: 10, to: conversation)
+      try bindNullable(folderID, at: 11, to: conversation)
       try stepDone(conversation)
 
       let session = try prepareUnlocked("""
@@ -3385,7 +3413,7 @@ public final class WorkspaceDatabase: @unchecked Sendable {
     try transaction {
       let content = try (content.isEmpty
         ? NoteDocument(kind: kind)
-        : NoteDocument.decode(content)).encoded()
+        : NoteDocument.editableDocument(from: content)).encoded()
       let noteID = id.uuidString.lowercased()
       let operatorID = try localMutationOperatorIDUnlocked()
       try validateFolderUnlocked(id: folderID, operatorID: operatorID)
@@ -3424,32 +3452,14 @@ public final class WorkspaceDatabase: @unchecked Sendable {
     id: String,
     title: String,
     content: String,
-    updatedAt: Date = Date()
+    updatedAt: Date = Date(),
+    expectedRevision: String? = nil
   ) throws -> Bool {
-    try transaction {
-      let content = try NoteDocument.decode(content).encoded()
-      let operatorID = try localMutationOperatorIDUnlocked()
-      let update = try prepareUnlocked("""
-        UPDATE notes
-        SET title = ?, content = ?, snippet = ?, updated_at = ?
-        WHERE id = ? AND user_id = ? AND deleted_at IS NULL
-        """)
-      defer { sqlite3_finalize(update) }
-      try bind(title, at: 1, to: update)
-      try bind(content, at: 2, to: update)
-      try bind(Self.noteSnippet(content), at: 3, to: update)
-      try bind(Self.timestamp(updatedAt), at: 4, to: update)
-      try bind(id, at: 5, to: update)
-      try bind(operatorID, at: 6, to: update)
-      try stepDone(update)
-      guard sqlite3_changes(connection) == 1 else {
-        throw WorkspaceNoteMutationError.noteNotFound
-      }
-
-      return true
-    }
+    try persistNoteDraft(id: id, title: title, content: content, updatedAt: updatedAt, expectedRevision: expectedRevision)
   }
 
+  /// Whole-document autosave shares the same optimistic boundary as mobile and
+  /// agent edits. A missing/deleted note is never recreated under its old ID.
   @discardableResult
   public func persistNoteDraft(
     id: String,
@@ -3457,54 +3467,41 @@ public final class WorkspaceDatabase: @unchecked Sendable {
     content: String,
     folderID: String? = nil,
     createdAt: String? = nil,
-    updatedAt: Date = Date()
+    updatedAt: Date = Date(),
+    expectedRevision: String? = nil,
+    baseContent: String? = nil,
+    baseTitle: String? = nil,
+    operationID: String? = nil
   ) throws -> Bool {
     try transaction {
-      let content = try NoteDocument.decode(content).encoded()
-      let operatorID = try localMutationOperatorIDUnlocked()
-      let timestamp = Self.timestamp(updatedAt)
-      let update = try prepareUnlocked("""
-        UPDATE notes
-        SET title = ?, content = ?, snippet = ?, updated_at = ?
-        WHERE id = ? AND user_id = ? AND deleted_at IS NULL
-        """)
-      defer { sqlite3_finalize(update) }
-      try bind(title, at: 1, to: update)
-      try bind(content, at: 2, to: update)
-      try bind(Self.noteSnippet(content), at: 3, to: update)
-      try bind(timestamp, at: 4, to: update)
-      try bind(id, at: 5, to: update)
-      try bind(operatorID, at: 6, to: update)
-      try stepDone(update)
-
-      let restoredMissingNote = sqlite3_changes(connection) != 1
-      if restoredMissingNote {
-        try validateFolderUnlocked(id: folderID, operatorID: operatorID)
-        let position = try nextNotePositionUnlocked(
-          folderID: folderID,
-          operatorID: operatorID
-        )
-        let insert = try prepareUnlocked("""
-          INSERT INTO notes (
-            id, user_id, folder_id, title, content, snippet, is_pinned,
-            position, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
-          """)
-        defer { sqlite3_finalize(insert) }
-        try bind(id, at: 1, to: insert)
-        try bind(operatorID, at: 2, to: insert)
-        try bindNullable(folderID, at: 3, to: insert)
-        try bind(title, at: 4, to: insert)
-        try bind(content, at: 5, to: insert)
-        try bind(Self.noteSnippet(content), at: 6, to: insert)
-        guard sqlite3_bind_int64(insert, 7, Int64(position)) == SQLITE_OK else {
-          throw bindError()
+      if let operationID, let receipt = try companionDraftReceiptUnlocked(operationID: operationID) {
+        guard receipt.id == id, receipt.title == title, receipt.content == Self.companionContentFingerprint(content) else {
+          throw WorkspaceNoteMutationError.revisionConflict
         }
-        try bind(createdAt ?? timestamp, at: 8, to: insert)
-        try bind(timestamp, at: 9, to: insert)
-        try stepDone(insert)
+        return true
       }
-
+      let operatorID = try localMutationOperatorIDUnlocked()
+      let note = try noteForEditingUnlocked(id: id, operatorID: operatorID)
+      if note.title == title, note.content == content {
+        try saveCompanionDraftReceiptUnlocked(operationID: operationID, id: id, title: title, content: content, revision: note.revision)
+        return true
+      }
+      guard let expectedRevision, expectedRevision == note.revision else {
+        throw WorkspaceNoteMutationError.revisionConflict
+      }
+      // Every field of the original supported document must survive decoding.
+      // Preserve exact raw bytes; editors choose when to encode their changes.
+      if content != note.content {
+        _ = try NoteDocument.editableDocument(from: note.content)
+        _ = try NoteDocument.editableDocument(from: content)
+      }
+      try companionExecuteUnlocked(
+        "UPDATE notes SET title = ?, content = ?, snippet = ?, updated_at = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL",
+        values: [title, content, Self.noteSnippet(content), Self.timestamp(updatedAt), id, operatorID]
+      )
+      guard sqlite3_changes(connection) == 1 else { throw WorkspaceNoteMutationError.noteNotFound }
+      let revision = try noteForEditingUnlocked(id: id, operatorID: operatorID).revision
+      try saveCompanionDraftReceiptUnlocked(operationID: operationID, id: id, title: title, content: content, revision: revision)
       return true
     }
   }
@@ -3518,7 +3515,7 @@ public final class WorkspaceDatabase: @unchecked Sendable {
         noteID: id,
         title: note.title,
         revision: note.revision,
-        document: NoteDocument.decode(note.content)
+        document: try NoteDocument.editableDocument(from: note.content)
       )
     }
   }
@@ -3534,16 +3531,16 @@ public final class WorkspaceDatabase: @unchecked Sendable {
   ) throws -> NoteEditingResponse {
     let operatorID = try localMutationOperatorIDUnlocked()
     let note = try noteForEditingUnlocked(id: request.noteID, operatorID: operatorID)
-    if let expected = request.expectedRevision, expected != note.revision {
+    if !request.operations.isEmpty, request.expectedRevision != note.revision {
       throw WorkspaceNoteMutationError.revisionConflict
     }
     guard !request.operations.isEmpty else {
       return NoteEditingResponse(
         success: true, noteID: request.noteID, title: note.title,
-        revision: note.revision, document: NoteDocument.decode(note.content)
+        revision: note.revision, document: try NoteDocument.editableDocument(from: note.content)
       )
     }
-    var document = NoteDocument.decode(note.content)
+    var document = try NoteDocument.editableDocument(from: note.content)
     if document.kind == .html,
        request.operations.contains(where: {
          if case .setTitle = $0 { true } else { false }
@@ -3570,7 +3567,7 @@ public final class WorkspaceDatabase: @unchecked Sendable {
     }
     return NoteEditingResponse(
       success: true, noteID: request.noteID, title: updatedTitle,
-      revision: revision, document: document
+      revision: try noteForEditingUnlocked(id: request.noteID, operatorID: operatorID).revision, document: document
     )
   }
 
@@ -3880,7 +3877,8 @@ public final class WorkspaceDatabase: @unchecked Sendable {
           SELECT json_object(
             'id', id, 'folder_id', folder_id, 'title', title,
             'content', content, 'created_at', created_at,
-            'updated_at', updated_at, 'is_pinned', is_pinned
+            'updated_at', updated_at, 'is_pinned', is_pinned,
+            'revision', CAST(COALESCE((SELECT revision FROM companion_versions WHERE kind = 'note' AND resource_id = notes.id), 1) AS TEXT)
           )
           FROM notes
           WHERE user_id = ? AND deleted_at IS NULL
@@ -4650,6 +4648,7 @@ public final class WorkspaceDatabase: @unchecked Sendable {
       try createWorkspaceCacheTablesUnlocked()
       try addCurrentColumnsUnlocked()
       try createDashboardRevisionTrackingUnlocked()
+      try createCompanionSchemaUnlocked()
     }
   }
 
@@ -4714,7 +4713,7 @@ public final class WorkspaceDatabase: @unchecked Sendable {
     try lock.withLock { try executeUnlocked(sql) }
   }
 
-  private func executeUnlocked(_ sql: String) throws {
+  func executeUnlocked(_ sql: String) throws {
     guard let connection else { throw WorkspaceDatabaseError.execute("Database is closed") }
     var errorMessage: UnsafeMutablePointer<CChar>?
     guard sqlite3_exec(connection, sql, nil, nil, &errorMessage) == SQLITE_OK else {
@@ -4724,7 +4723,7 @@ public final class WorkspaceDatabase: @unchecked Sendable {
     }
   }
 
-  private func prepareUnlocked(_ sql: String) throws -> OpaquePointer {
+  func prepareUnlocked(_ sql: String) throws -> OpaquePointer {
     guard let connection else { throw WorkspaceDatabaseError.prepare("Database is closed") }
     var statement: OpaquePointer?
     guard sqlite3_prepare_v2(connection, sql, -1, &statement, nil) == SQLITE_OK, let statement else {
@@ -4760,11 +4759,11 @@ public final class WorkspaceDatabase: @unchecked Sendable {
     return nil
   }
 
-  private func localMutationOperatorIDUnlocked() throws -> String {
+  func localMutationOperatorIDUnlocked() throws -> String {
     try canonicalWorkspaceOperatorIDUnlocked() ?? "local-operator"
   }
 
-  private func validateFolderUnlocked(id: String?, operatorID: String) throws {
+  func validateFolderUnlocked(id: String?, operatorID: String) throws {
     guard let id else { return }
     let statement = try prepareUnlocked("""
       SELECT 1 FROM folders
@@ -4778,7 +4777,7 @@ public final class WorkspaceDatabase: @unchecked Sendable {
     }
   }
 
-  private func nextNotePositionUnlocked(
+  func nextNotePositionUnlocked(
     folderID: String?,
     operatorID: String
   ) throws -> Int {
@@ -4800,12 +4799,12 @@ public final class WorkspaceDatabase: @unchecked Sendable {
     return Int(sqlite3_column_int64(statement, 0))
   }
 
-  private func noteForEditingUnlocked(
+  func noteForEditingUnlocked(
     id: String,
     operatorID: String
   ) throws -> (title: String, content: String, revision: String) {
     let statement = try prepareUnlocked("""
-      SELECT title, content, updated_at
+      SELECT title, content, CAST(COALESCE((SELECT revision FROM companion_versions WHERE kind = 'note' AND resource_id = notes.id), 1) AS TEXT)
       FROM notes
       WHERE id = ? AND user_id = ? AND deleted_at IS NULL
       """)
@@ -4822,8 +4821,8 @@ public final class WorkspaceDatabase: @unchecked Sendable {
     )
   }
 
-  private static func noteSnippet(_ content: String) -> String {
-    let content = NoteDocument.decode(content).plainText
+  static func noteSnippet(_ content: String) -> String {
+    let content = (try? NoteDocument.editableDocument(from: content).plainText) ?? "Unsupported document"
     let replacements: [(String, String, String.CompareOptions)] = [
       (#"</p>\s*<p[^>]*>"#, " ", .regularExpression),
       (#"<br\s*/?>"#, " ", [.regularExpression, .caseInsensitive]),
@@ -4892,13 +4891,13 @@ public final class WorkspaceDatabase: @unchecked Sendable {
     }
   }
 
-  private func bind(_ value: String, at index: Int32, to statement: OpaquePointer) throws {
+  func bind(_ value: String, at index: Int32, to statement: OpaquePointer) throws {
     guard sqlite3_bind_text(statement, index, value, -1, SQLITE_TRANSIENT) == SQLITE_OK else {
       throw bindError()
     }
   }
 
-  private func bind(_ value: Data, at index: Int32, to statement: OpaquePointer) throws {
+  func bind(_ value: Data, at index: Int32, to statement: OpaquePointer) throws {
     if value.isEmpty {
       guard sqlite3_bind_zeroblob(statement, index, 0) == SQLITE_OK else {
         throw bindError()
@@ -4917,7 +4916,7 @@ public final class WorkspaceDatabase: @unchecked Sendable {
     guard result == SQLITE_OK else { throw bindError() }
   }
 
-  private func bindNullable(
+  func bindNullable(
     _ value: String?,
     at index: Int32,
     to statement: OpaquePointer
@@ -4929,31 +4928,31 @@ public final class WorkspaceDatabase: @unchecked Sendable {
     }
   }
 
-  private func text(_ statement: OpaquePointer, column: Int32) throws -> String {
+  func text(_ statement: OpaquePointer, column: Int32) throws -> String {
     guard let value = sqlite3_column_text(statement, column) else { throw WorkspaceDatabaseError.corruptRow }
     return String(cString: value)
   }
 
-  private func optionalText(_ statement: OpaquePointer, column: Int32) -> String? {
+  func optionalText(_ statement: OpaquePointer, column: Int32) -> String? {
     sqlite3_column_text(statement, column).map { String(cString: $0) }
   }
 
-  private func blob(_ statement: OpaquePointer, column: Int32) throws -> Data {
+  func blob(_ statement: OpaquePointer, column: Int32) throws -> Data {
     let count = Int(sqlite3_column_bytes(statement, column))
     guard count > 0 else { return Data() }
     guard let bytes = sqlite3_column_blob(statement, column) else { throw WorkspaceDatabaseError.corruptRow }
     return Data(bytes: bytes, count: count)
   }
 
-  private func stepDone(_ statement: OpaquePointer) throws {
+  func stepDone(_ statement: OpaquePointer) throws {
     guard sqlite3_step(statement) == SQLITE_DONE else { throw stepError() }
   }
 
-  private func bindError() -> WorkspaceDatabaseError {
+  func bindError() -> WorkspaceDatabaseError {
     .bind(connection.map { String(cString: sqlite3_errmsg($0)) } ?? "Database is closed")
   }
 
-  private func stepError() -> WorkspaceDatabaseError {
+  func stepError() -> WorkspaceDatabaseError {
     .step(connection.map { String(cString: sqlite3_errmsg($0)) } ?? "Database is closed")
   }
 
@@ -4965,7 +4964,7 @@ public final class WorkspaceDatabase: @unchecked Sendable {
     return formatter
   }
 
-  private static func timestamp(_ date: Date) -> String {
+  static func timestamp(_ date: Date) -> String {
     formatter(includingFractionalSeconds: true).string(from: date)
   }
 

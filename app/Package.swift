@@ -12,10 +12,11 @@ let package = Package(
     .library(name: "WovenMatterClient", targets: ["WovenMatterClient"]),
     .library(name: "WovenMatterDashboardStore", targets: ["WovenMatterDashboardStore"])
   ],
-  dependencies: [],
+  dependencies: [.package(path: "../shared")],
   targets: [
     .target(
       name: "WovenMatterCore",
+      dependencies: [.product(name: "WovenMatterCompanion", package: "shared")],
       swiftSettings: [
         .enableUpcomingFeature("ExistentialAny")
       ]
@@ -52,6 +53,18 @@ let package = Package(
     .testTarget(
       name: "WovenMatterClientTests",
       dependencies: ["WovenMatterClient"]
+    ),
+    .target(
+      name: "WovenMatterAppFacade",
+      dependencies: ["WovenMatterCore", "WovenMatterClient", "WovenMatterDashboardStore"],
+      path: "App",
+      exclude: ["WovenMatterApp.swift", "Assets.xcassets", "Info.plist", "Resources"],
+      sources: ["ApplicationModel.swift", "Models", "Services", "Views"],
+      swiftSettings: [.define("COMPANION_FACADE_TESTS")]
+    ),
+    .testTarget(
+      name: "WovenMatterAppFacadeTests",
+      dependencies: ["WovenMatterAppFacade", "WovenMatterDashboardStore"]
     )
   ]
 )

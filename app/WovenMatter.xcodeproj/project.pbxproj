@@ -49,6 +49,9 @@
 		2350EC32F0F50FD3DB4069F3 /* DashboardNotePane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 52C822631EDF91C6FE39C754 /* DashboardNotePane.swift */; };
 		BAAE9A1BC06C8AC78E67AA1B /* DashboardOpenClawCron.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3AB89D5EB3D93F04C3A5CB5E /* DashboardOpenClawCron.swift */; };
 		923D138C1F54FC887AA90493 /* DashboardSharedViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 40D1B5DEF1B0023CB8C52B6D /* DashboardSharedViews.swift */; };
+		E678564F286E71B5FA588A5A /* CompanionCommandService.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF3D48D1E7B9587A3DF2F895 /* CompanionCommandService.swift */; };
+		B7937C7349692E25EE127696 /* CompanionHostController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0083907CDB98FA31255BD2C1 /* CompanionHostController.swift */; };
+		3D87BAA73934F3BC92DC78F1 /* SettingsCompanionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F0B68181C793F898EC7A4DE /* SettingsCompanionView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -95,6 +98,9 @@
 		52C822631EDF91C6FE39C754 /* DashboardNotePane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardNotePane.swift; sourceTree = "<group>"; };
 		3AB89D5EB3D93F04C3A5CB5E /* DashboardOpenClawCron.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardOpenClawCron.swift; sourceTree = "<group>"; };
 		40D1B5DEF1B0023CB8C52B6D /* DashboardSharedViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardSharedViews.swift; sourceTree = "<group>"; };
+		FF3D48D1E7B9587A3DF2F895 /* CompanionCommandService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionCommandService.swift; sourceTree = "<group>"; };
+		0083907CDB98FA31255BD2C1 /* CompanionHostController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionHostController.swift; sourceTree = "<group>"; };
+		8F0B68181C793F898EC7A4DE /* SettingsCompanionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsCompanionView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -165,6 +171,7 @@
 		D0E0A91C0032120E4CDF1388 /* Views */ = {
 			isa = PBXGroup;
 			children = (
+				8F0B68181C793F898EC7A4DE /* SettingsCompanionView.swift */,
 				40D1B5DEF1B0023CB8C52B6D /* DashboardSharedViews.swift */,
 				3AB89D5EB3D93F04C3A5CB5E /* DashboardOpenClawCron.swift */,
 				52C822631EDF91C6FE39C754 /* DashboardNotePane.swift */,
@@ -209,6 +216,8 @@
 		D50000000000000000000008 /* Services */ = {
 			isa = PBXGroup;
 			children = (
+				0083907CDB98FA31255BD2C1 /* CompanionHostController.swift */,
+				FF3D48D1E7B9587A3DF2F895 /* CompanionCommandService.swift */,
 				879D531AEA3583A537B8BE1B /* DashboardNoteDrafts.swift */,
 				E10100000000000000000002 /* WovenNoteService.swift */,
 			);
@@ -321,6 +330,9 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				3D87BAA73934F3BC92DC78F1 /* SettingsCompanionView.swift in Sources */,
+				B7937C7349692E25EE127696 /* CompanionHostController.swift in Sources */,
+				E678564F286E71B5FA588A5A /* CompanionCommandService.swift in Sources */,
 				923D138C1F54FC887AA90493 /* DashboardSharedViews.swift in Sources */,
 				BAAE9A1BC06C8AC78E67AA1B /* DashboardOpenClawCron.swift in Sources */,
 				2350EC32F0F50FD3DB4069F3 /* DashboardNotePane.swift in Sources */,
@@ -401,7 +413,7 @@
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = App/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = "Woven Matter Dev";
+				INFOPLIST_KEY_CFBundleDisplayName = "$(WOVENMATTER_APP_PRODUCT_NAME)";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright Woven Matter";
 				INFOPLIST_KEY_NSPrincipalClass = NSApplication;
@@ -410,9 +422,11 @@
 					"@executable_path/../Frameworks",
 				);
 				MARKETING_VERSION = 0.1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = wovenmatter.desktop.dev;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(WOVENMATTER_APP_BUNDLE_IDENTIFIER)";
+				WOVENMATTER_APP_BUNDLE_IDENTIFIER = wovenmatter.desktop.dev;
 				PRODUCT_MODULE_NAME = WovenMatter;
-				PRODUCT_NAME = "Woven Matter Dev";
+				PRODUCT_NAME = "$(WOVENMATTER_APP_PRODUCT_NAME)";
+				WOVENMATTER_APP_PRODUCT_NAME = "Woven Matter Dev";
 				SDKROOT = macosx;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 			};

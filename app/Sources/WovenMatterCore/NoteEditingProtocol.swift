@@ -466,10 +466,16 @@ public enum NoteEditOperation: Codable, Equatable, Sendable {
 
 public extension NoteDocument {
   mutating func apply(_ operations: [NoteEditOperation]) throws -> String? {
+    guard operations.count <= 128,
+          try JSONEncoder().encode(operations).count <= CompanionProtocol.maximumNoteBytes else {
+      throw NoteDocumentSafetyError.tooLarge
+    }
+    try validateEditableShape()
     var title: String?
     for operation in operations {
       switch operation {
       case .setTitle(let value):
+        guard value.utf8.count <= 4096 else { throw NoteDocumentSafetyError.tooLarge }
         title = value
       case .appendText(let text, let style):
         blocks.append(.richText(NoteRichTextBlock(style: style, text: text)))
@@ -494,6 +500,8 @@ public extension NoteDocument {
         block.style = style
         blocks[index] = .richText(block)
       case .createTable(let afterBlockID, let rows, let columns, let headerRow):
+        guard (1...1000).contains(rows), (1...128).contains(columns),
+              rows <= 50_000 / columns else { throw NoteDocumentSafetyError.unsupportedFormat }
         blocks.insert(
           .table(NoteTableBlock(rows: rows, columns: columns, headerRow: headerRow)),
           at: insertionIndex(after: afterBlockID)
@@ -542,6 +550,7 @@ public extension NoteDocument {
       case .setTableDatabaseLink(let tableID, let link):
         try mutateTable(id: tableID) { $0.databaseLink = link }
       }
+      try validateEditableShape()
     }
     self = normalized()
     return title

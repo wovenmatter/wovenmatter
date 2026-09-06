@@ -149,9 +149,10 @@ public struct WorkspaceNoteRecord: Codable, Equatable, Identifiable, Sendable {
   public let createdAt: String?
   public let updatedAt: String?
   public let isPinned: Bool
+  public let revision: String?
 
   enum CodingKeys: String, CodingKey {
-    case id, title, content
+    case id, title, content, revision
     case folderID = "folder_id"
     case createdAt = "created_at"
     case updatedAt = "updated_at"
@@ -166,6 +167,7 @@ public struct WorkspaceNoteRecord: Codable, Equatable, Identifiable, Sendable {
     content = try values.decode(String.self, forKey: .content)
     createdAt = try values.decodeIfPresent(String.self, forKey: .createdAt)
     updatedAt = try values.decodeIfPresent(String.self, forKey: .updatedAt)
+    revision = try values.decodeIfPresent(String.self, forKey: .revision)
     isPinned = try values.sqliteBoolIfPresent(forKey: .isPinned) ?? false
   }
 }

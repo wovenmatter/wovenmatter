@@ -2,6 +2,7 @@ import AppKit
 import Darwin
 import Foundation
 import SwiftUI
+import WovenMatterDashboardStore
 import WovenMatterClient
 
 struct WorkspaceProcessLeaseOwner: Equatable, Sendable {
@@ -140,6 +141,9 @@ final class WorkspaceProcessLease {
             in: .userDomainMask
         ).first
     ) -> URL {
+        if let isolated = CompanionTestWorkspace.supportDirectory {
+            return isolated.appending(path: "workspace-owner.lock")
+        }
         let supportDirectory = applicationSupportDirectory
             ?? FileManager.default.homeDirectoryForCurrentUser.appending(
                 path: "Library/Application Support",
@@ -324,14 +328,28 @@ final class WorkspaceProcessLease {
     }
 }
 
+@MainActor
+final class WovenMatterAppDelegate: NSObject, NSApplicationDelegate {
+    weak var model: ApplicationModel?
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+    func applicationWillTerminate(_ notification: Notification) {
+        model?.flushNoteDrafts()
+        model?.shutdownLocalACPSessions()
+    }
+}
+
 @main
 struct WovenMatterApp: App {
+    @NSApplicationDelegateAdaptor(WovenMatterAppDelegate.self) private var appDelegate
     private let workspaceProcessLease: WorkspaceProcessLease?
     @State private var applicationModel: ApplicationModel
     @AppStorage(DashboardTheme.storageKey) private var themeRawValue = DashboardTheme.green.rawValue
     @AppStorage(DashboardSidebarStyle.storageKey) private var sidebarStyleRawValue = DashboardSidebarStyle.defaultStyle.rawValue
 
     init() {
+        if let status = CompanionServeSupervisor.dispatch(arguments: CommandLine.arguments) {
+            Darwin.exit(status)
+        }
         if let commandIndex = CommandLine.arguments.firstIndex(of: "--woven-note-cli") {
             Darwin.exit(WovenNoteCommandLine.run(
                 arguments: Array(CommandLine.arguments.dropFirst(commandIndex + 1)),
@@ -374,6 +392,7 @@ struct WovenMatterApp: App {
     var body: some Scene {
         WindowGroup {
             RootView(model: applicationModel)
+                .onAppear { appDelegate.model = applicationModel }
                 .frame(minWidth: 760, minHeight: 640)
                 .scrollIndicators(.never)
                 .onReceive(
@@ -382,14 +401,6 @@ struct WovenMatterApp: App {
                     )
                 ) { _ in
                     applicationModel.flushNoteDrafts()
-                }
-                .onReceive(
-                    NotificationCenter.default.publisher(
-                        for: NSApplication.willTerminateNotification
-                    )
-                ) { _ in
-                    applicationModel.flushNoteDrafts()
-                    applicationModel.shutdownLocalACPSessions()
                 }
         }
         .defaultSize(width: 1320, height: 860)
