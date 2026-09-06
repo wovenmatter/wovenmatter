@@ -3,7 +3,6 @@ import SQLite3
 import WovenMatterCore
 
 struct CursorAccountActivity: Sendable {
-  let accountLabel: String
   let samples: [UsageSample]
 }
 
@@ -90,7 +89,7 @@ struct CursorAccountClient: Sendable {
         sourceEventID: identity
       )
     }
-    return CursorAccountActivity(accountLabel: accountLabel, samples: samples)
+    return CursorAccountActivity(samples: samples)
   }
 
   private static func eventIdentity(_ event: CursorUsageEvent) -> String {
@@ -369,7 +368,9 @@ struct CursorAccountClient: Sendable {
     }
     defer { sqlite3_finalize(statement) }
     sqlite3_bind_text(statement, 1, key, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
-    guard sqlite3_step(statement) == SQLITE_ROW else { return nil }
+    let status = sqlite3_step(statement)
+    if status == SQLITE_DONE { return nil }
+    guard status == SQLITE_ROW else { throw CursorAccountClientError.invalidResponse }
     if sqlite3_column_type(statement, 0) == SQLITE_TEXT,
        let value = sqlite3_column_text(statement, 0) {
       return String(cString: value)

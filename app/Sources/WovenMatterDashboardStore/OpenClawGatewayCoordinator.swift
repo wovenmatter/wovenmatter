@@ -54,6 +54,9 @@ public actor OpenClawGatewayCoordinator {
     "sortDir": .string("desc"),
   ])
 
+  typealias ConnectClient = @Sendable (OpenClawGatewayClient) async throws -> OpenClawGatewayCapabilities
+  private let connectClient: ConnectClient
+  private var connectionGenerations: [UUID: UUID] = [:]
   private let database: WorkspaceDatabase
   private let runExecutor: RunExecutor?
   private let onChange: ChangeHandler?
@@ -79,7 +82,7 @@ public actor OpenClawGatewayCoordinator {
   private var promptReadyWaiters: [String: [CheckedContinuation<Bool, Never>]] = [:]
   private var pausedGatewayEventRunIDs: Set<String> = []
   private var bufferedGatewayEventsByRunID: [
-    String: [(OpenClawGatewayEvent, UUID)]
+    String: [(OpenClawGatewayEvent, UUID, UUID)]
   ] = [:]
   private var contentPublicationTasks: [String: Task<Void, Never>] = [:]
   private static let contentPublicationDelay = Duration.milliseconds(50)
@@ -88,6 +91,7 @@ public actor OpenClawGatewayCoordinator {
     database: WorkspaceDatabase,
     onChange: ChangeHandler? = nil
   ) {
+    self.connectClient = { try await $0.connect() }
     self.database = database
     self.runExecutor = nil
     self.onChange = onChange
@@ -98,18 +102,30 @@ public actor OpenClawGatewayCoordinator {
     onChange: ChangeHandler? = nil,
     runExecutor: @escaping RunExecutor
   ) {
+    self.connectClient = { try await $0.connect() }
     self.database = database
     self.runExecutor = runExecutor
     self.onChange = onChange
+  }
+
+  init(database: WorkspaceDatabase, connectClient: @escaping ConnectClient) {
+    self.database = database
+    self.connectClient = connectClient
+    self.runExecutor = nil
+    self.onChange = nil
+  }
+
+  private func invalidateConnection(agentID: UUID) -> OpenClawGatewayClient? {
+    connectionGenerations.removeValue(forKey: agentID)
+    pendingClientConnections.removeValue(forKey: agentID)?.cancel()
+    return clients.removeValue(forKey: agentID)
   }
 
   public func reconnect(
     agentID: UUID,
     attempts requestedAttempts: Int? = nil
   ) async throws -> OpenClawGatewayCapabilities {
-    pendingClientConnections.removeValue(forKey: agentID)?.cancel()
-    await clients[agentID]?.disconnect()
-    clients.removeValue(forKey: agentID)
+    await invalidateConnection(agentID: agentID)?.disconnect()
     let location = try database.openClawGatewayLinks().first(where: {
       $0.agentID == agentID
     })?.location
@@ -167,9 +183,7 @@ public actor OpenClawGatewayCoordinator {
   }
 
   public func disconnect(agentID: UUID) async {
-    pendingClientConnections.removeValue(forKey: agentID)?.cancel()
-    await clients[agentID]?.disconnect()
-    clients.removeValue(forKey: agentID)
+    await invalidateConnection(agentID: agentID)?.disconnect()
   }
 
   public func configureTransport(
@@ -177,12 +191,12 @@ public actor OpenClawGatewayCoordinator {
     endpoint: OpenClawGatewayEndpoint,
     requestHeaders: [String: String]
   ) async {
-    pendingClientConnections.removeValue(forKey: agentID)?.cancel()
-    await clients.removeValue(forKey: agentID)?.disconnect()
+    let previous = invalidateConnection(agentID: agentID)
     clientTransports[agentID] = ClientTransport(
       endpoint: endpoint,
       headers: requestHeaders
     )
+    await previous?.disconnect()
   }
 
   @discardableResult
@@ -677,13 +691,14 @@ public actor OpenClawGatewayCoordinator {
 
   private func handleGatewayEvent(
     _ event: OpenClawGatewayEvent,
-    agentID: UUID
+    agentID: UUID,
+    generation: UUID
   ) async {
-    guard let projection = OpenClawGatewayEventProjection.project(event),
+    guard isCurrentConnection(agentID, generation: generation), let projection = OpenClawGatewayEventProjection.project(event),
           let runID = activeRunID(for: projection, agentID: agentID),
           var active = activeRuns[runID] else { return }
     if pausedGatewayEventRunIDs.contains(runID) {
-      bufferedGatewayEventsByRunID[runID, default: []].append((event, agentID))
+      bufferedGatewayEventsByRunID[runID, default: []].append((event, agentID, generation))
       return
     }
     let sequence: Int
@@ -782,8 +797,8 @@ public actor OpenClawGatewayCoordinator {
   private func resumeGatewayEvents(runID: String) async {
     pausedGatewayEventRunIDs.remove(runID)
     let buffered = bufferedGatewayEventsByRunID.removeValue(forKey: runID) ?? []
-    for (event, agentID) in buffered {
-      await handleGatewayEvent(event, agentID: agentID)
+    for (event, agentID, generation) in buffered {
+      await handleGatewayEvent(event, agentID: agentID, generation: generation)
     }
   }
 
@@ -1116,8 +1131,7 @@ public actor OpenClawGatewayCoordinator {
           kind: .tool,
           phase: phase,
           title: OpenClawGatewayEventProjection.toolTitle(
-            name: toolName,
-            input: nil
+            name: toolName
           ),
           status: normalizedStatus,
           toolName: toolName
@@ -1526,11 +1540,18 @@ public actor OpenClawGatewayCoordinator {
     )
   }
 
-  private func client(agentID: UUID) async throws -> OpenClawGatewayClient {
+  func client(agentID: UUID) async throws -> OpenClawGatewayClient {
     if let client = clients[agentID] { return client }
     if let pending = pendingClientConnections[agentID] {
-      return try await pending.value
+      let generation = connectionGenerations[agentID]
+      let client = try await pending.value
+      guard generation == connectionGenerations[agentID] else { throw CancellationError() }
+      try Task.checkCancellation()
+      return client
     }
+    let generation = UUID()
+    connectionGenerations[agentID] = generation
+    let connectClient = self.connectClient
     let database = self.database
     let task = Task<OpenClawGatewayClient, any Error> { [weak self] in
       guard var link = try database.openClawGatewayLinks().first(where: {
@@ -1542,15 +1563,16 @@ public actor OpenClawGatewayCoordinator {
         endpoint: transport.endpoint,
         requestHeaders: transport.headers,
         eventHandler: { [weak self] event in
-          await self?.handleGatewayEvent(event, agentID: agentID)
+          await self?.handleGatewayEvent(event, agentID: agentID, generation: generation)
         },
         disconnectHandler: { [weak self] detail in
-          await self?.handleGatewayDisconnect(agentID: agentID, detail: detail)
+          await self?.handleGatewayDisconnect(agentID: agentID, generation: generation, detail: detail)
         }
       )
       do {
-        let hello = try await client.connect()
+        let hello = try await connectClient(client)
         try Task.checkCancellation()
+        guard await self?.isCurrentConnection(agentID, generation: generation) == true else { throw CancellationError() }
         link.status = OpenClawGatewayConnectionStatus.ready.rawValue
         link.openClawVersion = hello.applicationVersion
         link.lastConnectedAt = hello.connectedAt
@@ -1563,20 +1585,33 @@ public actor OpenClawGatewayCoordinator {
         link.status = OpenClawGatewayConnectionStatus.unavailable.rawValue
         link.lastError = error.localizedDescription
         link.updatedAt = Date()
-        try? database.saveOpenClawGatewayLink(link)
+        if await self?.isCurrentConnection(agentID, generation: generation) == true {
+          try? database.saveOpenClawGatewayLink(link)
+        }
         throw error
       }
     }
     pendingClientConnections[agentID] = task
     do {
       let client = try await task.value
+      guard isCurrentConnection(agentID, generation: generation) else {
+        await client.disconnect()
+        throw CancellationError()
+      }
       pendingClientConnections.removeValue(forKey: agentID)
       clients[agentID] = client
+      try Task.checkCancellation()
       return client
     } catch {
-      pendingClientConnections.removeValue(forKey: agentID)
+      if isCurrentConnection(agentID, generation: generation) {
+        pendingClientConnections.removeValue(forKey: agentID)
+      }
       throw error
     }
+  }
+
+  private func isCurrentConnection(_ agentID: UUID, generation: UUID) -> Bool {
+    connectionGenerations[agentID] == generation
   }
 
   private func linkedGateway(agentID: UUID) throws -> OpenClawGatewayLink {
@@ -1600,8 +1635,8 @@ public actor OpenClawGatewayCoordinator {
     try database.saveOpenClawGatewayLink(link)
   }
 
-  private func handleGatewayDisconnect(agentID: UUID, detail: String) {
-    guard let link = try? linkedGateway(agentID: agentID),
+  private func handleGatewayDisconnect(agentID: UUID, generation: UUID, detail: String) {
+    guard isCurrentConnection(agentID, generation: generation), let link = try? linkedGateway(agentID: agentID),
           link.connectionStatus != .restarting else { return }
     try? setLinkStatus(agentID: agentID, status: .unavailable, error: detail)
   }

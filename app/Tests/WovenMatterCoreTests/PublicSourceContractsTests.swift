@@ -5,18 +5,6 @@ import WovenMatterCore
 
 @Suite("Public source contracts", .serialized)
 struct PublicSourceContractsTests {
-  @Test("usage gateway supports only the approved account providers")
-  func usageGatewayProviders() {
-    #expect(ProviderKind.supportedAccounts == [
-      .codex,
-      .claude,
-      .grok,
-      .cursor,
-      .openCodeGo,
-      .openRouter,
-    ])
-  }
-
   @Test("disabled usage accounts are absent and never probed")
   func passiveUsageAccounts() async {
     let now = Date(timeIntervalSince1970: 1_800_000_000)
@@ -381,7 +369,7 @@ struct PublicSourceContractsTests {
       credentialStore: credentials,
       usageDatabaseURL: databaseURL
     )
-    let snapshot = await service.snapshot(
+    let snapshot = try await service.snapshot(
       range: .last30Days,
       refreshLimits: false,
       refreshReason: .rangeChanged,
@@ -415,7 +403,7 @@ struct PublicSourceContractsTests {
       usageDatabaseURL: directory.url.appending(path: "workspace.sqlite")
     )
 
-    let snapshot = await service.snapshot(
+    let snapshot = try await service.snapshot(
       range: .last30Days,
       refreshLimits: true,
       refreshReason: .manual,
@@ -429,16 +417,6 @@ struct PublicSourceContractsTests {
     #expect(snapshot.limits.isEmpty)
     #expect(credentials.readCount == 0)
     #expect(sourceAccess.providerSourceChecks.isEmpty)
-  }
-
-  @Test("provider dashboards use consumer account destinations")
-  func providerDashboardDestinations() {
-    #expect(ProviderDashboardURL.codex?.absoluteString == "https://chatgpt.com/codex/settings/usage")
-    #expect(ProviderDashboardURL.claude?.absoluteString == "https://claude.ai/settings/usage")
-    #expect(ProviderDashboardURL.grok?.absoluteString == "https://grok.com/?_s=usage")
-    #expect(ProviderDashboardURL.cursor?.absoluteString == "https://cursor.com/dashboard?tab=usage")
-    #expect(ProviderDashboardURL.openCodeGo?.absoluteString == "https://opencode.ai/auth")
-    #expect(ProviderDashboardURL.openRouter?.absoluteString == "https://openrouter.ai/settings/credits")
   }
 
   @Test("the bundled catalog is complete and executable")

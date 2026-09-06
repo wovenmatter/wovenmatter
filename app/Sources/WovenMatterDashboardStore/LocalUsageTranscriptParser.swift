@@ -1,11 +1,6 @@
 import Foundation
 import WovenMatterCore
 
-struct ParsedUsageSample: Codable {
-  let sample: UsageSample
-  let dedupeKey: String?
-}
-
 struct CodexUsageScanState {
   var model = ""
   var reasoningLevel: String?
@@ -29,7 +24,7 @@ struct HarnessUsageScanState {
 enum LocalUsageTranscriptParser {
   static let forkCopyMaximumGap: TimeInterval = 1
 
-  static func parseClaude(line: String, lineNumber: Int) -> ParsedUsageSample? {
+  static func parseClaude(line: String, lineNumber: Int) -> UsageSample? {
     guard line.contains("\"usage\"") else { return nil }
     guard let root = object(line), string(root["type"]) == "assistant",
           let message = dictionary(root["message"]),
@@ -56,26 +51,23 @@ enum LocalUsageTranscriptParser {
     )
     guard tokens.totalTokens > 0 else { return nil }
 
-    return ParsedUsageSample(
-      sample: UsageSample(
-        id: "claude:\(identity)",
-        provider: .claude,
-        timestamp: timestamp,
-        sessionID: sessionID,
-        accountLabel: "Unknown",
-        model: model,
-        billingProvider: "Anthropic",
-        billingRoute: "Claude account",
-        reasoningLevel: string(root["effort"]),
-        harness: "Claude Code",
-        application: application,
-        agent: string(root["userType"]),
-        workspace: workspace,
-        tokens: tokens,
-        costUSD: number(root["costUSD"] ?? root["cost_usd"]),
-        sourceEventID: "\(identity)",
-        dedupeKey: dedupeKey
-      ),
+    return UsageSample(
+      id: "claude:\(identity)",
+      provider: .claude,
+      timestamp: timestamp,
+      sessionID: sessionID,
+      accountLabel: "Unknown",
+      model: model,
+      billingProvider: "Anthropic",
+      billingRoute: "Claude account",
+      reasoningLevel: string(root["effort"]),
+      harness: "Claude Code",
+      application: application,
+      agent: string(root["userType"]),
+      workspace: workspace,
+      tokens: tokens,
+      costUSD: number(root["costUSD"] ?? root["cost_usd"]),
+      sourceEventID: "\(identity)",
       dedupeKey: dedupeKey
     )
   }
@@ -84,7 +76,7 @@ enum LocalUsageTranscriptParser {
     line: String,
     lineNumber: Int,
     state: inout CodexUsageScanState
-  ) -> ParsedUsageSample? {
+  ) -> UsageSample? {
     guard line.contains("\"token_count\"")
             || line.contains("\"turn_context\"")
             || line.contains("\"session_meta\"") else { return nil }
@@ -149,24 +141,21 @@ enum LocalUsageTranscriptParser {
     guard tokens.totalTokens > 0 else { return nil }
     let sessionID = state.sessionID
 
-    return ParsedUsageSample(
-      sample: UsageSample(
-        id: "codex:\(sessionID):\(lineNumber):\(timestamp.timeIntervalSince1970)",
-        provider: .codex,
-        timestamp: timestamp,
-        sessionID: sessionID,
-        accountLabel: "Unknown",
-        model: state.model,
-        billingProvider: "OpenAI",
-        billingRoute: "Codex subscription",
-        reasoningLevel: state.reasoningLevel,
-        harness: "Codex",
-        application: state.application,
-        workspace: state.workspace,
-        tokens: tokens,
-        sourceEventID: "\(sessionID):\(lineNumber):\(timestamp.timeIntervalSince1970)"
-      ),
-      dedupeKey: nil
+    return UsageSample(
+      id: "codex:\(sessionID):\(lineNumber):\(timestamp.timeIntervalSince1970)",
+      provider: .codex,
+      timestamp: timestamp,
+      sessionID: sessionID,
+      accountLabel: "Unknown",
+      model: state.model,
+      billingProvider: "OpenAI",
+      billingRoute: "Codex subscription",
+      reasoningLevel: state.reasoningLevel,
+      harness: "Codex",
+      application: state.application,
+      workspace: state.workspace,
+      tokens: tokens,
+      sourceEventID: "\(sessionID):\(lineNumber):\(timestamp.timeIntervalSince1970)"
     )
   }
 
@@ -174,7 +163,7 @@ enum LocalUsageTranscriptParser {
     line: String,
     lineNumber: Int,
     summary: [String: Any]
-  ) -> [ParsedUsageSample] {
+  ) -> [UsageSample] {
     guard line.contains("\"usage\"") else { return [] }
     guard let root = object(line),
           let params = dictionary(root["params"]),
@@ -210,26 +199,23 @@ enum LocalUsageTranscriptParser {
       guard tokens.totalTokens > 0 else { return nil }
       let costTicks = number(modelTotals["costUsdTicks"] ?? modelTotals["cost_usd_ticks"])
       let cost = costTicks.map { $0 / 1_000_000_000 }
-      return ParsedUsageSample(
-        sample: UsageSample(
-          id: "grok:\(sessionID):\(promptID):\(model):\(timestamp.timeIntervalSince1970)",
-          provider: .grok,
-          timestamp: timestamp,
-          sessionID: sessionID,
-          accountLabel: "Unknown",
-          model: model,
-          billingProvider: "xAI",
-          billingRoute: "Grok account",
-          reasoningLevel: string(summary["reasoning_effort"]),
-          harness: "Grok Build",
-          application: "Grok CLI",
-          agent: string(summary["agent_name"]),
-          workspace: string(dictionary(summary["info"])?["cwd"]).map(lastPathComponent),
-          tokens: tokens,
-          costUSD: cost,
-          sourceEventID: "\(sessionID):\(promptID):\(model):\(timestamp.timeIntervalSince1970)",
-          dedupeKey: "\(sessionID):\(promptID):\(model):\(timestamp.timeIntervalSince1970)"
-        ),
+      return UsageSample(
+        id: "grok:\(sessionID):\(promptID):\(model):\(timestamp.timeIntervalSince1970)",
+        provider: .grok,
+        timestamp: timestamp,
+        sessionID: sessionID,
+        accountLabel: "Unknown",
+        model: model,
+        billingProvider: "xAI",
+        billingRoute: "Grok account",
+        reasoningLevel: string(summary["reasoning_effort"]),
+        harness: "Grok Build",
+        application: "Grok CLI",
+        agent: string(summary["agent_name"]),
+        workspace: string(dictionary(summary["info"])?["cwd"]).map(lastPathComponent),
+        tokens: tokens,
+        costUSD: cost,
+        sourceEventID: "\(sessionID):\(promptID):\(model):\(timestamp.timeIntervalSince1970)",
         dedupeKey: "\(sessionID):\(promptID):\(model):\(timestamp.timeIntervalSince1970)"
       )
     }
@@ -285,7 +271,7 @@ enum LocalUsageTranscriptParser {
     lineNumber: Int,
     harness: String,
     state: inout HarnessUsageScanState
-  ) -> ParsedUsageSample? {
+  ) -> UsageSample? {
     guard let root = object(line), let type = string(root["type"]) else { return nil }
 
     if type == "session" {
@@ -340,26 +326,23 @@ enum LocalUsageTranscriptParser {
       ?? "\(sessionID):\(lineNumber):\(timestamp.timeIntervalSince1970)"
     let cost = dictionary(usage["cost"]).flatMap { number($0["total"]) }
       ?? number(usage["cost"] ?? usage["cost_usd"])
-    return ParsedUsageSample(
-      sample: UsageSample(
-        id: "\(harness.lowercased()):\(identity)",
-        provider: route.provider,
-        timestamp: timestamp,
-        sessionID: sessionID,
-        accountLabel: "Unknown",
-        model: model,
-        billingProvider: route.billingProvider,
-        billingRoute: route.billingRoute,
-        reasoningLevel: string(message["thinkingLevel"] ?? message["thinking_level"])
-          ?? state.reasoningLevel,
-        harness: harness,
-        application: harness,
-        workspace: state.workspace,
-        tokens: tokens,
-        costUSD: cost,
-        sourceEventID: identity,
-        dedupeKey: responseID.map { "\(providerIdentifier):\($0)" }
-      ),
+    return UsageSample(
+      id: "\(harness.lowercased()):\(identity)",
+      provider: route.provider,
+      timestamp: timestamp,
+      sessionID: sessionID,
+      accountLabel: "Unknown",
+      model: model,
+      billingProvider: route.billingProvider,
+      billingRoute: route.billingRoute,
+      reasoningLevel: string(message["thinkingLevel"] ?? message["thinking_level"])
+        ?? state.reasoningLevel,
+      harness: harness,
+      application: harness,
+      workspace: state.workspace,
+      tokens: tokens,
+      costUSD: cost,
+      sourceEventID: identity,
       dedupeKey: responseID.map { "\(providerIdentifier):\($0)" }
     )
   }

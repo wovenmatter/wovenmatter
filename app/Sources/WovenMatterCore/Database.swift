@@ -67,28 +67,6 @@ public enum NoteArtifactKind: String, Codable, CaseIterable, Sendable {
   }
 }
 
-public struct AgentDatabaseListItem: Codable, Equatable, Identifiable, Sendable {
-  public let id: String
-  public let name: String
-  public let preference: AgentDatabasePreference
-
-  public init(id: String, name: String, preference: AgentDatabasePreference) {
-    self.id = id
-    self.name = name
-    self.preference = preference
-  }
-}
-
-public struct AgentDatabaseListResponse: Equatable, Sendable {
-  public let contractVersion: Int
-  public let databases: [AgentDatabaseListItem]
-
-  public init(contractVersion: Int, databases: [AgentDatabaseListItem]) {
-    self.contractVersion = contractVersion
-    self.databases = databases
-  }
-}
-
 public struct AgentDatabaseQueryResponse: Codable, Equatable, Sendable {
   public let contractVersion: Int
   public let columns: [String]
@@ -137,20 +115,5 @@ public struct DatabaseTabularData: Equatable, Sendable {
     }
     table.headerRowCount = columns.isEmpty ? 0 : 1
     return table.normalized()
-  }
-}
-
-extension AgentDatabaseListResponse: Decodable {
-  private enum CodingKeys: String, CodingKey {
-    case contractVersion
-    case contractVersionSnake = "contract_version"
-    case databases
-  }
-
-  public init(from decoder: any Decoder) throws {
-    let values = try decoder.container(keyedBy: CodingKeys.self)
-    contractVersion = try values.decodeIfPresent(Int.self, forKey: .contractVersion)
-      ?? values.decode(Int.self, forKey: .contractVersionSnake)
-    databases = try values.decode([AgentDatabaseListItem].self, forKey: .databases)
   }
 }

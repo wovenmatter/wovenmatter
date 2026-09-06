@@ -53,6 +53,8 @@ struct ConversationWorkTranscript: View {
                 .padding(.top, 12)
 
             if expanded {
+                let activities = self.activities
+                let timelineItems = timelineItems(for: activities)
                 VStack(alignment: .leading, spacing: 10) {
                     ForEach(timelineItems) { item in
                         if item.activities.count == 1,
@@ -129,7 +131,7 @@ struct ConversationWorkTranscript: View {
         return order.compactMap { values[$0] }
     }
 
-    private var timelineItems: [ConversationTimelineItem] {
+    private func timelineItems(for activities: [AgentRunActivity]) -> [ConversationTimelineItem] {
         var items: [ConversationTimelineItem] = []
         var pendingTools: [AgentRunActivity] = []
         func flushTools() {
@@ -516,6 +518,14 @@ struct ConversationChangedFilesCard: View {
     @State private var selectedChange: AgentRunFileChange?
 
     var body: some View {
+        let changes = self.changes
+        let tree = expanded ? ConversationChangedFileTreeNode.build(changes) : []
+        let directoryPaths = Set(tree.flatMap(\.allDirectoryPaths))
+        let allDirectoriesExpanded = !directoryPaths.isEmpty
+            && directoryPaths.isSubset(of: expandedDirectories)
+        let visibleRows = ConversationChangedFileTreeRow.flatten(tree, expanded: expandedDirectories)
+        let additions = changes.reduce(0) { $0 + $1.additions }
+        let deletions = changes.reduce(0) { $0 + $1.deletions }
         if !changes.isEmpty {
             VStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: 8) {
@@ -530,7 +540,7 @@ struct ConversationChangedFilesCard: View {
                     Text("−\(deletions)").foregroundStyle(.red)
                     Spacer()
                     if expanded, !directoryPaths.isEmpty {
-                        Button { toggleAllDirectories() } label: {
+                        Button { expandedDirectories = allDirectoriesExpanded ? [] : directoryPaths } label: {
                             Image(systemName: allDirectoriesExpanded
                                 ? "chevron.up.chevron.down"
                                 : "chevron.down.chevron.up")
@@ -618,24 +628,7 @@ struct ConversationChangedFilesCard: View {
         for change in records.flatMap(\.activity.changes) { result[change.path] = change }
         return result.values.sorted { $0.path < $1.path }
     }
-    private var tree: [ConversationChangedFileTreeNode] {
-        ConversationChangedFileTreeNode.build(changes)
-    }
-    private var directoryPaths: Set<String> {
-        Set(tree.flatMap(\.allDirectoryPaths))
-    }
-    private var allDirectoriesExpanded: Bool {
-        !directoryPaths.isEmpty && directoryPaths.isSubset(of: expandedDirectories)
-    }
-    private var visibleRows: [ConversationChangedFileTreeRow] {
-        ConversationChangedFileTreeRow.flatten(tree, expanded: expandedDirectories)
-    }
-    private var additions: Int { changes.reduce(0) { $0 + $1.additions } }
-    private var deletions: Int { changes.reduce(0) { $0 + $1.deletions } }
 
-    private func toggleAllDirectories() {
-        expandedDirectories = allDirectoriesExpanded ? [] : directoryPaths
-    }
 }
 
 private struct ConversationChangedFileTreeNode: Identifiable {

@@ -185,7 +185,7 @@ struct DashboardDatabasesView: View {
                     ScrollView {
                         LazyVStack(spacing: 8) {
                             ForEach(source.databases) { database in
-                                databaseRow(database, source: source)
+                                databaseRow(database)
                             }
                         }
                         .padding(20)
@@ -231,8 +231,7 @@ struct DashboardDatabasesView: View {
     }
 
     private func databaseRow(
-        _ database: DashboardAgentDatabase,
-        source: DashboardDatabaseSource
+        _ database: DashboardAgentDatabase
     ) -> some View {
         Button {
             selectedDatabaseID = database.id

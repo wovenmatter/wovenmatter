@@ -98,7 +98,7 @@ jobs:
           actual="$(gh release view "$tag" --json assets --jq '.assets[].name' | sort)"
           test "$actual" = "$expected"
           echo "Release $tag is staged as a private draft."
-          echo "Only trey131 can publish it through the Publish Release workflow."
+          echo "Verify and publish the draft through scripts/publish-release.sh."
 
       - name: Remove temporary signing keychain
         if: always()

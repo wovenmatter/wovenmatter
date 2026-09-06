@@ -60,9 +60,11 @@ enum OpenRouterActivityClient {
     }
     let rows = activityRows(root)
     var result: [String: [UsageSample]] = [:]
+    let dateFormatter = utcDateFormatter()
     for (index, row) in rows.enumerated() {
       guard let dateString = string(row["date"]),
-            let timestamp = utcMidday(dateString) else { continue }
+            let timestamp = dateFormatter.date(from: dateString)?
+              .addingTimeInterval(12 * 60 * 60) else { continue }
       let rawModel = string(row["model_permaslug"] ?? row["modelPermaslug"])
         ?? string(row["model"])
         ?? "Unknown model"
@@ -128,13 +130,13 @@ enum OpenRouterActivityClient {
     return root["activity"] as? [[String: Any]] ?? []
   }
 
-  private static func utcMidday(_ value: String) -> Date? {
+  private static func utcDateFormatter() -> DateFormatter {
     let formatter = DateFormatter()
     formatter.calendar = Calendar(identifier: .gregorian)
     formatter.locale = Locale(identifier: "en_US_POSIX")
     formatter.timeZone = TimeZone(secondsFromGMT: 0)
     formatter.dateFormat = "yyyy-MM-dd"
-    return formatter.date(from: value)?.addingTimeInterval(12 * 60 * 60)
+    return formatter
   }
 
   private static func string(_ value: Any?) -> String? {

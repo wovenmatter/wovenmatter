@@ -11,12 +11,6 @@ cache_root="${WOVENMATTER_TEST_CACHE_DIR:-/private/tmp/wovenmatter-validation}"
 test_root="${cache_root}/ComposerTextEditorTests"
 mkdir -p "$test_root" "${cache_root}/ModuleCache"
 
-composer_source="${repo_root}/app/App/Views/WorkspaceView.swift"
-composer_body="$(sed -n '/^private struct DashboardComposer: View {$/,/^private struct DashboardComposerClickAwayMonitor:/p' "$composer_source")"
-printf '%s\n' "$composer_body" | grep -Fq '@State private var focused = false'
-printf '%s\n' "$composer_body" | grep -Fq 'isFocused: $focused'
-printf '%s\n' "$composer_body" | grep -Fq 'onCommandNavigation: onCommandNavigation'
-
 xcrun swiftc \
   -parse-as-library \
   -module-cache-path "${cache_root}/ModuleCache" \

@@ -14,8 +14,6 @@ public enum AgentGoverningPlane: String, Codable, CaseIterable, Hashable, Sendab
 
 public enum DataAuthorityKind: String, Codable, CaseIterable, Hashable, Sendable {
   case deviceOwned = "device_owned"
-
-  public var canonical: DataAuthorityKind { self }
 }
 
 public enum AgentBucket: String, Codable, CaseIterable, Hashable, Sendable {
@@ -115,7 +113,7 @@ public struct WorkspaceAgent: Codable, Equatable, Identifiable, Sendable {
     self.iconKey = iconKey
     self.executionLocation = executionLocation
     self.governingPlane = governingPlane
-    self.authorityKind = authorityKind.canonical
+    self.authorityKind = authorityKind
     self.authorityDeviceID = authorityDeviceID
     self.runtimeKind = runtimeKind
     self.runtimeDeviceID = runtimeDeviceID

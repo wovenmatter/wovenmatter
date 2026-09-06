@@ -51,7 +51,7 @@ jobs:
           git diff --name-only "$base_sha" "$HEAD_SHA" > "$RUNNER_TEMP/changed-files"
 
           macos=false
-          if grep -Eq '^app/|^harnesses/|^scripts/(build_and_run|scan-public-tree|test-changes|test-remote-workspace|validate-native-app)\.sh$|^\.github/workflows/ci\.yml$' "$RUNNER_TEMP/changed-files"; then
+          if grep -Eq '^app/|^harnesses/|^scripts/.*\.sh$|^scripts/test-support/|^\.github/workflows/(ci|release)\.yml$' "$RUNNER_TEMP/changed-files"; then
             macos=true
           fi
 

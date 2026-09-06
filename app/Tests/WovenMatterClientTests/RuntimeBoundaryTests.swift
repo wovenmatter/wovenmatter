@@ -270,7 +270,7 @@ struct RuntimeBoundaryTests {
     let preview = try await installer.prepareCLIInstall(definition)
     #expect(preview.source == URL(string: "https://example.com/install.sh"))
     #expect(preview.bytes == reviewed.count)
-    #expect(preview.sha256 == LocalACPManagedNodeRuntime.sha256Hex(reviewed))
+    #expect(preview.sha256 == "306c6ca7407560340797866e077e053627ad409277d1b9da58106fce4cf717cb")
 
     do {
       _ = try await installer.install(

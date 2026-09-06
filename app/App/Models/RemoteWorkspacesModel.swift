@@ -193,7 +193,7 @@ final class RemoteWorkspacesModel {
         hostName: String,
         userName: String
     ) -> RemoteWorkspacePreflight? {
-        checkedHostKey == Self.inspectionKey(
+        checkedHostKey == Self.hostKey(
             hostName: hostName,
             userName: userName
         )
@@ -222,7 +222,7 @@ final class RemoteWorkspacesModel {
                     hostName: cleanHost,
                     userName: cleanUser.nilIfEmpty
                 )
-                checkedHostKey = Self.inspectionKey(
+                checkedHostKey = Self.hostKey(
                     hostName: cleanHost,
                     userName: cleanUser
                 )
@@ -308,7 +308,7 @@ final class RemoteWorkspacesModel {
                     hostName: configuration.hostName,
                     userName: configuration.userName
                 )
-                checkedHostKey = Self.inspectionKey(
+                checkedHostKey = Self.hostKey(
                     hostName: configuration.hostName,
                     userName: configuration.userName ?? ""
                 )
@@ -365,7 +365,7 @@ final class RemoteWorkspacesModel {
                     hostName: pending.configuration.hostName,
                     userName: pending.configuration.userName
                 )
-                checkedHostKey = Self.inspectionKey(
+                checkedHostKey = Self.hostKey(
                     hostName: pending.configuration.hostName,
                     userName: pending.configuration.userName ?? ""
                 )
@@ -735,13 +735,6 @@ final class RemoteWorkspacesModel {
 
     private static func hostKey(hostName: String, userName: String) -> String {
         "\(userName.trimmingCharacters(in: .whitespacesAndNewlines))@\(hostName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())"
-    }
-
-    private static func inspectionKey(
-        hostName: String,
-        userName: String
-    ) -> String {
-        hostKey(hostName: hostName, userName: userName)
     }
 
     private static func requireCapabilities(

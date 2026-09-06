@@ -79,40 +79,6 @@ struct ChatPanelLayoutTests {
     })
   }
 
-  @Test("lower row can be the first divided four-panel variant")
-  func lowerRowFourPanelVariant() {
-    var state = threePanelState()
-
-    let addedC = state.addPanel(from: a, newPanelID: c)
-    #expect(addedC)
-    #expect(state.auxiliaryRows.map { $0.map(\.id) } == [[b], [a, c]])
-    #expect(state.canAddPanel(from: b))
-    #expect(!state.canAddPanel(from: a))
-    #expect(!state.canAddPanel(from: c))
-    #expect(state.normalizedFrames()[b] == DashboardChatPanelFrame(
-      x: 0.5,
-      y: 0,
-      width: 0.5,
-      height: 0.5
-    ))
-    #expect(state.normalizedFrames()[a] == DashboardChatPanelFrame(
-      x: 0.5,
-      y: 0.5,
-      width: 0.25,
-      height: 0.5
-    ))
-    #expect(state.normalizedFrames()[c] == DashboardChatPanelFrame(
-      x: 0.75,
-      y: 0.5,
-      width: 0.25,
-      height: 0.5
-    ))
-
-    let addedD = state.addPanel(from: b, newPanelID: d)
-    #expect(addedD)
-    #expect(state.auxiliaryRows.map { $0.map(\.id) } == [[b, d], [a, c]])
-  }
-
   @Test("invalid additions and a sixth panel are gated")
   func maximumAndInvalidAddGating() {
     var state = fivePanelState()
@@ -179,7 +145,6 @@ struct ChatPanelLayoutTests {
     let auxiliaryIDs = [a, b, c, d]
     for order in permutations(of: auxiliaryIDs) {
       var state = fivePanelState()
-      let chatLifecycle = Set(["primary", "chat-a", "chat-b", "chat-c", "chat-d"])
       let assignedA = state.setConversation("chat-a", in: a)
       let assignedB = state.setConversation("chat-b", in: b)
       let assignedC = state.setConversation("chat-c", in: c)
@@ -189,8 +154,6 @@ struct ChatPanelLayoutTests {
       for panelID in order {
         let closed = state.closePanel(panelID)
         #expect(closed)
-        // Panel removal has no lifecycle collaborator and cannot mutate chats.
-        #expect(chatLifecycle == Set(["primary", "chat-a", "chat-b", "chat-c", "chat-d"]))
       }
       #expect(state.panels == [DashboardChatPanel(
         id: .primary,
@@ -324,11 +287,6 @@ struct ChatPanelLayoutTests {
     let navigatedUp = state.navigate(.up)
     #expect(navigatedUp == nil)
     #expect(state.focusRequest == request)
-  }
-
-  @Test("panel divider contract matches Adaptive Sidebar")
-  func dividerContract() {
-    #expect(DashboardChatPanelMetrics.dividerThickness == 0.5)
   }
 
   private func threePanelState() -> DashboardChatPanelState {

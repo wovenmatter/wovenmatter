@@ -43,6 +43,20 @@ struct DashboardCalendarMonthLayout: Equatable {
     }
 }
 
+func dashboardCalendarItemsByDay(
+    _ items: [WorkspaceCalendarItemRecord],
+    calendar: Calendar
+) -> [Date: [WorkspaceCalendarItemRecord]] {
+    var grouped: [Date: [(item: WorkspaceCalendarItemRecord, start: Date)]] = [:]
+    for item in items {
+        guard let start = item.startDate else { continue }
+        grouped[calendar.startOfDay(for: start), default: []].append((item, start))
+    }
+    return grouped.mapValues { entries in
+        entries.sorted { $0.start < $1.start }.map(\.item)
+    }
+}
+
 struct DashboardCalendarEventDraft: Equatable {
     var title = ""
     var startsAt: Date
@@ -78,12 +92,13 @@ struct DashboardCalendarSurface: View {
     )
 
     var body: some View {
+        let itemsByDay = dashboardCalendarItemsByDay(model.calendarItems, calendar: calendar)
         VStack(spacing: 0) {
             header
             ScrollView {
                 VStack(spacing: 14) {
-                    monthCard
-                    selectedDayCard
+                    monthCard(itemsByDay: itemsByDay)
+                    selectedDayCard(items: itemsByDay[calendar.startOfDay(for: selectedDate)] ?? [])
                 }
                 .frame(maxWidth: 920)
                 .frame(maxWidth: .infinity)
@@ -133,7 +148,7 @@ struct DashboardCalendarSurface: View {
         .padding(.top, 56)
     }
 
-    private var monthCard: some View {
+    private func monthCard(itemsByDay: [Date: [WorkspaceCalendarItemRecord]]) -> some View {
         let layout = DashboardCalendarMonthLayout(displaying: displayedMonth, calendar: calendar)
         return DashboardCard {
             VStack(spacing: 14) {
@@ -170,16 +185,15 @@ struct DashboardCalendarSurface: View {
                             .padding(.vertical, 3)
                     }
                     ForEach(layout.days) { day in
-                        dayCell(day)
+                        dayCell(day, dayItems: itemsByDay[calendar.startOfDay(for: day.date)] ?? [])
                     }
                 }
             }
         }
     }
 
-    private var selectedDayCard: some View {
-        let items = items(on: selectedDate)
-        return DashboardCard {
+    private func selectedDayCard(items: [WorkspaceCalendarItemRecord]) -> some View {
+        DashboardCard {
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
                     VStack(alignment: .leading, spacing: 3) {
@@ -221,8 +235,10 @@ struct DashboardCalendarSurface: View {
         }
     }
 
-    private func dayCell(_ day: DashboardCalendarMonthLayout.Day) -> some View {
-        let dayItems = items(on: day.date)
+    private func dayCell(
+        _ day: DashboardCalendarMonthLayout.Day,
+        dayItems: [WorkspaceCalendarItemRecord]
+    ) -> some View {
         let selected = calendar.isDate(day.date, inSameDayAs: selectedDate)
         let today = calendar.isDateInToday(day.date)
         return Button {
@@ -289,14 +305,6 @@ struct DashboardCalendarSurface: View {
         }
         .buttonStyle(DashboardQuietButtonStyle())
         .accessibilityLabel(label)
-    }
-
-    private func items(on day: Date) -> [WorkspaceCalendarItemRecord] {
-        model.calendarItems
-            .filter { item in
-                item.startDate.map { calendar.isDate($0, inSameDayAs: day) } == true
-            }
-            .sorted { ($0.startDate ?? .distantFuture) < ($1.startDate ?? .distantFuture) }
     }
 
     private func timeLabel(for item: WorkspaceCalendarItemRecord) -> String {

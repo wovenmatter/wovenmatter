@@ -12,13 +12,17 @@ struct DashboardSpreadsheetEditor: View {
     }
 
     private var table: NoteTableBlock {
-        guard let tableIndex, case .table(let table) = document.blocks[tableIndex] else {
+        let blocks = document.blocks
+        guard let index = blocks.firstIndex(where: {
+            if case .table = $0 { true } else { false }
+        }), case .table(let table) = blocks[index] else {
             return NoteTableBlock(rows: 20, columns: 8, headerRow: true)
         }
         return table
     }
 
     var body: some View {
+        let table = self.table
         VStack(spacing: 0) {
             HStack(spacing: 8) {
                 HStack(spacing: 4) {
@@ -120,6 +124,7 @@ struct DashboardSpreadsheetEditor: View {
     private func cellBinding(row: Int, column: Int) -> Binding<String> {
         Binding(
             get: {
+                let table = self.table
                 guard table.rows.indices.contains(row),
                       table.rows[row].cells.indices.contains(column) else { return "" }
                 return table.rows[row].cells[column].plainText
@@ -205,6 +210,10 @@ struct DashboardHTMLArtifactView: NSViewRepresentable {
     }
 
     func updateNSView(_ webView: WKWebView, context: Context) {
+        let coordinator = context.coordinator
+        guard coordinator.html != html || coordinator.linkedDataJSON != linkedDataJSON else { return }
+        coordinator.html = html
+        coordinator.linkedDataJSON = linkedDataJSON
         let rendered = Self.renderedHTML(html: html, linkedDataJSON: linkedDataJSON)
         guard context.coordinator.renderedHTML != rendered else { return }
         context.coordinator.renderedHTML = rendered
@@ -249,6 +258,8 @@ struct DashboardHTMLArtifactView: NSViewRepresentable {
     }
 
     final class Coordinator: NSObject, WKNavigationDelegate {
+        var html: String?
+        var linkedDataJSON: String?
         var renderedHTML: String?
 
         func webView(
@@ -350,7 +361,7 @@ private struct DashboardDatabaseLinkPopover: View {
         }
         .padding(16)
         .frame(width: 380)
-        .onAppear { loadInitialValues() }
+        .onAppear { loadSelectedTargetLink() }
         .onChange(of: sourceID) { _, _ in
             if !databases.contains(where: { $0.databaseID == databaseID }) {
                 databaseID = databases.first?.databaseID ?? ""
@@ -363,10 +374,6 @@ private struct DashboardDatabaseLinkPopover: View {
         if ["db", "sqlite", "sqlite3"].contains(fileExtension) { return true }
         if fileExtension == "json" { return false }
         return databases.first(where: { $0.databaseID == databaseID })?.preference == .sqlite
-    }
-
-    private func loadInitialValues() {
-        loadSelectedTargetLink()
     }
 
     private func loadSelectedTargetLink() {

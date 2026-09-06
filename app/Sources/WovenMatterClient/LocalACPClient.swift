@@ -314,30 +314,87 @@ private struct ACPEnvelope: Codable, Sendable {
 
 final class ACPLineCursor: @unchecked Sendable {
     static let maximumLineBytes = 10_000_000
-    private var iterator: FileHandle.AsyncBytes.Iterator
+    private let handle: FileHandle
+    // FileHandle.AsyncBytes shares a blocking I/O actor across handles on macOS.
+    // An idle session must not prevent another session from reading its response.
+    // All mutable framing state is confined to this cursor's queue.
+    private let queue = DispatchQueue(label: "com.wovenmatter.acp-line-reader", qos: .userInitiated)
+    private var chunk = [UInt8](repeating: 0, count: 64 * 1_024)
+    private var chunkCount = 0
+    private var chunkOffset = 0
     private var buffer = Data()
 
     init(handle: FileHandle) {
-        iterator = handle.bytes.makeAsyncIterator()
+        self.handle = handle
     }
 
     func next() async throws -> Data? {
-        while let byte = try await iterator.next() {
-            if byte == 0x0A {
-                guard !buffer.isEmpty else { continue }
+        let cancellation = ReadCancellation()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                queue.async {
+                    do { continuation.resume(returning: try self.readLine(cancellation: cancellation)) }
+                    catch { continuation.resume(throwing: error) }
+                }
+            }
+        } onCancel: {
+            cancellation.cancel()
+        }
+    }
+
+    private func readLine(cancellation: ReadCancellation) throws -> Data? {
+        while true {
+            try cancellation.check()
+            while chunkOffset < chunkCount {
+                let byte = chunk[chunkOffset]
+                chunkOffset += 1
+                if byte == 0x0A {
+                    guard !buffer.isEmpty else { continue }
+                    let line = buffer
+                    buffer.removeAll(keepingCapacity: true)
+                    return line
+                }
+                buffer.append(byte)
+                guard buffer.count <= Self.maximumLineBytes else {
+                    throw LocalACPClientError.lineTooLarge
+                }
+            }
+
+            // Poll on a dispatch worker, never on Swift's cooperative executor.
+            // The bounded wait lets cancellation finish even if the writer stays open.
+            var descriptor = pollfd(fd: handle.fileDescriptor, events: Int16(POLLIN), revents: 0)
+            let ready = Darwin.poll(&descriptor, 1, 100)
+            if ready == 0 { continue }
+            if ready < 0 {
+                if errno == EINTR { continue }
+                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            }
+            try cancellation.check()
+            let count = chunk.withUnsafeMutableBytes {
+                Darwin.read(handle.fileDescriptor, $0.baseAddress!, $0.count)
+            }
+            if count < 0 {
+                if errno == EINTR { continue }
+                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            }
+            chunkCount = count
+            chunkOffset = 0
+            if count == 0 {
+                guard !buffer.isEmpty else { return nil }
                 let line = buffer
-                buffer.removeAll(keepingCapacity: true)
+                buffer.removeAll()
                 return line
             }
-            buffer.append(byte)
-            guard buffer.count <= Self.maximumLineBytes else {
-                throw LocalACPClientError.lineTooLarge
-            }
         }
-        guard !buffer.isEmpty else { return nil }
-        let line = buffer
-        buffer.removeAll()
-        return line
+    }
+
+    private final class ReadCancellation: @unchecked Sendable {
+        private let lock = NSLock()
+        private var cancelled = false
+        func cancel() { lock.withLock { cancelled = true } }
+        func check() throws {
+            if lock.withLock({ cancelled }) { throw CancellationError() }
+        }
     }
 }
 
@@ -995,12 +1052,6 @@ public actor LocalACPClient {
         case .pi:
             .piRPC
         }
-    }
-
-    private func beginActivePrompt(
-        _ text: String
-    ) throws -> Task<LocalACPStopReason?, any Error> {
-        try beginActivePrompt(AgentMessageInput(text: text))
     }
 
     private func beginActivePrompt(

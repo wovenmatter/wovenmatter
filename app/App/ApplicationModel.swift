@@ -1,22 +1,8 @@
-import Darwin
 import Foundation
 import Observation
 import WovenMatterClient
 import WovenMatterCore
 import WovenMatterDashboardStore
-
-struct DashboardMessagePresentation: Sendable {
-    let source: String
-    let status: String?
-    let createdAt: String
-    let document: ConversationMarkdownDocument?
-}
-
-struct DashboardRunPresentation: Sendable {
-    let source: WorkspaceRunRecord
-    let startedAt: Date?
-    let completedDuration: String?
-}
 
 struct PendingLocalACPPermission: Equatable, Identifiable {
     let id: UUID
@@ -44,280 +30,6 @@ struct ConversationTitleGenerationSettings: Equatable {
     var thinking: String
 }
 
-struct DashboardConversationWindow: Equatable, Sendable {
-    let conversationID: String
-    let messages: [WorkspaceMessageRecord]
-    let runs: [WorkspaceRunRecord]
-    let activities: [WorkspaceRunActivityRecord]
-    let attachments: [WorkspaceMessageAttachmentRecord]
-    let references: [WorkspaceMessageReferenceRecord]
-    let hasOlderMessages: Bool
-    let loadedOlderMessages: Bool
-
-    init(page: WorkspaceConversationHistoryPage) {
-        conversationID = page.conversationID
-        runs = page.runs
-        activities = page.activities
-        attachments = page.attachments
-        references = page.references
-        messages = Self.ordered(messages: page.messages, runs: page.runs)
-        hasOlderMessages = page.hasOlderMessages
-        loadedOlderMessages = false
-    }
-
-    func refreshing(with page: WorkspaceConversationHistoryPage) -> DashboardConversationWindow {
-        guard page.conversationID == conversationID, loadedOlderMessages,
-              let tailStart = page.oldestMessageCursor else {
-            return DashboardConversationWindow(page: page)
-        }
-        // Completed history outside the live tail is product-defined as immutable.
-        // Preserve the already paged prefix instead of requerying it on every refresh;
-        // if sent-message editing or deletion is added, revalidate this prefix here.
-        let retainedMessages = messages.filter {
-            Self.cursor(for: $0).precedes(tailStart)
-        }
-        let retainedMessageIDs = Set(retainedMessages.map(\.id))
-        let retainedRuns = runs.filter {
-            $0.userMessageID.map(retainedMessageIDs.contains) == true
-                || $0.assistantMessageID.map(retainedMessageIDs.contains) == true
-        }
-        let retainedRunIDs = Set(retainedRuns.map(\.id))
-        let retainedActivities = activities.filter { retainedRunIDs.contains($0.runID) }
-        let retainedAttachments = attachments.filter { retainedMessageIDs.contains($0.messageID) }
-        let retainedReferences = references.filter { retainedMessageIDs.contains($0.messageID) }
-        return DashboardConversationWindow(
-            conversationID: conversationID,
-            messages: Self.merged(messages: retainedMessages, with: page.messages),
-            runs: Self.merged(runs: retainedRuns, with: page.runs),
-            activities: Self.merged(activities: retainedActivities, with: page.activities),
-            attachments: Self.merged(attachments: retainedAttachments, with: page.attachments),
-            references: Self.merged(references: retainedReferences, with: page.references),
-            hasOlderMessages: retainedMessages.isEmpty ? page.hasOlderMessages : hasOlderMessages,
-            loadedOlderMessages: true
-        )
-    }
-
-    func prepending(_ page: WorkspaceConversationHistoryPage) -> DashboardConversationWindow {
-        guard page.conversationID == conversationID else {
-            return DashboardConversationWindow(page: page)
-        }
-        return DashboardConversationWindow(
-            conversationID: conversationID,
-            messages: Self.merged(messages: page.messages, with: messages),
-            runs: Self.merged(runs: page.runs, with: runs),
-            activities: Self.merged(activities: page.activities, with: activities),
-            attachments: Self.merged(attachments: page.attachments, with: attachments),
-            references: Self.merged(references: page.references, with: references),
-            hasOlderMessages: page.hasOlderMessages,
-            loadedOlderMessages: true
-        )
-    }
-
-    func mergingNewer(_ newer: DashboardConversationWindow) -> DashboardConversationWindow {
-        guard newer.conversationID == conversationID else { return newer }
-        return DashboardConversationWindow(
-            conversationID: conversationID,
-            messages: Self.merged(messages: messages, with: newer.messages),
-            runs: Self.merged(runs: runs, with: newer.runs),
-            activities: Self.merged(activities: activities, with: newer.activities),
-            attachments: Self.merged(attachments: attachments, with: newer.attachments),
-            references: Self.merged(references: references, with: newer.references),
-            hasOlderMessages: hasOlderMessages,
-            loadedOlderMessages: true
-        )
-    }
-
-    private init(
-        conversationID: String,
-        messages: [WorkspaceMessageRecord],
-        runs: [WorkspaceRunRecord],
-        activities: [WorkspaceRunActivityRecord],
-        attachments: [WorkspaceMessageAttachmentRecord],
-        references: [WorkspaceMessageReferenceRecord],
-        hasOlderMessages: Bool,
-        loadedOlderMessages: Bool
-    ) {
-        self.conversationID = conversationID
-        self.runs = runs
-        self.activities = activities
-        self.attachments = attachments
-        self.references = references
-        self.messages = Self.ordered(messages: messages, runs: runs)
-        self.hasOlderMessages = hasOlderMessages
-        self.loadedOlderMessages = loadedOlderMessages
-    }
-
-    private static func cursor(for message: WorkspaceMessageRecord) -> WorkspaceConversationHistoryCursor {
-        WorkspaceConversationHistoryCursor(createdAt: message.createdAt, messageID: message.id)
-    }
-
-    private static func merged(
-        messages first: [WorkspaceMessageRecord],
-        with second: [WorkspaceMessageRecord]
-    ) -> [WorkspaceMessageRecord] {
-        var byID = Dictionary(uniqueKeysWithValues: first.map { ($0.id, $0) })
-        for message in second {
-            byID[message.id] = message
-        }
-        return byID.values.sorted {
-            $0.createdAt == $1.createdAt ? $0.id < $1.id : $0.createdAt < $1.createdAt
-        }
-    }
-
-    private static func merged(
-        runs first: [WorkspaceRunRecord],
-        with second: [WorkspaceRunRecord]
-    ) -> [WorkspaceRunRecord] {
-        var byID = Dictionary(uniqueKeysWithValues: first.map { ($0.id, $0) })
-        for run in second {
-            byID[run.id] = run
-        }
-        return byID.values.sorted {
-            let firstCreatedAt = $0.createdAt ?? ""
-            let secondCreatedAt = $1.createdAt ?? ""
-            return firstCreatedAt == secondCreatedAt ? $0.id < $1.id : firstCreatedAt < secondCreatedAt
-        }
-    }
-
-    private static func merged(
-        activities first: [WorkspaceRunActivityRecord],
-        with second: [WorkspaceRunActivityRecord]
-    ) -> [WorkspaceRunActivityRecord] {
-        var byID = Dictionary(uniqueKeysWithValues: first.map { ($0.id, $0) })
-        for activity in second { byID[activity.id] = activity }
-        return byID.values.sorted {
-            $0.createdAt == $1.createdAt ? $0.id < $1.id : $0.createdAt < $1.createdAt
-        }
-    }
-
-    private static func merged(
-        attachments first: [WorkspaceMessageAttachmentRecord],
-        with second: [WorkspaceMessageAttachmentRecord]
-    ) -> [WorkspaceMessageAttachmentRecord] {
-        var byID = Dictionary(uniqueKeysWithValues: first.map { ($0.id, $0) })
-        for attachment in second { byID[attachment.id] = attachment }
-        return byID.values.sorted { $0.createdAt == $1.createdAt ? $0.id < $1.id : $0.createdAt < $1.createdAt }
-    }
-
-    private static func merged(
-        references first: [WorkspaceMessageReferenceRecord],
-        with second: [WorkspaceMessageReferenceRecord]
-    ) -> [WorkspaceMessageReferenceRecord] {
-        var byID = Dictionary(uniqueKeysWithValues: first.map { ($0.id, $0) })
-        for reference in second { byID[reference.id] = reference }
-        return byID.values.sorted { $0.createdAt == $1.createdAt ? $0.id < $1.id : $0.createdAt < $1.createdAt }
-    }
-
-    /// Server and Mac clocks can differ enough for a response timestamp to
-    /// precede the prompt that caused it. Use timestamps as the baseline, then
-    /// enforce the causal user -> assistant relationship carried by each run.
-    private static func ordered(
-        messages: [WorkspaceMessageRecord],
-        runs: [WorkspaceRunRecord]
-    ) -> [WorkspaceMessageRecord] {
-        let chronological = messages.sorted {
-            $0.createdAt == $1.createdAt ? $0.id < $1.id : $0.createdAt < $1.createdAt
-        }
-        let messageIDs = Set(chronological.map(\.id))
-        var prerequisites: [String: Set<String>] = [:]
-        for run in runs {
-            guard let userMessageID = run.userMessageID,
-                  let assistantMessageID = run.assistantMessageID,
-                  userMessageID != assistantMessageID,
-                  messageIDs.contains(userMessageID),
-                  messageIDs.contains(assistantMessageID) else { continue }
-            prerequisites[assistantMessageID, default: []].insert(userMessageID)
-        }
-        guard !prerequisites.isEmpty else { return chronological }
-
-        var emitted: Set<String> = []
-        var remaining = chronological
-        var result: [WorkspaceMessageRecord] = []
-        result.reserveCapacity(chronological.count)
-        while !remaining.isEmpty {
-            guard let nextIndex = remaining.firstIndex(where: { message in
-                prerequisites[message.id, default: []].isSubset(of: emitted)
-            }) else {
-                // Malformed cyclic relationships must not make messages vanish.
-                result.append(contentsOf: remaining)
-                break
-            }
-            let next = remaining.remove(at: nextIndex)
-            emitted.insert(next.id)
-            result.append(next)
-        }
-        return result
-    }
-}
-
-private extension WorkspaceConversationHistoryCursor {
-    func precedes(_ other: WorkspaceConversationHistoryCursor) -> Bool {
-        createdAt == other.createdAt ? messageID < other.messageID : createdAt < other.createdAt
-    }
-}
-
-private struct DashboardConversationPresentation: Sendable {
-    let window: DashboardConversationWindow
-    let messagesByID: [String: DashboardMessagePresentation]
-    let runsByID: [String: DashboardRunPresentation]
-
-    var content: WorkspaceConversationContent {
-        WorkspaceConversationContent(
-            conversationID: window.conversationID,
-            messages: window.messages,
-            runs: window.runs,
-            attachments: window.attachments,
-            references: window.references
-        )
-    }
-}
-
-@MainActor
-@Observable
-final class DashboardConversationState {
-    let conversationID: String
-    private(set) var content: WorkspaceConversationContent?
-    private(set) var messagePresentations: [String: DashboardMessagePresentation] = [:]
-    private(set) var runPresentations: [String: DashboardRunPresentation] = [:]
-    private(set) var runActivities: [WorkspaceRunActivityRecord] = []
-    private(set) var hasOlderMessages = false
-    private(set) var isLoadingOlderMessages = false
-    private(set) var error: String?
-    @ObservationIgnored fileprivate var presentation: DashboardConversationPresentation?
-    @ObservationIgnored fileprivate var lastAccessSequence: UInt64 = 0
-    @ObservationIgnored private var refreshGeneration: UInt64 = 0
-
-    init(conversationID: String) {
-        self.conversationID = conversationID
-    }
-
-    fileprivate func apply(_ presentation: DashboardConversationPresentation) {
-        self.presentation = presentation
-        content = presentation.content
-        messagePresentations = presentation.messagesByID
-        runPresentations = presentation.runsByID
-        runActivities = presentation.window.activities
-        hasOlderMessages = presentation.window.hasOlderMessages
-    }
-
-    fileprivate func setLoadingOlderMessages(_ loading: Bool) {
-        isLoadingOlderMessages = loading
-    }
-
-    fileprivate func setError(_ error: String?) {
-        self.error = error
-    }
-
-    fileprivate func beginRefresh() -> UInt64 {
-        refreshGeneration &+= 1
-        return refreshGeneration
-    }
-
-    fileprivate func isCurrentRefresh(_ generation: UInt64) -> Bool {
-        refreshGeneration == generation
-    }
-}
-
 struct DashboardWorkspaceOverview: Equatable, Sendable {
     let folders: [WorkspaceFolderRecord]
     let conversations: [WorkspaceConversationRecord]
@@ -328,485 +40,6 @@ struct DashboardWorkspaceOverview: Equatable, Sendable {
         conversations = workspace.conversations
         notes = workspace.notes
     }
-}
-
-struct DashboardNoteJournalEntry: Codable, Equatable, Sendable {
-    static let currentVersion = 3
-
-    let version: Int
-    let writerSessionID: String?
-    let mutationID: String?
-    let noteID: String
-    let title: String
-    let content: String
-    let revision: UInt64
-    let folderID: String?
-    let createdAt: String?
-
-    init(
-        writerSessionID: String? = nil,
-        mutationID: String = UUID().uuidString.lowercased(),
-        noteID: String,
-        title: String,
-        content: String,
-        revision: UInt64,
-        folderID: String? = nil,
-        createdAt: String? = nil
-    ) {
-        version = Self.currentVersion
-        self.writerSessionID = writerSessionID
-        self.mutationID = mutationID
-        self.noteID = noteID
-        self.title = title
-        self.content = content
-        self.revision = revision
-        self.folderID = folderID
-        self.createdAt = createdAt
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case version, writerSessionID, mutationID
-        case noteID, title, content, revision, folderID, createdAt
-    }
-
-    init(from decoder: any Decoder) throws {
-        let values = try decoder.container(keyedBy: CodingKeys.self)
-        version = try values.decodeIfPresent(Int.self, forKey: .version) ?? 1
-        writerSessionID = try values.decodeIfPresent(String.self, forKey: .writerSessionID)
-        mutationID = try values.decodeIfPresent(String.self, forKey: .mutationID)
-        noteID = try values.decode(String.self, forKey: .noteID)
-        title = try values.decode(String.self, forKey: .title)
-        content = try values.decode(String.self, forKey: .content)
-        revision = try values.decode(UInt64.self, forKey: .revision)
-        folderID = try values.decodeIfPresent(String.self, forKey: .folderID)
-        createdAt = try values.decodeIfPresent(String.self, forKey: .createdAt)
-    }
-
-    func identified(by writerSessionID: String) -> DashboardNoteJournalEntry {
-        DashboardNoteJournalEntry(
-            writerSessionID: writerSessionID,
-            mutationID: mutationID ?? UUID().uuidString.lowercased(),
-            noteID: noteID,
-            title: title,
-            content: content,
-            revision: revision,
-            folderID: folderID,
-            createdAt: createdAt
-        )
-    }
-}
-
-final class DashboardNoteDraftJournal: @unchecked Sendable {
-    typealias BeforeAppend = @Sendable () throws -> Void
-
-    private let fileURL: URL
-    private let lockFileURL: URL
-    private let beforeAppend: BeforeAppend
-    private let lock = NSLock()
-    private let encoder = JSONEncoder()
-    private let decoder = JSONDecoder()
-
-    init(
-        fileURL: URL,
-        beforeAppend: @escaping BeforeAppend = {}
-    ) {
-        self.fileURL = fileURL
-        lockFileURL = fileURL.appendingPathExtension("lock")
-        self.beforeAppend = beforeAppend
-    }
-
-    func append(_ entry: DashboardNoteJournalEntry) throws {
-        try withExclusiveLock {
-            _ = try entriesUnlocked()
-            try beforeAppend()
-            try ensureFileUnlocked()
-            var record = try encoder.encode(entry)
-            record.append(0x0A)
-            let handle = try FileHandle(forWritingTo: fileURL)
-            defer { try? handle.close() }
-            try handle.seekToEnd()
-            try handle.write(contentsOf: record)
-            try handle.synchronize()
-        }
-    }
-
-    func entries() throws -> [DashboardNoteJournalEntry] {
-        try withExclusiveLock { try entriesUnlocked() }
-    }
-
-    func latestEntries() throws -> [DashboardNoteJournalEntry] {
-        Self.latestEntries(from: try entries())
-    }
-
-    func compactToLatestEntries() throws {
-        try withExclusiveLock {
-            let latest = Self.latestEntries(from: try entriesUnlocked())
-            var data = Data()
-            for entry in latest {
-                data.append(try encoder.encode(entry))
-                data.append(0x0A)
-            }
-            try writeCompactedUnlocked(data)
-        }
-    }
-
-    func acknowledge(_ acknowledged: DashboardNoteJournalEntry) throws {
-        try withExclusiveLock {
-            let entries = try entriesUnlocked()
-            let targetIndex: Int?
-            if let mutationID = acknowledged.mutationID {
-                targetIndex = entries.firstIndex { $0.mutationID == mutationID }
-            } else {
-                targetIndex = entries.firstIndex { $0 == acknowledged }
-            }
-            guard let targetIndex else { return }
-            let remaining: [DashboardNoteJournalEntry] = entries.enumerated().compactMap {
-                index, entry in
-                if index == targetIndex { return nil }
-                if index < targetIndex,
-                   let writerSessionID = acknowledged.writerSessionID,
-                   entry.noteID == acknowledged.noteID,
-                   entry.writerSessionID == writerSessionID {
-                    return nil
-                }
-                return entry
-            }
-            var data = Data()
-            for entry in remaining {
-                data.append(try encoder.encode(entry))
-                data.append(0x0A)
-            }
-            try writeCompactedUnlocked(data)
-        }
-    }
-
-    private func entriesUnlocked() throws -> [DashboardNoteJournalEntry] {
-        guard FileManager.default.fileExists(atPath: fileURL.path) else { return [] }
-        try FileManager.default.setAttributes(
-            [.posixPermissions: 0o600],
-            ofItemAtPath: fileURL.path
-        )
-        try repairPartialTailUnlocked()
-        let data = try Data(contentsOf: fileURL)
-        let records = data.split(separator: 0x0A, omittingEmptySubsequences: true)
-        var entries: [DashboardNoteJournalEntry] = []
-        var foundMalformedRecord = false
-        for record in records {
-            do {
-                entries.append(try decoder.decode(
-                    DashboardNoteJournalEntry.self,
-                    from: Data(record)
-                ))
-            } catch {
-                foundMalformedRecord = true
-            }
-        }
-        if foundMalformedRecord {
-            try quarantineAndRewriteUnlocked(entries)
-        }
-        return entries
-    }
-
-    private func ensureFileUnlocked() throws {
-        let directory = fileURL.deletingLastPathComponent()
-        try FileManager.default.createDirectory(
-            at: directory,
-            withIntermediateDirectories: true
-        )
-        if !FileManager.default.fileExists(atPath: fileURL.path) {
-            guard FileManager.default.createFile(
-                atPath: fileURL.path,
-                contents: nil,
-                attributes: [.posixPermissions: 0o600]
-            ) else {
-                throw DashboardNoteJournalError.createFailed
-            }
-            try synchronizeParentDirectoryUnlocked()
-        }
-        try FileManager.default.setAttributes(
-            [.posixPermissions: 0o600],
-            ofItemAtPath: fileURL.path
-        )
-    }
-
-    private func repairPartialTailUnlocked() throws {
-        let data = try Data(contentsOf: fileURL)
-        guard !data.isEmpty, data.last != 0x0A else { return }
-        let validLength = data.lastIndex(of: 0x0A).map { $0 + 1 } ?? 0
-        let handle = try FileHandle(forWritingTo: fileURL)
-        defer { try? handle.close() }
-        try handle.truncate(atOffset: UInt64(validLength))
-        try handle.synchronize()
-    }
-
-    private func quarantineAndRewriteUnlocked(
-        _ entries: [DashboardNoteJournalEntry]
-    ) throws {
-        let quarantineURL = fileURL
-            .deletingPathExtension()
-            .appendingPathExtension("corrupt-\(UUID().uuidString).ndjson")
-        try FileManager.default.copyItem(at: fileURL, to: quarantineURL)
-        try FileManager.default.setAttributes(
-            [.posixPermissions: 0o600],
-            ofItemAtPath: quarantineURL.path
-        )
-        var data = Data()
-        for entry in entries {
-            data.append(try encoder.encode(entry))
-            data.append(0x0A)
-        }
-        try writeCompactedUnlocked(data)
-    }
-
-    private func writeCompactedUnlocked(_ data: Data) throws {
-        try FileManager.default.createDirectory(
-            at: fileURL.deletingLastPathComponent(),
-            withIntermediateDirectories: true
-        )
-        try data.write(to: fileURL, options: .atomic)
-        try FileManager.default.setAttributes(
-            [.posixPermissions: 0o600],
-            ofItemAtPath: fileURL.path
-        )
-        let handle = try FileHandle(forWritingTo: fileURL)
-        defer { try? handle.close() }
-        try handle.synchronize()
-        try synchronizeParentDirectoryUnlocked()
-    }
-
-    private func synchronizeParentDirectoryUnlocked() throws {
-        let directory = fileURL.deletingLastPathComponent().path
-        let descriptor = directory.withCString { Darwin.open($0, O_RDONLY) }
-        guard descriptor >= 0 else { throw Self.currentPOSIXError() }
-        defer { Darwin.close(descriptor) }
-        guard Darwin.fsync(descriptor) == 0 else {
-            throw Self.currentPOSIXError()
-        }
-    }
-
-    private func withExclusiveLock<T>(_ operation: () throws -> T) throws -> T {
-        try lock.withLock {
-            let directory = lockFileURL.deletingLastPathComponent()
-            try FileManager.default.createDirectory(
-                at: directory,
-                withIntermediateDirectories: true
-            )
-            let descriptor = lockFileURL.path.withCString {
-                Darwin.open($0, O_CREAT | O_RDWR | O_CLOEXEC, S_IRUSR | S_IWUSR)
-            }
-            guard descriptor >= 0 else { throw Self.currentPOSIXError() }
-            defer { Darwin.close(descriptor) }
-            guard Darwin.lockf(descriptor, F_LOCK, 0) == 0 else {
-                throw Self.currentPOSIXError()
-            }
-            defer { Darwin.lockf(descriptor, F_ULOCK, 0) }
-            return try operation()
-        }
-    }
-
-    private static func currentPOSIXError() -> POSIXError {
-        POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
-    }
-
-    private static func latestEntries(
-        from entries: [DashboardNoteJournalEntry]
-    ) -> [DashboardNoteJournalEntry] {
-        var latestIndex: [String: [String: Int]] = [:]
-        var retained = Array(repeating: true, count: entries.count)
-        for (index, entry) in entries.enumerated() {
-            guard let writerSessionID = entry.writerSessionID else { continue }
-            if let previous = latestIndex[entry.noteID]?[writerSessionID] {
-                retained[previous] = false
-            }
-            latestIndex[entry.noteID, default: [:]][writerSessionID] = index
-        }
-        return entries.enumerated().compactMap { index, entry in
-            retained[index] ? entry : nil
-        }
-    }
-}
-
-enum DashboardNoteJournalError: Error {
-    case createFailed
-}
-
-final class DashboardNoteWriteBehind: @unchecked Sendable {
-    typealias Update = @Sendable (DashboardNoteJournalEntry) throws -> Void
-    typealias Completion = @Sendable (
-        DashboardNoteJournalEntry,
-        Result<Void, any Error>
-    ) -> Void
-
-    private let journal: DashboardNoteDraftJournal
-    private let update: Update
-    private let completion: Completion
-    private let queue = DispatchQueue(label: "com.wovenmatter.note-write-behind")
-    private let coalescingDelay: DispatchTimeInterval
-    private let writerSessionID: String
-    private var pending: [String: DashboardNoteJournalEntry] = [:]
-    private var order: [String] = []
-    private var scheduledGeneration: UInt64 = 0
-    private var stickyAppendError: (any Error)?
-
-    init(
-        journal: DashboardNoteDraftJournal,
-        coalescingDelay: DispatchTimeInterval = .milliseconds(700),
-        writerSessionID: String = UUID().uuidString.lowercased(),
-        update: @escaping Update,
-        completion: @escaping Completion
-    ) {
-        self.journal = journal
-        self.coalescingDelay = coalescingDelay
-        self.writerSessionID = writerSessionID
-        self.update = update
-        self.completion = completion
-    }
-
-    func submit(_ entry: DashboardNoteJournalEntry) {
-        // Keystrokes update application state immediately and are coalesced on
-        // this serial queue. Lifecycle flush barriers close the short window
-        // before the latest entry reaches the recoverable on-disk journal.
-        let identifiedEntry = entry.identified(by: writerSessionID)
-        queue.async { [self] in
-            enqueue(identifiedEntry)
-            scheduleDrain()
-        }
-    }
-
-    func replayAndFlush(_ entries: [DashboardNoteJournalEntry]) async throws {
-        return try await withCheckedThrowingContinuation {
-            (continuation: CheckedContinuation<Void, any Error>) in
-            queue.async { [self] in
-                scheduledGeneration &+= 1
-                if let error = processJournaled(Self.latestEntries(from: entries)) {
-                    continuation.resume(throwing: error)
-                } else {
-                    continuation.resume()
-                }
-            }
-        }
-    }
-
-    func flush() throws {
-        var failure: (any Error)?
-        queue.sync { [self] in
-            scheduledGeneration &+= 1
-            failure = drainPending()
-        }
-        if let failure {
-            throw failure
-        }
-    }
-
-    func hasOutstandingWork() -> Bool {
-        queue.sync {
-            guard pending.isEmpty else { return true }
-            do {
-                return try !journal.entries().isEmpty
-            } catch {
-                return true
-            }
-        }
-    }
-
-    private func enqueue(_ entry: DashboardNoteJournalEntry) {
-        if pending[entry.noteID] == nil { order.append(entry.noteID) }
-        if pending[entry.noteID, default: entry].revision <= entry.revision {
-            pending[entry.noteID] = entry
-        }
-    }
-
-    private func scheduleDrain() {
-        scheduledGeneration &+= 1
-        let generation = scheduledGeneration
-        queue.asyncAfter(deadline: .now() + coalescingDelay) { [self] in
-            guard generation == scheduledGeneration else { return }
-            _ = drainPending()
-        }
-    }
-
-    private func drainPending() -> (any Error)? {
-        let entries = order.compactMap { pending[$0] }
-        order.removeAll(keepingCapacity: true)
-        pending.removeAll(keepingCapacity: true)
-        guard !entries.isEmpty else { return stickyAppendError }
-
-        var firstFailure: (any Error)?
-        var appendFailure: (any Error)?
-        for entry in entries {
-            do {
-                try journal.append(entry)
-            } catch {
-                enqueue(entry)
-                if appendFailure == nil { appendFailure = error }
-                if firstFailure == nil { firstFailure = error }
-                completion(entry, .failure(error))
-                continue
-            }
-
-            let result = persistJournaled(entry)
-            if case .failure(let error) = result, firstFailure == nil {
-                firstFailure = error
-            }
-            completion(entry, result)
-        }
-        stickyAppendError = appendFailure
-        return firstFailure
-    }
-
-    private func processJournaled(
-        _ entries: [DashboardNoteJournalEntry]
-    ) -> (any Error)? {
-        var firstFailure: (any Error)?
-        for entry in entries {
-            let result = persistJournaled(entry)
-            if case .failure(let error) = result, firstFailure == nil {
-                firstFailure = error
-            }
-            completion(entry, result)
-        }
-        return firstFailure
-    }
-
-    private func persistJournaled(
-        _ entry: DashboardNoteJournalEntry
-    ) -> Result<Void, any Error> {
-        do {
-            try update(entry)
-            try journal.acknowledge(entry)
-            return .success(())
-        } catch {
-            // Each record is a complete note snapshot. If SQLite remains
-            // unavailable, retaining only each note's latest durable snapshot
-            // prevents retry/edit traffic from growing the journal without
-            // bound while preserving the last-mutation order across notes.
-            try? journal.compactToLatestEntries()
-            return .failure(error)
-        }
-    }
-
-    private static func latestEntries(
-        from entries: [DashboardNoteJournalEntry]
-    ) -> [DashboardNoteJournalEntry] {
-        var latestIndex: [String: [String: Int]] = [:]
-        var retained = Array(repeating: true, count: entries.count)
-        for (index, entry) in entries.enumerated() {
-            guard let writerSessionID = entry.writerSessionID else { continue }
-            if let previous = latestIndex[entry.noteID]?[writerSessionID] {
-                retained[previous] = false
-            }
-            latestIndex[entry.noteID, default: [:]][writerSessionID] = index
-        }
-        return entries.enumerated().compactMap { index, entry in
-            retained[index] ? entry : nil
-        }
-    }
-}
-
-enum DashboardNoteDraftSaveState: Equatable {
-    case saved
-    case saving
-    case failed(String)
 }
 
 private struct UsageAnalyticsRefreshKey: Hashable, Sendable {
@@ -820,81 +53,6 @@ private struct UsageLimitsRefreshKey: Hashable, Sendable {
     let allowsCredentialAccess: Bool
     let keychainInteraction: String
     let selectedCodexWorkspaceID: String?
-}
-
-struct DashboardNoteDraft: Equatable {
-    var title: String
-    var content: String
-    var saveState: DashboardNoteDraftSaveState
-    var editRevision: UInt64
-    var persistedRevision: UInt64
-    var sourceUpdatedAt: String?
-
-    static func initial(for note: WorkspaceNoteRecord) -> DashboardNoteDraft {
-        DashboardNoteDraft(
-            title: note.title,
-            content: note.content,
-            saveState: .saved,
-            editRevision: 0,
-            persistedRevision: 0,
-            sourceUpdatedAt: note.updatedAt
-        )
-    }
-
-    static func recovered(
-        from entry: DashboardNoteJournalEntry,
-        source note: WorkspaceNoteRecord?
-    ) -> DashboardNoteDraft {
-        DashboardNoteDraft(
-            title: entry.title,
-            content: entry.content,
-            saveState: .saving,
-            editRevision: entry.revision,
-            persistedRevision: 0,
-            sourceUpdatedAt: note?.updatedAt
-        )
-    }
-
-    mutating func reconcile(with note: WorkspaceNoteRecord) {
-        if editRevision == 0 {
-            adopt(note)
-        } else if note.title == title, note.content == content {
-            saveState = .saved
-            sourceUpdatedAt = note.updatedAt
-            if persistedRevision >= editRevision {
-                editRevision = 0
-                persistedRevision = 0
-            }
-        } else if persistedRevision < editRevision {
-            // A local write is still pending. A refresh cannot supersede it.
-        } else if note.updatedAt == sourceUpdatedAt {
-            // A pane can reopen before the post-write snapshot refresh arrives.
-            // Keep both the newer draft and its current save result.
-        } else {
-            // A newer local writer (including woven-note) won the revision.
-            adopt(note)
-        }
-    }
-
-    mutating func edit(title: String? = nil, content: String? = nil) {
-        if let title { self.title = title }
-        if let content { self.content = content }
-        editRevision &+= 1
-        saveState = .saving
-    }
-
-    mutating func fail(_ message: String) {
-        saveState = .failed(message)
-    }
-
-    private mutating func adopt(_ note: WorkspaceNoteRecord) {
-        title = note.title
-        content = note.content
-        saveState = .saved
-        editRevision = 0
-        persistedRevision = 0
-        sourceUpdatedAt = note.updatedAt
-    }
 }
 
 @MainActor
@@ -934,7 +92,6 @@ final class ApplicationModel {
     private(set) var openClawHeartbeatMessages: [UUID: String] = [:]
     private(set) var openClawHeartbeatErrorAgentIDs: Set<UUID> = []
     private(set) var openClawHeartbeatSavingAgentIDs: Set<UUID> = []
-    private(set) var openClawGatewaySessionPreferences: [String: OpenClawSessionPreferences] = [:]
     private(set) var openClawGatewaySessionMetadata: [String: LocalACPSessionMetadata] = [:]
     private(set) var openClawCronJobs: [OpenClawCronJob] = []
     private(set) var openClawCronRuns: [OpenClawCronRun] = []
@@ -948,7 +105,6 @@ final class ApplicationModel {
     private(set) var workspaceListRevision: Int64 = 0
     private(set) var macSurfaceProfile: SurfaceProfile?
     private(set) var workspaceError: String?
-    private(set) var newChatError: String?
     private(set) var folderMutationError: String?
     private(set) var noteMutationError: String?
     private(set) var noteEditingSocketPath: String?
@@ -1031,6 +187,10 @@ final class ApplicationModel {
     private let localACPRuntimeResolver = LocalACPRuntimeResolver()
     @ObservationIgnored
     private let localUsageService = LocalUsageService()
+    @ObservationIgnored
+    private var usageAnalyticsRequestID: UUID?
+    @ObservationIgnored
+    private var usageLimitsRequestID: UUID?
     @ObservationIgnored
     private let usageAnalyticsRefreshCoordinator = UsageRefreshCoordinator<
         UsageAnalyticsRefreshKey,
@@ -2195,12 +1355,13 @@ final class ApplicationModel {
             if draft.editRevision == entry.revision {
                 draft.saveState = .saved
             }
-            if noteWriteBehind?.hasOutstandingWork() == false {
+            let hasOutstandingWork = noteWriteBehind?.hasOutstandingWork()
+            if hasOutstandingWork == false {
                 noteMutationError = nil
             }
             noteDrafts[entry.noteID] = draft
             if dashboardStoreStartDeferredForNoteRecovery,
-               noteWriteBehind?.hasOutstandingWork() == false {
+               hasOutstandingWork == false {
                 dashboardStoreStartDeferredForNoteRecovery = false
                 startDashboardStoreIfReady()
             }
@@ -2298,19 +1459,24 @@ final class ApplicationModel {
             enabledProviders: enabledProviders.map(\.rawValue).sorted(),
             allowsCredentialAccess: allowsCredentialAccess
         )
+        let requestID = UUID()
+        usageAnalyticsRequestID = requestID
         isRefreshingUsageAnalytics = true
         do {
             let analytics = try await usageAnalyticsRefreshCoordinator.value(
                 for: key,
                 policy: policy
             ) { [localUsageService] in
-                await localUsageService.analyticsSnapshot(
+                try await localUsageService.analyticsSnapshot(
                     range: range,
                     refreshReason: reason,
                     enabledProviders: enabledProviders,
                     allowCredentialAccess: allowsCredentialAccess
                 )
             }
+            guard usageAnalyticsRequestID == requestID,
+                  enabledUsageProviders == enabledProviders else { return }
+            try Task.checkCancellation()
             let existing = localUsage
             localUsage = LocalUsageSnapshot(
                 analytics: analytics,
@@ -2323,9 +1489,14 @@ final class ApplicationModel {
         } catch is CancellationError {
             // A forced refresh superseded this request. Its replacement owns the state.
         } catch {
-            localUsageError = error.localizedDescription
+            if usageAnalyticsRequestID == requestID, !Task.isCancelled {
+                localUsageError = error.localizedDescription
+            }
         }
-        isRefreshingUsageAnalytics = await usageAnalyticsRefreshCoordinator.isRefreshing
+        let isRefreshing = await usageAnalyticsRefreshCoordinator.isRefreshing
+        if usageAnalyticsRequestID == requestID {
+            isRefreshingUsageAnalytics = isRefreshing
+        }
     }
 
     private func refreshUsageLimits(
@@ -2344,13 +1515,15 @@ final class ApplicationModel {
             keychainInteraction: keychainInteraction.rawValue,
             selectedCodexWorkspaceID: requestedCodexWorkspaceID
         )
+        let requestID = UUID()
+        usageLimitsRequestID = requestID
         isRefreshingUsageLimits = true
         do {
             let limits = try await usageLimitsRefreshCoordinator.value(
                 for: key,
                 policy: force ? .force : .refresh
             ) { [localUsageService] in
-                await localUsageService.limitsSnapshot(
+                try await localUsageService.limitsSnapshot(
                     refresh: true,
                     refreshReason: reason,
                     enabledProviders: enabledProviders,
@@ -2359,6 +1532,10 @@ final class ApplicationModel {
                     selectedCodexWorkspaceID: requestedCodexWorkspaceID
                 )
             }
+            guard usageLimitsRequestID == requestID,
+                  enabledUsageProviders == enabledProviders,
+                  selectedCodexUsageWorkspaceID == requestedCodexWorkspaceID else { return }
+            try Task.checkCancellation()
             codexUsageWorkspaces = limits.codexWorkspaces
             selectedCodexUsageWorkspaceID = limits.selectedCodexWorkspaceID
             let existing = localUsage
@@ -2371,9 +1548,14 @@ final class ApplicationModel {
         } catch is CancellationError {
             // A forced refresh superseded this request. Its replacement owns the state.
         } catch {
-            localUsageError = error.localizedDescription
+            if usageLimitsRequestID == requestID, !Task.isCancelled {
+                localUsageError = error.localizedDescription
+            }
         }
-        isRefreshingUsageLimits = await usageLimitsRefreshCoordinator.isRefreshing
+        let isRefreshing = await usageLimitsRefreshCoordinator.isRefreshing
+        if usageLimitsRequestID == requestID {
+            isRefreshingUsageLimits = isRefreshing
+        }
     }
 
     private func prepareUsageSnapshot(range: UsageTimeRange) {
@@ -2557,14 +1739,9 @@ final class ApplicationModel {
         _ runtimeKind: AgentRuntimeKind
     ) {
         acknowledgeCredentialAccessDisclosure()
-        let wasEnabled = enabledLocalACPRuntimeKinds.contains(runtimeKind)
         let state = localACPRuntimePreferences.enable(runtimeKind)
         enabledLocalACPRuntimeKinds = state.enabledRuntimeKinds
         shownLocalACPRuntimeKinds = state.shownRuntimeKinds
-        guard !wasEnabled else {
-            refreshLocalACPRuntimesNow()
-            return
-        }
         refreshLocalACPRuntimesNow()
     }
 
@@ -2961,17 +2138,15 @@ final class ApplicationModel {
             throw ApplicationModelError.dashboardStoreUnavailable
         }
         let content = try await dashboardStore.conversationContent(id: conversation.id)
-        let transcript = content.messages.map { message in
-            let value = message.role == "assistant"
-                ? RemoteNoteEditEnvelope.redactingEnvelopes(in: message.content)
-                : message.content
-            return "\(message.role.capitalized): \(value)"
-        }.joined(separator: "\n\n")
+        let preview = DashboardConversationReferencePreview.make(
+            messages: content.messages,
+            limit: AgentMessageAttachmentLimits.maximumReferenceCharacters
+        )
         return .reference(AgentMessageReferenceDraft(
             kind: .conversation,
             resourceID: conversation.id,
             titleSnapshot: conversation.title,
-            contentSnapshot: String(transcript.prefix(AgentMessageAttachmentLimits.maximumReferenceCharacters)),
+            contentSnapshot: preview,
             revisionSnapshot: conversation.lastMessageAt ?? "",
             folderIDSnapshot: conversation.folderID,
             folderTitleSnapshot: conversation.folderID.flatMap { folderID in
@@ -3023,9 +2198,7 @@ final class ApplicationModel {
         conversationState.setError(nil)
         localRunError = nil
         do {
-            let usesOpenClawGateway = try await shouldUseOpenClawGateway(
-                for: conversation
-            )
+            let usesOpenClawGateway = isOpenClawGatewayConversation(conversation.id)
             let usesMediatedNoteEditing = usesOpenClawGateway
             let noteBinding = canAgentEditOpenNote(conversation)
                 && !(isSteeringActiveTurn && usesMediatedNoteEditing)
@@ -3062,9 +2235,8 @@ final class ApplicationModel {
                 }
                 return true
             }
-            let accepted: LocalACPRunIdentifiers
             if usesOpenClawGateway {
-                accepted = try await acceptOpenClawGatewayMessage(
+                _ = try await acceptOpenClawGatewayMessage(
                     conversation: conversation,
                     input: normalized,
                     deliveryContent: deliveryContent,
@@ -3072,7 +2244,7 @@ final class ApplicationModel {
                     store: dashboardStore
                 )
             } else {
-                accepted = try await acceptLocalAgentMessage(
+                _ = try await acceptLocalAgentMessage(
                     conversation: conversation,
                     input: normalized,
                     deliveryContent: deliveryContent,
@@ -3084,7 +2256,6 @@ final class ApplicationModel {
                 conversation: conversation,
                 firstPrompt: normalized.previewText
             )
-            _ = accepted
             return true
         } catch {
             if !isSteeringActiveTurn {
@@ -3140,12 +2311,6 @@ final class ApplicationModel {
             }
         }
         try? store.database.dismissTerminalRemoteNoteEdits()
-    }
-
-    private func shouldUseOpenClawGateway(
-        for conversation: WorkspaceConversationRecord
-    ) async throws -> Bool {
-        openClawGatewayConversationIDs.contains(conversation.id)
     }
 
     func canAgentEditOpenNote(_ conversation: WorkspaceConversationRecord?) -> Bool {
@@ -3515,10 +2680,6 @@ final class ApplicationModel {
         }
     }
 
-    func clearNewChatError() {
-        newChatError = nil
-    }
-
     func installLocalACPRuntimeComponent(_ runtimeKind: AgentRuntimeKind) {
         guard !installingLocalACPRuntimeKinds.contains(runtimeKind),
               let definition = LocalACPRuntimeCatalog.definition(
@@ -3809,6 +2970,7 @@ final class ApplicationModel {
         let workingDirectory = localACPWorkspaceLaunchConfiguration?.rootURL
             ?? FileManager.default.homeDirectoryForCurrentUser
         let resolutions = await Task.detached(priority: .utility) {
+            let resolver = resolver.snapshottingExecutableSearchDirectories()
             var resolutions: [LocalACPRuntimeResolution] = []
             for definition in definitions {
                 let discovered = resolver.resolve(
@@ -4717,7 +3879,7 @@ final class ApplicationModel {
         guard let dashboardStore else { return }
         Task {
             do {
-                openClawGatewaySessionPreferences[conversationID] = try await dashboardStore
+                _ = try await dashboardStore
                     .patchOpenClawGatewaySession(
                         conversationID: conversationID,
                         preferences: OpenClawSessionPreferences(

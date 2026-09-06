@@ -173,7 +173,6 @@ public actor LocalACPSessionCoordinator {
     private struct ActiveSession {
         let client: LocalACPSessionDriver
         let runtimeKind: AgentRuntimeKind
-        var configuration: LocalACPSessionConfiguration
         // Cursor returns a session ID before it has created the durable
         // store.db needed by session/load. Keep a newly created Cursor ID
         // attached to this live process until its first prompt succeeds.
@@ -187,7 +186,7 @@ public actor LocalACPSessionCoordinator {
     private struct PendingSessionStart {
         let id: UInt64
         let task: Task<LocalACPSessionDriver, any Error>
-        var waiterCount: Int
+        var waiters: Set<UUID>
     }
 
     private struct PendingSessionShutdown {
@@ -494,10 +493,7 @@ public actor LocalACPSessionCoordinator {
                 runID: run.runID
             )
             try persistConfiguration(
-                await currentConfiguration(
-                    conversationID: descriptor.conversationID,
-                    client: client
-                ),
+                await client.configuration(),
                 conversationID: descriptor.conversationID
             )
             try await streamWriter.finish()
@@ -534,7 +530,7 @@ public actor LocalACPSessionCoordinator {
             if let active = activeSessions.removeValue(
                 forKey: descriptor.conversationID
             ) {
-                await active.client.shutdown()
+                await shutDownSession(active, conversationID: descriptor.conversationID)
             }
             throw error
         }
@@ -576,10 +572,7 @@ public actor LocalACPSessionCoordinator {
             systemPrompt: systemPrompt
         )
         do {
-            let configuration = await currentConfiguration(
-                conversationID: conversationID,
-                client: client
-            )
+            let configuration = await client.configuration()
             try persistConfiguration(
                 configuration,
                 conversationID: conversationID
@@ -630,7 +623,6 @@ public actor LocalACPSessionCoordinator {
                 model,
                 thinking
             )
-            activeSessions[conversationID]?.configuration = configuration
             try persistConfiguration(
                 configuration,
                 conversationID: conversationID
@@ -647,7 +639,12 @@ public actor LocalACPSessionCoordinator {
         if let runID = runIDsByConversation[conversationID] {
             cancellationRequestedRunIDs.insert(runID)
         }
-        guard let active = activeSessions[conversationID] else { return }
+        guard let active = activeSessions[conversationID] else {
+            if let pending = pendingSessionStarts[conversationID], pending.waiters.count == 1 {
+                pending.task.cancel()
+            }
+            return
+        }
         try? await active.client.cancel()
     }
 
@@ -939,9 +936,10 @@ public actor LocalACPSessionCoordinator {
         systemPrompt: String?,
         runID: String?
     ) async throws -> LocalACPSessionDriver {
+        let waiterID = UUID()
         let pending: PendingSessionStart
         if var existing = pendingSessionStarts[descriptor.conversationID] {
-            existing.waiterCount += 1
+            existing.waiters.insert(waiterID)
             pendingSessionStarts[descriptor.conversationID] = existing
             pending = existing
         } else {
@@ -959,37 +957,37 @@ public actor LocalACPSessionCoordinator {
             pending = PendingSessionStart(
                 id: id,
                 task: task,
-                waiterCount: 1
+                waiters: [waiterID]
             )
             pendingSessionStarts[descriptor.conversationID] = pending
         }
 
-        do {
-            let client = try await pending.task.value
-            finishWaitingForSessionStart(
-                conversationID: descriptor.conversationID,
-                id: pending.id
-            )
-            return client
-        } catch {
-            finishWaitingForSessionStart(
-                conversationID: descriptor.conversationID,
-                id: pending.id
-            )
-            throw error
+        return try await withTaskCancellationHandler {
+            defer {
+                finishWaitingForSessionStart(conversationID: descriptor.conversationID,
+                                             id: pending.id, waiterID: waiterID)
+            }
+            return try await pending.task.value
+        } onCancel: {
+            Task {
+                await self.finishWaitingForSessionStart(conversationID: descriptor.conversationID,
+                                                        id: pending.id, waiterID: waiterID,
+                                                        cancelling: true)
+            }
         }
     }
 
     private func finishWaitingForSessionStart(
-        conversationID: String,
-        id: UInt64
+        conversationID: String, id: UInt64, waiterID: UUID, cancelling: Bool = false
     ) {
-        guard var pending = pendingSessionStarts[conversationID],
-              pending.id == id else {
-            return
-        }
-        pending.waiterCount -= 1
-        if pending.waiterCount == 0 {
+        guard var pending = pendingSessionStarts[conversationID], pending.id == id else { return }
+        let removed = pending.waiters.remove(waiterID) != nil
+        if cancelling {
+            guard removed else { return }
+            if pending.waiters.isEmpty { pending.task.cancel() }
+            // Keep ownership until the startup task has finished shutting down.
+            pendingSessionStarts[conversationID] = pending
+        } else if pending.waiters.isEmpty {
             pendingSessionStarts.removeValue(forKey: conversationID)
         } else {
             pendingSessionStarts[conversationID] = pending
@@ -1024,6 +1022,10 @@ public actor LocalACPSessionCoordinator {
             await evictIdleSessionsIfNeeded()
             return
         }
+        await shutDownSession(session, conversationID: conversationID)
+    }
+
+    private func shutDownSession(_ session: ActiveSession, conversationID: String) async {
         sessionShutdownSequence &+= 1
         let id = sessionShutdownSequence
         let task = Task {
@@ -1076,7 +1078,7 @@ public actor LocalACPSessionCoordinator {
                 ) else {
                 return
             }
-            await session.client.shutdown()
+            await shutDownSession(session, conversationID: conversationID)
         }
     }
 
@@ -1121,6 +1123,8 @@ public actor LocalACPSessionCoordinator {
                     model,
                     nil
                 )
+                try Task.checkCancellation()
+                guard !isShutDown else { throw LifecycleError.shutDown }
             }
             if let thinking,
                thinking != configuration.thinking,
@@ -1129,6 +1133,8 @@ public actor LocalACPSessionCoordinator {
                     nil,
                     thinking
                 )
+                try Task.checkCancellation()
+                guard !isShutDown else { throw LifecycleError.shutDown }
             }
             try persistConfiguration(
                 configuration,
@@ -1137,7 +1143,6 @@ public actor LocalACPSessionCoordinator {
             activeSessions[descriptor.conversationID] = ActiveSession(
                 client: started,
                 runtimeKind: descriptor.runtimeKind,
-                configuration: configuration,
                 pendingDurableSessionID:
                     Self.defersNewSessionPersistence(descriptor.runtimeKind)
                         && !initialized.loadedExistingSession
@@ -1272,15 +1277,6 @@ public actor LocalACPSessionCoordinator {
             ?? descriptor.acpSessionID
             ?? descriptor.conversationID
     }
-
-    private func currentConfiguration(
-        conversationID: String,
-        client: LocalACPSessionDriver
-    ) async -> LocalACPSessionConfiguration {
-        let configuration = await client.configuration()
-        activeSessions[conversationID]?.configuration = configuration
-        return configuration
-    }
 }
 
 private actor LocalACPAssistantStreamWriter {
@@ -1328,6 +1324,10 @@ private actor LocalACPAssistantStreamWriter {
     }
 
     func finish() async throws {
+        try await flushSegment()
+    }
+
+    private func flushSegment() async throws {
         await waitUntilResumed()
         flushTask?.cancel()
         flushTask = nil
@@ -1336,11 +1336,7 @@ private actor LocalACPAssistantStreamWriter {
     }
 
     func finishSegment() async throws {
-        await waitUntilResumed()
-        flushTask?.cancel()
-        flushTask = nil
-        if let flushError { throw flushError }
-        try flush()
+        try await flushSegment()
     }
 
     func finishSegmentAndPause() throws {

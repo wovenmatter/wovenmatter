@@ -23,9 +23,16 @@ struct MessageAttachmentStore: Sendable {
     let cleanURL = fileURL.standardizedFileURL
     let fileName = cleanURL.lastPathComponent.isEmpty
       ? "Attachment" : cleanURL.lastPathComponent
-    guard let values = try? cleanURL.resourceValues(forKeys: [.isRegularFileKey]),
+    guard let values = try? cleanURL.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey]),
           values.isRegularFile == true else {
       throw AgentMessageAttachmentError.unreadableFile(fileName)
+    }
+    if let fileSize = values.fileSize,
+       Int64(fileSize) > AgentMessageAttachmentLimits.maximumFileBytes {
+      throw AgentMessageAttachmentError.fileTooLarge(
+        name: fileName,
+        maximumBytes: AgentMessageAttachmentLimits.maximumFileBytes
+      )
     }
     guard let data = try? Data(contentsOf: cleanURL, options: [.mappedIfSafe]) else {
       throw AgentMessageAttachmentError.unreadableFile(fileName)

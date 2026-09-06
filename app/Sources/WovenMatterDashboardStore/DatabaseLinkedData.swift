@@ -168,7 +168,7 @@ public enum DatabaseLinkedData {
       )
     }
     if let values = object as? [[Any]] {
-      let width = min(max(1, values.map(\.count).max() ?? 1), maximumColumns)
+      let width = min(max(1, values.lazy.map(\.count).max() ?? 1), maximumColumns)
       let columns = (0..<width).map(columnName)
       return (
         columns,

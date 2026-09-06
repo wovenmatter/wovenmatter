@@ -288,10 +288,6 @@ public actor LocalACPManagedNodeRuntime {
         }
     }
 
-    static func sha256Hex(_ data: Data) -> String {
-        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
-    }
-
     static func sha256Hex(fileAt url: URL) throws -> String {
         let file = try FileHandle(forReadingFrom: url)
         defer { try? file.close() }
@@ -853,15 +849,11 @@ public enum LocalACPManagedNodeError: LocalizedError, Sendable {
 struct LocalACPProcessResult: Sendable {
     let terminationStatus: Int32
     let stdout: String
-    let stderr: String
 
     var succeeded: Bool { terminationStatus == 0 }
 
     var combinedOutput: String {
-        [stdout, stderr]
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-            .joined(separator: "\n")
+        stdout.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 
@@ -888,8 +880,7 @@ enum LocalACPProcessRunner {
 
         return LocalACPProcessResult(
             terminationStatus: process.terminationStatus,
-            stdout: String(decoding: outputData, as: UTF8.self),
-            stderr: ""
+            stdout: String(decoding: outputData, as: UTF8.self)
         )
     }
 }

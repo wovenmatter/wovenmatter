@@ -100,17 +100,19 @@ public enum DashboardConversationSelection {
     in conversations: [WorkspaceConversationRecord],
     excluding excludedConversationIDs: Set<String>
   ) -> String? {
-    conversations
-      .filter {
-        !$0.isArchived && !excludedConversationIDs.contains($0.id)
+    var selectedID: String?
+    var selectedDate = Date.distantPast
+    for conversation in conversations {
+      guard !conversation.isArchived,
+            !excludedConversationIDs.contains(conversation.id) else { continue }
+      let date = conversation.lastMessageAt.flatMap(dashboardDate(from:)) ?? .distantPast
+      if selectedID == nil || date > selectedDate
+          || (date == selectedDate && conversation.id > selectedID!) {
+        selectedID = conversation.id
+        selectedDate = date
       }
-      .max { lhs, rhs in
-        let lhsDate = lhs.lastMessageAt.flatMap(dashboardDate(from:)) ?? .distantPast
-        let rhsDate = rhs.lastMessageAt.flatMap(dashboardDate(from:)) ?? .distantPast
-        if lhsDate != rhsDate { return lhsDate < rhsDate }
-        return lhs.id < rhs.id
-      }?
-      .id
+    }
+    return selectedID
   }
 }
 

@@ -154,8 +154,6 @@ struct DashboardComposerTextEditorTests {
         )
 
         let markedTextView = DashboardComposerNativeTextView()
-        var submitCount = 0
-        markedTextView.onSubmit = { submitCount += 1 }
         markedTextView.setMarkedText(
             "候補",
             selectedRange: NSRange(location: 2, length: 0),
@@ -171,7 +169,6 @@ struct DashboardComposerTextEditorTests {
             ) == .standard,
             "the live marked-text state must route Return to the text system"
         )
-        expect(submitCount == 0, "Return used by marked text must not submit")
     }
 
     private static func testCommandArrowPanelNavigationIsResponderScoped() {

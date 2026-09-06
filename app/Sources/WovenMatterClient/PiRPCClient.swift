@@ -84,6 +84,10 @@ public actor PiRPCClient {
     private var pendingResponses: [String: CheckedContinuation<[String: Any], any Error>] = [:]
     private var promptEvents: LocalACPClient.EventHandler?
     private var promptPermission: LocalACPClient.PermissionHandler?
+    private var promptGeneration: UUID?
+    private var hasQueuedSettlement = false
+    private var settlement: Result<Void, any Error>?
+    private var transportError: (any Error)?
     private var settledWaiters: [CheckedContinuation<Void, any Error>] = []
     private var cancelled = false
     private var readerTask: Task<Void, Never>?
@@ -103,6 +107,15 @@ public actor PiRPCClient {
     ) {
         self.launch = launch
         self.workingDirectory = workingDirectory.standardizedFileURL
+    }
+
+    // Pipe-backed transport for deterministic protocol tests without subprocesses.
+    init(launch: LocalACPRuntimeLaunchConfiguration, workingDirectory: URL,
+         input: FileHandle, output: FileHandle) {
+        self.launch = launch
+        self.workingDirectory = workingDirectory
+        self.input = input
+        self.cursor = ACPLineCursor(handle: output)
     }
 
     public static func start(
@@ -217,30 +230,39 @@ public actor PiRPCClient {
         onEvent: LocalACPClient.EventHandler? = nil,
         onPermission: LocalACPClient.PermissionHandler? = nil
     ) async throws -> LocalACPStopReason {
+        try Task.checkCancellation()
+        let generation = UUID()
+        promptGeneration = generation
+        hasQueuedSettlement = false
+        settlement = nil
         cancelled = false
         promptEvents = onEvent
         promptPermission = onPermission
         defer {
+            promptGeneration = nil
             promptEvents = nil
             promptPermission = nil
         }
-        let settled = settledWaiter()
-        do {
-            let response = try await sendCommand([
-                "type": "prompt",
-                "message": text,
-            ])
-            if response["success"] as? Bool != true {
-                failSettledWaiters()
-                throw PiRPCClientError.commandFailed(
-                    string(response["error"]) ?? "Pi rejected the prompt."
-                )
+        return try await withTaskCancellationHandler {
+            do {
+                let response = try await sendCommand([
+                    "type": "prompt",
+                    "message": text,
+                ])
+                if response["success"] as? Bool != true {
+                    throw PiRPCClientError.commandFailed(
+                        string(response["error"]) ?? "Pi rejected the prompt."
+                    )
+                }
+                try Task.checkCancellation()
+                try await waitUntilSettled()
+                return cancelled ? .cancelled : .endTurn
+            } catch {
+                failSettledWaiters(error)
+                throw error
             }
-            try await settled.value
-            return cancelled ? .cancelled : .endTurn
-        } catch {
-            failSettledWaiters()
-            throw error
+        } onCancel: {
+            Task { await self.cancelPromptTask(generation: generation) }
         }
     }
 
@@ -259,8 +281,14 @@ public actor PiRPCClient {
 
     public func cancel() async {
         cancelled = true
+        finishSettledWaiters()
         _ = try? await sendCommand(["type": "abort"])
-        failSettledWaiters()
+    }
+
+    private func cancelPromptTask(generation: UUID) async {
+        guard promptGeneration == generation else { return }
+        failPending(CancellationError())
+        await shutdown()
     }
 
     public func shutdown() async {
@@ -305,7 +333,8 @@ public actor PiRPCClient {
     }
 
     private func spawn(sessionID: String?) throws {
-        guard process == nil else { return }
+        guard !closed else { throw PiRPCClientError.processExited() }
+        guard process == nil, input == nil else { return }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/sh")
         var arguments = [
@@ -357,6 +386,8 @@ public actor PiRPCClient {
             failPending(error)
         }
         guard !closed else { return }
+        if hasQueuedSettlement { await eventTask?.value }
+        else { eventTask?.cancel() }
         let detail = await stderrTask?.value
         failPending(PiRPCClientError.processExited(detail))
     }
@@ -398,13 +429,14 @@ public actor PiRPCClient {
             }
             return
         }
-        let event = Self.event(from: object, workingDirectory: workingDirectory)
+        let event = Self.event(from: object)
         let extensionRequest = type == "extension_ui_request"
             ? Self.extensionUIRequest(from: object)
             : nil
         guard extensionRequest != nil
                 || type == "agent_settled"
                 || event != nil else { return }
+        if type == "agent_settled" { hasQueuedSettlement = true }
         let previous = eventTask
         eventTask = Task { [weak self] in
             await previous?.value
@@ -477,7 +509,9 @@ public actor PiRPCClient {
     }
 
     private func sendCommand(_ payload: [String: Any]) async throws -> [String: Any] {
-        guard let input else {
+        try Task.checkCancellation()
+        if let transportError { throw transportError }
+        guard !closed, let input else {
             throw PiRPCClientError.sessionNotInitialized
         }
         nextID += 1
@@ -498,37 +532,37 @@ public actor PiRPCClient {
         }
     }
 
-    private func settledWaiter() -> Task<Void, any Error> {
-        Task {
-            try await withCheckedThrowingContinuation { continuation in
-                settledWaiters.append(continuation)
-            }
+    private func waitUntilSettled() async throws {
+        if let settlement { return try settlement.get() }
+        try await withCheckedThrowingContinuation { continuation in
+            settledWaiters.append(continuation)
         }
     }
 
     private func finishSettledWaiters() {
+        guard settlement == nil else { return }
+        settlement = .success(())
         let waiters = settledWaiters
         settledWaiters.removeAll()
-        for waiter in waiters {
-            waiter.resume()
-        }
+        for waiter in waiters { waiter.resume() }
     }
 
-    private func failSettledWaiters() {
+    private func failSettledWaiters(_ error: any Error) {
+        guard settlement == nil else { return }
+        settlement = .failure(error)
         let waiters = settledWaiters
         settledWaiters.removeAll()
-        for waiter in waiters {
-            waiter.resume()
-        }
+        for waiter in waiters { waiter.resume(throwing: error) }
     }
 
     private func failPending(_ error: any Error) {
+        transportError = error
         let pending = pendingResponses
         pendingResponses.removeAll()
         for waiter in pending.values {
             waiter.resume(throwing: error)
         }
-        failSettledWaiters()
+        failSettledWaiters(error)
     }
 
     private nonisolated static func extensionUIRequest(
@@ -604,8 +638,7 @@ public actor PiRPCClient {
     }
 
     private static func event(
-        from object: [String: Any],
-        workingDirectory: URL
+        from object: [String: Any]
     ) -> LocalACPEvent? {
         switch string(object["type"]) {
         case "message_update":

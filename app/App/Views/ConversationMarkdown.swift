@@ -234,11 +234,12 @@ private struct ConversationMarkdownTable: View {
     }
 
     private var tableScroll: some View {
-        ScrollView(.horizontal) {
+        let widths = columnWidths
+        return ScrollView(.horizontal) {
             VStack(alignment: .leading, spacing: 0) {
-                row(table.header, header: true)
+                row(table.header, header: true, widths: widths)
                 ForEach(table.rows.indices, id: \.self) { index in
-                    row(table.rows[index], header: false)
+                    row(table.rows[index], header: false, widths: widths)
                 }
             }
             .padding(.horizontal, 3)
@@ -248,13 +249,14 @@ private struct ConversationMarkdownTable: View {
 
     private func row(
         _ cells: [ConversationMarkdownDocument.InlineText],
-        header: Bool
+        header: Bool,
+        widths: [CGFloat]
     ) -> some View {
         HStack(alignment: .top, spacing: 0) {
             ForEach(table.header.indices, id: \.self) { index in
                 ConversationMarkdownInline(content: cell(cells, index))
                     .font(.system(size: 13, weight: header ? .semibold : .regular))
-                    .frame(width: columnWidths[index], alignment: alignment(index))
+                    .frame(width: widths[index], alignment: alignment(index))
                     .padding(.horizontal, 11)
                     .padding(.vertical, header ? 10 : 9)
             }

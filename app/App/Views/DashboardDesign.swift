@@ -687,7 +687,6 @@ enum DashboardTheme: String, CaseIterable, Identifiable {
                 railEdge: .hex(0x002A18, opacity: 0.06),
                 railHoverRim: .hex(0xFFFFFF, opacity: 0.64),
                 railHoverInner: .hex(0xFFFFFF, opacity: 0.14),
-                railHoverShadow: .hex(0x002A18, opacity: 0.22),
                 railReducedFill: .hex(0xE4ECE8),
                 themeAccent: .hex(0x004225),
                 themeWhisper: .hex(0x004225, opacity: 0.05),
@@ -706,7 +705,6 @@ enum DashboardTheme: String, CaseIterable, Identifiable {
                 railEdge: .clear,
                 railHoverRim: .clear,
                 railHoverInner: .hex(0xFFFFFF, opacity: 0.88),
-                railHoverShadow: .hex(0x4D2D15, opacity: 0.16),
                 railReducedFill: .hex(0xFFFFFF),
                 themeAccent: .hex(0x9A5A2A),
                 themeWhisper: .hex(0x9A5A2A, opacity: 0.05),
@@ -819,7 +817,6 @@ struct DashboardPalette {
     let railEdge: Color
     let railHoverRim: Color
     let railHoverInner: Color
-    let railHoverShadow: Color
     let railReducedFill: Color
     let themeAccent: Color
     let themeWhisper: Color

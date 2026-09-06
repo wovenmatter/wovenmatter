@@ -121,49 +121,11 @@ public enum LocalACPWorkspaceProvisioner {
         workspaceRoot: URL,
         externalRepositoriesURL: URL?
     ) throws -> URL {
-        let fileManager = FileManager.default
-        guard let externalRepositoriesURL else {
-            if try isSymbolicLink(repositoriesLink) {
-                try fileManager.removeItem(at: repositoriesLink)
-            }
-            try fileManager.createDirectory(
-                at: repositoriesLink,
-                withIntermediateDirectories: true
-            )
-            try setOwnerOnlyDirectoryPermissions(repositoriesLink)
-            return repositoriesLink
-        }
-
-        let target = try validateRepositoriesDirectory(
-            externalRepositoriesURL,
-            workspaceRoot: workspaceRoot
-        )
-        if fileManager.fileExists(atPath: repositoriesLink.path)
-            || (try? isSymbolicLink(repositoriesLink)) == true {
-            if try isSymbolicLink(repositoriesLink) {
-                let destination = try fileManager.destinationOfSymbolicLink(
-                    atPath: repositoriesLink.path
-                )
-                let destinationURL = URL(
-                    fileURLWithPath: destination,
-                    relativeTo: repositoriesLink.deletingLastPathComponent()
-                ).standardizedFileURL
-                if destinationURL.resolvingSymlinksInPath() == target {
-                    return target
-                }
-                try fileManager.removeItem(at: repositoriesLink)
-            } else {
-                guard try isEmptyDirectory(repositoriesLink) else {
-                    throw LocalACPWorkspaceError.defaultRepositoriesNotEmpty
-                }
-                try fileManager.removeItem(at: repositoriesLink)
-            }
-        }
-        try fileManager.createSymbolicLink(
+        try reconcileDirectory(
             at: repositoriesLink,
-            withDestinationURL: target
-        )
-        return target
+            externalURL: externalRepositoriesURL,
+            nonemptyDirectoryError: .defaultRepositoriesNotEmpty
+        ) { try validateRepositoriesDirectory($0, workspaceRoot: workspaceRoot) }
     }
 
     private static func reconcileDatabases(
@@ -171,46 +133,56 @@ public enum LocalACPWorkspaceProvisioner {
         workspaceRoot: URL,
         externalDatabasesURL: URL?
     ) throws -> URL {
+        try reconcileDirectory(
+            at: databasesLink,
+            externalURL: externalDatabasesURL,
+            nonemptyDirectoryError: .defaultDatabasesNotEmpty
+        ) { try validateDatabasesDirectory($0, workspaceRoot: workspaceRoot) }
+    }
+
+    private static func reconcileDirectory(
+        at link: URL,
+        externalURL: URL?,
+        nonemptyDirectoryError: LocalACPWorkspaceError,
+        validateTarget: (URL) throws -> URL
+    ) throws -> URL {
         let fileManager = FileManager.default
-        guard let externalDatabasesURL else {
-            if try isSymbolicLink(databasesLink) {
-                try fileManager.removeItem(at: databasesLink)
+        guard let externalURL else {
+            if try isSymbolicLink(link) {
+                try fileManager.removeItem(at: link)
             }
             try fileManager.createDirectory(
-                at: databasesLink,
+                at: link,
                 withIntermediateDirectories: true
             )
-            try setOwnerOnlyDirectoryPermissions(databasesLink)
-            return databasesLink
+            try setOwnerOnlyDirectoryPermissions(link)
+            return link
         }
 
-        let target = try validateDatabasesDirectory(
-            externalDatabasesURL,
-            workspaceRoot: workspaceRoot
-        )
-        if fileManager.fileExists(atPath: databasesLink.path)
-            || (try? isSymbolicLink(databasesLink)) == true {
-            if try isSymbolicLink(databasesLink) {
+        let target = try validateTarget(externalURL)
+        if fileManager.fileExists(atPath: link.path)
+            || (try? isSymbolicLink(link)) == true {
+            if try isSymbolicLink(link) {
                 let destination = try fileManager.destinationOfSymbolicLink(
-                    atPath: databasesLink.path
+                    atPath: link.path
                 )
                 let destinationURL = URL(
                     fileURLWithPath: destination,
-                    relativeTo: databasesLink.deletingLastPathComponent()
+                    relativeTo: link.deletingLastPathComponent()
                 ).standardizedFileURL
                 if destinationURL.resolvingSymlinksInPath() == target {
                     return target
                 }
-                try fileManager.removeItem(at: databasesLink)
+                try fileManager.removeItem(at: link)
             } else {
-                guard try isEmptyDirectory(databasesLink) else {
-                    throw LocalACPWorkspaceError.defaultDatabasesNotEmpty
+                guard try isEmptyDirectory(link) else {
+                    throw nonemptyDirectoryError
                 }
-                try fileManager.removeItem(at: databasesLink)
+                try fileManager.removeItem(at: link)
             }
         }
         try fileManager.createSymbolicLink(
-            at: databasesLink,
+            at: link,
             withDestinationURL: target
         )
         return target

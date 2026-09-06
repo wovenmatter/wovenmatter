@@ -530,14 +530,24 @@ public enum LocalACPRuntimeVerifier {
 }
 
 public struct LocalACPRuntimeResolver: Sendable {
-    private let searchDirectories: [String]?
+    private let searchDirectories: @Sendable () -> [String]
 
     public init() {
-        searchDirectories = nil
+        searchDirectories = Self.executableSearchDirectories
     }
 
     init(executableSearchDirectories: [String]) {
-        searchDirectories = executableSearchDirectories
+        searchDirectories = { executableSearchDirectories }
+    }
+
+    init(executableSearchDirectoriesProvider: @escaping @Sendable () -> [String]) {
+        searchDirectories = executableSearchDirectoriesProvider
+    }
+
+    /// Reuses one search-path discovery within a refresh. Create a new snapshot
+    /// for each refresh so subsequent installs and PATH changes remain visible.
+    public func snapshottingExecutableSearchDirectories() -> Self {
+        Self(executableSearchDirectories: effectiveSearchDirectories)
     }
 
     public func resolve(
@@ -735,7 +745,7 @@ public struct LocalACPRuntimeResolver: Sendable {
     }
 
     private var effectiveSearchDirectories: [String] {
-        searchDirectories ?? Self.executableSearchDirectories()
+        searchDirectories()
     }
 
     private func launchEnvironment(

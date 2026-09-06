@@ -3,16 +3,13 @@ import SQLite3
 import WovenMatterCore
 
 struct UsageStoredSource: Equatable, Sendable {
-  let id: String
   let fingerprint: String
-  let importedAt: Date
   let indexedAfter: Date?
 }
 
 struct UsageSourceStatistics: Equatable, Sendable {
   let sessions: Int
   let events: Int
-  let importedAt: Date?
 }
 
 struct UsageRuntimeSyncState: Equatable, Sendable {
@@ -44,6 +41,7 @@ final class UsageStore: @unchecked Sendable {
   private static let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
   private var connection: OpaquePointer?
+  private var transactionInvalidated = false
 
   init(databaseURL: URL) throws {
     var database: OpaquePointer?
@@ -74,7 +72,7 @@ final class UsageStore: @unchecked Sendable {
 
   func source(_ id: String) throws -> UsageStoredSource? {
     let statement = try prepare("""
-      SELECT fingerprint, imported_at, indexed_after
+      SELECT fingerprint, indexed_after
       FROM usage_sources
       WHERE source_id = ?
       """)
@@ -85,10 +83,8 @@ final class UsageStore: @unchecked Sendable {
       return nil
     case SQLITE_ROW:
       return UsageStoredSource(
-        id: id,
         fingerprint: text(statement, 0),
-        importedAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 1)),
-        indexedAfter: optionalDouble(statement, 2).map(Date.init(timeIntervalSince1970:))
+        indexedAfter: optionalDouble(statement, 1).map(Date.init(timeIntervalSince1970:))
       )
     default:
       throw stepError()
@@ -103,7 +99,9 @@ final class UsageStore: @unchecked Sendable {
       """)
     defer { sqlite3_finalize(statement) }
     bind(endpoint, to: 1, in: statement)
-    guard sqlite3_step(statement) == SQLITE_ROW else { return nil }
+    let status = sqlite3_step(statement)
+    if status == SQLITE_DONE { return nil }
+    guard status == SQLITE_ROW else { throw stepError() }
     return UsageRuntimeSyncState(
       sourceID: text(statement, 0),
       endpoint: endpoint,
@@ -271,7 +269,17 @@ final class UsageStore: @unchecked Sendable {
     indexedAfter: Date? = nil,
     transactional: Bool = true
   ) throws {
-    if transactional { try execute("BEGIN IMMEDIATE") }
+    guard !transactionInvalidated else {
+      throw UsageStoreError.step("The usage import transaction requires rollback")
+    }
+    if transactional {
+      try execute("BEGIN IMMEDIATE")
+    } else {
+      guard let connection, sqlite3_get_autocommit(connection) == 0 else {
+        throw UsageStoreError.step("Source replacement requires an active import transaction")
+      }
+      try execute("SAVEPOINT usage_source_replace")
+    }
     do {
       let source = try prepare("""
         INSERT INTO usage_sources (
@@ -367,17 +375,38 @@ final class UsageStore: @unchecked Sendable {
         sqlite3_bind_double(insertion, 31, importedAt.timeIntervalSince1970)
         try stepDone(insertion)
       }
-      if transactional { try execute("COMMIT") }
+      if transactional {
+        try execute("COMMIT")
+      } else {
+        try execute("RELEASE SAVEPOINT usage_source_replace")
+      }
     } catch {
-      if transactional { try? execute("ROLLBACK") }
+      if transactional {
+        try? execute("ROLLBACK")
+      } else {
+        do {
+          try execute("ROLLBACK TO SAVEPOINT usage_source_replace")
+          try execute("RELEASE SAVEPOINT usage_source_replace")
+        } catch {
+          // The importer may catch per-source failures. Never let it commit
+          // after a failed rollback or an SQLite error that ended the transaction.
+          transactionInvalidated = true
+          throw error
+        }
+      }
       throw error
     }
   }
 
   func performTransaction(_ body: () throws -> Void) throws {
     try execute("BEGIN IMMEDIATE")
+    transactionInvalidated = false
+    defer { transactionInvalidated = false }
     do {
       try body()
+      guard !transactionInvalidated else {
+        throw UsageStoreError.step("A usage source could not be rolled back safely")
+      }
       try execute("COMMIT")
     } catch {
       try? execute("ROLLBACK")
@@ -385,7 +414,7 @@ final class UsageStore: @unchecked Sendable {
     }
   }
 
-  func samples(in interval: DateInterval) throws -> [UsageSample] {
+  func samples(in interval: DateInterval, sourceID: String? = nil) throws -> [UsageSample] {
     let statement = try prepare("""
       SELECT
         event_id, source_id, source_event_id, dedupe_key,
@@ -397,11 +426,13 @@ final class UsageStore: @unchecked Sendable {
         cost_usd, attribution_confidence, granularity
       FROM usage_events
       WHERE timestamp >= ? AND timestamp < ?
+      \(sourceID == nil ? "" : "AND source_id = ?")
       ORDER BY timestamp, event_id
       """)
     defer { sqlite3_finalize(statement) }
     sqlite3_bind_double(statement, 1, interval.start.timeIntervalSince1970)
     sqlite3_bind_double(statement, 2, interval.end.timeIntervalSince1970.nextUp)
+    if let sourceID { bind(sourceID, to: 3, in: statement) }
     var result: [UsageSample] = []
     while true {
       switch sqlite3_step(statement) {
@@ -451,28 +482,24 @@ final class UsageStore: @unchecked Sendable {
 
   func statistics(sourceID: String, in interval: DateInterval) throws -> UsageSourceStatistics {
     let statement = try prepare("""
-      SELECT COUNT(DISTINCT session_id), COUNT(*),
-             (SELECT imported_at FROM usage_sources WHERE source_id = ?)
+      SELECT COUNT(DISTINCT session_id), COUNT(*)
       FROM usage_events
       WHERE source_id = ? AND timestamp >= ? AND timestamp < ?
       """)
     defer { sqlite3_finalize(statement) }
     bind(sourceID, to: 1, in: statement)
-    bind(sourceID, to: 2, in: statement)
-    sqlite3_bind_double(statement, 3, interval.start.timeIntervalSince1970)
-    sqlite3_bind_double(statement, 4, interval.end.timeIntervalSince1970.nextUp)
+    sqlite3_bind_double(statement, 2, interval.start.timeIntervalSince1970)
+    sqlite3_bind_double(statement, 3, interval.end.timeIntervalSince1970.nextUp)
     guard sqlite3_step(statement) == SQLITE_ROW else { throw stepError() }
     return UsageSourceStatistics(
       sessions: Int(sqlite3_column_int64(statement, 0)),
-      events: Int(sqlite3_column_int64(statement, 1)),
-      importedAt: optionalDouble(statement, 2).map(Date.init(timeIntervalSince1970:))
+      events: Int(sqlite3_column_int64(statement, 1))
     )
   }
 
   func statistics(sourceIDPrefix: String, in interval: DateInterval) throws -> UsageSourceStatistics {
     let statement = try prepare("""
-      SELECT COUNT(DISTINCT source_id || ':' || session_id), COUNT(*),
-             MAX(imported_at)
+      SELECT COUNT(DISTINCT source_id || ':' || session_id), COUNT(*)
       FROM usage_events
       WHERE source_id LIKE ? ESCAPE '\\' AND timestamp >= ? AND timestamp < ?
       """)
@@ -487,10 +514,7 @@ final class UsageStore: @unchecked Sendable {
     guard sqlite3_step(statement) == SQLITE_ROW else { throw stepError() }
     return UsageSourceStatistics(
       sessions: Int(sqlite3_column_int64(statement, 0)),
-      events: Int(sqlite3_column_int64(statement, 1)),
-      importedAt: optionalDouble(statement, 2).map {
-        Date(timeIntervalSince1970: $0)
-      }
+      events: Int(sqlite3_column_int64(statement, 1))
     )
   }
 
@@ -498,8 +522,10 @@ final class UsageStore: @unchecked Sendable {
     let statement = try prepare("SELECT value FROM usage_metadata WHERE key = ?")
     defer { sqlite3_finalize(statement) }
     bind(key, to: 1, in: statement)
-    guard sqlite3_step(statement) == SQLITE_ROW,
-          let value = Double(text(statement, 0)) else { return nil }
+    let status = sqlite3_step(statement)
+    if status == SQLITE_DONE { return nil }
+    guard status == SQLITE_ROW else { throw stepError() }
+    guard let value = Double(text(statement, 0)) else { return nil }
     return Date(timeIntervalSince1970: value)
   }
 
@@ -740,11 +766,14 @@ final class UsageStore: @unchecked Sendable {
 
   private func ensureColumn(table: String, column: String, definition: String) throws {
     let statement = try prepare("PRAGMA table_info(\(table))")
+    defer { sqlite3_finalize(statement) }
     var found = false
-    while sqlite3_step(statement) == SQLITE_ROW {
+    while true {
+      let status = sqlite3_step(statement)
+      if status == SQLITE_DONE { break }
+      guard status == SQLITE_ROW else { throw stepError() }
       if text(statement, 1) == column { found = true }
     }
-    sqlite3_finalize(statement)
     if found { return }
     try execute("ALTER TABLE \(table) ADD COLUMN \(column) \(definition)")
   }
