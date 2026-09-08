@@ -71,10 +71,20 @@ struct OpenClawGatewayEventProjection: Equatable, Sendable {
     payload: [String: GatewayJSONValue]
   ) -> Self {
     let data = payload["data"]?.objectValue ?? [:]
-    let stream = string(payload["stream"]) ?? "activity"
+    let stream = string(payload["stream"]) ?? (event.name == "session.tool" ? "tool" : "activity")
     let runID = string(payload["runId"])
     let sessionKey = string(payload["sessionKey"])
     let sequence = sequence(event: event, payload: payload)
+
+    if stream == "lifecycle", let phase = string(data["phase"]),
+       ["end", "error", "aborted"].contains(phase) {
+      return Self(runID: runID, sessionKey: sessionKey, sequence: sequence,
+        eventType: "done", eventPhase: phase, toolName: nil, content: nil,
+        assistantUpdate: nil, activity: nil,
+        terminalState: phase == "end" ? .completed : phase == "aborted"
+          ? .cancelled(string(data["error"])) : .failed(string(data["error"]) ?? "OpenClaw Gateway run failed."),
+        approval: nil)
+    }
 
     if stream == "assistant" {
       let snapshot = text(data["text"])
@@ -341,6 +351,23 @@ struct OpenClawGatewayEventProjection: Equatable, Sendable {
     payload: [String: GatewayJSONValue]
   ) -> Self {
     let state = string(payload["state"]) ?? "delta"
+    if state == "status" {
+      let phase = string(payload["phase"]) ?? "preparing_context"
+      let title: String = switch phase {
+      case "preparing_workspace": "Preparing workspace"
+      case "naming_worktree": "Naming workspace"
+      case "creating_worktree": "Creating workspace"
+      case "running_setup": "Running setup"
+      case "provisioning_environment": "Preparing environment"
+      case "starting_model": "Starting model"
+      default: "Preparing context"
+      }
+      return Self(runID: string(payload["runId"]), sessionKey: string(payload["sessionKey"]),
+        sequence: sequence(event: event, payload: payload), eventType: "progress",
+        eventPhase: state, toolName: nil, content: nil, assistantUpdate: nil,
+        activity: AgentRunActivity(id: "startup", kind: .progress, phase: "update",
+          title: title, status: "running"), terminalState: nil, approval: nil)
+    }
     let message = payload["message"]?.objectValue
     let fullText = messageText(message, types: ["text"], fields: ["text"])
     let thought = messageText(
@@ -350,7 +377,7 @@ struct OpenClawGatewayEventProjection: Equatable, Sendable {
     )
     let deltaText = text(payload["deltaText"])
     let assistantUpdate: AssistantUpdate?
-    if let fullText {
+    if let fullText, !fullText.isEmpty || !["final", "aborted", "error"].contains(state) {
       assistantUpdate = .replace(fullText)
     } else if let deltaText, !deltaText.isEmpty {
       assistantUpdate = payload["replace"]?.boolValue == true
@@ -601,9 +628,24 @@ struct OpenClawGatewayEventProjection: Equatable, Sendable {
     }.filter { seen.insert($0).inserted }.map { AgentRunLocation(path: $0) }
   }
 
+  static func progressCardActivity(_ value: GatewayJSONValue?) -> AgentRunActivity {
+    guard let card = value?.objectValue else {
+      return AgentRunActivity(id: "progress-card", kind: .plan, phase: "clear",
+        status: "completed", content: "")
+    }
+    let entries = planEntries(in: card["steps"])
+    return AgentRunActivity(id: "progress-card", kind: entries.isEmpty ? .progress : .plan,
+      phase: "update", title: "Progress",
+      status: !entries.isEmpty && entries.allSatisfy { $0.status == "completed" } ? "completed" : "running",
+      content: text(card["markdown"]) ?? "", planEntries: entries)
+  }
+
   private static func planEntries(in value: GatewayJSONValue?) -> [AgentRunPlanEntry] {
-    (value?.arrayValue ?? []).compactMap(\.stringValue).map {
-      AgentRunPlanEntry(content: $0, status: "pending")
+    (value?.arrayValue ?? []).compactMap { value in
+      if let content = string(value) { return AgentRunPlanEntry(content: content, status: "pending") }
+      guard let object = value.objectValue,
+            let content = string(object["step"]) ?? string(object["content"]) else { return nil }
+      return AgentRunPlanEntry(content: content, status: string(object["status"]) ?? "pending")
     }
   }
 }

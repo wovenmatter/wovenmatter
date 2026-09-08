@@ -36,7 +36,8 @@ struct PersistenceBehaviorTests {
         SELECT 'unrelated-' || n, 'other-' || n, '2026-01-01T00:00:00.000Z' FROM numbers;
         """)
     }
-    // Insert the larger ID first: index creation must preserve explicit ID tie order.
+    // Insert the larger ID first: native events retain causal insertion order;
+    // attachments/references and legacy traces retain their stable ID tie order.
     for suffix in ["b", "a"] {
       try sql.execute("""
         INSERT INTO dashboard_message_attachments
@@ -68,7 +69,7 @@ struct PersistenceBehaviorTests {
     #expect(before.runs.map(\.id) == [run.runID])
     #expect(before.attachments.map(\.id) == ["attachment-a", "attachment-b"])
     #expect(before.references.map(\.id) == ["reference-a", "reference-b"])
-    #expect(before.activities.map(\.id) == ["event-a", "event-b", "trace-trace-a", "trace-trace-b"])
+    #expect(before.activities.map(\.id) == ["event-b", "event-a", "trace-trace-a", "trace-trace-b"])
     let reopened = try WorkspaceDatabase(url: fixture.databaseURL)
     let after = try reopened.conversationHistoryPage(id: conversationID, limit: 2)
     #expect(after == before)

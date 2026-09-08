@@ -2577,6 +2577,53 @@ public final class WorkspaceDatabase: @unchecked Sendable {
     }
   }
 
+  /// Freeze text before an activity without changing the canonical reply. The
+  /// transaction and explicit reply identity also cover steering and app reopen.
+  public func recordAssistantStreamBoundary(
+    runID: String,
+    assistantMessageID requestedMessageID: String? = nil,
+    updatedAt: Date = Date()
+  ) throws {
+    try transaction {
+      let authority = try localRunAuthorityUnlocked(runID: runID)
+      let messageID = requestedMessageID ?? authority.assistantMessageID
+      let statement = try prepareUnlocked("""
+        SELECT content FROM dashboard_messages
+        WHERE id = ? AND run_id = ? AND role = 'assistant' AND desktop_owned = 1
+        """)
+      defer { sqlite3_finalize(statement) }
+      try bind(messageID, at: 1, to: statement)
+      try bind(runID, at: 2, to: statement)
+      guard sqlite3_step(statement) == SQLITE_ROW else {
+        throw LocalACPSessionDatabaseError.runNotFound
+      }
+      let content = try text(statement, column: 0)
+      let segments = try runActivityRecordsUnlocked(runIDs: [runID], assistantOnly: true).map(\.activity).filter {
+        $0.kind == .assistant && $0.assistantMessageID == messageID
+      }
+      let prefix = segments.compactMap(\.content).joined()
+      // A divergent authoritative snapshot starts a new segment. Never infer
+      // an append from length alone, or trim meaningful whitespace/code fences.
+      let tail: String
+      if let checkpoint = segments.last?.assistantCheckpoint {
+        tail = checkpoint.followingText(in: content) ?? content
+      } else {
+        tail = content.hasPrefix(prefix) ? String(content.dropFirst(prefix.count)) : content
+      }
+      guard !tail.isEmpty else { return }
+      try upsertDeviceOwnedRunActivityUnlocked(
+        runID: runID,
+        activity: AgentRunActivity(
+          id: "assistant:\(messageID):\(String(format: "%08d", segments.count))",
+          kind: .assistant, phase: "boundary", status: "completed",
+          content: tail, assistantMessageID: messageID,
+          assistantCheckpoint: AssistantTextCheckpoint(content)
+        ),
+        appendingContent: false, updatedAt: updatedAt
+      )
+    }
+  }
+
   public func upsertDeviceOwnedRunActivity(
     runID: String,
     activity update: AgentRunActivity,
@@ -4162,16 +4209,18 @@ public final class WorkspaceDatabase: @unchecked Sendable {
   }
 
   private func runActivityRecordsUnlocked(
-    runIDs: [String]
+    runIDs: [String],
+    assistantOnly: Bool = false
   ) throws -> [WorkspaceRunActivityRecord] {
     guard !runIDs.isEmpty else { return [] }
     let placeholders = Array(repeating: "?", count: runIDs.count).joined(separator: ", ")
     var records: [WorkspaceRunActivityRecord] = []
     let events = try prepareUnlocked("""
-      SELECT id, run_id, conversation_id, event_type, content, created_at
+      SELECT id, run_id, conversation_id, event_type, content, created_at, rowid
       FROM dashboard_run_events
       WHERE run_id IN (\(placeholders))
-      ORDER BY created_at, id
+        \(assistantOnly ? "AND event_type = 'assistant'" : "")
+      ORDER BY created_at, rowid
       """)
     defer { sqlite3_finalize(events) }
     for (index, runID) in runIDs.enumerated() {
@@ -4202,10 +4251,12 @@ public final class WorkspaceDatabase: @unchecked Sendable {
         runID: try text(events, column: 1),
         conversationID: try text(events, column: 2),
         activity: activity,
-        createdAt: try text(events, column: 5)
+        createdAt: try text(events, column: 5),
+        sequence: sqlite3_column_int64(events, 6)
       ))
     }
 
+    if assistantOnly { return records.sorted(by: WorkspaceRunActivityRecord.precedes) }
     let traces = try prepareUnlocked("""
       SELECT id, run_id, conversation_id, event_type, event_name,
         event_phase, tool_name, content, raw_event_json, created_at
@@ -4267,10 +4318,7 @@ public final class WorkspaceDatabase: @unchecked Sendable {
         createdAt: try text(traces, column: 9)
       ))
     }
-    return records.sorted {
-      if $0.createdAt != $1.createdAt { return $0.createdAt < $1.createdAt }
-      return $0.id < $1.id
-    }
+    return records.sorted(by: WorkspaceRunActivityRecord.precedes)
   }
 
   private static func tracePayload(_ value: Any?) -> [String: Any]? {
