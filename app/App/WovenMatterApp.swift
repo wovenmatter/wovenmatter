@@ -332,6 +332,12 @@ struct WovenMatterApp: App {
     @AppStorage(DashboardSidebarStyle.storageKey) private var sidebarStyleRawValue = DashboardSidebarStyle.defaultStyle.rawValue
 
     init() {
+        if let commandIndex = CommandLine.arguments.firstIndex(of: "--woven-history-cli") {
+            Darwin.exit(WovenHistoryCommandLine.run(
+                arguments: Array(CommandLine.arguments.dropFirst(commandIndex + 1)),
+                environment: ProcessInfo.processInfo.environment
+            ))
+        }
         if let commandIndex = CommandLine.arguments.firstIndex(of: "--woven-note-cli") {
             Darwin.exit(WovenNoteCommandLine.run(
                 arguments: Array(CommandLine.arguments.dropFirst(commandIndex + 1)),

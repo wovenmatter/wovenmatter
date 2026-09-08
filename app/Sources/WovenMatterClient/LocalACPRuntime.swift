@@ -310,6 +310,7 @@ public struct LocalACPRuntimeAvailability: Equatable, Identifiable, Sendable {
 }
 
 public struct LocalACPRuntimeLaunchConfiguration: Sendable {
+    public var historyRecorder: WorkspaceWireRecorder? = nil
     public let runtimeKind: AgentRuntimeKind
     public let executableURL: URL
     public let arguments: [String]

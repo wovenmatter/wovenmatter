@@ -1164,6 +1164,10 @@ public actor LocalACPSessionCoordinator {
         workspace: LocalACPWorkspaceLaunchConfiguration,
         systemPrompt: String?
     ) async throws -> (LocalACPSessionDriver, LocalACPInitializedSession) {
+        var launch = launch
+        launch.historyRecorder = database.historyWireRecorder(
+            conversationID: descriptor.conversationID, harness: descriptor.runtimeKind.rawValue
+        )
         let started = try clientFactory(launch, workspace.rootURL)
         do {
             let initialized = try await initializeSession(

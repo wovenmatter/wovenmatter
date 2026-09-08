@@ -22,6 +22,12 @@ struct DashboardNotePane: View {
     @FocusState private var titleFocused: Bool
     @State private var editorController = DashboardNoteEditorController()
     @State private var showsFormatting = false
+    @State private var showsVersions = false
+    @State private var versions: [NoteAssetVersion] = []
+    @State private var selectedVersionID: String?
+    @State private var versionsError: String?
+    @State private var restoreRevision = ""
+    @State private var restoringVersion = false
     @State private var linkedDataJSON: String?
     @State private var linkedDataError: String?
     @State private var isRefreshingLinkedData = false
@@ -73,6 +79,57 @@ struct DashboardNotePane: View {
         }.joined(separator: "\n")
     }
 
+    private var versionHistorySheet: some View {
+        VStack(alignment:.leading,spacing:16) {
+            HStack {
+                Text("Version history").font(.headline)
+                Spacer()
+                Button("Done") { showsVersions=false }.keyboardShortcut(.cancelAction)
+            }
+            Text("Recent checkpoints are retained within storage limits. Restoring saves your current version first.")
+                .font(.caption).foregroundStyle(.secondary)
+            if let versionsError { Text(versionsError).foregroundStyle(DashboardPalette.danger) }
+            HStack(alignment:.top) {
+                List(versions,selection:$selectedVersionID) { version in
+                    VStack(alignment:.leading,spacing:4) {
+                        Text(version.createdAt).font(.caption).monospacedDigit()
+                        Text(version.source.replacingOccurrences(of:"-",with:" ").capitalized)
+                            .font(.caption2).foregroundStyle(.secondary)
+                    }.tag(version.id)
+                }.frame(width:240)
+                if let version=versions.first(where:{$0.id==selectedVersionID}) {
+                    ScrollView {
+                        VStack(alignment:.leading,spacing:12) {
+                            Text(version.title).font(.headline)
+                            Text(NoteDocument.decode(version.content).kind == .html
+                                 ? NoteDocument.decode(version.content).html
+                                 : NoteDocument.decode(version.content).plainText)
+                                .textSelection(.enabled).frame(maxWidth:.infinity,alignment:.leading)
+                        }.padding()
+                    }
+                } else {
+                    Text("No retained versions yet.").foregroundStyle(.secondary)
+                        .frame(maxWidth:.infinity,maxHeight:.infinity)
+                }
+            }
+            HStack {
+                Spacer()
+                Button("Restore selected version") {
+                    guard let selectedVersionID else { return }
+                    restoringVersion=true
+                    Task {
+                        defer { restoringVersion=false }
+                        do {
+                            try await model.restoreNoteVersion(noteID:note.id,versionID:selectedVersionID,
+                                                               expectedRevision:restoreRevision)
+                            showsVersions=false
+                        } catch { versionsError=error.localizedDescription }
+                    }
+                }.disabled(selectedVersionID == nil || restoringVersion)
+            }
+        }.padding(24).frame(minWidth:700,minHeight:440)
+    }
+
     var body: some View {
         let currentDocument = self.currentDocument
         VStack(spacing: 0) {
@@ -100,6 +157,20 @@ struct DashboardNotePane: View {
                     .accessibilityLabel("Note title")
                     .layoutPriority(1)
                 Spacer()
+                Button {
+                    do {
+                        versions = try model.noteVersions(noteID:note.id)
+                        restoreRevision = try model.currentNoteRevision(noteID:note.id)
+                        selectedVersionID = versions.first?.id
+                        versionsError = nil
+                    } catch { versionsError = error.localizedDescription }
+                    showsVersions = true
+                } label: {
+                    DashboardLucideIcon(glyph:.rotate,size:14).frame(width:32,height:32)
+                }
+                .buttonStyle(DashboardIconButtonStyle())
+                .help("Version history")
+                .accessibilityLabel("Version history")
                 DashboardDatabaseLinkControl(
                     document: document,
                     snapshot: model.databasesSnapshot
@@ -220,6 +291,7 @@ struct DashboardNotePane: View {
             .padding(.bottom, 24)
         }
         .background(theme.palette.workspace)
+        .sheet(isPresented:$showsVersions) { versionHistorySheet }
         .onAppear {
             model.prepareNoteDraft(note)
             if focusesTitleOnAppear {
@@ -236,7 +308,7 @@ struct DashboardNotePane: View {
             }
             await refreshLinkedData()
         }
-        .onDisappear { model.flushNoteDrafts() }
+        .onDisappear { model.checkpointClosingNote(noteID:note.id) }
     }
 
     private func refreshLinkedData() async {

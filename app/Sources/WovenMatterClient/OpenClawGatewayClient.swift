@@ -110,6 +110,7 @@ public actor OpenClawGatewayClient {
 
   private let endpoint: OpenClawGatewayEndpoint
   private let requestHeaders: [String: String]
+  private let historyRecorder: WorkspaceWireRecorder?
   private let eventHandler: EventHandler
   private let disconnectHandler: DisconnectHandler
   private let session: URLSession
@@ -123,9 +124,11 @@ public actor OpenClawGatewayClient {
   public init(
     endpoint: OpenClawGatewayEndpoint,
     requestHeaders: [String: String] = [:],
+    historyRecorder: WorkspaceWireRecorder? = nil,
     eventHandler: @escaping EventHandler = { _ in },
     disconnectHandler: @escaping DisconnectHandler = { _ in }
   ) {
+    self.historyRecorder = historyRecorder
     self.endpoint = endpoint
     self.requestHeaders = requestHeaders
     self.eventHandler = eventHandler
@@ -366,6 +369,8 @@ public actor OpenClawGatewayClient {
   private func send(_ frame: Frame) async throws {
     guard let socket else { throw OpenClawGatewayClientError.connectionClosed }
     let data = try JSONEncoder().encode(frame)
+    // Authentication handshake material is not agent work and must not enter history.
+    if frame.method != "connect" { try historyRecorder?("out", data) }
     guard let text = String(data: data, encoding: .utf8) else {
       throw OpenClawGatewayClientError.malformedFrame
     }
@@ -380,6 +385,7 @@ public actor OpenClawGatewayClient {
     case .string(let text): Data(text.utf8)
     @unknown default: throw OpenClawGatewayClientError.malformedFrame
     }
+    if capabilities != nil { try historyRecorder?("in", data) }
     return try JSONDecoder().decode(Frame.self, from: data)
   }
 

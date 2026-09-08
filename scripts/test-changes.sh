@@ -23,6 +23,7 @@ run_static_checks() {
   scripts/test-composer-text-editor.sh
   scripts/test-note-editor.sh
   scripts/test-note-socket.sh
+  python3 scripts/test-support/test_history_relay.py
   scripts/test-remote-workspace.sh
   for file in remote/src/*.mjs remote/test/*.test.mjs; do
     node --check "$file"
@@ -53,6 +54,7 @@ run_app_build() {
     build
   scripts/validate-native-app.sh \
     "${derived_data}/Build/Products/Debug/Woven Matter Dev.app"
+  scripts/test-history.sh
 }
 
 run_all() {

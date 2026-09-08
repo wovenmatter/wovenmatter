@@ -34,7 +34,10 @@
 		A12000000000000000000009 /* harnesses in Resources */ = {isa = PBXBuildFile; fileRef = A1200000000000000000000A /* harnesses */; };
 		E10000000000000000000001 /* NoteEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = E10000000000000000000002 /* NoteEditor.swift */; };
 		E10100000000000000000001 /* WovenNoteService.swift in Sources */ = {isa = PBXBuildFile; fileRef = E10100000000000000000002 /* WovenNoteService.swift */; };
+		E10500000000000000000001 /* WovenHistoryService.swift in Sources */ = {isa = PBXBuildFile; fileRef = E10500000000000000000002 /* WovenHistoryService.swift */; };
 		E10200000000000000000001 /* woven-note in Resources */ = {isa = PBXBuildFile; fileRef = E10200000000000000000002 /* woven-note */; };
+		E10300000000000000000001 /* woven-history in Resources */ = {isa = PBXBuildFile; fileRef = E10300000000000000000002 /* woven-history */; };
+		E10400000000000000000001 /* woven-history-remote.py in Resources */ = {isa = PBXBuildFile; fileRef = E10400000000000000000002 /* woven-history-remote.py */; };
 		F10000000000000000000001 /* AgentDatabases.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000002 /* AgentDatabases.swift */; };
 		A13000000000000000000001 /* RemoteWorkspacesModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A13000000000000000000002 /* RemoteWorkspacesModel.swift */; };
 		A13000000000000000000003 /* SettingsRemoteWorkspacesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A13000000000000000000004 /* SettingsRemoteWorkspacesView.swift */; };
@@ -80,7 +83,10 @@
 		D50000000000000000000009 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		E10000000000000000000002 /* NoteEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteEditor.swift; sourceTree = "<group>"; };
 		E10100000000000000000002 /* WovenNoteService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WovenNoteService.swift; sourceTree = "<group>"; };
+		E10500000000000000000002 /* WovenHistoryService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WovenHistoryService.swift; sourceTree = "<group>"; };
 		E10200000000000000000002 /* woven-note */ = {isa = PBXFileReference; lastKnownFileType = text.script.sh; path = "woven-note"; sourceTree = "<group>"; };
+		E10300000000000000000002 /* woven-history */ = {isa = PBXFileReference; lastKnownFileType = text.script.sh; path = "woven-history"; sourceTree = "<group>"; };
+		E10400000000000000000002 /* woven-history-remote.py */ = {isa = PBXFileReference; lastKnownFileType = text.script.python; path = "woven-history-remote.py"; sourceTree = "<group>"; };
 		F10000000000000000000002 /* AgentDatabases.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentDatabases.swift; sourceTree = "<group>"; };
 		A13000000000000000000002 /* RemoteWorkspacesModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteWorkspacesModel.swift; sourceTree = "<group>"; };
 		A13000000000000000000004 /* SettingsRemoteWorkspacesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsRemoteWorkspacesView.swift; sourceTree = "<group>"; };
@@ -202,6 +208,8 @@
 				A12000000000000000000008 /* remote */,
 				A1200000000000000000000A /* harnesses */,
 				E10200000000000000000002 /* woven-note */,
+				E10300000000000000000002 /* woven-history */,
+				E10400000000000000000002 /* woven-history-remote.py */,
 			);
 			path = Resources;
 			sourceTree = "<group>";
@@ -211,6 +219,7 @@
 			children = (
 				879D531AEA3583A537B8BE1B /* DashboardNoteDrafts.swift */,
 				E10100000000000000000002 /* WovenNoteService.swift */,
+				E10500000000000000000002 /* WovenHistoryService.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -285,6 +294,8 @@
 				A12000000000000000000007 /* remote in Resources */,
 				A12000000000000000000009 /* harnesses in Resources */,
 				E10200000000000000000001 /* woven-note in Resources */,
+				E10300000000000000000001 /* woven-history in Resources */,
+				E10400000000000000000001 /* woven-history-remote.py in Resources */,
 				A11C00000000000000000001 /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -337,6 +348,7 @@
 				F10100000000000000000001 /* ArtifactEditor.swift in Sources */,
 				F10200000000000000000001 /* DashboardDatabasesView.swift in Sources */,
 				E10100000000000000000001 /* WovenNoteService.swift in Sources */,
+				E10500000000000000000001 /* WovenHistoryService.swift in Sources */,
 				E10000000000000000000001 /* NoteEditor.swift in Sources */,
 				49BB9C77C988D34AA1B69E70 /* ApplicationModel.swift in Sources */,
 				D49000000000000000000001 /* ConversationMarkdown.swift in Sources */,

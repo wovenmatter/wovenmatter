@@ -17,6 +17,9 @@ test ! -e "${app}/Contents/Library/LaunchAgents"
 test ! -e "${app}/Contents/MacOS/WovenMatterLocalService"
 
 resources="${app}/Contents/Resources"
+test -x "${resources}/woven-history"
+test -f "${resources}/woven-history-remote.py"
+"${resources}/woven-history" --help >/dev/null
 test -f "${resources}/harnesses/catalog.json"
 test -x "${resources}/harnesses/initialize-workspace.sh"
 test -f "${resources}/remote/Dockerfile"
