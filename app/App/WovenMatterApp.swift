@@ -4,6 +4,23 @@ import Foundation
 import SwiftUI
 import WovenMatterClient
 
+/// Optional development variants have their own database and process lease.
+/// Release builds always use the established workspace directory.
+enum WovenMatterWorkspacePaths {
+    static var folderName: String {
+        #if DEBUG
+        let prefix = "wovenmatter.desktop.dev."
+        if let identifier = Bundle.main.bundleIdentifier, identifier.hasPrefix(prefix) {
+            let variant = String(identifier.dropFirst(prefix.count))
+            if !variant.isEmpty, variant.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-") }) {
+                return "Woven Matter Dev/" + variant
+            }
+        }
+        #endif
+        return "Woven Matter"
+    }
+}
+
 struct WorkspaceProcessLeaseOwner: Equatable, Sendable {
     let processIdentifier: Int32
     let bundleIdentifier: String
@@ -146,7 +163,7 @@ final class WorkspaceProcessLease {
                 directoryHint: .isDirectory
             )
         return supportDirectory.appending(
-            path: "Woven Matter/workspace-owner.lock",
+            path: WovenMatterWorkspacePaths.folderName + "/workspace-owner.lock",
             directoryHint: .notDirectory
         )
     }

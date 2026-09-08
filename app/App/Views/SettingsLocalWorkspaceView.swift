@@ -17,6 +17,7 @@ struct SettingsLocalWorkspaceView: View {
             onBack: onBack
         ) {
             workspaceCard
+            if let openCode = model.openCode { OpenCodeSettingsCard(model: openCode) }
             runtimesCard
         }
         .confirmationDialog(
@@ -172,7 +173,7 @@ struct SettingsLocalWorkspaceView: View {
             title: "Runtimes",
             detail: "Woven Matter discovers installed CLIs and adapters automatically and can install what’s missing."
         ) {
-            ForEach(LocalACPRuntimeCatalog.definitions) { definition in
+            ForEach(LocalACPRuntimeCatalog.definitions.filter { $0.runtimeKind != .opencode }) { definition in
                 let availability = model.localACPRuntimeAvailability.first {
                     $0.runtimeKind == definition.runtimeKind
                 }

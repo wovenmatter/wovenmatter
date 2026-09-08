@@ -1015,14 +1015,14 @@ struct DashboardNewChatDrawer: View {
                         summary: DashboardNewChatAvailabilitySummary.localCLIs(
                             readyRuntimeCount: model.localACPRuntimeAvailability
                                 .filter {
-                                    $0.isReady
+                                    $0.runtimeKind == .opencode ? model.openCode?.isReady == true : $0.isReady
                                         && model.isLocalACPAgentReady($0.runtimeKind)
                                         && !model.checkingLocalACPRuntimeKinds
                                             .contains($0.runtimeKind)
                                 }
                                 .count,
                             workspaceIsReady: model.localACPWorkspaceAvailability
-                                .isReady
+                                .isReady || model.openCode?.isReady == true
                         ),
                         isExpanded: expansionBinding(for: .acpDirect)
                     ) {
@@ -1042,7 +1042,9 @@ struct DashboardNewChatDrawer: View {
                                         runtimeKind: definition.runtimeKind
                                     ),
                                     title: definition.displayName,
-                                    detail: isChecking || availability == nil
+                                    detail: definition.runtimeKind == .opencode
+                                        ? (model.openCode?.isReady == true ? "OpenCode v2 shared service" : "Connect OpenCode v2 in Settings")
+                                        : isChecking || availability == nil
                                         ? "Checking…"
                                         : availability?.isReady == true
                                             && !model.isLocalACPAgentReady(definition.runtimeKind)
@@ -1054,7 +1056,7 @@ struct DashboardNewChatDrawer: View {
                             }
                             .buttonStyle(DashboardQuietButtonStyle())
                             .disabled(
-                                isChecking
+                                definition.runtimeKind == .opencode ? model.openCode?.isReady != true : isChecking
                                     || availability?.isReady != true
                                     || !model.isLocalACPAgentReady(definition.runtimeKind)
                                     || !model.localACPWorkspaceAvailability.isReady

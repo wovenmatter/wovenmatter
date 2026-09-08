@@ -80,6 +80,7 @@ final class ApplicationModel {
     private(set) var checkingBuzzWorkspaceLinkIDs: Set<UUID> = []
     private(set) var mutatingBuzzWorkspaceEnrollmentIDs: Set<UUID> = []
     private(set) var buzzWorkspaceError: String?
+    var openCode: OpenCodeModel?
     private(set) var openClawGatewayLinks: [OpenClawGatewayLink] = []
     private(set) var openClawGatewayErrors: [UUID: String] = [:]
     private(set) var openClawGatewayNotices: [UUID: String] = [:]
@@ -339,6 +340,16 @@ final class ApplicationModel {
             let dashboardStore = try DashboardStore(supportDirectory: supportDirectory)
             self.dashboardStore = dashboardStore
             try await dashboardStore.prepareLocalWorkspace()
+            let openCode = OpenCodeModel(store: dashboardStore, ownerDeviceID: try await dashboardStore.dashboardDeviceID(), defaults: applicationDefaults)
+            self.openCode = openCode
+            openCode.onChange = { [weak self, weak openCode] id in
+                guard let self, let openCode else { return }
+                if openCode.snapshots[id]?.active == true { self.localRunningConversationIDs.insert(id) }
+                else { self.localRunningConversationIDs.remove(id) }
+                await self.refreshWorkspaceIfChanged()
+                await self.refreshConversation(id: id)
+            }
+            Task { await openCode.restore() }
             localACPDatabaseReadyRuntimeKinds = Set(
                 LocalACPRuntimeCatalog.definitions.map(\.runtimeKind)
             )
@@ -565,7 +576,7 @@ final class ApplicationModel {
     var visibleOrderedLocalCLIAgents: [WorkspaceAgent] {
         let visibleRuntimeKinds = LocalACPRuntimePreferences.visibleRuntimeKinds(
             in: orderedLocalCLIAgents.map(\.runtimeKind),
-            shownRuntimeKinds: shownLocalACPRuntimeKinds
+            shownRuntimeKinds: shownLocalACPRuntimeKinds.union(openCode?.connected.isEmpty == false ? [.opencode] : [])
         )
         let visibleRuntimeKindSet = Set(visibleRuntimeKinds)
         return orderedLocalCLIAgents.filter {
@@ -792,7 +803,7 @@ final class ApplicationModel {
         ).first else {
             throw ApplicationModelError.applicationSupportUnavailable
         }
-        return applicationSupport.appending(path: "Woven Matter", directoryHint: .isDirectory)
+        return applicationSupport.appending(path: WovenMatterWorkspacePaths.folderName, directoryHint: .isDirectory)
     }
 
     func refreshWorkspace() async {
@@ -2173,6 +2184,14 @@ final class ApplicationModel {
             )
             return false
         }
+        if conversation.localRuntimeKind == .opencode {
+            do {
+                guard let openCode else { throw OpenCodeError.message("OpenCode is still starting.") }
+                try await openCode.send(conversation.id, input: normalized)
+                conversationState.setError(nil)
+                return true
+            } catch { conversationState.setError(error.localizedDescription); return false }
+        }
         guard !loadingLocalACPSessionIDs.contains(conversation.id),
               !updatingLocalACPSessionIDs.contains(conversation.id) else {
             conversationState.setError(
@@ -2315,7 +2334,7 @@ final class ApplicationModel {
 
     func canAgentEditOpenNote(_ conversation: WorkspaceConversationRecord?) -> Bool {
         guard let conversation else { return false }
-        return conversation.localRuntimeKind != nil
+        return conversation.localRuntimeKind != nil && conversation.localRuntimeKind != .opencode
     }
 
     private func acceptOpenClawGatewayMessage(
@@ -2410,6 +2429,12 @@ final class ApplicationModel {
     func refreshLocalACPSession(
         conversation: WorkspaceConversationRecord
     ) async {
+        if conversation.localRuntimeKind == .opencode {
+            if let openCode, let link = openCode.links[conversation.id] {
+                await openCode.coordinator.watch(link)
+            }
+            return
+        }
         guard let runtimeKind = conversation.localRuntimeKind else {
             return
         }
@@ -2525,6 +2550,14 @@ final class ApplicationModel {
     func createLocalACPSession(
         runtimeKind: AgentRuntimeKind
     ) async -> String? {
+        if runtimeKind == .opencode {
+            do {
+                guard let openCode else { throw OpenCodeError.message("OpenCode is still starting.") }
+                let id = try await openCode.create()
+                await refreshWorkspace()
+                return id
+            } catch { localRunError = error.localizedDescription; return nil }
+        }
         guard localACPLaunchConfigurations[runtimeKind] != nil,
               localACPWorkspaceLaunchConfiguration != nil,
               isLocalACPAgentReady(runtimeKind) else {
@@ -2865,6 +2898,10 @@ final class ApplicationModel {
     }
 
     func cancelLocalACPPrompt(conversationID: String) {
+        if let openCode, openCode.links[conversationID] != nil {
+            openCode.perform { _ = try await openCode.sessionCall(conversationID, "/interrupt", method: "POST") }
+            return
+        }
         let permissionIDs = pendingLocalACPPermissions
             .filter { $0.conversationID == conversationID }
             .map(\.id)
@@ -2888,7 +2925,7 @@ final class ApplicationModel {
         }
         LocalACPClient.terminateAllProcesses()
         PiRPCClient.terminateAllProcesses()
-        Task { await dashboardStore?.shutdownLocalACPSessions() }
+        Task { await openCode?.coordinator.shutdown(); await dashboardStore?.shutdownLocalACPSessions() }
     }
 
     private func requestLocalACPPermission(

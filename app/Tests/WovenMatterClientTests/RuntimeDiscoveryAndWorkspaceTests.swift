@@ -12,7 +12,7 @@ struct RuntimeDiscoveryAndWorkspaceTests {
     let fallback = root.appending(path: "fallback")
     for directory in [preferred, fallback] {
       try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-      for command in ["pi", "opencode"] {
+      for command in ["pi", "opencode2"] {
         let executable = directory.appending(path: command)
         try Data().write(to: executable)
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
@@ -27,7 +27,7 @@ struct RuntimeDiscoveryAndWorkspaceTests {
       #expect(pi.launchConfiguration?.executableURL == preferred.appending(path: "pi"))
       #expect(pi.launchConfiguration?.environment["PATH"] == "\(preferred.path):\(fallback.path)")
       #expect(snapshot.resolve(runtimeKind: .opencode).launchConfiguration?.executableURL
-        == preferred.appending(path: "opencode"))
+        == preferred.appending(path: "opencode2"))
     }
     #expect(discovery.count == 1)
 

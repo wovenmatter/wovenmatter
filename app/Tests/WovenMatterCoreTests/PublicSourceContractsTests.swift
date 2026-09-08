@@ -431,8 +431,8 @@ struct PublicSourceContractsTests {
     #expect(document.harnesses.allSatisfy { harness in
       !harness.capabilities.isEmpty
         && harness.install.source.scheme == "https"
-        && !harness.authentication.statusCommands.isEmpty
-        && !harness.authentication.methods.isEmpty
+        && (harness.transport == "opencode-v2" || (!harness.authentication.statusCommands.isEmpty
+        && !harness.authentication.methods.isEmpty))
         && (harness.adapterPackage != nil || harness.transportCheckCommand != nil)
     })
     #expect(document.harnesses.filter { $0.adapterPackage != nil }.allSatisfy {
@@ -447,7 +447,7 @@ struct PublicSourceContractsTests {
       guard let package = $0.install.package,
             let separator = package.lastIndex(of: "@"),
             separator != package.startIndex else { return false }
-      let version = package[package.index(after: separator)...]
+      let version = package[package.index(after: separator)...].split(separator: "-", maxSplits: 1)[0]
       let parts = version.split(separator: ".", omittingEmptySubsequences: false)
       return parts.count == 3
         && parts.allSatisfy { !$0.isEmpty && $0.allSatisfy(\.isNumber) }
