@@ -3901,6 +3901,7 @@ final class ApplicationModel {
     func refreshOpenClawGatewaySession(conversationID: String) async {
         guard let dashboardStore else { return }
         do {
+            _ = try await dashboardStore.synchronizeOpenClawSession(conversationID: conversationID)
             openClawGatewaySessionMetadata[conversationID] = try await dashboardStore
                 .openClawGatewaySessionMetadata(conversationID: conversationID)
             ensureConversationState(id: conversationID).setError(nil)
@@ -3922,6 +3923,46 @@ final class ApplicationModel {
                 openClawGatewayErrors[link.agentID] = error.localizedDescription
             }
         }
+    }
+
+    func openClawNativeSessions(agentID: UUID, offset: Int = 0) async throws -> (sessions: [OpenClawGatewaySession], nextOffset: Int?) {
+        guard let dashboardStore else { throw OpenClawGatewayClientError.connectionClosed }
+        return try await dashboardStore.openClawNativeSessions(agentID: agentID, offset: offset)
+    }
+
+    func importOpenClawSession(agentID: UUID, session: OpenClawGatewaySession) async throws {
+        guard let dashboardStore else { throw OpenClawGatewayClientError.connectionClosed }
+        _ = try await dashboardStore.importOpenClawSession(agentID: agentID, session: session)
+        await refreshOpenClawGateways()
+        await refreshWorkspace()
+    }
+
+    func openClawSessionControls(conversationID: String) async throws -> OpenClawGatewayControls {
+        guard let dashboardStore else { throw OpenClawGatewayClientError.connectionClosed }
+        return try await dashboardStore.openClawSessionControls(conversationID: conversationID)
+    }
+
+    func loadOpenClawHistory(conversationID: String, offset: Int = 0) async throws -> Int? {
+        guard let dashboardStore else { throw OpenClawGatewayClientError.connectionClosed }
+        let history = try await dashboardStore.synchronizeOpenClawSession(conversationID: conversationID, offset: offset)
+        await refreshConversation(id: conversationID)
+        return history.nextOffset
+    }
+
+    func setOpenClawSetting(_ setting: OpenClawSessionSetting, value: GatewayJSONValue, snapshot: OpenClawGatewayControls) async throws {
+        guard let dashboardStore else { throw OpenClawGatewayClientError.connectionClosed }
+        try await dashboardStore.setOpenClawSetting(setting, value: value, snapshot: snapshot)
+        await refreshOpenClawGatewaySession(conversationID: snapshot.conversationID)
+    }
+
+    func resolveOpenClawApproval(id: String, decision: String, snapshot: OpenClawGatewayControls) async throws {
+        guard let dashboardStore else { throw OpenClawGatewayClientError.connectionClosed }
+        try await dashboardStore.resolveOpenClawApproval(id: id, decision: decision, snapshot: snapshot)
+    }
+
+    func answerOpenClawQuestion(id: String, answers: [String: [String]], snapshot: OpenClawGatewayControls) async throws {
+        guard let dashboardStore else { throw OpenClawGatewayClientError.connectionClosed }
+        try await dashboardStore.answerOpenClawQuestion(id: id, answers: answers, snapshot: snapshot)
     }
 
     private func restoreOpenClawGatewayLinks() async {

@@ -295,6 +295,34 @@ public actor DashboardStore {
     try database.openClawGatewayConversationIDs()
   }
 
+  public func openClawNativeSessions(agentID: UUID, offset: Int = 0) async throws -> (sessions: [OpenClawGatewaySession], nextOffset: Int?) {
+    try await openClawGateway.nativeSessions(agentID: agentID, offset: offset)
+  }
+
+  public func importOpenClawSession(agentID: UUID, session: OpenClawGatewaySession) async throws -> String {
+    try await openClawGateway.importSession(agentID: agentID, session: session)
+  }
+
+  public func synchronizeOpenClawSession(conversationID: String, offset: Int = 0) async throws -> OpenClawGatewayHistory {
+    try await openClawGateway.synchronizeSession(conversationID: conversationID, offset: offset)
+  }
+
+  public func openClawSessionControls(conversationID: String) async throws -> OpenClawGatewayControls {
+    try await openClawGateway.sessionControls(conversationID: conversationID)
+  }
+
+  public func setOpenClawSetting(_ setting: OpenClawSessionSetting, value: GatewayJSONValue, snapshot: OpenClawGatewayControls) async throws {
+    try await openClawGateway.setSessionSetting(setting, value: value, snapshot: snapshot)
+  }
+
+  public func resolveOpenClawApproval(id: String, decision: String, snapshot: OpenClawGatewayControls) async throws {
+    try await openClawGateway.resolveApproval(id: id, decision: decision, snapshot: snapshot)
+  }
+
+  public func answerOpenClawQuestion(id: String, answers: [String: [String]], snapshot: OpenClawGatewayControls) async throws {
+    try await openClawGateway.answerQuestion(id: id, answers: answers, snapshot: snapshot)
+  }
+
   @discardableResult
   public func acceptOpenClawGatewayPrompt(
     conversationID: String,
@@ -929,6 +957,7 @@ public actor DashboardStore {
   }
 
   public func shutdownLocalACPSessions() async {
+    await openClawGateway.shutdown()
     await localSessions.shutdown()
     await localOpenClawGateways.shutdown()
   }

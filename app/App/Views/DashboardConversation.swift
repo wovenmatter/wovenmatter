@@ -81,6 +81,7 @@ struct DashboardCloudConversation: View {
     @State private var bottomPositionRevision = 0
     @State private var scrollPositionID: String?
     @State private var bottomStackHeight: CGFloat = 0
+    @State private var openClawControlsConversationID: String?
 
     var body: some View {
         let runsByAssistantMessageID = self.runsByAssistantMessageID
@@ -279,6 +280,17 @@ struct DashboardCloudConversation: View {
                     .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
                 }
                 HStack(alignment: .center, spacing: 8) {
+                    if let conversation, model.isOpenClawGatewayConversation(conversation.id) {
+                        Button { openClawControlsConversationID = conversation.id } label: {
+                            Image(systemName: "slider.horizontal.3")
+                        }
+                        .buttonStyle(DashboardQuietButtonStyle())
+                        .help("OpenClaw session controls, approvals, and questions")
+                        .accessibilityLabel("OpenClaw session controls")
+                        .sheet(isPresented: Binding(get: { openClawControlsConversationID != nil }, set: { if !$0 { openClawControlsConversationID = nil } })) {
+                            if let id = openClawControlsConversationID { OpenClawSessionView(model: model, conversationID: id) }
+                        }
+                    }
                     if showsClosePanel {
                         DashboardPanelControlButton(
                             glyph: .panelRightOpen,

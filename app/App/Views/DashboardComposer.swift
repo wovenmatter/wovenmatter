@@ -100,6 +100,12 @@ struct DashboardComposer: View {
                                 Text("/\(command.name)")
                                     .font(.system(size: 12.5, weight: .medium))
                                     .foregroundStyle(DashboardPalette.foreground)
+                                if let hint = command.argumentHint, !hint.isEmpty {
+                                    Text(hint)
+                                        .font(.system(size: 11.5, design: .monospaced))
+                                        .foregroundStyle(DashboardPalette.mutedForeground)
+                                        .lineLimit(1)
+                                }
                                 if let detail = command.detail, !detail.isEmpty {
                                     Text(detail)
                                         .font(.system(size: 11.5))

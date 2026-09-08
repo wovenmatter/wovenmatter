@@ -126,10 +126,12 @@ public struct LocalACPSlashCommand: Codable, Equatable, Identifiable, Sendable {
     public var id: String { name }
     public let name: String
     public let detail: String?
+    public let argumentHint: String?
 
-    public init(name: String, detail: String? = nil) {
+    public init(name: String, detail: String? = nil, argumentHint: String? = nil) {
         self.name = name
         self.detail = detail
+        self.argumentHint = argumentHint
     }
 }
 
