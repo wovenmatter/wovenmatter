@@ -792,6 +792,11 @@ struct DashboardMessageRow: View {
                         )
                     }
                     if isUser {
+                        if let sender=message.senderSessionID {
+                            Text("Sent from \(message.senderAgent ?? "Agent") · \(message.senderSessionTitle ?? "Session")")
+                                .font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
+                                .help("Source session: \(sender)")
+                        }
                         ConversationUserMessage(
                             content: message.content,
                             attachments: attachments,

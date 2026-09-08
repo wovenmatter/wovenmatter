@@ -418,6 +418,7 @@ public actor PiRPCClient {
     }
 
     private func handleLine(_ line: Data) async throws {
+        try launch.historyRecorder?("in", line)
         guard let object = try JSONSerialization.jsonObject(with: line) as? [String: Any] else {
             throw PiRPCClientError.invalidResponse("expected JSON object")
         }
@@ -519,6 +520,7 @@ public actor PiRPCClient {
         var body = payload
         body["id"] = id
         let data = try JSONSerialization.data(withJSONObject: body)
+        try launch.historyRecorder?("out", data)
         var line = data
         line.append(0x0A)
         return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<[String: Any], any Error>) in
@@ -633,6 +635,7 @@ public actor PiRPCClient {
         }
         guard let input else { return }
         var data = try JSONSerialization.data(withJSONObject: payload)
+        try launch.historyRecorder?("out", data)
         data.append(0x0A)
         try input.write(contentsOf: data)
     }

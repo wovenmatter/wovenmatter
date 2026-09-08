@@ -1562,6 +1562,7 @@ public actor OpenClawGatewayCoordinator {
       let client = OpenClawGatewayClient(
         endpoint: transport.endpoint,
         requestHeaders: transport.headers,
+        historyRecorder: database.historyWireRecorder(agentID: agentID.uuidString.lowercased(), harness: "openclaw"),
         eventHandler: { [weak self] event in
           await self?.handleGatewayEvent(event, agentID: agentID, generation: generation)
         },
