@@ -3960,6 +3960,11 @@ final class ApplicationModel {
         try await dashboardStore.resolveOpenClawApproval(id: id, decision: decision, snapshot: snapshot)
     }
 
+    func stopOpenClawSession(snapshot: OpenClawGatewayControls) async throws {
+        guard let dashboardStore else { throw OpenClawGatewayClientError.connectionClosed }
+        try await dashboardStore.stopOpenClawSession(snapshot: snapshot)
+    }
+
     func answerOpenClawQuestion(id: String, answers: [String: [String]], snapshot: OpenClawGatewayControls) async throws {
         guard let dashboardStore else { throw OpenClawGatewayClientError.connectionClosed }
         try await dashboardStore.answerOpenClawQuestion(id: id, answers: answers, snapshot: snapshot)

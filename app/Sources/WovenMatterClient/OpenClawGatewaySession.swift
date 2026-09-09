@@ -32,19 +32,25 @@ public struct OpenClawGatewaySession: Identifiable, Equatable, Sendable {
 public struct OpenClawGatewayHistoryMessage: Equatable, Sendable {
   public let id: String
   public let role: String
+  public let nativeRole: String
+  public let isAssistantResponse: Bool
   public let text: String
   public let runID: String?
   public let date: Date
   public let raw: Data
   public let terminalError: String?
 
-  public init?(payload: GatewayJSONValue, siblingIndex: Int = 0) {
+  public init?(payload: GatewayJSONValue) {
     guard let row = payload.objectValue, let role = row["role"]?.stringValue,
           ["user", "assistant", "toolResult", "tool"].contains(role) else { return nil }
     let encoder = JSONEncoder()
     encoder.outputFormatting = .sortedKeys
     guard let raw = try? encoder.encode(payload) else { return nil }
     self.raw = raw
+    nativeRole = role
+    let synthetic = row["__openclaw"]?.objectValue?["kind"]?.stringValue
+    isAssistantResponse = role == "assistant" && synthetic == nil
+      && !["toolUse", "tool_use"].contains(row["stopReason"]?.stringValue ?? "")
     let stopReason = row["stopReason"]?.stringValue
     terminalError = ["error", "aborted", "cancelled"].contains(stopReason ?? "")
       ? (row["errorMessage"]?.stringValue ?? "OpenClaw ended this response: \(stopReason ?? "error").") : nil
@@ -53,7 +59,17 @@ public struct OpenClawGatewayHistoryMessage: Equatable, Sendable {
     // One transcript record can project multiple roles/blocks. Retain siblings.
     let key = metadata["id"]?.stringValue ?? row["id"]?.stringValue
       ?? SHA256.hash(data: raw).map { String(format: "%02x", $0) }.joined()
-    id = key + ":" + role + ":" + String(siblingIndex)
+    // A byte-bounded page can begin halfway through a record's projected siblings.
+    // Page-local ordinals are not identities. Include the canonical content so a
+    // sibling keeps the same identity in tail pages and complete/overlapping pages.
+    let projection = GatewayJSONValue.object([
+      "content": row["content"] ?? row["text"] ?? .null,
+      "toolCallId": row["toolCallId"] ?? .null,
+      "kind": metadata["kind"] ?? .null,
+    ])
+    let projectionData = (try? encoder.encode(projection)) ?? raw
+    let projectionID = SHA256.hash(data: projectionData).map { String(format: "%02x", $0) }.joined()
+    id = key + ":" + role + ":" + projectionID
     let idempotencyKey = metadata["idempotencyKey"]?.stringValue ?? row["idempotencyKey"]?.stringValue
     runID = idempotencyKey.map {
       var value = $0
@@ -104,22 +120,20 @@ public struct OpenClawGatewayHistory: Sendable {
     guard let row = payload.objectValue, let messages = row["messages"]?.arrayValue else {
       throw OpenClawGatewayClientError.malformedFrame
     }
-    var siblingCounts: [String: Int] = [:]
+    var seen: Set<String> = []
     self.messages = messages.compactMap { value in
       guard let first = OpenClawGatewayHistoryMessage(payload: value) else { return nil }
-      let index = siblingCounts[first.id, default: 0]
-      siblingCounts[first.id] = index + 1
-      return index == 0 ? first : OpenClawGatewayHistoryMessage(payload: value, siblingIndex: index)
+      return seen.insert(first.id).inserted ? first : nil
     }
     let session = row["sessionInfo"]?.objectValue ?? [:]
     sessionID = row["sessionId"]?.stringValue ?? session["sessionId"]?.stringValue
     activeRunIDs = session["activeRunIds"]?.arrayValue.map { Set($0.compactMap(\.stringValue)) }
     hasActiveRun = session["hasActiveRun"]?.boolValue == true || activeRunIDs?.isEmpty == false
-    isIdle = !hasActiveRun && (session["hasActiveRun"]?.boolValue == false
-      || session["activeRunIds"]?.arrayValue?.isEmpty == true)
     let flight = row["inFlightRun"]?.objectValue
     inFlightRunID = flight?["runId"]?.stringValue
     inFlightText = flight?["text"]?.stringValue
+    isIdle = !hasActiveRun && inFlightRunID == nil && (session["hasActiveRun"]?.boolValue == false
+      || session["activeRunIds"]?.arrayValue?.isEmpty == true)
     nextOffset = row["hasMore"]?.boolValue == true ? row["nextOffset"]?.intValue : nil
     cursor = row["deltaCursor"]?.stringValue
   }

@@ -66,6 +66,7 @@ struct OpenClawSessionView: View {
     @State private var nextOffset: Int?
     @State private var busy = false
     @State private var error: String?
+    @State private var refreshRevision = 0
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -94,7 +95,10 @@ struct OpenClawSessionView: View {
                                 }
                             }
                             Button("Stop OpenClaw work in this session", role: .destructive) {
-                                model.cancelOpenClawGatewayPrompt(conversationID: conversationID)
+                                perform {
+                                    try await model.stopOpenClawSession(snapshot: snapshot)
+                                    try await reload()
+                                }
                             }
                             if let nextOffset {
                                 Button("Load earlier transcript") {
@@ -116,13 +120,13 @@ struct OpenClawSessionView: View {
                         }
                         SettingsCard(title: "Questions", detail: "Answers go to this OpenClaw session. Secret-store questions must be answered in OpenClaw Control UI.") {
                             if snapshot.questions.isEmpty { Text("No pending questions.") }
-                            ForEach(Array(snapshot.questions.enumerated()), id: \.offset) { _, record in
-                                OpenClawQuestionForm(record: record, disabled: busy) { id, answers in
+                            ForEach(snapshot.questions.compactMap(OpenClawQuestionRecord.init)) { record in
+                                OpenClawQuestionForm(record: record.value, disabled: busy) { id, answers in
                                     perform {
                                         try await model.answerOpenClawQuestion(id: id, answers: answers, snapshot: snapshot)
                                         try await reload()
                                     }
-                                }.id(record.objectValue?["id"]?.stringValue)
+                                }
                             }
                         }
                     }
@@ -138,8 +142,17 @@ struct OpenClawSessionView: View {
             while !Task.isCancelled {
                 do { try await Task.sleep(for: .seconds(5)) } catch { return }
                 guard !busy else { continue }
-                do { snapshot = try await model.openClawSessionControls(conversationID: conversationID) }
-                catch { self.error = error.localizedDescription }
+                let revision = refreshRevision
+                do {
+                    let updated = try await model.openClawSessionControls(conversationID: conversationID)
+                    guard !Task.isCancelled, !busy, revision == refreshRevision else { continue }
+                    snapshot = updated
+                    error = nil
+                } catch {
+                    guard !Task.isCancelled, !busy, revision == refreshRevision else { continue }
+                    self.error = error.localizedDescription
+                    snapshot = nil
+                }
             }
         }
     }
@@ -192,12 +205,25 @@ struct OpenClawSessionView: View {
 
     private func perform(_ operation: @escaping @MainActor () async throws -> Void) {
         guard !busy else { return }
+        refreshRevision += 1
         busy = true; error = nil
         Task {
             defer { busy = false }
             do { try await operation() }
             catch { self.error = error.localizedDescription + " Refresh before retrying a decision." }
         }
+    }
+}
+
+// Keep drafts attached to their request when an earlier question disappears.
+private struct OpenClawQuestionRecord: Identifiable {
+    let id: String
+    let value: GatewayJSONValue
+
+    init?(_ value: GatewayJSONValue) {
+        guard let id = value.objectValue?["id"]?.stringValue else { return nil }
+        self.id = id
+        self.value = value
     }
 }
 
@@ -220,7 +246,10 @@ private struct OpenClawQuestionForm: View {
                         ForEach(Array((question["options"]?.arrayValue ?? []).enumerated()), id: \.offset) { _, option in
                             if let label = option.objectValue?["label"]?.stringValue {
                                 Toggle(isOn: Binding(get: { answers[id, default: []].contains(label) }, set: { selected in
-                                    if question["multiSelect"]?.boolValue != true { answers[id] = selected ? [label] : [] }
+                                    if question["multiSelect"]?.boolValue != true {
+                                        answers[id] = selected ? [label] : []
+                                        if selected { freeText[id] = nil }
+                                    }
                                     else if selected { answers[id, default: []].append(label) }
                                     else { answers[id]?.removeAll { $0 == label } }
                                 })) {
@@ -250,8 +279,6 @@ private struct OpenClawQuestionForm: View {
         }
     }
     private var resolvedAnswers: [String: [String]] {
-        var result = answers
-        for (id, text) in freeText where !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { result[id] = [text] }
-        return result
+        OpenClawQuestionAnswers.resolve(questions: questions, selected: answers, freeText: freeText)
     }
 }

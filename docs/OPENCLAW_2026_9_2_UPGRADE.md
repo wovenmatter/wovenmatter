@@ -59,6 +59,47 @@ This is a substantial integration upgrade, **not a claim of 100% native parity**
 
 ## Validation and review
 
+### PR #38 follow-up code review (2026-09-09)
+
+Reviewed the complete PR from `dc39c49` through `dd2efa5` against the pinned
+OpenClaw source above, then addressed these findings:
+
+- **P1 — stale transport authority:** an explicitly retired client could reopen,
+  and controls captured before a WebSocket reconnect could still mutate the
+  session. Retirement is now permanent; decisions, settings, and Stop are bound
+  to the exact connected transport as well as the enrollment generation. Old
+  history callbacks and session-list responses cannot update a replacement link.
+- **P1 — incorrect recovered output:** tool results could claim an optimistic
+  assistant row or prove successful delivery. Reconciliation now distinguishes
+  native tool/synthetic records from actual assistant responses. Contradictory
+  in-flight metadata is not considered idle.
+- **P1 — steering recovery:** follow-up remote input IDs were only in memory;
+  restart/history refresh could duplicate messages or attach an earlier reply to
+  the latest assistant. Input-to-message mappings now persist transactionally,
+  recovery checks the latest input, and uncertain steering delivery enters
+  observation without resending. Receipts must identify the supplied input.
+- **P2 — partial history pages:** page-local sibling ordinals changed identity
+  when a byte-bounded page started halfway through a transcript record. Canonical
+  projection-content identities now remain stable across overlapping pages.
+- **P2 — import integrity and authorization:** denied history left a phantom
+  conversation, history reads unnecessarily required approval-management scope,
+  and concurrent/archived imports could duplicate a shared session. History is
+  fetched first without approval privileges; the existing-session check is now
+  transactional and an explicit reimport restores the archived conversation.
+- **P2 — inbox state:** an old poll could repaint resolved decisions, question
+  drafts were indexed by list position, and multi-select free text discarded
+  selected options. Polls are revision-fenced, drafts follow request IDs, and
+  ordinary question answers preserve both selected and permitted free-text values.
+
+Regression coverage includes retired clients, same-enrollment transport changes,
+partial sibling pages, mixed question answers, denied/least-privilege imports,
+concurrent imports, tool-only recovery, and exact steering rows after database
+reopen. The full provider-free suite passes (117 Swift tests and 11 remote tests),
+along with static checks, the macOS Debug build, and native bundle validation.
+This audit does not establish live Eddie acceptance or a rendered live inbox;
+the existing manual acceptance checklist below still applies. No merge, release,
+Gateway configuration change, provider turn, or production installation occurred.
+
 Run `scripts/test-changes.sh --all`. Tests use fake sockets, in-memory credential
 stores, temporary SQLite databases, and existing local harness fixtures. They
 must not contact model providers or read production Gateway credentials.

@@ -84,10 +84,48 @@ struct OpenClawGatewayUpgradeTests {
     let row: GatewayJSONValue = .object(["role": .string("assistant"),
       "__openclaw": .object(["id": .string("shared-record")]),
       "stopReason": .string("error"), "errorMessage": .string("Provider unavailable")])
-    let history = try OpenClawGatewayHistory(payload: .object(["messages": .array([row, row])]))
+    var sibling = row.objectValue!
+    sibling["content"] = .string("Second projected row")
+    let history = try OpenClawGatewayHistory(payload: .object(["messages": .array([row, .object(sibling)])]))
     #expect(history.messages.count == 2)
     #expect(history.messages[0].id != history.messages[1].id)
     #expect(history.messages[0].terminalError == "Provider unavailable")
+    let tail = try OpenClawGatewayHistory(payload: .object(["messages": .array([.object(sibling)])]))
+    #expect(tail.messages[0].id == history.messages[1].id)
+  }
+
+  @Test func gatewayExplicitDisconnectCannotBeReopenedByStaleCaller() async throws {
+    let socket = GatewayFixtureSocket()
+    let client = OpenClawGatewayClient(endpoint: endpoint, credentialStore: GatewayMemoryCredentials(), socketFactory: { _ in socket })
+    _ = try await client.connect()
+    await client.disconnect()
+    do { _ = try await client.request("sessions.patch"); Issue.record("Retired client reopened") }
+    catch OpenClawGatewayClientError.connectionClosed { }
+    #expect(await socket.starts == 1)
+  }
+
+  @Test func gatewayDecisionCannotCrossSocketReconnect() async throws {
+    let first = GatewayFixtureSocket(), second = GatewayFixtureSocket()
+    let pool = GatewaySocketPool([first, second])
+    let client = OpenClawGatewayClient(endpoint: endpoint, credentialStore: GatewayMemoryCredentials(), socketFactory: { _ in pool.next() })
+    _ = try await client.connect()
+    let oldGeneration = try #require(await client.connectedGeneration)
+    await first.close()
+    for _ in 0..<100 where await client.connectedGeneration != nil { try await Task.sleep(for: .milliseconds(5)) }
+    _ = try await client.connect()
+    #expect(await client.connectedGeneration != oldGeneration)
+    do {
+      _ = try await client.request("approval.resolve", expectedConnectionGeneration: oldGeneration)
+      Issue.record("A decision crossed a socket reconnect")
+    } catch OpenClawGatewayClientError.rejected { }
+    #expect(await second.methods == ["connect"])
+    await client.disconnect()
+  }
+
+  @Test func gatewayMultiSelectRetainsChoicesAlongsideOtherText() {
+    let question: GatewayJSONValue = .object(["questionId": .string("choice"), "multiSelect": .bool(true), "isOther": .bool(true),
+      "options": .array([.object(["label": .string("A")])])])
+    #expect(OpenClawQuestionAnswers.resolve(questions: [question], selected: ["choice": ["A"]], freeText: ["choice": "B"]) == ["choice": ["A", "B"]])
   }
 }
 
@@ -113,15 +151,19 @@ private actor GatewayFixtureSocket: OpenClawGatewaySocket {
   let challenge: Bool
   var closed = false
   var connectParams: GatewayJSONValue?
+  var starts = 0
+  var methods: [String] = []
   private var frames: [Data] = []
   private var waiter: CheckedContinuation<Data, any Error>?
   init(challenge: Bool = true) { self.challenge = challenge }
   func start() async {
+    starts += 1
     if challenge { try? push(.object(["type": .string("event"), "event": .string("connect.challenge"),
       "payload": .object(["nonce": .string("test-nonce"), "ts": .number(1_700_000_000_000)])])) }
   }
   func send(_ data: Data) async throws {
     let row = try JSONDecoder().decode(GatewayJSONValue.self, from: data).objectValue ?? [:]
+    methods.append(row["method"]?.stringValue ?? "")
     let result: GatewayJSONValue
     if row["method"] == .string("connect") {
       connectParams = row["params"]
@@ -143,4 +185,11 @@ private actor GatewayFixtureSocket: OpenClawGatewaySocket {
     if let waiter { self.waiter = nil; waiter.resume(returning: data) }
     else { frames.append(data) }
   }
+}
+
+private final class GatewaySocketPool: @unchecked Sendable {
+  private let lock = NSLock()
+  private var sockets: [GatewayFixtureSocket]
+  init(_ sockets: [GatewayFixtureSocket]) { self.sockets = sockets }
+  func next() -> GatewayFixtureSocket { lock.withLock { sockets.removeFirst() } }
 }

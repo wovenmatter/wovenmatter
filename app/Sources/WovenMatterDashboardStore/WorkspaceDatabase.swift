@@ -576,10 +576,25 @@ public final class WorkspaceDatabase: @unchecked Sendable {
 
   /// Import the native session key directly; never synthesize a new upstream chat.
   public func importOpenClawGatewaySession(agentID: UUID, session: OpenClawGatewaySession) throws -> String {
-    if let existing = try openClawGatewaySessions(agentID: agentID).first(where: { $0.sessionKey == session.key }) {
-      return existing.conversationID
-    }
     return try transaction {
+      let existing = try prepareUnlocked("""
+        SELECT s.conversation_id FROM desktop_openclaw_gateway_sessions s
+        JOIN dashboard_conversations c ON c.id = s.conversation_id
+        WHERE s.agent_id = ? AND s.session_key = ? AND c.deleted_at IS NULL LIMIT 1
+        """)
+      defer { sqlite3_finalize(existing) }
+      try bind(agentID.uuidString.lowercased(), at: 1, to: existing)
+      try bind(session.key, at: 2, to: existing)
+      let code = sqlite3_step(existing)
+      if code == SQLITE_ROW {
+        let id = try text(existing, column: 0)
+        let restore = try prepareUnlocked("UPDATE dashboard_conversations SET is_archived = 0 WHERE id = ?")
+        defer { sqlite3_finalize(restore) }
+        try bind(id, at: 1, to: restore)
+        try stepDone(restore)
+        return id
+      }
+      guard code == SQLITE_DONE else { throw stepError() }
       let id = UUID().uuidString.lowercased()
       let timestamp = Self.timestamp(Date())
       let conversation = try prepareUnlocked("""
@@ -647,19 +662,25 @@ public final class WorkspaceDatabase: @unchecked Sendable {
         if hasAnchor {
           id = try text(anchor, column: 0)
           claimedLocalMessages.insert(id)
-        } else if let remoteRunID = message.runID {
+        } else if let remoteRunID = message.runID,
+                  message.nativeRole == "user" || message.isAssistantResponse {
           let existing = try prepareUnlocked("""
             SELECT id FROM dashboard_messages
-            WHERE conversation_id = ? AND run_id = ? AND role = ?
+            WHERE conversation_id = ? AND role = ?
               AND message_source = 'local_acp'
+              AND id = COALESCE(
+                (SELECT CASE WHEN ? = 'user' THEN user_message_id ELSE assistant_message_id END
+                 FROM desktop_openclaw_run_inputs WHERE conversation_id = ? AND remote_run_id = ?),
+                (SELECT id FROM dashboard_messages WHERE conversation_id = ? AND run_id = ? AND role = ?
+                 AND message_source = 'local_acp' ORDER BY created_at DESC LIMIT 1))
               AND id NOT IN (SELECT message_id FROM desktop_openclaw_transcript_entries WHERE conversation_id = ?)
             ORDER BY created_at DESC LIMIT 1
             """)
           defer { sqlite3_finalize(existing) }
-          try bind(conversationID, at: 1, to: existing)
-          try bind(remoteRunID, at: 2, to: existing)
-          try bind(message.role, at: 3, to: existing)
-          try bind(conversationID, at: 4, to: existing)
+          for (index, value) in [conversationID, message.role, message.role, conversationID, remoteRunID,
+                                conversationID, remoteRunID, message.role, conversationID].enumerated() {
+            try bind(value, at: Int32(index + 1), to: existing)
+          }
           if sqlite3_step(existing) == SQLITE_ROW {
             let candidate = try text(existing, column: 0)
             if claimedLocalMessages.insert(candidate).inserted { id = candidate }
@@ -726,6 +747,34 @@ public final class WorkspaceDatabase: @unchecked Sendable {
           userMessageID: try text(statement, column: 1), assistantMessageID: try text(statement, column: 2)))
       }
     }
+  }
+
+  public func openClawRunAssistantIDs(runID: String) throws -> [String: String] {
+    try lock.withLock {
+      let statement = try prepareUnlocked("SELECT remote_run_id, assistant_message_id FROM desktop_openclaw_run_inputs WHERE local_run_id = ?")
+      defer { sqlite3_finalize(statement) }
+      try bind(runID, at: 1, to: statement)
+      var result: [String: String] = [:]
+      while true {
+        let code = sqlite3_step(statement)
+        if code == SQLITE_DONE { return result }
+        guard code == SQLITE_ROW else { throw stepError() }
+        result[try text(statement, column: 0)] = try text(statement, column: 1)
+      }
+    }
+  }
+
+  private func recordOpenClawInputUnlocked(conversationID: String, localRunID: String, remoteRunID: String,
+                                          userMessageID: String, assistantMessageID: String) throws {
+    let statement = try prepareUnlocked("""
+      INSERT INTO desktop_openclaw_run_inputs (conversation_id, local_run_id, remote_run_id, user_message_id, assistant_message_id)
+      SELECT ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM desktop_openclaw_gateway_sessions WHERE conversation_id = ?)
+      """)
+    defer { sqlite3_finalize(statement) }
+    for (index, value) in [conversationID, localRunID, remoteRunID, userMessageID, assistantMessageID, conversationID].enumerated() {
+      try bind(value, at: Int32(index + 1), to: statement)
+    }
+    try stepDone(statement)
   }
 
   public func openClawGatewaySession(
@@ -2289,6 +2338,8 @@ public final class WorkspaceDatabase: @unchecked Sendable {
       try bind(conversationID, at: 4, to: conversation)
       try stepDone(conversation)
 
+      try recordOpenClawInputUnlocked(conversationID: conversationID, localRunID: identifiers.runID,
+        remoteRunID: identifiers.runID, userMessageID: identifiers.userMessageID, assistantMessageID: identifiers.assistantMessageID)
       return identifiers
     }
   }
@@ -2526,6 +2577,8 @@ public final class WorkspaceDatabase: @unchecked Sendable {
       try bind(authority.conversationID, at: 4, to: conversation)
       try stepDone(conversation)
 
+      try recordOpenClawInputUnlocked(conversationID: authority.conversationID, localRunID: runID,
+        remoteRunID: identifiers.userMessageID, userMessageID: identifiers.userMessageID, assistantMessageID: identifiers.assistantMessageID)
       return identifiers
     }
   }
@@ -4709,6 +4762,16 @@ public final class WorkspaceDatabase: @unchecked Sendable {
       CREATE TRIGGER IF NOT EXISTS desktop_openclaw_transcript_delete
       AFTER DELETE ON dashboard_conversations BEGIN
         DELETE FROM desktop_openclaw_transcript_entries WHERE conversation_id = OLD.id;
+      END;
+      CREATE TABLE IF NOT EXISTS desktop_openclaw_run_inputs (
+        conversation_id TEXT NOT NULL, local_run_id TEXT NOT NULL, remote_run_id TEXT NOT NULL,
+        user_message_id TEXT NOT NULL, assistant_message_id TEXT NOT NULL,
+        PRIMARY KEY (conversation_id, remote_run_id)
+      );
+      CREATE INDEX IF NOT EXISTS desktop_openclaw_run_inputs_local ON desktop_openclaw_run_inputs(local_run_id);
+      CREATE TRIGGER IF NOT EXISTS desktop_openclaw_run_inputs_delete
+      AFTER DELETE ON dashboard_conversations BEGIN
+        DELETE FROM desktop_openclaw_run_inputs WHERE conversation_id = OLD.id;
       END;
       CREATE TABLE IF NOT EXISTS desktop_buzz_workspace_links (
         id TEXT PRIMARY KEY,

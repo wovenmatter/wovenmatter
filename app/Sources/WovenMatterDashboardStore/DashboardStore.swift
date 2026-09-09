@@ -319,6 +319,10 @@ public actor DashboardStore {
     try await openClawGateway.resolveApproval(id: id, decision: decision, snapshot: snapshot)
   }
 
+  public func stopOpenClawSession(snapshot: OpenClawGatewayControls) async throws {
+    try await openClawGateway.stopSession(snapshot: snapshot)
+  }
+
   public func answerOpenClawQuestion(id: String, answers: [String: [String]], snapshot: OpenClawGatewayControls) async throws {
     try await openClawGateway.answerQuestion(id: id, answers: answers, snapshot: snapshot)
   }

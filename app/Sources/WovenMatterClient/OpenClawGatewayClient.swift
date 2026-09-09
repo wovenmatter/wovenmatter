@@ -128,6 +128,9 @@ public actor OpenClawGatewayClient {
   private var generation = UUID()
   private var lastEventSequence: Int?
   private var lastFrameAt = ContinuousClock.now
+  private var retired = false
+
+  public var connectedGeneration: UUID? { capabilities != nil && socket != nil ? generation : nil }
 
   public init(
     endpoint: OpenClawGatewayEndpoint,
@@ -168,6 +171,7 @@ public actor OpenClawGatewayClient {
   }
 
   public func connect() async throws -> OpenClawGatewayCapabilities {
+    guard !retired else { throw OpenClawGatewayClientError.connectionClosed }
     if let capabilities, socket != nil { return capabilities }
     if let connecting { return try await connecting.value }
     let attempt = UUID()
@@ -190,6 +194,7 @@ public actor OpenClawGatewayClient {
   }
 
   private func performConnect(generation attempt: UUID) async throws -> OpenClawGatewayCapabilities {
+    guard !retired, generation == attempt, !Task.isCancelled else { throw CancellationError() }
     guard ["ws", "wss"].contains(endpoint.url.scheme?.lowercased()) else {
       throw OpenClawGatewayClientError.invalidEndpoint
     }
@@ -366,6 +371,9 @@ public actor OpenClawGatewayClient {
   }
 
   public func disconnect() async {
+    // Explicit retirement (unlink/reconfigure/shutdown) is not a network outage.
+    // Owners must create a new client; stale callers may never reopen this one.
+    retired = true
     generation = UUID()
     connecting?.cancel()
     connecting = nil
@@ -387,9 +395,15 @@ public actor OpenClawGatewayClient {
   public func request(
     _ method: String,
     params: GatewayJSONValue = .object([:]),
-    timeout: Duration = .seconds(30)
+    timeout: Duration = .seconds(30),
+    expectedConnectionGeneration: UUID? = nil
   ) async throws -> GatewayJSONValue {
-    _ = try await connect()
+    if let expectedConnectionGeneration {
+      guard connectedGeneration == expectedConnectionGeneration, !retired else {
+        throw OpenClawGatewayClientError.rejected("The connection changed. Refresh before making a decision.")
+      }
+    } else { _ = try await connect() }
+    try Task.checkCancellation()
     let id = UUID().uuidString.lowercased()
     let requestGeneration = generation
     return try await withCheckedThrowingContinuation { continuation in
