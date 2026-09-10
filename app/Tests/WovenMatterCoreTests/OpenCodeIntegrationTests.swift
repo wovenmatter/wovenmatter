@@ -7,6 +7,67 @@ import WovenMatterCore
 
 @Suite(.serialized)
 struct OpenCodeIntegrationTests {
+    @Test func durableStreamAllowsIdleTimeWithoutUsingTheSnapshotTimeout() async throws {
+        let fixture = OpenCodeFixture(); FixtureProtocol.fixture = fixture
+        let client = OpenCodeHTTPClient(connection: try connection(), session: fixtureSession())
+        // This stub intentionally returns JSON rather than SSE, ending the
+        // request immediately after recording its actual transport timeout.
+        await #expect(throws: OpenCodeError.malformedStream) {
+            try await client.events("/api/experimental/session/ses_fixture/log") { _ in }
+        }
+        #expect(fixture.streamTimeout == 86_400)
+    }
+    @Test func existingComposerKeepsProviderIdentityAndModelSpecificThinking() throws {
+        let catalog: [OpenCodeValue] = [
+            ["id": "same", "providerID": "first", "variants": .array([["id": "low"], ["id": "high"]])],
+            ["id": "same", "providerID": "second", "variants": .array([])]
+        ]
+        let session: OpenCodeValue = ["id": "ses_fixture", "model": ["id": "same", "providerID": "first", "variant": "high"]]
+        let metadata = OpenCodeComposerMetadata.metadata(session: session, models: catalog)
+        #expect(metadata.selectableModels == ["first/same", "second/same"])
+        #expect(metadata.model == "first/same")
+        #expect(metadata.thinking == "high")
+        #expect(metadata.selectableThinkingLevels == ["default", "low", "high"])
+        #expect(try OpenCodeComposerMetadata.selection(model: "first/same", thinking: "low", models: catalog)["model"]["variant"].text == "low")
+        #expect(try OpenCodeComposerMetadata.selection(model: "first/same", thinking: "default", models: catalog)["model"]["variant"].isNull)
+        // Switching models clears the old model's reasoning variant.
+        let changed = try OpenCodeComposerMetadata.selection(model: "second/same", models: catalog)
+        #expect(changed["model"]["providerID"].text == "second")
+        #expect(changed["model"]["variant"].isNull)
+        #expect(OpenCodeComposerMetadata.metadata(session: ["model": changed["model"]], models: catalog).selectableThinkingLevels.isEmpty)
+        #expect(throws: OpenCodeError.self) { try OpenCodeComposerMetadata.selection(model: "second/same", thinking: "high", models: catalog) }
+        #expect(!OpenCodeSessionSnapshot.presentsMessage(["type": "model-switched", "model": changed["model"]]))
+        #expect(OpenCodeSessionSnapshot.presentsMessage(["type": "assistant", "content": .array([])]))
+    }
+
+    @Test func localServiceUsesStandardRegistrationAndAcceptsOfficialVersionBanner() {
+        let home = URL(fileURLWithPath: "/fixture-home")
+        #expect(OpenCodeConnection.registrationURL(environment: [:], home: home).path == "/fixture-home/.local/state/opencode/service.json")
+        #expect(OpenCodeConnection.registrationURL(environment: ["XDG_STATE_HOME": "/custom/state"], home: home).path == "/custom/state/opencode/service.json")
+        #expect(OpenCodeServiceLauncher.normalizedVersion("opencode2 v0.0.0-beta-19278\n") == OpenCodeConnection.supportedVersion)
+        #expect(OpenCodeServiceLauncher.normalizedVersion("0.0.0-beta-19278\n") == OpenCodeConnection.supportedVersion)
+        #expect(OpenCodeServiceLauncher.normalizedVersion("opencode2 v2.99.0") != OpenCodeConnection.supportedVersion)
+    }
+
+    @Test func connectReusesExistingLocalServiceAndNeverReplacesLiveIncompatibleService() async throws {
+        let fixture = OpenCodeFixture(); FixtureProtocol.fixture = fixture
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appending(path: "service.json")
+        let registration: OpenCodeValue = ["url": "http://127.0.0.1:1234", "pid": .number(Double(ProcessInfo.processInfo.processIdentifier)), "password": "fixture"]
+        let bytes = try JSONEncoder().encode(registration); try bytes.write(to: file)
+        let session = fixtureSession()
+        let connection = try await OpenCodeServiceLauncher.ensure(executable: nil, registration: file, clientFactory: { OpenCodeHTTPClient(connection: $0, session: session) })
+        #expect(connection.identity == "local:" + file.standardizedFileURL.path)
+        #expect(try Data(contentsOf: file) == bytes)
+        fixture.version = "2.99.0"
+        await #expect(throws: OpenCodeError.incompatible("2.99.0")) {
+            try await OpenCodeServiceLauncher.ensure(executable: URL(fileURLWithPath: "/never-run"), registration: file, clientFactory: { OpenCodeHTTPClient(connection: $0, session: session) })
+        }
+        #expect(try Data(contentsOf: file) == bytes)
+    }
+
     @Test func fragmentedSSEAcceptsOnlyCompleteFrames() throws {
         var parser = OpenCodeSSEParser()
         let event: OpenCodeValue = ["type": "message.updated", "durable": ["seq": .number(91)], "text": "café 🧵"]
@@ -266,10 +327,12 @@ private final class OpenCodeFixture: @unchecked Sendable {
     var promptCount = 0
     var interruptCount = 0
     var historyRequests = 0
+    var streamTimeout: TimeInterval?
     func respond(_ request: URLRequest) throws -> (Int, OpenCodeValue) {
         try lock.withLock {
             let path = request.url!.path
-            if path == "/api/health" { return (200, ["healthy": .bool(true), "version": .string(version)]) }
+            if path.hasSuffix("/log") { streamTimeout = request.timeoutInterval; return (200, [:]) }
+            if path == "/api/health" { return (200, ["healthy": .bool(true), "version": .string(version), "pid": .number(Double(ProcessInfo.processInfo.processIdentifier))]) }
             if path == "/api/session/active" { return (200, ["data": [:]]) }
             if path.hasSuffix("/interrupt") { interruptCount += 1; return (200, [:]) }
             if path.hasSuffix("/prompt") {
@@ -312,7 +375,7 @@ private final class OpenCodeFixture: @unchecked Sendable {
 
 private final class FixtureProtocol: URLProtocol, @unchecked Sendable {
     nonisolated(unsafe) static var fixture = OpenCodeFixture()
-    override class func canInit(with request: URLRequest) -> Bool { request.url?.host == "fixture.invalid" }
+    override class func canInit(with request: URLRequest) -> Bool { ["fixture.invalid", "127.0.0.1"].contains(request.url?.host ?? "") }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
         if request.url?.path == "/api/health", Self.fixture.holdHealth {

@@ -96,7 +96,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
-## SwiftTerm
-
-The macOS OpenCode terminal view uses [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm), version 1.10.1, revision `5c83a9d214e7354697624c11deb4e488bdcfabad`, under the MIT license. Its copyright and license text are included in `app/App/Resources/SwiftTerm-LICENSE.txt` and in the application bundle.

@@ -7,7 +7,6 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		0C0200000000000000000001 /* SwiftTerm-LICENSE.txt in Resources */ = {isa = PBXBuildFile; fileRef = 0C0200000000000000000002 /* SwiftTerm-LICENSE.txt */; };
 		0C11E0000000000000000001 /* WovenMatterClient in Frameworks */ = {isa = PBXBuildFile; productRef = 0C11E0000000000000000004 /* WovenMatterClient */; };
 		D46000000000000000000002 /* WovenMatterDashboardStore in Frameworks */ = {isa = PBXBuildFile; productRef = D46000000000000000000001 /* WovenMatterDashboardStore */; };
 		A11C00000000000000000001 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A11C00000000000000000002 /* Assets.xcassets */; };
@@ -54,14 +53,9 @@
 		E86083BC811D526E0900522B /* OpenCodeSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 97160C827D94B74AFAB2961A /* OpenCodeSettingsView.swift */; };
 		8B47C81B917AA853D87FB56A /* OpenCodeInteractionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17AF06D69A7DE73E3F94E40A /* OpenCodeInteractionView.swift */; };
 		46E81C4CE9571D1C715098CA /* OpenCodeSessionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F6AFCDD4A429E11B0945492 /* OpenCodeSessionView.swift */; };
-		E57822CA2F9933D847567694 /* OpenCodeFilesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8AD0385B854AD8456F077F16 /* OpenCodeFilesView.swift */; };
-		605790D07A0D9DDE4F9A93E9 /* OpenCodeIntegrationsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 681E0C3F4323951A6E1935AD /* OpenCodeIntegrationsView.swift */; };
-		191503785EF1D51B5BDDEF86 /* OpenCodeTerminalView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD66C718D2D9D2C32A0F9058 /* OpenCodeTerminalView.swift */; };
-		0C0D00000000000000000003 /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = 0C0D00000000000000000002 /* SwiftTerm */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
-		0C0200000000000000000002 /* SwiftTerm-LICENSE.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = "SwiftTerm-LICENSE.txt"; sourceTree = "<group>"; };
 		A11C00000000000000000002 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A11C00000000000000000004 /* WorkspaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceView.swift; sourceTree = "<group>"; };
 		DC0A00000000000000000002 /* DashboardComposerTextEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardComposerTextEditor.swift; sourceTree = "<group>"; };
@@ -109,9 +103,6 @@
 		97160C827D94B74AFAB2961A /* OpenCodeSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenCodeSettingsView.swift; sourceTree = "<group>"; };
 		17AF06D69A7DE73E3F94E40A /* OpenCodeInteractionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenCodeInteractionView.swift; sourceTree = "<group>"; };
 		6F6AFCDD4A429E11B0945492 /* OpenCodeSessionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenCodeSessionView.swift; sourceTree = "<group>"; };
-		8AD0385B854AD8456F077F16 /* OpenCodeFilesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenCodeFilesView.swift; sourceTree = "<group>"; };
-		681E0C3F4323951A6E1935AD /* OpenCodeIntegrationsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenCodeIntegrationsView.swift; sourceTree = "<group>"; };
-		FD66C718D2D9D2C32A0F9058 /* OpenCodeTerminalView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenCodeTerminalView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -119,7 +110,6 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-                0C0D00000000000000000003 /* SwiftTerm in Frameworks */,
 				0C11E0000000000000000001 /* WovenMatterClient in Frameworks */,
 				D46000000000000000000002 /* WovenMatterDashboardStore in Frameworks */,
 			);
@@ -184,9 +174,6 @@
 		D0E0A91C0032120E4CDF1388 /* Views */ = {
 			isa = PBXGroup;
 			children = (
-				FD66C718D2D9D2C32A0F9058 /* OpenCodeTerminalView.swift */,
-				681E0C3F4323951A6E1935AD /* OpenCodeIntegrationsView.swift */,
-				8AD0385B854AD8456F077F16 /* OpenCodeFilesView.swift */,
 				6F6AFCDD4A429E11B0945492 /* OpenCodeSessionView.swift */,
 				17AF06D69A7DE73E3F94E40A /* OpenCodeInteractionView.swift */,
 				97160C827D94B74AFAB2961A /* OpenCodeSettingsView.swift */,
@@ -223,7 +210,6 @@
 		D50000000000000000000007 /* Resources */ = {
 			isa = PBXGroup;
 			children = (
-				0C0200000000000000000002 /* SwiftTerm-LICENSE.txt */,
 				A12000000000000000000006 /* remote-workspace.sh */,
 				A12000000000000000000008 /* remote */,
 				A1200000000000000000000A /* harnesses */,
@@ -259,7 +245,6 @@
 			);
 			name = WovenMatter;
 			packageProductDependencies = (
-                0C0D00000000000000000002 /* SwiftTerm */,
 				0C11E0000000000000000004 /* WovenMatterClient */,
 				D46000000000000000000001 /* WovenMatterDashboardStore */,
 			);
@@ -291,7 +276,6 @@
 			mainGroup = 614FCD38F579029AF08B9221;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-                0C0D00000000000000000001 /* SwiftTerm */,
 				03A429A1CC1E3FDB9062F0AE /* XCLocalSwiftPackageReference "." */,
 			);
 			preferredProjectObjectVersion = 77;
@@ -314,7 +298,6 @@
 				A12000000000000000000009 /* harnesses in Resources */,
 				E10200000000000000000001 /* woven-note in Resources */,
 				A11C00000000000000000001 /* Assets.xcassets in Resources */,
-				0C0200000000000000000001 /* SwiftTerm-LICENSE.txt in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -350,9 +333,6 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				191503785EF1D51B5BDDEF86 /* OpenCodeTerminalView.swift in Sources */,
-				605790D07A0D9DDE4F9A93E9 /* OpenCodeIntegrationsView.swift in Sources */,
-				E57822CA2F9933D847567694 /* OpenCodeFilesView.swift in Sources */,
 				46E81C4CE9571D1C715098CA /* OpenCodeSessionView.swift in Sources */,
 				8B47C81B917AA853D87FB56A /* OpenCodeInteractionView.swift in Sources */,
 				E86083BC811D526E0900522B /* OpenCodeSettingsView.swift in Sources */,
@@ -609,15 +589,8 @@
 		};
 /* End XCLocalSwiftPackageReference section */
 
-/* Begin XCRemoteSwiftPackageReference section */
-        0C0D00000000000000000001 /* SwiftTerm */ = {
-            isa = XCRemoteSwiftPackageReference;
-            repositoryURL = "https://github.com/migueldeicaza/SwiftTerm.git";
-            requirement = { kind = revision; revision = 5c83a9d214e7354697624c11deb4e488bdcfabad; };
-        };
-/* End XCRemoteSwiftPackageReference section */
+
 /* Begin XCSwiftPackageProductDependency section */
-        0C0D00000000000000000002 /* SwiftTerm */ = {isa = XCSwiftPackageProductDependency; package = 0C0D00000000000000000001; productName = SwiftTerm; };
 		0C11E0000000000000000004 /* WovenMatterClient */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = WovenMatterClient;

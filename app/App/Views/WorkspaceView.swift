@@ -239,9 +239,6 @@ struct WorkspaceView: View {
         .onChange(of: model.workspaceOverview?.conversations.map(\.id) ?? []) { _, ids in
             selectDefaults()
         }
-        .onChange(of: model.openCode?.requestedConversationID) { _, id in
-            if let id { selectConversation(id); model.openCode?.requestedConversationID = nil }
-        }
         .onChange(of: selectedConversationID) { _, conversationID in
             if let conversationID {
                 model.markConversationRead(id: conversationID)

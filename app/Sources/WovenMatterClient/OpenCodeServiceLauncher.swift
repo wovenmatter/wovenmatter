@@ -1,14 +1,42 @@
 import Foundation
+import Darwin
 
 public enum OpenCodeServiceLauncher {
-    /// Launch the official service contender only when registration is absent.
-    /// Never calls Service.ensure/stop: those may replace another client's service.
+    /// Reuse the standard service. Only a missing or dead process permits a
+    /// launch; a live incompatible/unhealthy service is never replaced.
+    public static func ensure(executable: URL?, registration: URL = OpenCodeConnection.registrationURL(),
+                              clientFactory: @Sendable (OpenCodeConnection) -> OpenCodeHTTPClient = { OpenCodeHTTPClient(connection: $0) }) async throws -> OpenCodeConnection {
+        if FileManager.default.fileExists(atPath: registration.path) {
+            let existing = try OpenCodeConnection.discover(file: registration)
+            do { _ = try await clientFactory(existing).health(); return existing }
+            catch { if isRunning(existing.pid) { throw error } }
+        }
+        guard let executable else { throw OpenCodeError.message("Install OpenCode v2 so Woven Matter can start its local service.") }
+        try await start(executable: executable, registration: registration)
+        let connection = try OpenCodeConnection.discover(file: registration)
+        _ = try await clientFactory(connection).health()
+        return connection
+    }
+
+    public static func normalizedVersion(_ output: String) -> String {
+        let version = output.trimmingCharacters(in: .whitespacesAndNewlines)
+        return version.hasPrefix("opencode2 v") ? String(version.dropFirst("opencode2 v".count)) : version
+    }
+
+    private static func isRunning(_ pid: Int?) -> Bool {
+        guard let pid else { return false }
+        return kill(Int32(pid), 0) == 0 || errno != ESRCH
+    }
+
     public static func start(executable: URL, registration: URL = OpenCodeConnection.registrationURL()) async throws {
-        guard !FileManager.default.fileExists(atPath: registration.path) else {
-            throw OpenCodeError.message("A shared service is already registered. Connect to it, or manage an unhealthy service with OpenCode itself.")
+        if FileManager.default.fileExists(atPath: registration.path) {
+            let existing = try OpenCodeConnection.discover(file: registration)
+            guard !isRunning(existing.pid) else {
+                throw OpenCodeError.message("The local OpenCode service is already running. Woven Matter has not replaced it.")
+            }
         }
         guard FileManager.default.isExecutableFile(atPath: executable.path) else {
-            throw OpenCodeError.message("Choose the installed opencode2 executable in settings.")
+            throw OpenCodeError.message("OpenCode v2 is no longer installed at its expected location. Reinstall it and reconnect.")
         }
         guard registration.lastPathComponent == "service.json", registration.deletingLastPathComponent().lastPathComponent == "opencode" else {
             throw OpenCodeError.message("The service registration must be an opencode/service.json file under an XDG state directory.")
@@ -24,7 +52,7 @@ public enum OpenCodeServiceLauncher {
         defer { if probe.isRunning { probe.terminate() } }
         for _ in 0..<40 where probe.isRunning { try await Task.sleep(for: .milliseconds(250)) }
         guard !probe.isRunning, probe.terminationStatus == 0 else { throw OpenCodeError.message("Could not verify the selected OpenCode executable.") }
-        let version = String(decoding: try Data(contentsOf: output).prefix(4096), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        let version = normalizedVersion(String(decoding: try Data(contentsOf: output).prefix(4096), as: UTF8.self))
         guard version == OpenCodeConnection.supportedVersion else { throw OpenCodeError.incompatible(version) }
         let process = Process()
         process.executableURL = executable

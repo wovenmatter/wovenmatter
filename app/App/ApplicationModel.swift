@@ -2553,7 +2553,8 @@ final class ApplicationModel {
         if runtimeKind == .opencode {
             do {
                 guard let openCode else { throw OpenCodeError.message("OpenCode is still starting.") }
-                let id = try await openCode.create()
+                guard let workspace = localACPWorkspaceLaunchConfiguration else { throw ApplicationModelError.localACPRuntimeUnavailable }
+                let id = try await openCode.create(workspace: workspace.rootURL)
                 await refreshWorkspace()
                 return id
             } catch { localRunError = error.localizedDescription; return nil }

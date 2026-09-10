@@ -90,7 +90,7 @@ struct DashboardCloudConversation: View {
         let visibleMessages = messages.filter { record in
             DashboardRunDisplayPolicy.presentsMessage(record, run: runsByAssistantMessageID[record.id])
                 && (conversation?.localRuntimeKind != .opencode || model.openCode?.links[record.conversationID] == nil
-                    || model.openCode?.snapshots[record.conversationID]?.messages.contains(where: { $0["id"].text == record.clientMessageID }) == true)
+                    || model.openCode?.snapshots[record.conversationID]?.messages.contains(where: { $0["id"].text == record.clientMessageID && OpenCodeSessionSnapshot.presentsMessage($0) }) == true)
         }
         let openCodeOrder = Dictionary((conversation.flatMap { model.openCode?.snapshots[$0.id]?.messages } ?? []).enumerated().map { ($0.element["id"].text, $0.offset) }, uniquingKeysWith: { first, _ in first })
         let orderedMessages = openCodeOrder.isEmpty ? visibleMessages : visibleMessages.sorted {
@@ -121,7 +121,7 @@ struct DashboardCloudConversation: View {
                             )
                         } else {
                             if scrollState.positionedConversationID == conversation?.id,
-                               conversationState?.hasOlderMessages == true,
+                               (conversationState?.hasOlderMessages == true || conversation.flatMap { model.openCode?.isLocalSession($0.id) == true ? model.openCode?.snapshots[$0.id]?.olderCursor : nil } != nil),
                                let oldestMessageID = messages.first?.id {
                                 Color.clear
                                     .frame(height: 1)
@@ -309,16 +309,22 @@ struct DashboardCloudConversation: View {
                         attachedNoteTitle: attachedNoteTitle,
                         attachments: attachments,
                         showsSessionControls: conversation.map {
-                            $0.localRuntimeKind != .opencode && (model.isOpenClawGatewayConversation($0.id)
-                                || $0.localRuntimeKind != nil)
+                            model.isOpenClawGatewayConversation($0.id) || $0.localRuntimeKind != nil
                         } ?? false,
                         sessionMetadata: conversation.flatMap {
+                            if $0.localRuntimeKind == .opencode { return model.openCode?.metadata($0.id) }
                             if model.isOpenClawGatewayConversation($0.id) {
                                 return model.openClawGatewaySessionMetadata[$0.id]
                             }
                             return model.localACPSessionMetadata[$0.id]
                         },
                         sessionControlsDisabled: conversation.map {
+                            if $0.localRuntimeKind == .opencode {
+                                return model.openCode?.isLocalSession($0.id) != true
+                                    || model.openCode?.statuses[$0.id] != "Connected"
+                                    || model.openCode?.updatingSessions.contains($0.id) == true
+                                    || model.localRunningConversationIDs.contains($0.id)
+                            }
                             if model.isOpenClawGatewayConversation($0.id) {
                                 return model.localRunningConversationIDs.contains($0.id)
                             }
@@ -330,7 +336,7 @@ struct DashboardCloudConversation: View {
                             return true
                         } ?? true,
                         sendDisabled: sendInProgress || (conversation.map {
-                            if $0.localRuntimeKind == .opencode { return model.openCode?.links[$0.id] == nil || model.openCode?.statuses[$0.id] != "Connected" }
+                            if $0.localRuntimeKind == .opencode { return model.openCode?.isLocalSession($0.id) != true || model.openCode?.statuses[$0.id] != "Connected" }
                             guard $0.localRuntimeKind != nil else { return true }
                             return model.loadingLocalACPSessionIDs.contains($0.id)
                                 || model.updatingLocalACPSessionIDs.contains($0.id)
@@ -340,6 +346,7 @@ struct DashboardCloudConversation: View {
                         onActivate: onActivatePanel,
                         onSelectModel: { selection in
                             guard let conversation else { return }
+                            if conversation.localRuntimeKind == .opencode { model.openCode?.updateSelection(conversation.id, model: selection); return }
                             if model.isOpenClawGatewayConversation(conversation.id) {
                                 model.patchOpenClawGatewaySession(
                                     conversationID: conversation.id,
@@ -358,6 +365,7 @@ struct DashboardCloudConversation: View {
                         },
                         onSelectThinking: { selection in
                             guard let conversation else { return }
+                            if conversation.localRuntimeKind == .opencode { model.openCode?.updateSelection(conversation.id, thinking: selection); return }
                             if model.isOpenClawGatewayConversation(conversation.id) {
                                 model.patchOpenClawGatewaySession(
                                     conversationID: conversation.id,
@@ -498,6 +506,14 @@ struct DashboardCloudConversation: View {
     ) async {
         guard let conversation, !isPrependingHistory else { return }
         isPrependingHistory = true
+        if conversationState?.hasOlderMessages != true,
+           let openCode = model.openCode, openCode.isLocalSession(conversation.id),
+           let link = openCode.links[conversation.id], openCode.snapshots[conversation.id]?.olderCursor != nil {
+            do {
+                try await openCode.coordinator.loadOlder(link)
+                await model.refreshConversation(id: conversation.id)
+            } catch { openCode.error = error.localizedDescription }
+        }
         let loaded = await model.loadOlderConversationMessages(id: conversation.id)
         if loaded, !Task.isCancelled {
             await Task.yield()

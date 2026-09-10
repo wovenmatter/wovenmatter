@@ -57,10 +57,6 @@ public actor OpenCodeSessionCoordinator {
         guard let client = clients[connectionID] else { throw OpenCodeError.message("OpenCode is disconnected.") }
         return try await client.readFile(path: path, query: query)
     }
-    public func terminal(connectionID: String, id: String, persistent: Bool = false, query: [String: String]) throws -> URLSessionWebSocketTask {
-        guard let client = clients[connectionID] else { throw OpenCodeError.message("OpenCode is disconnected.") }
-        return try client.terminal(id: id, persistent: persistent, query: query)
-    }
     public func watch(_ link: OpenCodeSessionLink) {
         guard workers[link.conversationID] == nil, clients[link.connectionID] != nil else { return }
         snapshots[link.conversationID] = (try? database.openCodeSnapshot(conversationID: link.conversationID)) ?? OpenCodeSessionSnapshot()
@@ -207,7 +203,7 @@ public actor OpenCodeSessionCoordinator {
         try database.saveOpenCodeSnapshot(snapshot, conversationID: link.conversationID)
         snapshots[link.conversationID] = snapshot; emit(link.conversationID, status: "Connected")
     }
-    public func prompt(_ link: OpenCodeSessionLink, input: AgentMessageInput, delivery: String = "queue", resume: Bool = false, serverFiles: [OpenCodeValue] = []) async throws {
+    public func prompt(_ link: OpenCodeSessionLink, input: AgentMessageInput) async throws {
         guard sending.insert(link.conversationID).inserted else { throw OpenCodeError.message("The previous input is still being submitted.") }
         defer { sending.remove(link.conversationID) }
         guard let client = clients[link.connectionID] else { throw OpenCodeError.message("Connect to OpenCode before sending input.") }
@@ -215,14 +211,13 @@ public actor OpenCodeSessionCoordinator {
             throw OpenCodeError.message("Resolve the uncertain input in session controls before sending another message.")
         }
         let id = "msg_" + UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
-        var files: [OpenCodeValue] = serverFiles
+        var files: [OpenCodeValue] = []
         for file in input.files {
             let bytes = try Data(contentsOf: file.localURL)
             guard bytes.count <= AgentMessageAttachmentLimits.maximumFileBytes else { throw OpenCodeError.message("Attachment exceeds Woven Matter's size limit.") }
             files.append(["uri": .string("data:\(file.mimeType);base64," + bytes.base64EncodedString()), "name": .string(file.fileName)])
         }
-        var payload: OpenCodeValue = ["id": .string(id), "text": .string(input.textWithReferenceContext), "files": .array(files), "delivery": .string(delivery)]
-        if resume { payload["resume"] = .bool(true) }
+        let payload: OpenCodeValue = ["id": .string(id), "text": .string(input.textWithReferenceContext), "files": .array(files)]
         try database.saveOpenCodeSubmission(conversationID: link.conversationID, id: id, payload: payload, status: "sending")
         do {
             let result = try await client.call("POST", "/api/session/\(OpenCodeHTTPClient.segment(link.sessionID))/prompt", body: payload)

@@ -30,7 +30,7 @@ public struct OpenCodeConnection: Equatable, Sendable {
     }
     public static func discover(file: URL = registrationURL()) throws -> Self {
         guard let data = try? Data(contentsOf: file), data.count <= 65_536 else {
-            throw OpenCodeError.message("No shared OpenCode v2 service was found. Start the shared service or configure a remote server in OpenCode settings.")
+            throw OpenCodeError.message("The local OpenCode v2 service is not running. Connect to OpenCode in Local Agent Workspace.")
         }
         let info = try OpenCodeValue.decode(data)
         guard var components = URLComponents(string: info["url"].text),
@@ -117,16 +117,6 @@ public struct OpenCodeHTTPClient: Sendable {
         }
         return (data, http.mimeType ?? "application/octet-stream")
     }
-    public func terminal(id: String, persistent: Bool = false, query: [String: String]) throws -> URLSessionWebSocketTask {
-        var request = try request("GET", (persistent ? "/api/experimental/persistent-pty/" : "/api/pty/") + Self.segment(id) + "/connect", query: query)
-        var url = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!
-        url.scheme = url.scheme == "https" ? "wss" : "ws"
-        request.url = url.url
-        let task = session.webSocketTask(with: request)
-        task.maximumMessageSize = 8 * 1_024 * 1_024
-        task.resume()
-        return task
-    }
     public func health() async throws -> OpenCodeValue {
         let health = try await call("GET", "/api/health")
         let version = health["version"].text
@@ -142,6 +132,10 @@ public struct OpenCodeHTTPClient: Sendable {
                        receive: @escaping @Sendable (OpenCodeValue) async throws -> Void) async throws {
         var request = try request("GET", path, query: query)
         request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+        // The durable log can legitimately be silent while a session is idle.
+        // HTTP snapshots retain their short timeout; stream silence is not a
+        // connection failure. A closed socket still triggers normal recovery.
+        request.timeoutInterval = 86_400
         let (bytes, response) = try await session.bytes(for: request)
         defer { bytes.task.cancel() }
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {

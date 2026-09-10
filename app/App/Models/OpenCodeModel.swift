@@ -1,54 +1,42 @@
-import AppKit
 import Foundation
 import Observation
-import Security
+import OSLog
 import WovenMatterClient
 import WovenMatterCore
 import WovenMatterDashboardStore
 
 @MainActor @Observable
 final class OpenCodeModel {
-    struct Server: Codable, Identifiable, Equatable {
-        var id: String
-        var name: String
-        var url: String
-        var username: String
-        var registration: String?
-    }
+    private let logger = Logger(subsystem: "wovenmatter.desktop", category: "OpenCode")
     let store: DashboardStore
     let coordinator: OpenCodeSessionCoordinator
     let ownerDeviceID: UUID
     private let defaults: UserDefaults
+    private let registration = OpenCodeConnection.registrationURL()
     private var updateTask: Task<Void, Never>?
+    private var connectionTask: Task<Void, Error>?
+    private var executable: URL?
     var onChange: ((String) async -> Void)?
-    var servers: [Server] = []
-    var connected: Set<String> = []
-    var selectedServerID: String = ""
     var links: [String: OpenCodeSessionLink] = [:]
     var snapshots: [String: OpenCodeSessionSnapshot] = [:]
     var statuses: [String: String] = [:]
     var errors: [String: String] = [:]
-    var requestedConversationID: String?
     var error: String?
-    var busy = false
-    var sessions: [OpenCodeValue] = []
-    var sessionsCursor: String?
-    var directory: String
-    var executablePath: String
-    var registrationPath: String
-    var delivery: [String: String] = [:]
-    var serverFiles: [String: [OpenCodeValue]] = [:]
-    var models: [String: [OpenCodeValue]] = [:]
-    var agents: [String: [OpenCodeValue]] = [:]
+    private(set) var isReady = false
+    private(set) var isConnecting = false
+    private(set) var busy = false
+    private(set) var updatingSessions: Set<String> = []
+    private var models: [String: [OpenCodeValue]] = [:]
+
+    private var connectionID: String { "local:" + registration.standardizedFileURL.path }
+    var connected: Set<String> { isReady ? [connectionID] : [] }
+    var canConnect: Bool { executable != nil || FileManager.default.fileExists(atPath: registration.path) }
 
     init(store: DashboardStore, ownerDeviceID: UUID, defaults: UserDefaults) {
         self.store = store; self.ownerDeviceID = ownerDeviceID; self.defaults = defaults
         coordinator = OpenCodeSessionCoordinator(database: store.database)
-        directory = defaults.string(forKey: "wovenmatter.opencode.directory") ?? FileManager.default.homeDirectoryForCurrentUser.appending(path: ".woven-matter").path
-        registrationPath = defaults.string(forKey: "wovenmatter.opencode.registration") ?? OpenCodeConnection.registrationURL().path
-        executablePath = defaults.string(forKey: "wovenmatter.opencode.executable") ?? LocalACPRuntimeResolver.resolveExecutable(named: "opencode2")?.path ?? ""
-        if let data = defaults.data(forKey: "wovenmatter.opencode.servers"), let saved = try? JSONDecoder().decode([Server].self, from: data) { servers = saved }
-        selectedServerID = defaults.string(forKey: "wovenmatter.opencode.selected-server") ?? servers.first?.id ?? ""
+        // Honor a previously selected CLI, never an old custom/remote service.
+        if let path = defaults.string(forKey: "wovenmatter.opencode.executable"), FileManager.default.isExecutableFile(atPath: path) { executable = URL(fileURLWithPath: path) }
         for link in (try? store.database.openCodeLinks()) ?? [] {
             links[link.conversationID] = link
             snapshots[link.conversationID] = try? store.database.openCodeSnapshot(conversationID: link.conversationID)
@@ -59,94 +47,73 @@ final class OpenCodeModel {
                 if let snapshot = update.snapshot { self.snapshots[update.conversationID] = snapshot }
                 self.statuses[update.conversationID] = update.status
                 self.errors[update.conversationID] = update.error
+                if self.isLocalSession(update.conversationID) {
+                    if update.status == "Connected" { self.isReady = true }
+                    else if ["Reconnecting", "Unsupported version", "Authentication required"].contains(update.status) { self.isReady = false }
+                    if update.status == "Reconnecting", !self.isConnecting {
+                        do { try await self.connectLocal() } catch { self.error = error.localizedDescription }
+                    }
+                }
                 await self.onChange?(update.conversationID)
             }
         }
     }
-    var isReady: Bool { connected.contains(selectedServerID) }
-    func savePreferences() {
-        defaults.set(try? JSONEncoder().encode(servers), forKey: "wovenmatter.opencode.servers")
-        defaults.set(selectedServerID, forKey: "wovenmatter.opencode.selected-server")
-        defaults.set(directory, forKey: "wovenmatter.opencode.directory")
-        defaults.set(registrationPath, forKey: "wovenmatter.opencode.registration")
-        defaults.set(executablePath, forKey: "wovenmatter.opencode.executable")
-    }
+
+    func isLocalSession(_ id: String) -> Bool { links[id]?.connectionID == connectionID }
+
     func restore() async {
-        for server in servers where defaults.bool(forKey: "wovenmatter.opencode.autoconnect." + server.id) {
-            do { try await connect(server) } catch { self.error = error.localizedDescription }
-        }
+        await resolveExecutable()
+        guard defaults.bool(forKey: "wovenmatter.opencode.local-connected") || links.values.contains(where: { $0.connectionID == connectionID }) else { return }
+        do { try await connectLocal() } catch { self.error = error.localizedDescription }
     }
+
+    private func resolveExecutable() async {
+        // Login-shell discovery runs a subprocess. Never do it in a computed
+        // property read by SwiftUI, where its run loop can reenter rendering.
+        if let resolved = await Task.detached(priority: .utility, operation: {
+            LocalACPRuntimeResolver.resolveExecutable(named: "opencode2")
+        }).value { executable = resolved }
+    }
+
+    /// One local service using OpenCode's standard registration/environment.
+    /// Concurrent New Chat/Connect requests share a single startup.
     func connectLocal() async throws {
-        let registration = URL(fileURLWithPath: registrationPath)
-        let connection = try OpenCodeConnection.discover(file: registration)
-        try await coordinator.connect(connection)
-        let server = Server(id: connection.identity, name: "This Mac", url: connection.url.absoluteString,
-                            username: "opencode", registration: registration.path)
-        servers.removeAll { $0.id == server.id }; servers.insert(server, at: 0)
-        selectedServerID = server.id; connected.insert(server.id)
-        defaults.set(true, forKey: "wovenmatter.opencode.autoconnect." + server.id)
-        savePreferences(); watchServer(server.id); try await listSessions()
-    }
-    func addRemote(name: String, url: String, username: String, password: String) async throws {
-        let origin = url.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let endpoint = URL(string: origin) else { throw OpenCodeError.message("Enter the OpenCode server URL.") }
-        let id = servers.first(where: { $0.registration == nil && $0.url == origin })?.id ?? UUID().uuidString
-        let server = Server(id: id, name: name.isEmpty ? endpoint.host ?? "Remote" : name, url: origin, username: username, registration: nil)
-        let connection = try OpenCodeConnection(identity: id, url: endpoint, username: username, password: password)
-        try await coordinator.connect(connection)
-        try savePassword(password, id: id)
-        servers.removeAll { $0.id == id }; servers.append(server)
-        selectedServerID = id; connected.insert(id)
-        defaults.set(true, forKey: "wovenmatter.opencode.autoconnect." + id)
-        savePreferences(); watchServer(id); try await listSessions()
-    }
-    func connect(_ server: Server) async throws {
-        let connection: OpenCodeConnection
-        if let registration = server.registration { connection = try .discover(file: URL(fileURLWithPath: registration)) }
-        else {
-            guard let url = URL(string: server.url) else { throw OpenCodeError.message("Invalid saved server URL.") }
-            connection = try OpenCodeConnection(identity: server.id, url: url, username: server.username, password: loadPassword(id: server.id))
+        if let connectionTask { return try await connectionTask.value }
+        isConnecting = true; error = nil
+        logger.info("Connecting to the local OpenCode service")
+        let task = Task { @MainActor in
+            if executable == nil { await resolveExecutable() }
+            logger.info("Discovering or starting the local OpenCode service")
+            let connection = try await OpenCodeServiceLauncher.ensure(executable: executable, registration: registration)
+            logger.info("Local OpenCode service is available")
+            try await coordinator.connect(connection)
+            isReady = true
+            defaults.set(true, forKey: "wovenmatter.opencode.local-connected")
+            for link in links.values where link.connectionID == connectionID { await coordinator.watch(link) }
         }
-        try await coordinator.connect(connection)
-        connected.insert(server.id); watchServer(server.id)
-        defaults.set(true, forKey: "wovenmatter.opencode.autoconnect." + server.id)
+        connectionTask = task
+        defer { connectionTask = nil; isConnecting = false }
+        do { try await task.value }
+        catch { logger.error("Local OpenCode connection failed: \(error.localizedDescription)"); isReady = false; self.error = error.localizedDescription; throw error }
     }
-    func disconnect(_ id: String) async {
-        await coordinator.disconnect(connectionID: id); connected.remove(id)
-        defaults.set(false, forKey: "wovenmatter.opencode.autoconnect." + id)
-    }
-    func watchServer(_ id: String) {
-        for link in links.values where link.connectionID == id { Task { await coordinator.watch(link) } }
-    }
-    func listSessions(search: String = "", more: Bool = false) async throws {
-        var query = ["limit": "50", "order": "desc", "search": search]
-        if more, let sessionsCursor { query["cursor"] = sessionsCursor }
-        let serverID = selectedServerID
-        let result = try await coordinator.call(connectionID: serverID, path: "/api/session", query: query)
-        guard selectedServerID == serverID else { return }
-        sessions = more ? sessions + result["data"].array : result["data"].array
-        var seen: Set<String> = []; sessions = sessions.filter { seen.insert($0["id"].text).inserted }
-        sessionsCursor = result["data"].array.count == 50 ? result["cursor"]["next"].string : nil
-    }
-    func create() async throws -> String {
-        guard directory.hasPrefix("/") else { throw OpenCodeError.message("Enter an absolute workspace path on the server's machine.") }
-        savePreferences()
+
+    func create(workspace: URL) async throws -> String {
         guard !busy else { throw OpenCodeError.message("A session is already being created.") }
         busy = true; defer { busy = false }
-        let serverID = selectedServerID
-        let pendingKey = "wovenmatter.opencode.pending-create." + serverID
+        try await connectLocal()
+        let pendingKey = "wovenmatter.opencode.pending-create." + connectionID
         if let pending = defaults.string(forKey: pendingKey) {
-            let recovered = try await coordinator.call(connectionID: serverID, path: "/api/session/" + OpenCodeHTTPClient.segment(pending))
-            let localID = try await open(recovered["data"], serverID: serverID)
+            let recovered = try await coordinator.call(connectionID: connectionID, path: "/api/session/" + OpenCodeHTTPClient.segment(pending))
+            let localID = try await open(recovered["data"])
             defaults.removeObject(forKey: pendingKey)
             return localID
         }
         let id = "ses_" + UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
         defaults.set(id, forKey: pendingKey)
         do {
-            let response = try await coordinator.call(connectionID: serverID, method: "POST", path: "/api/session",
-                body: ["id": .string(id), "location": ["directory": .string(directory)]])
-            let localID = try await open(response["data"], serverID: serverID)
+            let response = try await coordinator.call(connectionID: connectionID, method: "POST", path: "/api/session",
+                body: ["id": .string(id), "location": ["directory": .string(workspace.path)]])
+            let localID = try await open(response["data"])
             defaults.removeObject(forKey: pendingKey)
             return localID
         } catch {
@@ -154,66 +121,61 @@ final class OpenCodeModel {
             throw error
         }
     }
-    func open(_ session: OpenCodeValue, serverID: String? = nil) async throws -> String {
-        let server = serverID ?? selectedServerID
+
+    private func open(_ session: OpenCodeValue) async throws -> String {
         let sessionID = session["id"].text
         guard sessionID.hasPrefix("ses") else { throw OpenCodeError.message("OpenCode did not return a session ID.") }
-        if let link = links.values.first(where: { $0.connectionID == server && $0.sessionID == sessionID }) {
-            await coordinator.watch(link); return link.conversationID
-        }
-        let conversationID = try store.database.createLocalACPSession(runtimeKind: .opencode, title: session["title"].string ?? "New OpenCode chat", ownerDeviceID: ownerDeviceID, openCodeAssociation: (server, sessionID))
-        let link = OpenCodeSessionLink(conversationID: conversationID, connectionID: server, sessionID: sessionID)
+        let conversationID = try store.database.createLocalACPSession(runtimeKind: .opencode, title: session["title"].string ?? "New OpenCode chat", ownerDeviceID: ownerDeviceID, openCodeAssociation: (connectionID, sessionID))
+        let link = OpenCodeSessionLink(conversationID: conversationID, connectionID: connectionID, sessionID: sessionID)
         links[conversationID] = link
         await coordinator.watch(link)
         await onChange?(conversationID)
         return conversationID
     }
-    func sessionCall(_ id: String, _ suffix: String = "", method: String = "GET", body: OpenCodeValue? = nil, query: [String: String] = [:]) async throws -> OpenCodeValue {
-        guard let link = links[id] else { throw OpenCodeError.message("This is a saved OpenCode v1 transcript. Start a new v2 session to continue working.") }
-        let result = try await coordinator.call(connectionID: link.connectionID, method: method,
-            path: "/api/session/" + OpenCodeHTTPClient.segment(link.sessionID) + suffix, query: query, body: body)
+
+    func sessionCall(_ id: String, _ suffix: String = "", method: String = "GET", body: OpenCodeValue? = nil) async throws -> OpenCodeValue {
+        guard let link = links[id], isLocalSession(id) else { throw OpenCodeError.message("This is a saved transcript. Start a new OpenCode chat to continue.") }
+        let result = try await coordinator.call(connectionID: connectionID, method: method,
+            path: "/api/session/" + OpenCodeHTTPClient.segment(link.sessionID) + suffix, body: body)
         if method != "GET" { try? await coordinator.refresh(link) }
         return result
     }
-    func locationQuery(_ id: String?) -> [String: String] {
-        let location = id.flatMap { snapshots[$0]?.info["location"] }
-        var query = ["location[directory]": location?["directory"].string ?? directory]
-        if let workspace = location?["workspaceID"].string { query["location[workspace]"] = workspace }
+
+    func locationQuery(_ id: String) -> [String: String] {
+        let location = snapshots[id]?.info["location"] ?? .null
+        var query = ["location[directory]": location["directory"].text]
+        if let workspace = location["workspaceID"].string { query["location[workspace]"] = workspace }
         return query
     }
-    func resource(_ path: String, conversationID: String? = nil, method: String = "GET", body: OpenCodeValue? = nil, query: [String: String] = [:]) async throws -> OpenCodeValue {
-        let server = conversationID.flatMap { links[$0]?.connectionID } ?? selectedServerID
-        return try await coordinator.call(connectionID: server, method: method, path: "/api/" + path,
-            query: locationQuery(conversationID).merging(query, uniquingKeysWith: { _, value in value }), body: body)
-    }
+
     func refreshCatalog(_ id: String) async throws {
-        async let modelList = resource("model", conversationID: id)
-        async let agentList = resource("agent", conversationID: id)
-        let result = try await (modelList, agentList)
-        models[id] = result.0["data"].array.filter { $0["enabled"].bool }
-        agents[id] = result.1["data"].array
+        guard isLocalSession(id) else { return }
+        let result = try await coordinator.call(connectionID: connectionID, path: "/api/model", query: locationQuery(id))
+        models[id] = result["data"].array.filter { $0["enabled"].bool }
     }
+
+    func metadata(_ id: String) -> LocalACPSessionMetadata? {
+        guard let snapshot = snapshots[id], isLocalSession(id) else { return nil }
+        return OpenCodeComposerMetadata.metadata(session: snapshot.info, models: models[id] ?? [])
+    }
+
+    func updateSelection(_ id: String, model: String? = nil, thinking: String? = nil) {
+        guard updatingSessions.insert(id).inserted else { return }
+        perform {
+            defer { self.updatingSessions.remove(id) }
+            guard let key = model ?? self.metadata(id)?.model else { return }
+            let selection = try OpenCodeComposerMetadata.selection(model: key, thinking: thinking, models: self.models[id] ?? [])
+            _ = try await self.sessionCall(id, "/model", method: "POST", body: selection)
+        }
+    }
+
     func send(_ id: String, input: AgentMessageInput) async throws {
-        guard let link = links[id] else { throw OpenCodeError.message("OpenCode v1 sessions are read-only. Create a new OpenCode v2 session.") }
-        let pendingFiles = serverFiles[id] ?? []
-        try await coordinator.prompt(link, input: input, delivery: delivery[id] ?? "queue", serverFiles: pendingFiles)
-        serverFiles[id]?.removeAll { pendingFiles.contains($0) }
+        guard let link = links[id], isLocalSession(id) else { throw OpenCodeError.message("This saved transcript is read-only. Create a new OpenCode chat.") }
+        if !isReady { try await connectLocal() }
+        try await coordinator.prompt(link, input: input)
     }
+
     func perform(_ operation: @escaping @MainActor () async throws -> Void) {
         Task { error = nil; do { try await operation() } catch { self.error = error.localizedDescription } }
-    }
-    private var keychainService: String { (Bundle.main.bundleIdentifier ?? "com.wovenmatter") + ".opencode" }
-    private func savePassword(_ password: String, id: String) throws {
-        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: keychainService, kSecAttrAccount as String: id]
-        let attributes: [String: Any] = [kSecValueData as String: Data(password.utf8), kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly]
-        let updated = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
-        if updated == errSecSuccess { return }
-        guard updated == errSecItemNotFound, SecItemAdd(query.merging(attributes, uniquingKeysWith: { _, v in v }) as CFDictionary, nil) == errSecSuccess else { throw OpenCodeError.message("Could not save the OpenCode password in Keychain.") }
-    }
-    private func loadPassword(id: String) throws -> String {
-        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: keychainService, kSecAttrAccount as String: id, kSecReturnData as String: true, kSecMatchLimit as String: kSecMatchLimitOne]
-        var result: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess, let data = result as? Data else { throw OpenCodeError.message("Reconnect this server to restore its Keychain credentials.") }
-        return String(decoding: data, as: UTF8.self)
     }
 }

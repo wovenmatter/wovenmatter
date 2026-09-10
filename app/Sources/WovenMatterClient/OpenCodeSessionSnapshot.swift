@@ -1,6 +1,41 @@
 import Foundation
 import WovenMatterCore
 
+/// Adapt the native service catalog to the same model/thinking controls used
+/// by the other harnesses. Provider identity remains part of each model key.
+public enum OpenCodeComposerMetadata {
+    public static func modelKey(_ model: OpenCodeValue) -> String {
+        let id = model["id"].text
+        return model["providerID"].text.isEmpty ? id : model["providerID"].text + "/" + id
+    }
+
+    public static func metadata(session: OpenCodeValue, models: [OpenCodeValue]) -> LocalACPSessionMetadata {
+        let selected = session["model"]
+        let key = modelKey(selected)
+        let option = models.first { modelKey($0) == key }
+        let variants = option?["variants"].array.compactMap { $0["id"].string } ?? []
+        return LocalACPSessionMetadata(sessionKey: session["id"].text,
+            model: key.isEmpty ? nil : key,
+            thinking: selected["variant"].string ?? (variants.isEmpty ? nil : "default"),
+            modelOptions: models.map(modelKey),
+            thinkingLevels: variants.isEmpty ? [] : ["default"] + variants)
+    }
+
+    public static func selection(model key: String, thinking: String? = nil, models: [OpenCodeValue]) throws -> OpenCodeValue {
+        guard let option = models.first(where: { modelKey($0) == key }) else {
+            throw OpenCodeError.message("This OpenCode model is no longer available. Refresh the conversation and choose another model.")
+        }
+        var selected: OpenCodeValue = ["id": option["id"], "providerID": option["providerID"]]
+        if let thinking, thinking != "default" {
+            guard option["variants"].array.contains(where: { $0["id"].string == thinking }) else {
+                throw OpenCodeError.message("This thinking level is not available for the selected OpenCode model.")
+            }
+            selected["variant"] = .string(thinking)
+        }
+        return ["model": selected]
+    }
+}
+
 public struct OpenCodeSessionLink: Codable, Equatable, Sendable {
     public let conversationID: String
     public let connectionID: String
@@ -36,6 +71,12 @@ public struct OpenCodeSessionSnapshot: Codable, Equatable, Sendable {
     }
     public func containsInput(_ id: String) -> Bool {
         messages.contains { $0["id"].text == id } || inbox.contains { $0["id"].text == id }
+    }
+    public static func presentsMessage(_ message: OpenCodeValue) -> Bool {
+        // Configuration events remain in the recovery snapshot, but are not
+        // empty system bubbles in the conversation. Assistant placeholders
+        // remain visible while text or tool activity is arriving.
+        message["type"].text == "assistant" || !text(message).isEmpty || !message["files"].array.isEmpty
     }
     public static func text(_ message: OpenCodeValue) -> String {
         switch message["type"].text {
