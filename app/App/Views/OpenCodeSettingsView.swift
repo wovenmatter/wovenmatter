@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct OpenCodeSettingsCard: View {
+    @Environment(\.openURL) private var openURL
     @Bindable var model: OpenCodeModel
     var body: some View {
         SettingsCard(title: "OpenCode", detail: "Uses the local OpenCode v2 service. New chats use your Woven Matter workspace.") {
@@ -8,6 +9,11 @@ struct OpenCodeSettingsCard: View {
                 Text(model.isConnecting ? "Connecting…" : model.isReady ? "Connected" : "Not connected")
                     .foregroundStyle(.secondary)
                 Spacer()
+                if model.isReady {
+                    Button("Open in Browser") {
+                        model.perform { openURL(try model.browserURL()) }
+                    }
+                }
                 Button("Connect") { model.perform { try await model.connectLocal() } }
                     .disabled(model.isConnecting || model.isReady)
             }

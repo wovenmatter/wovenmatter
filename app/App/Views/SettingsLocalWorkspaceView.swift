@@ -17,8 +17,8 @@ struct SettingsLocalWorkspaceView: View {
             onBack: onBack
         ) {
             workspaceCard
-            if let openCode = model.openCode { OpenCodeSettingsCard(model: openCode) }
             runtimesCard
+            if let openCode = model.openCode { OpenCodeSettingsCard(model: openCode) }
         }
         .confirmationDialog(
             "Review installer source",

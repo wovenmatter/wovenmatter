@@ -44,6 +44,13 @@ public struct OpenCodeConnection: Equatable, Sendable {
         return try Self(identity: "local:" + file.standardizedFileURL.path, url: url, password: password,
                         registration: file, pid: Int(pid), version: info["version"].string)
     }
+    /// OpenCode consumes this token at startup and removes it from browser history.
+    /// Keep this URL out of logs and persistent Woven Matter settings.
+    public var browserURL: URL {
+        var components = URLComponents(url: url, resolvingAgainstBaseURL: false)!
+        components.queryItems = [URLQueryItem(name: "auth_token", value: Data("\(username):\(password)".utf8).base64EncodedString())]
+        return components.url!
+    }
     public var authorization: String { "Basic " + Data("\(username):\(password)".utf8).base64EncodedString() }
 }
 

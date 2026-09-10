@@ -97,6 +97,11 @@ final class OpenCodeModel {
         catch { logger.error("Local OpenCode connection failed: \(error.localizedDescription)"); isReady = false; self.error = error.localizedDescription; throw error }
     }
 
+    func browserURL() throws -> URL {
+        // Discover again so a service restart never hands the browser stale credentials.
+        try OpenCodeConnection.discover(file: registration).browserURL
+    }
+
     func create(workspace: URL) async throws -> String {
         guard !busy else { throw OpenCodeError.message("A session is already being created.") }
         busy = true; defer { busy = false }
