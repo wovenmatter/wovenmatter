@@ -7,6 +7,21 @@ import WovenMatterCore
 
 @Suite(.serialized)
 struct OpenCodeIntegrationTests {
+    @Test func freshSessionShowsServerDefaultWithoutOverridingExplicitSelection() throws {
+        let fallback: OpenCodeValue = ["id": "default-model", "providerID": "provider", "variants": .array([["id": "high"]])]
+        let explicit: OpenCodeValue = ["id": "chosen", "providerID": "provider", "variant": "high"]
+        let catalog: [OpenCodeValue] = [fallback, ["id": "chosen", "providerID": "provider", "variants": .array([["id": "high"]])]]
+        let fresh = OpenCodeComposerMetadata.metadata(session: ["id": "ses_new"], models: catalog, defaultModel: fallback)
+        #expect(fresh.model == "provider/default-model")
+        #expect(fresh.thinking == "default")
+        #expect(OpenCodeComposerMetadata.matchesSelection(["id": "chosen", "providerID": "provider", "variant": "default"], ["id": "chosen", "providerID": "provider"]))
+        #expect(!OpenCodeComposerMetadata.matchesSelection(explicit, ["id": "chosen", "providerID": "provider"]))
+        let selected = OpenCodeComposerMetadata.metadata(session: ["id": "ses_new", "model": explicit], models: catalog, defaultModel: fallback)
+        #expect(selected.model == "provider/chosen")
+        #expect(selected.thinking == "high")
+        #expect(OpenCodeComposerMetadata.metadata(session: ["id": "ses_new"], models: []).model == nil)
+    }
+
     @Test func durableStreamAllowsIdleTimeWithoutUsingTheSnapshotTimeout() async throws {
         let fixture = OpenCodeFixture(); FixtureProtocol.fixture = fixture
         let client = OpenCodeHTTPClient(connection: try connection(), session: fixtureSession())

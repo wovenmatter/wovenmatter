@@ -26,6 +26,8 @@ final class OpenCodeModel {
     private(set) var isConnecting = false
     private(set) var busy = false
     private(set) var updatingSessions: Set<String> = []
+    private var selectionTasks: [String: Task<Void, Error>] = [:]
+    private var defaultModels: [String: OpenCodeValue] = [:]
     private var models: [String: [OpenCodeValue]] = [:]
 
     private var connectionID: String { "local:" + registration.standardizedFileURL.path }
@@ -133,6 +135,11 @@ final class OpenCodeModel {
         let conversationID = try store.database.createLocalACPSession(runtimeKind: .opencode, title: session["title"].string ?? "New OpenCode chat", ownerDeviceID: ownerDeviceID, openCodeAssociation: (connectionID, sessionID))
         let link = OpenCodeSessionLink(conversationID: conversationID, connectionID: connectionID, sessionID: sessionID)
         links[conversationID] = link
+        var initial = OpenCodeSessionSnapshot()
+        initial.info = session
+        snapshots[conversationID] = initial
+        do { try await refreshCatalog(conversationID) }
+        catch { self.error = error.localizedDescription }
         await coordinator.watch(link)
         await onChange?(conversationID)
         return conversationID
@@ -156,27 +163,44 @@ final class OpenCodeModel {
     func refreshCatalog(_ id: String) async throws {
         guard isLocalSession(id) else { return }
         let result = try await coordinator.call(connectionID: connectionID, path: "/api/model", query: locationQuery(id))
+        let fallback = try await coordinator.call(connectionID: connectionID, path: "/api/model/default", query: locationQuery(id))
         models[id] = result["data"].array.filter { $0["enabled"].bool }
+        defaultModels[id] = fallback["data"]
     }
 
     func metadata(_ id: String) -> LocalACPSessionMetadata? {
         guard let snapshot = snapshots[id], isLocalSession(id) else { return nil }
-        return OpenCodeComposerMetadata.metadata(session: snapshot.info, models: models[id] ?? [])
+        return OpenCodeComposerMetadata.metadata(session: snapshot.info, models: models[id] ?? [], defaultModel: defaultModels[id] ?? .null)
     }
 
     func updateSelection(_ id: String, model: String? = nil, thinking: String? = nil) {
         guard updatingSessions.insert(id).inserted else { return }
-        perform {
-            defer { self.updatingSessions.remove(id) }
-            guard let key = model ?? self.metadata(id)?.model else { return }
+        error = nil
+        let task = Task { @MainActor in
+            guard let key = model ?? self.metadata(id)?.model else {
+                throw OpenCodeError.message("OpenCode has no default model. Choose an available model.")
+            }
             let selection = try OpenCodeComposerMetadata.selection(model: key, thinking: thinking, models: self.models[id] ?? [])
             _ = try await self.sessionCall(id, "/model", method: "POST", body: selection)
+            let confirmed = try await self.sessionCall(id)
+            guard OpenCodeComposerMetadata.matchesSelection(confirmed["data"]["model"], selection["model"]) else {
+                throw OpenCodeError.message("OpenCode has not confirmed the selected model. Select it again before sending.")
+            }
+            self.snapshots[id]?.info = confirmed["data"]
+        }
+        selectionTasks[id] = task
+        Task {
+            defer { self.updatingSessions.remove(id) }
+            do { try await task.value }
+            catch { self.error = error.localizedDescription }
         }
     }
 
     func send(_ id: String, input: AgentMessageInput) async throws {
         guard let link = links[id], isLocalSession(id) else { throw OpenCodeError.message("This saved transcript is read-only. Create a new OpenCode chat.") }
         if !isReady { try await connectLocal() }
+        // A failed selection remains a send barrier until the user selects again.
+        if let selection = selectionTasks[id] { try await selection.value }
         try await coordinator.prompt(link, input: input)
     }
 

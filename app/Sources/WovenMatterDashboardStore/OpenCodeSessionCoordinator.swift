@@ -126,7 +126,11 @@ public actor OpenCodeSessionCoordinator {
         }
     }
     public func refresh(_ link: OpenCodeSessionLink, generation: UUID? = nil, recoverHistory: Bool = false) async throws {
-        guard refreshing.insert(link.conversationID).inserted else { return }
+        // A post-mutation refresh must not be skipped behind an older snapshot.
+        while refreshing.contains(link.conversationID) {
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        refreshing.insert(link.conversationID)
         defer { refreshing.remove(link.conversationID) }
         guard let client = clients[link.connectionID] else { throw OpenCodeError.message("OpenCode is disconnected.") }
         let capturedGeneration = generation ?? generations[link.conversationID]
