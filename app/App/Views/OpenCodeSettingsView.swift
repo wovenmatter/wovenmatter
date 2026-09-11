@@ -51,9 +51,9 @@ struct OpenCodeSettingsCard: View {
             }
             .buttonStyle(SettingsQuietButtonStyle())
             Toggle("Start OpenCode server when WovenMatter launches", isOn: $model.startServerOnLaunch)
-                .toggleStyle(.checkbox)
+                .toggleStyle(DashboardSwitchToggleStyle())
             Toggle("Stop OpenCode server when WovenMatter quits", isOn: $model.stopServerOnQuit)
-                .toggleStyle(.checkbox)
+                .toggleStyle(DashboardSwitchToggleStyle())
             Text("Stopping the server also disconnects the browser and other OpenCode clients.")
                 .font(.caption).foregroundStyle(.secondary)
             if let error = model.error { Text(error).font(.callout).foregroundStyle(.red) }
@@ -90,8 +90,10 @@ struct OpenCodeSettingsCard: View {
                                 Text(option["name"].string ?? option["id"].text)
                                 Text(option["providerID"].text).font(.caption).foregroundStyle(.secondary)
                             }
+                            .frame(maxWidth: .infinity, alignment: .leading)
                         }
-                        .toggleStyle(.checkbox)
+                        .toggleStyle(DashboardSwitchToggleStyle())
+                        .accessibilityLabel((option["name"].string ?? option["id"].text) + ", " + option["providerID"].text)
                     }
                 }
             }

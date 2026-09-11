@@ -17,6 +17,7 @@ when an intentional design change is accepted.
   Preserve intentional differences such as borderless Usage sections.
 - **Icons:** use the existing `DashboardLucideIcon` glyphs and bundled harness
   logos, matching nearby icon sizes and stroke weights.
+- **Switches:** use `DashboardSwitchToggleStyle` for boolean controls and multi-select toggles. It supplies compact native switches in a 28 × 16-point control frame before their labels on the left, in the shared forest-green action color and is the default at the app root. Markdown task-list markers remain document content.
 - **Interaction:** keep controls compact, selection fills restrained, and focus
   styling quiet. Do not add persistent colored focus rings. Preserve keyboard
   navigation and accessible labels and states.

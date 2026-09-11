@@ -299,7 +299,7 @@ struct OpenClawHeartbeatCard: View {
                 }
                 Spacer()
                 Toggle("Enabled", isOn: $draft.isEnabled)
-                    .toggleStyle(.switch)
+                    .toggleStyle(DashboardSwitchToggleStyle())
                     .disabled(configuration == nil || isSaving)
             }
 

@@ -1122,6 +1122,34 @@ struct DashboardSearchField: View {
     }
 }
 
+/// Compact native switches share the app's forest-green action color.
+/// Keeping the native control preserves keyboard and accessibility behavior.
+struct DashboardSwitchToggleStyle: ToggleStyle {
+    @Environment(\.isEnabled) private var isEnabled
+    var showsLabel = true
+
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 8) {
+            Toggle(isOn: configuration.$isOn) { configuration.label }
+                .labelsHidden()
+                .toggleStyle(SwitchToggleStyle(tint: DashboardPalette.primary))
+                .controlSize(.mini)
+                .fixedSize()
+                .scaleEffect(0.8)
+                .frame(width: 28, height: 16)
+            if showsLabel {
+                configuration.label
+                    .contentShape(Rectangle())
+                    .onTapGesture { if isEnabled { configuration.isOn.toggle() } }
+            }
+        }
+        .accessibilityRepresentation {
+            Toggle(isOn: configuration.$isOn) { configuration.label }
+                .toggleStyle(.switch)
+        }
+    }
+}
+
 struct DashboardPrimaryButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
 
