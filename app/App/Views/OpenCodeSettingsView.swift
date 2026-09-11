@@ -43,6 +43,15 @@ struct OpenCodeSettingsCard: View {
             }
         }
     }
+    private var sortedPickerModels: [OpenCodeValue] {
+        let matching = model.settingsModels.filter {
+            modelSearch.isEmpty || ($0["name"].text + " " + OpenCodeComposerMetadata.modelKey($0)).localizedCaseInsensitiveContains(modelSearch)
+        }
+        // Partition without disturbing the catalog order within either group.
+        return matching.filter { !model.hiddenModels.contains(OpenCodeComposerMetadata.modelKey($0)) }
+            + matching.filter { model.hiddenModels.contains(OpenCodeComposerMetadata.modelKey($0)) }
+    }
+
     private var modelPicker: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Models shown in Woven Matter").font(.headline)
@@ -52,9 +61,7 @@ struct OpenCodeSettingsCard: View {
             if let modelsError { Text(modelsError).font(.caption).foregroundStyle(.red) }
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 10) {
-                    ForEach(model.settingsModels.filter {
-                        modelSearch.isEmpty || ($0["name"].text + " " + OpenCodeComposerMetadata.modelKey($0)).localizedCaseInsensitiveContains(modelSearch)
-                    }, id: \.self) { option in
+                    ForEach(sortedPickerModels, id: \.self) { option in
                         let key = OpenCodeComposerMetadata.modelKey(option)
                         Toggle(isOn: Binding(
                             get: { !model.hiddenModels.contains(key) },
