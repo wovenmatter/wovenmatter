@@ -258,6 +258,13 @@ struct DashboardSidebarNavigationPage: View {
     let onDeleteFolder: (String) -> Void
     let onUnavailableMutation: (String) -> Void
 
+    @AppStorage(DashboardWorkspaceSidebarVisibility.localWorkspace.storageKey)
+    private var showsLocalWorkspace = true
+    @AppStorage(DashboardWorkspaceSidebarVisibility.remoteWorkspaces.storageKey)
+    private var showsRemoteWorkspaces = true
+    @AppStorage(DashboardWorkspaceSidebarVisibility.buzzWorkspaces.storageKey)
+    private var showsBuzzWorkspaces = true
+
     @State private var agentsOpen = true
     @State private var foldersOpen = true
     @State private var recentsOpen = true
@@ -440,57 +447,63 @@ struct DashboardSidebarNavigationPage: View {
                     }
                 }
 
-                // Direct local agent workspace
-                let workspaceAgents = groupAgents(
-                    in: .localWorkspace,
-                    pinIDs: pinIDs,
-                    pinOrder: pinOrder
-                )
-                agentDisclosureHeading(
-                    title: DashboardAgentSidebarGroup.localWorkspace.title,
-                    key: DashboardAgentDisclosureKey.localWorkspace
-                )
-                if agentSectionExpanded(DashboardAgentDisclosureKey.localWorkspace) {
-                    if workspaceAgents.isEmpty {
-                        agentEmptyLabel("None on this Mac")
-                    } else {
-                        ForEach(workspaceAgents) { agent in
-                            agentRow(
-                                agent,
-                                moveScope: .stored(
-                                    DashboardAgentSidebarGroup.localWorkspace.orderKey
-                                ),
-                                groupAgents: workspaceAgents,
-                                isPinned: false
-                            )
+                if showsLocalWorkspace {
+                    // Direct local agent workspace
+                    let workspaceAgents = groupAgents(
+                        in: .localWorkspace,
+                        pinIDs: pinIDs,
+                        pinOrder: pinOrder
+                    )
+                    agentDisclosureHeading(
+                        title: DashboardAgentSidebarGroup.localWorkspace.title,
+                        key: DashboardAgentDisclosureKey.localWorkspace
+                    )
+                    if agentSectionExpanded(DashboardAgentDisclosureKey.localWorkspace) {
+                        if workspaceAgents.isEmpty {
+                            agentEmptyLabel("None on this Mac")
+                        } else {
+                            ForEach(workspaceAgents) { agent in
+                                agentRow(
+                                    agent,
+                                    moveScope: .stored(
+                                        DashboardAgentSidebarGroup.localWorkspace.orderKey
+                                    ),
+                                    groupAgents: workspaceAgents,
+                                    isPinned: false
+                                )
+                            }
                         }
                     }
                 }
 
-                agentDisclosureHeading(
-                    title: DashboardAgentSidebarGroup.remoteWorkspaces.title,
-                    key: DashboardAgentDisclosureKey.remoteWorkspaces
-                )
-                if agentSectionExpanded(DashboardAgentDisclosureKey.remoteWorkspaces) {
-                    if remoteWorkspaceLinks.isEmpty {
-                        agentEmptyLabel("No remote workspaces yet")
-                    } else {
-                        ForEach(remoteWorkspaceLinks) { workspace in
-                            remoteWorkspaceSection(workspace)
+                if showsRemoteWorkspaces {
+                    agentDisclosureHeading(
+                        title: DashboardAgentSidebarGroup.remoteWorkspaces.title,
+                        key: DashboardAgentDisclosureKey.remoteWorkspaces
+                    )
+                    if agentSectionExpanded(DashboardAgentDisclosureKey.remoteWorkspaces) {
+                        if remoteWorkspaceLinks.isEmpty {
+                            agentEmptyLabel("No remote workspaces yet")
+                        } else {
+                            ForEach(remoteWorkspaceLinks) { workspace in
+                                remoteWorkspaceSection(workspace)
+                            }
                         }
                     }
                 }
 
-                agentDisclosureHeading(
-                    title: DashboardAgentSidebarHeading.buzzWorkspaces,
-                    key: DashboardAgentDisclosureKey.buzzWorkspaces
-                )
-                if agentSectionExpanded(DashboardAgentDisclosureKey.buzzWorkspaces) {
-                    if buzzWorkspaceLinks.isEmpty {
-                        agentEmptyLabel("No Buzz workspaces linked")
-                    } else {
-                        ForEach(buzzWorkspaceLinks) { workspace in
-                            buzzWorkspaceSection(workspace)
+                if showsBuzzWorkspaces {
+                    agentDisclosureHeading(
+                        title: DashboardAgentSidebarHeading.buzzWorkspaces,
+                        key: DashboardAgentDisclosureKey.buzzWorkspaces
+                    )
+                    if agentSectionExpanded(DashboardAgentDisclosureKey.buzzWorkspaces) {
+                        if buzzWorkspaceLinks.isEmpty {
+                            agentEmptyLabel("No Buzz workspaces linked")
+                        } else {
+                            ForEach(buzzWorkspaceLinks) { workspace in
+                                buzzWorkspaceSection(workspace)
+                            }
                         }
                     }
                 }

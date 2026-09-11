@@ -19,6 +19,7 @@ struct SettingsBuzzWorkspacesView: View {
             reservesRailControlSpace: reservesRailControlSpace,
             onBack: onBack
         ) {
+            SettingsWorkspaceSidebarVisibilityControl(.buzzWorkspaces)
             SettingsCard(
                 title: "Local discovery",
                 detail: "Disabled by default. Woven Matter reads only the workspace and agent catalog paths you add below."

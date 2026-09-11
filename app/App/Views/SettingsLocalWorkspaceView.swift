@@ -17,6 +17,7 @@ struct SettingsLocalWorkspaceView: View {
             reservesRailControlSpace: reservesRailControlSpace,
             onBack: onBack
         ) {
+            SettingsWorkspaceSidebarVisibilityControl(.localWorkspace)
             workspaceCard
             runtimesCard
         }
