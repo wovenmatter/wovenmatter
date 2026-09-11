@@ -27,6 +27,8 @@ final class OpenCodeModel {
     private(set) var isConnecting = false
     private(set) var busy = false
     private(set) var updatingSessions: Set<String> = []
+    private(set) var hiddenModels: Set<String> = []
+    private(set) var settingsModels: [OpenCodeValue] = []
     private var selectionTasks: [String: Task<Void, Error>] = [:]
     private var defaultModels: [String: OpenCodeValue] = [:]
     private var models: [String: [OpenCodeValue]] = [:]
@@ -37,6 +39,7 @@ final class OpenCodeModel {
 
     init(store: DashboardStore, ownerDeviceID: UUID, defaults: UserDefaults) {
         isEnabled = defaults.object(forKey: "wovenmatter.opencode.enabled") as? Bool ?? defaults.bool(forKey: "wovenmatter.opencode.local-connected")
+        hiddenModels = Set(defaults.stringArray(forKey: "wovenmatter.opencode.hidden-models") ?? [])
         self.store = store; self.ownerDeviceID = ownerDeviceID; self.defaults = defaults
         coordinator = OpenCodeSessionCoordinator(database: store.database)
         // Honor a previously selected CLI, never an old custom/remote service.
@@ -173,6 +176,20 @@ final class OpenCodeModel {
         return query
     }
 
+    func setModelVisible(_ key: String, visible: Bool) {
+        if visible { hiddenModels.remove(key) } else { hiddenModels.insert(key) }
+        defaults.set(hiddenModels.sorted(), forKey: "wovenmatter.opencode.hidden-models")
+    }
+
+    func refreshSettingsModels(workspace: String) async throws {
+        let result = try await coordinator.call(connectionID: connectionID, path: "/api/model",
+            query: ["location[directory]": workspace])
+        settingsModels = result["data"].array.filter { $0["enabled"].bool }.sorted {
+            if $0["providerID"].text != $1["providerID"].text { return $0["providerID"].text < $1["providerID"].text }
+            return $0["name"].text.localizedCaseInsensitiveCompare($1["name"].text) == .orderedAscending
+        }
+    }
+
     func refreshCatalog(_ id: String) async throws {
         guard isLocalSession(id) else { return }
         let result = try await coordinator.call(connectionID: connectionID, path: "/api/model", query: locationQuery(id))
@@ -183,7 +200,7 @@ final class OpenCodeModel {
 
     func metadata(_ id: String) -> LocalACPSessionMetadata? {
         guard let snapshot = snapshots[id], isLocalSession(id) else { return nil }
-        return OpenCodeComposerMetadata.metadata(session: snapshot.info, models: models[id] ?? [], defaultModel: defaultModels[id] ?? .null)
+        return OpenCodeComposerMetadata.metadata(session: snapshot.info, models: models[id] ?? [], defaultModel: defaultModels[id] ?? .null, hiddenModels: hiddenModels)
     }
 
     func updateSelection(_ id: String, model: String? = nil, thinking: String? = nil) {

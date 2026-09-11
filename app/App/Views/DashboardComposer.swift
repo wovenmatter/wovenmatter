@@ -465,7 +465,7 @@ struct DashboardComposer: View {
         capitalizeOptions: Bool = false,
         action: ((String) -> Void)?
     ) -> some View {
-        let unavailable = sessionControlsDisabled || options.count < 2 || action == nil
+        let unavailable = sessionControlsDisabled || (options.isEmpty || (options.count == 1 && options.first == selection)) || action == nil
         return Button {
             guard !unavailable else { return }
             onActivate()
@@ -510,7 +510,7 @@ struct DashboardComposer: View {
         capitalizeOptions: Bool = false,
         action: ((String) -> Void)?
     ) -> some View {
-        let unavailable = sessionControlsDisabled || options.count < 2 || action == nil
+        let unavailable = sessionControlsDisabled || (options.isEmpty || (options.count == 1 && options.first == selection)) || action == nil
         return Button {
             guard !unavailable else { return }
             onActivate()

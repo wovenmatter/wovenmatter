@@ -9,7 +9,7 @@ public enum OpenCodeComposerMetadata {
         return model["providerID"].text.isEmpty ? id : model["providerID"].text + "/" + id
     }
 
-    public static func metadata(session: OpenCodeValue, models: [OpenCodeValue], defaultModel: OpenCodeValue = .null) -> LocalACPSessionMetadata {
+    public static func metadata(session: OpenCodeValue, models: [OpenCodeValue], defaultModel: OpenCodeValue = .null, hiddenModels: Set<String> = []) -> LocalACPSessionMetadata {
         let selected = modelKey(session["model"]).isEmpty ? defaultModel : session["model"]
         let key = modelKey(selected)
         let option = models.first { modelKey($0) == key }
@@ -18,6 +18,7 @@ public enum OpenCodeComposerMetadata {
             model: key.isEmpty ? nil : key,
             thinking: selected["variant"].string ?? (variants.isEmpty ? nil : "default"),
             modelOptions: models.map(modelKey),
+            excludedModels: hiddenModels.sorted(),
             thinkingLevels: variants.isEmpty ? [] : ["default"] + variants)
     }
 

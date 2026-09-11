@@ -7,6 +7,21 @@ import WovenMatterCore
 
 @Suite(.serialized)
 struct OpenCodeIntegrationTests {
+    @Test func hiddenModelsLeaveSessionAndThinkingIntactButDisappearFromChoices() throws {
+        let models: [OpenCodeValue] = [
+            ["id": "chosen", "providerID": "one", "variants": .array([["id": "high"]])],
+            ["id": "chosen", "providerID": "two"]
+        ]
+        let session: OpenCodeValue = ["id": "ses_test", "model": ["id": "chosen", "providerID": "one", "variant": "high"]]
+        let metadata = OpenCodeComposerMetadata.metadata(session: session, models: models, hiddenModels: ["one/chosen"])
+        #expect(metadata.model == "one/chosen")
+        #expect(metadata.thinking == "high")
+        #expect(metadata.selectableModels == ["two/chosen"])
+        #expect(metadata.selectableThinkingLevels == ["default", "high"])
+        #expect(OpenCodeComposerMetadata.metadata(session: session, models: models, hiddenModels: ["one/chosen", "two/chosen"]).selectableModels.isEmpty)
+        #expect(try JSONDecoder().decode(LocalACPSessionMetadata.self, from: JSONEncoder().encode(metadata)) == metadata)
+    }
+
     @Test func freshSessionShowsServerDefaultWithoutOverridingExplicitSelection() throws {
         let fallback: OpenCodeValue = ["id": "default-model", "providerID": "provider", "variants": .array([["id": "high"]])]
         let explicit: OpenCodeValue = ["id": "chosen", "providerID": "provider", "variant": "high"]

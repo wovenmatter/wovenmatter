@@ -227,6 +227,11 @@ struct SettingsLocalWorkspaceView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
 
                         HStack(spacing: 8) {
+                            if definition.runtimeKind == .openclaw {
+                                Button("More") { onMore(.openclaw) }
+                                    .buttonStyle(SettingsQuietButtonStyle())
+                                    .accessibilityLabel("More OpenClaw settings")
+                            }
                             let isShown = model.isLocalACPRuntimeShown(
                                 definition.runtimeKind
                             )
@@ -295,11 +300,6 @@ struct SettingsLocalWorkspaceView: View {
                                 .buttonStyle(SettingsQuietButtonStyle())
                                 .disabled(isChecking)
                             }
-                            if definition.runtimeKind == .openclaw {
-                                Button("More") { onMore(.openclaw) }
-                                    .buttonStyle(SettingsQuietButtonStyle())
-                                    .accessibilityLabel("More OpenClaw settings")
-                            }
                         }
                     }
                 }
@@ -328,6 +328,8 @@ struct SettingsLocalWorkspaceView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 HStack(spacing: 8) {
+                    Button("More") { onMore(.opencode) }
+                        .accessibilityLabel("More OpenCode settings")
                     let shown = model.isLocalACPRuntimeShown(.opencode)
                     Button(shown ? "Hide" : "Show") { model.setLocalACPRuntimeShown(!shown, runtimeKind: .opencode) }
                         .accessibilityLabel("\(shown ? "Hide" : "Show") OpenCode in the left sidebar")
@@ -339,8 +341,6 @@ struct SettingsLocalWorkspaceView: View {
                         }
                     }
                     .disabled(model.openCode == nil || model.openCode?.isConnecting == true)
-                    Button("More") { onMore(.opencode) }
-                        .accessibilityLabel("More OpenCode settings")
                 }
                 .buttonStyle(SettingsQuietButtonStyle())
             }

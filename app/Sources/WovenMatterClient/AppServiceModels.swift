@@ -5,6 +5,7 @@ public struct LocalACPSessionMetadata: Codable, Equatable, Sendable {
     public let model: String?
     public let thinking: String?
     public let modelOptions: [String]?
+    public let excludedModels: [String]?
     public let allowedModels: [String]?
     public let thinkingLevels: [String]?
     public let slashCommands: [LocalACPSlashCommand]
@@ -15,6 +16,7 @@ public struct LocalACPSessionMetadata: Codable, Equatable, Sendable {
         thinking: String?,
         modelOptions: [String]? = nil,
         allowedModels: [String]? = nil,
+        excludedModels: [String]? = nil,
         thinkingLevels: [String]? = nil,
         slashCommands: [LocalACPSlashCommand] = []
     ) {
@@ -23,12 +25,13 @@ public struct LocalACPSessionMetadata: Codable, Equatable, Sendable {
         self.thinking = thinking
         self.modelOptions = modelOptions
         self.allowedModels = allowedModels
+        self.excludedModels = excludedModels
         self.thinkingLevels = thinkingLevels
         self.slashCommands = slashCommands
     }
 
     public var selectableModels: [String] {
-        Self.unique((modelOptions ?? allowedModels ?? []) + [model].compactMap { $0 })
+        Self.unique((modelOptions ?? allowedModels ?? []) + [model].compactMap { $0 }).filter { !(excludedModels ?? []).contains($0) }
     }
 
     public var selectableThinkingLevels: [String] {

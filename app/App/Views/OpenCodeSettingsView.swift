@@ -1,8 +1,14 @@
 import SwiftUI
+import WovenMatterClient
 
 struct OpenCodeSettingsCard: View {
     @Environment(\.openURL) private var openURL
     @Bindable var model: OpenCodeModel
+    var workspace: String
+    @State private var showingModels = false
+    @State private var modelSearch = ""
+    @State private var loadingModels = false
+    @State private var modelsError: String?
     var body: some View {
         SettingsCard(title: "OpenCode", detail: "Uses the local OpenCode v2 service. New chats use your Woven Matter workspace.") {
             HStack {
@@ -14,6 +20,19 @@ struct OpenCodeSettingsCard: View {
                     }
                     .buttonStyle(SettingsQuietButtonStyle())
                 }
+                Button("Manage models") { showingModels.toggle() }
+                    .buttonStyle(SettingsQuietButtonStyle())
+                    .disabled(!model.isReady)
+                    .popover(isPresented: $showingModels, arrowEdge: .bottom) {
+                        modelPicker
+                            .task {
+                                loadingModels = true
+                                modelsError = nil
+                                defer { loadingModels = false }
+                                do { try await model.refreshSettingsModels(workspace: workspace) }
+                                catch { modelsError = error.localizedDescription }
+                            }
+                    }
                 Button("Connect") { model.perform { try await model.connectLocal() } }
                     .buttonStyle(SettingsQuietButtonStyle())
                     .disabled(model.isConnecting || model.isReady)
@@ -24,6 +43,40 @@ struct OpenCodeSettingsCard: View {
             }
         }
     }
+    private var modelPicker: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Models shown in Woven Matter").font(.headline)
+            TextField("Search models", text: $modelSearch)
+                .textFieldStyle(.roundedBorder)
+            if loadingModels { ProgressView() }
+            if let modelsError { Text(modelsError).font(.caption).foregroundStyle(.red) }
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 10) {
+                    ForEach(model.settingsModels.filter {
+                        modelSearch.isEmpty || ($0["name"].text + " " + OpenCodeComposerMetadata.modelKey($0)).localizedCaseInsensitiveContains(modelSearch)
+                    }, id: \.self) { option in
+                        let key = OpenCodeComposerMetadata.modelKey(option)
+                        Toggle(isOn: Binding(
+                            get: { !model.hiddenModels.contains(key) },
+                            set: { model.setModelVisible(key, visible: $0) }
+                        )) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(option["name"].string ?? option["id"].text)
+                                Text(option["providerID"].text).font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                        .toggleStyle(.checkbox)
+                    }
+                }
+            }
+            .frame(height: 300)
+            Text("Saved automatically. Existing chats keep their selected model.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        .padding(16)
+        .frame(width: 360)
+    }
+
 }
 
 struct SettingsOpenCodeView: View {
@@ -35,7 +88,7 @@ struct SettingsOpenCodeView: View {
         SettingsPage(title: "OpenCode",
             detail: "The local OpenCode v2 service and its connection on this Mac.",
             reservesRailControlSpace: reservesRailControlSpace, onBack: onBack) {
-            if let openCode = model.openCode { OpenCodeSettingsCard(model: openCode) }
+            if let openCode = model.openCode { OpenCodeSettingsCard(model: openCode, workspace: model.localACPWorkspaceAvailability.rootPath ?? FileManager.default.homeDirectoryForCurrentUser.appending(path: ".woven-matter").path) }
         }
     }
 }
