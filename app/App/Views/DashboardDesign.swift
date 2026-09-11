@@ -246,6 +246,25 @@ enum DashboardBuzzWorkspaceSidebarModel {
     }
 }
 
+/// Presentation-only preferences, independent of runtime visibility and section expansion.
+enum DashboardWorkspaceSidebarVisibility: String {
+    case localWorkspace
+    case remoteWorkspaces
+    case buzzWorkspaces
+
+    var storageKey: String {
+        "wovenmatter.dashboard.show-\(rawValue)"
+    }
+
+    var title: String {
+        switch self {
+        case .localWorkspace: DashboardAgentSidebarGroup.localWorkspace.title
+        case .remoteWorkspaces: DashboardAgentSidebarGroup.remoteWorkspaces.title
+        case .buzzWorkspaces: DashboardAgentSidebarHeading.buzzWorkspaces
+        }
+    }
+}
+
 enum DashboardAgentDisclosureKey {
     static let localWorkspace = "section:local-workspace"
     static let remoteWorkspaces = "section:remote-workspaces"
