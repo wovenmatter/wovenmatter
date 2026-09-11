@@ -70,9 +70,10 @@ const server = createServer(async (request, response) => {
     if (request.method === 'POST' && url.pathname === '/v1/runtime-maintenance/check') {
       return json(response, 200, await maintenance.check())
     }
-    const maintenanceMatch = url.pathname.match(/^\/v1\/runtime-maintenance\/([^/]+)(?:\/(install|update))?$/)
+    const maintenanceMatch = url.pathname.match(/^\/v1\/runtime-maintenance\/([^/]+)(?:\/(install|update|check))?$/)
     if (maintenanceMatch) {
       const harness = requireHarness(maintenanceMatch[1])
+      if (request.method === 'POST' && maintenanceMatch[2] === 'check') return json(response, 200, await maintenance.inventory(harness, true))
       if (request.method === 'PATCH' && !maintenanceMatch[2]) return json(response, 200, await maintenance.preferences(harness, await readJSON(request)))
       if (request.method === 'POST' && maintenanceMatch[2]) return json(response, 202, await maintenance.start(harness, maintenanceMatch[2], await readJSON(request)))
     }

@@ -217,6 +217,10 @@ final class ApplicationModel {
     private(set) var runtimeFailures: [AgentRuntimeKind: Int] = [:]
     private(set) var runtimeFailureDetails: [AgentRuntimeKind: String] = [:]
     private(set) var checkingRuntimeInventory = false
+    private(set) var checkingRuntimeKinds: Set<AgentRuntimeKind> = []
+    private(set) var checkedRuntimeKinds: Set<AgentRuntimeKind> = []
+    private(set) var updatingRuntimeKinds: Set<AgentRuntimeKind> = []
+    private(set) var failedRuntimeUpdateKinds: Set<AgentRuntimeKind> = []
     private var runtimeInventoryGeneration: UInt64 = 0
     private(set) var installingLocalACPRuntimeKinds: Set<AgentRuntimeKind> = []
     private(set) var preparedLocalACPRuntimeInstall:
@@ -2809,7 +2813,7 @@ final class ApplicationModel {
     }
 
     func refreshRuntimeInventory() {
-        guard !checkingRuntimeInventory, installingLocalACPRuntimeKinds.isEmpty else { return }
+        guard !checkingRuntimeInventory, checkingRuntimeKinds.isEmpty, installingLocalACPRuntimeKinds.isEmpty else { return }
         checkingRuntimeInventory = true
         runtimeInventoryGeneration &+= 1
         let generation = runtimeInventoryGeneration
@@ -2822,12 +2826,36 @@ final class ApplicationModel {
             for definition in LocalACPRuntimeCatalog.definitions {
                 guard installingLocalACPRuntimeKinds.isEmpty else { return }
                 let kind = definition.runtimeKind
+                checkingRuntimeKinds.insert(kind)
+                let checkLatest = kind == .opencode ? openCodeEnabled : enabled.contains(kind)
                 let inventory = await Task.detached(priority: .utility) {
-                    await RuntimeMaintenance.inspect(kind, checkLatest: kind == .opencode ? openCodeEnabled : enabled.contains(kind), selectedOpenCode: selectedOpenCode)
+                    await RuntimeMaintenance.inspect(kind, checkLatest: checkLatest, selectedOpenCode: selectedOpenCode)
                 }.value
+                checkingRuntimeKinds.remove(kind)
                 guard installingLocalACPRuntimeKinds.isEmpty, generation == runtimeInventoryGeneration else { return }
                 runtimeInventories[kind] = inventory
+                if checkLatest { checkedRuntimeKinds.insert(kind) }
             }
+        }
+    }
+
+    func checkRuntimeUpdate(_ kind: AgentRuntimeKind) {
+        guard !checkingRuntimeInventory, checkingRuntimeKinds.insert(kind).inserted else { return }
+        guard installingLocalACPRuntimeKinds.isEmpty, openCode?.isInstalling != true else {
+            checkingRuntimeKinds.remove(kind)
+            return
+        }
+        let generation = runtimeInventoryGeneration
+        Task {
+            defer { checkingRuntimeKinds.remove(kind) }
+            if kind == .opencode { await openCode?.resolveExecutable() }
+            let selectedOpenCode = openCode?.runtimeExecutable
+            let inventory = await Task.detached(priority: .utility) {
+                await RuntimeMaintenance.inspect(kind, checkLatest: true, selectedOpenCode: selectedOpenCode)
+            }.value
+            guard installingLocalACPRuntimeKinds.isEmpty, generation == runtimeInventoryGeneration else { return }
+            runtimeInventories[kind] = inventory
+            checkedRuntimeKinds.insert(kind)
         }
     }
 
@@ -2836,8 +2864,9 @@ final class ApplicationModel {
             attempts: runtimeFailures[kind, default: 0], failure: runtimeFailureDetails[kind] ?? "unknown")
     }
 
-    private func recordRuntimeFailure(_ kind: AgentRuntimeKind, error: any Error) {
+    private func recordRuntimeFailure(_ kind: AgentRuntimeKind, error: any Error, update: Bool = false) {
         runtimeFailures[kind, default: 0] += 1
+        if update { failedRuntimeUpdateKinds.insert(kind) }
         // Never copy arbitrary subprocess output or URLs into diagnostics.
         let category: String
         if let failure = error as? RuntimeMaintenanceError { category = failure.localizedDescription }
@@ -2895,11 +2924,12 @@ final class ApplicationModel {
               preparedLocalACPRuntimeInstall == nil, localRunningConversationIDs.isEmpty else { return }
         runtimeInventoryGeneration &+= 1
         installingLocalACPRuntimeKinds.insert(kind)
+        if update { updatingRuntimeKinds.insert(kind) }
         localRunError = nil
         let installer = localACPRuntimeInstaller
         let before = runtimeInventories[kind]
         Task {
-            defer { installingLocalACPRuntimeKinds.remove(kind) }
+            defer { installingLocalACPRuntimeKinds.remove(kind); updatingRuntimeKinds.remove(kind) }
             do {
                 if let preview {
                     _ = try await installer.install(definition, component: .cli,
@@ -2925,6 +2955,7 @@ final class ApplicationModel {
                     await RuntimeMaintenance.inspect(kind, checkLatest: true)
                 }.value
                 runtimeInventories[kind] = inventory
+                checkedRuntimeKinds.insert(kind)
                 guard inventory.isInstalled else { throw RuntimeMaintenanceError.verification }
                 if update {
                     // Success requires the outdated components to reach the observed
@@ -2937,8 +2968,9 @@ final class ApplicationModel {
                     }
                 }
                 runtimeFailures[kind] = 0; runtimeFailureDetails[kind] = nil
+                failedRuntimeUpdateKinds.remove(kind)
                 await refreshLocalACPRuntimes()
-            } catch { recordRuntimeFailure(kind, error: error) }
+            } catch { recordRuntimeFailure(kind, error: error, update: update) }
         }
     }
 

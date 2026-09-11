@@ -509,28 +509,6 @@ struct SettingsRemoteWorkspacesView: View {
                             VStack(alignment: .leading, spacing: 3) {
                                 Text(harness.displayName)
                                     .font(.system(size: 13, weight: .medium))
-                                Text("\(harness.transport) · \(harness.capabilities.joined(separator: ", "))")
-                                    .font(.system(size: 11.5))
-                                    .foregroundStyle(DashboardPalette.mutedForeground)
-                                    .lineLimit(2)
-                                Text(
-                                    "Authentication: \(harness.authenticationStatus.replacingOccurrences(of: "_", with: " ").capitalized)"
-                                )
-                                .font(.system(size: 11.5))
-                                .foregroundStyle(DashboardPalette.mutedForeground)
-                                if let transportStatus = harness.transportStatus {
-                                    Text(
-                                        "Transport: \(transportStatus.replacingOccurrences(of: "_", with: " ").capitalized)"
-                                    )
-                                    .font(.system(size: 11.5))
-                                    .foregroundStyle(DashboardPalette.mutedForeground)
-                                }
-                                if let transportError = harness.transportError {
-                                    Text(transportError)
-                                        .font(.system(size: 11.5))
-                                        .foregroundStyle(DashboardPalette.mutedForeground)
-                                        .lineLimit(2)
-                                }
                                 if !harness.detectedProviders.isEmpty {
                                     Text("Detected: \(harness.detectedProviders.joined(separator: ", "))")
                                         .font(.system(size: 11.5))
@@ -545,21 +523,13 @@ struct SettingsRemoteWorkspacesView: View {
                             runtimeButtons(harness, workspace: workspace)
                         }
                         if let runtime = model.runtimeMaintenance[workspace.id]?.first(where: { $0.id == harness.id }) {
-                            runtimeInventory(runtime)
+                            runtimeInventory(runtime, workspace: workspace)
                         }
                     }
                 }
             }
-            if let error = model.runtimeErrors[workspace.id] { SettingsNote(error) }
-
-            if let operation = model.operations[workspace.id] {
-                SettingsNote("\(operation.action.capitalized): \(operation.status)\(operation.error.map { " — \($0)" } ?? "")")
-                if !operation.output.isEmpty {
-                    Text(operation.output)
-                        .font(.system(size: 10.5, design: .monospaced))
-                        .textSelection(.enabled)
-                        .lineLimit(8)
-                }
+            if model.runtimeErrors[workspace.id] != nil {
+                SettingsNote("Runtime inventory unavailable. Check for updates to retry.")
             }
 
             if let session = model.authenticationSessions[workspace.id] {
@@ -571,57 +541,81 @@ struct SettingsRemoteWorkspacesView: View {
 
     @ViewBuilder
     private func runtimeButtons(_ harness: RemoteHarnessStatus, workspace: RemoteWorkspaceConfiguration) -> some View {
-        if let runtime = model.runtimeMaintenance[workspace.id]?.first(where: { $0.id == harness.id }) {
-            VStack(alignment: .trailing, spacing: 8) {
-                HStack(spacing: 8) {
-                    if !runtime.installed {
-                        Button(runtime.failureCount > 0 ? "Retry Install" : "Install") {
-                            model.prepareHarnessAction("install", harness: harness, configuration: workspace)
-                        }.buttonStyle(DashboardPrimaryButtonStyle())
-                    } else {
-                        Button(runtime.enabled ? "Disable" : "Enable") {
-                            model.setRuntimePreferences(runtime, configuration: workspace, enabled: !runtime.enabled)
-                        }.buttonStyle(SettingsQuietButtonStyle())
-                        if runtime.updateAvailable || (runtime.failureCount > 0 && runtime.operation?.action == "update") {
-                            Button(runtime.failureCount > 0 ? "Retry Update" : "Update") {
-                                model.prepareHarnessAction("update", harness: harness, configuration: workspace)
-                            }.buttonStyle(SettingsQuietButtonStyle())
-                        }
-                    }
-                    if !runtime.installed && runtime.enabled {
-                        Button("Disable") {
-                            model.setRuntimePreferences(runtime, configuration: workspace, enabled: false)
-                        }.buttonStyle(SettingsQuietButtonStyle())
-                    }
-                    Button(runtime.visible ? "Hide" : "Show") {
-                        model.setRuntimePreferences(runtime, configuration: workspace, visible: !runtime.visible)
+        let runtime = model.runtimeMaintenance[workspace.id]?.first(where: { $0.id == harness.id })
+        let checking = model.checkingRuntimeIDs[workspace.id]?.contains(harness.id) == true
+        let running = runtime?.operation?.status == "running"
+        let unavailable = model.isRuntimeInventoryUnavailable(harness.id, configuration: workspace)
+        let checkUnavailable = unavailable || model.runtimeCheckErrors[workspace.id]?[harness.id] != nil || runtime?.versionCheckAvailable == false
+        let busy = model.busyWorkspaceIDs.contains(workspace.id) || running || checking
+        VStack(alignment: .trailing, spacing: 8) {
+            HStack(spacing: 8) {
+                if harness.id == .opencode || harness.id == .openclaw {
+                    Button("More") {
+                        if let onMoreRuntime { onMoreRuntime(harness.id, workspace) }
+                        else { selectedRuntime = harness.id }
                     }.buttonStyle(SettingsQuietButtonStyle())
-                    if harness.id == .opencode || harness.id == .openclaw {
-                        Button("More") {
-                            if let onMoreRuntime { onMoreRuntime(harness.id, workspace) }
-                            else { selectedRuntime = harness.id }
-                        }
-                            .buttonStyle(SettingsQuietButtonStyle())
+                }
+                Button(checkUnavailable && !checking && !running ? "Retry check" : updateButtonTitle(runtime, checking: checking)) {
+                    if let runtime, runtime.installed,
+                       runtime.updateAvailable || (runtime.failureCount > 0 && runtime.operation?.action == "update"),
+                       !checkUnavailable {
+                        model.prepareHarnessAction("update", harness: harness, configuration: workspace)
+                    } else {
+                        model.checkRuntimeUpdates(harness.id, configuration: workspace)
                     }
                 }
-                if runtime.installed { harnessButtons(harness, workspace: workspace) }
+                .buttonStyle(SettingsQuietButtonStyle())
+                .disabled(busy)
+                if let runtime {
+                    Button(runtime.visible ? "Hide" : "Show") {
+                        model.setRuntimePreferences(runtime, configuration: workspace, visible: !runtime.visible)
+                    }.buttonStyle(SettingsQuietButtonStyle()).disabled(busy || unavailable)
+                    if runtime.installed {
+                        Button(runtime.enabled ? "Disable" : "Enable") {
+                            model.setRuntimePreferences(runtime, configuration: workspace, enabled: !runtime.enabled)
+                        }.buttonStyle(SettingsQuietButtonStyle()).disabled(busy || unavailable)
+                    } else {
+                        if runtime.enabled {
+                            Button("Disable") {
+                                model.setRuntimePreferences(runtime, configuration: workspace, enabled: false)
+                            }.buttonStyle(SettingsQuietButtonStyle()).disabled(busy || unavailable)
+                        }
+                        Button(running && runtime.operation?.action == "install" ? "Installing…" : (runtime.failureCount > 0 ? "Retry Install" : "Install")) {
+                            model.prepareHarnessAction("install", harness: harness, configuration: workspace)
+                        }.buttonStyle(DashboardPrimaryButtonStyle()).disabled(busy || unavailable)
+                    }
+                }
             }
-            .disabled(model.busyWorkspaceIDs.contains(workspace.id) || runtime.operation?.status == "running" || model.runtimeErrors[workspace.id] != nil)
-        } else {
-            Text("Inventory unavailable")
-                .font(.system(size: 11.5)).foregroundStyle(DashboardPalette.mutedForeground)
+            if let runtime, runtime.installed {
+                harnessButtons(harness, workspace: workspace).disabled(busy || unavailable)
+            }
         }
     }
 
-    private func runtimeInventory(_ runtime: RemoteRuntimeMaintenance) -> some View {
+    private func updateButtonTitle(_ runtime: RemoteRuntimeMaintenance?, checking: Bool) -> String {
+        if checking { return "Checking…" }
+        if runtime?.operation?.status == "running", runtime?.operation?.action == "update" { return "Updating…" }
+        if let runtime, runtime.installed {
+            if runtime.failureCount > 0 && runtime.operation?.action == "update" { return "Retry Update" }
+            if runtime.updateAvailable { return "Update" }
+        }
+        return "Check for updates"
+    }
+
+    private func runtimeInventory(_ runtime: RemoteRuntimeMaintenance, workspace: RemoteWorkspaceConfiguration) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             ForEach(runtime.components) { component in
-                Text("\(component.displayName): \(component.installed ? (component.installedVersion ?? "installed · version unavailable") : "missing")"
-                     + (component.latestVersion.map { " · latest \($0)" } ?? ""))
+                Text(componentVersion(component))
                     .font(.system(size: 11.5)).foregroundStyle(DashboardPalette.mutedForeground)
                     .help(component.path ?? "No installed path")
             }
-            if let notice = runtime.notice { SettingsNote(notice) }
+            if model.runtimeCheckErrors[workspace.id]?[runtime.id] != nil || runtime.versionCheckAvailable == false {
+                Text("Update check unavailable")
+                    .font(.system(size: 11.5)).foregroundStyle(DashboardPalette.mutedForeground)
+            }
+            if runtime.operation?.status == "failed", let error = runtime.operation?.error {
+                Text(error).font(.system(size: 11.5)).foregroundStyle(DashboardPalette.mutedForeground).lineLimit(2)
+            }
             if runtime.failureCount >= 2, let prompt = runtime.diagnosticPrompt {
                 Button("Copy Diagnostic Prompt") {
                     NSPasteboard.general.clearContents()
@@ -629,6 +623,14 @@ struct SettingsRemoteWorkspacesView: View {
                 }.buttonStyle(SettingsQuietButtonStyle())
             }
         }.frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func componentVersion(_ component: RemoteRuntimeComponent) -> String {
+        let installed = component.installed ? (component.installedVersion ?? "version unavailable") : "missing"
+        let newer = component.installedVersion.flatMap { installed in
+            component.latestVersion.flatMap { RuntimeMaintenance.version(installed, precedes: $0) ? $0 : nil }
+        }
+        return "\(component.displayName) \(installed)" + (newer.map { " → \($0)" } ?? "")
     }
 
     @ViewBuilder

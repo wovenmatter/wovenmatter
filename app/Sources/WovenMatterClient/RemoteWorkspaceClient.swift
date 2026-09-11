@@ -265,6 +265,7 @@ public struct RemoteRuntimeMaintenance: Codable, Equatable, Identifiable, Sendab
     public let diagnosticPrompt: String?
     public let notice: String?
     public let updateAvailable: Bool
+    public let versionCheckAvailable: Bool?
 }
 
 public struct RemoteHarnessSetupMethod: Codable, Equatable, Identifiable, Sendable {
@@ -938,6 +939,10 @@ public struct RemoteWorkspaceServiceClient: Sendable {
             method: checkLatest ? "POST" : "GET", body: nil
         )
         return document.runtimes
+    }
+
+    public func checkRuntimeUpdates(_ id: AgentRuntimeKind) async throws -> RemoteRuntimeMaintenance {
+        try await request(path: "v1/runtime-maintenance/\(id.rawValue)/check", method: "POST", body: nil)
     }
 
     public func setRuntimePreferences(

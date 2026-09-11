@@ -89,6 +89,47 @@ struct RuntimeMaintenanceTests {
         #expect(RuntimeMaintenance.hermesCheck("Already up to date.\nUpdate available: 4 commits") == nil)
     }
 
+    @Test func hermesOfficialUpdateRequiresCleanIdleCheckoutAndVerifiesCurrentACP() throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root.appending(path: "venv/bin"), withIntermediateDirectories: true)
+        try Data("[project]\nname = \"hermes-agent\"\n".utf8).write(to: root.appending(path: "pyproject.toml"))
+        let python = root.appending(path: "venv/bin/python")
+        try Data("#!/bin/sh\nexit 0\n".utf8).write(to: python)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: python.path)
+        let launcher = root.appending(path: "launcher")
+        try Data("#!/bin/bash\nexec \"\(python.path)\" \"\(root.path)/hermes\" \"$@\"\n".utf8).write(to: launcher)
+        var dirty = true
+        var active = false
+        var stale = false
+        var updates = 0
+        let run: (URL, [String], TimeInterval) throws -> LocalACPProcessResult = { _, args, timeout in
+            let output: String
+            if args.contains("rev-parse") { output = root.path }
+            else if args.contains("status") { output = dirty ? " M user.py" : "" }
+            else if args == ["update", "--plan"] { output = "Update plan:\n  Install: git (v0.21.2)\n  " + (active ? "Running services to restart (1):" : "Running Hermes services: none detected — code swap only.") }
+            else if args == ["update", "--help"] { output = "--yes --check --plan" }
+            else if args == ["update", "--yes"] { #expect(timeout == 600); updates += 1; output = "Update complete" }
+            else if args == ["update", "--check"] { output = stale ? "Update available: 1 commit" : "Already up to date." }
+            else if args == ["acp", "--version"] { output = "0.21.2" }
+            else { output = "" }
+            return LocalACPProcessResult(terminationStatus: 0, stdout: output)
+        }
+        #expect(throws: (any Error).self) { try RuntimeMaintenance.updateHermes(executable: launcher, run: run) }
+        #expect(updates == 0)
+        dirty = false; active = true
+        #expect(throws: (any Error).self) { try RuntimeMaintenance.updateHermes(executable: launcher, run: run) }
+        #expect(updates == 0)
+        active = false; stale = true
+        #expect(throws: (any Error).self) { try RuntimeMaintenance.updateHermes(executable: launcher, run: run) }
+        stale = false
+        try RuntimeMaintenance.updateHermes(executable: launcher, run: run)
+        #expect(updates == 2)
+        #expect(RuntimeMaintenance.hermesPython(launcher) == python)
+        #expect(!RuntimeMaintenance.hermesPlanAllowsUpdate("Update plan:\nInstall: docker\nRunning Hermes services: none detected — code swap only."))
+        #expect(RuntimeMaintenance.hermesHasActiveProcesses("123 /checkout/venv/bin/python -m acp_adapter.entry"))
+    }
+
     @Test func cursorReleaseUsesTheVersionSegment() async {
         let version = await RuntimeMaintenance.latestVersion(kind: .cursor, package: nil, fetch: { _ in
             Data(#"DOWNLOAD_URL="https://downloads.cursor.com/lab/2026.09.10-fd3934a/${OS}/${ARCH}/agent-cli-package.tar.gz""#.utf8)
