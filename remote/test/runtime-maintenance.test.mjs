@@ -37,6 +37,39 @@ test('host state gates enable, persists visibility, checks latest only for enabl
   const value=(await service.list()).runtimes[0]
   assert.equal(value.enabled,true);assert.equal(value.visible,false)
 })
+test('preference migration preserves verified legacy runtimes without enabling later installs or overriding choices', async t => {
+  const legacy = await fixture(t)
+  legacy.install()
+  assert.equal(await legacy.service.isEnabled('pi'), true, 'gateway/start checks can be the first migration caller')
+  await legacy.service.check()
+  assert.equal(legacy.requests, 1, 'migrated enabled runtimes receive the startup latest check')
+  assert.equal(legacy.executions, 0)
+  await legacy.service.preferences(pi, { enabled: false, visible: false })
+  const restarted = createRuntimeMaintenance(legacy.options)
+  const retained = (await restarted.list()).runtimes[0]
+  assert.equal(retained.enabled, false)
+  assert.equal(retained.visible, false)
+
+  const missing = await fixture(t)
+  assert.equal(await missing.service.isEnabled('pi'), false)
+  missing.install()
+  assert.equal((await createRuntimeMaintenance(missing.options).list()).runtimes[0].enabled, false)
+})
+test('migration of one catalog entry does not silently disable another uninspected entry', async t => {
+  const other = { ...pi, id: 'other', command: 'other' }
+  const f = await fixture(t, { catalog: new Map([['pi', pi], ['other', other]]) })
+  f.install()
+  await f.service.inventory(pi)
+  const restarted = createRuntimeMaintenance(f.options)
+  assert.equal((await restarted.inventory(other)).enabled, true)
+})
+test('corrupt saved preferences fail closed instead of re-enabling runtimes', async t => {
+  const f = await fixture(t)
+  f.install()
+  await mkdir(resolve(f.root, '.wovenmatter'), { recursive: true })
+  await writeFile(resolve(f.root, '.wovenmatter/runtime-preferences.json'), 'invalid saved preferences')
+  assert.equal(await createRuntimeMaintenance(f.options).isEnabled('pi'), false)
+})
 test('duplicate operations share a reservation and verify actual installed result',async t=>{
   const f=await fixture(t)
   const [a,b]=await Promise.all([f.service.start(pi,'install',{confirmed:true}),f.service.start(pi,'install',{confirmed:true})])
@@ -175,4 +208,40 @@ test('Hermes check is explicit, bounded and reports allowlisted status without a
   result = await f.service.inventory(h, true)
   assert.match(result.notice, /information is unavailable/)
   assert.doesNotMatch(result.notice, /unexpected private output/)
+})
+
+test('reviewed Pi preview pins execution even when registry latest changes', async t => {
+  let version = '0.84.4'
+  const f = await fixture(t, { fetchImplementation: async () => ({ ok: true, json: async () => ({ version }) }) })
+  const preview = await f.service.npmPreview(pi)
+  assert.equal(preview.packageSpec, '@earendil-works/pi-coding-agent@0.84.4')
+  assert.ok(preview.command.includes(preview.packageSpec))
+  version = '0.85.0'
+  await f.service.start(pi, 'install', { confirmed: true, packageSpec: preview.packageSpec })
+  assert.equal((await finished(f.service)).operation.status, 'succeeded')
+  assert.ok(f.calls.includes(preview.command))
+  assert.equal(f.calls.some(c => c.includes('@latest') || c.includes('@0.85.0')), false)
+})
+
+test('npm action rejects foreign packages, tags and incompatible OpenCode pins; legacy Pi stays pinned', async t => {
+  const f = await fixture(t)
+  for (const packageSpec of ['@foreign/package@0.84.4', '@earendil-works/pi-coding-agent@latest', '@earendil-works/pi-coding-agent@0.84.4;touch /tmp/unsafe']) {
+    await f.service.start(pi, 'install', { confirmed: true, packageSpec })
+    const value = await finished(f.service)
+    assert.equal(value.operation.status, 'failed')
+    assert.match(value.operation.error, /invalid_package_spec/)
+  }
+  assert.equal(f.executions, 0)
+  await f.service.start(pi, 'install', { confirmed: true })
+  await finished(f.service)
+  assert.ok(f.calls.some(c => c.includes("'@earendil-works/pi-coding-agent@0.84.3'")))
+  const h = { id: 'opencode', displayName: 'OpenCode', command: 'opencode2', cliCommand: 'opencode2', install: { kind: 'npm-global', package: '@opencode/cli@0.0.0-beta-19278' } }
+  const other = await fixture(t, { catalog: new Map([['opencode', h]]) })
+  const preview = await other.service.npmPreview(h)
+  assert.equal(preview.packageSpec, h.install.package)
+  assert.equal(other.requests, 0)
+  await other.service.start(h, 'install', { confirmed: true, packageSpec: '@opencode/cli@0.0.0-beta-99999' })
+  const failed = await finished(other.service)
+  assert.equal(failed.operation.error, 'opencode_version_incompatible')
+  assert.equal(other.executions, 0)
 })

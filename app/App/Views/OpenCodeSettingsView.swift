@@ -52,7 +52,7 @@ struct OpenCodeSettingsCard: View {
                 Button("Stop server") { model.perform { try await model.stopServer() } }
                     .disabled(model.isControllingServer || model.isConnecting || !model.hasServerRegistration)
                 Button("Restart server") { model.perform { try await model.restartServer() } }
-                    .disabled(model.isControllingServer || model.isConnecting || !model.isInstalled)
+                    .disabled(model.isControllingServer || model.isConnecting || !model.isInstalled || (model.isRemote && !model.canConnect))
                 if model.isControllingServer { ProgressView().controlSize(.small) }
             }
             .buttonStyle(SettingsQuietButtonStyle())
@@ -149,6 +149,13 @@ struct SettingsOpenCodeView: View {
                 }
             }
         }
-        .task { await model.synchronizeRemoteOpenCodeInstances() }
+        .task {
+            await model.synchronizeRemoteOpenCodeInstances()
+            // A disabled runtime may still own a running server. Its workspace
+            // status keeps Stop available without reconnecting or enabling it.
+            for configuration in remoteConfigurations {
+                model.remoteWorkspaces.refreshWorkspaceInstance(.opencode, configuration: configuration)
+            }
+        }
     }
 }

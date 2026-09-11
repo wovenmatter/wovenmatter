@@ -16,6 +16,18 @@ export function precedes(a, b) {
   }
   return false
 }
+export function validatedPackageSpec(harness, supplied) {
+  const pinned = harness.install.package
+  const separator = typeof pinned === 'string' ? pinned.lastIndexOf('@') : -1
+  if (separator <= 0) throw failure('reviewed_package_spec_required')
+  const name = pinned.slice(0, separator)
+  const spec = supplied === undefined || supplied === null ? pinned : supplied
+  if (typeof spec !== 'string' || !spec.startsWith(name + '@')) throw failure('invalid_package_spec')
+  const version = spec.slice(name.length + 1)
+  if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?(?:\+[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?$/.test(version)) throw failure('invalid_package_spec')
+  if (harness.id === 'opencode' && spec !== pinned) throw failure('opencode_version_incompatible')
+  return spec
+}
 export function diagnosticCategory(error) {
   const text = String(error ?? '')
   const allowed = ['runtime_active_stop_conversations_or_server_first', 'active_conversation_check_unavailable', 'runtime_active_or_operation_in_progress', 'runtime_lock_unavailable', 'hermes_update_requires_host_terminal', 'source_digest_required', 'installer_digest_changed', 'installer_download_failed', 'installer_download_timed_out', 'runtime_preferences_save_failed', 'bundled_dependency_refresh_failed']
@@ -73,13 +85,19 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
   let saveQueue = Promise.resolve(), checks = null
   const loaded = readFile(statePath, 'utf8').then(text => {
     const saved = JSON.parse(text)
-    for (const h of catalog.values()) states.set(h.id, { enabled: saved[h.id]?.enabled === true, visible: saved[h.id]?.visible !== false, failureCount: Number(saved[h.id]?.failureCount) || 0 })
-  }).catch(() => {})
-  async function state(id) { await loaded; if (!states.has(id)) states.set(id, { enabled: false, visible: true, failureCount: 0 }); return states.get(id) }
+    for (const h of catalog.values()) {
+      if (typeof saved[h.id]?.enabled === 'boolean') states.set(h.id, { enabled: saved[h.id].enabled, visible: saved[h.id]?.visible !== false, failureCount: Number(saved[h.id]?.failureCount) || 0 })
+    }
+  }).catch(error => {
+    // Missing preferences predate runtime management. Unreadable/corrupt saved
+    // preferences must not accidentally turn an explicitly disabled runtime on.
+    if (error.code !== 'ENOENT') for (const h of catalog.values()) states.set(h.id, { enabled: false, visible: true, failureCount: 0 })
+  })
+  async function state(id) { await loaded; if (!states.has(id)) states.set(id, { enabled: undefined, visible: true, failureCount: 0 }); return states.get(id) }
   function persist() {
     saveQueue = saveQueue.catch(() => {}).then(async () => {
       await mkdir(dirname(statePath), { recursive: true, mode: 0o700 })
-      const data = Object.fromEntries([...states].map(([id, s]) => [id, { enabled: s.enabled, visible: s.visible, failureCount: s.failureCount }]))
+      const data = Object.fromEntries([...states].filter(([, s]) => typeof s.enabled === 'boolean').map(([id, s]) => [id, { enabled: s.enabled, visible: s.visible, failureCount: s.failureCount }]))
       await writeFile(statePath + '.tmp', JSON.stringify(data), { mode: 0o600 }); await rename(statePath + '.tmp', statePath)
     }); return saveQueue
   }
@@ -163,6 +181,13 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
     const storedOperation = operations.get(h.id) ?? null
     const operation = storedOperation && !storedOperation.finishedAt ? { ...storedOperation, status: 'running' } : storedOperation
     const installed = components.every(c => !c.required || c.installed)
+    if (s.enabled === undefined) {
+      // Before preferences existed, installed runtimes were usable immediately.
+      // Preserve that state once, after verifying all required components. A
+      // missing runtime stays disabled even if it is installed on a later run.
+      s.enabled = installed
+      await persist()
+    }
     let notice = h.id === 'hermes' ? 'Hermes updates remain manual: review hermes update --plan on this host; its updater may restart other profiles.' : h.id === 'opencode' ? `OpenCode v2 compatibility is pinned to ${h.install.package.split('@').at(-1)}.` : h.adapterPackage ? 'Chat uses the adapter and bundled engine shown here; sign-in CLI updates do not update that engine.' : null
     if (h.id === 'hermes' && s.hermesNotice) notice += ' ' + s.hermesNotice
     const bundled = components.find(c => c.id === 'bundled')
@@ -194,7 +219,7 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
         if (action === 'update' && h.id === 'hermes') throw failure('hermes_update_requires_host_terminal')
         if (await busy(h)) throw failure('runtime_active_stop_conversations_or_server_first')
         let command
-        const pkg = h.id === 'opencode' ? h.install.package : h.id === 'pi' ? '@earendil-works/pi-coding-agent@latest' : null
+        const pkg = h.install.kind === 'npm-global' ? validatedPackageSpec(h, body.packageSpec) : null
         const adapter = h.adapterPackage ? ` && npm install --global --prefix "$HOME/.local" ${quote(h.adapterPackage + '@latest')}` : ''
         if (pkg) command = `npm install --global --prefix "$HOME/.local" ${quote(pkg)}${adapter}`
         else {
@@ -231,6 +256,18 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
   }
   return {
     inventory,
+    async npmPreview(h) {
+      let packageSpec = validatedPackageSpec(h)
+      if (h.id === 'pi') {
+        const name = packageSpec.slice(0, packageSpec.lastIndexOf('@'))
+        const version = await latest(name)
+        if (!version) throw failure('latest_package_version_unavailable')
+        packageSpec = validatedPackageSpec(h, name + '@' + version)
+      }
+      return { harnessID: h.id, source: h.install.source, sha256: null, bytes: null,
+        packageSpec, command: `npm install --global --prefix "$HOME/.local" ${quote(packageSpec)}`,
+        verification: 'npm-registry-integrity' }
+    },
     async recordFailure(h, action, error) {
       const s = await state(h.id)
       if (operations.get(h.id) && !operations.get(h.id).finishedAt) return
@@ -239,13 +276,21 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
       operations.set(h.id, { id: randomUUID(), harnessID: h.id, action, status: 'failed', output: '', error: sanitize(error.message, environment()), startedAt: now, finishedAt: now })
       await persist()
     },
-    async isEnabled(id) { return (await state(id)).enabled },
+    async isEnabled(id) {
+      const s = await state(id)
+      if (s.enabled === undefined && catalog.has(id)) await inventory(catalog.get(id))
+      return s.enabled === true
+    },
     isBusy(id) { return Boolean(operations.get(id) && !operations.get(id).finishedAt) },
     operation: id => { const op = [...operations.values()].find(op => op.id === id); return op && !op.finishedAt ? { ...op, status: 'running' } : op },
     start,
     async list() { return { runtimes: await Promise.all([...catalog.values()].map(h => inventory(h))) } },
     async check() {
-      if (!checks) checks = (async () => ({ runtimes: await Promise.all([...catalog.values()].map(async h => inventory(h, (await state(h.id)).enabled))) }))().finally(() => { checks = null })
+      if (!checks) checks = (async () => ({ runtimes: await Promise.all([...catalog.values()].map(async h => {
+        const s = await state(h.id)
+        if (s.enabled === undefined) await inventory(h)
+        return inventory(h, s.enabled === true)
+      })) }))().finally(() => { checks = null })
       return checks
     },
     async preferences(h, body) {

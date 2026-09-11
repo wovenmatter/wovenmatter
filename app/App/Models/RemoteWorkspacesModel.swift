@@ -106,7 +106,7 @@ final class RemoteWorkspacesModel {
     var readyChatTargets: [RemoteHarnessChatTarget] {
         workspaces.flatMap { configuration -> [RemoteHarnessChatTarget] in
             guard isCredentialAccessEnabled, !invalidatingWorkspaceIDs.contains(configuration.id), statuses[configuration.id]?.running == true, runtimeErrors[configuration.id] == nil else { return [] }
-            return (harnesses[configuration.id] ?? []).compactMap { harness in
+            return currentHarnesses(for: configuration).compactMap { harness in
                 harness.state == "ready"
                     && self.runtimeMaintenance[configuration.id]?.contains(where: {
                         $0.id == harness.id && $0.enabled && $0.visible && $0.installed && $0.operation?.status != "running"
@@ -129,6 +129,15 @@ final class RemoteWorkspacesModel {
         }
     }
 
+    func currentHarnesses(for configuration: RemoteWorkspaceConfiguration) -> [RemoteHarnessStatus] {
+        (harnesses[configuration.id] ?? []).map { harness in
+            harness.reconcilingOpenCode(
+                instance: workspaceInstances[configuration.id]?[.opencode],
+                installed: runtimeMaintenance[configuration.id]?.first(where: { $0.id == .opencode })?.installed
+            )
+        }
+    }
+
     func configuration(id: UUID) -> RemoteWorkspaceConfiguration? {
         workspaces.first { $0.id == id }
     }
@@ -140,9 +149,9 @@ final class RemoteWorkspacesModel {
         isRuntimeEnabled(runtimeKind, in: configuration)
             && runtimeErrors[configuration.id] == nil
             && statuses[configuration.id]?.running == true
-            && harnesses[configuration.id]?.contains {
+            && currentHarnesses(for: configuration).contains {
                 $0.id == runtimeKind && $0.state == "ready"
-            } == true && runtimeMaintenance[configuration.id]?.contains(where: {
+            } && runtimeMaintenance[configuration.id]?.contains(where: {
                 $0.id == runtimeKind && $0.enabled && $0.installed && $0.operation?.status != "running"
             }) == true
     }
@@ -719,7 +728,8 @@ final class RemoteWorkspacesModel {
             var operation = try await client.maintainRuntime(
                 preparedHarnessAction.harness.id,
                 action: preparedHarnessAction.action,
-                sourceSHA256: preparedHarnessAction.preview.sha256
+                sourceSHA256: preparedHarnessAction.preview.sha256,
+                packageSpec: preparedHarnessAction.preview.packageSpec
             )
             try self.requireCurrent(identity)
             self.operations[preparedHarnessAction.configuration.id] = operation
@@ -827,6 +837,11 @@ final class RemoteWorkspacesModel {
         _ configuration: RemoteWorkspaceConfiguration
     ) async {
         guard let identity = try? requestIdentity(configuration) else { return }
+        // A lifecycle snapshot from before this refresh must not override newer
+        // harness inventory (for example after an external stop or container restart).
+        // Responses from lifecycle requests arriving during/after these awaits stay
+        // in the cache and remain authoritative over the pre-launch inventory.
+        workspaceInstances[configuration.id]?.removeValue(forKey: .opencode)
         do {
             let client = try await serviceClient(for: configuration)
             try requireCurrent(identity)

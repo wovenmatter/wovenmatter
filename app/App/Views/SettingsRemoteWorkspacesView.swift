@@ -492,7 +492,7 @@ struct SettingsRemoteWorkspacesView: View {
             title: "\(workspace.name) runtimes",
             detail: "Runtime components and credentials belong to this remote workspace. Installation and updates run here through its authenticated SSH connection."
         ) {
-            let harnesses = model.harnesses[workspace.id] ?? []
+            let harnesses = model.currentHarnesses(for: workspace)
             if harnesses.isEmpty {
                 SettingsEmpty("Start the workspace and refresh to inspect its harnesses.")
             } else {

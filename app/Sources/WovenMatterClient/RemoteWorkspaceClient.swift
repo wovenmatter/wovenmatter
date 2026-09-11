@@ -215,6 +215,23 @@ public struct RemoteHarnessStatus: Codable, Equatable, Identifiable, Sendable {
     public let transportError: String?
     public let setupMethods: [RemoteHarnessSetupMethod]
     public let detectedProviders: [String]
+
+    /// Lifecycle responses are newer than the harness inventory fetched before launch.
+    /// Reconcile only the native OpenCode instance; ACP authentication stays authoritative.
+    public func reconcilingOpenCode(instance: RemoteWorkspaceInstanceStatus?, installed: Bool?) -> Self {
+        guard id == .opencode, let instance, instance.kind == AgentRuntimeKind.opencode.rawValue else { return self }
+        let present = installed ?? (installationStatus == "installed")
+        let running = present && instance.state == "running"
+        return Self(
+            id: id, displayName: displayName, transport: transport, capabilities: capabilities,
+            state: !present ? "cli_missing" : (running ? "ready" : "transport_unavailable"),
+            installationStatus: present ? "installed" : "cli_missing",
+            authenticationStatus: authenticationStatus,
+            transportStatus: running ? "ready" : "unavailable",
+            transportError: running ? nil : (instance.lastError ?? "Start this workspace’s OpenCode v2 server in More settings."),
+            setupMethods: setupMethods, detectedProviders: detectedProviders
+        )
+    }
 }
 
 public struct RemoteWorkspaceInstanceStatus: Codable, Equatable, Sendable {
@@ -262,6 +279,7 @@ public struct RemoteInstallerPreview: Codable, Equatable, Sendable {
     public let bytes: Int?
     public let command: String
     public let verification: String
+    public let packageSpec: String?
 }
 
 public struct RemoteHarnessAuthenticationSession: Codable, Equatable, Identifiable, Sendable {
@@ -935,10 +953,11 @@ public struct RemoteWorkspaceServiceClient: Sendable {
     }
 
     public func maintainRuntime(
-        _ id: AgentRuntimeKind, action: String, sourceSHA256: String?
+        _ id: AgentRuntimeKind, action: String, sourceSHA256: String?, packageSpec: String? = nil
     ) async throws -> RemoteHarnessOperation {
         var payload: [String: Any] = ["confirmed": true]
         if let sourceSHA256 { payload["sourceSHA256"] = sourceSHA256 }
+        if let packageSpec { payload["packageSpec"] = packageSpec }
         return try await request(
             path: "v1/runtime-maintenance/\(id.rawValue)/\(action)", method: "POST",
             body: try JSONSerialization.data(withJSONObject: payload)

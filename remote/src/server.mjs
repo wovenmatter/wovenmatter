@@ -709,16 +709,7 @@ function commandSucceeded(command, timeoutMilliseconds) {
 }
 
 async function installerPreview(harness) {
-  if (harness.install.kind === 'npm-global') {
-    return {
-      harnessID: harness.id,
-      source: harness.install.source,
-      sha256: null,
-      bytes: null,
-      command: harness.install.command,
-      verification: 'npm-registry-integrity',
-    }
-  }
+  if (harness.install.kind === 'npm-global') return maintenance.npmPreview(harness)
   const installer = await downloadInstaller(harness)
   return {
     harnessID: harness.id,

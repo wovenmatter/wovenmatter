@@ -82,6 +82,7 @@ final class ApplicationModel {
     private(set) var buzzWorkspaceError: String?
     var openCode: OpenCodeModel?
     private(set) var remoteOpenCodes: [UUID: OpenCodeModel] = [:]
+    private var remoteOpenCodeSyncGeneration = UUID()
     var openCodeInstances: [OpenCodeModel] { [openCode].compactMap { $0 } + Array(remoteOpenCodes.values) }
 
     func openCodeModel(for conversationID: String) -> OpenCodeModel? {
@@ -89,16 +90,24 @@ final class ApplicationModel {
     }
 
     func synchronizeRemoteOpenCodeInstances() async {
+        let generation = UUID()
+        remoteOpenCodeSyncGeneration = generation
         guard let dashboardStore, let ownerDeviceID = try? await dashboardStore.dashboardDeviceID() else { return }
+        guard remoteOpenCodeSyncGeneration == generation else { return }
         let configurations = remoteWorkspaces.workspaces
         let eligibleIDs = Set(configurations.map(\.id))
         for id in Array(remoteOpenCodes.keys) where !eligibleIDs.contains(id) {
             if let removed = remoteOpenCodes.removeValue(forKey: id) { await removed.suspendConnection() }
+            guard remoteOpenCodeSyncGeneration == generation else { return }
         }
         for configuration in configurations {
+            guard remoteOpenCodeSyncGeneration == generation,
+                  remoteWorkspaces.configuration(id: configuration.id) == configuration else { return }
             if let existing = remoteOpenCodes[configuration.id], existing.remoteConfiguration != configuration {
-                await existing.suspendConnection()
                 remoteOpenCodes[configuration.id] = nil
+                await existing.suspendConnection()
+                guard remoteOpenCodeSyncGeneration == generation,
+                      remoteWorkspaces.configuration(id: configuration.id) == configuration else { return }
             }
             let instance: OpenCodeModel
             if let existing = remoteOpenCodes[configuration.id] { instance = existing }

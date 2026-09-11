@@ -66,8 +66,19 @@ final class OpenCodeModel {
         "wovenmatter.opencode." + (remoteConfiguration.map { "remote." + $0.id.uuidString.lowercased() + "." } ?? "") + suffix
     }
     var connected: Set<String> { isReady ? [connectionID] : [] }
-    var hasServerRegistration: Bool { isRemote ? isReady : FileManager.default.fileExists(atPath: registration.path) }
-    var canConnect: Bool { isRemote ? isInstalled : executable != nil || hasServerRegistration }
+    var hasServerRegistration: Bool {
+        if let configuration = remoteConfiguration {
+            guard remoteWorkspaces?.isCredentialAccessEnabled == true,
+                  remoteWorkspaces?.configuration(id: configuration.id) == configuration else { return false }
+            let status = remoteWorkspaces?.workspaceInstances[configuration.id]?[.opencode]
+            return isReady || status?.state == "running" || status?.pid != nil
+        }
+        return FileManager.default.fileExists(atPath: registration.path)
+    }
+    var canConnect: Bool {
+        if let configuration = remoteConfiguration { return remoteWorkspaces?.isRuntimeEnabled(.opencode, in: configuration) == true }
+        return executable != nil || hasServerRegistration
+    }
 
     init(store: DashboardStore, ownerDeviceID: UUID, defaults: UserDefaults,
          remoteConfiguration: RemoteWorkspaceConfiguration? = nil, remoteWorkspaces: RemoteWorkspacesModel? = nil) {
@@ -107,6 +118,11 @@ final class OpenCodeModel {
                 await self.onChange?(update.conversationID)
             }
         }
+    }
+
+    isolated deinit {
+        updateTask?.cancel()
+        connectionTask?.cancel()
     }
 
     func isLocalSession(_ id: String) -> Bool { links[id]?.connectionID == connectionID }

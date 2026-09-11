@@ -37,6 +37,11 @@ must include these endpoints before the controls are available. Buzz remains
 outside this management surface. Local package presence never verifies a remote
 installation or a linked gateway's runtime.
 
+On first inventory, runtimes without saved preferences retain their previous
+availability only after all required components verify. Missing runtimes become
+disabled and remain so after later installation until explicitly enabled. Saved
+Disable/Hide choices survive service restarts; unreadable preferences fail closed.
+
 Remote adapter inventories show upstream bundled-package versions separately
 from the compatible update target resolved using the adapter's dependency range.
 Updates refresh that dependency within the declared range and verify the result;

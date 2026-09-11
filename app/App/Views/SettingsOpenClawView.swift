@@ -40,6 +40,17 @@ struct SettingsOpenClawView: View {
             }
 
             }
+            if !isWorkspaceScoped {
+                let buzzAgents = model.buzzWorkspaceAgents.filter { $0.runtimeKind == .openclaw }
+                    .sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
+                if !buzzAgents.isEmpty {
+                    SettingsCard(title: "Buzz workspaces", detail: "Agent names and existing Gateway connections.") {
+                        VStack(spacing: 8) {
+                            ForEach(buzzAgents) { agent in agentRow(agent) }
+                        }
+                    }
+                }
+            }
             ForEach(model.remoteWorkspaces.workspaces.filter { configuration in
                 isWorkspaceScoped ? configuration.id == workspaceID
                     : model.remoteWorkspaces.isRuntimeEnabled(.openclaw, in: configuration)
