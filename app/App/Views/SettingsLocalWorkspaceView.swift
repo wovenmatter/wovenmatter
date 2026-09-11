@@ -20,7 +20,7 @@ struct SettingsLocalWorkspaceView: View {
             workspaceCard
             runtimesCard
         }
-        .task { await model.openCode?.resolveExecutable() }
+        .task { await model.openCode?.resolveExecutable(); model.refreshRuntimeInventory() }
         .confirmationDialog(
             "Review installer source",
             isPresented: Binding(
@@ -181,6 +181,8 @@ struct SettingsLocalWorkspaceView: View {
                 let availability = model.localACPRuntimeAvailability.first {
                     $0.runtimeKind == definition.runtimeKind
                 }
+                let inventory = model.runtimeInventories[definition.runtimeKind]
+                let installing = model.installingLocalACPRuntimeKinds.contains(definition.runtimeKind)
                 let isChecking = model.checkingLocalACPRuntimeKinds.contains(
                     definition.runtimeKind
                 )
@@ -224,10 +226,32 @@ struct SettingsLocalWorkspaceView: View {
                                 .foregroundStyle(DashboardPalette.mutedForeground)
                                 .fixedSize(horizontal: false, vertical: true)
                                 .textSelection(.enabled)
+                            if let inventory {
+                                if definition.runtimeKind == .hermes, let limitation = inventory.limitation {
+                                    Text(limitation).font(.system(size: 11))
+                                        .foregroundStyle(DashboardPalette.mutedForeground)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+                                if let notice = inventory.updateNotice {
+                                    Text(notice).font(.system(size: 11))
+                                        .foregroundStyle(DashboardPalette.mutedForeground)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+                                Text(inventory.summary)
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(DashboardPalette.mutedForeground)
+                                    .textSelection(.enabled)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                if model.isLocalACPRuntimeCredentialAccessEnabled(definition.runtimeKind), inventory.latestUnavailable {
+                                    Text("Some latest versions are unavailable.")
+                                        .font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
+                                }
+                            }
                         }
+                        .help(inventory?.limitation ?? definition.adapterDescription)
                         .frame(maxWidth: .infinity, alignment: .leading)
 
-                        HStack(spacing: 8) {
+                        RuntimeMaintenanceActions {
                             if definition.runtimeKind == .openclaw {
                                 Button("More") { onMore(.openclaw) }
                                     .buttonStyle(SettingsQuietButtonStyle())
@@ -252,25 +276,38 @@ struct SettingsLocalWorkspaceView: View {
                                     : "Adds the runtime to the Local Agent Workspace sidebar without changing its enabled state."
                             )
 
-                            if let availability,
-                               availability.needsCLIInstallation
-                                || availability.needsAdapterInstallation {
-                                Button(
-                                    model.installingLocalACPRuntimeKinds
-                                        .contains(definition.runtimeKind)
-                                        ? "Installing…"
-                                        : localACPInstallButtonLabel(availability)
-                                ) {
-                                    model.installLocalACPRuntimeComponent(
-                                        definition.runtimeKind
-                                    )
+                            if model.runtimeFailures[definition.runtimeKind, default: 0] >= 2 {
+                                Button("Copy diagnostic") {
+                                    NSPasteboard.general.clearContents()
+                                    NSPasteboard.general.setString(model.runtimeDiagnostic(definition.runtimeKind), forType: .string)
+                                }
+                                .buttonStyle(SettingsQuietButtonStyle())
+                            }
+                            if inventory?.manualUpdateAvailable == true {
+                                Link("Update guide", destination: URL(string: "https://nousresearch.github.io/hermes-agent/docs/getting-started/updating/")!)
+                                    .buttonStyle(SettingsQuietButtonStyle())
+                            }
+                            if inventory?.outdated == true, inventory?.isInstalled == true,
+                               model.isLocalACPRuntimeCredentialAccessEnabled(definition.runtimeKind) {
+                                Button(installing ? "Updating…" : "Update") { model.updateRuntime(definition.runtimeKind) }
+                                    .buttonStyle(SettingsQuietButtonStyle())
+                                    .disabled(!model.installingLocalACPRuntimeKinds.isEmpty || !model.localRunningConversationIDs.isEmpty)
+                            }
+                            if inventory?.isInstalled != true {
+                                if model.isLocalACPRuntimeCredentialAccessEnabled(definition.runtimeKind) {
+                                    Button("Disable") { model.disableLocalACPRuntimeCredentialAccess(definition.runtimeKind) }
+                                        .buttonStyle(SettingsQuietButtonStyle())
+                                }
+                                Button(installing ? "Installing…" : inventory == nil ? "Checking…" : "Install") {
+                                    model.installLocalACPRuntimeComponent(definition.runtimeKind)
                                 }
                                 .buttonStyle(DashboardPrimaryButtonStyle())
-                                .disabled(
-                                    model.installingLocalACPRuntimeKinds
-                                        .contains(definition.runtimeKind)
-                                )
-                            } else if isReady {
+                                .disabled(inventory == nil || !model.installingLocalACPRuntimeKinds.isEmpty || !model.localRunningConversationIDs.isEmpty)
+                            } else if model.isLocalACPRuntimeCredentialAccessEnabled(definition.runtimeKind) {
+                                if !isReady {
+                                    Button("Recheck") { model.refreshLocalACPRuntimesNow(); model.refreshRuntimeInventory() }
+                                        .buttonStyle(SettingsQuietButtonStyle()).disabled(isChecking)
+                                }
                                 Button("Disable") {
                                     model.disableLocalACPRuntimeCredentialAccess(
                                         definition.runtimeKind
@@ -299,7 +336,7 @@ struct SettingsLocalWorkspaceView: View {
                                     }
                                 }
                                 .buttonStyle(SettingsQuietButtonStyle())
-                                .disabled(isChecking)
+                                .disabled(isChecking || !model.installingLocalACPRuntimeKinds.isEmpty || inventory?.isInstalled != true)
                             }
                         }
                     }
@@ -307,6 +344,7 @@ struct SettingsLocalWorkspaceView: View {
                 }
             }
 
+            SettingsNote("Checks run at startup and when reopening the app. Updates run only when requested. Linked gateways, Buzz and remote workspace runtimes are managed on their host.")
             if let error = model.openCode?.error { SettingsError(error) }
             if let error = model.localRunError {
                 SettingsError(error)
@@ -323,27 +361,36 @@ struct SettingsLocalWorkspaceView: View {
                         SettingsPill(model.openCode?.isEnabled == true ? "Enabled" : "Not enabled",
                             tone: model.openCode?.isEnabled == true ? .neutral : .warning)
                     }
-                    Text("Uses the local OpenCode v2 service. New chats use your Woven Matter workspace.")
+                    Text(model.runtimeInventories[.opencode]?.summary ?? "Checking the local OpenCode v2 installation…")
                         .font(.system(size: 11.5))
                         .foregroundStyle(DashboardPalette.mutedForeground)
                         .fixedSize(horizontal: false, vertical: true)
+                    Text(model.runtimeInventories[.opencode]?.limitation ?? "Uses the local OpenCode v2 service.")
+                        .font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                HStack(spacing: 8) {
+                RuntimeMaintenanceActions {
                     Button("More") { onMore(.opencode) }
                         .accessibilityLabel("More OpenCode settings")
                     let shown = model.isLocalACPRuntimeShown(.opencode)
                     Button(shown ? "Hide" : "Show") { model.setLocalACPRuntimeShown(!shown, runtimeKind: .opencode) }
                         .accessibilityLabel("\(shown ? "Hide" : "Show") OpenCode in the left sidebar")
-                    Button(model.openCode?.isInstalling == true ? "Downloading…" : model.openCode?.isInstalled != true ? "Download" : model.openCode?.isEnabled == true ? "Disable" : "Enable") {
+                    if model.openCode?.installationFailures ?? 0 >= 2 {
+                        Button("Copy diagnostic") {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(model.openCode?.installationDiagnostic ?? model.runtimeDiagnostic(.opencode), forType: .string)
+                        }
+                    }
+                    Button(model.openCode?.isInstalling == true ? "Downloading…" : model.runtimeInventories[.opencode]?.isInstalled != true ? "Install" : model.openCode?.isEnabled == true ? "Disable" : "Enable") {
                         guard let openCode = model.openCode else { return }
                         openCode.perform {
-                            if !openCode.isInstalled { try await openCode.download() }
+                            if model.runtimeInventories[.opencode]?.isInstalled != true { try await openCode.download(); model.refreshRuntimeInventory() }
                             else if openCode.isEnabled { await openCode.disable() }
                             else { try await openCode.connectLocal() }
                         }
                     }
-                    .disabled(model.openCode == nil || model.openCode?.isConnecting == true || model.openCode?.isInstalling == true || model.openCode?.isControllingServer == true)
+                    .disabled(model.runtimeInventories[.opencode] == nil || !model.installingLocalACPRuntimeKinds.isEmpty || model.openCode == nil || model.openCode?.isConnecting == true || model.openCode?.isInstalling == true || model.openCode?.isControllingServer == true)
                 }
                 .buttonStyle(SettingsQuietButtonStyle())
             }
@@ -416,5 +463,15 @@ struct SettingsLocalWorkspaceView: View {
             return
         }
         NSWorkspace.shared.open(URL(fileURLWithPath: path, isDirectory: true))
+    }
+}
+
+private struct RuntimeMaintenanceActions<Content: View>: View {
+    @ViewBuilder var content: () -> Content
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 8, content: content)
+            VStack(alignment: .trailing, spacing: 8, content: content)
+        }
     }
 }

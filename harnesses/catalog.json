@@ -9,7 +9,7 @@
       "arguments": [],
       "cliCommand": "codex",
       "adapterPackage": "@agentclientprotocol/codex-acp",
-      "minimumAdapterVersion": "1.7.0",
+      "minimumAdapterVersion": "1.11.0",
       "install": {
         "kind": "official-script",
         "source": "https://chatgpt.com/codex/install.sh",
