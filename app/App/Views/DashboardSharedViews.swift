@@ -476,7 +476,7 @@ struct DashboardConversationRow: View {
             hoverCardTask?.cancel()
             if isHovered {
                 hoverCardTask = Task { @MainActor in
-                    try? await Task.sleep(for: .milliseconds(380))
+                    try? await Task.sleep(for: .seconds(1))
                     guard !Task.isCancelled, hovered, !Self.isMouseButtonPressed else { return }
                     detailCardState.setHovered(true, conversationID: conversation.id)
                 }
@@ -564,7 +564,7 @@ struct DashboardConversationRow: View {
     }
 }
 
-/// Hover pop-out for a workspace chat row — folder, agent, runtime (not git/device).
+/// Hover pop-out for a workspace chat row, including names for OpenClaw agents.
 struct DashboardConversationHoverCard: View {
     let presentation: DashboardConversationRowPresentation
 
@@ -579,7 +579,9 @@ struct DashboardConversationHoverCard: View {
 
             VStack(alignment: .leading, spacing: 7) {
                 hoverRow(icon: .folder, text: meta.folderLabel)
-                hoverRow(icon: .bot, text: meta.agentLabel)
+                if let agent = presentation.agent, agent.runtimeKind == .openclaw {
+                    hoverRow(icon: .bot, text: dashboardAgentDisplayName(agent))
+                }
                 if let runtime = meta.runtimeLabel {
                     hoverRow(
                         icon: .terminal,
