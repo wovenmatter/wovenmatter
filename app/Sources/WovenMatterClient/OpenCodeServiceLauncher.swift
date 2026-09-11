@@ -18,6 +18,44 @@ public enum OpenCodeServiceLauncher {
         return connection
     }
 
+    public static var installDefinition: LocalACPRuntimeDefinition {
+        LocalACPRuntimeDefinition(runtimeKind: .opencode, displayName: "OpenCode v2", commandName: "opencode2",
+            arguments: [], underlyingCLIName: "opencode2",
+            cliInstallerSource: URL(string: "https://registry.npmjs.org/@opencode%2fcli"),
+            cliInstallerInterpreter: nil, cliNpmPackageSpec: "@opencode/cli@" + OpenCodeConnection.supportedVersion,
+            adapterPackage: nil, adapterDescription: "Local OpenCode v2 service")
+    }
+
+    public static func install(using installer: LocalACPRuntimeInstaller = LocalACPRuntimeInstaller()) async throws -> URL {
+        let definition = installDefinition
+        let executable = try await installer.install(definition, component: .cli, expectedPackageSpec: definition.cliNpmPackageSpec)
+        let result = try await Task.detached {
+            try LocalACPProcessRunner.run(executableURL: executable, arguments: ["--version"])
+        }.value
+        guard result.succeeded, normalizedVersion(result.stdout) == OpenCodeConnection.supportedVersion else {
+            throw OpenCodeError.message("The downloaded OpenCode version could not be verified. Try Download again.")
+        }
+        return executable
+    }
+
+    public static func stop(registration: URL = OpenCodeConnection.registrationURL()) async throws {
+        guard FileManager.default.fileExists(atPath: registration.path) else { return }
+        let connection = try OpenCodeConnection.discover(file: registration)
+        guard isRunning(connection.pid) else { return }
+        // Verify the authenticated service identity before signaling its process.
+        _ = try await OpenCodeHTTPClient(connection: connection).health()
+        guard try OpenCodeConnection.discover(file: registration) == connection,
+              let pid = connection.pid else { throw OpenCodeError.message("OpenCode changed while stopping. Try again.") }
+        guard kill(Int32(pid), SIGTERM) == 0 || errno == ESRCH else {
+            throw OpenCodeError.message("OpenCode could not be stopped.")
+        }
+        for _ in 0..<80 {
+            if !isRunning(pid) { return }
+            try await Task.sleep(for: .milliseconds(125))
+        }
+        throw OpenCodeError.message("OpenCode is still shutting down. Wait before restarting it.")
+    }
+
     public static func normalizedVersion(_ output: String) -> String {
         let version = output.trimmingCharacters(in: .whitespacesAndNewlines)
         return version.hasPrefix("opencode2 v") ? String(version.dropFirst("opencode2 v".count)) : version

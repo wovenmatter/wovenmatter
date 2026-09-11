@@ -7,6 +7,33 @@ import WovenMatterCore
 
 @Suite(.serialized)
 struct OpenCodeIntegrationTests {
+    @Test func openCodeDownloadUsesPinnedPackageAndVerifiesExecutable() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let npm = root.appending(path: "npm")
+        let script = """
+        #!/bin/sh
+        test "$1" = install && test "$2" = --global && test "$3" = --prefix || exit 1
+        test "$5" = '@opencode/cli@\(OpenCodeConnection.supportedVersion)' || exit 2
+        mkdir -p "$4/bin"
+        printf '#!/bin/sh\\necho "opencode2 v\(OpenCodeConnection.supportedVersion)"\\n' > "$4/bin/opencode2"
+        chmod +x "$4/bin/opencode2"
+        """
+        try script.write(to: npm, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: npm.path)
+        let prefix = root.appending(path: "installed")
+        let result = try await OpenCodeServiceLauncher.install(using: LocalACPRuntimeInstaller(installPrefix: prefix, npmExecutableURL: npm))
+        #expect(result == prefix.appending(path: "bin/opencode2"))
+        #expect(FileManager.default.isExecutableFile(atPath: result.path))
+    }
+
+    @Test func stopMissingServiceDoesNotStartAnything() async throws {
+        let registration = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString + "/opencode/service.json")
+        try await OpenCodeServiceLauncher.stop(registration: registration)
+        #expect(!FileManager.default.fileExists(atPath: registration.path))
+    }
+
     @Test func hiddenModelsLeaveSessionAndThinkingIntactButDisappearFromChoices() throws {
         let models: [OpenCodeValue] = [
             ["id": "chosen", "providerID": "one", "variants": .array([["id": "high"]])],

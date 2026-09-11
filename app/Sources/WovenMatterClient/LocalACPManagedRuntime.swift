@@ -764,9 +764,8 @@ public actor LocalACPRuntimeInstaller {
     }
 
     static func isExactSemanticVersion(_ value: String) -> Bool {
-        let parts = value.split(separator: ".", omittingEmptySubsequences: false)
-        return parts.count == 3
-            && parts.allSatisfy { !$0.isEmpty && $0.allSatisfy(\.isNumber) }
+        // Exact prerelease versions are pinned too; ranges and moving tags are not.
+        value.range(of: #"^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$"#, options: .regularExpression) != nil
     }
 
     static func isExactPackageSpec(_ value: String) -> Bool {

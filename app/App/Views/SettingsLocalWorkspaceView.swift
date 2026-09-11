@@ -20,6 +20,7 @@ struct SettingsLocalWorkspaceView: View {
             workspaceCard
             runtimesCard
         }
+        .task { await model.openCode?.resolveExecutable() }
         .confirmationDialog(
             "Review installer source",
             isPresented: Binding(
@@ -306,6 +307,7 @@ struct SettingsLocalWorkspaceView: View {
                 }
             }
 
+            if let error = model.openCode?.error { SettingsError(error) }
             if let error = model.localRunError {
                 SettingsError(error)
             }
@@ -333,14 +335,15 @@ struct SettingsLocalWorkspaceView: View {
                     let shown = model.isLocalACPRuntimeShown(.opencode)
                     Button(shown ? "Hide" : "Show") { model.setLocalACPRuntimeShown(!shown, runtimeKind: .opencode) }
                         .accessibilityLabel("\(shown ? "Hide" : "Show") OpenCode in the left sidebar")
-                    Button(model.openCode?.isEnabled == true ? "Disable" : "Enable") {
+                    Button(model.openCode?.isInstalling == true ? "Downloading…" : model.openCode?.isInstalled != true ? "Download" : model.openCode?.isEnabled == true ? "Disable" : "Enable") {
                         guard let openCode = model.openCode else { return }
                         openCode.perform {
-                            if openCode.isEnabled { await openCode.disable() }
+                            if !openCode.isInstalled { try await openCode.download() }
+                            else if openCode.isEnabled { await openCode.disable() }
                             else { try await openCode.connectLocal() }
                         }
                     }
-                    .disabled(model.openCode == nil || model.openCode?.isConnecting == true)
+                    .disabled(model.openCode == nil || model.openCode?.isConnecting == true || model.openCode?.isInstalling == true || model.openCode?.isControllingServer == true)
                 }
                 .buttonStyle(SettingsQuietButtonStyle())
             }

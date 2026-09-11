@@ -32,3 +32,12 @@ Automated tests cover local service reuse without a CLI, refusing to replace a l
 Human acceptance should exercise the same session through Woven Matter and a v2-capable OpenCode client, including provider-backed streaming, permissions, attachments, and reconnection. Green fixture tests are not a claim that those provider scenarios were performed.
 
 Verified locally for this revision: the full validation suite passed (113 Swift tests, 11 remote-service tests, static checks, native app validation). Native UI checks confirmed standard-service startup from Connect, New Chat in the Woven Matter workspace, model and High reasoning selection persisted by the service, and reconnection after app restarts without changing the service PID. No provider prompt was executed in these checks.
+
+## Installation and server lifecycle
+
+- Download installs the exact supported OpenCode v2 npm package through Woven Matter's managed Node installer, verifies its version, and reveals Enable. Installation does not enable or connect the runtime.
+- Stop server disconnects Woven Matter and terminates the authenticated local service. Automatic reconnect stays suspended until an explicit Connect/Restart/Enable action.
+- Restart server stops the registered service before starting and reconnecting.
+- Start on launch defaults on for an enabled integration. When off, startup may attach to an existing service but never launches one.
+- Stop on quit defaults off. When enabled, normal application termination waits for the shared server to stop. A stop failure offers Cancel quit or Quit anyway. Force Quit cannot run application shutdown handlers.
+- Disable remains separate: it disconnects Woven Matter without stopping the server.

@@ -33,10 +33,29 @@ struct OpenCodeSettingsCard: View {
                                 catch { modelsError = error.localizedDescription }
                             }
                     }
-                Button("Connect") { model.perform { try await model.connectLocal() } }
+                Button(model.isInstalled ? "Connect" : model.isInstalling ? "Downloading…" : "Download") {
+                    model.perform {
+                        if model.isInstalled { try await model.connectLocal() }
+                        else { try await model.download() }
+                    }
+                }
                     .buttonStyle(SettingsQuietButtonStyle())
-                    .disabled(model.isConnecting || model.isReady)
+                    .disabled(model.isConnecting || model.isReady || model.isInstalling || model.isControllingServer)
             }
+            HStack(spacing: 8) {
+                Button("Stop server") { model.perform { try await model.stopServer() } }
+                    .disabled(model.isControllingServer || model.isConnecting || !model.hasServerRegistration)
+                Button("Restart server") { model.perform { try await model.restartServer() } }
+                    .disabled(model.isControllingServer || model.isConnecting || !model.isInstalled)
+                if model.isControllingServer { ProgressView().controlSize(.small) }
+            }
+            .buttonStyle(SettingsQuietButtonStyle())
+            Toggle("Start OpenCode server when WovenMatter launches", isOn: $model.startServerOnLaunch)
+                .toggleStyle(.checkbox)
+            Toggle("Stop OpenCode server when WovenMatter quits", isOn: $model.stopServerOnQuit)
+                .toggleStyle(.checkbox)
+            Text("Stopping the server also disconnects the browser and other OpenCode clients.")
+                .font(.caption).foregroundStyle(.secondary)
             if let error = model.error { Text(error).font(.callout).foregroundStyle(.red) }
             if !model.canConnect {
                 Text("Install OpenCode v2 to connect.").font(.caption).foregroundStyle(.secondary)
