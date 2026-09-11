@@ -1015,7 +1015,7 @@ struct DashboardNewChatDrawer: View {
                         summary: DashboardNewChatAvailabilitySummary.localCLIs(
                             readyRuntimeCount: model.localACPRuntimeAvailability
                                 .filter {
-                                    $0.runtimeKind == .opencode ? model.openCode?.canConnect == true : $0.isReady
+                                    $0.runtimeKind == .opencode ? (model.openCode?.isEnabled == true && model.openCode?.canConnect == true) : $0.isReady
                                         && model.isLocalACPAgentReady($0.runtimeKind)
                                         && !model.checkingLocalACPRuntimeKinds
                                             .contains($0.runtimeKind)
@@ -1043,7 +1043,7 @@ struct DashboardNewChatDrawer: View {
                                     ),
                                     title: definition.displayName,
                                     detail: definition.runtimeKind == .opencode
-                                        ? (model.openCode?.canConnect == true ? "Local OpenCode v2" : "Install OpenCode v2")
+                                        ? ((model.openCode?.isEnabled == true && model.openCode?.canConnect == true) ? "Local OpenCode v2" : "Enable OpenCode in Settings")
                                         : isChecking || availability == nil
                                         ? "Checking…"
                                         : availability?.isReady == true
@@ -1056,7 +1056,7 @@ struct DashboardNewChatDrawer: View {
                             }
                             .buttonStyle(DashboardQuietButtonStyle())
                             .disabled(
-                                definition.runtimeKind == .opencode ? (model.openCode?.canConnect != true || model.openCode?.busy == true || !model.localACPWorkspaceAvailability.isReady) : isChecking
+                                definition.runtimeKind == .opencode ? (model.openCode?.isEnabled != true || model.openCode?.canConnect != true || model.openCode?.busy == true || !model.localACPWorkspaceAvailability.isReady) : isChecking
                                     || availability?.isReady != true
                                     || !model.isLocalACPAgentReady(definition.runtimeKind)
                                     || !model.localACPWorkspaceAvailability.isReady

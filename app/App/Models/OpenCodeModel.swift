@@ -22,6 +22,7 @@ final class OpenCodeModel {
     var statuses: [String: String] = [:]
     var errors: [String: String] = [:]
     var error: String?
+    private(set) var isEnabled = false
     private(set) var isReady = false
     private(set) var isConnecting = false
     private(set) var busy = false
@@ -35,6 +36,7 @@ final class OpenCodeModel {
     var canConnect: Bool { executable != nil || FileManager.default.fileExists(atPath: registration.path) }
 
     init(store: DashboardStore, ownerDeviceID: UUID, defaults: UserDefaults) {
+        isEnabled = defaults.object(forKey: "wovenmatter.opencode.enabled") as? Bool ?? defaults.bool(forKey: "wovenmatter.opencode.local-connected")
         self.store = store; self.ownerDeviceID = ownerDeviceID; self.defaults = defaults
         coordinator = OpenCodeSessionCoordinator(database: store.database)
         // Honor a previously selected CLI, never an old custom/remote service.
@@ -49,7 +51,7 @@ final class OpenCodeModel {
                 if let snapshot = update.snapshot { self.snapshots[update.conversationID] = snapshot }
                 self.statuses[update.conversationID] = update.status
                 self.errors[update.conversationID] = update.error
-                if self.isLocalSession(update.conversationID) {
+                if self.isEnabled, self.isLocalSession(update.conversationID) {
                     if update.status == "Connected" { self.isReady = true }
                     else if ["Reconnecting", "Unsupported version", "Authentication required"].contains(update.status) { self.isReady = false }
                     if update.status == "Reconnecting", !self.isConnecting {
@@ -65,6 +67,7 @@ final class OpenCodeModel {
 
     func restore() async {
         await resolveExecutable()
+        guard defaults.object(forKey: "wovenmatter.opencode.enabled") as? Bool != false else { return }
         guard defaults.bool(forKey: "wovenmatter.opencode.local-connected") || links.values.contains(where: { $0.connectionID == connectionID }) else { return }
         do { try await connectLocal() } catch { self.error = error.localizedDescription }
     }
@@ -90,6 +93,8 @@ final class OpenCodeModel {
             logger.info("Local OpenCode service is available")
             try await coordinator.connect(connection)
             isReady = true
+            isEnabled = true
+            defaults.set(true, forKey: "wovenmatter.opencode.enabled")
             defaults.set(true, forKey: "wovenmatter.opencode.local-connected")
             for link in links.values where link.connectionID == connectionID { await coordinator.watch(link) }
         }
@@ -99,12 +104,20 @@ final class OpenCodeModel {
         catch { logger.error("Local OpenCode connection failed: \(error.localizedDescription)"); isReady = false; self.error = error.localizedDescription; throw error }
     }
 
+    func disable() async {
+        isEnabled = false
+        defaults.set(false, forKey: "wovenmatter.opencode.enabled")
+        await coordinator.disconnect(connectionID: connectionID)
+        isReady = false
+    }
+
     func browserURL() throws -> URL {
         // Discover again so a service restart never hands the browser stale credentials.
         try OpenCodeConnection.discover(file: registration).browserURL
     }
 
     func create(workspace: URL) async throws -> String {
+        guard isEnabled else { throw OpenCodeError.message("Enable OpenCode in Local Agent Workspace before creating a chat.") }
         guard !busy else { throw OpenCodeError.message("A session is already being created.") }
         busy = true; defer { busy = false }
         try await connectLocal()
@@ -198,6 +211,7 @@ final class OpenCodeModel {
 
     func send(_ id: String, input: AgentMessageInput) async throws {
         guard let link = links[id], isLocalSession(id) else { throw OpenCodeError.message("This saved transcript is read-only. Create a new OpenCode chat.") }
+        guard isEnabled else { throw OpenCodeError.message("Enable OpenCode in Local Agent Workspace before sending.") }
         if !isReady { try await connectLocal() }
         // A failed selection remains a send barrier until the user selects again.
         if let selection = selectionTasks[id] { try await selection.value }

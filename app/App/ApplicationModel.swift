@@ -576,7 +576,7 @@ final class ApplicationModel {
     var visibleOrderedLocalCLIAgents: [WorkspaceAgent] {
         let visibleRuntimeKinds = LocalACPRuntimePreferences.visibleRuntimeKinds(
             in: orderedLocalCLIAgents.map(\.runtimeKind),
-            shownRuntimeKinds: shownLocalACPRuntimeKinds.union(openCode?.connected.isEmpty == false ? [.opencode] : [])
+            shownRuntimeKinds: shownLocalACPRuntimeKinds
         )
         let visibleRuntimeKindSet = Set(visibleRuntimeKinds)
         return orderedLocalCLIAgents.filter {
@@ -2430,7 +2430,7 @@ final class ApplicationModel {
         conversation: WorkspaceConversationRecord
     ) async {
         if conversation.localRuntimeKind == .opencode {
-            if let openCode, let link = openCode.links[conversation.id] {
+            if let openCode, openCode.isEnabled, let link = openCode.links[conversation.id] {
                 await openCode.coordinator.watch(link)
             }
             return

@@ -7,6 +7,7 @@ struct SettingsLocalWorkspaceView: View {
     @Bindable var model: ApplicationModel
     var reservesRailControlSpace = false
     var onBack: () -> Void
+    var onMore: (AgentRuntimeKind) -> Void
     @State private var pendingCredentialRuntime: AgentRuntimeKind?
 
     var body: some View {
@@ -18,7 +19,6 @@ struct SettingsLocalWorkspaceView: View {
         ) {
             workspaceCard
             runtimesCard
-            if let openCode = model.openCode { OpenCodeSettingsCard(model: openCode) }
         }
         .confirmationDialog(
             "Review installer source",
@@ -173,7 +173,10 @@ struct SettingsLocalWorkspaceView: View {
             title: "Runtimes",
             detail: "Woven Matter discovers installed CLIs and adapters automatically and can install what’s missing."
         ) {
-            ForEach(LocalACPRuntimeCatalog.definitions.filter { $0.runtimeKind != .opencode }) { definition in
+            ForEach(LocalACPRuntimeCatalog.definitions) { definition in
+                if definition.runtimeKind == .opencode {
+                    openCodeRuntimeRow
+                } else {
                 let availability = model.localACPRuntimeAvailability.first {
                     $0.runtimeKind == definition.runtimeKind
                 }
@@ -292,13 +295,54 @@ struct SettingsLocalWorkspaceView: View {
                                 .buttonStyle(SettingsQuietButtonStyle())
                                 .disabled(isChecking)
                             }
+                            if definition.runtimeKind == .openclaw {
+                                Button("More") { onMore(.openclaw) }
+                                    .buttonStyle(SettingsQuietButtonStyle())
+                                    .accessibilityLabel("More OpenClaw settings")
+                            }
                         }
                     }
+                }
                 }
             }
 
             if let error = model.localRunError {
                 SettingsError(error)
+            }
+        }
+    }
+
+    private var openCodeRuntimeRow: some View {
+        SettingsInset {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 8) {
+                        Text("OpenCode").font(.system(size: 13, weight: .medium))
+                        SettingsPill(model.openCode?.isEnabled == true ? "Enabled" : "Not enabled",
+                            tone: model.openCode?.isEnabled == true ? .neutral : .warning)
+                    }
+                    Text("Uses the local OpenCode v2 service. New chats use your Woven Matter workspace.")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(DashboardPalette.mutedForeground)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                HStack(spacing: 8) {
+                    let shown = model.isLocalACPRuntimeShown(.opencode)
+                    Button(shown ? "Hide" : "Show") { model.setLocalACPRuntimeShown(!shown, runtimeKind: .opencode) }
+                        .accessibilityLabel("\(shown ? "Hide" : "Show") OpenCode in the left sidebar")
+                    Button(model.openCode?.isEnabled == true ? "Disable" : "Enable") {
+                        guard let openCode = model.openCode else { return }
+                        openCode.perform {
+                            if openCode.isEnabled { await openCode.disable() }
+                            else { try await openCode.connectLocal() }
+                        }
+                    }
+                    .disabled(model.openCode == nil || model.openCode?.isConnecting == true)
+                    Button("More") { onMore(.opencode) }
+                        .accessibilityLabel("More OpenCode settings")
+                }
+                .buttonStyle(SettingsQuietButtonStyle())
             }
         }
     }
