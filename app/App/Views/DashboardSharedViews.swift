@@ -488,8 +488,10 @@ struct DashboardConversationRow: View {
             guard !Self.isMouseButtonPressed else { return }
             detailCardState.setFocused(isFocused, conversationID: conversation.id)
         }
-        .popover(isPresented: detailCardPresented, arrowEdge: .trailing) {
-            DashboardConversationHoverCard(presentation: presentation)
+        .background {
+            DashboardConversationPopover(isPresented: detailCardPresented) {
+                DashboardConversationHoverCard(presentation: presentation)
+            }
         }
         .contextMenu {
             Button(conversation.isPinned ? "Unpin" : "Pin") { onUnavailableMutation("Conversation pinning") }
@@ -538,7 +540,7 @@ struct DashboardConversationRow: View {
                 detailCardState.presentedConversationID == presentation.id
             },
             set: { presented in
-                if !presented {
+                if !presented, detailCardState.presentedConversationID == presentation.id {
                     detailCardState.dismiss()
                 }
             }
