@@ -39,6 +39,9 @@ struct SettingsRemoteWorkspacesView: View {
             }
         ) {
             VStack(alignment: .leading, spacing: 16) {
+                if selectedWorkspace == nil {
+                    SettingsWorkspaceSidebarVisibilityControl(.remoteWorkspaces)
+                }
                 credentialAccessCard
                 if let selectedWorkspace {
                     workspaceCard(selectedWorkspace)
