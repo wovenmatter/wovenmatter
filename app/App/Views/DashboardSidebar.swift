@@ -130,12 +130,17 @@ struct DashboardSidebarRail: View {
     let onSurfaceProfileChange: () -> Void
 
     var body: some View {
-        switch page {
-        case .navigation:
-            navigationPage
-        case .workspace:
-            workspacePage
+        Group {
+            switch page {
+            case .navigation:
+                navigationPage
+            case .workspace:
+                workspacePage
+            }
         }
+        .environment(\.dashboardSidebarForeground, DashboardPalette.foreground)
+        .foregroundStyle(DashboardPalette.foreground)
+        .tint(DashboardPalette.foreground)
     }
 
     private var navigationPage: some View {
@@ -325,7 +330,7 @@ struct DashboardSidebarNavigationPage: View {
                     .font(.system(size: 13, weight: .semibold))
                 Text("\(agents.count) \(agents.count == 1 ? "agent" : "agents")")
                 .font(.system(size: 11))
-                .foregroundStyle(DashboardPalette.mutedForeground)
+                .foregroundStyle(DashboardPalette.foreground)
             }
             Spacer()
             if let onMove {
@@ -409,7 +414,7 @@ struct DashboardSidebarNavigationPage: View {
                 title: "Settings",
                 hoverID: "destination:settings",
                 selected: destination == .settings,
-                iconColor: DashboardPalette.primary
+                iconColor: DashboardPalette.foreground
             ) {
                 onUtility(.settings)
             }
@@ -639,7 +644,7 @@ struct DashboardSidebarNavigationPage: View {
     private func agentEmptyLabel(_ text: String, level: Int = 0) -> some View {
         Text(text)
             .font(.system(size: 11))
-            .foregroundStyle(DashboardPalette.mutedForeground)
+            .foregroundStyle(DashboardPalette.foreground)
             .padding(.horizontal, 12)
             .padding(.leading, CGFloat(level * 8))
             .padding(.vertical, 4)
@@ -861,7 +866,7 @@ struct DashboardSidebarNavigationPage: View {
                 if recentItems.isEmpty {
                     Text("No recent items.")
                         .font(.system(size: 12))
-                        .foregroundStyle(DashboardPalette.mutedForeground)
+                        .foregroundStyle(DashboardPalette.foreground)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 10)
                 } else {
@@ -1609,7 +1614,7 @@ struct DashboardSidebarWorkspacePage: View {
                     .lineLimit(1)
                 Text("\(conversations.count) chats · \(notes.count) notes")
                     .font(.system(size: 11))
-                    .foregroundStyle(DashboardPalette.mutedForeground)
+                    .foregroundStyle(DashboardPalette.foreground)
             }
             Spacer()
             if onBack == nil {
@@ -1652,9 +1657,7 @@ struct DashboardSidebarWorkspacePage: View {
         } label: {
             DashboardLucideIcon(glyph: .listFilter, size: 14)
                 .foregroundStyle(
-                    readFilter != nil
-                        ? DashboardPalette.primary
-                        : DashboardPalette.mutedForeground
+                    DashboardPalette.foreground
                 )
                 .frame(width: 36, height: 36)
                 .background(
