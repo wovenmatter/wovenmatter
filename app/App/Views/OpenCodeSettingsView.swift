@@ -15,7 +15,7 @@ struct OpenCodeSettingsCard: View {
                 SettingsPill(model.isConnecting ? "Connecting…" : model.isReady ? "Connected" : "Not connected", tone: model.isReady ? .neutral : .warning)
                 Spacer()
                 if model.isReady {
-                    Button("Open in Browser") {
+                    Button("Open in browser") {
                         model.perform { openURL(try model.browserURL()) }
                     }
                     .buttonStyle(SettingsQuietButtonStyle())
