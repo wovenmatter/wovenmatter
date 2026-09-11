@@ -47,7 +47,7 @@ struct OpenCodeFormView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text(form["title"].text).fontWeight(.semibold)
-            ForEach(form["fields"].array.filter(visible), id: \.self) { field in
+            ForEach(OpenCodeFormAnswers.activeFields(form["fields"].array, answers: answers), id: \.self) { field in
                 VStack(alignment: .leading, spacing: 5) {
                     Text(field["title"].string ?? field["key"].text)
                     if let description = field["description"].string { Text(description).font(.caption).foregroundStyle(.secondary) }
@@ -61,12 +61,6 @@ struct OpenCodeFormView: View {
             if let invalid { Text(invalid).foregroundStyle(.red).font(.caption) }
         }.padding(12).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
         .onAppear { for field in form["fields"].array where !field["default"].isNull { answers[field["key"].text] = field["default"] } }
-    }
-    private func visible(_ field: OpenCodeValue) -> Bool {
-        field["when"].array.allSatisfy { rule in
-            let equal = (answers[rule["key"].text] ?? .null) == rule["value"]
-            return rule["op"].text == "neq" ? !equal : equal
-        }
     }
     @ViewBuilder private func fieldControl(_ field: OpenCodeValue) -> some View {
         let key = field["key"].text
@@ -106,14 +100,15 @@ struct OpenCodeFormView: View {
     }
     private func submit() {
         var result: [String: OpenCodeValue] = [:]
-        for field in form["fields"].array.filter(visible) where field["type"].text != "external" {
+        for field in OpenCodeFormAnswers.activeFields(form["fields"].array, answers: answers) where field["type"].text != "external" {
             let key = field["key"].text
             var value = answers[key] ?? (field["type"].text == "boolean" ? .bool(false) : .null)
-            if ["number", "integer"].contains(field["type"].text), !value.isNull, value != .string("") {
+            if ["number", "integer"].contains(field["type"].text), value == .string("") { value = .null }
+            if ["number", "integer"].contains(field["type"].text), !value.isNull {
                 guard let parsed = value.number ?? Double(value.text), parsed.isFinite else { invalid = "Enter a number for \(key)."; return }
                 guard field["type"].text != "integer" || parsed.rounded() == parsed else { invalid = "Enter a whole number for \(key)."; return }
-                if let minimum = field["min"].number, parsed < minimum { invalid = "\(key) must be at least \(minimum)."; return }
-                if let maximum = field["max"].number, parsed > maximum { invalid = "\(key) must be at most \(maximum)."; return }
+                if let minimum = field["minimum"].number, parsed < minimum { invalid = "\(key) must be at least \(minimum)."; return }
+                if let maximum = field["maximum"].number, parsed > maximum { invalid = "\(key) must be at most \(maximum)."; return }
                 value = .number(parsed)
             }
             if field["required"].bool && (value.isNull || value == .string("") || value == .array([])) { invalid = "Complete \(field["title"].string ?? key)."; return }

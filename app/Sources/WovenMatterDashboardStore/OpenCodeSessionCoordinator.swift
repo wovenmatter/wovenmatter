@@ -21,7 +21,6 @@ public actor OpenCodeSessionCoordinator {
     private var snapshots: [String: OpenCodeSessionSnapshot] = [:]
     private var pendingCursors: [String: Int64] = [:]
     private var refreshing: Set<String> = []
-    private var loadingOlder: Set<String> = []
     private var sending: Set<String> = []
 
     public init(database: WorkspaceDatabase, clientFactory: @escaping @Sendable (OpenCodeConnection) -> OpenCodeHTTPClient = { OpenCodeHTTPClient(connection: $0) }) {
@@ -43,15 +42,30 @@ public actor OpenCodeSessionCoordinator {
         for link in (try? database.openCodeLinks()) ?? [] where link.connectionID == connectionID {
             workers.removeValue(forKey: link.conversationID)?.cancel()
             generations.removeValue(forKey: link.conversationID)
+            pendingCursors.removeValue(forKey: link.conversationID)
             emit(link.conversationID, status: "Disconnected")
         }
         clients.removeValue(forKey: connectionID)
     }
-    public func shutdown() { workers.values.forEach { $0.cancel() }; workers.removeAll(); generations.removeAll(); clients.removeAll(); connectionTokens.removeAll() }
+    public func shutdown() { workers.values.forEach { $0.cancel() }; workers.removeAll(); generations.removeAll(); clients.removeAll(); connectionTokens.removeAll(); pendingCursors.removeAll() }
     public func call(connectionID: String, method: String = "GET", path: String,
                      query: [String: String] = [:], body: OpenCodeValue? = nil) async throws -> OpenCodeValue {
         guard let client = clients[connectionID] else { throw OpenCodeError.message("Connect to the OpenCode service first.") }
-        return try await client.call(method, path, query: query, body: body)
+        let token = connectionTokens[connectionID]
+        let result = try await client.call(method, path, query: query, body: body)
+        guard token == connectionTokens[connectionID] else { throw CancellationError() }
+        return result
+    }
+    public func createSession(connectionID: String, id: String, workspace: URL, recover: Bool) async throws -> OpenCodeValue {
+        if recover {
+            do { return try await call(connectionID: connectionID, path: "/api/session/" + OpenCodeHTTPClient.segment(id)) }
+            catch OpenCodeError.http(404) {
+                // Creation is idempotent by session ID in the native service.
+                // Reuse that ID even if the first request is still finishing.
+            }
+        }
+        return try await call(connectionID: connectionID, method: "POST", path: "/api/session",
+            body: ["id": .string(id), "location": ["directory": .string(workspace.path)]])
     }
     public func readFile(connectionID: String, path: String, query: [String: String]) async throws -> (Data, String) {
         guard let client = clients[connectionID] else { throw OpenCodeError.message("OpenCode is disconnected.") }
@@ -69,11 +83,12 @@ public actor OpenCodeSessionCoordinator {
             let connectedAt = ContinuousClock.now
             do {
                 guard var client = clients[link.connectionID] else { return }
+                let token = connectionTokens[link.connectionID]
                 if let registration = client.connection.registration {
                     client = clientFactory(try .discover(file: registration))
                     _ = try await client.health()
                     try Task.checkCancellation()
-                    guard generations[link.conversationID] == generation else { return }
+                    guard generations[link.conversationID] == generation, token == connectionTokens[link.connectionID] else { continue }
                     clients[link.connectionID] = client
                 } else { _ = try await client.health() }
                 try await refresh(link, generation: generation, recoverHistory: true)
@@ -101,6 +116,7 @@ public actor OpenCodeSessionCoordinator {
                 }
             } catch {
                 guard !Task.isCancelled, generations[link.conversationID] == generation else { return }
+                if error is CancellationError { continue }
                 if case OpenCodeError.incompatible = error { emit(link.conversationID, status: "Unsupported version", error: error.localizedDescription); break }
                 if case OpenCodeError.http(401) = error { emit(link.conversationID, status: "Authentication required", error: error.localizedDescription); break }
                 if case OpenCodeError.http(404) = error { emit(link.conversationID, status: "Session unavailable", error: error.localizedDescription); break }
@@ -126,6 +142,10 @@ public actor OpenCodeSessionCoordinator {
         }
     }
     public func refresh(_ link: OpenCodeSessionLink, generation: UUID? = nil, recoverHistory: Bool = false) async throws {
+        let token = connectionTokens[link.connectionID]
+        let capturedGeneration = generation ?? generations[link.conversationID]
+        // History loads and refreshes share a lock so neither can overwrite
+        // pages committed by the other while awaiting form state or pagination.
         // A post-mutation refresh must not be skipped behind an older snapshot.
         while refreshing.contains(link.conversationID) {
             try await Task.sleep(for: .milliseconds(25))
@@ -133,7 +153,8 @@ public actor OpenCodeSessionCoordinator {
         refreshing.insert(link.conversationID)
         defer { refreshing.remove(link.conversationID) }
         guard let client = clients[link.connectionID] else { throw OpenCodeError.message("OpenCode is disconnected.") }
-        let capturedGeneration = generation ?? generations[link.conversationID]
+        guard token != nil, token == connectionTokens[link.connectionID],
+              capturedGeneration == generations[link.conversationID] else { throw CancellationError() }
         let acknowledged = pendingCursors[link.conversationID]
         let path = "/api/session/" + OpenCodeHTTPClient.segment(link.sessionID)
         async let info = client.call("GET", path)
@@ -144,7 +165,7 @@ public actor OpenCodeSessionCoordinator {
         async let active = client.call("GET", "/api/session/active")
         let responses = try await (info, messages, permissions, forms, inbox, active)
         try Task.checkCancellation()
-        guard capturedGeneration == generations[link.conversationID] else { return }
+        guard capturedGeneration == generations[link.conversationID], token == connectionTokens[link.connectionID] else { throw CancellationError() }
         var snapshot = snapshots[link.conversationID] ?? OpenCodeSessionSnapshot()
         snapshot.info = responses.0["data"]
         guard snapshot.info["id"].text == link.sessionID else { throw OpenCodeError.message("OpenCode returned a different session identity.") }
@@ -183,23 +204,27 @@ public actor OpenCodeSessionCoordinator {
         snapshot.active = !responses.5["data"][link.sessionID].isNull
         if let acknowledged { snapshot.cursor = max(snapshot.cursor ?? -1, acknowledged) }
         try Task.checkCancellation()
-        guard capturedGeneration == generations[link.conversationID] else { return }
+        guard capturedGeneration == generations[link.conversationID], token == connectionTokens[link.connectionID] else { throw CancellationError() }
         if snapshots[link.conversationID] != snapshot {
             try database.saveOpenCodeSnapshot(snapshot, conversationID: link.conversationID)
             snapshots[link.conversationID] = snapshot
             emit(link.conversationID, status: "Connected")
         }
-        try await reconcileSubmissions(link, client: client, snapshot: snapshot)
+        try await reconcileSubmissions(link, client: client, snapshot: snapshot, token: token)
+        guard capturedGeneration == generations[link.conversationID], token == connectionTokens[link.connectionID] else { throw CancellationError() }
         emit(link.conversationID, status: "Connected")
     }
     public func loadOlder(_ link: OpenCodeSessionLink) async throws {
-        guard loadingOlder.insert(link.conversationID).inserted else { return }
-        defer { loadingOlder.remove(link.conversationID) }
-        guard let client = clients[link.connectionID], let cursor = snapshots[link.conversationID]?.olderCursor else { return }
+        let token = connectionTokens[link.connectionID]
         let generation = generations[link.conversationID]
+        while refreshing.contains(link.conversationID) { try await Task.sleep(for: .milliseconds(25)) }
+        guard token != nil, token == connectionTokens[link.connectionID], generation == generations[link.conversationID] else { throw CancellationError() }
+        refreshing.insert(link.conversationID)
+        defer { refreshing.remove(link.conversationID) }
+        guard let client = clients[link.connectionID], let cursor = snapshots[link.conversationID]?.olderCursor else { return }
         let page = try await client.call("GET", "/api/session/\(OpenCodeHTTPClient.segment(link.sessionID))/message", query: ["cursor": cursor, "limit": "100"])
         try Task.checkCancellation()
-        guard generation == generations[link.conversationID], clients[link.connectionID] != nil,
+        guard generation == generations[link.conversationID], token == connectionTokens[link.connectionID],
               snapshots[link.conversationID]?.olderCursor == cursor else { return }
         var snapshot = snapshots[link.conversationID] ?? OpenCodeSessionSnapshot()
         snapshot.mergeMessages(Array(page["data"].array.reversed()), older: true)
@@ -239,7 +264,7 @@ public actor OpenCodeSessionCoordinator {
         }
         try? await refresh(link)
     }
-    private func reconcileSubmissions(_ link: OpenCodeSessionLink, client: OpenCodeHTTPClient, snapshot: OpenCodeSessionSnapshot) async throws {
+    private func reconcileSubmissions(_ link: OpenCodeSessionLink, client: OpenCodeHTTPClient, snapshot: OpenCodeSessionSnapshot, token: UUID?) async throws {
         for item in try database.openCodeUncertainSubmissions(conversationID: link.conversationID) {
             let id = item["id"].text
             var accepted = snapshot.containsInput(id)
@@ -247,6 +272,8 @@ public actor OpenCodeSessionCoordinator {
                 let message = try? await client.call("GET", "/api/session/\(OpenCodeHTTPClient.segment(link.sessionID))/message/\(OpenCodeHTTPClient.segment(id))")
                 accepted = message?["data"]["id"].text == id
             }
+            try Task.checkCancellation()
+            guard token == connectionTokens[link.connectionID] else { throw CancellationError() }
             if accepted { try database.saveOpenCodeSubmission(conversationID: link.conversationID, id: id, payload: item["payload"], status: "accepted") }
         }
     }

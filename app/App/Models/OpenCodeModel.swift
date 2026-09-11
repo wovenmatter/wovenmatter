@@ -25,9 +25,11 @@ final class OpenCodeModel {
     private(set) var isInstalling = false
     private(set) var isControllingServer = false
     private var serverStopped = false
+    private var quitting = false
+    private var connectionGeneration = UUID()
     var startServerOnLaunch: Bool { didSet { defaults.set(startServerOnLaunch, forKey: "wovenmatter.opencode.start-on-launch") } }
     var stopServerOnQuit: Bool { didSet { defaults.set(stopServerOnQuit, forKey: "wovenmatter.opencode.stop-on-quit") } }
-    var isInstalled: Bool { executable != nil }
+    var isInstalled: Bool { executable.map { FileManager.default.isExecutableFile(atPath: $0.path) } ?? false }
     private(set) var isEnabled = false
     private(set) var isReady = false
     private(set) var isConnecting = false
@@ -60,6 +62,7 @@ final class OpenCodeModel {
         updateTask = Task { [weak self, coordinator] in
             for await update in coordinator.updates {
                 guard let self, !Task.isCancelled else { return }
+                guard update.status == "Disconnected" || (self.isEnabled && !self.serverStopped && !self.quitting) else { continue }
                 if let snapshot = update.snapshot { self.snapshots[update.conversationID] = snapshot }
                 self.statuses[update.conversationID] = update.status
                 self.errors[update.conversationID] = update.error
@@ -78,6 +81,7 @@ final class OpenCodeModel {
     func isLocalSession(_ id: String) -> Bool { links[id]?.connectionID == connectionID }
 
     func restore() async {
+        quitting = false
         await resolveExecutable()
         guard defaults.object(forKey: "wovenmatter.opencode.enabled") as? Bool != false else { return }
         guard defaults.bool(forKey: "wovenmatter.opencode.local-connected") || links.values.contains(where: { $0.connectionID == connectionID }) else { return }
@@ -87,6 +91,8 @@ final class OpenCodeModel {
     func resolveExecutable() async {
         // Login-shell discovery runs a subprocess. Never do it in a computed
         // property read by SwiftUI, where its run loop can reenter rendering.
+        if !isInstalled { executable = nil }
+        if executable != nil { return }
         if let resolved = await Task.detached(priority: .utility, operation: {
             LocalACPRuntimeResolver.resolveExecutable(named: "opencode2")
         }).value { executable = resolved }
@@ -95,12 +101,16 @@ final class OpenCodeModel {
     /// One local service using OpenCode's standard registration/environment.
     /// Concurrent New Chat/Connect requests share a single startup.
     func connectLocal(allowStart: Bool = true) async throws {
+        guard !quitting else { throw CancellationError() }
         if let connectionTask { return try await connectionTask.value }
+        let generation = UUID(); connectionGeneration = generation
         serverStopped = false
         isConnecting = true; error = nil
         logger.info("Connecting to the local OpenCode service")
         let task = Task { @MainActor in
-            if executable == nil { await resolveExecutable() }
+            if !isInstalled { await resolveExecutable() }
+            try Task.checkCancellation()
+            guard generation == connectionGeneration, !quitting else { throw CancellationError() }
             logger.info("Discovering or starting the local OpenCode service")
             let connection: OpenCodeConnection
             if allowStart { connection = try await OpenCodeServiceLauncher.ensure(executable: executable, registration: registration) }
@@ -108,8 +118,12 @@ final class OpenCodeModel {
                 connection = try OpenCodeConnection.discover(file: registration)
                 _ = try await OpenCodeHTTPClient(connection: connection).health()
             }
+            try Task.checkCancellation()
+            guard generation == connectionGeneration, !quitting else { throw CancellationError() }
             logger.info("Local OpenCode service is available")
             try await coordinator.connect(connection)
+            try Task.checkCancellation()
+            guard generation == connectionGeneration, !quitting else { throw CancellationError() }
             isReady = true
             isEnabled = true
             defaults.set(true, forKey: "wovenmatter.opencode.enabled")
@@ -117,9 +131,15 @@ final class OpenCodeModel {
             for link in links.values where link.connectionID == connectionID { await coordinator.watch(link) }
         }
         connectionTask = task
-        defer { connectionTask = nil; isConnecting = false }
+        defer { if generation == connectionGeneration { connectionTask = nil; isConnecting = false } }
         do { try await task.value }
-        catch { logger.error("Local OpenCode connection failed: \(error.localizedDescription)"); isReady = false; self.error = error.localizedDescription; throw error }
+        catch {
+            if generation == connectionGeneration {
+                isReady = false
+                if !(error is CancellationError) { self.error = error.localizedDescription }
+            }
+            throw error
+        }
     }
 
     func download() async throws {
@@ -132,7 +152,7 @@ final class OpenCodeModel {
     }
 
     func stopServer() async throws {
-        guard !isControllingServer, !isConnecting else { return }
+        guard !isControllingServer, !isConnecting else { throw OpenCodeError.message("Wait for the current server operation to finish.") }
         isControllingServer = true
         serverStopped = true
         defer { isControllingServer = false }
@@ -147,14 +167,18 @@ final class OpenCodeModel {
     }
 
     func prepareToQuit() async throws {
+        quitting = true
         serverStopped = true
         if let connectionTask { _ = try? await connectionTask.value }
+        while isControllingServer { try await Task.sleep(for: .milliseconds(25)) }
         serverStopped = true
         await coordinator.shutdown()
         if stopServerOnQuit { try await OpenCodeServiceLauncher.stop(registration: registration) }
     }
 
     func disable() async {
+        connectionGeneration = UUID()
+        connectionTask?.cancel(); connectionTask = nil; isConnecting = false
         isEnabled = false
         defaults.set(false, forKey: "wovenmatter.opencode.enabled")
         await coordinator.disconnect(connectionID: connectionID)
@@ -173,17 +197,11 @@ final class OpenCodeModel {
         busy = true; defer { busy = false }
         try await connectLocal()
         let pendingKey = "wovenmatter.opencode.pending-create." + connectionID
-        if let pending = defaults.string(forKey: pendingKey) {
-            let recovered = try await coordinator.call(connectionID: connectionID, path: "/api/session/" + OpenCodeHTTPClient.segment(pending))
-            let localID = try await open(recovered["data"])
-            defaults.removeObject(forKey: pendingKey)
-            return localID
-        }
-        let id = "ses_" + UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
+        let pending = defaults.string(forKey: pendingKey)
+        let id = pending ?? "ses_" + UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
         defaults.set(id, forKey: pendingKey)
         do {
-            let response = try await coordinator.call(connectionID: connectionID, method: "POST", path: "/api/session",
-                body: ["id": .string(id), "location": ["directory": .string(workspace.path)]])
+            let response = try await coordinator.createSession(connectionID: connectionID, id: id, workspace: workspace, recover: pending != nil)
             let localID = try await open(response["data"])
             defaults.removeObject(forKey: pendingKey)
             return localID

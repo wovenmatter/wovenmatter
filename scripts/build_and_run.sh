@@ -40,6 +40,14 @@ test -x "$executable"
 
 stop_dev_app() {
   pkill -TERM -x "$product_name" >/dev/null 2>&1 || true
+  # Launch Services can reject a relaunch while the old process is exiting.
+  local attempt
+  for attempt in {1..100}; do
+    if ! pgrep -x "$product_name" >/dev/null; then return 0; fi
+    sleep 0.1
+  done
+  printf 'The development app is still exiting; close it before relaunching.\n' >&2
+  return 1
 }
 
 launch_app() {

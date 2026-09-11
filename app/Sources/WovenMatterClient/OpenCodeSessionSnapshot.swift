@@ -117,3 +117,30 @@ public struct OpenCodeSessionSnapshot: Codable, Equatable, Sendable {
         }
     }
 }
+
+/// Form conditions follow OpenCode's ordered, cascading visibility rules.
+public enum OpenCodeFormAnswers {
+    public static func activeFields(_ fields: [OpenCodeValue], answers: [String: OpenCodeValue]) -> [OpenCodeValue] {
+        var activeAnswers: [String: OpenCodeValue] = [:]
+        return fields.filter { field in
+            let visible = field["when"].array.allSatisfy { condition in
+                guard let answer = activeAnswers[condition["key"].text], !answer.isNull else { return false }
+                let matches: Bool
+                if case .array(let values) = answer { matches = values.contains(condition["value"]) }
+                else { matches = answer == condition["value"] }
+                return condition["op"].text == "neq" ? !matches : matches
+            }
+            if visible {
+                let key = field["key"].text
+                var value = answers[key] ?? field["default"]
+                if value.isNull, field["type"].text == "boolean" { value = .bool(false) }
+                if ["number", "integer"].contains(field["type"].text), let text = value.string {
+                    if let number = Double(text), number.isFinite { value = .number(number) }
+                    else { value = .null }
+                }
+                if !value.isNull { activeAnswers[key] = value }
+            }
+            return visible
+        }
+    }
+}

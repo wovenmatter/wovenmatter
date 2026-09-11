@@ -211,7 +211,7 @@ async function harnessStatus(harness) {
     id: harness.id, displayName: harness.displayName, transport: harness.transport,
     capabilities: harness.capabilities, state: 'transport_unavailable',
     installationStatus: 'unknown', authenticationStatus: 'unknown', transportStatus: 'unavailable',
-    transportError: 'Configure this host’s shared OpenCode v2 server in Woven Matter OpenCode settings.',
+    transportError: 'OpenCode v2 is supported only in the local workspace. Remote OpenCode sessions are unavailable.',
     setupMethods: [], detectedProviders: [],
   }
 

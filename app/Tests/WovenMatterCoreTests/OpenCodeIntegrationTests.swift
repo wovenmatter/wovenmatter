@@ -365,6 +365,95 @@ struct OpenCodeIntegrationTests {
         await coordinator.shutdown()
     }
 
+    @Test func disconnectedRefreshCannotPublishAnUnwatchedSnapshot() async throws {
+        let fixture = OpenCodeFixture(); FixtureProtocol.fixture = fixture
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let database = try WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+        let id = try database.createLocalACPSession(runtimeKind: .opencode, title: "Original", ownerDeviceID: UUID(), openCodeAssociation: ("fixture", "ses_fixture"))
+        let link = OpenCodeSessionLink(conversationID: id, connectionID: "fixture", sessionID: "ses_fixture")
+        let session = fixtureSession()
+        let coordinator = OpenCodeSessionCoordinator(database: database, clientFactory: { OpenCodeHTTPClient(connection: $0, session: session) })
+        try await coordinator.connect(connection())
+        fixture.heldPath = "/api/session/ses_fixture"
+        let refresh = Task { try await coordinator.refresh(link) }
+        await fixture.gate.waitForArrival()
+        await coordinator.disconnect(connectionID: "fixture")
+        // Even reconnecting under the same identity must retire the old request.
+        try await coordinator.connect(connection())
+        fixture.gate.release()
+        await #expect(throws: CancellationError.self) { try await refresh.value }
+        #expect(try database.openCodeSnapshot(conversationID: id) == OpenCodeSessionSnapshot())
+        #expect(try database.localACPSession(conversationID: id).title == "Original")
+        await coordinator.shutdown()
+    }
+
+    @Test func loadingHistoryDuringRefreshPreservesBothPages() async throws {
+        let fixture = OpenCodeFixture(); FixtureProtocol.fixture = fixture
+        fixture.messages = (0..<250).map { message("msg_history_\($0)") }
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let database = try WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+        let id = try database.createLocalACPSession(runtimeKind: .opencode, title: "Paging", ownerDeviceID: UUID(), openCodeAssociation: ("fixture", "ses_fixture"))
+        let link = OpenCodeSessionLink(conversationID: id, connectionID: "fixture", sessionID: "ses_fixture")
+        let session = fixtureSession()
+        let coordinator = OpenCodeSessionCoordinator(database: database, clientFactory: { OpenCodeHTTPClient(connection: $0, session: session) })
+        try await coordinator.connect(connection())
+        try await coordinator.refresh(link)
+        fixture.heldPath = "/api/session/ses_fixture/form/form_pending/state"
+        let refresh = Task { try await coordinator.refresh(link) }
+        await fixture.gate.waitForArrival()
+        let older = Task { try await coordinator.loadOlder(link) }
+        // Let the concurrent history request reach the refresh lock. Previously
+        // it completed here and its page was overwritten when refresh resumed.
+        try await Task.sleep(for: .milliseconds(100))
+        fixture.gate.release()
+        try await refresh.value
+        try await older.value
+        #expect(try database.openCodeSnapshot(conversationID: id)?.messages.map { $0["id"].text } == Array(fixture.messages.suffix(200)).map { $0["id"].text })
+        await coordinator.shutdown()
+    }
+
+    @Test func interruptedSessionCreationReusesThePendingIdentity() async throws {
+        let fixture = OpenCodeFixture(); FixtureProtocol.fixture = fixture
+        fixture.sessionExists = false
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let database = try WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+        let session = fixtureSession()
+        let coordinator = OpenCodeSessionCoordinator(database: database, clientFactory: { OpenCodeHTTPClient(connection: $0, session: session) })
+        try await coordinator.connect(connection())
+        // A previous create did not reach the server. Recovery sees 404 and
+        // safely submits that same identity instead of blocking all new chats.
+        let created = try await coordinator.createSession(connectionID: "fixture", id: "ses_fixture", workspace: directory, recover: true)
+        #expect(created["data"]["id"].text == "ses_fixture")
+        #expect(fixture.createCount == 1)
+        // If only the response was lost, recovery retrieves the existing session.
+        let recovered = try await coordinator.createSession(connectionID: "fixture", id: "ses_fixture", workspace: directory, recover: true)
+        #expect(recovered["data"]["id"].text == "ses_fixture")
+        #expect(fixture.createCount == 1)
+        await coordinator.shutdown()
+    }
+
+    @Test func formConditionsUseSelectionsNumbersAndCascadeHiddenAnswers() {
+        let fields: [OpenCodeValue] = [
+            ["key": "choices", "type": "multiselect"],
+            ["key": "details", "type": "string", "when": .array([["key": "choices", "op": "eq", "value": "custom"]])],
+            ["key": "followup", "type": "string", "when": .array([["key": "details", "op": "neq", "value": "skip"]])],
+            ["key": "number", "type": "integer"],
+            ["key": "numeric", "type": "string", "when": .array([["key": "number", "op": "eq", "value": .number(2)]])]
+        ]
+        let shown = OpenCodeFormAnswers.activeFields(fields, answers: ["choices": .array(["custom"]), "details": "yes", "number": "2"])
+        #expect(shown.map { $0["key"].text } == ["choices", "details", "followup", "number", "numeric"])
+        let hidden = OpenCodeFormAnswers.activeFields(fields, answers: ["choices": .array([]), "details": "stale"])
+        #expect(hidden.map { $0["key"].text } == ["choices", "number"])
+        let unanswered = OpenCodeFormAnswers.activeFields(fields, answers: [:])
+        #expect(unanswered.map { $0["key"].text } == ["choices", "number"])
+    }
+
     private func connection() throws -> OpenCodeConnection { try .init(identity: "fixture", url: URL(string: "http://fixture.invalid")!, password: "fixture") }
     private func fixtureSession() -> URLSession {
         let config = URLSessionConfiguration.ephemeral; config.protocolClasses = [FixtureProtocol.self]
@@ -377,6 +466,9 @@ private final class OpenCodeFixture: @unchecked Sendable {
     let lock = NSLock()
     let gate = FixtureHealthGate()
     var holdHealth = false
+    var heldPath: String?
+    var sessionExists = true
+    var createCount = 0
     var version = OpenCodeConnection.supportedVersion
     var messages: [OpenCodeValue] = []
     var losePromptResponse = false
@@ -424,6 +516,11 @@ private final class OpenCodeFixture: @unchecked Sendable {
             if path.hasSuffix("/form") { return (200, ["data": .array([["id": "form_pending"], ["id": "form_done"]])]) }
             if path.hasSuffix("/state") { return (200, ["data": ["status": path.contains("form_pending") ? "pending" : "answered"]]) }
             if path.hasSuffix("/inbox") { return (200, ["data": .array([])]) }
+            if path == "/api/session", request.httpMethod == "POST" {
+                createCount += 1; sessionExists = true
+                return (200, ["data": ["id": "ses_fixture", "title": "Created fixture"]])
+            }
+            if path == "/api/session/ses_fixture", !sessionExists { return (404, [:]) }
             if path == "/api/session/ses_fixture" { return (200, ["data": ["id": "ses_fixture", "title": "Shared fixture", "time": ["updated": .number(900)]]]) }
             return (404, [:])
         }
@@ -435,7 +532,7 @@ private final class FixtureProtocol: URLProtocol, @unchecked Sendable {
     override class func canInit(with request: URLRequest) -> Bool { ["fixture.invalid", "127.0.0.1"].contains(request.url?.host ?? "") }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
-        if request.url?.path == "/api/health", Self.fixture.holdHealth {
+        if (request.url?.path == "/api/health" && Self.fixture.holdHealth) || request.url?.path == Self.fixture.heldPath {
             let fixture = Self.fixture
             fixture.gate.arrive(self)
         } else { deliver() }

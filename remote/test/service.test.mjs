@@ -158,7 +158,7 @@ test('service authentication exposes the reviewed harness catalog', async (conte
   assert.equal(openCode.transport, 'opencode-v2')
   assert.equal(openCode.state, 'transport_unavailable')
   assert.deepEqual(openCode.setupMethods, [])
-  assert.match(openCode.transportError, /shared OpenCode v2 server/)
+  assert.match(openCode.transportError, /supported only in the local workspace/)
   assert.deepEqual(
     Object.keys(harnesses[0].setupMethods[0]).sort(),
     ['displayName', 'id']
