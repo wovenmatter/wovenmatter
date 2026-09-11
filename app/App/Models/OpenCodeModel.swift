@@ -16,6 +16,7 @@ final class OpenCodeModel {
     private var updateTask: Task<Void, Never>?
     private var connectionTask: Task<Void, Error>?
     private var executable: URL?
+    var runtimeExecutable: URL? { executable }
     var onChange: ((String) async -> Void)?
     var links: [String: OpenCodeSessionLink] = [:]
     var snapshots: [String: OpenCodeSessionSnapshot] = [:]
@@ -23,6 +24,12 @@ final class OpenCodeModel {
     var errors: [String: String] = [:]
     var error: String?
     private(set) var isInstalling = false
+    private(set) var installationFailures = 0
+    private(set) var installationInventory: RuntimeInventory?
+    var installationDiagnostic: String {
+        RuntimeMaintenance.diagnostic(inventory: installationInventory, kind: .opencode,
+            attempts: installationFailures, failure: "The pinned OpenCode v2 install could not be verified. Raw installer output omitted.")
+    }
     private(set) var isControllingServer = false
     private var serverStopped = false
     private var quitting = false
@@ -143,12 +150,22 @@ final class OpenCodeModel {
     }
 
     func download() async throws {
-        guard !isInstalling else { return }
+        guard !isInstalling, !isConnecting, !isControllingServer,
+              !snapshots.values.contains(where: \.active) else { throw RuntimeMaintenanceError.busy }
         isInstalling = true
         defer { isInstalling = false }
-        let installed = try await OpenCodeServiceLauncher.install()
-        executable = installed
-        defaults.set(installed.path, forKey: "wovenmatter.opencode.executable")
+        do {
+            let installed = try await OpenCodeServiceLauncher.install()
+            executable = installed
+            defaults.set(installed.path, forKey: "wovenmatter.opencode.executable")
+            installationInventory = await RuntimeMaintenance.inspect(.opencode, checkLatest: true, selectedOpenCode: installed)
+            guard installationInventory?.isInstalled == true else { throw RuntimeMaintenanceError.verification }
+            installationFailures = 0
+        } catch {
+            installationFailures += 1
+            installationInventory = await RuntimeMaintenance.inspect(.opencode, checkLatest: false, selectedOpenCode: executable)
+            throw RuntimeMaintenanceError.verification
+        }
     }
 
     func stopServer() async throws {

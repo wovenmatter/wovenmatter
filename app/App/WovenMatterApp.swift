@@ -346,6 +346,12 @@ final class WovenMatterLifecycleDelegate: NSObject, NSApplicationDelegate {
     weak var model: ApplicationModel?
     private var terminating = false
 
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        model?.refreshRuntimeInventory()
+        model?.refreshLocalACPRuntimesNow()
+        return true
+    }
+
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard let model else { return .terminateNow }
         guard !terminating else { return .terminateLater }

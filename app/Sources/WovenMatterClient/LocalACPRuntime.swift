@@ -687,7 +687,8 @@ public struct LocalACPRuntimeResolver: Sendable {
             arguments: ["--version"],
             environment: ProcessInfo.processInfo.environment.merging(environment) {
                 _, new in new
-            }
+            },
+            timeout: 15
         ), result.succeeded,
               let installed = Self.semanticVersion(in: result.stdout),
               let required = Self.semanticVersion(in: minimum)
@@ -719,6 +720,8 @@ public struct LocalACPRuntimeResolver: Sendable {
             searchDirectories: executableSearchDirectories()
         )
     }
+
+    public func executable(named name: String) -> URL? { resolveExecutable(named: name) }
 
     public static var executableSearchPath: String {
         executableSearchDirectories().joined(separator: ":")
