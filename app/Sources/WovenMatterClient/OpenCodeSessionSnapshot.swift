@@ -120,6 +120,39 @@ public struct OpenCodeSessionSnapshot: Codable, Equatable, Sendable {
 
 /// Form conditions follow OpenCode's ordered, cascading visibility rules.
 public enum OpenCodeFormAnswers {
+    /// Build only active answers. External steps require explicit user
+    /// acknowledgement; the server rejects replies that omit that true value.
+    public static func reply(fields: [OpenCodeValue], answers: [String: OpenCodeValue]) throws -> OpenCodeValue {
+        var result: [String: OpenCodeValue] = [:]
+        for field in activeFields(fields, answers: answers) {
+            let key = field["key"].text
+            let title = field["title"].string ?? key
+            var value = answers[key] ?? field["default"]
+            if field["type"].text == "external" {
+                guard value == .bool(true) else { throw OpenCodeError.message("Complete and confirm \(title).") }
+            } else if field["type"].text == "boolean", value.isNull {
+                value = .bool(false)
+            }
+            if ["number", "integer"].contains(field["type"].text), value == .string("") { value = .null }
+            if ["number", "integer"].contains(field["type"].text), !value.isNull {
+                guard let parsed = value.number ?? Double(value.text), parsed.isFinite else {
+                    throw OpenCodeError.message("Enter a number for \(title).")
+                }
+                guard field["type"].text != "integer" || parsed.rounded() == parsed else {
+                    throw OpenCodeError.message("Enter a whole number for \(title).")
+                }
+                if let minimum = field["minimum"].number, parsed < minimum { throw OpenCodeError.message("\(title) must be at least \(minimum).") }
+                if let maximum = field["maximum"].number, parsed > maximum { throw OpenCodeError.message("\(title) must be at most \(maximum).") }
+                value = .number(parsed)
+            }
+            if field["required"].bool && (value.isNull || value == .string("") || value == .array([])) {
+                throw OpenCodeError.message("Complete \(title).")
+            }
+            if !value.isNull { result[key] = value }
+        }
+        return .object(result)
+    }
+
     public static func activeFields(_ fields: [OpenCodeValue], answers: [String: OpenCodeValue]) -> [OpenCodeValue] {
         var activeAnswers: [String: OpenCodeValue] = [:]
         return fields.filter { field in

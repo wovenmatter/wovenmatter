@@ -186,11 +186,14 @@ public actor OpenCodeSessionCoordinator {
             try Task.checkCancellation()
         }
         let incomingIDs = Set(descending.map { $0["id"].text })
+        // Once the server's entire history has been read, it is authoritative.
+        // Retaining a cached prefix here would resurrect removed first messages.
+        let reachedHistoryStart = cursor == nil
         // The beta returns a next cursor for every nonempty page, including
         // the final page. Keep a previously established end of history.
         if snapshot.olderCursor == nil, let oldestKnownID, incomingIDs.contains(oldestKnownID) { cursor = nil }
-        let keepsOlderPrefix = (snapshot.messages.firstIndex { incomingIDs.contains($0["id"].text) } ?? 0) > 0
-        snapshot.mergeMessages(Array(descending.reversed()))
+        let keepsOlderPrefix = !reachedHistoryStart && (snapshot.messages.firstIndex { incomingIDs.contains($0["id"].text) } ?? 0) > 0
+        snapshot.mergeMessages(Array(descending.reversed()), replace: reachedHistoryStart)
         if !keepsOlderPrefix { snapshot.olderCursor = cursor }
         snapshot.permissions = responses.2["data"].array
         // Session form list includes completed forms; query authoritative state.

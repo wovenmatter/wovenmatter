@@ -24,7 +24,7 @@ Earlier experimental custom/remote connections are no longer opened by this loca
 
 ## Persistence and recovery
 
-Recovery combines an exclusive durable session-log cursor with canonical HTTP snapshots. Cursor and transcript projection commit atomically in SQLite. Canonical message order wins over timestamps. Pagination follows native cursors without adding `order` to cursor requests. Catch-up preserves older loaded history and refreshes it after reconnect. The general event stream is not treated as a replay source. Refresh and older-page loads are serialized, and disconnected connection generations cannot commit stale snapshots. Interrupted session creation recovers or retries the same idempotent session ID. Conditional forms follow native multi-select and cascading visibility semantics.
+Recovery combines an exclusive durable session-log cursor with canonical HTTP snapshots. Cursor and transcript projection commit atomically in SQLite. Canonical message order wins over timestamps. Pagination follows native cursors without adding `order` to cursor requests. Catch-up preserves older loaded history and refreshes it after reconnect. The general event stream is not treated as a replay source. Refresh and older-page loads are serialized, and disconnected connection generations cannot commit stale snapshots. Interrupted session creation recovers or retries the same idempotent session ID. Conditional forms follow native multi-select and cascading visibility semantics. Suggested string choices remain available alongside custom answers; external steps require explicit acknowledgement. A complete history response replaces the cached projection, including any removed prefix, while saved transcript rows remain in SQLite.
 
 ## Validation boundary
 

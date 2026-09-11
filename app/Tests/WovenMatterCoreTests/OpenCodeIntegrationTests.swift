@@ -454,6 +454,53 @@ struct OpenCodeIntegrationTests {
         #expect(unanswered.map { $0["key"].text } == ["choices", "number"])
     }
 
+    @Test func formReplyRequiresExternalAcknowledgementAndPreservesCustomAnswers() throws {
+        let fields: [OpenCodeValue] = [
+            ["key": "verification", "type": "external", "url": "https://example.com/verify"],
+            ["key": "choice", "type": "string", "required": .bool(true), "custom": .bool(true),
+             "options": .array([["label": "Suggested", "value": "suggested"]])],
+            ["key": "amount", "type": "integer", "minimum": .number(1), "maximum": .number(3)],
+            ["key": "details", "type": "string", "when": .array([["key": "choice", "op": "eq", "value": "suggested"]])]
+        ]
+        var answers: [String: OpenCodeValue] = ["choice": "My own answer", "amount": "2", "details": "stale hidden answer"]
+        #expect(throws: OpenCodeError.self) { try OpenCodeFormAnswers.reply(fields: fields, answers: answers) }
+        answers["verification"] = .bool(false)
+        #expect(throws: OpenCodeError.self) { try OpenCodeFormAnswers.reply(fields: fields, answers: answers) }
+        answers["verification"] = .bool(true)
+        let custom = try OpenCodeFormAnswers.reply(fields: fields, answers: answers)
+        #expect(custom == ["verification": .bool(true), "choice": "My own answer", "amount": .number(2)])
+        answers["choice"] = "suggested"
+        #expect(try OpenCodeFormAnswers.reply(fields: fields, answers: answers)["details"] == "stale hidden answer")
+        answers["amount"] = "2.5"
+        #expect(throws: OpenCodeError.self) { try OpenCodeFormAnswers.reply(fields: fields, answers: answers) }
+        answers["amount"] = "4"
+        #expect(throws: OpenCodeError.self) { try OpenCodeFormAnswers.reply(fields: fields, answers: answers) }
+    }
+
+    @Test func completeServerHistoryDoesNotResurrectRemovedCachedPrefix() async throws {
+        let fixture = OpenCodeFixture(); FixtureProtocol.fixture = fixture
+        fixture.messages = [message("msg_removed"), message("msg_kept"), message("msg_last")]
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let database = try WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+        let id = try database.createLocalACPSession(runtimeKind: .opencode, title: "History", ownerDeviceID: UUID(), openCodeAssociation: ("fixture", "ses_fixture"))
+        let link = OpenCodeSessionLink(conversationID: id, connectionID: "fixture", sessionID: "ses_fixture")
+        let session = fixtureSession()
+        let coordinator = OpenCodeSessionCoordinator(database: database, clientFactory: { OpenCodeHTTPClient(connection: $0, session: session) })
+        try await coordinator.connect(connection())
+        try await coordinator.refresh(link)
+        fixture.messages.removeFirst()
+        try await coordinator.refresh(link, recoverHistory: true)
+        let recovered = try #require(try database.openCodeSnapshot(conversationID: id))
+        #expect(recovered.messages == fixture.messages)
+        #expect(recovered.olderCursor == nil)
+        // The saved transcript is retained, but the canonical visible projection
+        // no longer includes content removed by another client.
+        #expect(try database.conversationContent(id: id).messages.count == 3)
+        await coordinator.shutdown()
+    }
+
     private func connection() throws -> OpenCodeConnection { try .init(identity: "fixture", url: URL(string: "http://fixture.invalid")!, password: "fixture") }
     private func fixtureSession() -> URLSession {
         let config = URLSessionConfiguration.ephemeral; config.protocolClasses = [FixtureProtocol.self]

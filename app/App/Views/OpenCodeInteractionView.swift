@@ -39,11 +39,16 @@ struct OpenCodeInteractions: View {
     }
 }
 
+private enum OpenCodeStringAnswerChoice: Hashable {
+    case none, option(String), custom
+}
+
 struct OpenCodeFormView: View {
     let form: OpenCodeValue
     let onReply: (OpenCodeValue?) -> Void
     @State private var answers: [String: OpenCodeValue] = [:]
     @State private var invalid: String?
+    @State private var customStringKeys: Set<String> = []
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text(form["title"].text).fontWeight(.semibold)
@@ -69,6 +74,10 @@ struct OpenCodeFormView: View {
             if let url = URL(string: field["url"].text), ["https", "http"].contains(url.scheme) {
                 Link("Open " + (field["title"].string ?? "verification"), destination: url)
             }
+            Toggle("I’ve completed this step", isOn: Binding(
+                get: { answers[key]?.bool ?? false }, set: { answers[key] = .bool($0) }
+            ))
+            .toggleStyle(DashboardSwitchToggleStyle())
         case "boolean":
             Toggle("Yes", isOn: Binding(get: { answers[key]?.bool ?? false }, set: { answers[key] = .bool($0) }))
                 .toggleStyle(DashboardSwitchToggleStyle())
@@ -81,11 +90,32 @@ struct OpenCodeFormView: View {
                 .toggleStyle(DashboardSwitchToggleStyle())
             }
             if field["custom"].bool { customInput(field) }
-        case "string" where !field["options"].array.isEmpty && !field["custom"].bool:
-            Picker("Answer", selection: Binding(get: { answers[key]?.text ?? "" }, set: { answers[key] = .string($0) })) {
-                Text("Choose…").tag("")
-                ForEach(field["options"].array, id: \.self) { Text($0["label"].text).tag($0["value"].text) }
+        case "string" where !field["options"].array.isEmpty:
+            Picker("Answer", selection: Binding<OpenCodeStringAnswerChoice>(get: {
+                let value = answers[key]?.text ?? ""
+                if customStringKeys.contains(key) { return .custom }
+                if field["options"].array.contains(where: { $0["value"].text == value }) { return .option(value) }
+                return field["custom"].bool && !value.isEmpty ? .custom : .none
+            }, set: { choice in
+                customStringKeys.remove(key)
+                switch choice {
+                case .none: answers[key] = .null
+                case .option(let value): answers[key] = .string(value)
+                case .custom: customStringKeys.insert(key); answers[key] = .string("")
+                }
+            })) {
+                Text("Choose…").tag(OpenCodeStringAnswerChoice.none)
+                ForEach(field["options"].array, id: \.self) {
+                    Text($0["label"].text).tag(OpenCodeStringAnswerChoice.option($0["value"].text))
+                }
+                if field["custom"].bool { Text("Custom answer…").tag(OpenCodeStringAnswerChoice.custom) }
             }.labelsHidden()
+            if field["custom"].bool && (customStringKeys.contains(key) || (answers[key]?.string.map { value in
+                !value.isEmpty && !field["options"].array.contains { $0["value"].text == value }
+            } ?? false)) {
+                TextField("Your answer", text: Binding(get: { answers[key]?.text ?? "" }, set: { customStringKeys.insert(key); answers[key] = .string($0) }))
+                    .textFieldStyle(.roundedBorder)
+            }
         default:
             TextField(field["placeholder"].string ?? "Answer", text: Binding(get: {
                 if let number = answers[key]?.number { return String(number) }
@@ -102,21 +132,10 @@ struct OpenCodeFormView: View {
         })).textFieldStyle(.roundedBorder)
     }
     private func submit() {
-        var result: [String: OpenCodeValue] = [:]
-        for field in OpenCodeFormAnswers.activeFields(form["fields"].array, answers: answers) where field["type"].text != "external" {
-            let key = field["key"].text
-            var value = answers[key] ?? (field["type"].text == "boolean" ? .bool(false) : .null)
-            if ["number", "integer"].contains(field["type"].text), value == .string("") { value = .null }
-            if ["number", "integer"].contains(field["type"].text), !value.isNull {
-                guard let parsed = value.number ?? Double(value.text), parsed.isFinite else { invalid = "Enter a number for \(key)."; return }
-                guard field["type"].text != "integer" || parsed.rounded() == parsed else { invalid = "Enter a whole number for \(key)."; return }
-                if let minimum = field["minimum"].number, parsed < minimum { invalid = "\(key) must be at least \(minimum)."; return }
-                if let maximum = field["maximum"].number, parsed > maximum { invalid = "\(key) must be at most \(maximum)."; return }
-                value = .number(parsed)
-            }
-            if field["required"].bool && (value.isNull || value == .string("") || value == .array([])) { invalid = "Complete \(field["title"].string ?? key)."; return }
-            if !value.isNull { result[key] = value }
-        }
-        invalid = nil; onReply(.object(result))
+        do {
+            let result = try OpenCodeFormAnswers.reply(fields: form["fields"].array, answers: answers)
+            invalid = nil
+            onReply(result)
+        } catch { invalid = error.localizedDescription }
     }
 }
