@@ -197,16 +197,16 @@ test('Hermes check is explicit, bounded and reports allowlisted status without a
   await f.service.inventory(h)
   assert.equal(calls.some(c => c.endsWith('update --check')), false)
   let result = await f.service.inventory(h, true)
-  assert.match(result.notice, /reports an update available/)
+  assert.match(result.notice, /Update available/)
   assert.doesNotMatch(result.notice, /secret-checkout/)
-  assert.equal(result.updateAvailable, false)
+  assert.equal(result.updateAvailable, true)
   assert.equal(result.components[0].latestVersion, null)
   output = 'Already up to date.'
   result = await f.service.inventory(h, true)
-  assert.match(result.notice, /reports this checkout is up to date/)
+  assert.match(result.notice, /Up to date/)
   output = 'unexpected private output'
   result = await f.service.inventory(h, true)
-  assert.match(result.notice, /information is unavailable/)
+  assert.match(result.notice, /Latest unavailable/)
   assert.doesNotMatch(result.notice, /unexpected private output/)
 })
 
@@ -244,4 +244,52 @@ test('npm action rejects foreign packages, tags and incompatible OpenCode pins; 
   const failed = await finished(other.service)
   assert.equal(failed.operation.error, 'opencode_version_incompatible')
   assert.equal(other.executions, 0)
+})
+
+test('Hermes performs the official bounded update only on a clean idle checkout and verifies ACP afterward', async t => {
+  const root = await mkdtemp(resolve(tmpdir(), 'wm-hermes-update-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  await mkdir(resolve(root, 'venv/bin'), { recursive: true })
+  await writeFile(resolve(root, 'pyproject.toml'), '[project]\nname = "hermes-agent"\n')
+  await writeFile(resolve(root, 'venv/bin/python'), '')
+  const launcher = resolve(root, 'launcher')
+  await writeFile(launcher, `#!/bin/bash\nexec "${root}/venv/bin/python" "${root}/hermes" "$@"\n`)
+  const h = { id: 'hermes', displayName: 'Hermes', command: 'hermes', cliCommand: 'hermes' }
+  let dirty = true, active = false, updated = false, stale = false
+  const calls = []
+  const service = createRuntimeMaintenance({ catalog: new Map([['hermes', h]]), workspaceRoot: root,
+    environment: () => ({ HOME: root }), acquireLock: async () => () => {},
+    execute: async (command, _env, _cwd, timeout) => {
+      calls.push(command)
+      if (command.startsWith('command -v')) return { code: 0, output: launcher }
+      if (command.includes('rev-parse')) return { code: 0, output: await import('node:fs/promises').then(fs => fs.realpath(root)) }
+      if (command.includes('status --porcelain')) return { code: 0, output: dirty ? ' M user.py' : '' }
+      if (command.endsWith('update --plan')) return { code: 0, output: `Update plan:\n  Install: git (v0.21.2)\n  ${active ? 'Running services to restart (1):' : 'Running Hermes services: none detected — code swap only.'}` }
+      if (command.endsWith('update --help')) return { code: 0, output: '--yes --check --plan' }
+      if (command.endsWith('update --yes')) { assert.equal(timeout, 600000); updated = true; return { code: 0, output: 'Update complete' } }
+      if (command.endsWith('update --check')) return { code: 0, output: updated && !stale ? 'Already up to date.' : 'Update available: 1 commit' }
+      if (command === 'ps -eo pid=,args=') return { code: 0, output: '' }
+      return { code: 0, output: command.includes('importlib.metadata') ? '0.9.0' : '0.21.2' }
+    },
+  })
+  await service.start(h, 'update', { confirmed: true })
+  assert.equal((await finished(service)).operation.error, 'hermes_checkout_dirty_commit_or_stash_then_retry')
+  assert.equal(updated, false)
+  dirty = false; active = true
+  await service.start(h, 'update', { confirmed: true })
+  assert.equal((await finished(service)).operation.error, 'hermes_update_plan_not_idle')
+  assert.equal(updated, false)
+  active = false; stale = true
+  await service.start(h, 'update', { confirmed: true })
+  assert.equal((await finished(service)).operation.error, 'hermes_update_verification_failed')
+  stale = false
+  await service.start(h, 'update', { confirmed: true })
+  const final = await finished(service)
+  assert.equal(final.operation.status, 'succeeded')
+  assert.equal(final.updateAvailable, false)
+  assert.equal(final.versionCheckAvailable, true)
+  assert.equal(final.components.find(c => c.id === 'acp-sdk').installedVersion, '0.9.0')
+  assert.equal(final.components.find(c => c.id === 'transport').installedVersion, '0.21.2')
+  assert.ok(calls.some(c => c.endsWith('acp --check')))
+  assert.equal(calls.some(c => c.includes('--no-restart') || c.includes('--keep-stash') || c.includes('install.sh')), false)
 })

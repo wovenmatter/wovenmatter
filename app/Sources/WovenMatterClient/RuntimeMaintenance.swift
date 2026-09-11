@@ -24,7 +24,9 @@ public struct RuntimeInventory: Equatable, Sendable {
     public let components: [RuntimeComponent]
     public let limitation: String?
     public var updateNotice: String? = nil
-    public var manualUpdateAvailable = false
+    public var detectedUpdateAvailable = false
+    public var versionCheckAvailable: Bool? = nil
+    public var updateAvailable: Bool { outdated || detectedUpdateAvailable }
     public var isInstalled: Bool { !components.isEmpty && components.allSatisfy { !$0.required || ($0.present && $0.verified) } }
     public var outdated: Bool { components.contains(where: \.outdated) }
     public var summary: String {
@@ -33,7 +35,7 @@ public struct RuntimeInventory: Equatable, Sendable {
                 + (component.outdated ? " → \(component.latest!)" : "")
         }.joined(separator: " · ")
     }
-    public var latestUnavailable: Bool { components.contains { $0.required && !$0.name.hasPrefix("Bundled ") && $0.latest == nil } }
+    public var latestUnavailable: Bool { if kind == .hermes { return versionCheckAvailable == false }; return components.contains { $0.required && !$0.name.hasPrefix("Bundled ") && $0.latest == nil } }
 }
 
 public enum RuntimeMaintenance {
@@ -107,6 +109,23 @@ public enum RuntimeMaintenance {
                     present: found, verified: overrideVersion != nil))
             }
         }
+        if kind == .hermes, let executable {
+            let environment = ProcessInfo.processInfo.environment.merging(["PATH": LocalACPRuntimeResolver.executableSearchPath]) { _, new in new }
+            let version = try? LocalACPProcessRunner.run(executableURL: executable, arguments: ["acp", "--version"], environment: environment, timeout: 15)
+            let check = try? LocalACPProcessRunner.run(executableURL: executable, arguments: ["acp", "--check"], environment: environment, timeout: 30)
+            components.append(RuntimeComponent(name: "Native ACP", executable: executable,
+                installed: version?.succeeded == true ? normalizeVersion(version!.stdout) : nil, latest: latest,
+                package: "hermes-agent", required: true, present: check?.succeeded == true,
+                verified: check?.succeeded == true && version?.succeeded == true))
+            if let python = hermesPython(executable) {
+                let metadata = try? LocalACPProcessRunner.run(executableURL: python,
+                    arguments: ["-c", "import importlib.metadata; print(importlib.metadata.version('agent-client-protocol'))"], environment: environment, timeout: 15)
+                if metadata?.succeeded == true, let version = metadata.flatMap({ normalizeVersion($0.stdout) }) {
+                    components.append(RuntimeComponent(name: "ACP SDK", executable: nil, installed: version, latest: nil,
+                        package: "agent-client-protocol", required: false, present: true))
+                }
+            }
+        }
         let limitation: String? = switch kind {
         case .codex: ProcessInfo.processInfo.environment["CODEX_PATH"]?.isEmpty == false
             ? "Chat has an inherited CODEX_PATH override; its version is reported separately."
@@ -116,17 +135,19 @@ public enum RuntimeMaintenance {
             : "Chat uses the adapter’s bundled Claude SDK."
         case .opencode: "Service compatibility is pinned to \(OpenCodeConnection.supportedVersion). Newer releases require app support; the running service is not restarted."
         case .openclaw: "Local CLI only. Linked gateways and their provider runtimes are managed on the gateway host."
-        case .hermes: "Hermes updates can restart services across profiles. Update in Terminal after reviewing hermes update --plan."
+        case .hermes: "Native ACP; updates require idle Hermes services."
         default: nil
         }
         var inventory = RuntimeInventory(kind: kind, components: components, limitation: limitation)
+        if kind == .hermes, checkLatest { inventory.versionCheckAvailable = false }
         if kind == .hermes, checkLatest, let executable {
             let result = try? LocalACPProcessRunner.run(executableURL: executable, arguments: ["update", "--check"],
                 environment: ProcessInfo.processInfo.environment.merging(["PATH": resolver.executable(named: "hermes")?.deletingLastPathComponent().path ?? "/usr/bin:/bin"]) { old, new in new + ":" + old }, timeout: 30)
             let check = result?.succeeded == true ? hermesCheck(result!.stdout) : nil
-            inventory.manualUpdateAvailable = check == true
-            inventory.updateNotice = check.map { $0 ? "Hermes reports an update available. Review its update plan in Terminal." : "Hermes reports this checkout is up to date." }
-                ?? "Hermes update information is unavailable."
+            inventory.detectedUpdateAvailable = check == true
+            inventory.versionCheckAvailable = check != nil
+            inventory.updateNotice = check.map { $0 ? "Update available." : "Up to date." }
+                ?? "Latest unavailable."
         }
         return inventory
     }
@@ -140,6 +161,10 @@ public enum RuntimeMaintenance {
 
     public static func updateNative(_ kind: AgentRuntimeKind, executable: URL?) async throws {
         guard let executable else { throw RuntimeMaintenanceError.verification }
+        if kind == .hermes {
+            try await Task.detached(priority: .utility) { try updateHermes(executable: executable) }.value
+            return
+        }
         if kind == .openclaw {
             let version = try await registryVersion("openclaw")
             _ = try await LocalACPRuntimeInstaller().installPackage("openclaw", version: version, executableName: "openclaw")
@@ -159,6 +184,78 @@ public enum RuntimeMaintenance {
         }.value
         guard result.succeeded else { throw LocalACPRuntimeInstallError.installFailed(result.combinedOutput) }
     }
+
+    // Official update parser exposes --yes/--plan, but no --no-restart. A
+    // confirmed idle fleet is required because the updater owns all profiles.
+    static func hermesPlanAllowsUpdate(_ output: String) -> Bool {
+        let lines = output.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        return lines.contains("Update plan:")
+            && lines.contains(where: { $0 == "Install: git" || $0.hasPrefix("Install: git (") })
+            && lines.contains("Running Hermes services: none detected — code swap only.")
+            && !output.contains("NOT updatable in place") && !output.contains("Running services to restart")
+    }
+
+    static func hermesHasActiveProcesses(_ output: String) -> Bool {
+        output.components(separatedBy: .newlines).contains { line in
+            line.split(whereSeparator: \.isWhitespace).contains { token in
+                let name = String(token).split(separator: "/").last.map(String.init) ?? ""
+                return ["hermes", "hermes-acp", "hermes-agent", "hermes_cli.main", "acp_adapter.entry"].contains(name)
+            }
+        }
+    }
+
+    static func updateHermes(executable: URL,
+        run: (URL, [String], TimeInterval) throws -> LocalACPProcessResult = { executable, arguments, timeout in
+            try LocalACPProcessRunner.run(executableURL: executable, arguments: arguments,
+                environment: ProcessInfo.processInfo.environment.merging(["PATH": LocalACPRuntimeResolver.executableSearchPath, "GIT_TERMINAL_PROMPT": "0"]) { _, new in new }, timeout: timeout)
+        }
+    ) throws {
+        guard let installation = hermesInstallation(executable) else { throw RuntimeMaintenanceError.hermesCheckoutUnverified }
+        let git = URL(fileURLWithPath: "/usr/bin/git")
+        let top = try run(git, ["-C", installation.root.path, "rev-parse", "--show-toplevel"], 15)
+        guard top.succeeded, URL(fileURLWithPath: top.stdout.trimmingCharacters(in: .whitespacesAndNewlines)).resolvingSymlinksInPath() == installation.root.resolvingSymlinksInPath() else { throw RuntimeMaintenanceError.hermesCheckoutUnverified }
+        let status = try run(git, ["-C", installation.root.path, "status", "--porcelain", "--untracked-files=normal"], 15)
+        guard status.succeeded, status.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw RuntimeMaintenanceError.hermesCheckoutDirty }
+        let plan = try run(executable, ["update", "--plan"], 30)
+        guard plan.succeeded, hermesPlanAllowsUpdate(plan.stdout) else { throw RuntimeMaintenanceError.hermesUpdateUnsafe }
+        let processes = try run(URL(fileURLWithPath: "/bin/ps"), ["-axo", "pid=,command="], 15)
+        guard processes.succeeded, !hermesHasActiveProcesses(processes.stdout) else { throw RuntimeMaintenanceError.busy }
+        let help = try run(executable, ["update", "--help"], 15)
+        guard help.succeeded, help.stdout.contains("--yes") else { throw RuntimeMaintenanceError.unavailable }
+        let result = try run(executable, ["update", "--yes"], 600)
+        guard result.succeeded else { throw LocalACPRuntimeInstallError.installFailed(result.combinedOutput) }
+        let checked = try run(executable, ["update", "--check"], 30)
+        let acp = try run(executable, ["acp", "--check"], 30)
+        let version = try run(executable, ["acp", "--version"], 15)
+        guard checked.succeeded, hermesCheck(checked.stdout) == false, acp.succeeded,
+              version.succeeded, normalizeVersion(version.stdout) != nil else { throw RuntimeMaintenanceError.verification }
+    }
+
+    static func hermesInstallation(_ executable: URL) -> (root: URL, python: URL)? {
+        let resolved = executable.resolvingSymlinksInPath()
+        var candidates: [(URL, URL)] = []
+        // Current official installer writes this literal two-path shell shim.
+        // Parse paths only; never source or evaluate the launcher as shell code.
+        if let text = try? String(contentsOf: resolved, encoding: .utf8), text.utf8.count < 16_384,
+           let regex = try? NSRegularExpression(pattern: #"(?m)^exec "(/[^"\n]+)" "(/[^"\n]+/hermes)" "\$@"$"#),
+           let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+           let p = Range(match.range(at: 1), in: text), let entry = Range(match.range(at: 2), in: text) {
+            candidates.append((URL(fileURLWithPath: String(text[entry])).deletingLastPathComponent(), URL(fileURLWithPath: String(text[p]))))
+        }
+        let bin = resolved.deletingLastPathComponent()
+        if bin.lastPathComponent == "bin", ["venv", ".venv"].contains(bin.deletingLastPathComponent().lastPathComponent) {
+            candidates.append((bin.deletingLastPathComponent().deletingLastPathComponent(), bin.appending(path: "python")))
+        }
+        return candidates.first { root, python in
+            let expected = [root.appending(path: "venv/bin/python").path, root.appending(path: ".venv/bin/python").path,
+                root.appending(path: "venv/bin/python3").path, root.appending(path: ".venv/bin/python3").path]
+            let metadata = try? String(contentsOf: root.appending(path: "pyproject.toml"), encoding: .utf8)
+            return expected.contains(python.path) && FileManager.default.isExecutableFile(atPath: python.path)
+                && metadata?.range(of: #"(?m)^name\s*=\s*["']hermes-agent["']\s*$"#, options: .regularExpression) != nil
+        }
+    }
+
+    static func hermesPython(_ executable: URL) -> URL? { hermesInstallation(executable)?.python }
 
     public static func npmPackage(_ kind: AgentRuntimeKind) -> String? {
         switch kind {
@@ -291,12 +388,15 @@ public enum RuntimeMaintenance {
 }
 
 public enum RuntimeMaintenanceError: LocalizedError {
-    case unavailable, verification, busy, timeout
+    case unavailable, verification, busy, timeout, hermesCheckoutUnverified, hermesCheckoutDirty, hermesUpdateUnsafe
     public var errorDescription: String? {
         switch self {
         case .unavailable: "Latest version information is unavailable. Retry when the update source is reachable."
         case .verification: "Installation finished, but the selected runtime or its required dependencies could not be verified. Retry installation."
         case .timeout: "The runtime command timed out. Retry after checking the installation."
+        case .hermesUpdateUnsafe: "Hermes Update requires an in-place Git install with no active Hermes services. Stop its services and retry."
+        case .hermesCheckoutUnverified: "The Hermes source checkout could not be verified. Repair its launcher and retry."
+        case .hermesCheckoutDirty: "Hermes has local source changes. Commit or stash them, then retry Update."
         case .busy: "Wait for the current runtime operation or conversation to finish."
         }
     }

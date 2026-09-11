@@ -28,9 +28,20 @@ export function validatedPackageSpec(harness, supplied) {
   if (harness.id === 'opencode' && spec !== pinned) throw failure('opencode_version_incompatible')
   return spec
 }
+export function hermesCheck(output) {
+  const available = /Update available:|Update available \(behind /.test(output)
+  const current = output.includes('Already up to date.')
+  return available === current ? null : available
+}
+export function hermesPlanAllowsUpdate(output) {
+  const lines = output.split('\n').map(line => line.trim())
+  return lines.includes('Update plan:') && lines.some(line => line === 'Install: git' || line.startsWith('Install: git ('))
+    && lines.includes('Running Hermes services: none detected — code swap only.')
+    && !output.includes('NOT updatable in place') && !output.includes('Running services to restart')
+}
 export function diagnosticCategory(error) {
   const text = String(error ?? '')
-  const allowed = ['runtime_active_stop_conversations_or_server_first', 'active_conversation_check_unavailable', 'runtime_active_or_operation_in_progress', 'runtime_lock_unavailable', 'hermes_update_requires_host_terminal', 'source_digest_required', 'installer_digest_changed', 'installer_download_failed', 'installer_download_timed_out', 'runtime_preferences_save_failed', 'bundled_dependency_refresh_failed']
+  const allowed = ['runtime_active_stop_conversations_or_server_first', 'active_conversation_check_unavailable', 'runtime_active_or_operation_in_progress', 'runtime_lock_unavailable', 'hermes_checkout_unverified', 'hermes_checkout_dirty_commit_or_stash_then_retry', 'hermes_update_plan_not_idle', 'hermes_update_flags_unavailable', 'hermes_update_verification_failed', 'source_digest_required', 'installer_digest_changed', 'installer_download_failed', 'installer_download_timed_out', 'runtime_preferences_save_failed', 'bundled_dependency_refresh_failed']
   if (allowed.includes(text)) return text
   if (text.startsWith('Installer exited ')) return 'installer_failed'
   if (text === 'Installer finished but required components could not be verified.') return 'installation_verification_failed'
@@ -79,6 +90,28 @@ async function packageRoot(path, name, dependency = false) {
   return null
 }
 
+async function hermesInstallation(executable) {
+  let resolved
+  try { resolved = await realpath(executable) } catch { return null }
+  const candidates = []
+  try {
+    const text = await readFile(resolved, 'utf8')
+    const match = text.length < 16384 ? text.match(/^exec "(\/[^"\n]+)" "(\/[^"\n]+\/hermes)" "\$@"$/m) : null
+    if (match) candidates.push({ root: dirname(match[2]), python: match[1] })
+  } catch {}
+  const bin = dirname(resolved)
+  if (bin.endsWith('/venv/bin') || bin.endsWith('/.venv/bin')) candidates.push({ root: dirname(dirname(bin)), python: resolve(bin, 'python') })
+  for (const candidate of candidates) {
+    if (!['venv/bin/python', '.venv/bin/python', 'venv/bin/python3', '.venv/bin/python3'].some(path => resolve(candidate.root, path) === candidate.python)) continue
+    try {
+      await realpath(candidate.python)
+      const project = await readFile(resolve(candidate.root, 'pyproject.toml'), 'utf8')
+      if (/^name\s*=\s*["']hermes-agent["']\s*$/m.test(project)) return candidate
+    } catch {}
+  }
+  return null
+}
+
 export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, verifiedInstaller, hasActiveRuntime = async () => false, execute = runHost, fetchImplementation = fetch, acquireLock = acquireHostLock }) {
   const states = new Map(), operations = new Map()
   const statePath = resolve(workspaceRoot, '.wovenmatter/runtime-preferences.json')
@@ -123,9 +156,21 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
     if (h.id === 'opencode' && main.installedVersion !== h.install.package.split('@').at(-1)) main.installed = false
     const components = [main]
     let adapterRoot = null, dependencyName = null, dependencyRange = null
-    if (h.transportCheckCommand && !h.adapterPackage && h.id !== 'opencode') {
+    if (h.transportCheckCommand && !h.adapterPackage && !['opencode', 'hermes'].includes(h.id)) {
       const probe = main.installed ? await run(h.id === 'openclaw' ? 'openclaw gateway --help' : h.transportCheckCommand) : null
       components.push({ id: 'transport', displayName: h.id === 'openclaw' ? 'Gateway command' : h.transport + ' transport', path: main.path, installedVersion: main.installedVersion, latestVersion: null, required: true, installed: probe?.code === 0 })
+    }
+    if (h.id === 'hermes') {
+      const version = main.installed ? await run(`${quote(main.path)} acp --version`) : null
+      const check = main.installed ? await run(`${quote(main.path)} acp --check`, 30000) : null
+      components.push({ id: 'transport', displayName: 'Native ACP', path: main.path,
+        installedVersion: version?.code === 0 ? normalizedVersion(version.output) : null,
+        latestVersion: null, required: true, installed: check?.code === 0 && version?.code === 0 && Boolean(normalizedVersion(version.output)) })
+      const installation = main.path ? await hermesInstallation(main.path) : null
+      if (installation) {
+        const metadata = await run(`${quote(installation.python)} -c ${quote("import importlib.metadata; print(importlib.metadata.version('agent-client-protocol'))")}`)
+        if (metadata.code === 0 && normalizedVersion(metadata.output)) components.push({ id: 'acp-sdk', displayName: 'ACP SDK', path: null, installedVersion: normalizedVersion(metadata.output), latestVersion: null, required: false, installed: true })
+      }
     }
     if (h.adapterPackage) {
       components.push(await component('signin', h.cliCommand + ' (sign-in CLI)', h.cliCommand))
@@ -150,11 +195,10 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
     if (checkLatest) {
       if (h.id === 'hermes') {
         const result = main.installed ? await run(`${quote(main.path)} update --check`, 30000) : null
-        const available = /Update available:|Update available \(behind /.test(result?.output ?? '')
-        const current = (result?.output ?? '').includes('Already up to date.')
-        s.hermesNotice = result?.code === 0 && available !== current
-          ? available ? 'Hermes reports an update available. Review its update plan in Terminal on this host.' : 'Hermes reports this checkout is up to date.'
-          : 'Hermes update information is unavailable.'
+        const available = result?.code === 0 ? hermesCheck(result.output) : null
+        s.hermesUpdateAvailable = available === true
+        s.versionCheckAvailable = available !== null
+        s.hermesNotice = available === null ? 'Latest unavailable.' : available ? 'Update available.' : 'Up to date.'
       }
       const packageName = h.adapterPackage ?? ({ pi: '@earendil-works/pi-coding-agent', openclaw: 'openclaw', opencode: '@opencode/cli' })[h.id]
       if (packageName) main.latestVersion = await latest(packageName, h.id === 'opencode' ? h.install.package.split('@').at(-1) : 'latest')
@@ -177,6 +221,7 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
         }
       }
     } else for (const c of components) { const cached = previous.find(p => p.id === c.id); c.latestVersion = cached?.latestVersion ?? null; if (c.id === 'bundled') c.updateTargetVersion = cached?.updateTargetVersion ?? null }
+    if (checkLatest && h.id !== 'hermes') s.versionCheckAvailable = main.latestVersion !== null
     s.components = components
     const storedOperation = operations.get(h.id) ?? null
     const operation = storedOperation && !storedOperation.finishedAt ? { ...storedOperation, status: 'running' } : storedOperation
@@ -188,13 +233,13 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
       s.enabled = installed
       await persist()
     }
-    let notice = h.id === 'hermes' ? 'Hermes updates remain manual: review hermes update --plan on this host; its updater may restart other profiles.' : h.id === 'opencode' ? `OpenCode v2 compatibility is pinned to ${h.install.package.split('@').at(-1)}.` : h.adapterPackage ? 'Chat uses the adapter and bundled engine shown here; sign-in CLI updates do not update that engine.' : null
+    let notice = h.id === 'hermes' ? 'Native ACP; updates require idle Hermes services.' : h.id === 'opencode' ? `OpenCode v2 compatibility is pinned to ${h.install.package.split('@').at(-1)}.` : h.adapterPackage ? 'Chat uses the adapter and bundled engine shown here; sign-in CLI updates do not update that engine.' : null
     if (h.id === 'hermes' && s.hermesNotice) notice += ' ' + s.hermesNotice
     const bundled = components.find(c => c.id === 'bundled')
     if (bundled?.latestVersion && bundled.latestVersion !== bundled.updateTargetVersion) notice += ' The newest bundled dependency may exceed the adapter’s declared compatibility; only compatible dependency updates are offered.'
     if (checkLatest && h.id !== 'hermes' && (main.latestVersion === null || (bundled && (!bundled.latestVersion || !bundled.updateTargetVersion)))) notice = [notice, 'Latest version information is unavailable.'].filter(Boolean).join(' ')
     s.notice = checkLatest ? notice : notice ?? s.notice ?? null
-    return { id: h.id, displayName: h.displayName, enabled: s.enabled, visible: s.visible, installed, components, operation, failureCount: s.failureCount, diagnosticPrompt: s.failureCount >= 2 ? `Diagnose ${h.displayName} on this remote workspace host (${process.platform}/${process.arch}). Do not modify other hosts.\n${components.map(c => `${c.displayName}: installed=${c.installedVersion ?? 'unknown'} latest=${c.latestVersion ?? 'unknown'} verified=${c.installed}`).join('\n')}\nFailure: ${diagnosticCategory(operation?.error)}` : null, notice: s.notice, updateAvailable: h.id !== 'hermes' && components.some(c => precedes(c.installedVersion, updateTarget(c))) }
+    return { id: h.id, displayName: h.displayName, enabled: s.enabled, visible: s.visible, installed, components, operation, failureCount: s.failureCount, diagnosticPrompt: s.failureCount >= 2 ? `Diagnose ${h.displayName} on this remote workspace host (${process.platform}/${process.arch}). Do not modify other hosts.\n${components.map(c => `${c.displayName}: installed=${c.installedVersion ?? 'unknown'} latest=${c.latestVersion ?? 'unknown'} verified=${c.installed}`).join('\n')}\nFailure: ${diagnosticCategory(operation?.error)}` : null, notice: s.notice, versionCheckAvailable: s.versionCheckAvailable ?? null, updateAvailable: h.id === 'hermes' ? s.hermesUpdateAvailable === true : components.some(c => precedes(c.installedVersion, updateTarget(c))) }
   }
   async function busy(h) {
     if (await hasActiveRuntime(h.id)) return true
@@ -216,12 +261,25 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
       let unlock
       try {
         unlock = await acquireLock(resolve(environment().HOME, '.wovenmatter/runtime-operation.lock'), environment(), workspaceRoot)
-        if (action === 'update' && h.id === 'hermes') throw failure('hermes_update_requires_host_terminal')
         if (await busy(h)) throw failure('runtime_active_stop_conversations_or_server_first')
         let command
-        const pkg = h.install.kind === 'npm-global' ? validatedPackageSpec(h, body.packageSpec) : null
+        const pkg = h.install?.kind === 'npm-global' ? validatedPackageSpec(h, body.packageSpec) : null
         const adapter = h.adapterPackage ? ` && npm install --global --prefix "$HOME/.local" ${quote(h.adapterPackage + '@latest')}` : ''
-        if (pkg) command = `npm install --global --prefix "$HOME/.local" ${quote(pkg)}${adapter}`
+        if (h.id === 'hermes' && action === 'update') {
+          const executable = await component('runtime', h.command, h.command)
+          if (!executable.installed) throw failure('runtime_requirements_not_verified')
+          const installation = await hermesInstallation(executable.path)
+          if (!installation) throw failure('hermes_checkout_unverified')
+          const top = await run(`git -C ${quote(installation.root)} rev-parse --show-toplevel`)
+          if (top.code !== 0 || resolve(top.output.trim()) !== await realpath(installation.root)) throw failure('hermes_checkout_unverified')
+          const status = await run(`git -C ${quote(installation.root)} status --porcelain --untracked-files=normal`)
+          if (status.code !== 0 || status.output.trim()) throw failure('hermes_checkout_dirty_commit_or_stash_then_retry')
+          const plan = await run(`${quote(executable.path)} update --plan`, 30000)
+          if (plan.code !== 0 || !hermesPlanAllowsUpdate(plan.output)) throw failure('hermes_update_plan_not_idle')
+          const help = await run(`${quote(executable.path)} update --help`)
+          if (help.code !== 0 || !help.output.includes('--yes')) throw failure('hermes_update_flags_unavailable')
+          command = `${quote(executable.path)} update --yes`
+        } else if (pkg) command = `npm install --global --prefix "$HOME/.local" ${quote(pkg)}${adapter}`
         else {
           if (typeof body.sourceSHA256 !== 'string') throw failure('source_digest_required')
           const installer = await verifiedInstaller(h, body.sourceSHA256)
@@ -229,7 +287,7 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
         }
         if (await busy(h)) throw failure('runtime_active_stop_conversations_or_server_first')
         const before = await inventory(h)
-        const result = await run(command, 300000)
+        const result = await run(command, h.id === 'hermes' && action === 'update' ? 600000 : 300000)
         op.output = sanitize(result.output, environment())
         if (result.code !== 0) throw failure(`Installer exited ${result.code}. ${op.output}`)
         if (h.adapterPackage) {
@@ -244,7 +302,8 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
             if (refreshed.code !== 0) throw failure('bundled_dependency_refresh_failed')
           }
         }
-        const after = await inventory(h)
+        const after = await inventory(h, h.id === 'hermes' && action === 'update')
+        if (h.id === 'hermes' && action === 'update' && (!after.versionCheckAvailable || after.updateAvailable)) throw failure('hermes_update_verification_failed')
         if (!after.installed) throw failure('Installer finished but required components could not be verified.')
         if (action === 'update' && before.components.some(c => precedes(c.installedVersion, updateTarget(c)) && precedes(after.components.find(a => a.id === c.id)?.installedVersion, updateTarget(c)))) throw failure('Update finished but a required component is still behind the checked version.')
         op.status = 'succeeded'; s.failureCount = 0

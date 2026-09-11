@@ -4,8 +4,12 @@ Local Workspace runtime rows inventory the selected executable and required
 components. Install replaces Enable until those requirements are verified. Enabled
 runtimes fetch release information once at startup/reopen; opening settings also
 refreshes inventory. There is no repeating version timer and checking never
-installs anything. Network failures leave latest versions unknown. An Update
-button appears only for an observed newer version. Failed operations remain
+installs anything. Network failures leave latest versions unknown.
+The per-runtime action remains visible after completion: Update for an observed
+update, otherwise Check for updates. Checking, updating and retry states use that
+same control. Rows retain component versions and upgrade arrows, with controls
+ordered More, Update/Check for updates, Hide/Show, then Enable/Disable or Install.
+Failed operations remain
 retryable; after two failures in this app session the row offers a copyable,
 allowlisted diagnostic with component versions and an error category. Raw command
 output, account data, paths and credentials are not copied.
@@ -19,7 +23,7 @@ output, account data, paths and credentials are not copied.
 | OpenClaw | Local `openclaw` CLI and separately linked gateways | Official npm `openclaw` release, managed CLI update. Does not update/restart gateways or install their provider runtimes. |
 | Cursor | Native `cursor-agent acp` | Version embedded in official Cursor installer; `cursor-agent update`. Same-date release hashes cannot be ordered and are not asserted to be newer. |
 | Grok Build | `grok … agent stdio` | Official stable release endpoint used by installer; `grok update`. |
-| Hermes | `hermes acp`, existing Python environment/profile | Official installer for missing CLI. `hermes update --check` reports current/available/unknown without installing. Exact latest version remains unavailable because upstream tracks git main. Available updates link to the official guide: use `hermes update --plan` and then deliberate Terminal maintenance, since updates may restart all profiles/services. No automatic Hermes update is offered. |
+| Hermes | `hermes acp`, native ACP version, and the owning environment's ACP SDK when discoverable | Official installer for missing CLI. `hermes update --check` reports current/available/unknown. Update verifies a clean source checkout, requires an idle plan and no active Hermes processes, then runs `hermes update --yes` with a 600-second limit. Completion requires a current update check and successful native ACP validation. |
 
 Managed npm installs are staged in `Node Tools/Installations/<UUID>` and verified
 before an atomic launcher symlink replacement in `Node Tools/bin`. Old generations
@@ -45,8 +49,9 @@ Disable/Hide choices survive service restarts; unreadable preferences fail close
 Remote adapter inventories show upstream bundled-package versions separately
 from the compatible update target resolved using the adapter's dependency range.
 Updates refresh that dependency within the declared range and verify the result;
-unknown compatibility does not produce an update claim. Hermes uses its bounded
-check-only command and keeps actual updates in the host terminal.
+unknown compatibility does not produce an update claim. Hermes uses the same
+bounded direct updater and verification on the selected host. It preserves
+modified source checkouts by refusing to update until those changes are saved.
 
 Remote maintenance takes an exclusive host lock. Remote conversation processes
 and managed OpenCode/OpenClaw servers hold shared locks for their lifetime, so an
@@ -86,3 +91,5 @@ upgrade independently linked gateways.
   [official installer](https://x.ai/cli/install.sh).
 - [OpenClaw updates](https://docs.openclaw.ai/install/updating).
 - [Hermes updates](https://nousresearch.github.io/hermes-agent/docs/getting-started/updating/).
+  Direct update behavior follows its [updater implementation](https://github.com/NousResearch/hermes-agent/blob/main/hermes_cli/subcommands/update.py)
+  and [service inventory](https://github.com/NousResearch/hermes-agent/blob/main/hermes_cli/update_inventory.py).

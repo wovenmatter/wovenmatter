@@ -213,42 +213,29 @@ struct SettingsLocalWorkspaceView: View {
                                         : .warning
                                 )
                             }
-                            Text(
-                                isChecking
-                                    ? "Checking ACP availability…"
-                                    : availability?.isReady == true && !databaseIsReady
-                                        ? model.localACPAgentReconciliationError
-                                            ?? "The local workspace could not save this agent."
-                                        : (availability?.detail
-                                            ?? definition.adapterDescription)
-                            )
-                                .font(.system(size: 11.5))
-                                .foregroundStyle(DashboardPalette.mutedForeground)
-                                .fixedSize(horizontal: false, vertical: true)
-                                .textSelection(.enabled)
+                            if availability?.isReady == true && !databaseIsReady,
+                               let error = model.localACPAgentReconciliationError {
+                                Text(error).font(.system(size: 11))
+                                    .foregroundStyle(DashboardPalette.mutedForeground)
+                            }
                             if let inventory {
-                                if definition.runtimeKind == .hermes, let limitation = inventory.limitation {
-                                    Text(limitation).font(.system(size: 11))
-                                        .foregroundStyle(DashboardPalette.mutedForeground)
-                                        .fixedSize(horizontal: false, vertical: true)
-                                }
-                                if let notice = inventory.updateNotice {
-                                    Text(notice).font(.system(size: 11))
-                                        .foregroundStyle(DashboardPalette.mutedForeground)
-                                        .fixedSize(horizontal: false, vertical: true)
-                                }
                                 Text(inventory.summary)
                                     .font(.system(size: 11))
                                     .foregroundStyle(DashboardPalette.mutedForeground)
                                     .textSelection(.enabled)
                                     .fixedSize(horizontal: false, vertical: true)
-                                if model.isLocalACPRuntimeCredentialAccessEnabled(definition.runtimeKind), inventory.latestUnavailable {
-                                    Text("Some latest versions are unavailable.")
-                                        .font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
+                                if model.checkedRuntimeKinds.contains(definition.runtimeKind), inventory.latestUnavailable {
+                                    Text("Latest unavailable").font(.system(size: 11))
+                                        .foregroundStyle(DashboardPalette.mutedForeground)
                                 }
                             }
+                            if model.runtimeFailures[definition.runtimeKind, default: 0] >= 2 {
+                                Button("Copy diagnostic") {
+                                    NSPasteboard.general.clearContents()
+                                    NSPasteboard.general.setString(model.runtimeDiagnostic(definition.runtimeKind), forType: .string)
+                                }.buttonStyle(SettingsQuietButtonStyle())
+                            }
                         }
-                        .help(inventory?.limitation ?? definition.adapterDescription)
                         .frame(maxWidth: .infinity, alignment: .leading)
 
                         RuntimeMaintenanceActions {
@@ -257,6 +244,7 @@ struct SettingsLocalWorkspaceView: View {
                                     .buttonStyle(SettingsQuietButtonStyle())
                                     .accessibilityLabel("More OpenClaw settings")
                             }
+                            runtimeUpdateButton(definition.runtimeKind)
                             let isShown = model.isLocalACPRuntimeShown(
                                 definition.runtimeKind
                             )
@@ -276,38 +264,17 @@ struct SettingsLocalWorkspaceView: View {
                                     : "Adds the runtime to the Local Agent Workspace sidebar without changing its enabled state."
                             )
 
-                            if model.runtimeFailures[definition.runtimeKind, default: 0] >= 2 {
-                                Button("Copy diagnostic") {
-                                    NSPasteboard.general.clearContents()
-                                    NSPasteboard.general.setString(model.runtimeDiagnostic(definition.runtimeKind), forType: .string)
-                                }
-                                .buttonStyle(SettingsQuietButtonStyle())
-                            }
-                            if inventory?.manualUpdateAvailable == true {
-                                Link("Update guide", destination: URL(string: "https://nousresearch.github.io/hermes-agent/docs/getting-started/updating/")!)
-                                    .buttonStyle(SettingsQuietButtonStyle())
-                            }
-                            if inventory?.outdated == true, inventory?.isInstalled == true,
-                               model.isLocalACPRuntimeCredentialAccessEnabled(definition.runtimeKind) {
-                                Button(installing ? "Updating…" : "Update") { model.updateRuntime(definition.runtimeKind) }
-                                    .buttonStyle(SettingsQuietButtonStyle())
-                                    .disabled(!model.installingLocalACPRuntimeKinds.isEmpty || !model.localRunningConversationIDs.isEmpty)
-                            }
                             if inventory?.isInstalled != true {
                                 if model.isLocalACPRuntimeCredentialAccessEnabled(definition.runtimeKind) {
                                     Button("Disable") { model.disableLocalACPRuntimeCredentialAccess(definition.runtimeKind) }
                                         .buttonStyle(SettingsQuietButtonStyle())
                                 }
-                                Button(installing ? "Installing…" : inventory == nil ? "Checking…" : "Install") {
+                                Button(installing ? "Installing…" : inventory == nil ? "Checking…" : model.runtimeFailures[definition.runtimeKind, default: 0] > 0 ? "Retry Install" : "Install") {
                                     model.installLocalACPRuntimeComponent(definition.runtimeKind)
                                 }
                                 .buttonStyle(DashboardPrimaryButtonStyle())
                                 .disabled(inventory == nil || !model.installingLocalACPRuntimeKinds.isEmpty || !model.localRunningConversationIDs.isEmpty)
                             } else if model.isLocalACPRuntimeCredentialAccessEnabled(definition.runtimeKind) {
-                                if !isReady {
-                                    Button("Recheck") { model.refreshLocalACPRuntimesNow(); model.refreshRuntimeInventory() }
-                                        .buttonStyle(SettingsQuietButtonStyle()).disabled(isChecking)
-                                }
                                 Button("Disable") {
                                     model.disableLocalACPRuntimeCredentialAccess(
                                         definition.runtimeKind
@@ -344,7 +311,6 @@ struct SettingsLocalWorkspaceView: View {
                 }
             }
 
-            SettingsNote("Checks run at startup and when reopening the app. Updates run only when requested. Manage remote runtimes in their Remote Workspace settings. Buzz is managed separately.")
             if let error = model.openCode?.error { SettingsError(error) }
             if let error = model.localRunError {
                 SettingsError(error)
@@ -365,23 +331,24 @@ struct SettingsLocalWorkspaceView: View {
                         .font(.system(size: 11.5))
                         .foregroundStyle(DashboardPalette.mutedForeground)
                         .fixedSize(horizontal: false, vertical: true)
-                    Text(model.runtimeInventories[.opencode]?.limitation ?? "Uses the local OpenCode v2 service.")
-                        .font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
-                        .fixedSize(horizontal: false, vertical: true)
+                    if model.checkedRuntimeKinds.contains(.opencode), model.runtimeInventories[.opencode]?.latestUnavailable == true {
+                        Text("Latest unavailable").font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
+                    }
+                    if model.openCode?.installationFailures ?? 0 >= 2 {
+                        Button("Copy diagnostic") {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(model.openCode?.installationDiagnostic ?? model.runtimeDiagnostic(.opencode), forType: .string)
+                        }.buttonStyle(SettingsQuietButtonStyle())
+                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 RuntimeMaintenanceActions {
                     Button("More") { onMore(.opencode) }
                         .accessibilityLabel("More OpenCode settings")
+                    runtimeUpdateButton(.opencode)
                     let shown = model.isLocalACPRuntimeShown(.opencode)
                     Button(shown ? "Hide" : "Show") { model.setLocalACPRuntimeShown(!shown, runtimeKind: .opencode) }
                         .accessibilityLabel("\(shown ? "Hide" : "Show") OpenCode in the left sidebar")
-                    if model.openCode?.installationFailures ?? 0 >= 2 {
-                        Button("Copy diagnostic") {
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(model.openCode?.installationDiagnostic ?? model.runtimeDiagnostic(.opencode), forType: .string)
-                        }
-                    }
                     Button(model.openCode?.isInstalling == true ? "Downloading…" : model.runtimeInventories[.opencode]?.isInstalled != true ? "Install" : model.openCode?.isEnabled == true ? "Disable" : "Enable") {
                         guard let openCode = model.openCode else { return }
                         openCode.perform {
@@ -395,6 +362,26 @@ struct SettingsLocalWorkspaceView: View {
                 .buttonStyle(SettingsQuietButtonStyle())
             }
         }
+    }
+
+    private func runtimeUpdateButton(_ kind: AgentRuntimeKind) -> some View {
+        let inventory = model.runtimeInventories[kind]
+        let updating = model.updatingRuntimeKinds.contains(kind)
+        let checking = model.checkingRuntimeKinds.contains(kind)
+        let retryUpdate = model.failedRuntimeUpdateKinds.contains(kind)
+        let hasUpdate = inventory?.isInstalled == true && (inventory?.updateAvailable == true || retryUpdate)
+        let retryCheck = model.checkedRuntimeKinds.contains(kind) && inventory?.latestUnavailable == true
+        let label = updating ? "Updating…" : checking ? "Checking…"
+            : hasUpdate ? (retryUpdate ? "Retry Update" : "Update")
+            : retryCheck ? "Retry check" : "Check for updates"
+        return Button(label) {
+            if hasUpdate { model.updateRuntime(kind) }
+            else { model.checkRuntimeUpdate(kind) }
+        }
+        .buttonStyle(SettingsQuietButtonStyle())
+        .disabled(checking || model.checkingRuntimeInventory || !model.installingLocalACPRuntimeKinds.isEmpty
+            || model.openCode?.isInstalling == true || (hasUpdate && !model.localRunningConversationIDs.isEmpty))
+        .accessibilityLabel(label + " for " + kind.displayName)
     }
 
     private func localACPRuntimeStatusLabel(

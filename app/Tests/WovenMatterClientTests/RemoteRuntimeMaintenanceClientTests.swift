@@ -71,9 +71,14 @@ struct RemoteRuntimeMaintenanceClientTests {
         #expect(initial[0].failureCount == 2)
         #expect(initial[0].diagnosticPrompt == "Sanitized failure")
         _ = try await second.runtimeMaintenance(checkLatest: true)
+        let selected = try await first.checkRuntimeUpdates(.codex)
+        #expect(selected.id == .codex)
+        #expect(selected.versionCheckAvailable == true)
         try await first.setRuntimePreferences(.codex, enabled: true, visible: false)
         let operation = try await second.maintainRuntime(.codex, action: "update", sourceSHA256: "reviewed-digest", packageSpec: "fixture@1.2.3")
         #expect(operation.status == "running")
+        let hermes = try await second.maintainRuntime(.hermes, action: "update", sourceSHA256: nil)
+        #expect(hermes.harnessID == .hermes)
         let status = try await second.workspaceInstance(.opencode, action: "start")
         #expect(status.state == "running")
     }
@@ -100,7 +105,7 @@ private final class RemoteMaintenanceFixtureProtocol: URLProtocol, @unchecked Se
         }
         let payload = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any]
 
-        let row = #"{"id":"codex","displayName":"Codex","enabled":true,"visible":false,"installed":true,"components":[{"id":"adapter","displayName":"codex-acp","path":"/home/woven/.local/bin/codex-acp","installedVersion":"1.7.0","latestVersion":"1.11.0","required":true,"installed":true},{"id":"engine","displayName":"Bundled Codex","path":null,"installedVersion":"0.148.0","latestVersion":null,"required":true,"installed":true}],"operation":null,"failureCount":2,"diagnosticPrompt":"Sanitized failure","notice":null,"updateAvailable":true}"#
+        let row = #"{"id":"codex","displayName":"Codex","enabled":true,"visible":false,"installed":true,"components":[{"id":"adapter","displayName":"codex-acp","path":"/home/woven/.local/bin/codex-acp","installedVersion":"1.7.0","latestVersion":"1.11.0","required":true,"installed":true},{"id":"engine","displayName":"Bundled Codex","path":null,"installedVersion":"0.148.0","latestVersion":null,"required":true,"installed":true}],"operation":null,"failureCount":2,"diagnosticPrompt":"Sanitized failure","notice":null,"updateAvailable":true,"versionCheckAvailable":true}"#
         let value: String
         switch path {
         case "/v1/runtime-maintenance":
@@ -111,6 +116,11 @@ private final class RemoteMaintenanceFixtureProtocol: URLProtocol, @unchecked Se
             #expect(!first)
             #expect(request.httpMethod == "POST")
             value = "{\"runtimes\":[\(row)]}"
+        case "/v1/runtime-maintenance/codex/check":
+            #expect(first)
+            #expect(request.httpMethod == "POST")
+            #expect(body.isEmpty)
+            value = row
         case "/v1/runtime-maintenance/codex":
             #expect(first)
             #expect(payload?["enabled"] as? Bool == true)
@@ -124,6 +134,13 @@ private final class RemoteMaintenanceFixtureProtocol: URLProtocol, @unchecked Se
             #expect(payload?["packageSpec"] as? String == "fixture@1.2.3")
             #expect(request.httpMethod == "POST")
             value = #"{"id":"00000000-0000-0000-0000-000000000001","harnessID":"codex","action":"update","status":"running","output":"","error":null,"startedAt":"2026-09-11T00:00:00Z","finishedAt":null}"#
+        case "/v1/runtime-maintenance/hermes/update":
+            #expect(!first)
+            #expect(request.httpMethod == "POST")
+            #expect(payload?["confirmed"] as? Bool == true)
+            #expect(payload?["sourceSHA256"] == nil)
+            #expect(payload?["packageSpec"] == nil)
+            value = #"{"id":"00000000-0000-0000-0000-000000000002","harnessID":"hermes","action":"update","status":"running","output":"","error":null,"startedAt":"2026-09-11T00:00:00Z","finishedAt":null}"#
         case "/v1/workspace-instances/opencode/start":
             #expect(!first)
             #expect(request.httpMethod == "POST")
