@@ -476,7 +476,7 @@ struct DashboardConversationRow: View {
             hoverCardTask?.cancel()
             if isHovered {
                 hoverCardTask = Task { @MainActor in
-                    try? await Task.sleep(for: .seconds(1))
+                    try? await Task.sleep(for: .milliseconds(500))
                     guard !Task.isCancelled, hovered, !Self.isMouseButtonPressed else { return }
                     detailCardState.setHovered(true, conversationID: conversation.id)
                 }
