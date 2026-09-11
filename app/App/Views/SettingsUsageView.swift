@@ -91,6 +91,16 @@ struct SettingsUsageView: View {
     private func providerRow(_ provider: ProviderKind) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .center, spacing: 12) {
+                Toggle(
+                    "Enable \(provider.displayName)",
+                    isOn: providerBinding(provider)
+                )
+                .labelsHidden()
+                .toggleStyle(DashboardSwitchToggleStyle(showsLabel: false))
+                .accessibilityLabel("Enable \(provider.displayName) usage")
+                .help(
+                    "Controls whether Woven Matter may scan, collect, and display \(provider.displayName) usage and account limits."
+                )
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 8) {
                         Text(provider.displayName)
@@ -108,16 +118,6 @@ struct SettingsUsageView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 16)
-                Toggle(
-                    "Enable \(provider.displayName)",
-                    isOn: providerBinding(provider)
-                )
-                .labelsHidden()
-                .toggleStyle(.switch)
-                .accessibilityLabel("Enable \(provider.displayName) usage")
-                .help(
-                    "Controls whether Woven Matter may scan, collect, and display \(provider.displayName) usage and account limits."
-                )
             }
 
             if provider == .openRouter {

@@ -338,6 +338,7 @@ private struct DashboardAddCalendarEventSheet: View {
                 TextField("Event title", text: $draft.title)
                     .textFieldStyle(.roundedBorder)
                 Toggle("All-day event", isOn: $draft.allDay)
+                    .toggleStyle(DashboardSwitchToggleStyle())
                 DatePicker(
                     "Starts",
                     selection: $draft.startsAt,

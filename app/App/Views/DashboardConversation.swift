@@ -87,8 +87,14 @@ struct DashboardCloudConversation: View {
         let activitiesByRunID = self.activitiesByRunID
         let attachmentsByMessageID = Dictionary(grouping: messageAttachments, by: \.messageID)
         let referencesByMessageID = Dictionary(grouping: messageReferences, by: \.messageID)
-        let visibleMessages = messages.filter {
-            DashboardRunDisplayPolicy.presentsMessage($0, run: runsByAssistantMessageID[$0.id])
+        let visibleMessages = messages.filter { record in
+            DashboardRunDisplayPolicy.presentsMessage(record, run: runsByAssistantMessageID[record.id])
+                && (conversation?.localRuntimeKind != .opencode || model.openCode?.links[record.conversationID] == nil
+                    || model.openCode?.snapshots[record.conversationID]?.messages.contains(where: { $0["id"].text == record.clientMessageID && OpenCodeSessionSnapshot.presentsMessage($0) }) == true)
+        }
+        let openCodeOrder = Dictionary((conversation.flatMap { model.openCode?.snapshots[$0.id]?.messages } ?? []).enumerated().map { ($0.element["id"].text, $0.offset) }, uniquingKeysWith: { first, _ in first })
+        let orderedMessages = openCodeOrder.isEmpty ? visibleMessages : visibleMessages.sorted {
+            (openCodeOrder[$0.clientMessageID ?? ""] ?? 0) < (openCodeOrder[$1.clientMessageID ?? ""] ?? 0)
         }
         ZStack(alignment: .bottom) {
             ScrollViewReader { proxy in
@@ -111,11 +117,11 @@ struct DashboardCloudConversation: View {
                                 title: conversation?.title ?? "Conversation",
                                 detail: conversation?.localRuntimeKind == nil
                                     ? "This conversation has no messages yet."
-                                    : "This direct chat is ready in the shared ~/.woven-matter workspace."
+                                    : conversation?.localRuntimeKind == .opencode ? "This session uses its workspace on the connected OpenCode host." : "This direct chat is ready in the shared ~/.woven-matter workspace."
                             )
                         } else {
                             if scrollState.positionedConversationID == conversation?.id,
-                               conversationState?.hasOlderMessages == true,
+                               (conversationState?.hasOlderMessages == true || conversation.flatMap { model.openCode?.isLocalSession($0.id) == true ? model.openCode?.snapshots[$0.id]?.olderCursor : nil } != nil),
                                let oldestMessageID = messages.first?.id {
                                 Color.clear
                                     .frame(height: 1)
@@ -128,7 +134,7 @@ struct DashboardCloudConversation: View {
                                         )
                                     }
                             }
-                            ForEach(visibleMessages) { message in
+                            ForEach(orderedMessages) { message in
                                 let presentation = messagePresentations[message.id]
                                 let run = runsByAssistantMessageID[message.id]
                                 DashboardMessageRow(
@@ -143,6 +149,9 @@ struct DashboardCloudConversation: View {
                                     activities: run.map { activitiesByRunID[$0.id] ?? [] } ?? []
                                 )
                                 .id(message.id)
+                                if let openCode = model.openCode, openCode.links[message.conversationID] != nil {
+                                    OpenCodeMessageMedia(model: openCode, conversationID: message.conversationID, messageID: message.clientMessageID ?? "")
+                                }
                             }
                         }
                         Color.clear
@@ -216,6 +225,10 @@ struct DashboardCloudConversation: View {
             .simultaneousGesture(TapGesture().onEnded(onActivatePanel))
 
             VStack(spacing: 8) {
+                if let conversation, conversation.localRuntimeKind == .opencode, let openCode = model.openCode {
+                    OpenCodeConversationControls(model: openCode, conversationID: conversation.id)
+                        .frame(maxWidth: 768)
+                }
                 if let error = model.workspaceError
                     ?? conversationState?.error {
                     DashboardInlineError(text: error)
@@ -296,16 +309,22 @@ struct DashboardCloudConversation: View {
                         attachedNoteTitle: attachedNoteTitle,
                         attachments: attachments,
                         showsSessionControls: conversation.map {
-                            model.isOpenClawGatewayConversation($0.id)
-                                || $0.localRuntimeKind != nil
+                            model.isOpenClawGatewayConversation($0.id) || $0.localRuntimeKind != nil
                         } ?? false,
                         sessionMetadata: conversation.flatMap {
+                            if $0.localRuntimeKind == .opencode { return model.openCode?.metadata($0.id) }
                             if model.isOpenClawGatewayConversation($0.id) {
                                 return model.openClawGatewaySessionMetadata[$0.id]
                             }
                             return model.localACPSessionMetadata[$0.id]
                         },
                         sessionControlsDisabled: conversation.map {
+                            if $0.localRuntimeKind == .opencode {
+                                return model.openCode?.isLocalSession($0.id) != true
+                                    || model.openCode?.statuses[$0.id] != "Connected"
+                                    || model.openCode?.updatingSessions.contains($0.id) == true
+                                    || model.localRunningConversationIDs.contains($0.id)
+                            }
                             if model.isOpenClawGatewayConversation($0.id) {
                                 return model.localRunningConversationIDs.contains($0.id)
                             }
@@ -317,6 +336,7 @@ struct DashboardCloudConversation: View {
                             return true
                         } ?? true,
                         sendDisabled: sendInProgress || (conversation.map {
+                            if $0.localRuntimeKind == .opencode { return model.openCode?.isLocalSession($0.id) != true || model.openCode?.statuses[$0.id] != "Connected" }
                             guard $0.localRuntimeKind != nil else { return true }
                             return model.loadingLocalACPSessionIDs.contains($0.id)
                                 || model.updatingLocalACPSessionIDs.contains($0.id)
@@ -326,6 +346,7 @@ struct DashboardCloudConversation: View {
                         onActivate: onActivatePanel,
                         onSelectModel: { selection in
                             guard let conversation else { return }
+                            if conversation.localRuntimeKind == .opencode { model.openCode?.updateSelection(conversation.id, model: selection); return }
                             if model.isOpenClawGatewayConversation(conversation.id) {
                                 model.patchOpenClawGatewaySession(
                                     conversationID: conversation.id,
@@ -344,6 +365,7 @@ struct DashboardCloudConversation: View {
                         },
                         onSelectThinking: { selection in
                             guard let conversation else { return }
+                            if conversation.localRuntimeKind == .opencode { model.openCode?.updateSelection(conversation.id, thinking: selection); return }
                             if model.isOpenClawGatewayConversation(conversation.id) {
                                 model.patchOpenClawGatewaySession(
                                     conversationID: conversation.id,
@@ -484,6 +506,14 @@ struct DashboardCloudConversation: View {
     ) async {
         guard let conversation, !isPrependingHistory else { return }
         isPrependingHistory = true
+        if conversationState?.hasOlderMessages != true,
+           let openCode = model.openCode, openCode.isLocalSession(conversation.id),
+           let link = openCode.links[conversation.id], openCode.snapshots[conversation.id]?.olderCursor != nil {
+            do {
+                try await openCode.coordinator.loadOlder(link)
+                await model.refreshConversation(id: conversation.id)
+            } catch { openCode.error = error.localizedDescription }
+        }
         let loaded = await model.loadOlderConversationMessages(id: conversation.id)
         if loaded, !Task.isCancelled {
             await Task.yield()

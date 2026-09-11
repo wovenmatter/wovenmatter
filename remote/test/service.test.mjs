@@ -152,8 +152,13 @@ test('service authentication exposes the reviewed harness catalog', async (conte
     'cursor', 'opencode', 'pi', 'openclaw',
   ])
   assert.ok(harnesses.every((value) =>
-    Array.isArray(value.setupMethods) && value.setupMethods.length > 0
+    Array.isArray(value.setupMethods) && (value.id === 'opencode' || value.setupMethods.length > 0)
   ))
+  const openCode = harnesses.find((value) => value.id === 'opencode')
+  assert.equal(openCode.transport, 'opencode-v2')
+  assert.equal(openCode.state, 'transport_unavailable')
+  assert.deepEqual(openCode.setupMethods, [])
+  assert.match(openCode.transportError, /supported only in the local workspace/)
   assert.deepEqual(
     Object.keys(harnesses[0].setupMethods[0]).sort(),
     ['displayName', 'id']

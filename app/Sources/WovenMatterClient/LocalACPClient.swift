@@ -525,6 +525,9 @@ public actor LocalACPClient {
         launch: LocalACPRuntimeLaunchConfiguration,
         workingDirectory: URL
     ) throws -> LocalACPClient {
+        guard launch.runtimeKind != .opencode else {
+            throw OpenCodeError.message("OpenCode v1 ACP is no longer supported. Create a new OpenCode v2 server session.")
+        }
         let process = Process()
         // Foundation.Process cannot configure POSIX_SPAWN_SETPGROUP. A minimal
         // non-interactive shell wrapper enables job control and then execs the

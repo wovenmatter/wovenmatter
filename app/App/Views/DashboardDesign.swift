@@ -897,11 +897,20 @@ struct DashboardLayoutState: Equatable {
     }
 }
 
+private struct DashboardSidebarForegroundKey: EnvironmentKey {
+    static let defaultValue: Color? = nil
+}
+
 private struct DashboardThemeEnvironmentKey: EnvironmentKey {
     static let defaultValue = DashboardTheme.green
 }
 
 extension EnvironmentValues {
+    var dashboardSidebarForeground: Color? {
+        get { self[DashboardSidebarForegroundKey.self] }
+        set { self[DashboardSidebarForegroundKey.self] = newValue }
+    }
+
     var dashboardTheme: DashboardTheme {
         get { self[DashboardThemeEnvironmentKey.self] }
         set { self[DashboardThemeEnvironmentKey.self] = newValue }
@@ -1031,6 +1040,7 @@ struct DashboardCard<Content: View>: View {
 
 struct DashboardSegmentedSelector<Option: Hashable>: View {
     @Environment(\.dashboardTheme) private var theme
+    @Environment(\.dashboardSidebarForeground) private var sidebarForeground
     let options: [Option]
     @Binding var selection: Option
     let label: (Option) -> String
@@ -1045,9 +1055,9 @@ struct DashboardSegmentedSelector<Option: Hashable>: View {
                     Text(label(option))
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(
-                            isSelected
+                            sidebarForeground ?? (isSelected
                                 ? DashboardPalette.foreground
-                                : DashboardPalette.mutedForeground
+                                : DashboardPalette.mutedForeground)
                         )
                         .frame(maxWidth: .infinity)
                         .frame(height: 27)
@@ -1091,14 +1101,15 @@ struct DashboardSegmentedSelector<Option: Hashable>: View {
 
 struct DashboardSearchField: View {
     @Environment(\.dashboardTheme) private var theme
+    @Environment(\.dashboardSidebarForeground) private var sidebarForeground
     @Binding var text: String
     let prompt: String
 
     var body: some View {
         HStack(spacing: 8) {
             DashboardLucideIcon(glyph: .searchControl, size: 14)
-                .foregroundStyle(DashboardPalette.mutedForeground)
-            TextField(prompt, text: $text)
+                .foregroundStyle(sidebarForeground ?? DashboardPalette.mutedForeground)
+            TextField(prompt, text: $text, prompt: Text(prompt).foregroundStyle(sidebarForeground ?? Color.secondary))
                 .textFieldStyle(.plain)
                 .font(.system(size: 13))
                 .foregroundStyle(DashboardPalette.foreground)
@@ -1106,7 +1117,7 @@ struct DashboardSearchField: View {
                 Button("Clear") { text = "" }
                     .buttonStyle(.plain)
                     .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(DashboardPalette.mutedForeground)
+                    .foregroundStyle(sidebarForeground ?? DashboardPalette.mutedForeground)
             }
         }
         .padding(.horizontal, 12)
@@ -1119,6 +1130,34 @@ struct DashboardSearchField: View {
                 style: .continuous
             )
         )
+    }
+}
+
+/// Compact native switches share the app's forest-green action color.
+/// Keeping the native control preserves keyboard and accessibility behavior.
+struct DashboardSwitchToggleStyle: ToggleStyle {
+    @Environment(\.isEnabled) private var isEnabled
+    var showsLabel = true
+
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 8) {
+            Toggle(isOn: configuration.$isOn) { configuration.label }
+                .labelsHidden()
+                .toggleStyle(SwitchToggleStyle(tint: DashboardPalette.primary))
+                .controlSize(.mini)
+                .fixedSize()
+                .scaleEffect(0.8)
+                .frame(width: 28, height: 16)
+            if showsLabel {
+                configuration.label
+                    .contentShape(Rectangle())
+                    .onTapGesture { if isEnabled { configuration.isOn.toggle() } }
+            }
+        }
+        .accessibilityRepresentation {
+            Toggle(isOn: configuration.$isOn) { configuration.label }
+                .toggleStyle(.switch)
+        }
     }
 }
 

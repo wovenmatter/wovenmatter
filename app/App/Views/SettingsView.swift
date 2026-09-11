@@ -6,6 +6,7 @@ enum SettingsSection: Equatable {
     case landing
     case general
     case openClaw
+    case openCode
     case openClawAgent(UUID)
     case localWorkspace
     case remoteWorkspaces
@@ -44,6 +45,9 @@ struct SettingsView: View {
                     onBack: { section = .landing },
                     onOpenAgent: { section = .openClawAgent($0) }
                 )
+            case .openCode:
+                SettingsOpenCodeView(model: model, reservesRailControlSpace: reservesRailControlSpace,
+                    onBack: { section = .landing })
             case .openClawAgent(let agentID):
                 SettingsOpenClawAgentView(
                     model: model,
@@ -55,7 +59,8 @@ struct SettingsView: View {
                 SettingsLocalWorkspaceView(
                     model: model,
                     reservesRailControlSpace: reservesRailControlSpace,
-                    onBack: { section = .landing }
+                    onBack: { section = .landing },
+                    onMore: { section = $0 == .opencode ? .openCode : .openClaw }
                 )
             case .remoteWorkspaces:
                 SettingsRemoteWorkspacesView(
@@ -109,6 +114,12 @@ struct SettingsView: View {
                     detail: "Gateway connections and Woven Matter names for every OpenClaw agent.",
                     icon: { DashboardHarnessLogoIcon(logo: .openClaw, size: 15) },
                     action: { section = .openClaw }
+                )
+                SettingsDestinationRow(
+                    title: "OpenCode",
+                    detail: "The local OpenCode v2 service and browser connection.",
+                    icon: { DashboardHarnessLogoIcon(logo: .openCode, size: 15) },
+                    action: { section = .openCode }
                 )
                 SettingsDestinationRow(
                     title: "Local Agent Workspace",

@@ -4,6 +4,23 @@ import Foundation
 import SwiftUI
 import WovenMatterClient
 
+/// Optional development variants have their own database and process lease.
+/// Release builds always use the established workspace directory.
+enum WovenMatterWorkspacePaths {
+    static var folderName: String {
+        #if DEBUG
+        let prefix = "wovenmatter.desktop.dev."
+        if let identifier = Bundle.main.bundleIdentifier, identifier.hasPrefix(prefix) {
+            let variant = String(identifier.dropFirst(prefix.count))
+            if !variant.isEmpty, variant.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-") }) {
+                return "Woven Matter Dev/" + variant
+            }
+        }
+        #endif
+        return "Woven Matter"
+    }
+}
+
 struct WorkspaceProcessLeaseOwner: Equatable, Sendable {
     let processIdentifier: Int32
     let bundleIdentifier: String
@@ -146,7 +163,7 @@ final class WorkspaceProcessLease {
                 directoryHint: .isDirectory
             )
         return supportDirectory.appending(
-            path: "Woven Matter/workspace-owner.lock",
+            path: WovenMatterWorkspacePaths.folderName + "/workspace-owner.lock",
             directoryHint: .notDirectory
         )
     }
@@ -324,8 +341,39 @@ final class WorkspaceProcessLease {
     }
 }
 
+@MainActor
+final class WovenMatterLifecycleDelegate: NSObject, NSApplicationDelegate {
+    weak var model: ApplicationModel?
+    private var terminating = false
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard let model else { return .terminateNow }
+        guard !terminating else { return .terminateLater }
+        terminating = true
+        model.flushNoteDrafts()
+        Task {
+            do {
+                try await model.openCode?.prepareToQuit()
+                sender.reply(toApplicationShouldTerminate: true)
+            } catch {
+                let alert = NSAlert()
+                alert.messageText = "OpenCode could not be stopped"
+                alert.informativeText = error.localizedDescription
+                alert.addButton(withTitle: "Cancel quit")
+                alert.addButton(withTitle: "Quit anyway")
+                let quit = alert.runModal() == .alertSecondButtonReturn
+                terminating = false
+                sender.reply(toApplicationShouldTerminate: quit)
+                if !quit { await model.openCode?.restore() }
+            }
+        }
+        return .terminateLater
+    }
+}
+
 @main
 struct WovenMatterApp: App {
+    @NSApplicationDelegateAdaptor(WovenMatterLifecycleDelegate.self) private var lifecycleDelegate
     private let workspaceProcessLease: WorkspaceProcessLease?
     @State private var applicationModel: ApplicationModel
     @AppStorage(DashboardTheme.storageKey) private var themeRawValue = DashboardTheme.green.rawValue
@@ -374,6 +422,7 @@ struct WovenMatterApp: App {
     var body: some Scene {
         WindowGroup {
             RootView(model: applicationModel)
+                .onAppear { lifecycleDelegate.model = applicationModel }
                 .frame(minWidth: 760, minHeight: 640)
                 .scrollIndicators(.never)
                 .onReceive(

@@ -465,7 +465,7 @@ struct DashboardComposer: View {
         capitalizeOptions: Bool = false,
         action: ((String) -> Void)?
     ) -> some View {
-        let unavailable = sessionControlsDisabled || options.count < 2 || action == nil
+        let unavailable = sessionControlsDisabled || (options.isEmpty || (options.count == 1 && options.first == selection)) || action == nil
         return Button {
             guard !unavailable else { return }
             onActivate()
@@ -482,19 +482,18 @@ struct DashboardComposer: View {
         .accessibilityLabel(accessibilityLabel)
         .accessibilityValue("\(title), \(openMenu == kind ? "Expanded" : "Collapsed")")
         .help(accessibilityLabel)
-        .overlay(alignment: .bottomLeading) {
-            if openMenu == kind {
-                DashboardComposerOptionMenu(
-                    title: menuTitle,
-                    options: options,
-                    selection: selection,
-                    capitalizeOptions: capitalizeOptions
-                ) { option in
-                    openMenu = nil
-                    action?(option)
-                }
-                .offset(y: -44)
-                .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .bottomLeading)))
+        .popover(isPresented: Binding(
+            get: { openMenu == kind },
+            set: { if !$0, openMenu == kind { openMenu = nil } }
+        ), arrowEdge: .bottom) {
+            DashboardComposerOptionMenu(
+                title: menuTitle,
+                options: options,
+                selection: selection,
+                capitalizeOptions: capitalizeOptions
+            ) { option in
+                openMenu = nil
+                action?(option)
             }
         }
         .zIndex(openMenu == kind ? 3 : 0)
@@ -511,7 +510,7 @@ struct DashboardComposer: View {
         capitalizeOptions: Bool = false,
         action: ((String) -> Void)?
     ) -> some View {
-        let unavailable = sessionControlsDisabled || options.count < 2 || action == nil
+        let unavailable = sessionControlsDisabled || (options.isEmpty || (options.count == 1 && options.first == selection)) || action == nil
         return Button {
             guard !unavailable else { return }
             onActivate()
@@ -527,19 +526,18 @@ struct DashboardComposer: View {
         .accessibilityLabel(accessibilityLabel)
         .accessibilityValue("\(title), \(openMenu == kind ? "Expanded" : "Collapsed")")
         .help(accessibilityLabel)
-        .overlay(alignment: .bottomLeading) {
-            if openMenu == kind {
-                DashboardComposerOptionMenu(
-                    title: menuTitle,
-                    options: options,
-                    selection: selection,
-                    capitalizeOptions: capitalizeOptions
-                ) { option in
-                    openMenu = nil
-                    action?(option)
-                }
-                .offset(y: -44)
-                .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .bottomLeading)))
+        .popover(isPresented: Binding(
+            get: { openMenu == kind },
+            set: { if !$0, openMenu == kind { openMenu = nil } }
+        ), arrowEdge: .bottom) {
+            DashboardComposerOptionMenu(
+                title: menuTitle,
+                options: options,
+                selection: selection,
+                capitalizeOptions: capitalizeOptions
+            ) { option in
+                openMenu = nil
+                action?(option)
             }
         }
         .zIndex(openMenu == kind ? 3 : 0)

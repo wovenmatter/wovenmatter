@@ -207,6 +207,14 @@ function authorized(request) {
 }
 
 async function harnessStatus(harness) {
+  if (harness.transport === 'opencode-v2') return {
+    id: harness.id, displayName: harness.displayName, transport: harness.transport,
+    capabilities: harness.capabilities, state: 'transport_unavailable',
+    installationStatus: 'unknown', authenticationStatus: 'unknown', transportStatus: 'unavailable',
+    transportError: 'OpenCode v2 is supported only in the local workspace. Remote OpenCode sessions are unavailable.',
+    setupMethods: [], detectedProviders: [],
+  }
+
   const cliInstalled = await commandExists(harness.cliCommand)
   const adapterInstalled = await commandExists(harness.command)
   const [authenticationConfigured, detectedProviders] = cliInstalled && adapterInstalled
