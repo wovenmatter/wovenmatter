@@ -49,6 +49,7 @@
 		2350EC32F0F50FD3DB4069F3 /* DashboardNotePane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 52C822631EDF91C6FE39C754 /* DashboardNotePane.swift */; };
 		BAAE9A1BC06C8AC78E67AA1B /* DashboardOpenClawCron.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3AB89D5EB3D93F04C3A5CB5E /* DashboardOpenClawCron.swift */; };
 		923D138C1F54FC887AA90493 /* DashboardSharedViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 40D1B5DEF1B0023CB8C52B6D /* DashboardSharedViews.swift */; };
+		C04200000000000000000001 /* DashboardConversationPopover.swift in Sources */ = {isa = PBXBuildFile; fileRef = C04200000000000000000002 /* DashboardConversationPopover.swift */; };
 		4C606D43824083BD3A612FF1 /* OpenCodeModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3CE258FB55B3D55A39972D5B /* OpenCodeModel.swift */; };
 		E86083BC811D526E0900522B /* OpenCodeSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 97160C827D94B74AFAB2961A /* OpenCodeSettingsView.swift */; };
 		8B47C81B917AA853D87FB56A /* OpenCodeInteractionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17AF06D69A7DE73E3F94E40A /* OpenCodeInteractionView.swift */; };
@@ -99,6 +100,7 @@
 		52C822631EDF91C6FE39C754 /* DashboardNotePane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardNotePane.swift; sourceTree = "<group>"; };
 		3AB89D5EB3D93F04C3A5CB5E /* DashboardOpenClawCron.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardOpenClawCron.swift; sourceTree = "<group>"; };
 		40D1B5DEF1B0023CB8C52B6D /* DashboardSharedViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardSharedViews.swift; sourceTree = "<group>"; };
+		C04200000000000000000002 /* DashboardConversationPopover.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardConversationPopover.swift; sourceTree = "<group>"; };
 		3CE258FB55B3D55A39972D5B /* OpenCodeModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenCodeModel.swift; sourceTree = "<group>"; };
 		97160C827D94B74AFAB2961A /* OpenCodeSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenCodeSettingsView.swift; sourceTree = "<group>"; };
 		17AF06D69A7DE73E3F94E40A /* OpenCodeInteractionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenCodeInteractionView.swift; sourceTree = "<group>"; };
@@ -178,6 +180,7 @@
 				17AF06D69A7DE73E3F94E40A /* OpenCodeInteractionView.swift */,
 				97160C827D94B74AFAB2961A /* OpenCodeSettingsView.swift */,
 				40D1B5DEF1B0023CB8C52B6D /* DashboardSharedViews.swift */,
+				C04200000000000000000002 /* DashboardConversationPopover.swift */,
 				3AB89D5EB3D93F04C3A5CB5E /* DashboardOpenClawCron.swift */,
 				52C822631EDF91C6FE39C754 /* DashboardNotePane.swift */,
 				45C178F10C928BB5DF700830 /* DashboardComposer.swift */,
@@ -338,6 +341,7 @@
 				E86083BC811D526E0900522B /* OpenCodeSettingsView.swift in Sources */,
 				4C606D43824083BD3A612FF1 /* OpenCodeModel.swift in Sources */,
 				923D138C1F54FC887AA90493 /* DashboardSharedViews.swift in Sources */,
+				C04200000000000000000001 /* DashboardConversationPopover.swift in Sources */,
 				BAAE9A1BC06C8AC78E67AA1B /* DashboardOpenClawCron.swift in Sources */,
 				2350EC32F0F50FD3DB4069F3 /* DashboardNotePane.swift in Sources */,
 				FE8DA980F8CFABCB8AAB3893 /* DashboardComposer.swift in Sources */,
