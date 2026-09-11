@@ -1664,12 +1664,24 @@ public final class WorkspaceDatabase: @unchecked Sendable {
     remoteWorkspaceName: String,
     title: String,
     ownerDeviceID: UUID,
-    createdAt: Date = Date()
+    createdAt: Date = Date(),
+    openCodeAssociation: (connectionID: String, sessionID: String)? = nil
   ) throws -> String {
     guard LocalACPRuntimeCatalog.definition(for: runtimeKind) != nil else {
       throw LocalACPSessionDatabaseError.runtimeUnavailable
     }
     return try transaction {
+      if let link = openCodeAssociation {
+        guard runtimeKind == .opencode,
+              link.connectionID == "remote-workspace:" + remoteWorkspaceID.uuidString.lowercased() else {
+          throw LocalACPSessionDatabaseError.runtimeUnavailable
+        }
+        let existing = try prepareUnlocked("SELECT conversation_id FROM desktop_opencode_sessions WHERE connection_id=? AND session_id=?")
+        defer { sqlite3_finalize(existing) }
+        try bind(link.connectionID, at: 1, to: existing)
+        try bind(link.sessionID, at: 2, to: existing)
+        if sqlite3_step(existing) == SQLITE_ROW { return try text(existing, column: 0) }
+      }
       let operatorID = try localMutationOperatorIDUnlocked()
       let agentID = try ensureRemoteHarnessAgentUnlocked(
         runtimeKind: runtimeKind,
@@ -1729,6 +1741,18 @@ public final class WorkspaceDatabase: @unchecked Sendable {
       try bind(timestamp, at: 8, to: session)
       try bind(timestamp, at: 9, to: session)
       try stepDone(session)
+      if let link = openCodeAssociation {
+        guard runtimeKind == .opencode,
+              link.connectionID == "remote-workspace:" + remoteWorkspaceID.uuidString.lowercased() else {
+          throw LocalACPSessionDatabaseError.runtimeUnavailable
+        }
+        let association = try prepareUnlocked("INSERT INTO desktop_opencode_sessions(conversation_id, connection_id, session_id, snapshot_json) VALUES (?, ?, ?, '{}')")
+        defer { sqlite3_finalize(association) }
+        try bind(conversationID, at: 1, to: association)
+        try bind(link.connectionID, at: 2, to: association)
+        try bind(link.sessionID, at: 3, to: association)
+        try stepDone(association)
+      }
       return conversationID
     }
   }

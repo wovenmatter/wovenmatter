@@ -81,6 +81,72 @@ final class ApplicationModel {
     private(set) var mutatingBuzzWorkspaceEnrollmentIDs: Set<UUID> = []
     private(set) var buzzWorkspaceError: String?
     var openCode: OpenCodeModel?
+    private(set) var remoteOpenCodes: [UUID: OpenCodeModel] = [:]
+    private var remoteOpenCodeSyncGeneration = UUID()
+    var openCodeInstances: [OpenCodeModel] { [openCode].compactMap { $0 } + Array(remoteOpenCodes.values) }
+
+    func openCodeModel(for conversationID: String) -> OpenCodeModel? {
+        openCodeInstances.first { $0.links[conversationID] != nil }
+    }
+
+    func synchronizeRemoteOpenCodeInstances() async {
+        let generation = UUID()
+        remoteOpenCodeSyncGeneration = generation
+        guard let dashboardStore, let ownerDeviceID = try? await dashboardStore.dashboardDeviceID() else { return }
+        guard remoteOpenCodeSyncGeneration == generation else { return }
+        let configurations = remoteWorkspaces.workspaces
+        let eligibleIDs = Set(configurations.map(\.id))
+        for id in Array(remoteOpenCodes.keys) where !eligibleIDs.contains(id) {
+            if let removed = remoteOpenCodes.removeValue(forKey: id) { await removed.suspendConnection() }
+            guard remoteOpenCodeSyncGeneration == generation else { return }
+        }
+        for configuration in configurations {
+            guard remoteOpenCodeSyncGeneration == generation,
+                  remoteWorkspaces.configuration(id: configuration.id) == configuration else { return }
+            if let existing = remoteOpenCodes[configuration.id], existing.remoteConfiguration != configuration {
+                remoteOpenCodes[configuration.id] = nil
+                await existing.suspendConnection()
+                guard remoteOpenCodeSyncGeneration == generation,
+                      remoteWorkspaces.configuration(id: configuration.id) == configuration else { return }
+            }
+            let instance: OpenCodeModel
+            if let existing = remoteOpenCodes[configuration.id] { instance = existing }
+            else {
+                instance = OpenCodeModel(store: dashboardStore, ownerDeviceID: ownerDeviceID, defaults: applicationDefaults,
+                    remoteConfiguration: configuration, remoteWorkspaces: remoteWorkspaces)
+                remoteOpenCodes[configuration.id] = instance
+                instance.onChange = { [weak self, weak instance] id in
+                    guard let self, let instance, self.remoteOpenCodes[configuration.id] === instance else { return }
+                    if instance.snapshots[id]?.active == true { self.localRunningConversationIDs.insert(id) }
+                    else { self.localRunningConversationIDs.remove(id) }
+                    await self.refreshWorkspaceIfChanged()
+                    await self.refreshConversation(id: id)
+                }
+            }
+            if remoteWorkspaces.isRuntimeEnabled(.opencode, in: configuration) {
+                if !instance.isReady && !instance.isConnecting && instance.canRestoreAutomatically { await instance.restore() }
+            } else { await instance.suspendConnection() }
+        }
+    }
+
+    func prepareOpenCodeInstancesToQuit() async throws {
+        for instance in openCodeInstances { try await instance.prepareToQuit() }
+    }
+
+    func restoreOpenCodeInstances() async {
+        for instance in openCodeInstances { await instance.restore() }
+        await synchronizeRemoteOpenCodeInstances()
+    }
+
+    func remoteOpenClawAgentID(for configuration: RemoteWorkspaceConfiguration) async throws -> UUID {
+        guard let dashboardStore, remoteWorkspaces.configuration(id: configuration.id) == configuration else {
+            throw ApplicationModelError.remoteHarnessUnavailable
+        }
+        let id = try await dashboardStore.ensureRemoteHarnessAgent(runtimeKind: .openclaw,
+            remoteWorkspaceID: configuration.id, remoteWorkspaceName: configuration.name)
+        await refreshWorkspace()
+        return id
+    }
     private(set) var openClawGatewayLinks: [OpenClawGatewayLink] = []
     private(set) var openClawGatewayErrors: [UUID: String] = [:]
     private(set) var openClawGatewayNotices: [UUID: String] = [:]
@@ -355,6 +421,11 @@ final class ApplicationModel {
                 await self.refreshConversation(id: id)
             }
             Task { await openCode.restore() }
+            remoteWorkspaces.onRuntimeMaintenanceChanged = { [weak self] in
+                await self?.synchronizeRemoteOpenCodeInstances()
+            }
+            remoteWorkspaces.refreshRuntimeMaintenanceAtStartup()
+            await synchronizeRemoteOpenCodeInstances()
             localACPDatabaseReadyRuntimeKinds = Set(
                 LocalACPRuntimeCatalog.definitions.map(\.runtimeKind)
             )
@@ -2198,7 +2269,7 @@ final class ApplicationModel {
         }
         if conversation.localRuntimeKind == .opencode {
             do {
-                guard let openCode else { throw OpenCodeError.message("OpenCode is still starting.") }
+                guard let openCode = openCodeModel(for: conversation.id) else { throw OpenCodeError.message("This workspace's OpenCode connection is unavailable.") }
                 try await openCode.send(conversation.id, input: normalized)
                 conversationState.setError(nil)
                 return true
@@ -2442,7 +2513,7 @@ final class ApplicationModel {
         conversation: WorkspaceConversationRecord
     ) async {
         if conversation.localRuntimeKind == .opencode {
-            if let openCode, openCode.isEnabled, let link = openCode.links[conversation.id] {
+            if let openCode = openCodeModel(for: conversation.id), openCode.isEnabled, let link = openCode.links[conversation.id] {
                 await openCode.coordinator.watch(link)
             }
             return
@@ -2622,6 +2693,17 @@ final class ApplicationModel {
             return nil
         }
         do {
+            if target.harness.id == .opencode {
+                await synchronizeRemoteOpenCodeInstances()
+                guard let instance = remoteOpenCodes[target.configuration.id] else {
+                    throw ApplicationModelError.remoteHarnessUnavailable
+                }
+                try await instance.connectLocal()
+                let directory = remoteWorkspaces.remoteWorkspaceRoot(for: target.configuration)
+                let id = try await instance.create(workspace: URL(fileURLWithPath: directory))
+                await refreshWorkspace()
+                return id
+            }
             guard let dashboardStore else {
                 throw ApplicationModelError.dashboardStoreUnavailable
             }
@@ -2954,7 +3036,7 @@ final class ApplicationModel {
     }
 
     func cancelLocalACPPrompt(conversationID: String) {
-        if let openCode, openCode.links[conversationID] != nil {
+        if let openCode = openCodeModel(for: conversationID), openCode.links[conversationID] != nil {
             openCode.perform { _ = try await openCode.sessionCall(conversationID, "/interrupt", method: "POST") }
             return
         }
@@ -2981,7 +3063,7 @@ final class ApplicationModel {
         }
         LocalACPClient.terminateAllProcesses()
         PiRPCClient.terminateAllProcesses()
-        Task { await openCode?.coordinator.shutdown(); await dashboardStore?.shutdownLocalACPSessions() }
+        Task { for instance in openCodeInstances { await instance.coordinator.shutdown() }; await dashboardStore?.shutdownLocalACPSessions() }
     }
 
     private func requestLocalACPPermission(

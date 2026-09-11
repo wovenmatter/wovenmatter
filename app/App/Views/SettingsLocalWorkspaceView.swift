@@ -345,7 +345,7 @@ struct SettingsLocalWorkspaceView: View {
                 }
             }
 
-            SettingsNote("Checks run at startup and when reopening the app. Updates run only when requested. Linked gateways, Buzz and remote workspace runtimes are managed on their host.")
+            SettingsNote("Checks run at startup and when reopening the app. Updates run only when requested. Manage remote runtimes in their Remote Workspace settings. Buzz is managed separately.")
             if let error = model.openCode?.error { SettingsError(error) }
             if let error = model.localRunError {
                 SettingsError(error)

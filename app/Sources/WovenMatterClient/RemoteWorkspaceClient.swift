@@ -2,6 +2,25 @@ import Foundation
 import Security
 import WovenMatterCore
 
+/// Captures authorization and destination before suspension; stale responses must not apply.
+public struct RemoteWorkspaceRequestIdentity: Sendable {
+    public let configuration: RemoteWorkspaceConfiguration
+    public let credentialEpoch: UUID
+    public let workspaceEpoch: UUID
+
+    public init(configuration: RemoteWorkspaceConfiguration, credentialEpoch: UUID, workspaceEpoch: UUID) {
+        self.configuration = configuration
+        self.credentialEpoch = credentialEpoch
+        self.workspaceEpoch = workspaceEpoch
+    }
+
+    public func isCurrent(configuration: RemoteWorkspaceConfiguration?, credentialsEnabled: Bool,
+                          credentialEpoch: UUID, workspaceEpoch: UUID) -> Bool {
+        credentialsEnabled && self.configuration == configuration
+            && self.credentialEpoch == credentialEpoch && self.workspaceEpoch == workspaceEpoch
+    }
+}
+
 public struct RemoteMachineCandidate: Codable, Equatable, Identifiable, Sendable {
     public let hostName: String
     public let displayName: String
@@ -98,6 +117,11 @@ public enum RemoteHarnessLaunchResolver {
             .definition(for: runtimeKind)?.environment.sorted(by: { $0.key < $1.key }) ?? [] {
             command.append("\(key)=\(value)")
         }
+        command.append(contentsOf: [
+            "bash", "-c",
+            #"mkdir -p /home/.wovenmatter && exec 9>/home/.wovenmatter/runtime-operation.lock && { flock --shared --nonblock 9 || { printf '%s\n' 'Runtime maintenance is in progress. Retry after it finishes.' >&2; exit 75; }; } && exec "$@""#,
+            "woven-runtime",
+        ])
         command.append(harness.command)
         command.append(contentsOf: harness.arguments)
         let remoteCommand = command.map(shellQuote).joined(separator: " ")
@@ -191,6 +215,56 @@ public struct RemoteHarnessStatus: Codable, Equatable, Identifiable, Sendable {
     public let transportError: String?
     public let setupMethods: [RemoteHarnessSetupMethod]
     public let detectedProviders: [String]
+
+    /// Lifecycle responses are newer than the harness inventory fetched before launch.
+    /// Reconcile only the native OpenCode instance; ACP authentication stays authoritative.
+    public func reconcilingOpenCode(instance: RemoteWorkspaceInstanceStatus?, installed: Bool?) -> Self {
+        guard id == .opencode, let instance, instance.kind == AgentRuntimeKind.opencode.rawValue else { return self }
+        let present = installed ?? (installationStatus == "installed")
+        let running = present && instance.state == "running"
+        return Self(
+            id: id, displayName: displayName, transport: transport, capabilities: capabilities,
+            state: !present ? "cli_missing" : (running ? "ready" : "transport_unavailable"),
+            installationStatus: present ? "installed" : "cli_missing",
+            authenticationStatus: authenticationStatus,
+            transportStatus: running ? "ready" : "unavailable",
+            transportError: running ? nil : (instance.lastError ?? "Start this workspace’s OpenCode v2 server in More settings."),
+            setupMethods: setupMethods, detectedProviders: detectedProviders
+        )
+    }
+}
+
+public struct RemoteWorkspaceInstanceStatus: Codable, Equatable, Sendable {
+    public let kind: String
+    public let state: String
+    public let pid: Int?
+    public let version: String?
+    public let endpointPath: String
+    public let lastError: String?
+}
+
+public struct RemoteRuntimeComponent: Codable, Equatable, Identifiable, Sendable {
+    public let id: String
+    public let displayName: String
+    public let path: String?
+    public let installedVersion: String?
+    public let latestVersion: String?
+    public let required: Bool
+    public let installed: Bool
+}
+
+public struct RemoteRuntimeMaintenance: Codable, Equatable, Identifiable, Sendable {
+    public let id: AgentRuntimeKind
+    public let displayName: String
+    public let enabled: Bool
+    public let visible: Bool
+    public let installed: Bool
+    public let components: [RemoteRuntimeComponent]
+    public let operation: RemoteHarnessOperation?
+    public let failureCount: Int
+    public let diagnosticPrompt: String?
+    public let notice: String?
+    public let updateAvailable: Bool
 }
 
 public struct RemoteHarnessSetupMethod: Codable, Equatable, Identifiable, Sendable {
@@ -205,6 +279,7 @@ public struct RemoteInstallerPreview: Codable, Equatable, Sendable {
     public let bytes: Int?
     public let command: String
     public let verification: String
+    public let packageSpec: String?
 }
 
 public struct RemoteHarnessAuthenticationSession: Codable, Equatable, Identifiable, Sendable {
@@ -845,6 +920,48 @@ public struct RemoteWorkspaceServiceClient: Sendable {
             body: nil
         )
         return document.harnesses
+    }
+
+    public func workspaceInstance(
+        _ kind: AgentRuntimeKind, action: String? = nil
+    ) async throws -> RemoteWorkspaceInstanceStatus {
+        try await request(
+            path: "v1/workspace-instances/\(kind.rawValue)" + (action.map { "/\($0)" } ?? ""),
+            method: action == nil ? "GET" : "POST", body: nil
+        )
+    }
+
+    public func runtimeMaintenance(checkLatest: Bool = false) async throws -> [RemoteRuntimeMaintenance] {
+        struct Document: Decodable { let runtimes: [RemoteRuntimeMaintenance] }
+        let document: Document = try await request(
+            path: checkLatest ? "v1/runtime-maintenance/check" : "v1/runtime-maintenance",
+            method: checkLatest ? "POST" : "GET", body: nil
+        )
+        return document.runtimes
+    }
+
+    public func setRuntimePreferences(
+        _ id: AgentRuntimeKind, enabled: Bool? = nil, visible: Bool? = nil
+    ) async throws {
+        var payload: [String: Bool] = [:]
+        if let enabled { payload["enabled"] = enabled }
+        if let visible { payload["visible"] = visible }
+        let _: RemoteRuntimeMaintenance = try await request(
+            path: "v1/runtime-maintenance/\(id.rawValue)", method: "PATCH",
+            body: try JSONSerialization.data(withJSONObject: payload)
+        )
+    }
+
+    public func maintainRuntime(
+        _ id: AgentRuntimeKind, action: String, sourceSHA256: String?, packageSpec: String? = nil
+    ) async throws -> RemoteHarnessOperation {
+        var payload: [String: Any] = ["confirmed": true]
+        if let sourceSHA256 { payload["sourceSHA256"] = sourceSHA256 }
+        if let packageSpec { payload["packageSpec"] = packageSpec }
+        return try await request(
+            path: "v1/runtime-maintenance/\(id.rawValue)/\(action)", method: "POST",
+            body: try JSONSerialization.data(withJSONObject: payload)
+        )
     }
 
     public func perform(

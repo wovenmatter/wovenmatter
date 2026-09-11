@@ -3,12 +3,15 @@ import WovenMatterCore
 
 struct SettingsOpenClawView: View {
     @Bindable var model: ApplicationModel
+    var workspaceID: UUID?
+    var isWorkspaceScoped = false
     var reservesRailControlSpace = false
     var onBack: () -> Void
     var onOpenAgent: (UUID) -> Void
+    @State private var instanceError: String?
 
     private var openClawAgents: [WorkspaceAgent] {
-        (model.localCLIAgents + model.remoteWorkspaceAgents + model.buzzWorkspaceAgents)
+        (isWorkspaceScoped && workspaceID != nil ? [] : model.localCLIAgents)
             .filter { $0.runtimeKind == .openclaw }
             .sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
     }
@@ -16,16 +19,17 @@ struct SettingsOpenClawView: View {
     var body: some View {
         SettingsPage(
             title: "OpenClaw",
-            detail: "Every OpenClaw Woven Matter can reach, and its gateway connection on this Mac.",
+            detail: "Independent OpenClaw settings for this Mac and each remote workspace.",
             reservesRailControlSpace: reservesRailControlSpace,
             onBack: onBack
         ) {
+            if !isWorkspaceScoped || workspaceID == nil {
             SettingsCard(
-                title: "Agents",
+                title: "Local Agent Workspace",
                 detail: "Open an agent to manage its Woven Matter name and Gateway connection."
             ) {
                 if openClawAgents.isEmpty {
-                    SettingsEmpty("No OpenClaw agents discovered yet. Local and Buzz workspace agents appear here when available.")
+                    SettingsEmpty("Enable local OpenClaw to configure its agent and Gateway connection.")
                 } else {
                     VStack(spacing: 8) {
                         ForEach(openClawAgents) { agent in
@@ -35,7 +39,33 @@ struct SettingsOpenClawView: View {
                 }
             }
 
-            SettingsNote("Local and Buzz workspace OpenClaws can be linked by hand. Link state belongs only to this Mac.")
+            }
+            if !isWorkspaceScoped {
+                let buzzAgents = model.buzzWorkspaceAgents.filter { $0.runtimeKind == .openclaw }
+                    .sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
+                if !buzzAgents.isEmpty {
+                    SettingsCard(title: "Buzz workspaces", detail: "Agent names and existing Gateway connections.") {
+                        VStack(spacing: 8) {
+                            ForEach(buzzAgents) { agent in agentRow(agent) }
+                        }
+                    }
+                }
+            }
+            ForEach(model.remoteWorkspaces.workspaces.filter { configuration in
+                isWorkspaceScoped ? configuration.id == workspaceID
+                    : model.remoteWorkspaces.isRuntimeEnabled(.openclaw, in: configuration)
+            }) { configuration in
+                RemoteWorkspaceInstanceSettingsCard(model: model.remoteWorkspaces,
+                    configuration: configuration, runtimeKind: .openclaw,
+                    onOpenAgentSettings: {
+                        Task {
+                            do { onOpenAgent(try await model.remoteOpenClawAgentID(for: configuration)) }
+                            catch { instanceError = error.localizedDescription }
+                        }
+                    })
+            }
+            if let instanceError { SettingsError(instanceError) }
+            SettingsNote("Each workspace owns its connection and gateway controls. Buzz is managed separately.")
         }
         .task(id: openClawAgents.map(\.id)) {
             for agent in openClawAgents

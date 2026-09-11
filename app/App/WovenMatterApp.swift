@@ -349,6 +349,7 @@ final class WovenMatterLifecycleDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         model?.refreshRuntimeInventory()
         model?.refreshLocalACPRuntimesNow()
+        model?.remoteWorkspaces.refreshRuntimeMaintenanceAtStartup()
         return true
     }
 
@@ -359,7 +360,7 @@ final class WovenMatterLifecycleDelegate: NSObject, NSApplicationDelegate {
         model.flushNoteDrafts()
         Task {
             do {
-                try await model.openCode?.prepareToQuit()
+                try await model.prepareOpenCodeInstancesToQuit()
                 sender.reply(toApplicationShouldTerminate: true)
             } catch {
                 let alert = NSAlert()
@@ -370,7 +371,7 @@ final class WovenMatterLifecycleDelegate: NSObject, NSApplicationDelegate {
                 let quit = alert.runModal() == .alertSecondButtonReturn
                 terminating = false
                 sender.reply(toApplicationShouldTerminate: quit)
-                if !quit { await model.openCode?.restore() }
+                if !quit { await model.restoreOpenCodeInstances() }
             }
         }
         return .terminateLater

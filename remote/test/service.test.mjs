@@ -156,9 +156,9 @@ test('service authentication exposes the reviewed harness catalog', async (conte
   ))
   const openCode = harnesses.find((value) => value.id === 'opencode')
   assert.equal(openCode.transport, 'opencode-v2')
-  assert.equal(openCode.state, 'transport_unavailable')
+  assert.equal(openCode.state, 'cli_missing')
   assert.deepEqual(openCode.setupMethods, [])
-  assert.match(openCode.transportError, /supported only in the local workspace/)
+  assert.match(openCode.transportError, /this workspace’s OpenCode v2 server/)
   assert.deepEqual(
     Object.keys(harnesses[0].setupMethods[0]).sort(),
     ['displayName', 'id']
@@ -387,7 +387,7 @@ test('Pi authentication locates its owning package from a nested npm bin target'
   })
 })
 
-test('installation includes the declared transport adapter', async (context) => {
+test('installation uses latest adapter and fails unless actual components verify', async (context) => {
   const fixture = await temporaryFixture(context, 'wovenmatter-install-')
   const home = resolve(fixture, 'home')
   const workspace = resolve(fixture, 'workspace')
@@ -395,8 +395,12 @@ test('installation includes the declared transport adapter', async (context) => 
   const npmArguments = resolve(fixture, 'npm-arguments')
   await mkdir(bin, { recursive: true })
   await mkdir(workspace, { recursive: true })
+  await writeFile(resolve(bin, 'flock'), '#!/bin/sh\nshift 3\nexec "$@"\n')
+  await chmod(resolve(bin, 'flock'), 0o700)
+  await writeFile(resolve(bin, 'ps'), '#!/bin/sh\nexit 0\n')
+  await chmod(resolve(bin, 'ps'), 0o700)
   const npm = resolve(bin, 'npm')
-  await writeFile(npm, `#!/bin/sh\nprintf '%s\\n' "$@" > '${npmArguments}'\n`)
+  await writeFile(npm, `#!/bin/sh\nprintf '%s\\n' "$@" >> '${npmArguments}'\n`)
   await chmod(npm, 0o700)
 
   const catalog = JSON.parse(await readFile(catalogPath, 'utf8'))
@@ -435,13 +439,14 @@ test('installation includes the declared transport adapter', async (context) => 
     headers,
     (value) => value.status !== 'running'
   )
-  assert.equal(operation.status, 'succeeded')
+  assert.equal(operation.status, 'failed')
+  assert.match(operation.error, /could not be verified/)
   const argumentsValue = await readFile(npmArguments, 'utf8')
   assert.match(argumentsValue, /@earendil-works\/pi-coding-agent/)
-  assert.match(argumentsValue, /@example\/pi-rpc-adapter@1\.2\.3/)
+  assert.match(argumentsValue, /@example\/pi-rpc-adapter@latest/)
 })
 
-test('Gateway upgrades are authenticated and never forward the API token', async (context) => {
+test('Gateway upgrades refuse unrelated listeners and never forward the API token', async (context) => {
   let upstreamRequest = ''
   const upstream = createNetServer((socket) => {
     socket.on('data', (data) => {
@@ -457,6 +462,8 @@ test('Gateway upgrades are authenticated and never forward the API token', async
   await listen(upstream)
   context.after(() => upstream.close())
   const fixture = await temporaryFixture(context, 'wovenmatter-gateway-')
+  await mkdir(resolve(fixture, '.wovenmatter'), { recursive: true })
+  await writeFile(resolve(fixture, '.wovenmatter/runtime-preferences.json'), JSON.stringify({openclaw:{enabled:true}}))
   const service = await startService({
     workspace: fixture,
     home: fixture,
@@ -476,12 +483,17 @@ test('Gateway upgrades are authenticated and never forward the API token', async
     + 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n'
     + 'Authorization: Bearer gateway-token\r\n\r\n'
   )
-  assert.match(await socketText(socket), /^HTTP\/1\.1 101 Switching Protocols/)
+  assert.match(await socketText(socket), /^HTTP\/1\.1 503 Service Unavailable/)
   assert.doesNotMatch(upstreamRequest, /authorization:|gateway-token/i)
+  const start = await fetch(`${service.url}/v1/openclaw/gateway/start`, { method: 'POST', headers: { authorization: 'Bearer gateway-token' } })
+  assert.equal(start.status, 409)
+  assert.equal((await start.json()).error, 'openclaw_gateway_port_in_use')
 })
 
 test('Gateway start reports running only after its listener accepts connections', async (context) => {
   const fixture = await temporaryFixture(context, 'wovenmatter-gateway-ready-')
+  await mkdir(resolve(fixture, '.wovenmatter'), { recursive: true })
+  await writeFile(resolve(fixture, '.wovenmatter/runtime-preferences.json'), JSON.stringify({openclaw:{enabled:true}}))
   const home = resolve(fixture, 'home')
   const bin = resolve(home, '.local/bin')
   const gatewayPort = await unusedPort()
@@ -558,6 +570,9 @@ async function fixtureEnvironment(home) {
   await mkdir(temporary, { recursive: true })
   await symlink(process.execPath, resolve(tools, 'node'))
   await symlink('/usr/bin/touch', resolve(tools, 'touch'))
+  await symlink('/bin/cat', resolve(tools, 'cat'))
+  await writeFile(resolve(tools, 'flock'), '#!/bin/sh\nshift 3\nexec "$@"\n')
+  await chmod(resolve(tools, 'flock'), 0o700)
   await symlink('/usr/bin/grep', resolve(tools, 'grep'))
   return {
     HOME: home,

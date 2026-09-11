@@ -8,7 +8,10 @@ struct SettingsRemoteWorkspacesView: View {
     let credentialDisclosureAcknowledged: Bool
     let onAcknowledgeCredentialDisclosure: () -> Void
     var reservesRailControlSpace = false
+    var onOpenOpenClawAgent: ((RemoteWorkspaceConfiguration) -> Void)?
+    var onMoreRuntime: ((AgentRuntimeKind, RemoteWorkspaceConfiguration) -> Void)?
     var onBack: () -> Void
+    @State private var selectedRuntime: AgentRuntimeKind?
     @State private var selectedWorkspaceID: UUID?
     @State private var name = ""
     @State private var workspaceID = ""
@@ -34,6 +37,7 @@ struct SettingsRemoteWorkspacesView: View {
                 if selectedWorkspaceID == nil {
                     onBack()
                 } else {
+                    selectedRuntime = nil
                     selectedWorkspaceID = nil
                 }
             }
@@ -44,9 +48,15 @@ struct SettingsRemoteWorkspacesView: View {
                 }
                 credentialAccessCard
                 if let selectedWorkspace {
-                    workspaceCard(selectedWorkspace)
-                    resourceCard(selectedWorkspace)
-                    harnessesCard(selectedWorkspace)
+                    if let selectedRuntime {
+                        Button("Back to \(selectedWorkspace.name)") { self.selectedRuntime = nil }
+                            .buttonStyle(SettingsQuietButtonStyle())
+                        RemoteWorkspaceInstanceSettingsCard(model: model, configuration: selectedWorkspace, runtimeKind: selectedRuntime, onOpenAgentSettings: onOpenOpenClawAgent.map { callback in { callback(selectedWorkspace) } })
+                    } else {
+                        workspaceCard(selectedWorkspace)
+                        resourceCard(selectedWorkspace)
+                        harnessesCard(selectedWorkspace)
+                    }
                     if let progress = model.progress {
                         SettingsNote(progress)
                     }
@@ -482,10 +492,10 @@ struct SettingsRemoteWorkspacesView: View {
         _ workspace: RemoteWorkspaceConfiguration
     ) -> some View {
         SettingsCard(
-            title: "\(workspace.name) harnesses",
-            detail: "Install, choose a supported account or API-key method, and verify each harness directly. Installation and credentials persist in this workspace home."
+            title: "\(workspace.name) runtimes",
+            detail: "Runtime components and credentials belong to this remote workspace. Installation and updates run here through its authenticated SSH connection."
         ) {
-            let harnesses = model.harnesses[workspace.id] ?? []
+            let harnesses = model.currentHarnesses(for: workspace)
             if harnesses.isEmpty {
                 SettingsEmpty("Start the workspace and refresh to inspect its harnesses.")
             } else {
@@ -532,11 +542,15 @@ struct SettingsRemoteWorkspacesView: View {
                                 harness.state.replacingOccurrences(of: "_", with: " ").capitalized,
                                 tone: harness.state == "ready" ? .neutral : .warning
                             )
-                            harnessButtons(harness, workspace: workspace)
+                            runtimeButtons(harness, workspace: workspace)
+                        }
+                        if let runtime = model.runtimeMaintenance[workspace.id]?.first(where: { $0.id == harness.id }) {
+                            runtimeInventory(runtime)
                         }
                     }
                 }
             }
+            if let error = model.runtimeErrors[workspace.id] { SettingsNote(error) }
 
             if let operation = model.operations[workspace.id] {
                 SettingsNote("\(operation.action.capitalized): \(operation.status)\(operation.error.map { " — \($0)" } ?? "")")
@@ -553,6 +567,68 @@ struct SettingsRemoteWorkspacesView: View {
             }
 
         }
+    }
+
+    @ViewBuilder
+    private func runtimeButtons(_ harness: RemoteHarnessStatus, workspace: RemoteWorkspaceConfiguration) -> some View {
+        if let runtime = model.runtimeMaintenance[workspace.id]?.first(where: { $0.id == harness.id }) {
+            VStack(alignment: .trailing, spacing: 8) {
+                HStack(spacing: 8) {
+                    if !runtime.installed {
+                        Button(runtime.failureCount > 0 ? "Retry Install" : "Install") {
+                            model.prepareHarnessAction("install", harness: harness, configuration: workspace)
+                        }.buttonStyle(DashboardPrimaryButtonStyle())
+                    } else {
+                        Button(runtime.enabled ? "Disable" : "Enable") {
+                            model.setRuntimePreferences(runtime, configuration: workspace, enabled: !runtime.enabled)
+                        }.buttonStyle(SettingsQuietButtonStyle())
+                        if runtime.updateAvailable || (runtime.failureCount > 0 && runtime.operation?.action == "update") {
+                            Button(runtime.failureCount > 0 ? "Retry Update" : "Update") {
+                                model.prepareHarnessAction("update", harness: harness, configuration: workspace)
+                            }.buttonStyle(SettingsQuietButtonStyle())
+                        }
+                    }
+                    if !runtime.installed && runtime.enabled {
+                        Button("Disable") {
+                            model.setRuntimePreferences(runtime, configuration: workspace, enabled: false)
+                        }.buttonStyle(SettingsQuietButtonStyle())
+                    }
+                    Button(runtime.visible ? "Hide" : "Show") {
+                        model.setRuntimePreferences(runtime, configuration: workspace, visible: !runtime.visible)
+                    }.buttonStyle(SettingsQuietButtonStyle())
+                    if harness.id == .opencode || harness.id == .openclaw {
+                        Button("More") {
+                            if let onMoreRuntime { onMoreRuntime(harness.id, workspace) }
+                            else { selectedRuntime = harness.id }
+                        }
+                            .buttonStyle(SettingsQuietButtonStyle())
+                    }
+                }
+                if runtime.installed { harnessButtons(harness, workspace: workspace) }
+            }
+            .disabled(model.busyWorkspaceIDs.contains(workspace.id) || runtime.operation?.status == "running" || model.runtimeErrors[workspace.id] != nil)
+        } else {
+            Text("Inventory unavailable")
+                .font(.system(size: 11.5)).foregroundStyle(DashboardPalette.mutedForeground)
+        }
+    }
+
+    private func runtimeInventory(_ runtime: RemoteRuntimeMaintenance) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(runtime.components) { component in
+                Text("\(component.displayName): \(component.installed ? (component.installedVersion ?? "installed · version unavailable") : "missing")"
+                     + (component.latestVersion.map { " · latest \($0)" } ?? ""))
+                    .font(.system(size: 11.5)).foregroundStyle(DashboardPalette.mutedForeground)
+                    .help(component.path ?? "No installed path")
+            }
+            if let notice = runtime.notice { SettingsNote(notice) }
+            if runtime.failureCount >= 2, let prompt = runtime.diagnosticPrompt {
+                Button("Copy Diagnostic Prompt") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(prompt, forType: .string)
+                }.buttonStyle(SettingsQuietButtonStyle())
+            }
+        }.frame(maxWidth: .infinity, alignment: .leading)
     }
 
     @ViewBuilder
@@ -601,10 +677,6 @@ struct SettingsRemoteWorkspacesView: View {
                 }
                 .buttonStyle(SettingsQuietButtonStyle())
             }
-            Button("Update") {
-                model.prepareHarnessAction("update", harness: harness, configuration: workspace)
-            }
-            .buttonStyle(SettingsQuietButtonStyle())
         }
     }
 
@@ -814,6 +886,64 @@ struct SettingsRemoteWorkspacesView: View {
                 .font(.system(size: 11.5))
                 .foregroundStyle(DashboardPalette.mutedForeground)
                 .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+/// Shared by workspace More navigation and the provider's workspace entry.
+struct RemoteWorkspaceInstanceSettingsCard: View {
+    @Bindable var model: RemoteWorkspacesModel
+    let configuration: RemoteWorkspaceConfiguration
+    let runtimeKind: AgentRuntimeKind
+    var onOpenAgentSettings: (() -> Void)?
+
+    private var status: RemoteWorkspaceInstanceStatus? {
+        model.workspaceInstances[configuration.id]?[runtimeKind]
+    }
+    private var name: String { runtimeKind == .opencode ? "OpenCode v2" : "OpenClaw Gateway" }
+
+    var body: some View {
+        SettingsCard(title: "\(name) · \(configuration.name)",
+                     detail: "This instance belongs to \(configuration.name) on \(configuration.hostName).") {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    SettingsPill(status?.state.capitalized ?? "Not checked",
+                                 tone: status?.state == "running" ? .neutral : .warning)
+                    if let version = status?.version {
+                        Text(version).font(.system(size: 11.5, design: .monospaced))
+                    }
+                    Spacer()
+                    Button("Refresh") {
+                        model.refreshWorkspaceInstance(runtimeKind, configuration: configuration)
+                    }.buttonStyle(SettingsQuietButtonStyle())
+                    if status?.state == "running" {
+                        Button("Stop") {
+                            model.refreshWorkspaceInstance(runtimeKind, configuration: configuration, action: "stop")
+                        }.buttonStyle(SettingsQuietButtonStyle())
+                    } else {
+                        Button("Start") {
+                            model.refreshWorkspaceInstance(runtimeKind, configuration: configuration, action: "start")
+                        }.buttonStyle(DashboardPrimaryButtonStyle())
+                            .disabled(!model.isRuntimeEnabled(runtimeKind, in: configuration))
+                    }
+                }
+                SettingsNote("Connection: authenticated workspace service over SSH to \(configuration.hostName):\(configuration.remotePort). The server binds to loopback; credentials remain in the workspace and Keychain.")
+                if runtimeKind == .openclaw, let onOpenAgentSettings {
+                    Button("Agent settings", action: onOpenAgentSettings)
+                        .buttonStyle(SettingsQuietButtonStyle())
+                }
+                if let endpoint = status?.endpointPath {
+                    Text(endpoint).font(.system(size: 11.5, design: .monospaced)).textSelection(.enabled)
+                }
+                if let error = status?.lastError { SettingsError(error) }
+                if !model.isRuntimeEnabled(runtimeKind, in: configuration) {
+                    SettingsNote("Install and enable this runtime in this workspace before starting it.")
+                }
+            }
+            .disabled(model.busyWorkspaceIDs.contains(configuration.id))
+        }
+        .task(id: "\(configuration.id):\(runtimeKind.rawValue)") {
+            model.refreshWorkspaceInstance(runtimeKind, configuration: configuration)
         }
     }
 }
