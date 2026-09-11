@@ -75,6 +75,9 @@ struct DashboardCloudConversation: View {
     let onDropFiles: ([URL]) -> Bool
     let onCommandNavigation: (DashboardComposerNavigationDirection) -> Bool
     let onUnavailableComposerAction: (String) -> Void
+    private var workspaceOpenCode: OpenCodeModel? {
+        conversation.flatMap { model.openCodeModel(for: $0.id) }
+    }
     @State private var scrollState = DashboardConversationScrollState()
     @State private var isPrependingHistory = false
     @State private var pendingBottomConversationID: String?
@@ -89,10 +92,10 @@ struct DashboardCloudConversation: View {
         let referencesByMessageID = Dictionary(grouping: messageReferences, by: \.messageID)
         let visibleMessages = messages.filter { record in
             DashboardRunDisplayPolicy.presentsMessage(record, run: runsByAssistantMessageID[record.id])
-                && (conversation?.localRuntimeKind != .opencode || model.openCode?.links[record.conversationID] == nil
-                    || model.openCode?.snapshots[record.conversationID]?.messages.contains(where: { $0["id"].text == record.clientMessageID && OpenCodeSessionSnapshot.presentsMessage($0) }) == true)
+                && (conversation?.localRuntimeKind != .opencode || workspaceOpenCode?.links[record.conversationID] == nil
+                    || workspaceOpenCode?.snapshots[record.conversationID]?.messages.contains(where: { $0["id"].text == record.clientMessageID && OpenCodeSessionSnapshot.presentsMessage($0) }) == true)
         }
-        let openCodeOrder = Dictionary((conversation.flatMap { model.openCode?.snapshots[$0.id]?.messages } ?? []).enumerated().map { ($0.element["id"].text, $0.offset) }, uniquingKeysWith: { first, _ in first })
+        let openCodeOrder = Dictionary((conversation.flatMap { workspaceOpenCode?.snapshots[$0.id]?.messages } ?? []).enumerated().map { ($0.element["id"].text, $0.offset) }, uniquingKeysWith: { first, _ in first })
         let orderedMessages = openCodeOrder.isEmpty ? visibleMessages : visibleMessages.sorted {
             (openCodeOrder[$0.clientMessageID ?? ""] ?? 0) < (openCodeOrder[$1.clientMessageID ?? ""] ?? 0)
         }
@@ -121,7 +124,7 @@ struct DashboardCloudConversation: View {
                             )
                         } else {
                             if scrollState.positionedConversationID == conversation?.id,
-                               (conversationState?.hasOlderMessages == true || conversation.flatMap { model.openCode?.isLocalSession($0.id) == true ? model.openCode?.snapshots[$0.id]?.olderCursor : nil } != nil),
+                               (conversationState?.hasOlderMessages == true || conversation.flatMap { workspaceOpenCode?.isLocalSession($0.id) == true ? workspaceOpenCode?.snapshots[$0.id]?.olderCursor : nil } != nil),
                                let oldestMessageID = messages.first?.id {
                                 Color.clear
                                     .frame(height: 1)
@@ -149,7 +152,7 @@ struct DashboardCloudConversation: View {
                                     activities: run.map { activitiesByRunID[$0.id] ?? [] } ?? []
                                 )
                                 .id(message.id)
-                                if let openCode = model.openCode, openCode.links[message.conversationID] != nil {
+                                if let openCode = workspaceOpenCode, openCode.links[message.conversationID] != nil {
                                     OpenCodeMessageMedia(model: openCode, conversationID: message.conversationID, messageID: message.clientMessageID ?? "")
                                 }
                             }
@@ -225,7 +228,7 @@ struct DashboardCloudConversation: View {
             .simultaneousGesture(TapGesture().onEnded(onActivatePanel))
 
             VStack(spacing: 8) {
-                if let conversation, conversation.localRuntimeKind == .opencode, let openCode = model.openCode {
+                if let conversation, conversation.localRuntimeKind == .opencode, let openCode = workspaceOpenCode {
                     OpenCodeConversationControls(model: openCode, conversationID: conversation.id)
                         .frame(maxWidth: 768)
                 }
@@ -312,7 +315,7 @@ struct DashboardCloudConversation: View {
                             model.isOpenClawGatewayConversation($0.id) || $0.localRuntimeKind != nil
                         } ?? false,
                         sessionMetadata: conversation.flatMap {
-                            if $0.localRuntimeKind == .opencode { return model.openCode?.metadata($0.id) }
+                            if $0.localRuntimeKind == .opencode { return workspaceOpenCode?.metadata($0.id) }
                             if model.isOpenClawGatewayConversation($0.id) {
                                 return model.openClawGatewaySessionMetadata[$0.id]
                             }
@@ -320,9 +323,9 @@ struct DashboardCloudConversation: View {
                         },
                         sessionControlsDisabled: conversation.map {
                             if $0.localRuntimeKind == .opencode {
-                                return model.openCode?.isLocalSession($0.id) != true
-                                    || model.openCode?.statuses[$0.id] != "Connected"
-                                    || model.openCode?.updatingSessions.contains($0.id) == true
+                                return workspaceOpenCode?.isLocalSession($0.id) != true
+                                    || workspaceOpenCode?.statuses[$0.id] != "Connected"
+                                    || workspaceOpenCode?.updatingSessions.contains($0.id) == true
                                     || model.localRunningConversationIDs.contains($0.id)
                             }
                             if model.isOpenClawGatewayConversation($0.id) {
@@ -336,7 +339,7 @@ struct DashboardCloudConversation: View {
                             return true
                         } ?? true,
                         sendDisabled: sendInProgress || (conversation.map {
-                            if $0.localRuntimeKind == .opencode { return model.openCode?.isLocalSession($0.id) != true || model.openCode?.statuses[$0.id] != "Connected" }
+                            if $0.localRuntimeKind == .opencode { return workspaceOpenCode?.isLocalSession($0.id) != true || workspaceOpenCode?.statuses[$0.id] != "Connected" }
                             guard $0.localRuntimeKind != nil else { return true }
                             return model.loadingLocalACPSessionIDs.contains($0.id)
                                 || model.updatingLocalACPSessionIDs.contains($0.id)
@@ -346,7 +349,7 @@ struct DashboardCloudConversation: View {
                         onActivate: onActivatePanel,
                         onSelectModel: { selection in
                             guard let conversation else { return }
-                            if conversation.localRuntimeKind == .opencode { model.openCode?.updateSelection(conversation.id, model: selection); return }
+                            if conversation.localRuntimeKind == .opencode { workspaceOpenCode?.updateSelection(conversation.id, model: selection); return }
                             if model.isOpenClawGatewayConversation(conversation.id) {
                                 model.patchOpenClawGatewaySession(
                                     conversationID: conversation.id,
@@ -365,7 +368,7 @@ struct DashboardCloudConversation: View {
                         },
                         onSelectThinking: { selection in
                             guard let conversation else { return }
-                            if conversation.localRuntimeKind == .opencode { model.openCode?.updateSelection(conversation.id, thinking: selection); return }
+                            if conversation.localRuntimeKind == .opencode { workspaceOpenCode?.updateSelection(conversation.id, thinking: selection); return }
                             if model.isOpenClawGatewayConversation(conversation.id) {
                                 model.patchOpenClawGatewaySession(
                                     conversationID: conversation.id,
@@ -507,7 +510,7 @@ struct DashboardCloudConversation: View {
         guard let conversation, !isPrependingHistory else { return }
         isPrependingHistory = true
         if conversationState?.hasOlderMessages != true,
-           let openCode = model.openCode, openCode.isLocalSession(conversation.id),
+           let openCode = workspaceOpenCode, openCode.isLocalSession(conversation.id),
            let link = openCode.links[conversation.id], openCode.snapshots[conversation.id]?.olderCursor != nil {
             do {
                 try await openCode.coordinator.loadOlder(link)

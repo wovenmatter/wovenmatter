@@ -1,3 +1,5 @@
+import { createRuntimeMaintenance, acquireHostLock } from './runtime-maintenance.mjs'
+import { createWorkspaceInstances } from './workspace-instances.mjs'
 import { createServer } from 'node:http'
 import { timingSafeEqual, randomUUID, createHash } from 'node:crypto'
 import { readFile, writeFile, mkdir } from 'node:fs/promises'
@@ -27,7 +29,6 @@ if (catalogDocument.schemaVersion !== 4 || !Array.isArray(catalogDocument.harnes
   throw new Error('Unsupported harness catalog')
 }
 const catalog = new Map(catalogDocument.harnesses.map((entry) => [entry.id, entry]))
-const operations = new Map()
 const authenticationSessions = new Map()
 const maximumRetainedTerminalRecords = 64
 const maximumInstallerBytes = 5_242_880
@@ -42,10 +43,39 @@ let gateway = {
   startPromise: null,
 }
 
+const instances = createWorkspaceInstances({
+  workspaceRoot, environment: harnessEnvironment,
+  gateway: {
+    status: gatewayStatus,
+    start: async () => { gateway.desired = true; await startGateway() },
+    stop: async () => { await stopGateway(); gateway.desired = false },
+  },
+  isEnabled: async id => await maintenance.isEnabled(id),
+})
+const maintenance = createRuntimeMaintenance({
+  catalog, workspaceRoot, environment: harnessEnvironment, verifiedInstaller,
+  hasActiveRuntime: async id => await instances.hasActiveRuntime(id)
+    || [...authenticationSessions.values()].some(s => s.harness.id === id && s.state === 'waiting_for_user'),
+})
+
 const server = createServer(async (request, response) => {
   try {
     if (!authorized(request)) return json(response, 401, { error: 'unauthorized' })
     const url = new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`)
+
+    if (await instances.handle(request, response, url)) return
+    if (request.method === 'GET' && url.pathname === '/v1/runtime-maintenance') {
+      return json(response, 200, await maintenance.list())
+    }
+    if (request.method === 'POST' && url.pathname === '/v1/runtime-maintenance/check') {
+      return json(response, 200, await maintenance.check())
+    }
+    const maintenanceMatch = url.pathname.match(/^\/v1\/runtime-maintenance\/([^/]+)(?:\/(install|update))?$/)
+    if (maintenanceMatch) {
+      const harness = requireHarness(maintenanceMatch[1])
+      if (request.method === 'PATCH' && !maintenanceMatch[2]) return json(response, 200, await maintenance.preferences(harness, await readJSON(request)))
+      if (request.method === 'POST' && maintenanceMatch[2]) return json(response, 202, await maintenance.start(harness, maintenanceMatch[2], await readJSON(request)))
+    }
 
     if (request.method === 'GET' && url.pathname === '/v1/health') {
       return json(response, 200, {
@@ -65,7 +95,8 @@ const server = createServer(async (request, response) => {
     const installPreview = url.pathname.match(/^\/v1\/harnesses\/([^/]+)\/install-preview$/)
     if (request.method === 'GET' && installPreview) {
       const harness = requireHarness(installPreview[1])
-      return json(response, 200, await installerPreview(harness))
+      try { return json(response, 200, await installerPreview(harness)) }
+      catch (error) { await maintenance.recordFailure(harness, 'install-preview', error); throw error }
     }
 
     const harnessAction = url.pathname.match(/^\/v1\/harnesses\/([^/]+)\/(install|update|recheck)$/)
@@ -77,24 +108,13 @@ const server = createServer(async (request, response) => {
         return json(response, 409, { error: 'confirmation_required' })
       }
       if (action === 'recheck') return json(response, 200, await harnessStatus(harness))
-      let installerPath = null
-      if ((action === 'install' || action === 'update')
-        && harness.install.kind === 'official-script') {
-        if (typeof body.sourceSHA256 !== 'string') {
-          return json(response, 409, { error: 'source_digest_required' })
-        }
-        installerPath = (await verifiedInstaller(
-          harness,
-          body.sourceSHA256
-        )).path
-      }
-      const operation = startHarnessOperation(harness, action, installerPath)
+      const operation = await maintenance.start(harness, action, body)
       return json(response, 202, operationView(operation))
     }
 
     const operationMatch = url.pathname.match(/^\/v1\/operations\/([^/]+)$/)
     if (request.method === 'GET' && operationMatch) {
-      const operation = operations.get(normalizeIdentifier(operationMatch[1]))
+      const operation = maintenance.operation(operationMatch[1])
       if (!operation) return json(response, 404, { error: 'operation_not_found' })
       return json(response, 200, operationView(operation))
     }
@@ -162,9 +182,11 @@ const server = createServer(async (request, response) => {
       return json(response, 202, gatewayStatus())
     }
     if (request.method === 'POST' && url.pathname === '/v1/openclaw/gateway/restart') {
+      if (!await maintenance.isEnabled('openclaw') || maintenance.isBusy('openclaw')) throw httpError(409, 'runtime_not_enabled_or_busy')
       gateway.desired = true
       gateway.restarts = 0
       await stopGateway()
+      gateway.desired = true
       await startGateway()
       return json(response, 202, gatewayStatus())
     }
@@ -178,6 +200,10 @@ const server = createServer(async (request, response) => {
 server.on('upgrade', (request, socket, head) => {
   if (!authorized(request) || request.url !== '/v1/openclaw/gateway/socket') {
     socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n')
+    return socket.destroy()
+  }
+  if (!gateway.ready || !gateway.process) {
+    socket.write('HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n')
     return socket.destroy()
   }
   const upstream = connect({ host: '127.0.0.1', port: gatewayPort }, () => {
@@ -207,12 +233,17 @@ function authorized(request) {
 }
 
 async function harnessStatus(harness) {
-  if (harness.transport === 'opencode-v2') return {
-    id: harness.id, displayName: harness.displayName, transport: harness.transport,
-    capabilities: harness.capabilities, state: 'transport_unavailable',
-    installationStatus: 'unknown', authenticationStatus: 'unknown', transportStatus: 'unavailable',
-    transportError: 'OpenCode v2 is supported only in the local workspace. Remote OpenCode sessions are unavailable.',
-    setupMethods: [], detectedProviders: [],
+  if (harness.transport === 'opencode-v2') {
+    const inventory = await maintenance.inventory(harness)
+    const instance = await instances.status('opencode')
+    return {
+      id: harness.id, displayName: harness.displayName, transport: harness.transport,
+      capabilities: harness.capabilities, state: inventory.installed ? ((instance.state === 'running') ? 'ready' : 'transport_unavailable') : 'cli_missing',
+      installationStatus: inventory.installed ? 'installed' : 'cli_missing',
+      authenticationStatus: 'unknown', transportStatus: (instance.state === 'running') ? 'ready' : 'unavailable',
+      transportError: (instance.state === 'running') ? null : 'Start this workspace’s OpenCode v2 server in More settings.',
+      setupMethods: [], detectedProviders: [],
+    }
   }
 
   const cliInstalled = await commandExists(harness.cliCommand)
@@ -345,55 +376,6 @@ async function discoverAuthenticationProviders(harness) {
     .map((value) => value.discovery.displayName)
 }
 
-function startHarnessOperation(harness, action, installerPath = null) {
-  const active = [...operations.values()].find((value) => value.harnessID === harness.id && value.status === 'running')
-  if (active) return active
-  const command = operationCommand(harness, action, installerPath)
-  const operation = {
-    id: randomUUID(), harnessID: harness.id, action, status: 'running',
-    output: '', error: null, startedAt: new Date().toISOString(), finishedAt: null,
-  }
-  operations.set(normalizeIdentifier(operation.id), operation)
-  const child = spawn('/bin/bash', ['-c', command], {
-    cwd: workspaceRoot,
-    env: harnessEnvironment(),
-    stdio: ['ignore', 'pipe', 'pipe'],
-  })
-  capture(child.stdout, operation)
-  capture(child.stderr, operation)
-  child.on('error', (error) => { operation.error = error.message })
-  child.on('close', async (code) => {
-    operation.status = code === 0 ? 'succeeded' : 'failed'
-    operation.error = code === 0 ? null : operation.error ?? `command exited ${code}`
-    operation.finishedAt = new Date().toISOString()
-    pruneTerminalRecords(operations, (value) => value.status !== 'running')
-  })
-  return operation
-}
-
-function operationCommand(harness, action, installerPath) {
-  if (action === 'install' || action === 'update') {
-    const adapterPackage = harness.minimumAdapterVersion
-      ? `${harness.adapterPackage}@${harness.minimumAdapterVersion}`
-      : harness.adapterPackage
-    if (harness.install.kind === 'npm-global') {
-      const packages = [harness.install.package, adapterPackage]
-        .filter((value) => typeof value === 'string')
-        .map(shellQuote)
-        .join(' ')
-      return `npm install --global --prefix "$HOME/.local" ${packages}`
-    }
-    if (!installerPath) throw httpError(409, 'verified_installer_required')
-    const adapter = harness.adapterPackage
-      ? ` && npm install --global --prefix "$HOME/.local" ${shellQuote(adapterPackage)}`
-      : ''
-    const interpreter = shellQuote(harness.install.interpreter)
-    const argumentsValue = (harness.install.arguments ?? []).map(shellQuote).join(' ')
-    return `${interpreter} ${shellQuote(installerPath)} ${argumentsValue}${adapter}`
-  }
-  throw httpError(400, 'unsupported_action')
-}
-
 function startAuthenticationSession(harness, method) {
   const active = [...authenticationSessions.values()].find((value) =>
     value.harness.id === harness.id
@@ -457,16 +439,32 @@ function authenticationProcessLaunch(method) {
     : { command: '/usr/bin/script', arguments: ['-qefc', command, '/dev/null'] }
 }
 
+let gatewayUnlock = null
+let gatewayLaunchReservation = null
 async function startGateway() {
+  if (gatewayLaunchReservation) return gatewayLaunchReservation
+  gatewayLaunchReservation = (async () => {
+    if (!await maintenance.isEnabled('openclaw') || maintenance.isBusy('openclaw')) throw httpError(409, 'runtime_not_enabled_or_busy')
+    if (gateway.ready && gateway.process) return
+    const unlock = await acquireHostLock(resolve(process.env.HOME, '.wovenmatter/runtime-operation.lock'), harnessEnvironment(), workspaceRoot, true)
+    gatewayUnlock = unlock
+    try { await startGatewayProcess() }
+    catch (error) { if (!gateway.process) { unlock(); gatewayUnlock = null }; throw error }
+  })().finally(() => { gatewayLaunchReservation = null })
+  return gatewayLaunchReservation
+}
+async function startGatewayProcess() {
   if (gateway.ready && gateway.process) return
   if (gateway.startPromise) return gateway.startPromise
   if (gateway.process) throw httpError(503, 'openclaw_gateway_start_in_progress')
+  if (await tcpListenerAvailable('127.0.0.1', gatewayPort, 500)) throw httpError(409, 'openclaw_gateway_port_in_use')
   if (!await commandExists('openclaw')) throw httpError(409, 'openclaw_not_installed')
   const child = spawn('openclaw', ['gateway', 'run', '--bind', 'loopback', '--port', String(gatewayPort)], {
     cwd: workspaceRoot,
     env: harnessEnvironment(),
     stdio: ['ignore', 'pipe', 'pipe'],
   })
+  child.on('error', () => { gateway.lastError = 'openclaw_gateway_launch_failed' })
   gateway.process = child
   gateway.ready = false
   gateway.lastError = null
@@ -476,6 +474,7 @@ async function startGateway() {
     process.stderr.write(`[gateway] ${data}`)
   })
   child.on('close', () => {
+    gatewayUnlock?.(); gatewayUnlock = null
     if (gateway.process === child) gateway.process = null
     gateway.ready = false
     gateway.startPromise = null
@@ -502,9 +501,9 @@ async function startGateway() {
 }
 
 async function stopGateway() {
+  gateway.desired = false
   const child = gateway.process
   if (!child) return
-  gateway.desired = false
   child.kill('SIGTERM')
   await new Promise((resolvePromise) => {
     const timeout = setTimeout(resolvePromise, 5_000)
@@ -513,7 +512,6 @@ async function stopGateway() {
       resolvePromise()
     })
   })
-  gateway.desired = true
 }
 
 async function waitForTCPListener(port, child, timeoutMilliseconds) {
@@ -548,7 +546,7 @@ function gatewayStatus() {
       : gateway.process ? 'starting' : gateway.desired ? 'reconnecting' : 'stopped',
     pid: gateway.process?.pid ?? null,
     restarts: gateway.restarts,
-    lastError: gateway.lastError,
+    lastError: gateway.lastError ? 'Gateway reported an error. Inspect logs on this workspace host.' : null,
     socketPath: '/v1/openclaw/gateway/socket',
   }
 }
@@ -576,10 +574,6 @@ function authenticationSessionView(session) {
 
 function operationView(operation) {
   return { ...operation, output: operation.output.slice(-16_384) }
-}
-
-function capture(stream, operation) {
-  stream.on('data', (data) => { operation.output = (operation.output + data).slice(-65_536) })
 }
 
 function captureAuthenticationOutput(stream, session) {

@@ -10,11 +10,17 @@ struct OpenCodeSettingsCard: View {
     @State private var loadingModels = false
     @State private var modelsError: String?
     var body: some View {
-        SettingsCard(title: "OpenCode", detail: "Uses the local OpenCode v2 service. New chats use your Woven Matter workspace.") {
+        SettingsCard(title: model.workspaceName, detail: model.isRemote
+            ? "OpenCode v2 through this remote workspace’s authenticated SSH connection."
+            : "OpenCode v2 on this Mac. New chats use your Woven Matter workspace.") {
+            if let configuration = model.remoteConfiguration {
+                SettingsValueRow(label: "Host", value: configuration.hostName)
+                SettingsNote("Authenticated workspace service over SSH, port \(configuration.remotePort). Connection settings belong to this remote workspace.")
+            }
             HStack {
                 SettingsPill(model.isConnecting ? "Connecting…" : model.isReady ? "Connected" : "Not connected", tone: model.isReady ? .neutral : .warning)
                 Spacer()
-                if model.isReady {
+                if model.isReady && !model.isRemote {
                     Button("Open in browser") {
                         model.perform { openURL(try model.browserURL()) }
                     }
@@ -33,14 +39,14 @@ struct OpenCodeSettingsCard: View {
                                 catch { modelsError = error.localizedDescription }
                             }
                     }
-                Button(model.isInstalled ? "Connect" : model.isInstalling ? "Downloading…" : "Download") {
+                Button(model.isRemote || model.isInstalled ? "Connect" : model.isInstalling ? "Downloading…" : "Download") {
                     model.perform {
                         if model.isInstalled { try await model.connectLocal() }
                         else { try await model.download() }
                     }
                 }
                     .buttonStyle(SettingsQuietButtonStyle())
-                    .disabled(model.isConnecting || model.isReady || model.isInstalling || model.isControllingServer)
+                    .disabled(model.isConnecting || model.isReady || model.isInstalling || model.isControllingServer || (model.isRemote && !model.canConnect))
             }
             HStack(spacing: 8) {
                 Button("Stop server") { model.perform { try await model.stopServer() } }
@@ -58,7 +64,7 @@ struct OpenCodeSettingsCard: View {
                 .font(.caption).foregroundStyle(.secondary)
             if let error = model.error { Text(error).font(.callout).foregroundStyle(.red) }
             if !model.canConnect {
-                Text("Install OpenCode v2 to connect.").font(.caption).foregroundStyle(.secondary)
+                Text(model.isRemote ? "Install and enable OpenCode in this remote workspace’s runtime settings to connect." : "Install OpenCode v2 to connect.").font(.caption).foregroundStyle(.secondary)
             }
         }
     }
@@ -113,14 +119,36 @@ struct OpenCodeSettingsCard: View {
 
 struct SettingsOpenCodeView: View {
     @Bindable var model: ApplicationModel
+    /// nil scope shows all eligible workspaces; a scoped nil ID means this Mac.
+    var workspaceID: UUID?
+    var isWorkspaceScoped = false
     var reservesRailControlSpace = false
     var onBack: () -> Void
 
+    private var remoteConfigurations: [RemoteWorkspaceConfiguration] {
+        if isWorkspaceScoped {
+            return model.remoteWorkspaces.workspaces.filter { $0.id == workspaceID }
+        }
+        return model.remoteWorkspaces.enabledRuntimeWorkspaces(.opencode)
+    }
+
     var body: some View {
         SettingsPage(title: "OpenCode",
-            detail: "The local OpenCode v2 service and its connection on this Mac.",
+            detail: "Independent OpenCode v2 connections for each workspace.",
             reservesRailControlSpace: reservesRailControlSpace, onBack: onBack) {
-            if let openCode = model.openCode { OpenCodeSettingsCard(model: openCode, workspace: model.localACPWorkspaceAvailability.rootPath ?? FileManager.default.homeDirectoryForCurrentUser.appending(path: ".woven-matter").path) }
+            if !isWorkspaceScoped || workspaceID == nil, let openCode = model.openCode {
+                OpenCodeSettingsCard(model: openCode, workspace: model.localACPWorkspaceAvailability.rootPath
+                    ?? FileManager.default.homeDirectoryForCurrentUser.appending(path: ".woven-matter").path)
+            }
+            ForEach(remoteConfigurations) { configuration in
+                if let instance = model.remoteOpenCodes[configuration.id] {
+                    OpenCodeSettingsCard(model: instance,
+                        workspace: model.remoteWorkspaces.remoteWorkspaceRoot(for: configuration))
+                } else {
+                    SettingsNote("Preparing the OpenCode connection for \(configuration.name)…")
+                }
+            }
         }
+        .task { await model.synchronizeRemoteOpenCodeInstances() }
     }
 }

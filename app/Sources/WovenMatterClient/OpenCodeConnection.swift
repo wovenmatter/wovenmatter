@@ -12,14 +12,31 @@ public struct OpenCodeConnection: Equatable, Sendable {
     public let registration: URL?
     public let pid: Int?
     public let version: String?
+    public let servicePathPrefix: String
+    private let bearerToken: String?
+    public var isRemoteWorkspaceProxy: Bool { bearerToken != nil }
 
     public init(identity: String, url: URL, username: String = "opencode", password: String,
-                registration: URL? = nil, pid: Int? = nil, version: String? = nil) throws {
+                registration: URL? = nil, pid: Int? = nil, version: String? = nil,
+                servicePathPrefix: String = "", bearerToken: String? = nil) throws {
         guard ["http", "https"].contains(url.scheme), url.host != nil,
               url.user == nil, url.password == nil, url.query == nil, url.fragment == nil,
               url.path.isEmpty || url.path == "/" else {
             throw OpenCodeError.message("Use an HTTP or HTTPS server origin without embedded credentials or a path.")
         }
+        if let bearerToken {
+            guard !bearerToken.isEmpty, !bearerToken.contains(where: { $0.isNewline }),
+                  identity.hasPrefix("remote-workspace:"),
+                  UUID(uuidString: String(identity.dropFirst("remote-workspace:".count))) != nil,
+                  url.scheme == "http", ["127.0.0.1", "::1", "[::1]", "localhost"].contains(url.host ?? ""),
+                  servicePathPrefix == "/v1/workspace-instances/opencode", registration == nil else {
+                throw OpenCodeError.message("Remote OpenCode must use its workspace's authenticated SSH loopback proxy.")
+            }
+        } else if !servicePathPrefix.isEmpty {
+            throw OpenCodeError.message("A service path requires workspace proxy authorization.")
+        }
+        self.servicePathPrefix = servicePathPrefix
+        self.bearerToken = bearerToken
         self.identity = identity; self.url = url; self.username = username; self.password = password
         self.registration = registration; self.pid = pid; self.version = version
     }
@@ -47,11 +64,16 @@ public struct OpenCodeConnection: Equatable, Sendable {
     /// OpenCode consumes this token at startup and removes it from browser history.
     /// Keep this URL out of logs and persistent Woven Matter settings.
     public var browserURL: URL {
+        // Workspace API credentials must never be embedded in browser URLs.
+        if isRemoteWorkspaceProxy { return url }
         var components = URLComponents(url: url, resolvingAgainstBaseURL: false)!
         components.queryItems = [URLQueryItem(name: "auth_token", value: Data("\(username):\(password)".utf8).base64EncodedString())]
         return components.url!
     }
-    public var authorization: String { "Basic " + Data("\(username):\(password)".utf8).base64EncodedString() }
+    public var authorization: String {
+        if let bearerToken { return "Bearer " + bearerToken }
+        return "Basic " + Data("\(username):\(password)".utf8).base64EncodedString()
+    }
 }
 
 /// Server-selected redirects must not move authenticated requests or mutations.
@@ -81,8 +103,8 @@ public struct OpenCodeHTTPClient: Sendable {
               var components = URLComponents(url: connection.url, resolvingAgainstBaseURL: false) else {
             throw OpenCodeError.message("Invalid OpenCode request path.")
         }
-        components.percentEncodedPath = path
-        components.queryItems = query.sorted { $0.key < $1.key }.map { URLQueryItem(name: $0.key, value: $0.value) }
+        components.percentEncodedPath = connection.servicePathPrefix + path
+        components.queryItems = query.isEmpty ? nil : query.sorted { $0.key < $1.key }.map { URLQueryItem(name: $0.key, value: $0.value) }
         guard let url = components.url else { throw OpenCodeError.message("Invalid OpenCode request URL.") }
         var request = URLRequest(url: url)
         request.httpMethod = method
