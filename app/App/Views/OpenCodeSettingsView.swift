@@ -96,6 +96,10 @@ struct OpenCodeSettingsCard: View {
                         .accessibilityLabel((option["name"].string ?? option["id"].text) + ", " + option["providerID"].text)
                     }
                 }
+                // Native switch tracks extend slightly beyond their layout frame.
+                // Keep that drawing inside the scroll viewport at every edge.
+                .padding(.horizontal, 4)
+                .padding(.vertical, 2)
             }
             .frame(height: 300)
             Text("Saved automatically. Existing chats keep their selected model.")
