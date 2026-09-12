@@ -22,7 +22,6 @@ struct SettingsView: View {
     @AppStorage(DashboardTheme.storageKey) private var storedTheme = DashboardTheme.green.rawValue
     @State private var section: SettingsSection = .landing
     @State private var providerReturnSection: SettingsSection = .openClaw
-    @State private var navigationError: String?
 
     private var theme: DashboardTheme {
         DashboardTheme(rawValue: storedTheme) ?? .green
@@ -84,15 +83,6 @@ struct SettingsView: View {
                         model.acknowledgeCredentialAccessDisclosure()
                     },
                     reservesRailControlSpace: reservesRailControlSpace,
-                    onOpenOpenClawAgent: { configuration in
-                        Task {
-                            do {
-                                let agentID = try await model.remoteOpenClawAgentID(for: configuration)
-                                providerReturnSection = .openClawWorkspace(configuration.id)
-                                section = .openClawAgent(agentID)
-                            } catch { navigationError = error.localizedDescription }
-                        }
-                    },
                     onMoreRuntime: { kind, configuration in
                         section = kind == .opencode ? .openCodeWorkspace(configuration.id) : .openClawWorkspace(configuration.id)
                     },
@@ -112,9 +102,6 @@ struct SettingsView: View {
                 )
             }
         }
-        .alert("Workspace unavailable", isPresented: Binding(get: { navigationError != nil }, set: { if !$0 { navigationError = nil } })) {
-            Button("OK") { navigationError = nil }
-        } message: { Text(navigationError ?? "") }
         .foregroundStyle(DashboardPalette.foreground)
         .environment(\.dashboardTheme, theme)
         .preferredColorScheme(.light)

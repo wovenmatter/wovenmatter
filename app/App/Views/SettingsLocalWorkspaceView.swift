@@ -274,7 +274,7 @@ struct SettingsLocalWorkspaceView: View {
                                     model.installLocalACPRuntimeComponent(definition.runtimeKind)
                                 }
                                 .buttonStyle(DashboardPrimaryButtonStyle())
-                                .disabled(inventory == nil || !model.installingLocalACPRuntimeKinds.isEmpty || !model.localRunningConversationIDs.isEmpty)
+                                .disabled(inventory == nil || model.checkingRuntimeInventory || !model.installingLocalACPRuntimeKinds.isEmpty || model.localRuntimeMaintenanceHasActiveConversation)
                             } else if model.isLocalACPRuntimeCredentialAccessEnabled(definition.runtimeKind) {
                                 Button("Disable") {
                                     model.disableLocalACPRuntimeCredentialAccess(
@@ -283,18 +283,8 @@ struct SettingsLocalWorkspaceView: View {
                                 }
                                 .buttonStyle(SettingsQuietButtonStyle())
                             } else {
-                                let credentialAccessEnabled = model
-                                    .isLocalACPRuntimeCredentialAccessEnabled(
-                                        definition.runtimeKind
-                                    )
-                                Button(
-                                    isChecking ? "Checking…"
-                                        : credentialAccessEnabled ? "Recheck" : "Enable"
-                                ) {
-                                    if credentialAccessEnabled {
-                                        model.refreshLocalACPRuntimesNow()
-                                    } else if model
-                                        .hasAcknowledgedCredentialAccessDisclosure {
+                                Button(isChecking ? "Checking…" : "Enable") {
+                                    if model.hasAcknowledgedCredentialAccessDisclosure {
                                         model.enableLocalACPRuntimeCredentialAccess(
                                             definition.runtimeKind
                                         )
@@ -381,7 +371,7 @@ struct SettingsLocalWorkspaceView: View {
         }
         .buttonStyle(SettingsQuietButtonStyle())
         .disabled(checking || model.checkingRuntimeInventory || !model.installingLocalACPRuntimeKinds.isEmpty
-            || model.openCode?.isInstalling == true || (hasUpdate && !model.localRunningConversationIDs.isEmpty))
+            || model.openCode?.isInstalling == true || (hasUpdate && model.localRuntimeMaintenanceHasActiveConversation))
         .accessibilityLabel(label + " for " + kind.displayName)
     }
 
@@ -403,17 +393,6 @@ struct SettingsLocalWorkspaceView: View {
         case .executableUnavailable:
             "Setup required"
         }
-    }
-
-    private func localACPInstallButtonLabel(
-        _ availability: LocalACPRuntimeAvailability
-    ) -> String {
-        if availability.needsCLIInstallation {
-            return "Install CLI"
-        }
-        return availability.state == .adapterOutdated
-            ? "Update Adapter"
-            : "Install Adapter"
     }
 
     private func chooseLocalACPRepositories() {

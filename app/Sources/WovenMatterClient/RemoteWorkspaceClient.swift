@@ -249,6 +249,16 @@ public struct RemoteRuntimeComponent: Codable, Equatable, Identifiable, Sendable
     public let path: String?
     public let installedVersion: String?
     public let latestVersion: String?
+    public let updateTargetVersion: String?
+
+    /// Bundled dependencies can only advance within the adapter's declared range.
+    public var availableUpdateVersion: String? {
+        let target = id == "bundled" ? updateTargetVersion : latestVersion
+        guard installed, let installedVersion, let target,
+              RuntimeMaintenance.version(installedVersion, precedes: target) else { return nil }
+        return target
+    }
+
     public let required: Bool
     public let installed: Bool
 }

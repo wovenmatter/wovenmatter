@@ -4,6 +4,23 @@ import WovenMatterCore
 @testable import WovenMatterClient
 
 struct RemoteRuntimeMaintenanceClientTests {
+    @Test func bundledUpgradeArrowUsesOnlyCompatibleTarget() throws {
+        func component(id: String = "bundled", installed: String = "0.153.4", target: String? = nil) throws -> RemoteRuntimeComponent {
+            var object: [String: Any] = [
+                "id": id, "displayName": "Component", "installedVersion": installed,
+                "latestVersion": "0.154.0", "required": true, "installed": true,
+            ]
+            if let target { object["updateTargetVersion"] = target }
+            return try JSONDecoder().decode(RemoteRuntimeComponent.self, from: JSONSerialization.data(withJSONObject: object))
+        }
+        let current = try component(target: "0.153.4")
+        #expect(current.latestVersion == "0.154.0") // Retained for diagnostics.
+        #expect(current.availableUpdateVersion == nil)
+        #expect(try component(installed: "0.153.1", target: "0.153.4").availableUpdateVersion == "0.153.4")
+        #expect(try component().availableUpdateVersion == nil) // Unknown compatibility must not advertise latest.
+        #expect(try component(id: "runtime").availableUpdateVersion == "0.154.0")
+    }
+
     @Test func invalidatesSuspendedRequestsAfterCredentialOrDestinationChanges() {
         let configuration = RemoteWorkspaceConfiguration(name: "One", workspaceID: "one", hostName: "host-one")
         let credentialEpoch = UUID(), workspaceEpoch = UUID()
