@@ -11,11 +11,16 @@ final class OpenCodeModel {
     let store: DashboardStore
     let coordinator: OpenCodeSessionCoordinator
     let ownerDeviceID: UUID
+    let remoteConfiguration: RemoteWorkspaceConfiguration?
+    private weak var remoteWorkspaces: RemoteWorkspacesModel?
+    var workspaceName: String { remoteConfiguration?.name ?? "Local Agent Workspace" }
+    var isRemote: Bool { remoteConfiguration != nil }
     private let defaults: UserDefaults
     private let registration = OpenCodeConnection.registrationURL()
     private var updateTask: Task<Void, Never>?
     private var connectionTask: Task<Void, Error>?
     private var executable: URL?
+    var runtimeExecutable: URL? { executable }
     var onChange: ((String) async -> Void)?
     var links: [String: OpenCodeSessionLink] = [:]
     var snapshots: [String: OpenCodeSessionSnapshot] = [:]
@@ -23,13 +28,25 @@ final class OpenCodeModel {
     var errors: [String: String] = [:]
     var error: String?
     private(set) var isInstalling = false
+    private(set) var installationFailures = 0
+    private(set) var installationInventory: RuntimeInventory?
+    var installationDiagnostic: String {
+        RuntimeMaintenance.diagnostic(inventory: installationInventory, kind: .opencode,
+            attempts: installationFailures, failure: "The pinned OpenCode v2 install could not be verified. Raw installer output omitted.")
+    }
     private(set) var isControllingServer = false
     private var serverStopped = false
+    var canRestoreAutomatically: Bool { !serverStopped && !quitting }
     private var quitting = false
     private var connectionGeneration = UUID()
-    var startServerOnLaunch: Bool { didSet { defaults.set(startServerOnLaunch, forKey: "wovenmatter.opencode.start-on-launch") } }
-    var stopServerOnQuit: Bool { didSet { defaults.set(stopServerOnQuit, forKey: "wovenmatter.opencode.stop-on-quit") } }
-    var isInstalled: Bool { executable.map { FileManager.default.isExecutableFile(atPath: $0.path) } ?? false }
+    var startServerOnLaunch: Bool { didSet { defaults.set(startServerOnLaunch, forKey: preference("start-on-launch")) } }
+    var stopServerOnQuit: Bool { didSet { defaults.set(stopServerOnQuit, forKey: preference("stop-on-quit")) } }
+    var isInstalled: Bool {
+        if let configuration = remoteConfiguration {
+            return remoteWorkspaces?.runtimeMaintenance[configuration.id]?.first { $0.id == .opencode }?.installed == true
+        }
+        return executable.map { FileManager.default.isExecutableFile(atPath: $0.path) } ?? false
+    }
     private(set) var isEnabled = false
     private(set) var isReady = false
     private(set) var isConnecting = false
@@ -41,21 +58,46 @@ final class OpenCodeModel {
     private var defaultModels: [String: OpenCodeValue] = [:]
     private var models: [String: [OpenCodeValue]] = [:]
 
-    private var connectionID: String { "local:" + registration.standardizedFileURL.path }
+    private var connectionID: String {
+        remoteConfiguration.map { "remote-workspace:" + $0.id.uuidString.lowercased() }
+            ?? "local:" + registration.standardizedFileURL.path
+    }
+    private func preference(_ suffix: String) -> String {
+        "wovenmatter.opencode." + (remoteConfiguration.map { "remote." + $0.id.uuidString.lowercased() + "." } ?? "") + suffix
+    }
     var connected: Set<String> { isReady ? [connectionID] : [] }
-    var hasServerRegistration: Bool { FileManager.default.fileExists(atPath: registration.path) }
-    var canConnect: Bool { executable != nil || hasServerRegistration }
+    var hasServerRegistration: Bool {
+        if let configuration = remoteConfiguration {
+            guard remoteWorkspaces?.isCredentialAccessEnabled == true,
+                  remoteWorkspaces?.configuration(id: configuration.id) == configuration else { return false }
+            let status = remoteWorkspaces?.workspaceInstances[configuration.id]?[.opencode]
+            return isReady || status?.state == "running" || status?.pid != nil
+        }
+        return FileManager.default.fileExists(atPath: registration.path)
+    }
+    var canConnect: Bool {
+        if let configuration = remoteConfiguration { return remoteWorkspaces?.isRuntimeEnabled(.opencode, in: configuration) == true }
+        return executable != nil || hasServerRegistration
+    }
 
-    init(store: DashboardStore, ownerDeviceID: UUID, defaults: UserDefaults) {
-        startServerOnLaunch = defaults.object(forKey: "wovenmatter.opencode.start-on-launch") as? Bool ?? true
-        stopServerOnQuit = defaults.bool(forKey: "wovenmatter.opencode.stop-on-quit")
-        isEnabled = defaults.object(forKey: "wovenmatter.opencode.enabled") as? Bool ?? defaults.bool(forKey: "wovenmatter.opencode.local-connected")
-        hiddenModels = Set(defaults.stringArray(forKey: "wovenmatter.opencode.hidden-models") ?? [])
+    init(store: DashboardStore, ownerDeviceID: UUID, defaults: UserDefaults,
+         remoteConfiguration: RemoteWorkspaceConfiguration? = nil, remoteWorkspaces: RemoteWorkspacesModel? = nil) {
+        self.remoteConfiguration = remoteConfiguration
+        self.remoteWorkspaces = remoteWorkspaces
+        let preference: (String) -> String = { suffix in
+            "wovenmatter.opencode." + (remoteConfiguration.map { "remote." + $0.id.uuidString.lowercased() + "." } ?? "") + suffix
+        }
+        startServerOnLaunch = defaults.object(forKey: preference("start-on-launch")) as? Bool ?? true
+        stopServerOnQuit = defaults.bool(forKey: preference("stop-on-quit"))
+        isEnabled = defaults.object(forKey: preference("enabled")) as? Bool ?? defaults.bool(forKey: preference("local-connected"))
+        hiddenModels = Set(defaults.stringArray(forKey: preference("hidden-models")) ?? [])
         self.store = store; self.ownerDeviceID = ownerDeviceID; self.defaults = defaults
         coordinator = OpenCodeSessionCoordinator(database: store.database)
         // Honor a previously selected CLI, never an old custom/remote service.
-        if let path = defaults.string(forKey: "wovenmatter.opencode.executable"), FileManager.default.isExecutableFile(atPath: path) { executable = URL(fileURLWithPath: path) }
-        for link in (try? store.database.openCodeLinks()) ?? [] {
+        if remoteConfiguration == nil, let path = defaults.string(forKey: preference("executable")), FileManager.default.isExecutableFile(atPath: path) { executable = URL(fileURLWithPath: path) }
+        let identity = remoteConfiguration.map { "remote-workspace:" + $0.id.uuidString.lowercased() }
+            ?? "local:" + registration.standardizedFileURL.path
+        for link in (try? store.database.openCodeLinks()) ?? [] where link.connectionID == identity {
             links[link.conversationID] = link
             snapshots[link.conversationID] = try? store.database.openCodeSnapshot(conversationID: link.conversationID)
         }
@@ -78,17 +120,34 @@ final class OpenCodeModel {
         }
     }
 
+    isolated deinit {
+        updateTask?.cancel()
+        connectionTask?.cancel()
+    }
+
     func isLocalSession(_ id: String) -> Bool { links[id]?.connectionID == connectionID }
 
     func restore() async {
         quitting = false
+        if let configuration = remoteConfiguration {
+            guard remoteWorkspaces?.isRuntimeEnabled(.opencode, in: configuration) == true else {
+                await suspendConnection()
+                return
+            }
+            isEnabled = true
+            if isReady { return }
+            do { try await connectLocal(allowStart: startServerOnLaunch) }
+            catch { self.error = error.localizedDescription }
+            return
+        }
         await resolveExecutable()
-        guard defaults.object(forKey: "wovenmatter.opencode.enabled") as? Bool != false else { return }
-        guard defaults.bool(forKey: "wovenmatter.opencode.local-connected") || links.values.contains(where: { $0.connectionID == connectionID }) else { return }
+        guard defaults.object(forKey: preference("enabled")) as? Bool != false else { return }
+        guard defaults.bool(forKey: preference("local-connected")) || links.values.contains(where: { $0.connectionID == connectionID }) else { return }
         do { try await connectLocal(allowStart: startServerOnLaunch) } catch { self.error = startServerOnLaunch ? error.localizedDescription : nil }
     }
 
     func resolveExecutable() async {
+        guard !isRemote else { return }
         // Login-shell discovery runs a subprocess. Never do it in a computed
         // property read by SwiftUI, where its run loop can reenter rendering.
         if !isInstalled { executable = nil }
@@ -102,18 +161,26 @@ final class OpenCodeModel {
     /// Concurrent New Chat/Connect requests share a single startup.
     func connectLocal(allowStart: Bool = true) async throws {
         guard !quitting else { throw CancellationError() }
+        if let configuration = remoteConfiguration,
+           remoteWorkspaces?.isRuntimeEnabled(.opencode, in: configuration) != true {
+            throw OpenCodeError.message("Enable OpenCode for this remote workspace before connecting.")
+        }
         if let connectionTask { return try await connectionTask.value }
         let generation = UUID(); connectionGeneration = generation
         serverStopped = false
         isConnecting = true; error = nil
         logger.info("Connecting to the local OpenCode service")
         let task = Task { @MainActor in
-            if !isInstalled { await resolveExecutable() }
+            if !isInstalled, !isRemote { await resolveExecutable() }
             try Task.checkCancellation()
             guard generation == connectionGeneration, !quitting else { throw CancellationError() }
             logger.info("Discovering or starting the local OpenCode service")
             let connection: OpenCodeConnection
-            if allowStart { connection = try await OpenCodeServiceLauncher.ensure(executable: executable, registration: registration) }
+            if let configuration = remoteConfiguration {
+                guard let remoteWorkspaces else { throw OpenCodeError.message("The remote workspace is unavailable.") }
+                connection = try await remoteWorkspaces.prepareOpenCodeConnection(for: configuration, allowStart: allowStart)
+                _ = try await OpenCodeHTTPClient(connection: connection).health()
+            } else if allowStart { connection = try await OpenCodeServiceLauncher.ensure(executable: executable, registration: registration) }
             else {
                 connection = try OpenCodeConnection.discover(file: registration)
                 _ = try await OpenCodeHTTPClient(connection: connection).health()
@@ -126,8 +193,8 @@ final class OpenCodeModel {
             guard generation == connectionGeneration, !quitting else { throw CancellationError() }
             isReady = true
             isEnabled = true
-            defaults.set(true, forKey: "wovenmatter.opencode.enabled")
-            defaults.set(true, forKey: "wovenmatter.opencode.local-connected")
+            defaults.set(true, forKey: preference("enabled"))
+            defaults.set(true, forKey: preference("local-connected"))
             for link in links.values where link.connectionID == connectionID { await coordinator.watch(link) }
         }
         connectionTask = task
@@ -143,12 +210,23 @@ final class OpenCodeModel {
     }
 
     func download() async throws {
-        guard !isInstalling else { return }
+        guard !isRemote else { throw OpenCodeError.message("Install OpenCode from this remote workspace's runtime row.") }
+        guard !isInstalling, !isConnecting, !isControllingServer,
+              !snapshots.values.contains(where: \.active) else { throw RuntimeMaintenanceError.busy }
         isInstalling = true
         defer { isInstalling = false }
-        let installed = try await OpenCodeServiceLauncher.install()
-        executable = installed
-        defaults.set(installed.path, forKey: "wovenmatter.opencode.executable")
+        do {
+            let installed = try await OpenCodeServiceLauncher.install()
+            executable = installed
+            defaults.set(installed.path, forKey: preference("executable"))
+            installationInventory = await RuntimeMaintenance.inspect(.opencode, checkLatest: true, selectedOpenCode: installed)
+            guard installationInventory?.isInstalled == true else { throw RuntimeMaintenanceError.verification }
+            installationFailures = 0
+        } catch {
+            installationFailures += 1
+            installationInventory = await RuntimeMaintenance.inspect(.opencode, checkLatest: false, selectedOpenCode: executable)
+            throw RuntimeMaintenanceError.verification
+        }
     }
 
     func stopServer() async throws {
@@ -158,7 +236,10 @@ final class OpenCodeModel {
         defer { isControllingServer = false }
         await coordinator.disconnect(connectionID: connectionID)
         isReady = false
-        try await OpenCodeServiceLauncher.stop(registration: registration)
+        if let configuration = remoteConfiguration {
+            guard let remoteWorkspaces else { throw OpenCodeError.message("The remote workspace is unavailable.") }
+            try await remoteWorkspaces.stopOpenCode(for: configuration)
+        } else { try await OpenCodeServiceLauncher.stop(registration: registration) }
     }
 
     func restartServer() async throws {
@@ -173,25 +254,42 @@ final class OpenCodeModel {
         while isControllingServer { try await Task.sleep(for: .milliseconds(25)) }
         serverStopped = true
         await coordinator.shutdown()
-        if stopServerOnQuit { try await OpenCodeServiceLauncher.stop(registration: registration) }
+        isReady = false
+        if stopServerOnQuit {
+            if let configuration = remoteConfiguration {
+                guard remoteWorkspaces?.isRuntimeEnabled(.opencode, in: configuration) == true else { return }
+                guard let remoteWorkspaces else { throw OpenCodeError.message("The remote workspace is unavailable.") }
+                try await remoteWorkspaces.stopOpenCode(for: configuration)
+            } else { try await OpenCodeServiceLauncher.stop(registration: registration) }
+        }
     }
 
-    func disable() async {
+    func suspendConnection() async {
         connectionGeneration = UUID()
         connectionTask?.cancel(); connectionTask = nil; isConnecting = false
         isEnabled = false
-        defaults.set(false, forKey: "wovenmatter.opencode.enabled")
+        await coordinator.disconnect(connectionID: connectionID)
+        isReady = false
+    }
+
+    func disable() async {
+        guard !isRemote else { await suspendConnection(); return }
+        connectionGeneration = UUID()
+        connectionTask?.cancel(); connectionTask = nil; isConnecting = false
+        isEnabled = false
+        defaults.set(false, forKey: preference("enabled"))
         await coordinator.disconnect(connectionID: connectionID)
         isReady = false
     }
 
     func browserURL() throws -> URL {
+        guard !isRemote else { throw OpenCodeError.message("Remote OpenCode uses the authenticated workspace connection inside Woven Matter.") }
         // Discover again so a service restart never hands the browser stale credentials.
-        try OpenCodeConnection.discover(file: registration).browserURL
+        return try OpenCodeConnection.discover(file: registration).browserURL
     }
 
     func create(workspace: URL) async throws -> String {
-        guard isEnabled else { throw OpenCodeError.message("Enable OpenCode in Local Agent Workspace before creating a chat.") }
+        guard isEnabled else { throw OpenCodeError.message("Enable OpenCode for this workspace before creating a chat.") }
         guard !serverStopped else { throw OpenCodeError.message("Start OpenCode from its settings page before creating a chat.") }
         guard !busy else { throw OpenCodeError.message("A session is already being created.") }
         busy = true; defer { busy = false }
@@ -214,7 +312,17 @@ final class OpenCodeModel {
     private func open(_ session: OpenCodeValue) async throws -> String {
         let sessionID = session["id"].text
         guard sessionID.hasPrefix("ses") else { throw OpenCodeError.message("OpenCode did not return a session ID.") }
-        let conversationID = try store.database.createLocalACPSession(runtimeKind: .opencode, title: session["title"].string ?? "New OpenCode chat", ownerDeviceID: ownerDeviceID, openCodeAssociation: (connectionID, sessionID))
+        let conversationID: String
+        if let configuration = remoteConfiguration {
+            conversationID = try store.database.createRemoteACPSession(runtimeKind: .opencode,
+                remoteWorkspaceID: configuration.id, remoteWorkspaceName: configuration.name,
+                title: session["title"].string ?? "New OpenCode chat", ownerDeviceID: ownerDeviceID,
+                openCodeAssociation: (connectionID, sessionID))
+        } else {
+            conversationID = try store.database.createLocalACPSession(runtimeKind: .opencode,
+                title: session["title"].string ?? "New OpenCode chat", ownerDeviceID: ownerDeviceID,
+                openCodeAssociation: (connectionID, sessionID))
+        }
         let link = OpenCodeSessionLink(conversationID: conversationID, connectionID: connectionID, sessionID: sessionID)
         links[conversationID] = link
         var initial = OpenCodeSessionSnapshot()
@@ -244,7 +352,7 @@ final class OpenCodeModel {
 
     func setModelVisible(_ key: String, visible: Bool) {
         if visible { hiddenModels.remove(key) } else { hiddenModels.insert(key) }
-        defaults.set(hiddenModels.sorted(), forKey: "wovenmatter.opencode.hidden-models")
+        defaults.set(hiddenModels.sorted(), forKey: preference("hidden-models"))
     }
 
     func refreshSettingsModels(workspace: String) async throws {
@@ -294,7 +402,11 @@ final class OpenCodeModel {
 
     func send(_ id: String, input: AgentMessageInput) async throws {
         guard let link = links[id], isLocalSession(id) else { throw OpenCodeError.message("This saved transcript is read-only. Create a new OpenCode chat.") }
-        guard isEnabled else { throw OpenCodeError.message("Enable OpenCode in Local Agent Workspace before sending.") }
+        guard isEnabled else { throw OpenCodeError.message("Enable OpenCode for this workspace before sending.") }
+        if let configuration = remoteConfiguration,
+           remoteWorkspaces?.isRuntimeEnabled(.opencode, in: configuration) != true {
+            throw OpenCodeError.message("OpenCode is disabled for this remote workspace.")
+        }
         guard !serverStopped else { throw OpenCodeError.message("Start OpenCode from its settings page before sending.") }
         if !isReady { try await connectLocal() }
         // A failed selection remains a send barrier until the user selects again.

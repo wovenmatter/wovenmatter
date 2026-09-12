@@ -7,6 +7,8 @@ enum SettingsSection: Equatable {
     case general
     case openClaw
     case openCode
+    case openCodeWorkspace(UUID?)
+    case openClawWorkspace(UUID?)
     case openClawAgent(UUID)
     case localWorkspace
     case remoteWorkspaces
@@ -19,6 +21,7 @@ struct SettingsView: View {
     var reservesRailControlSpace = false
     @AppStorage(DashboardTheme.storageKey) private var storedTheme = DashboardTheme.green.rawValue
     @State private var section: SettingsSection = .landing
+    @State private var providerReturnSection: SettingsSection = .openClaw
 
     private var theme: DashboardTheme {
         DashboardTheme(rawValue: storedTheme) ?? .green
@@ -43,24 +46,33 @@ struct SettingsView: View {
                     model: model,
                     reservesRailControlSpace: reservesRailControlSpace,
                     onBack: { section = .landing },
-                    onOpenAgent: { section = .openClawAgent($0) }
+                    onOpenAgent: { providerReturnSection = .openClaw; section = .openClawAgent($0) }
                 )
             case .openCode:
                 SettingsOpenCodeView(model: model, reservesRailControlSpace: reservesRailControlSpace,
                     onBack: { section = .landing })
+            case .openCodeWorkspace(let workspaceID):
+                SettingsOpenCodeView(model: model, workspaceID: workspaceID, isWorkspaceScoped: true,
+                    reservesRailControlSpace: reservesRailControlSpace,
+                    onBack: { section = workspaceID == nil ? .localWorkspace : .remoteWorkspaces })
+            case .openClawWorkspace(let workspaceID):
+                SettingsOpenClawView(model: model, workspaceID: workspaceID, isWorkspaceScoped: true,
+                    reservesRailControlSpace: reservesRailControlSpace,
+                    onBack: { section = workspaceID == nil ? .localWorkspace : .remoteWorkspaces },
+                    onOpenAgent: { providerReturnSection = .openClawWorkspace(workspaceID); section = .openClawAgent($0) })
             case .openClawAgent(let agentID):
                 SettingsOpenClawAgentView(
                     model: model,
                     agentID: agentID,
                     reservesRailControlSpace: reservesRailControlSpace,
-                    onBack: { section = .openClaw }
+                    onBack: { section = providerReturnSection }
                 )
             case .localWorkspace:
                 SettingsLocalWorkspaceView(
                     model: model,
                     reservesRailControlSpace: reservesRailControlSpace,
                     onBack: { section = .landing },
-                    onMore: { section = $0 == .opencode ? .openCode : .openClaw }
+                    onMore: { section = $0 == .opencode ? .openCodeWorkspace(nil) : .openClawWorkspace(nil) }
                 )
             case .remoteWorkspaces:
                 SettingsRemoteWorkspacesView(
@@ -71,6 +83,9 @@ struct SettingsView: View {
                         model.acknowledgeCredentialAccessDisclosure()
                     },
                     reservesRailControlSpace: reservesRailControlSpace,
+                    onMoreRuntime: { kind, configuration in
+                        section = kind == .opencode ? .openCodeWorkspace(configuration.id) : .openClawWorkspace(configuration.id)
+                    },
                     onBack: { section = .landing }
                 )
             case .buzzWorkspaces:

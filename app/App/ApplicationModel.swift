@@ -81,6 +81,72 @@ final class ApplicationModel {
     private(set) var mutatingBuzzWorkspaceEnrollmentIDs: Set<UUID> = []
     private(set) var buzzWorkspaceError: String?
     var openCode: OpenCodeModel?
+    private(set) var remoteOpenCodes: [UUID: OpenCodeModel] = [:]
+    private var remoteOpenCodeSyncGeneration = UUID()
+    var openCodeInstances: [OpenCodeModel] { [openCode].compactMap { $0 } + Array(remoteOpenCodes.values) }
+
+    func openCodeModel(for conversationID: String) -> OpenCodeModel? {
+        openCodeInstances.first { $0.links[conversationID] != nil }
+    }
+
+    func synchronizeRemoteOpenCodeInstances() async {
+        let generation = UUID()
+        remoteOpenCodeSyncGeneration = generation
+        guard let dashboardStore, let ownerDeviceID = try? await dashboardStore.dashboardDeviceID() else { return }
+        guard remoteOpenCodeSyncGeneration == generation else { return }
+        let configurations = remoteWorkspaces.workspaces
+        let eligibleIDs = Set(configurations.map(\.id))
+        for id in Array(remoteOpenCodes.keys) where !eligibleIDs.contains(id) {
+            if let removed = remoteOpenCodes.removeValue(forKey: id) { await removed.suspendConnection() }
+            guard remoteOpenCodeSyncGeneration == generation else { return }
+        }
+        for configuration in configurations {
+            guard remoteOpenCodeSyncGeneration == generation,
+                  remoteWorkspaces.configuration(id: configuration.id) == configuration else { return }
+            if let existing = remoteOpenCodes[configuration.id], existing.remoteConfiguration != configuration {
+                remoteOpenCodes[configuration.id] = nil
+                await existing.suspendConnection()
+                guard remoteOpenCodeSyncGeneration == generation,
+                      remoteWorkspaces.configuration(id: configuration.id) == configuration else { return }
+            }
+            let instance: OpenCodeModel
+            if let existing = remoteOpenCodes[configuration.id] { instance = existing }
+            else {
+                instance = OpenCodeModel(store: dashboardStore, ownerDeviceID: ownerDeviceID, defaults: applicationDefaults,
+                    remoteConfiguration: configuration, remoteWorkspaces: remoteWorkspaces)
+                remoteOpenCodes[configuration.id] = instance
+                instance.onChange = { [weak self, weak instance] id in
+                    guard let self, let instance, self.remoteOpenCodes[configuration.id] === instance else { return }
+                    if instance.snapshots[id]?.active == true { self.localRunningConversationIDs.insert(id) }
+                    else { self.localRunningConversationIDs.remove(id) }
+                    await self.refreshWorkspaceIfChanged()
+                    await self.refreshConversation(id: id)
+                }
+            }
+            if remoteWorkspaces.isRuntimeEnabled(.opencode, in: configuration) {
+                if !instance.isReady && !instance.isConnecting && instance.canRestoreAutomatically { await instance.restore() }
+            } else { await instance.suspendConnection() }
+        }
+    }
+
+    func prepareOpenCodeInstancesToQuit() async throws {
+        for instance in openCodeInstances { try await instance.prepareToQuit() }
+    }
+
+    func restoreOpenCodeInstances() async {
+        for instance in openCodeInstances { await instance.restore() }
+        await synchronizeRemoteOpenCodeInstances()
+    }
+
+    func remoteOpenClawAgentID(for configuration: RemoteWorkspaceConfiguration) async throws -> UUID {
+        guard let dashboardStore, remoteWorkspaces.configuration(id: configuration.id) == configuration else {
+            throw ApplicationModelError.remoteHarnessUnavailable
+        }
+        let id = try await dashboardStore.ensureRemoteHarnessAgent(runtimeKind: .openclaw,
+            remoteWorkspaceID: configuration.id, remoteWorkspaceName: configuration.name)
+        await refreshWorkspace()
+        return id
+    }
     private(set) var openClawGatewayLinks: [OpenClawGatewayLink] = []
     private(set) var openClawGatewayErrors: [UUID: String] = [:]
     private(set) var openClawGatewayNotices: [UUID: String] = [:]
@@ -147,6 +213,15 @@ final class ApplicationModel {
     private(set) var titleGenerationCapabilities: CodexTitleGenerationCapabilities?
     private(set) var titleGenerationStatus = "Waiting for Codex"
     private(set) var isRefreshingTitleGenerationCapabilities = false
+    private(set) var runtimeInventories: [AgentRuntimeKind: RuntimeInventory] = [:]
+    private(set) var runtimeFailures: [AgentRuntimeKind: Int] = [:]
+    private(set) var runtimeFailureDetails: [AgentRuntimeKind: String] = [:]
+    private(set) var checkingRuntimeInventory = false
+    private(set) var checkingRuntimeKinds: Set<AgentRuntimeKind> = []
+    private(set) var checkedRuntimeKinds: Set<AgentRuntimeKind> = []
+    private(set) var updatingRuntimeKinds: Set<AgentRuntimeKind> = []
+    private(set) var failedRuntimeUpdateKinds: Set<AgentRuntimeKind> = []
+    private var runtimeInventoryGeneration: UInt64 = 0
     private(set) var installingLocalACPRuntimeKinds: Set<AgentRuntimeKind> = []
     private(set) var preparedLocalACPRuntimeInstall:
         PreparedLocalACPRuntimeInstall?
@@ -350,6 +425,11 @@ final class ApplicationModel {
                 await self.refreshConversation(id: id)
             }
             Task { await openCode.restore() }
+            remoteWorkspaces.onRuntimeMaintenanceChanged = { [weak self] in
+                await self?.synchronizeRemoteOpenCodeInstances()
+            }
+            remoteWorkspaces.refreshRuntimeMaintenanceAtStartup()
+            await synchronizeRemoteOpenCodeInstances()
             localACPDatabaseReadyRuntimeKinds = Set(
                 LocalACPRuntimeCatalog.definitions.map(\.runtimeKind)
             )
@@ -426,6 +506,7 @@ final class ApplicationModel {
 
             guard !Task.isCancelled else { return }
             refreshLocalACPRuntimesNow()
+            refreshRuntimeInventory()
             await refreshWorkspace()
             await refreshLocalUsage(
                 range: currentUsageRange,
@@ -1749,6 +1830,8 @@ final class ApplicationModel {
     func enableLocalACPRuntimeCredentialAccess(
         _ runtimeKind: AgentRuntimeKind
     ) {
+        guard runtimeInventories[runtimeKind]?.isInstalled == true,
+              installingLocalACPRuntimeKinds.isEmpty else { return }
         acknowledgeCredentialAccessDisclosure()
         let state = localACPRuntimePreferences.enable(runtimeKind)
         enabledLocalACPRuntimeKinds = state.enabledRuntimeKinds
@@ -2174,6 +2257,10 @@ final class ApplicationModel {
         note: WorkspaceNoteRecord? = nil
     ) async -> Bool {
         let conversationState = ensureConversationState(id: conversation.id)
+        guard !usesLocallyInstalledRuntime(conversation) || installingLocalACPRuntimeKinds.isEmpty else {
+            conversationState.setError("Wait for runtime installation or update to finish before sending a message.")
+            return false
+        }
         let normalized = AgentMessageInput(
             text: input.text.trimmingCharacters(in: .whitespacesAndNewlines),
             attachments: input.attachments
@@ -2186,7 +2273,7 @@ final class ApplicationModel {
         }
         if conversation.localRuntimeKind == .opencode {
             do {
-                guard let openCode else { throw OpenCodeError.message("OpenCode is still starting.") }
+                guard let openCode = openCodeModel(for: conversation.id) else { throw OpenCodeError.message("This workspace's OpenCode connection is unavailable.") }
                 try await openCode.send(conversation.id, input: normalized)
                 conversationState.setError(nil)
                 return true
@@ -2430,7 +2517,7 @@ final class ApplicationModel {
         conversation: WorkspaceConversationRecord
     ) async {
         if conversation.localRuntimeKind == .opencode {
-            if let openCode, openCode.isEnabled, let link = openCode.links[conversation.id] {
+            if let openCode = openCodeModel(for: conversation.id), openCode.isEnabled, let link = openCode.links[conversation.id] {
                 await openCode.coordinator.watch(link)
             }
             return
@@ -2610,6 +2697,17 @@ final class ApplicationModel {
             return nil
         }
         do {
+            if target.harness.id == .opencode {
+                await synchronizeRemoteOpenCodeInstances()
+                guard let instance = remoteOpenCodes[target.configuration.id] else {
+                    throw ApplicationModelError.remoteHarnessUnavailable
+                }
+                try await instance.connectLocal()
+                let directory = remoteWorkspaces.remoteWorkspaceRoot(for: target.configuration)
+                let id = try await instance.create(workspace: URL(fileURLWithPath: directory))
+                await refreshWorkspace()
+                return id
+            }
             guard let dashboardStore else {
                 throw ApplicationModelError.dashboardStoreUnavailable
             }
@@ -2714,94 +2812,184 @@ final class ApplicationModel {
         }
     }
 
-    func installLocalACPRuntimeComponent(_ runtimeKind: AgentRuntimeKind) {
-        guard !installingLocalACPRuntimeKinds.contains(runtimeKind),
-              let definition = LocalACPRuntimeCatalog.definition(
-                for: runtimeKind
-              ),
-              let availability = localACPRuntimeAvailability.first(
-                where: { $0.runtimeKind == runtimeKind }
-              )
-        else { return }
-        let component: LocalACPRuntimeInstallComponent
-        if availability.needsCLIInstallation {
-            component = .cli
-        } else if availability.needsAdapterInstallation {
-            component = .adapter
-        } else {
+    func refreshRuntimeInventory() {
+        guard !checkingRuntimeInventory, checkingRuntimeKinds.isEmpty, installingLocalACPRuntimeKinds.isEmpty,
+              preparedLocalACPRuntimeInstall == nil else { return }
+        checkingRuntimeInventory = true
+        runtimeInventoryGeneration &+= 1
+        let generation = runtimeInventoryGeneration
+        let enabled = enabledLocalACPRuntimeKinds
+        let openCodeEnabled = openCode?.isEnabled == true
+        Task {
+            defer { checkingRuntimeInventory = false }
+            await openCode?.resolveExecutable()
+            let selectedOpenCode = openCode?.runtimeExecutable
+            for definition in LocalACPRuntimeCatalog.definitions {
+                guard installingLocalACPRuntimeKinds.isEmpty else { return }
+                let kind = definition.runtimeKind
+                checkingRuntimeKinds.insert(kind)
+                let checkLatest = kind == .opencode ? openCodeEnabled : enabled.contains(kind)
+                let inventory = await Task.detached(priority: .utility) {
+                    await RuntimeMaintenance.inspect(kind, checkLatest: checkLatest, selectedOpenCode: selectedOpenCode)
+                }.value
+                checkingRuntimeKinds.remove(kind)
+                guard installingLocalACPRuntimeKinds.isEmpty, generation == runtimeInventoryGeneration else { return }
+                runtimeInventories[kind] = inventory
+                if checkLatest { checkedRuntimeKinds.insert(kind) }
+            }
+        }
+    }
+
+    func checkRuntimeUpdate(_ kind: AgentRuntimeKind) {
+        guard !checkingRuntimeInventory, checkingRuntimeKinds.insert(kind).inserted else { return }
+        guard installingLocalACPRuntimeKinds.isEmpty, openCode?.isInstalling != true else {
+            checkingRuntimeKinds.remove(kind)
             return
         }
-        if case .cli = component {
+        let generation = runtimeInventoryGeneration
+        Task {
+            defer { checkingRuntimeKinds.remove(kind) }
+            if kind == .opencode { await openCode?.resolveExecutable() }
+            let selectedOpenCode = openCode?.runtimeExecutable
+            let inventory = await Task.detached(priority: .utility) {
+                await RuntimeMaintenance.inspect(kind, checkLatest: true, selectedOpenCode: selectedOpenCode)
+            }.value
+            guard installingLocalACPRuntimeKinds.isEmpty, generation == runtimeInventoryGeneration else { return }
+            runtimeInventories[kind] = inventory
+            checkedRuntimeKinds.insert(kind)
+        }
+    }
+
+    func runtimeDiagnostic(_ kind: AgentRuntimeKind) -> String {
+        RuntimeMaintenance.diagnostic(inventory: runtimeInventories[kind], kind: kind,
+            attempts: runtimeFailures[kind, default: 0], failure: runtimeFailureDetails[kind] ?? "unknown")
+    }
+
+    private func recordRuntimeFailure(_ kind: AgentRuntimeKind, error: any Error, update: Bool = false) {
+        runtimeFailures[kind, default: 0] += 1
+        if update { failedRuntimeUpdateKinds.insert(kind) }
+        // Never copy arbitrary subprocess output or URLs into diagnostics.
+        let category: String
+        if let failure = error as? RuntimeMaintenanceError { category = failure.localizedDescription }
+        else if let failure = error as? LocalACPRuntimeInstallError {
+            switch failure {
+            case .installFailed: category = "Installer exited unsuccessfully (output omitted)."
+            case .executableMissing: category = "Installer did not produce the required executable."
+            default: category = failure.localizedDescription
+            }
+        } else { category = "Runtime operation failed (private details omitted)." }
+        runtimeFailureDetails[kind] = category
+        localRunError = category
+    }
+
+    private func usesLocallyInstalledRuntime(_ conversation: WorkspaceConversationRecord) -> Bool {
+        conversation.localRuntimeKind != nil && conversation.remoteWorkspaceID == nil
+            && !buzzBoundLocalACPConversationIDs.contains(conversation.id)
+            && !isOpenClawGatewayConversation(conversation.id)
+    }
+
+    var localRuntimeMaintenanceHasActiveConversation: Bool {
+        localRunningConversationIDs.contains { id in
+            if buzzBoundLocalACPConversationIDs.contains(id) || isOpenClawGatewayConversation(id) { return false }
+            // A newly accepted turn may precede the workspace snapshot refresh.
+            // Keep maintenance blocked until its execution location is known.
+            guard let conversation = workspaceOverview?.conversations.first(where: { $0.id == id }) else { return true }
+            return usesLocallyInstalledRuntime(conversation)
+        }
+    }
+
+    func installLocalACPRuntimeComponent(_ runtimeKind: AgentRuntimeKind) {
+        // Finish the initial inventory before an install invalidates its generation.
+        // Otherwise the remaining runtime rows can be left without an inventory.
+        guard !checkingRuntimeInventory, installingLocalACPRuntimeKinds.isEmpty, openCode?.isInstalling != true, preparedLocalACPRuntimeInstall == nil,
+              !localRuntimeMaintenanceHasActiveConversation,
+              let definition = LocalACPRuntimeCatalog.definition(for: runtimeKind) else { return }
+        let inventory = runtimeInventories[runtimeKind]
+        let cliMissing = definition.underlyingCLIName.map { name in
+            inventory?.components.contains { $0.name == name + " (sign-in CLI)" && !$0.present } == true
+        } ?? false
+        let needsCLI = cliMissing || (definition.adapterPackage == nil && inventory?.isInstalled != true)
+        if needsCLI {
+            runtimeInventoryGeneration &+= 1
             installingLocalACPRuntimeKinds.insert(runtimeKind)
             localRunError = nil
             Task {
                 defer { installingLocalACPRuntimeKinds.remove(runtimeKind) }
                 do {
-                    let preview = try await localACPRuntimeInstaller
-                        .prepareCLIInstall(definition)
-                    preparedLocalACPRuntimeInstall =
-                        PreparedLocalACPRuntimeInstall(
-                            definition: definition,
-                            preview: preview
-                        )
-                } catch {
-                    localRunError = error.localizedDescription
-                }
+                    let preview = try await localACPRuntimeInstaller.prepareCLIInstall(definition)
+                    preparedLocalACPRuntimeInstall = PreparedLocalACPRuntimeInstall(definition: definition, preview: preview)
+                } catch { recordRuntimeFailure(runtimeKind, error: error) }
             }
-            return
-        }
-        performLocalACPRuntimeInstall(definition, component: component)
+        } else { performRuntimeMaintenance(definition, update: false) }
+    }
+
+    func updateRuntime(_ kind: AgentRuntimeKind) {
+        guard let definition = LocalACPRuntimeCatalog.definition(for: kind) else { return }
+        performRuntimeMaintenance(definition, update: true)
     }
 
     func confirmPreparedLocalACPRuntimeInstall() {
-        guard let preparedLocalACPRuntimeInstall else { return }
-        self.preparedLocalACPRuntimeInstall = nil
-        let runtimeKind = preparedLocalACPRuntimeInstall.definition.runtimeKind
-        guard !installingLocalACPRuntimeKinds.contains(runtimeKind) else {
-            return
-        }
-        installingLocalACPRuntimeKinds.insert(runtimeKind)
-        localRunError = nil
-        Task {
-            defer { installingLocalACPRuntimeKinds.remove(runtimeKind) }
-            do {
-                _ = try await localACPRuntimeInstaller.install(
-                    preparedLocalACPRuntimeInstall.definition,
-                    component: .cli,
-                    expectedSourceSHA256:
-                        preparedLocalACPRuntimeInstall.preview.sha256,
-                    expectedPackageSpec:
-                        preparedLocalACPRuntimeInstall.preview.packageSpec
-                )
-                await refreshLocalACPRuntimes()
-            } catch {
-                localRunError = error.localizedDescription
-            }
-        }
-    }
-
-    func cancelPreparedLocalACPRuntimeInstall() {
+        guard let prepared = preparedLocalACPRuntimeInstall else { return }
         preparedLocalACPRuntimeInstall = nil
+        performRuntimeMaintenance(prepared.definition, update: false, preview: prepared.preview)
     }
 
-    private func performLocalACPRuntimeInstall(
-        _ definition: LocalACPRuntimeDefinition,
-        component: LocalACPRuntimeInstallComponent
-    ) {
-        let runtimeKind = definition.runtimeKind
-        installingLocalACPRuntimeKinds.insert(runtimeKind)
+    func cancelPreparedLocalACPRuntimeInstall() { preparedLocalACPRuntimeInstall = nil }
+
+    private func performRuntimeMaintenance(_ definition: LocalACPRuntimeDefinition, update: Bool,
+                                          preview: LocalACPInstallerPreview? = nil) {
+        let kind = definition.runtimeKind
+        guard !checkingRuntimeInventory, installingLocalACPRuntimeKinds.isEmpty, openCode?.isInstalling != true,
+              preparedLocalACPRuntimeInstall == nil, !localRuntimeMaintenanceHasActiveConversation else { return }
+        runtimeInventoryGeneration &+= 1
+        installingLocalACPRuntimeKinds.insert(kind)
+        if update { updatingRuntimeKinds.insert(kind) }
         localRunError = nil
+        let installer = localACPRuntimeInstaller
+        let before = runtimeInventories[kind]
         Task {
-            defer { installingLocalACPRuntimeKinds.remove(runtimeKind) }
+            defer { installingLocalACPRuntimeKinds.remove(kind); updatingRuntimeKinds.remove(kind) }
             do {
-                _ = try await localACPRuntimeInstaller.install(
-                    definition,
-                    component: component
-                )
+                if let preview {
+                    _ = try await installer.install(definition, component: .cli,
+                        expectedSourceSHA256: preview.sha256, expectedPackageSpec: preview.packageSpec)
+                }
+                if let package = definition.adapterPackage ?? (kind == .pi && preview == nil ? RuntimeMaintenance.npmPackage(kind) : nil) {
+                    // Resolve a concrete version before npm is allowed to mutate anything.
+                    let version: String
+                    do { version = try await RuntimeMaintenance.registryVersion(package) }
+                    catch {
+                        guard !update, let pinned = definition.minimumAdapterVersion else { throw error }
+                        version = pinned
+                    }
+                    _ = try await installer.installPackage(package, version: version, executableName: definition.commandName)
+                } else if update {
+                    try await RuntimeMaintenance.updateNative(kind, executable: before?.components.first?.executable)
+                }
+                if update, definition.adapterPackage != nil,
+                   let cli = before?.components.first(where: { $0.name.hasSuffix("(sign-in CLI)") && $0.outdated }) {
+                    try await RuntimeMaintenance.updateNative(kind, executable: cli.executable)
+                }
+                let inventory = await Task.detached(priority: .utility) {
+                    await RuntimeMaintenance.inspect(kind, checkLatest: true)
+                }.value
+                runtimeInventories[kind] = inventory
+                checkedRuntimeKinds.insert(kind)
+                guard inventory.isInstalled else { throw RuntimeMaintenanceError.verification }
+                if update {
+                    // Success requires the outdated components to reach the observed
+                    // target, not merely an exit-zero updater or a changed PATH.
+                    for component in before?.components.filter(\.outdated) ?? [] {
+                        guard let after = inventory.components.first(where: { $0.name == component.name }),
+                              let installed = after.installed, let target = component.latest,
+                              installed == target || RuntimeMaintenance.version(target, precedes: installed)
+                        else { throw RuntimeMaintenanceError.verification }
+                    }
+                }
+                runtimeFailures[kind] = 0; runtimeFailureDetails[kind] = nil
+                failedRuntimeUpdateKinds.remove(kind)
                 await refreshLocalACPRuntimes()
-            } catch {
-                localRunError = error.localizedDescription
-            }
+            } catch { recordRuntimeFailure(kind, error: error, update: update) }
         }
     }
 
@@ -2899,7 +3087,7 @@ final class ApplicationModel {
     }
 
     func cancelLocalACPPrompt(conversationID: String) {
-        if let openCode, openCode.links[conversationID] != nil {
+        if let openCode = openCodeModel(for: conversationID), openCode.links[conversationID] != nil {
             openCode.perform { _ = try await openCode.sessionCall(conversationID, "/interrupt", method: "POST") }
             return
         }
@@ -2926,7 +3114,7 @@ final class ApplicationModel {
         }
         LocalACPClient.terminateAllProcesses()
         PiRPCClient.terminateAllProcesses()
-        Task { await openCode?.coordinator.shutdown(); await dashboardStore?.shutdownLocalACPSessions() }
+        Task { for instance in openCodeInstances { await instance.coordinator.shutdown() }; await dashboardStore?.shutdownLocalACPSessions() }
     }
 
     private func requestLocalACPPermission(
