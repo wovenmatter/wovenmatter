@@ -257,26 +257,39 @@ public actor DashboardStore {
     guard let base = LocalACPRuntimeResolver().resolve(runtimeKind: .openclaw).launchConfiguration else {
       throw LocalACPSessionDatabaseError.runtimeUnavailable
     }
-    let identity = "local-workspace:\(agentID.uuidString.lowercased())"
-    let port = OpenClawLocalGatewayLifecycle.stablePort(for: identity)
+    var environment = ProcessInfo.processInfo.environment
+    for key in base.environmentKeysToRemove { environment.removeValue(forKey: key) }
+    for prefix in base.environmentKeyPrefixesToRemove {
+      for key in environment.keys where key.hasPrefix(prefix) { environment.removeValue(forKey: key) }
+    }
+    environment.merge(base.environment) { _, configured in configured }
+    let configuration = try OpenClawLocalGatewayConfiguration(environment: environment)
+    let identity = "local-config:" + configuration.configURL.standardizedFileURL.path
+    var launchEnvironment = base.environment
+    launchEnvironment["OPENCLAW_CONFIG_PATH"] = configuration.configURL.path
+    // Keep resolved credentials out of argv and available to diagnostic redaction.
+    if let token = configuration.token { launchEnvironment["OPENCLAW_GATEWAY_TOKEN"] = token }
+    if let password = configuration.password { launchEnvironment["OPENCLAW_GATEWAY_PASSWORD"] = password }
     let launch = LocalACPRuntimeLaunchConfiguration(
       runtimeKind: .openclaw,
       executableURL: base.executableURL,
-      arguments: [
-        "gateway", "--port", String(port), "--bind", "loopback", "--auth", "none",
-      ],
-      environment: base.environment,
-      environmentKeysToRemove: [
-        "OPENCLAW_GATEWAY_PASSWORD", "OPENCLAW_GATEWAY_TOKEN", "BUZZ_PRIVATE_KEY",
-        "NOSTR_PRIVATE_KEY",
-      ],
-      environmentKeyPrefixesToRemove: ["BUZZ_", "NOSTR_"]
+      // Keep the user's authentication, bind and Tailscale settings. Never force
+      // another listener or use --force against an existing OpenClaw service.
+      arguments: ["gateway", "--port", String(configuration.port)],
+      environment: launchEnvironment,
+      environmentKeysToRemove: base.environmentKeysToRemove + ["BUZZ_PRIVATE_KEY", "NOSTR_PRIVATE_KEY"],
+      environmentKeyPrefixesToRemove: base.environmentKeyPrefixesToRemove + ["BUZZ_", "NOSTR_"]
     )
     _ = try await localOpenClawGateways.ensure(
       agentID: agentID, identity: identity, launch: launch,
-      workingDirectory: workingDirectory
+      workingDirectory: workingDirectory, configuredPort: configuration.port,
+      reuseExistingListener: true
     )
-    return OpenClawGatewayEndpointResolver.localAgentWorkspace(port: port)
+    let endpoint = OpenClawGatewayEndpointResolver.localAgentWorkspace(port: configuration.port)
+    await openClawGateway.configureTransport(agentID: agentID, endpoint: endpoint,
+      requestHeaders: configuration.token.map { ["Authorization": "Bearer " + $0] } ?? [:],
+      password: configuration.password)
+    return endpoint
   }
 
   public func attachOpenClawGatewaySession(

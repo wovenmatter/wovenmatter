@@ -222,3 +222,40 @@ pairing, provider response or the full application's narrow/wide workspace layou
 The fixture was closed. Shared Woven Matter Dev was neither replaced nor launched;
 all build products remained in the isolated cache. The manager's exact-head Dev
 integration and Trey's manual Gateway acceptance checklist remain outstanding.
+
+### Local Link Gateway startup correction (2026-09-12)
+
+User acceptance exposed a local launch failure hidden by discarded stderr/stdout.
+The old command forced `--auth none` on an agent-specific port while inheriting
+`gateway.tailscale.mode=serve`. The installed 2026.9.4 CLI rejected this with exit
+78: `gateway.auth.mode=none cannot be used with gateway.tailscale.mode=serve`.
+This was reproduced before the user narrowed testing, using a temporary minimal
+configuration, not the live Gateway or user configuration.
+
+Local-workspace preparation now reads the selected local configuration and uses
+its port and authentication. An existing listener is borrowed: unlink and app
+shutdown never terminate it. If no listener exists, Woven owns only the foreground
+child it starts, with no auth, bind, or Tailscale override and no `--force`.
+Serve-enabled and Serve-disabled configurations follow this same path; neither
+requires changing the user's Serve setting. The proposed `--tailscale off`
+workaround was withdrawn and is not included.
+
+Plaintext, environment, and OpenClaw store-backed authentication are resolved only
+in memory. The actual setup uses a store SecretRef; its single team-scoped value
+is read through a parameterized, read-only query matching upstream
+`src/secrets/store/secret-store.ts`. No credential or database migration is
+performed. Password auth is supported in the Gateway connect frame. Credentials
+are absent from persisted links and argv. Unsupported included Gateway settings,
+custom-bind/TLS, trusted-proxy bypass, or unresolved references fail visibly
+instead of overwriting configuration or weakening security.
+
+Startup stdout/stderr are continuously drained into a 16 KiB in-memory tail.
+Failures include exit status and at most eight sanitized lines/2 KiB; known
+credential values, credential-bearing lines, URLs and home paths are redacted.
+No raw startup log is written to disk. Existing process cancellation/reaping
+remains bounded.
+
+Per the user's direction, no new tests, scenario matrix, or testing infrastructure
+was added for this correction. Existing repository-required validation is used;
+Trey's actual Link Gateway retry in the manager-built Dev app remains the
+acceptance check. Real Serve availability has not been asserted from a fixture.

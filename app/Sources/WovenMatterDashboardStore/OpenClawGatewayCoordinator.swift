@@ -65,6 +65,7 @@ public actor OpenClawGatewayCoordinator {
   private struct ClientTransport: Sendable {
     let endpoint: OpenClawGatewayEndpoint
     let headers: [String: String]
+    var password: String? = nil
   }
   private var clientTransports: [UUID: ClientTransport] = [:]
   private var pendingClientConnections: [
@@ -219,12 +220,13 @@ public actor OpenClawGatewayCoordinator {
   public func configureTransport(
     agentID: UUID,
     endpoint: OpenClawGatewayEndpoint,
-    requestHeaders: [String: String]
+    requestHeaders: [String: String],
+    password: String? = nil
   ) async {
     let previous = invalidateConnection(agentID: agentID)
     clientTransports[agentID] = ClientTransport(
       endpoint: endpoint,
-      headers: requestHeaders
+      headers: requestHeaders, password: password
     )
     await previous?.disconnect()
   }
@@ -1629,6 +1631,7 @@ public actor OpenClawGatewayCoordinator {
       let client = injectedClient ?? OpenClawGatewayClient(
         endpoint: transport.endpoint,
         requestHeaders: transport.headers,
+        password: transport.password,
         credentialScope: "gateway-agent:\(agentID.uuidString.lowercased())"
           + (link.location == .remoteWorkspace ? "" : ":\(link.endpoint.url.absoluteString)"),
         eventHandler: { [weak self] event in
