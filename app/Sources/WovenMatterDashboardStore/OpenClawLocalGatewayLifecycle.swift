@@ -19,6 +19,8 @@ actor OpenClawLocalGatewayLifecycle {
     let isRunning: @Sendable () -> Bool
     let terminate: @Sendable () -> Void
     var waitForExit: @Sendable () async -> Void = {}
+    var exitStatus: @Sendable () -> Int32? = { nil }
+    var startupOutput: @Sendable () -> String = { "" }
   }
   typealias Launcher = @Sendable (LocalACPRuntimeLaunchConfiguration, URL) throws -> OwnedProcess
   private struct Entry {
@@ -69,7 +71,9 @@ actor OpenClawLocalGatewayLifecycle {
     agentID: UUID,
     identity: String,
     launch: LocalACPRuntimeLaunchConfiguration,
-    workingDirectory: URL
+    workingDirectory: URL,
+    configuredPort: Int? = nil,
+    reuseExistingListener: Bool = false
   ) async throws -> Int {
     try Task.checkCancellation()
     guard !isShutDown else { throw CancellationError() }
@@ -90,7 +94,8 @@ actor OpenClawLocalGatewayLifecycle {
     } else {
       let generation = UUID()
       let task = Task { try await self.start(identity: identity, generation: generation,
-                                            launch: launch, workingDirectory: workingDirectory) }
+                                            launch: launch, workingDirectory: workingDirectory,
+                                            configuredPort: configuredPort, reuseExistingListener: reuseExistingListener) }
       start = Pending(generation: generation, task: task, waiters: [waiter])
       pending[identity] = start
     }
@@ -128,7 +133,8 @@ actor OpenClawLocalGatewayLifecycle {
   }
 
   private func start(identity: String, generation: UUID,
-                     launch: LocalACPRuntimeLaunchConfiguration, workingDirectory: URL) async throws -> Int {
+                     launch: LocalACPRuntimeLaunchConfiguration, workingDirectory: URL,
+                     configuredPort: Int?, reuseExistingListener: Bool) async throws -> Int {
     try Task.checkCancellation()
     guard !isShutDown else { throw CancellationError() }
     let stale = entries.removeValue(forKey: identity)
@@ -138,8 +144,16 @@ actor OpenClawLocalGatewayLifecycle {
     }
     try Task.checkCancellation()
     guard !isShutDown else { throw CancellationError() }
-    let process = try launchProcess(launch, workingDirectory)
-    let port = Self.stablePort(for: identity)
+    let port = configuredPort ?? Self.stablePort(for: identity)
+    // A pre-existing listener is borrowed, never terminated by Woven. Protocol
+    // and authentication are verified by the Gateway client before linking.
+    let process: OwnedProcess
+    if reuseExistingListener, isReady(port) {
+      let ready = isReady
+      process = OwnedProcess(isRunning: { ready(port) }, terminate: {})
+    } else {
+      process = try launchProcess(launch, workingDirectory)
+    }
     entries[identity] = Entry(process: process, agents: [], port: port, generation: generation)
     do {
       let clock = ContinuousClock()
@@ -160,6 +174,10 @@ actor OpenClawLocalGatewayLifecycle {
       retire(process, identity: identity)
       await waitForRetirement(identity: identity)
       if entries[identity]?.generation == generation { entries.removeValue(forKey: identity) }
+      if let startupError = error as? OpenClawLocalGatewayLifecycleError {
+        throw GatewayStartupFailure(reason: startupError.localizedDescription,
+          status: process.exitStatus(), detail: process.startupOutput())
+      }
       throw error
     }
   }
@@ -192,12 +210,19 @@ actor OpenClawLocalGatewayLifecycle {
     }
     environment.merge(launch.environment) { _, staged in staged }
     process.environment = environment
-    process.standardOutput = FileHandle.nullDevice
-    process.standardError = FileHandle.nullDevice
-    try process.run()
+    let pipe = Pipe()
+    let output = try GatewayStartupOutput(pipe: pipe, environment: environment)
+    process.standardOutput = pipe
+    process.standardError = pipe
+    do { try process.run() }
+    catch { output.finish(); throw error }
+    // Only the child keeps the write side. EOF must not depend on Process lifetime.
+    try? pipe.fileHandleForWriting.close()
     let owner = GatewayProcessOwner(process)
     return OwnedProcess(isRunning: { process.isRunning }, terminate: { owner.terminate() },
-                        waitForExit: { await owner.waitForExit() })
+      waitForExit: { await owner.waitForExit(); output.finish() },
+      exitStatus: { process.isRunning ? nil : process.terminationStatus },
+      startupOutput: { output.summary() })
   }
 
   private static func portAcceptsConnections(_ port: Int) -> Bool {
@@ -279,4 +304,101 @@ private final class GatewayProcessOwner: @unchecked Sendable {
     let task = lock.withLock { reaper }
     await task?.value
   }
+}
+
+private struct GatewayStartupFailure: LocalizedError {
+  let reason: String
+  let status: Int32?
+  let detail: String
+  var errorDescription: String? {
+    let exit = status.map { " Exit status: \($0)." } ?? ""
+    return reason + exit + (detail.isEmpty ? "" : "\n" + detail)
+  }
+}
+
+/// Continuously drain both streams without a pipe deadlock or an unbounded log.
+/// Raw bytes live only in a small in-memory tail; diagnostics are sanitized on read.
+final class GatewayStartupOutput: @unchecked Sendable {
+  private let queue = DispatchQueue(label: "wovenmatter.openclaw-startup-output")
+  private let source: any DispatchSourceRead
+  private let descriptor: Int32
+  private let sensitiveValues: [String]
+  private var tail = Data()
+  private var finished = false
+  private var truncated = false
+  static let maximumBytes = 16_384
+
+  init(pipe: Pipe, environment: [String: String]) throws {
+    descriptor = dup(pipe.fileHandleForReading.fileDescriptor)
+    guard descriptor >= 0 else { throw POSIXError(.EMFILE) }
+    _ = fcntl(descriptor, F_SETFL, O_NONBLOCK)
+    try? pipe.fileHandleForReading.close()
+    sensitiveValues = environment.compactMap { key, value in
+      let name = key.lowercased()
+      return ["token", "password", "secret", "credential", "api_key", "private_key"].contains(where: name.contains)
+        && !value.isEmpty ? value : nil
+    }.sorted { $0.count > $1.count }
+    source = DispatchSource.makeReadSource(fileDescriptor: descriptor, queue: queue)
+    let descriptor = descriptor
+    source.setCancelHandler { Darwin.close(descriptor) }
+    source.setEventHandler { [weak self] in self?.drain() }
+    source.resume()
+  }
+
+  private func drain() {
+    guard !finished else { return }
+    var bytes = [UInt8](repeating: 0, count: 4096)
+    // Bound each turn even when a child writes continuously.
+    for _ in 0..<16 {
+      let count = Darwin.read(descriptor, &bytes, bytes.count)
+      if count <= 0 {
+        if count == 0 { finished = true; source.cancel() }
+        return
+      }
+      tail.append(contentsOf: bytes.prefix(count))
+      if tail.count > Self.maximumBytes {
+        tail.removeFirst(tail.count - Self.maximumBytes)
+        truncated = true
+      }
+    }
+  }
+
+  func finish() {
+    queue.sync {
+      drain()
+      finished = true
+      source.cancel()
+    }
+  }
+
+  func summary() -> String {
+    queue.sync {
+      var data = tail
+      if truncated {
+        // Do not expose a fragment of a secret whose field name was truncated.
+        if let newline = data.firstIndex(of: 10) { data = Data(data.suffix(from: data.index(after: newline))) }
+        else { data = Data() }
+      }
+      return Self.redact(String(decoding: data, as: UTF8.self), sensitiveValues: sensitiveValues)
+    }
+  }
+
+  static func redact(_ output: String, sensitiveValues: [String] = []) -> String {
+    if output.contains("gateway.auth.mode=none cannot be used with gateway.tailscale.mode=") {
+      return "OpenClaw rejected unauthenticated startup with Tailscale Serve/Funnel enabled. Tailscale Serve/Funnel requires an authenticated Gateway."
+    }
+    var result = output
+    for value in sensitiveValues { result = result.replacingOccurrences(of: value, with: "[redacted]") }
+    result = result.replacingOccurrences(of: #"\x1B\[[0-9;]*[A-Za-z]"#, with: "", options: .regularExpression)
+    result = result.components(separatedBy: .newlines).map { line in
+      if line.range(of: #"(?i)(token|password|secret|credential|api[_-]?key|authorization|private[_ -]?key)"#, options: .regularExpression) != nil {
+        return "[credential-related startup output redacted]"
+      }
+      return line.replacingOccurrences(of: #"(?i)(https?|wss?)://[^\s]+"#, with: "[URL redacted]", options: .regularExpression)
+        .replacingOccurrences(of: NSHomeDirectory(), with: "~")
+    }.filter { !$0.isEmpty }.suffix(8).joined(separator: "\n")
+    return String(result.prefix(2048))
+  }
+
+  deinit { source.cancel() }
 }

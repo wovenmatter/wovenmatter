@@ -111,6 +111,7 @@ public actor OpenClawGatewayClient {
 
   private let endpoint: OpenClawGatewayEndpoint
   private let requestHeaders: [String: String]
+  private let password: String?
   private let eventHandler: EventHandler
   private let disconnectHandler: DisconnectHandler
   private let connectionHandler: ConnectionHandler
@@ -135,6 +136,7 @@ public actor OpenClawGatewayClient {
   public init(
     endpoint: OpenClawGatewayEndpoint,
     requestHeaders: [String: String] = [:],
+    password: String? = nil,
     credentialScope: String? = nil,
     credentialStore: any OpenClawGatewayCredentialStore = OpenClawGatewayKeychain.shared,
     eventHandler: @escaping EventHandler = { _ in },
@@ -143,6 +145,7 @@ public actor OpenClawGatewayClient {
   ) {
     self.endpoint = endpoint
     self.requestHeaders = requestHeaders
+    self.password = password
     self.eventHandler = eventHandler
     self.disconnectHandler = disconnectHandler
     self.connectionHandler = connectionHandler
@@ -161,6 +164,7 @@ public actor OpenClawGatewayClient {
   ) {
     self.endpoint = endpoint
     self.requestHeaders = [:]
+    self.password = nil
     self.credentialScope = endpoint.url.absoluteString
     self.credentialStore = credentialStore
     self.handshakeTimeout = handshakeTimeout
@@ -226,8 +230,8 @@ public actor OpenClawGatewayClient {
     var credentials = try credentialStore.credentials(for: credentialScope)
     let signingKey = try Curve25519.Signing.PrivateKey(rawRepresentation: credentials.privateKey)
     let sharedToken = Self.bearerToken(from: requestHeaders)
-    let token = sharedToken ?? credentials.deviceToken
-    if endpoint.authorization == .remoteWorkspace, token == nil {
+    let token = sharedToken ?? (password == nil ? credentials.deviceToken : nil)
+    if endpoint.authorization == .remoteWorkspace, token == nil, password == nil {
       throw OpenClawGatewayClientError.authenticationMissing
     }
     let requestID = UUID().uuidString.lowercased()
@@ -244,7 +248,7 @@ public actor OpenClawGatewayClient {
     let connectParams = Self.connectParameters(
       deviceID: deviceID, publicKey: publicKey, signature: signature,
       signedAt: signedAt, nonce: nonce, scopes: scopes, token: sharedToken,
-      deviceToken: sharedToken == nil ? credentials.deviceToken : nil
+      deviceToken: sharedToken == nil && password == nil ? credentials.deviceToken : nil, password: password
     )
     try await send(Frame(type: "req", id: requestID, method: "connect", params: connectParams))
     let response = try await receiveFrame(from: socket)
@@ -303,7 +307,8 @@ public actor OpenClawGatewayClient {
     nonce: String,
     scopes: [String],
     token: String? = nil,
-    deviceToken: String? = nil
+    deviceToken: String? = nil,
+    password: String? = nil
   ) -> GatewayJSONValue {
     var parameters: [String: GatewayJSONValue] = [
       "minProtocol": .number(4), "maxProtocol": .number(4),
@@ -329,6 +334,7 @@ public actor OpenClawGatewayClient {
       "userAgent": .string("woven-matter-macos/1.0"),
     ]
     if let token { parameters["auth"] = .object(["token": .string(token)]) }
+    else if let password { parameters["auth"] = .object(["password": .string(password)]) }
     else if let deviceToken { parameters["auth"] = .object(["deviceToken": .string(deviceToken)]) }
     return .object(parameters)
   }
