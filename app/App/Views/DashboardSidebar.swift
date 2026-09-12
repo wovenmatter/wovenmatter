@@ -130,12 +130,17 @@ struct DashboardSidebarRail: View {
     let onSurfaceProfileChange: () -> Void
 
     var body: some View {
-        switch page {
-        case .navigation:
-            navigationPage
-        case .workspace:
-            workspacePage
+        Group {
+            switch page {
+            case .navigation:
+                navigationPage
+            case .workspace:
+                workspacePage
+            }
         }
+        .environment(\.dashboardSidebarForeground, DashboardPalette.foreground)
+        .foregroundStyle(DashboardPalette.foreground)
+        .tint(DashboardPalette.foreground)
     }
 
     private var navigationPage: some View {
@@ -253,6 +258,13 @@ struct DashboardSidebarNavigationPage: View {
     let onDeleteFolder: (String) -> Void
     let onUnavailableMutation: (String) -> Void
 
+    @AppStorage(DashboardWorkspaceSidebarVisibility.localWorkspace.storageKey)
+    private var showsLocalWorkspace = true
+    @AppStorage(DashboardWorkspaceSidebarVisibility.remoteWorkspaces.storageKey)
+    private var showsRemoteWorkspaces = true
+    @AppStorage(DashboardWorkspaceSidebarVisibility.buzzWorkspaces.storageKey)
+    private var showsBuzzWorkspaces = true
+
     @State private var agentsOpen = true
     @State private var foldersOpen = true
     @State private var recentsOpen = true
@@ -325,7 +337,7 @@ struct DashboardSidebarNavigationPage: View {
                     .font(.system(size: 13, weight: .semibold))
                 Text("\(agents.count) \(agents.count == 1 ? "agent" : "agents")")
                 .font(.system(size: 11))
-                .foregroundStyle(DashboardPalette.mutedForeground)
+                .foregroundStyle(DashboardPalette.foreground)
             }
             Spacer()
             if let onMove {
@@ -409,7 +421,7 @@ struct DashboardSidebarNavigationPage: View {
                 title: "Settings",
                 hoverID: "destination:settings",
                 selected: destination == .settings,
-                iconColor: DashboardPalette.primary
+                iconColor: DashboardPalette.foreground
             ) {
                 onUtility(.settings)
             }
@@ -435,57 +447,63 @@ struct DashboardSidebarNavigationPage: View {
                     }
                 }
 
-                // Direct local agent workspace
-                let workspaceAgents = groupAgents(
-                    in: .localWorkspace,
-                    pinIDs: pinIDs,
-                    pinOrder: pinOrder
-                )
-                agentDisclosureHeading(
-                    title: DashboardAgentSidebarGroup.localWorkspace.title,
-                    key: DashboardAgentDisclosureKey.localWorkspace
-                )
-                if agentSectionExpanded(DashboardAgentDisclosureKey.localWorkspace) {
-                    if workspaceAgents.isEmpty {
-                        agentEmptyLabel("None on this Mac")
-                    } else {
-                        ForEach(workspaceAgents) { agent in
-                            agentRow(
-                                agent,
-                                moveScope: .stored(
-                                    DashboardAgentSidebarGroup.localWorkspace.orderKey
-                                ),
-                                groupAgents: workspaceAgents,
-                                isPinned: false
-                            )
+                if showsLocalWorkspace {
+                    // Direct local agent workspace
+                    let workspaceAgents = groupAgents(
+                        in: .localWorkspace,
+                        pinIDs: pinIDs,
+                        pinOrder: pinOrder
+                    )
+                    agentDisclosureHeading(
+                        title: DashboardAgentSidebarGroup.localWorkspace.title,
+                        key: DashboardAgentDisclosureKey.localWorkspace
+                    )
+                    if agentSectionExpanded(DashboardAgentDisclosureKey.localWorkspace) {
+                        if workspaceAgents.isEmpty {
+                            agentEmptyLabel("None on this Mac")
+                        } else {
+                            ForEach(workspaceAgents) { agent in
+                                agentRow(
+                                    agent,
+                                    moveScope: .stored(
+                                        DashboardAgentSidebarGroup.localWorkspace.orderKey
+                                    ),
+                                    groupAgents: workspaceAgents,
+                                    isPinned: false
+                                )
+                            }
                         }
                     }
                 }
 
-                agentDisclosureHeading(
-                    title: DashboardAgentSidebarGroup.remoteWorkspaces.title,
-                    key: DashboardAgentDisclosureKey.remoteWorkspaces
-                )
-                if agentSectionExpanded(DashboardAgentDisclosureKey.remoteWorkspaces) {
-                    if remoteWorkspaceLinks.isEmpty {
-                        agentEmptyLabel("No remote workspaces yet")
-                    } else {
-                        ForEach(remoteWorkspaceLinks) { workspace in
-                            remoteWorkspaceSection(workspace)
+                if showsRemoteWorkspaces {
+                    agentDisclosureHeading(
+                        title: DashboardAgentSidebarGroup.remoteWorkspaces.title,
+                        key: DashboardAgentDisclosureKey.remoteWorkspaces
+                    )
+                    if agentSectionExpanded(DashboardAgentDisclosureKey.remoteWorkspaces) {
+                        if remoteWorkspaceLinks.isEmpty {
+                            agentEmptyLabel("No remote workspaces yet")
+                        } else {
+                            ForEach(remoteWorkspaceLinks) { workspace in
+                                remoteWorkspaceSection(workspace)
+                            }
                         }
                     }
                 }
 
-                agentDisclosureHeading(
-                    title: DashboardAgentSidebarHeading.buzzWorkspaces,
-                    key: DashboardAgentDisclosureKey.buzzWorkspaces
-                )
-                if agentSectionExpanded(DashboardAgentDisclosureKey.buzzWorkspaces) {
-                    if buzzWorkspaceLinks.isEmpty {
-                        agentEmptyLabel("No Buzz workspaces linked")
-                    } else {
-                        ForEach(buzzWorkspaceLinks) { workspace in
-                            buzzWorkspaceSection(workspace)
+                if showsBuzzWorkspaces {
+                    agentDisclosureHeading(
+                        title: DashboardAgentSidebarHeading.buzzWorkspaces,
+                        key: DashboardAgentDisclosureKey.buzzWorkspaces
+                    )
+                    if agentSectionExpanded(DashboardAgentDisclosureKey.buzzWorkspaces) {
+                        if buzzWorkspaceLinks.isEmpty {
+                            agentEmptyLabel("No Buzz workspaces linked")
+                        } else {
+                            ForEach(buzzWorkspaceLinks) { workspace in
+                                buzzWorkspaceSection(workspace)
+                            }
                         }
                     }
                 }
@@ -639,7 +657,7 @@ struct DashboardSidebarNavigationPage: View {
     private func agentEmptyLabel(_ text: String, level: Int = 0) -> some View {
         Text(text)
             .font(.system(size: 11))
-            .foregroundStyle(DashboardPalette.mutedForeground)
+            .foregroundStyle(DashboardPalette.foreground)
             .padding(.horizontal, 12)
             .padding(.leading, CGFloat(level * 8))
             .padding(.vertical, 4)
@@ -861,7 +879,7 @@ struct DashboardSidebarNavigationPage: View {
                 if recentItems.isEmpty {
                     Text("No recent items.")
                         .font(.system(size: 12))
-                        .foregroundStyle(DashboardPalette.mutedForeground)
+                        .foregroundStyle(DashboardPalette.foreground)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 10)
                 } else {
@@ -1015,14 +1033,14 @@ struct DashboardNewChatDrawer: View {
                         summary: DashboardNewChatAvailabilitySummary.localCLIs(
                             readyRuntimeCount: model.localACPRuntimeAvailability
                                 .filter {
-                                    $0.isReady
+                                    $0.runtimeKind == .opencode ? (model.openCode?.isEnabled == true && model.openCode?.canConnect == true) : $0.isReady
                                         && model.isLocalACPAgentReady($0.runtimeKind)
                                         && !model.checkingLocalACPRuntimeKinds
                                             .contains($0.runtimeKind)
                                 }
                                 .count,
                             workspaceIsReady: model.localACPWorkspaceAvailability
-                                .isReady
+                                .isReady || model.openCode?.isReady == true
                         ),
                         isExpanded: expansionBinding(for: .acpDirect)
                     ) {
@@ -1042,7 +1060,9 @@ struct DashboardNewChatDrawer: View {
                                         runtimeKind: definition.runtimeKind
                                     ),
                                     title: definition.displayName,
-                                    detail: isChecking || availability == nil
+                                    detail: definition.runtimeKind == .opencode
+                                        ? ((model.openCode?.isEnabled == true && model.openCode?.canConnect == true) ? "Local OpenCode v2" : "Enable OpenCode in Settings")
+                                        : isChecking || availability == nil
                                         ? "Checking…"
                                         : availability?.isReady == true
                                             && !model.isLocalACPAgentReady(definition.runtimeKind)
@@ -1054,7 +1074,7 @@ struct DashboardNewChatDrawer: View {
                             }
                             .buttonStyle(DashboardQuietButtonStyle())
                             .disabled(
-                                isChecking
+                                definition.runtimeKind == .opencode ? (model.openCode?.isEnabled != true || model.openCode?.canConnect != true || model.openCode?.busy == true || !model.localACPWorkspaceAvailability.isReady) : isChecking
                                     || availability?.isReady != true
                                     || !model.isLocalACPAgentReady(definition.runtimeKind)
                                     || !model.localACPWorkspaceAvailability.isReady
@@ -1607,7 +1627,7 @@ struct DashboardSidebarWorkspacePage: View {
                     .lineLimit(1)
                 Text("\(conversations.count) chats · \(notes.count) notes")
                     .font(.system(size: 11))
-                    .foregroundStyle(DashboardPalette.mutedForeground)
+                    .foregroundStyle(DashboardPalette.foreground)
             }
             Spacer()
             if onBack == nil {
@@ -1650,9 +1670,7 @@ struct DashboardSidebarWorkspacePage: View {
         } label: {
             DashboardLucideIcon(glyph: .listFilter, size: 14)
                 .foregroundStyle(
-                    readFilter != nil
-                        ? DashboardPalette.primary
-                        : DashboardPalette.mutedForeground
+                    DashboardPalette.foreground
                 )
                 .frame(width: 36, height: 36)
                 .background(

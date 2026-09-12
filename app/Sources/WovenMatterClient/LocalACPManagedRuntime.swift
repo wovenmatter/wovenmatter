@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import Darwin
 import WovenMatterCore
 
 public enum LocalACPRuntimeInstallComponent: Sendable {
@@ -566,7 +567,9 @@ public actor LocalACPRuntimeInstaller {
         expectedSourceSHA256: String? = nil,
         expectedPackageSpec: String? = nil
     ) async throws -> URL {
-        switch component {
+        let lock = try RuntimeInstallationLock(directory: installPrefix)
+        defer { lock.release() }
+        return switch component {
         case .cli:
             try await installCLI(
                 definition,
@@ -632,6 +635,14 @@ public actor LocalACPRuntimeInstaller {
         return executable
     }
 
+    public func installPackage(_ package: String, version: String, executableName: String) async throws -> URL {
+        guard ["@agentclientprotocol/codex-acp", "@agentclientprotocol/claude-agent-acp", "@earendil-works/pi-coding-agent", "openclaw"].contains(package),
+              Self.isExactSemanticVersion(version) else { throw LocalACPRuntimeInstallError.unpinnedPackage }
+        let lock = try RuntimeInstallationLock(directory: installPrefix)
+        defer { lock.release() }
+        return try await installNpmPackage("\(package)@\(version)", executableName: executableName)
+    }
+
     private func installAdapter(
         _ definition: LocalACPRuntimeDefinition
     ) async throws -> URL {
@@ -665,6 +676,10 @@ public actor LocalACPRuntimeInstaller {
             at: installPrefix,
             withIntermediateDirectories: true
         )
+        let generation = installPrefix.appending(path: "Installations/\(UUID().uuidString)", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: generation, withIntermediateDirectories: true)
+        var promoted = false
+        defer { if !promoted { try? FileManager.default.removeItem(at: generation) } }
         let searchDirectories = (
             [
                 npm.deletingLastPathComponent().path,
@@ -682,7 +697,7 @@ public actor LocalACPRuntimeInstaller {
                 "install",
                 "--global",
                 "--prefix",
-                installPrefix.path,
+                generation.path,
                 packageSpec,
             ],
             environment: environment,
@@ -693,7 +708,7 @@ public actor LocalACPRuntimeInstaller {
                 result.combinedOutput
             )
         }
-        let executable = installPrefix
+        let executable = generation
             .appending(path: "bin", directoryHint: .isDirectory)
             .appending(path: executableName)
         guard FileManager.default.isExecutableFile(atPath: executable.path) else {
@@ -701,7 +716,36 @@ public actor LocalACPRuntimeInstaller {
                 executableName
             )
         }
-        return executable
+        let probe = try LocalACPProcessRunner.run(executableURL: executable, arguments: ["--version"], environment: environment, timeout: 15)
+        guard probe.succeeded,
+              let installed = RuntimeMaintenance.normalizeVersion(probe.stdout),
+              installed == packageSpec.split(separator: "@").last.map(String.init) else {
+            throw RuntimeMaintenanceError.verification
+        }
+        let packageName = String(packageSpec.prefix(upTo: packageSpec.lastIndex(of: "@")!))
+        if ["@agentclientprotocol/codex-acp", "@agentclientprotocol/claude-agent-acp"].contains(packageName) {
+            let dependency = packageName.hasSuffix("/codex-acp") ? "@openai/codex" : "@anthropic-ai/claude-agent-sdk"
+            guard let root = RuntimeMaintenance.packageRoot(executable: executable, name: packageName),
+                  let bundled = RuntimeMaintenance.dependencyRoot(from: root, name: dependency),
+                  RuntimeMaintenance.packageVersion(at: bundled) != nil,
+                  let engine = RuntimeMaintenance.bundledEngine(in: bundled, kind: packageName.hasSuffix("/codex-acp") ? .codex : .claudeCode),
+                  FileManager.default.isExecutableFile(atPath: engine.path),
+                  RuntimeMaintenance.probeVersion(engine).flatMap(RuntimeMaintenance.normalizeVersion) != nil
+            else { throw RuntimeMaintenanceError.verification }
+        }
+        // Each npm install has an immutable prefix. Existing adapter processes
+        // continue using their old dependency tree after the bin link changes.
+        let bin = installPrefix.appending(path: "bin", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        let target = bin.appending(path: executableName)
+        let temporaryLink = bin.appending(path: ".\(executableName)-\(UUID().uuidString)")
+        try FileManager.default.createSymbolicLink(at: temporaryLink, withDestinationURL: executable)
+        defer { try? FileManager.default.removeItem(at: temporaryLink) }
+        guard Darwin.rename(temporaryLink.path, target.path) == 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        promoted = true
+        return target
     }
 
     private func cliInstallerSource(
@@ -764,9 +808,8 @@ public actor LocalACPRuntimeInstaller {
     }
 
     static func isExactSemanticVersion(_ value: String) -> Bool {
-        let parts = value.split(separator: ".", omittingEmptySubsequences: false)
-        return parts.count == 3
-            && parts.allSatisfy { !$0.isEmpty && $0.allSatisfy(\.isNumber) }
+        // Exact prerelease versions are pinned too; ranges and moving tags are not.
+        value.range(of: #"^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$"#, options: .regularExpression) != nil
     }
 
     static func isExactPackageSpec(_ value: String) -> Bool {
@@ -862,26 +905,64 @@ enum LocalACPProcessRunner {
         executableURL: URL,
         arguments: [String],
         environment: [String: String]? = nil,
-        currentDirectoryURL: URL? = nil
+        currentDirectoryURL: URL? = nil,
+        timeout: TimeInterval = 600
     ) throws -> LocalACPProcessResult {
-        let output = Pipe()
-        let process = Process()
-        process.executableURL = executableURL
-        process.arguments = arguments
-        process.environment = environment
-        process.currentDirectoryURL = currentDirectoryURL
-        process.standardInput = FileHandle.nullDevice
-        process.standardOutput = output
-        process.standardError = output
-        try process.run()
-        output.fileHandleForWriting.closeFile()
-        let outputData = output.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-
-        return LocalACPProcessResult(
-            terminationStatus: process.terminationStatus,
-            stdout: String(decoding: outputData, as: UTF8.self)
-        )
+        let outputURL = FileManager.default.temporaryDirectory.appending(path: "runtime-output-\(UUID().uuidString)")
+        FileManager.default.createFile(atPath: outputURL.path, contents: nil, attributes: [.posixPermissions: 0o600])
+        defer { try? FileManager.default.removeItem(at: outputURL) }
+        let output = try FileHandle(forWritingTo: outputURL)
+        defer { try? output.close() }
+        var actions: posix_spawn_file_actions_t?
+        var attributes: posix_spawnattr_t?
+        posix_spawn_file_actions_init(&actions)
+        posix_spawnattr_init(&attributes)
+        defer { posix_spawn_file_actions_destroy(&actions); posix_spawnattr_destroy(&attributes) }
+        posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0)
+        posix_spawn_file_actions_adddup2(&actions, output.fileDescriptor, STDOUT_FILENO)
+        posix_spawn_file_actions_adddup2(&actions, output.fileDescriptor, STDERR_FILENO)
+        if let currentDirectoryURL {
+            posix_spawn_file_actions_addchdir(&actions, currentDirectoryURL.path)
+        }
+        // Own the entire subprocess group so a timed-out shell cannot leave an
+        // npm/curl child mutating an installation after the UI permits retry.
+        posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_SETPGROUP))
+        posix_spawnattr_setpgroup(&attributes, 0)
+        let argv = ([executableURL.path] + arguments).map { strdup($0) } + [nil]
+        let envp = (environment ?? ProcessInfo.processInfo.environment).map { strdup("\($0.key)=\($0.value)") } + [nil]
+        defer { argv.forEach { free($0) }; envp.forEach { free($0) } }
+        var pid: pid_t = 0
+        let spawnStatus = argv.withUnsafeBufferPointer { args in
+            envp.withUnsafeBufferPointer { env in
+                posix_spawn(&pid, executableURL.path, &actions, &attributes,
+                    UnsafeMutablePointer(mutating: args.baseAddress!), UnsafeMutablePointer(mutating: env.baseAddress!))
+            }
+        }
+        guard spawnStatus == 0 else { throw POSIXError(POSIXErrorCode(rawValue: spawnStatus) ?? .EIO) }
+        var status: Int32 = 0
+        let deadline = Date().addingTimeInterval(timeout)
+        while true {
+            let waited = waitpid(pid, &status, WNOHANG)
+            if waited == pid { break }
+            if waited < 0 {
+                if errno == EINTR { continue }
+                Darwin.kill(-pid, SIGKILL)
+                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            }
+            if Date() >= deadline {
+                Darwin.kill(-pid, SIGTERM)
+                Thread.sleep(forTimeInterval: 0.1)
+                Darwin.kill(-pid, SIGKILL)
+                while waitpid(pid, &status, 0) < 0 && errno == EINTR {}
+                throw RuntimeMaintenanceError.timeout
+            }
+            Thread.sleep(forTimeInterval: 0.025)
+        }
+        let input = try FileHandle(forReadingFrom: outputURL)
+        defer { try? input.close() }
+        let outputData = try input.read(upToCount: 128 * 1_024) ?? Data()
+        return LocalACPProcessResult(terminationStatus: (status & 0x7f) == 0 ? (status >> 8) & 0xff : 128 + (status & 0x7f),
+            stdout: String(decoding: outputData, as: UTF8.self))
     }
 }
 
@@ -893,4 +974,19 @@ private extension Array where Element: Equatable {
             }
         }
     }
+}
+
+/// A nonblocking host lock also covers separate installer actor instances.
+private struct RuntimeInstallationLock {
+    let descriptor: Int32
+    init(directory: URL) throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        descriptor = Darwin.open(directory.appending(path: ".installation.lock").path, O_CREAT | O_RDWR | O_CLOEXEC, 0o600)
+        guard descriptor >= 0 else { throw RuntimeMaintenanceError.busy }
+        guard flock(descriptor, LOCK_EX | LOCK_NB) == 0 else {
+            Darwin.close(descriptor)
+            throw RuntimeMaintenanceError.busy
+        }
+    }
+    func release() { flock(descriptor, LOCK_UN); Darwin.close(descriptor) }
 }

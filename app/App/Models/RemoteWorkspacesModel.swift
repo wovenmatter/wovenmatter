@@ -36,6 +36,17 @@ final class RemoteWorkspacesModel {
     private(set) var machineCandidates: [RemoteMachineCandidate] = []
     private(set) var statuses: [UUID: RemoteWorkspaceStatus] = [:]
     private(set) var harnesses: [UUID: [RemoteHarnessStatus]] = [:]
+    var onRuntimeMaintenanceChanged: (@MainActor () async -> Void)?
+    private var credentialEpoch = UUID()
+    private var workspaceEpochs: [UUID: UUID] = [:]
+    private var invalidatingWorkspaceIDs: Set<UUID> = []
+    private var workspaceRoots: [UUID: String] = [:]
+    private(set) var runtimeMaintenance: [UUID: [RemoteRuntimeMaintenance]] = [:]
+    private var runtimeChecksVerifiedAfterError: [UUID: Set<AgentRuntimeKind>] = [:]
+    private(set) var checkingRuntimeIDs: [UUID: Set<AgentRuntimeKind>] = [:]
+    private(set) var runtimeCheckErrors: [UUID: [AgentRuntimeKind: String]] = [:]
+    private(set) var runtimeErrors: [UUID: String] = [:]
+    private(set) var workspaceInstances: [UUID: [AgentRuntimeKind: RemoteWorkspaceInstanceStatus]] = [:]
     private(set) var operations: [UUID: RemoteHarnessOperation] = [:]
     private(set) var authenticationSessions: [UUID: RemoteHarnessAuthenticationSession] = [:]
     private(set) var preparedHarnessAction: PreparedHarnessAction?
@@ -77,10 +88,20 @@ final class RemoteWorkspacesModel {
     }
 
     func disableCredentialAccess() {
+        credentialEpoch = UUID()
         isCredentialAccessEnabled = false
+        preparedHarnessAction = nil
+        runtimeErrors.removeAll()
+        runtimeCheckErrors.removeAll()
+        runtimeChecksVerifiedAfterError.removeAll()
+        checkingRuntimeIDs.removeAll()
+        workspaceRoots.removeAll()
         defaults.set(false, forKey: credentialAccessDefaultsKey)
         statuses.removeAll()
         harnesses.removeAll()
+        runtimeMaintenance.removeAll()
+        workspaceInstances.removeAll()
+        Task { await onRuntimeMaintenanceChanged?() }
         let activeTunnels = Array(tunnels.values)
         tunnels.removeAll()
         Task {
@@ -90,9 +111,13 @@ final class RemoteWorkspacesModel {
 
     var readyChatTargets: [RemoteHarnessChatTarget] {
         workspaces.flatMap { configuration -> [RemoteHarnessChatTarget] in
-            guard statuses[configuration.id]?.running == true else { return [] }
-            return (harnesses[configuration.id] ?? []).compactMap { harness in
+            guard isCredentialAccessEnabled, !invalidatingWorkspaceIDs.contains(configuration.id), statuses[configuration.id]?.running == true else { return [] }
+            return currentHarnesses(for: configuration).compactMap { harness in
                 harness.state == "ready"
+                    && !isRuntimeInventoryUnavailable(harness.id, configuration: configuration)
+                    && self.runtimeMaintenance[configuration.id]?.contains(where: {
+                        $0.id == harness.id && $0.enabled && $0.visible && $0.installed && $0.operation?.status != "running"
+                    }) == true
                     ? RemoteHarnessChatTarget(
                         configuration: configuration,
                         harness: harness
@@ -111,6 +136,15 @@ final class RemoteWorkspacesModel {
         }
     }
 
+    func currentHarnesses(for configuration: RemoteWorkspaceConfiguration) -> [RemoteHarnessStatus] {
+        (harnesses[configuration.id] ?? []).map { harness in
+            harness.reconcilingOpenCode(
+                instance: workspaceInstances[configuration.id]?[.opencode],
+                installed: runtimeMaintenance[configuration.id]?.first(where: { $0.id == .opencode })?.installed
+            )
+        }
+    }
+
     func configuration(id: UUID) -> RemoteWorkspaceConfiguration? {
         workspaces.first { $0.id == id }
     }
@@ -119,10 +153,14 @@ final class RemoteWorkspacesModel {
         _ runtimeKind: AgentRuntimeKind,
         in configuration: RemoteWorkspaceConfiguration
     ) -> Bool {
-        statuses[configuration.id]?.running == true
-            && harnesses[configuration.id]?.contains {
+        isRuntimeEnabled(runtimeKind, in: configuration)
+            && !isRuntimeInventoryUnavailable(runtimeKind, configuration: configuration)
+            && statuses[configuration.id]?.running == true
+            && currentHarnesses(for: configuration).contains {
                 $0.id == runtimeKind && $0.state == "ready"
-            } == true
+            } && runtimeMaintenance[configuration.id]?.contains(where: {
+                $0.id == runtimeKind && $0.enabled && $0.installed && $0.operation?.status != "running"
+            }) == true
     }
 
     func refreshAll() {
@@ -130,9 +168,191 @@ final class RemoteWorkspacesModel {
         for workspace in workspaces { refresh(workspace) }
     }
 
+    func isRuntimeEnabled(_ kind: AgentRuntimeKind, in configuration: RemoteWorkspaceConfiguration) -> Bool {
+        isCredentialAccessEnabled && self.configuration(id: configuration.id) == configuration
+            && !invalidatingWorkspaceIDs.contains(configuration.id)
+            && runtimeMaintenance[configuration.id]?.contains { $0.id == kind && $0.enabled && $0.installed } == true
+    }
+
+    func refreshRuntimeMaintenanceAtStartup() { checkRuntimeMaintenanceOnActivation() }
+
+    func remoteWorkspaceRoot(for configuration: RemoteWorkspaceConfiguration) -> String {
+        workspaceRoots[configuration.id] ?? "/home/.woven-matter"
+    }
+
+    func stopOpenCode(for configuration: RemoteWorkspaceConfiguration) async throws {
+        let identity = try requestIdentity(configuration)
+        let client = try await serviceClient(for: configuration)
+        try requireCurrent(identity)
+        let status = try await client.workspaceInstance(.opencode, action: "stop")
+        try requireCurrent(identity)
+        workspaceInstances[configuration.id, default: [:]][.opencode] = status
+    }
+
+    func enabledRuntimeWorkspaces(_ kind: AgentRuntimeKind) -> [RemoteWorkspaceConfiguration] {
+        guard isCredentialAccessEnabled else { return [] }
+        return workspaces.filter { workspace in
+            !invalidatingWorkspaceIDs.contains(workspace.id) && runtimeMaintenance[workspace.id]?.contains { $0.id == kind && $0.enabled } == true
+        }
+    }
+
+    /// Called at startup/reopen only; never installs, upgrades, or launches runtimes.
+    func checkRuntimeMaintenanceOnActivation() {
+        guard isCredentialAccessEnabled else { return }
+        for workspace in workspaces {
+            performBusy(workspace) {
+                await self.refreshRuntimeMaintenance(workspace, checkLatest: true)
+            }
+        }
+    }
+
+    func isRuntimeInventoryUnavailable(_ kind: AgentRuntimeKind, configuration: RemoteWorkspaceConfiguration) -> Bool {
+        runtimeErrors[configuration.id] != nil && runtimeChecksVerifiedAfterError[configuration.id]?.contains(kind) != true
+    }
+
+    func checkRuntimeUpdates(_ kind: AgentRuntimeKind, configuration: RemoteWorkspaceConfiguration) {
+        guard let identity = try? requestIdentity(configuration),
+              !busyWorkspaceIDs.contains(configuration.id),
+              runtimeMaintenance[configuration.id]?.first(where: { $0.id == kind })?.operation?.status != "running",
+              checkingRuntimeIDs[configuration.id]?.contains(kind) != true else { return }
+        checkingRuntimeIDs[configuration.id, default: []].insert(kind)
+        runtimeCheckErrors[configuration.id]?.removeValue(forKey: kind)
+        Task {
+            defer {
+                if credentialEpoch == identity.credentialEpoch && workspaceEpochs[configuration.id] == identity.workspaceEpoch {
+                    checkingRuntimeIDs[configuration.id]?.remove(kind)
+                }
+            }
+            do {
+                let client = try await serviceClient(for: configuration)
+                try requireCurrent(identity)
+                let inventory = try await client.checkRuntimeUpdates(kind)
+                try requireCurrent(identity)
+                guard inventory.id == kind else { throw RemoteWorkspaceClientError.invalidResponse("The runtime check returned a different runtime.") }
+                var rows = runtimeMaintenance[configuration.id] ?? []
+                if let index = rows.firstIndex(where: { $0.id == kind }) { rows[index] = inventory }
+                else { rows.append(inventory) }
+                runtimeMaintenance[configuration.id] = rows
+                runtimeChecksVerifiedAfterError[configuration.id, default: []].insert(kind)
+                runtimeCheckErrors[configuration.id]?.removeValue(forKey: kind)
+                await onRuntimeMaintenanceChanged?()
+            } catch {
+                guard (try? requireCurrent(identity)) != nil else { return }
+                runtimeCheckErrors[configuration.id, default: [:]][kind] = "Update check unavailable"
+            }
+        }
+    }
+
+    func setRuntimePreferences(
+        _ runtime: RemoteRuntimeMaintenance, configuration: RemoteWorkspaceConfiguration,
+        enabled: Bool? = nil, visible: Bool? = nil
+    ) {
+        guard enabled != true || runtime.installed else { return }
+        performBusy(configuration) {
+            let identity = try self.requestIdentity(configuration)
+            let client = try await self.serviceClient(for: configuration)
+            try self.requireCurrent(identity)
+            try await client.setRuntimePreferences(runtime.id, enabled: enabled, visible: visible)
+            try self.requireCurrent(identity)
+            await self.refreshRuntimeMaintenance(configuration)
+        }
+    }
+
+    func refreshWorkspaceInstance(_ kind: AgentRuntimeKind, configuration: RemoteWorkspaceConfiguration,
+                                  action: String? = nil) {
+        performBusy(configuration) {
+            let identity = try self.requestIdentity(configuration)
+            let client = try await self.serviceClient(for: configuration)
+            try self.requireCurrent(identity)
+            if action == "start", !self.isRuntimeEnabled(kind, in: configuration) { throw CancellationError() }
+            let status = try await client.workspaceInstance(kind, action: action)
+            try self.requireCurrent(identity)
+            self.workspaceInstances[configuration.id, default: [:]][kind] = status
+        }
+    }
+
+    func prepareOpenCodeConnection(for configuration: RemoteWorkspaceConfiguration, allowStart: Bool = true) async throws -> OpenCodeConnection {
+        let identity = try requestIdentity(configuration)
+        guard isRuntimeEnabled(.opencode, in: configuration), runtimeMaintenance[configuration.id]?.contains(where: {
+            $0.id == .opencode && $0.installed && $0.enabled && $0.operation?.status != "running"
+        }) == true else { throw RemoteWorkspaceClientError.harnessUnavailable }
+        let client = try await serviceClient(for: configuration)
+        try requireCurrent(identity)
+        let health = try await client.health()
+        try requireCurrent(identity)
+        guard isRuntimeEnabled(.opencode, in: configuration) else { throw CancellationError() }
+        let status = try await client.workspaceInstance(.opencode, action: allowStart ? "start" : nil)
+        try requireCurrent(identity)
+        workspaceRoots[configuration.id] = health.workspaceRoot
+        workspaceInstances[configuration.id, default: [:]][.opencode] = status
+        guard status.state == "running", let port = await tunnels[configuration.id]?.localPort,
+              let token = try await credentials.token(for: configuration.id) else {
+            throw RemoteWorkspaceClientError.invalidResponse(status.lastError ?? "The workspace OpenCode server is unavailable.")
+        }
+        try requireCurrent(identity)
+        guard isRuntimeEnabled(.opencode, in: configuration) else { throw CancellationError() }
+        return try OpenCodeConnection(
+            identity: "remote-workspace:\(configuration.id.uuidString.lowercased())",
+            url: URL(string: "http://127.0.0.1:\(port)")!, password: "",
+            version: status.version, servicePathPrefix: "/v1/workspace-instances/opencode", bearerToken: token
+        )
+    }
+
+    private func refreshRuntimeMaintenance(_ configuration: RemoteWorkspaceConfiguration,
+                                          checkLatest: Bool = false) async {
+        guard let identity = try? requestIdentity(configuration) else { return }
+        let checking: Set<AgentRuntimeKind> = checkLatest
+            ? Set((runtimeMaintenance[configuration.id] ?? []).filter(\.enabled).map(\.id)) : []
+        checkingRuntimeIDs[configuration.id, default: []].formUnion(checking)
+        defer {
+            if credentialEpoch == identity.credentialEpoch && workspaceEpochs[configuration.id] == identity.workspaceEpoch {
+                checkingRuntimeIDs[configuration.id]?.subtract(checking)
+            }
+        }
+        do {
+            let client = try await serviceClient(for: configuration)
+            try requireCurrent(identity)
+            let inventory = try await client.runtimeMaintenance(checkLatest: checkLatest)
+            try requireCurrent(identity)
+            runtimeMaintenance[configuration.id] = inventory
+            runtimeErrors.removeValue(forKey: configuration.id)
+            runtimeChecksVerifiedAfterError.removeValue(forKey: configuration.id)
+            runtimeCheckErrors.removeValue(forKey: configuration.id)
+            await onRuntimeMaintenanceChanged?()
+        } catch {
+            guard (try? requireCurrent(identity)) != nil else { return }
+            runtimeChecksVerifiedAfterError.removeValue(forKey: configuration.id)
+            runtimeErrors[configuration.id] = "Runtime inventory unavailable. Update this workspace service if it predates runtime management. " + error.localizedDescription
+        }
+    }
+
+    private func requestIdentity(_ configuration: RemoteWorkspaceConfiguration) throws -> RemoteWorkspaceRequestIdentity {
+        let epoch = workspaceEpochs[configuration.id] ?? UUID()
+        workspaceEpochs[configuration.id] = epoch
+        let identity = RemoteWorkspaceRequestIdentity(configuration: configuration,
+                                                     credentialEpoch: credentialEpoch, workspaceEpoch: epoch)
+        try requireCurrent(identity)
+        return identity
+    }
+
+    private func requireCurrent(_ identity: RemoteWorkspaceRequestIdentity) throws {
+        guard !invalidatingWorkspaceIDs.contains(identity.configuration.id),
+              identity.isCurrent(configuration: configuration(id: identity.configuration.id),
+                                 credentialsEnabled: isCredentialAccessEnabled,
+                                 credentialEpoch: credentialEpoch,
+                                 workspaceEpoch: workspaceEpochs[identity.configuration.id] ?? UUID()) else {
+            throw CancellationError()
+        }
+    }
+
     func prepareOpenClawGateway(
         for configuration: RemoteWorkspaceConfiguration
     ) async throws -> RemoteOpenClawGatewayConnection {
+        let identity = try requestIdentity(configuration)
+        guard isRuntimeEnabled(.openclaw, in: configuration),
+              runtimeMaintenance[configuration.id]?.first(where: { $0.id == .openclaw })?.operation?.status != "running" else {
+            throw RemoteWorkspaceClientError.harnessUnavailable
+        }
         if let knownHarnesses = harnesses[configuration.id],
            !knownHarnesses.contains(where: {
                $0.id == .openclaw && $0.state == "ready"
@@ -140,11 +360,15 @@ final class RemoteWorkspacesModel {
             throw RemoteWorkspaceClientError.harnessUnavailable
         }
         let client = try await serviceClient(for: configuration)
+        try requireCurrent(identity)
         var status = try await client.startOpenClawGateway()
+        try requireCurrent(identity)
         var attempts = 0
         while status.state != "running", attempts < 12 {
             try await Task.sleep(for: .milliseconds(150))
+            try requireCurrent(identity)
             status = try await client.openClawGatewayStatus()
+            try requireCurrent(identity)
             attempts += 1
         }
         guard status.state == "running" else {
@@ -162,6 +386,8 @@ final class RemoteWorkspacesModel {
                 "The SSH loopback tunnel did not report a local port."
             )
         }
+        try requireCurrent(identity)
+        guard isRuntimeEnabled(.openclaw, in: configuration) else { throw CancellationError() }
         return RemoteOpenClawGatewayConnection(
             endpoint: OpenClawGatewayEndpoint(
                 url: URL(
@@ -442,6 +668,10 @@ final class RemoteWorkspacesModel {
         updated.swapLimit = swapLimit
             .trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
         performBusy(configuration) {
+            self.checkingRuntimeIDs.removeValue(forKey: configuration.id)
+            self.workspaceEpochs[configuration.id] = UUID()
+            self.invalidatingWorkspaceIDs.insert(configuration.id)
+            defer { self.invalidatingWorkspaceIDs.remove(configuration.id) }
             try RemoteWorkspaceSSHClient.validateConfiguration(updated)
             let preflight = try await self.sshClient.preflight(
                 hostName: updated.hostName,
@@ -457,6 +687,7 @@ final class RemoteWorkspacesModel {
                 self.workspaces[index] = updated
                 self.save()
             }
+            self.invalidatingWorkspaceIDs.remove(configuration.id)
             await self.refreshService(updated)
         }
     }
@@ -470,6 +701,10 @@ final class RemoteWorkspacesModel {
             return
         }
         performBusy(configuration) {
+            self.checkingRuntimeIDs.removeValue(forKey: configuration.id)
+            self.workspaceEpochs[configuration.id] = UUID()
+            self.invalidatingWorkspaceIDs.insert(configuration.id)
+            defer { self.invalidatingWorkspaceIDs.remove(configuration.id) }
             try await self.sshClient.delete(
                 configuration: configuration,
                 removePersistentData: removePersistentData
@@ -481,7 +716,10 @@ final class RemoteWorkspacesModel {
             self.statuses.removeValue(forKey: configuration.id)
             self.harnesses.removeValue(forKey: configuration.id)
             self.authenticationSessions.removeValue(forKey: configuration.id)
+            self.runtimeMaintenance.removeValue(forKey: configuration.id)
+            self.workspaceInstances.removeValue(forKey: configuration.id)
             self.save()
+            await self.onRuntimeMaintenanceChanged?()
         }
     }
 
@@ -513,10 +751,27 @@ final class RemoteWorkspacesModel {
         harness: RemoteHarnessStatus,
         configuration: RemoteWorkspaceConfiguration
     ) {
-        guard action == "install" || action == "update" else { return }
+        guard action == "install" || action == "update",
+              checkingRuntimeIDs[configuration.id]?.contains(harness.id) != true else { return }
+        if action == "update", harness.id == .hermes,
+           runtimeMaintenance[configuration.id]?.first(where: { $0.id == .hermes })?.installed == true {
+            performBusy(configuration) {
+                try await self.runRuntimeMaintenance(.hermes, action: "update", configuration: configuration)
+            }
+            return
+        }
         performBusy(configuration) {
+            let identity = try self.requestIdentity(configuration)
             let client = try await self.serviceClient(for: configuration)
-            let preview = try await client.installerPreview(harnessID: harness.id)
+            try self.requireCurrent(identity)
+            let preview: RemoteInstallerPreview
+            do {
+                preview = try await client.installerPreview(harnessID: harness.id)
+            } catch {
+                await self.refreshRuntimeMaintenance(configuration)
+                throw error
+            }
+            try self.requireCurrent(identity)
             self.preparedHarnessAction = PreparedHarnessAction(
                 action: action,
                 harness: harness,
@@ -530,26 +785,40 @@ final class RemoteWorkspacesModel {
         guard let preparedHarnessAction else { return }
         self.preparedHarnessAction = nil
         performBusy(preparedHarnessAction.configuration) {
-            let client = try await self.serviceClient(
-                for: preparedHarnessAction.configuration
+            try await self.runRuntimeMaintenance(
+                preparedHarnessAction.harness.id, action: preparedHarnessAction.action,
+                configuration: preparedHarnessAction.configuration,
+                sourceSHA256: preparedHarnessAction.preview.sha256,
+                packageSpec: preparedHarnessAction.preview.packageSpec
             )
-            var operation = try await client.perform(
-                harnessID: preparedHarnessAction.harness.id,
-                action: preparedHarnessAction.action,
-                confirmed: true,
-                sourceSHA256: preparedHarnessAction.preview.sha256
-            )
-            self.operations[preparedHarnessAction.configuration.id] = operation
-            var checks = 0
-            while operation.status == "running", checks < 300 {
-                try await Task.sleep(for: .seconds(1))
-                operation = try await client.operation(id: operation.id)
-                self.operations[preparedHarnessAction.configuration.id] = operation
-                checks += 1
-            }
-            self.harnesses[preparedHarnessAction.configuration.id] = try await client
-                .harnesses()
         }
+    }
+
+    private func runRuntimeMaintenance(_ kind: AgentRuntimeKind, action: String,
+                                       configuration: RemoteWorkspaceConfiguration,
+                                       sourceSHA256: String? = nil, packageSpec: String? = nil) async throws {
+        let identity = try requestIdentity(configuration)
+        let client = try await serviceClient(for: configuration)
+        try requireCurrent(identity)
+        var operation = try await client.maintainRuntime(kind, action: action,
+                                                       sourceSHA256: sourceSHA256, packageSpec: packageSpec)
+        try requireCurrent(identity)
+        operations[configuration.id] = operation
+        await refreshRuntimeMaintenance(configuration)
+        var checks = 0
+        while operation.status == "running", checks < 900 {
+            try await Task.sleep(for: .seconds(1))
+            try requireCurrent(identity)
+            operation = try await client.operation(id: operation.id)
+            try requireCurrent(identity)
+            operations[configuration.id] = operation
+            checks += 1
+        }
+        await refreshRuntimeMaintenance(configuration)
+        try requireCurrent(identity)
+        let updatedHarnesses = try await client.harnesses()
+        try requireCurrent(identity)
+        harnesses[configuration.id] = updatedHarnesses
     }
 
     func cancelPreparedHarnessAction() {
@@ -616,23 +885,45 @@ final class RemoteWorkspacesModel {
         _ configuration: RemoteWorkspaceConfiguration,
         operation: @escaping @MainActor () async throws -> Void
     ) {
-        guard busyWorkspaceIDs.insert(configuration.id).inserted else { return }
+        guard let identity = try? requestIdentity(configuration),
+              busyWorkspaceIDs.insert(configuration.id).inserted else { return }
         errorMessage = nil
         Task {
             defer { busyWorkspaceIDs.remove(configuration.id) }
-            do { try await operation() }
-            catch { errorMessage = error.localizedDescription }
+            do {
+                try requireCurrent(identity)
+                try await operation()
+            } catch is CancellationError {
+                // Credential or destination changes invalidate this request silently.
+            } catch {
+                guard isCredentialAccessEnabled, credentialEpoch == identity.credentialEpoch,
+                      self.configuration(id: configuration.id) == configuration else { return }
+                errorMessage = error.localizedDescription
+            }
         }
     }
 
     private func refreshService(
         _ configuration: RemoteWorkspaceConfiguration
     ) async {
+        guard let identity = try? requestIdentity(configuration) else { return }
+        // A lifecycle snapshot from before this refresh must not override newer
+        // harness inventory (for example after an external stop or container restart).
+        // Responses from lifecycle requests arriving during/after these awaits stay
+        // in the cache and remain authoritative over the pre-launch inventory.
+        workspaceInstances[configuration.id]?.removeValue(forKey: .opencode)
         do {
             let client = try await serviceClient(for: configuration)
-            _ = try await client.health()
-            harnesses[configuration.id] = try await client.harnesses()
+            try requireCurrent(identity)
+            let health = try await client.health()
+            try requireCurrent(identity)
+            let inventory = try await client.harnesses()
+            try requireCurrent(identity)
+            workspaceRoots[configuration.id] = health.workspaceRoot
+            harnesses[configuration.id] = inventory
+            await refreshRuntimeMaintenance(configuration)
         } catch {
+            guard (try? requireCurrent(identity)) != nil else { return }
             errorMessage = error.localizedDescription
         }
     }
@@ -662,6 +953,7 @@ final class RemoteWorkspacesModel {
     private func serviceClient(
         for configuration: RemoteWorkspaceConfiguration
     ) async throws -> RemoteWorkspaceServiceClient {
+        let identity = try requestIdentity(configuration)
         guard isCredentialAccessEnabled else {
             throw RemoteWorkspaceClientError.invalidResponse(
                 "Enable Remote Workspace credential access before connecting."
@@ -672,6 +964,7 @@ final class RemoteWorkspacesModel {
                 "The workspace API token is missing from Keychain."
             )
         }
+        try requireCurrent(identity)
         let tunnel = tunnels[configuration.id] ?? RemoteWorkspaceTunnel()
         tunnels[configuration.id] = tunnel
         let localPort = Self.localPort(for: configuration.id)
@@ -695,6 +988,12 @@ final class RemoteWorkspacesModel {
             throw RemoteWorkspaceClientError.invalidResponse(
                 "The SSH loopback tunnel did not report a local port."
             )
+        }
+        do { try requireCurrent(identity) }
+        catch {
+            // Do not stop a tunnel that a newer request still owns.
+            if tunnels[configuration.id] !== tunnel { await tunnel.stop() }
+            throw error
         }
         return RemoteWorkspaceServiceClient(
             baseURL: URL(string: "http://127.0.0.1:\(activePort)")!,

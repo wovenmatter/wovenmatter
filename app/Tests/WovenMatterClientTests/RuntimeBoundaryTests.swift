@@ -179,6 +179,9 @@ struct RuntimeBoundaryTests {
     )
     #expect(launch.workspace.rootURL.path == "/home/.woven-matter")
     #expect(launch.launch.arguments.last?.contains("'HOME=/home'") == true)
+    #expect(launch.launch.arguments.last?.contains("flock --shared --nonblock 9") == true)
+    #expect(launch.launch.arguments.last?.contains("/home/.wovenmatter/runtime-operation.lock") == true)
+    #expect(launch.launch.arguments.last?.contains("Runtime maintenance is in progress") == true)
 
     let deleteRecorder = SSHRecorder(response: #"{"deleted":true}"#)
     let deleteClient = RemoteWorkspaceSSHClient(
@@ -326,8 +329,8 @@ struct RuntimeBoundaryTests {
         shift
       done
       mkdir -p "$prefix/bin"
-      touch "$prefix/bin/fake-acp"
-      touch "$prefix/bin/fake-cli"
+      printf '#!/bin/sh\\necho 1.2.3\\n' > "$prefix/bin/fake-acp"
+      printf '#!/bin/sh\\necho 4.5.6\\n' > "$prefix/bin/fake-cli"
       chmod 700 "$prefix/bin/fake-acp"
       chmod 700 "$prefix/bin/fake-cli"
       """.write(to: npm, atomically: true, encoding: .utf8)

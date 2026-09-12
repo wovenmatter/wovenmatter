@@ -252,14 +252,14 @@ struct DashboardRailRow: View {
                 Spacer(minLength: 4)
                 if showsPin {
                     DashboardLucideIcon(glyph: .pin, size: 11)
-                        .foregroundStyle(DashboardPalette.primary)
+                        .foregroundStyle(DashboardPalette.foreground)
                         .accessibilityLabel("Pinned")
                 }
                 if let trailing {
                     Text(trailing)
                         .font(.system(size: 10))
                         .monospacedDigit()
-                        .foregroundStyle(DashboardPalette.mutedForeground)
+                        .foregroundStyle(DashboardPalette.foreground)
                 }
             }
             .font(.system(size: 13, weight: selected ? .medium : .regular))
@@ -333,7 +333,7 @@ struct DashboardDisclosureHeading: View {
                     .rotationEffect(.degrees(expanded ? 0 : -90))
             }
             .font(.system(size: 10, weight: .semibold))
-            .foregroundStyle(DashboardPalette.mutedForeground)
+            .foregroundStyle(DashboardPalette.foreground)
             .padding(.horizontal, 12)
             .frame(height: 26)
             .contentShape(Rectangle())
@@ -356,7 +356,7 @@ struct DashboardListSectionHeader: View {
                 Spacer()
             }
             .font(.system(size: 10, weight: .semibold))
-            .foregroundStyle(DashboardPalette.mutedForeground)
+            .foregroundStyle(DashboardPalette.foreground)
             .padding(.horizontal, 12)
             .frame(height: 30)
             .contentShape(Rectangle())
@@ -371,7 +371,7 @@ struct DashboardEmptyListRow: View {
     var body: some View {
         Text(text)
             .font(.system(size: 12))
-            .foregroundStyle(DashboardPalette.mutedForeground)
+            .foregroundStyle(DashboardPalette.foreground)
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
     }
@@ -424,13 +424,13 @@ struct DashboardConversationRow: View {
                     Spacer(minLength: 4)
                     if conversation.unread {
                         Circle()
-                            .fill(DashboardPalette.primary)
+                            .fill(DashboardPalette.foreground)
                             .frame(width: 6, height: 6)
                             .accessibilityLabel("Unread")
                     }
                     Text(presentation.time)
                         .font(.system(size: 11))
-                        .foregroundStyle(DashboardPalette.mutedForeground)
+                        .foregroundStyle(DashboardPalette.foreground)
                         .monospacedDigit()
                 }
                 HStack(spacing: 5) {
@@ -440,14 +440,14 @@ struct DashboardConversationRow: View {
                         } else {
                             DashboardLucideIcon(glyph: agentGlyph, size: 12)
                                 .foregroundStyle(
-                                    DashboardPalette.mutedForeground.opacity(0.95)
+                                    DashboardPalette.foreground
                                 )
                         }
                     }
                     .frame(width: 13, height: 13)
                     Text(meta.agentLabel)
                         .font(.system(size: 11.5))
-                        .foregroundStyle(DashboardPalette.mutedForeground.opacity(0.95))
+                        .foregroundStyle(DashboardPalette.foreground)
                         .lineLimit(1)
                 }
             }
@@ -476,7 +476,7 @@ struct DashboardConversationRow: View {
             hoverCardTask?.cancel()
             if isHovered {
                 hoverCardTask = Task { @MainActor in
-                    try? await Task.sleep(for: .milliseconds(380))
+                    try? await Task.sleep(for: .milliseconds(500))
                     guard !Task.isCancelled, hovered, !Self.isMouseButtonPressed else { return }
                     detailCardState.setHovered(true, conversationID: conversation.id)
                 }
@@ -488,8 +488,10 @@ struct DashboardConversationRow: View {
             guard !Self.isMouseButtonPressed else { return }
             detailCardState.setFocused(isFocused, conversationID: conversation.id)
         }
-        .popover(isPresented: detailCardPresented, arrowEdge: .trailing) {
-            DashboardConversationHoverCard(presentation: presentation)
+        .background {
+            DashboardConversationPopover(isPresented: detailCardPresented) {
+                DashboardConversationHoverCard(presentation: presentation)
+            }
         }
         .contextMenu {
             Button(conversation.isPinned ? "Unpin" : "Pin") { onUnavailableMutation("Conversation pinning") }
@@ -538,7 +540,7 @@ struct DashboardConversationRow: View {
                 detailCardState.presentedConversationID == presentation.id
             },
             set: { presented in
-                if !presented {
+                if !presented, detailCardState.presentedConversationID == presentation.id {
                     detailCardState.dismiss()
                 }
             }
@@ -564,7 +566,7 @@ struct DashboardConversationRow: View {
     }
 }
 
-/// Hover pop-out for a workspace chat row — folder, agent, runtime (not git/device).
+/// Hover pop-out for a workspace chat row, including names for OpenClaw agents.
 struct DashboardConversationHoverCard: View {
     let presentation: DashboardConversationRowPresentation
 
@@ -579,7 +581,9 @@ struct DashboardConversationHoverCard: View {
 
             VStack(alignment: .leading, spacing: 7) {
                 hoverRow(icon: .folder, text: meta.folderLabel)
-                hoverRow(icon: .bot, text: meta.agentLabel)
+                if let agent = presentation.agent, agent.runtimeKind == .openclaw {
+                    hoverRow(icon: .bot, text: dashboardAgentDisplayName(agent))
+                }
                 if let runtime = meta.runtimeLabel {
                     hoverRow(
                         icon: .terminal,
@@ -661,7 +665,7 @@ struct DashboardNoteRow: View {
                             .font(.system(size: 14, weight: .medium))
                     }
                 }
-                .foregroundStyle(note.isPinned ? DashboardPalette.primary : DashboardPalette.foreground)
+                .foregroundStyle(DashboardPalette.foreground)
                 .frame(width: 18)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(presentation.title)
@@ -669,7 +673,7 @@ struct DashboardNoteRow: View {
                         .lineLimit(1)
                     Text(presentation.preview)
                         .font(.system(size: 11))
-                        .foregroundStyle(DashboardPalette.mutedForeground)
+                        .foregroundStyle(DashboardPalette.foreground)
                         .lineLimit(1)
                 }
                 Spacer()
@@ -730,6 +734,7 @@ extension View {
 
 struct DashboardIconButtonStyle: ButtonStyle {
     @Environment(\.dashboardTheme) private var theme
+    @Environment(\.dashboardSidebarForeground) private var sidebarForeground
     @Environment(\.isEnabled) private var isEnabled
     @State private var hovered = false
 
@@ -737,8 +742,8 @@ struct DashboardIconButtonStyle: ButtonStyle {
         configuration.label
             .foregroundStyle(
                 isEnabled
-                    ? DashboardPalette.mutedForeground
-                    : DashboardPalette.mutedForeground.opacity(0.68)
+                    ? (sidebarForeground ?? DashboardPalette.mutedForeground)
+                    : (sidebarForeground ?? DashboardPalette.mutedForeground).opacity(0.68)
             )
             .background(
                 isEnabled && (configuration.isPressed || hovered)

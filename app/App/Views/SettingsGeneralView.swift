@@ -261,7 +261,7 @@ struct SettingsGeneralView: View {
                             set: { model.setTitleGenerationEnabled($0) }
                         )
                     )
-                    .toggleStyle(.switch)
+                    .toggleStyle(DashboardSwitchToggleStyle())
                 }
 
                 if model.titleGenerationSettings.isEnabled {

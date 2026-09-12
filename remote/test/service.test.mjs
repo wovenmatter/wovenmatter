@@ -152,8 +152,13 @@ test('service authentication exposes the reviewed harness catalog', async (conte
     'cursor', 'opencode', 'pi', 'openclaw',
   ])
   assert.ok(harnesses.every((value) =>
-    Array.isArray(value.setupMethods) && value.setupMethods.length > 0
+    Array.isArray(value.setupMethods) && (value.id === 'opencode' || value.setupMethods.length > 0)
   ))
+  const openCode = harnesses.find((value) => value.id === 'opencode')
+  assert.equal(openCode.transport, 'opencode-v2')
+  assert.equal(openCode.state, 'cli_missing')
+  assert.deepEqual(openCode.setupMethods, [])
+  assert.match(openCode.transportError, /this workspace’s OpenCode v2 server/)
   assert.deepEqual(
     Object.keys(harnesses[0].setupMethods[0]).sort(),
     ['displayName', 'id']
@@ -382,7 +387,7 @@ test('Pi authentication locates its owning package from a nested npm bin target'
   })
 })
 
-test('installation includes the declared transport adapter', async (context) => {
+test('installation uses latest adapter and fails unless actual components verify', async (context) => {
   const fixture = await temporaryFixture(context, 'wovenmatter-install-')
   const home = resolve(fixture, 'home')
   const workspace = resolve(fixture, 'workspace')
@@ -390,8 +395,12 @@ test('installation includes the declared transport adapter', async (context) => 
   const npmArguments = resolve(fixture, 'npm-arguments')
   await mkdir(bin, { recursive: true })
   await mkdir(workspace, { recursive: true })
+  await writeFile(resolve(bin, 'flock'), '#!/bin/sh\nshift 3\nexec "$@"\n')
+  await chmod(resolve(bin, 'flock'), 0o700)
+  await writeFile(resolve(bin, 'ps'), '#!/bin/sh\nexit 0\n')
+  await chmod(resolve(bin, 'ps'), 0o700)
   const npm = resolve(bin, 'npm')
-  await writeFile(npm, `#!/bin/sh\nprintf '%s\\n' "$@" > '${npmArguments}'\n`)
+  await writeFile(npm, `#!/bin/sh\nprintf '%s\\n' "$@" >> '${npmArguments}'\n`)
   await chmod(npm, 0o700)
 
   const catalog = JSON.parse(await readFile(catalogPath, 'utf8'))
@@ -430,13 +439,14 @@ test('installation includes the declared transport adapter', async (context) => 
     headers,
     (value) => value.status !== 'running'
   )
-  assert.equal(operation.status, 'succeeded')
+  assert.equal(operation.status, 'failed')
+  assert.match(operation.error, /could not be verified/)
   const argumentsValue = await readFile(npmArguments, 'utf8')
   assert.match(argumentsValue, /@earendil-works\/pi-coding-agent/)
-  assert.match(argumentsValue, /@example\/pi-rpc-adapter@1\.2\.3/)
+  assert.match(argumentsValue, /@example\/pi-rpc-adapter@latest/)
 })
 
-test('Gateway upgrades are authenticated and never forward the API token', async (context) => {
+test('Gateway upgrades refuse unrelated listeners and never forward the API token', async (context) => {
   let upstreamRequest = ''
   const upstream = createNetServer((socket) => {
     socket.on('data', (data) => {
@@ -452,6 +462,8 @@ test('Gateway upgrades are authenticated and never forward the API token', async
   await listen(upstream)
   context.after(() => upstream.close())
   const fixture = await temporaryFixture(context, 'wovenmatter-gateway-')
+  await mkdir(resolve(fixture, '.wovenmatter'), { recursive: true })
+  await writeFile(resolve(fixture, '.wovenmatter/runtime-preferences.json'), JSON.stringify({openclaw:{enabled:true}}))
   const service = await startService({
     workspace: fixture,
     home: fixture,
@@ -471,12 +483,17 @@ test('Gateway upgrades are authenticated and never forward the API token', async
     + 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n'
     + 'Authorization: Bearer gateway-token\r\n\r\n'
   )
-  assert.match(await socketText(socket), /^HTTP\/1\.1 101 Switching Protocols/)
+  assert.match(await socketText(socket), /^HTTP\/1\.1 503 Service Unavailable/)
   assert.doesNotMatch(upstreamRequest, /authorization:|gateway-token/i)
+  const start = await fetch(`${service.url}/v1/openclaw/gateway/start`, { method: 'POST', headers: { authorization: 'Bearer gateway-token' } })
+  assert.equal(start.status, 409)
+  assert.equal((await start.json()).error, 'openclaw_gateway_port_in_use')
 })
 
 test('Gateway start reports running only after its listener accepts connections', async (context) => {
   const fixture = await temporaryFixture(context, 'wovenmatter-gateway-ready-')
+  await mkdir(resolve(fixture, '.wovenmatter'), { recursive: true })
+  await writeFile(resolve(fixture, '.wovenmatter/runtime-preferences.json'), JSON.stringify({openclaw:{enabled:true}}))
   const home = resolve(fixture, 'home')
   const bin = resolve(home, '.local/bin')
   const gatewayPort = await unusedPort()
@@ -510,6 +527,77 @@ process.on('SIGTERM', () => server.close(() => process.exit(0)))
   })
   assert.equal(status.state, 'running')
   assert.equal(await canConnect(gatewayPort), true)
+})
+
+test('Stopping a gateway during crash backoff cancels its pending restart', async (context) => {
+  const fixture = await temporaryFixture(context, 'wovenmatter-gateway-stop-')
+  await mkdir(resolve(fixture, '.wovenmatter'), { recursive: true })
+  await writeFile(resolve(fixture, '.wovenmatter/runtime-preferences.json'), JSON.stringify({ openclaw: { enabled: true } }))
+  const home = resolve(fixture, 'home')
+  const bin = resolve(home, '.local/bin')
+  const launches = resolve(fixture, 'launches')
+  await mkdir(bin, { recursive: true })
+  await writeFile(resolve(bin, 'openclaw'), `#!/usr/bin/env node
+require('node:fs').appendFileSync(${JSON.stringify(launches)}, 'started\\n')
+const server = require('node:net').createServer(socket => socket.destroy())
+server.listen(Number(process.argv[process.argv.indexOf('--port') + 1]), '127.0.0.1')
+process.on('SIGTERM', () => server.close(() => process.exit(0)))
+`)
+  await chmod(resolve(bin, 'openclaw'), 0o700)
+  const service = await startService({ workspace: fixture, home, catalog: catalogPath, token: 'stop-token' })
+  const headers = { authorization: 'Bearer stop-token' }
+  context.after(async () => {
+    const status = await fetch(`${service.url}/v1/openclaw/gateway`, { headers }).then(response => response.json())
+    if (status.pid) { try { process.kill(status.pid, 'SIGTERM') } catch {} }
+    service.child.kill('SIGTERM')
+  })
+  const response = await fetch(`${service.url}/v1/openclaw/gateway/start`, { method: 'POST', headers })
+  assert.equal(response.status, 202)
+  const started = await response.json()
+  process.kill(started.pid, 'SIGKILL')
+  await waitFor(`${service.url}/v1/openclaw/gateway`, headers, value => value.state === 'reconnecting')
+  const stopped = await fetch(`${service.url}/v1/workspace-instances/openclaw/stop`, { method: 'POST', headers })
+  assert.equal(stopped.status, 200)
+  assert.equal((await stopped.json()).state, 'stopped')
+  await new Promise(done => setTimeout(done, 1250))
+  const current = await fetch(`${service.url}/v1/openclaw/gateway`, { headers }).then(response => response.json())
+  assert.equal(current.state, 'stopped')
+  assert.equal(await readFile(launches, 'utf8'), 'started\n')
+})
+
+test('Stopping a gateway fences a start suspended while acquiring its host lock', async (context) => {
+  const fixture = await temporaryFixture(context, 'wovenmatter-gateway-pending-')
+  await mkdir(resolve(fixture, '.wovenmatter'), { recursive: true })
+  await writeFile(resolve(fixture, '.wovenmatter/runtime-preferences.json'), JSON.stringify({ openclaw: { enabled: true } }))
+  const home = resolve(fixture, 'home')
+  const service = await startService({ workspace: fixture, home, catalog: catalogPath, token: 'pending-token' })
+  context.after(() => service.child.kill('SIGTERM'))
+  const waiting = resolve(fixture, 'waiting'), release = resolve(fixture, 'release')
+  await writeFile(resolve(home, '.fixture-bin/flock'), `#!/usr/bin/env node
+const fs = require('node:fs')
+fs.writeFileSync(${JSON.stringify(waiting)}, '')
+const timer = setInterval(() => {
+  if (!fs.existsSync(${JSON.stringify(release)})) return
+  clearInterval(timer)
+  const child = require('node:child_process').spawn(process.argv[5], process.argv.slice(6), { stdio: 'inherit' })
+  child.on('exit', code => process.exit(code ?? 1))
+}, 10)
+`)
+  const headers = { authorization: 'Bearer pending-token' }
+  const pending = fetch(`${service.url}/v1/openclaw/gateway/start`, { method: 'POST', headers })
+  for (let attempts = 0; ; attempts++) {
+    try { await readFile(waiting); break } catch { assert.ok(attempts < 100, 'start should reach host lock') }
+    await new Promise(done => setTimeout(done, 10))
+  }
+  const stopped = await fetch(`${service.url}/v1/workspace-instances/openclaw/stop`, { method: 'POST', headers })
+  assert.equal(stopped.status, 200)
+  await writeFile(release, '')
+  const result = await pending
+  assert.equal(result.status, 409)
+  assert.equal((await result.json()).error, 'openclaw_gateway_start_cancelled')
+  const current = await fetch(`${service.url}/v1/openclaw/gateway`, { headers }).then(response => response.json())
+  assert.equal(current.state, 'stopped')
+  assert.equal(current.pid, null)
 })
 
 async function temporaryFixture(context, prefix) {
@@ -553,6 +641,9 @@ async function fixtureEnvironment(home) {
   await mkdir(temporary, { recursive: true })
   await symlink(process.execPath, resolve(tools, 'node'))
   await symlink('/usr/bin/touch', resolve(tools, 'touch'))
+  await symlink('/bin/cat', resolve(tools, 'cat'))
+  await writeFile(resolve(tools, 'flock'), '#!/bin/sh\nshift 3\nexec "$@"\n')
+  await chmod(resolve(tools, 'flock'), 0o700)
   await symlink('/usr/bin/grep', resolve(tools, 'grep'))
   return {
     HOME: home,

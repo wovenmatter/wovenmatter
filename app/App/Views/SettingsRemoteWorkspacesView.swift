@@ -8,6 +8,7 @@ struct SettingsRemoteWorkspacesView: View {
     let credentialDisclosureAcknowledged: Bool
     let onAcknowledgeCredentialDisclosure: () -> Void
     var reservesRailControlSpace = false
+    var onMoreRuntime: (AgentRuntimeKind, RemoteWorkspaceConfiguration) -> Void
     var onBack: () -> Void
     @State private var selectedWorkspaceID: UUID?
     @State private var name = ""
@@ -39,6 +40,9 @@ struct SettingsRemoteWorkspacesView: View {
             }
         ) {
             VStack(alignment: .leading, spacing: 16) {
+                if selectedWorkspace == nil {
+                    SettingsWorkspaceSidebarVisibilityControl(.remoteWorkspaces)
+                }
                 credentialAccessCard
                 if let selectedWorkspace {
                     workspaceCard(selectedWorkspace)
@@ -479,10 +483,10 @@ struct SettingsRemoteWorkspacesView: View {
         _ workspace: RemoteWorkspaceConfiguration
     ) -> some View {
         SettingsCard(
-            title: "\(workspace.name) harnesses",
-            detail: "Install, choose a supported account or API-key method, and verify each harness directly. Installation and credentials persist in this workspace home."
+            title: "\(workspace.name) runtimes",
+            detail: "Runtime components and credentials belong to this remote workspace. Installation and updates run here through its authenticated SSH connection."
         ) {
-            let harnesses = model.harnesses[workspace.id] ?? []
+            let harnesses = model.currentHarnesses(for: workspace)
             if harnesses.isEmpty {
                 SettingsEmpty("Start the workspace and refresh to inspect its harnesses.")
             } else {
@@ -496,28 +500,6 @@ struct SettingsRemoteWorkspacesView: View {
                             VStack(alignment: .leading, spacing: 3) {
                                 Text(harness.displayName)
                                     .font(.system(size: 13, weight: .medium))
-                                Text("\(harness.transport) · \(harness.capabilities.joined(separator: ", "))")
-                                    .font(.system(size: 11.5))
-                                    .foregroundStyle(DashboardPalette.mutedForeground)
-                                    .lineLimit(2)
-                                Text(
-                                    "Authentication: \(harness.authenticationStatus.replacingOccurrences(of: "_", with: " ").capitalized)"
-                                )
-                                .font(.system(size: 11.5))
-                                .foregroundStyle(DashboardPalette.mutedForeground)
-                                if let transportStatus = harness.transportStatus {
-                                    Text(
-                                        "Transport: \(transportStatus.replacingOccurrences(of: "_", with: " ").capitalized)"
-                                    )
-                                    .font(.system(size: 11.5))
-                                    .foregroundStyle(DashboardPalette.mutedForeground)
-                                }
-                                if let transportError = harness.transportError {
-                                    Text(transportError)
-                                        .font(.system(size: 11.5))
-                                        .foregroundStyle(DashboardPalette.mutedForeground)
-                                        .lineLimit(2)
-                                }
                                 if !harness.detectedProviders.isEmpty {
                                     Text("Detected: \(harness.detectedProviders.joined(separator: ", "))")
                                         .font(.system(size: 11.5))
@@ -529,20 +511,16 @@ struct SettingsRemoteWorkspacesView: View {
                                 harness.state.replacingOccurrences(of: "_", with: " ").capitalized,
                                 tone: harness.state == "ready" ? .neutral : .warning
                             )
-                            harnessButtons(harness, workspace: workspace)
+                            runtimeButtons(harness, workspace: workspace)
+                        }
+                        if let runtime = model.runtimeMaintenance[workspace.id]?.first(where: { $0.id == harness.id }) {
+                            runtimeInventory(runtime, workspace: workspace)
                         }
                     }
                 }
             }
-
-            if let operation = model.operations[workspace.id] {
-                SettingsNote("\(operation.action.capitalized): \(operation.status)\(operation.error.map { " — \($0)" } ?? "")")
-                if !operation.output.isEmpty {
-                    Text(operation.output)
-                        .font(.system(size: 10.5, design: .monospaced))
-                        .textSelection(.enabled)
-                        .lineLimit(8)
-                }
+            if model.runtimeErrors[workspace.id] != nil {
+                SettingsNote("Runtime inventory unavailable. Check for updates to retry.")
             }
 
             if let session = model.authenticationSessions[workspace.id] {
@@ -550,6 +528,97 @@ struct SettingsRemoteWorkspacesView: View {
             }
 
         }
+    }
+
+    @ViewBuilder
+    private func runtimeButtons(_ harness: RemoteHarnessStatus, workspace: RemoteWorkspaceConfiguration) -> some View {
+        let runtime = model.runtimeMaintenance[workspace.id]?.first(where: { $0.id == harness.id })
+        let checking = model.checkingRuntimeIDs[workspace.id]?.contains(harness.id) == true
+        let running = runtime?.operation?.status == "running"
+        let unavailable = model.isRuntimeInventoryUnavailable(harness.id, configuration: workspace)
+        let checkUnavailable = unavailable || model.runtimeCheckErrors[workspace.id]?[harness.id] != nil || runtime?.versionCheckAvailable == false
+        let busy = model.busyWorkspaceIDs.contains(workspace.id) || running || checking
+        VStack(alignment: .trailing, spacing: 8) {
+            HStack(spacing: 8) {
+                if harness.id == .opencode || harness.id == .openclaw {
+                    Button("More") {
+                        onMoreRuntime(harness.id, workspace)
+                    }.buttonStyle(SettingsQuietButtonStyle())
+                }
+                Button(checkUnavailable && !checking && !running ? "Retry check" : updateButtonTitle(runtime, checking: checking)) {
+                    if let runtime, runtime.installed,
+                       runtime.updateAvailable || (runtime.failureCount > 0 && runtime.operation?.action == "update"),
+                       !checkUnavailable {
+                        model.prepareHarnessAction("update", harness: harness, configuration: workspace)
+                    } else {
+                        model.checkRuntimeUpdates(harness.id, configuration: workspace)
+                    }
+                }
+                .buttonStyle(SettingsQuietButtonStyle())
+                .disabled(busy)
+                if let runtime {
+                    Button(runtime.visible ? "Hide" : "Show") {
+                        model.setRuntimePreferences(runtime, configuration: workspace, visible: !runtime.visible)
+                    }.buttonStyle(SettingsQuietButtonStyle()).disabled(busy || unavailable)
+                    if runtime.installed {
+                        Button(runtime.enabled ? "Disable" : "Enable") {
+                            model.setRuntimePreferences(runtime, configuration: workspace, enabled: !runtime.enabled)
+                        }.buttonStyle(SettingsQuietButtonStyle()).disabled(busy || unavailable)
+                    } else {
+                        if runtime.enabled {
+                            Button("Disable") {
+                                model.setRuntimePreferences(runtime, configuration: workspace, enabled: false)
+                            }.buttonStyle(SettingsQuietButtonStyle()).disabled(busy || unavailable)
+                        }
+                        Button(running && runtime.operation?.action == "install" ? "Installing…" : (runtime.failureCount > 0 ? "Retry Install" : "Install")) {
+                            model.prepareHarnessAction("install", harness: harness, configuration: workspace)
+                        }.buttonStyle(DashboardPrimaryButtonStyle()).disabled(busy || unavailable)
+                    }
+                }
+            }
+            if let runtime, runtime.installed {
+                harnessButtons(harness, workspace: workspace).disabled(busy || unavailable)
+            }
+        }
+    }
+
+    private func updateButtonTitle(_ runtime: RemoteRuntimeMaintenance?, checking: Bool) -> String {
+        if checking { return "Checking…" }
+        if runtime?.operation?.status == "running", runtime?.operation?.action == "update" { return "Updating…" }
+        if let runtime, runtime.installed {
+            if runtime.failureCount > 0 && runtime.operation?.action == "update" { return "Retry Update" }
+            if runtime.updateAvailable { return "Update" }
+        }
+        return "Check for updates"
+    }
+
+    private func runtimeInventory(_ runtime: RemoteRuntimeMaintenance, workspace: RemoteWorkspaceConfiguration) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(runtime.components) { component in
+                Text(componentVersion(component))
+                    .font(.system(size: 11.5)).foregroundStyle(DashboardPalette.mutedForeground)
+                    .help(component.path ?? "No installed path")
+            }
+            if model.runtimeCheckErrors[workspace.id]?[runtime.id] != nil || runtime.versionCheckAvailable == false {
+                Text("Update check unavailable")
+                    .font(.system(size: 11.5)).foregroundStyle(DashboardPalette.mutedForeground)
+            }
+            if runtime.operation?.status == "failed", let error = runtime.operation?.error {
+                Text(error).font(.system(size: 11.5)).foregroundStyle(DashboardPalette.mutedForeground).lineLimit(2)
+            }
+            if runtime.failureCount >= 2, let prompt = runtime.diagnosticPrompt {
+                Button("Copy Diagnostic Prompt") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(prompt, forType: .string)
+                }.buttonStyle(SettingsQuietButtonStyle())
+            }
+        }.frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func componentVersion(_ component: RemoteRuntimeComponent) -> String {
+        let installed = component.installed ? (component.installedVersion ?? "version unavailable") : "missing"
+        let newer = component.availableUpdateVersion
+        return "\(component.displayName) \(installed)" + (newer.map { " → \($0)" } ?? "")
     }
 
     @ViewBuilder
@@ -598,10 +667,6 @@ struct SettingsRemoteWorkspacesView: View {
                 }
                 .buttonStyle(SettingsQuietButtonStyle())
             }
-            Button("Update") {
-                model.prepareHarnessAction("update", harness: harness, configuration: workspace)
-            }
-            .buttonStyle(SettingsQuietButtonStyle())
         }
     }
 
@@ -811,6 +876,64 @@ struct SettingsRemoteWorkspacesView: View {
                 .font(.system(size: 11.5))
                 .foregroundStyle(DashboardPalette.mutedForeground)
                 .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+/// Shared by workspace More navigation and the provider's workspace entry.
+struct RemoteWorkspaceInstanceSettingsCard: View {
+    @Bindable var model: RemoteWorkspacesModel
+    let configuration: RemoteWorkspaceConfiguration
+    let runtimeKind: AgentRuntimeKind
+    var onOpenAgentSettings: (() -> Void)?
+
+    private var status: RemoteWorkspaceInstanceStatus? {
+        model.workspaceInstances[configuration.id]?[runtimeKind]
+    }
+    private var name: String { runtimeKind == .opencode ? "OpenCode v2" : "OpenClaw Gateway" }
+
+    var body: some View {
+        SettingsCard(title: "\(name) · \(configuration.name)",
+                     detail: "This instance belongs to \(configuration.name) on \(configuration.hostName).") {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    SettingsPill(status?.state.capitalized ?? "Not checked",
+                                 tone: status?.state == "running" ? .neutral : .warning)
+                    if let version = status?.version {
+                        Text(version).font(.system(size: 11.5, design: .monospaced))
+                    }
+                    Spacer()
+                    Button("Refresh") {
+                        model.refreshWorkspaceInstance(runtimeKind, configuration: configuration)
+                    }.buttonStyle(SettingsQuietButtonStyle())
+                    if status?.state == "running" {
+                        Button("Stop") {
+                            model.refreshWorkspaceInstance(runtimeKind, configuration: configuration, action: "stop")
+                        }.buttonStyle(SettingsQuietButtonStyle())
+                    } else {
+                        Button("Start") {
+                            model.refreshWorkspaceInstance(runtimeKind, configuration: configuration, action: "start")
+                        }.buttonStyle(DashboardPrimaryButtonStyle())
+                            .disabled(!model.isRuntimeEnabled(runtimeKind, in: configuration))
+                    }
+                }
+                SettingsNote("Connection: authenticated workspace service over SSH to \(configuration.hostName):\(configuration.remotePort). The server binds to loopback; credentials remain in the workspace and Keychain.")
+                if runtimeKind == .openclaw, let onOpenAgentSettings {
+                    Button("Agent settings", action: onOpenAgentSettings)
+                        .buttonStyle(SettingsQuietButtonStyle())
+                }
+                if let endpoint = status?.endpointPath {
+                    Text(endpoint).font(.system(size: 11.5, design: .monospaced)).textSelection(.enabled)
+                }
+                if let error = status?.lastError { SettingsError(error) }
+                if !model.isRuntimeEnabled(runtimeKind, in: configuration) {
+                    SettingsNote("Install and enable this runtime in this workspace before starting it.")
+                }
+            }
+            .disabled(model.busyWorkspaceIDs.contains(configuration.id))
+        }
+        .task(id: "\(configuration.id):\(runtimeKind.rawValue)") {
+            model.refreshWorkspaceInstance(runtimeKind, configuration: configuration)
         }
     }
 }

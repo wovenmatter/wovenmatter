@@ -59,6 +59,31 @@ struct SettingsPage<Content: View>: View {
     }
 }
 
+struct SettingsWorkspaceSidebarVisibilityControl: View {
+    let workspace: DashboardWorkspaceSidebarVisibility
+    @AppStorage private var isShown: Bool
+
+    init(_ workspace: DashboardWorkspaceSidebarVisibility) {
+        self.workspace = workspace
+        _isShown = AppStorage(wrappedValue: true, workspace.storageKey)
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text("Sidebar visibility")
+                .font(.system(size: 13))
+                .foregroundStyle(DashboardPalette.mutedForeground)
+            Button(isShown ? "Hide" : "Show") {
+                isShown.toggle()
+            }
+            .buttonStyle(SettingsQuietButtonStyle())
+            .accessibilityLabel("\(isShown ? "Hide" : "Show") \(workspace.title) in the sidebar")
+            .accessibilityValue(isShown ? "Shown" : "Hidden")
+            .help("Changes sidebar visibility only. Workspaces and running conversations stay active.")
+        }
+    }
+}
+
 struct SettingsBackButton: View {
     @Environment(\.dashboardTheme) private var theme
     let title: String

@@ -20,6 +20,7 @@ struct RootView: View {
             }
         }
         .environment(\.dashboardTheme, theme)
+        .toggleStyle(DashboardSwitchToggleStyle())
         .preferredColorScheme(.light)
         .background(theme.palette.workspace)
     }

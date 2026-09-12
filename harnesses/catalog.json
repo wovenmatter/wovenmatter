@@ -9,7 +9,7 @@
       "arguments": [],
       "cliCommand": "codex",
       "adapterPackage": "@agentclientprotocol/codex-acp",
-      "minimumAdapterVersion": "1.7.0",
+      "minimumAdapterVersion": "1.11.0",
       "install": {
         "kind": "official-script",
         "source": "https://chatgpt.com/codex/install.sh",
@@ -256,40 +256,31 @@
     {
       "id": "opencode",
       "displayName": "OpenCode",
-      "transport": "acp",
-      "command": "opencode",
-      "arguments": ["acp"],
-      "cliCommand": "opencode",
-      "transportCheckCommand": "opencode acp --help",
+      "transport": "opencode-v2",
+      "command": "opencode2",
+      "arguments": [],
+      "cliCommand": "opencode2",
+      "transportCheckCommand": "opencode2 --version",
       "install": {
-        "kind": "official-script",
-        "source": "https://opencode.ai/install",
-        "command": "curl -fsSL https://opencode.ai/install | bash",
-        "interpreter": "bash",
-        "arguments": []
+        "kind": "npm-global",
+        "package": "@opencode/cli@0.0.0-beta-19278",
+        "source": "https://registry.npmjs.org/@opencode/cli",
+        "arguments": [],
+        "command": "npm install -g @opencode/cli@0.0.0-beta-19278"
       },
       "authentication": {
-        "statusCommands": ["opencode auth list --pure 2>/dev/null | grep -q 'OpenCode Go'"],
-        "discoveries": [
-          {
-            "displayName": "OpenCode Go account",
-            "statusCommand": "opencode auth list --pure 2>/dev/null | grep -q 'OpenCode Go'"
-          }
-        ],
-        "methods": [
-          {
-            "id": "opencode-go",
-            "displayName": "Sign in with OpenCode Go",
-            "kind": "api-key",
-            "command": "opencode auth login --provider \"OpenCode Go\" --pure",
-            "acceptsInput": true,
-            "inputLabel": "OpenCode Go API key",
-            "inputSecret": true,
-            "verificationURL": "https://opencode.ai/auth"
-          }
-        ]
+        "statusCommands": [],
+        "discoveries": [],
+        "methods": []
       },
-      "capabilities": ["conversations", "resume", "permissions"]
+      "capabilities": [
+        "conversations",
+        "resume",
+        "permissions",
+        "attachments",
+        "shared-sessions",
+        "server"
+      ]
     },
     {
       "id": "pi",
