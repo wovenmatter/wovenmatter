@@ -53,8 +53,8 @@ public enum GatewayJSONValue: Codable, Equatable, Sendable {
   }
 
   public var intValue: Int? {
-    guard case .number(let value) = self, value.rounded() == value else { return nil }
-    return Int(value)
+    guard case .number(let value) = self else { return nil }
+    return Int(exactly: value)
   }
 }
 
@@ -91,10 +91,11 @@ public enum OpenClawGatewayClientError: LocalizedError, Equatable, Sendable {
 }
 
 /// One native OpenClaw Gateway implementation shared by all endpoint adapters.
-/// The server's live hello is authoritative for capabilities.
+/// Protocol v4 transport. Method advertisements are discovery hints, not an allowlist.
 public actor OpenClawGatewayClient {
   public typealias EventHandler = @Sendable (OpenClawGatewayEvent) async -> Void
   public typealias DisconnectHandler = @Sendable (String) async -> Void
+  public typealias ConnectionHandler = @Sendable (OpenClawGatewayCapabilities) async -> Void
 
   private struct Frame: Codable {
     var type: String
@@ -112,30 +113,88 @@ public actor OpenClawGatewayClient {
   private let requestHeaders: [String: String]
   private let eventHandler: EventHandler
   private let disconnectHandler: DisconnectHandler
-  private let session: URLSession
-  private let signingKey: Curve25519.Signing.PrivateKey
-  private var socket: URLSessionWebSocketTask?
+  private let connectionHandler: ConnectionHandler
+  private let credentialStore: any OpenClawGatewayCredentialStore
+  private let credentialScope: String
+  private let socketFactory: @Sendable (URLRequest) -> any OpenClawGatewaySocket
+  private let handshakeTimeout: Duration
+  private var socket: (any OpenClawGatewaySocket)?
   private var capabilities: OpenClawGatewayCapabilities?
   private var pending: [String: CheckedContinuation<GatewayJSONValue, any Error>] = [:]
   private var requestTimeouts: [String: Task<Void, Never>] = [:]
   private var receiver: Task<Void, Never>?
+  private var connecting: Task<OpenClawGatewayCapabilities, any Error>?
+  private var watchdog: Task<Void, Never>?
+  private var generation = UUID()
+  private var lastEventSequence: Int?
+  private var lastFrameAt = ContinuousClock.now
+  private var retired = false
+
+  public var connectedGeneration: UUID? { capabilities != nil && socket != nil ? generation : nil }
 
   public init(
     endpoint: OpenClawGatewayEndpoint,
     requestHeaders: [String: String] = [:],
+    credentialScope: String? = nil,
+    credentialStore: any OpenClawGatewayCredentialStore = OpenClawGatewayKeychain.shared,
     eventHandler: @escaping EventHandler = { _ in },
-    disconnectHandler: @escaping DisconnectHandler = { _ in }
+    disconnectHandler: @escaping DisconnectHandler = { _ in },
+    connectionHandler: @escaping ConnectionHandler = { _ in }
   ) {
     self.endpoint = endpoint
     self.requestHeaders = requestHeaders
     self.eventHandler = eventHandler
     self.disconnectHandler = disconnectHandler
-    self.session = URLSession(configuration: .ephemeral)
-    self.signingKey = Curve25519.Signing.PrivateKey()
+    self.connectionHandler = connectionHandler
+    self.credentialScope = credentialScope ?? endpoint.url.absoluteString
+    self.credentialStore = credentialStore
+    self.socketFactory = { OpenClawURLSessionSocket(request: $0) }
+    self.handshakeTimeout = .seconds(15)
+  }
+
+  init(
+    endpoint: OpenClawGatewayEndpoint,
+    credentialStore: any OpenClawGatewayCredentialStore,
+    handshakeTimeout: Duration = .seconds(15),
+    socketFactory: @escaping @Sendable (URLRequest) -> any OpenClawGatewaySocket,
+    eventHandler: @escaping EventHandler = { _ in }
+  ) {
+    self.endpoint = endpoint
+    self.requestHeaders = [:]
+    self.credentialScope = endpoint.url.absoluteString
+    self.credentialStore = credentialStore
+    self.handshakeTimeout = handshakeTimeout
+    self.socketFactory = socketFactory
+    self.eventHandler = eventHandler
+    self.disconnectHandler = { _ in }
+    self.connectionHandler = { _ in }
   }
 
   public func connect() async throws -> OpenClawGatewayCapabilities {
-    if let capabilities, socket?.state == .running { return capabilities }
+    guard !retired else { throw OpenClawGatewayClientError.connectionClosed }
+    if let capabilities, socket != nil { return capabilities }
+    if let connecting { return try await connecting.value }
+    let attempt = UUID()
+    generation = attempt
+    let task = Task { try await self.performConnect(generation: attempt) }
+    connecting = task
+    do {
+      let hello = try await task.value
+      guard generation == attempt else { throw CancellationError() }
+      connecting = nil
+      Task { await connectionHandler(hello) }
+      return hello
+    } catch {
+      if generation == attempt {
+        connecting = nil
+        await closeTransport()
+      }
+      throw error
+    }
+  }
+
+  private func performConnect(generation attempt: UUID) async throws -> OpenClawGatewayCapabilities {
+    guard !retired, generation == attempt, !Task.isCancelled else { throw CancellationError() }
     guard ["ws", "wss"].contains(endpoint.url.scheme?.lowercased()) else {
       throw OpenClawGatewayClientError.invalidEndpoint
     }
@@ -146,21 +205,29 @@ public actor OpenClawGatewayClient {
     // The local service explicitly rejects browser-origin WebSockets. URLSession
     // does not add Origin by default; remove any inherited value defensively.
     request.setValue(nil, forHTTPHeaderField: "Origin")
-    let socket = session.webSocketTask(with: request)
+    let socket = socketFactory(request)
     self.socket = socket
-    socket.resume()
-    let challenge = try await receiveFrame()
+    await socket.start()
+    // Closing the captured socket unblocks receive even if no challenge ever arrives.
+    let timeout = Task {
+      do { try await Task.sleep(for: handshakeTimeout) } catch { return }
+      await socket.close()
+    }
+    defer { timeout.cancel() }
+    let challenge = try await receiveFrame(from: socket)
+    guard generation == attempt, !Task.isCancelled else { throw CancellationError() }
     guard challenge.type == "event", challenge.event == "connect.challenge",
           let nonce = challenge.payload?.objectValue?["nonce"]?.stringValue,
           !nonce.isEmpty,
           let signedAt = challenge.payload?.objectValue?["ts"]?.intValue,
           signedAt >= 0 else {
-      socket.cancel(with: .protocolError, reason: nil)
       throw OpenClawGatewayClientError.challengeMissing
     }
-    let token = Self.bearerToken(from: requestHeaders)
+    var credentials = try credentialStore.credentials(for: credentialScope)
+    let signingKey = try Curve25519.Signing.PrivateKey(rawRepresentation: credentials.privateKey)
+    let sharedToken = Self.bearerToken(from: requestHeaders)
+    let token = sharedToken ?? credentials.deviceToken
     if endpoint.authorization == .remoteWorkspace, token == nil {
-      socket.cancel(with: .policyViolation, reason: nil)
       throw OpenClawGatewayClientError.authenticationMissing
     }
     let requestID = UUID().uuidString.lowercased()
@@ -176,17 +243,36 @@ public actor OpenClawGatewayClient {
       .base64URLEncodedString()
     let connectParams = Self.connectParameters(
       deviceID: deviceID, publicKey: publicKey, signature: signature,
-      signedAt: signedAt, nonce: nonce, scopes: scopes, token: token
+      signedAt: signedAt, nonce: nonce, scopes: scopes, token: sharedToken,
+      deviceToken: sharedToken == nil ? credentials.deviceToken : nil
     )
     try await send(Frame(type: "req", id: requestID, method: "connect", params: connectParams))
-    let response = try await receiveFrame()
+    let response = try await receiveFrame(from: socket)
     guard response.type == "res", response.id == requestID, response.ok == true,
           let hello = response.payload else {
       throw response.error.map(Self.responseError) ?? OpenClawGatewayClientError.malformedFrame
     }
     let negotiated = try Self.capabilities(from: hello)
+    guard generation == attempt, !Task.isCancelled else { throw CancellationError() }
+    if let deviceToken = hello.objectValue?["auth"]?.objectValue?["deviceToken"]?.stringValue {
+      credentials.deviceToken = deviceToken
+      try credentialStore.save(credentials, for: credentialScope)
+    }
     capabilities = negotiated
-    receiver = Task { await self.receiveLoop() }
+    lastEventSequence = nil
+    lastFrameAt = .now
+    receiver = Task { await self.receiveLoop(from: socket, generation: attempt) }
+    watchdog = Task {
+      let interval = max(1_000, negotiated.tickIntervalMilliseconds)
+      while !Task.isCancelled {
+        do { try await Task.sleep(for: .milliseconds(interval)) } catch { return }
+        guard self.generation == attempt else { return }
+        if self.lastFrameAt.duration(to: .now) > .milliseconds(interval * 3) {
+          await socket.close()
+          return
+        }
+      }
+    }
     return negotiated
   }
 
@@ -216,7 +302,8 @@ public actor OpenClawGatewayClient {
     signedAt: Int,
     nonce: String,
     scopes: [String],
-    token: String? = nil
+    token: String? = nil,
+    deviceToken: String? = nil
   ) -> GatewayJSONValue {
     var parameters: [String: GatewayJSONValue] = [
       "minProtocol": .number(4), "maxProtocol": .number(4),
@@ -230,7 +317,7 @@ public actor OpenClawGatewayClient {
       "scopes": .array(scopes.map(GatewayJSONValue.string)),
       // OpenClaw only registers this connection as a recipient for run-scoped
       // tool lifecycle events when the client explicitly advertises this cap.
-      "caps": .array([.string("tool-events")]),
+      "caps": .array([.string("tool-events"), .string("agent-kind")]),
       "commands": .array([]),
       "permissions": .object([:]),
       "device": .object([
@@ -242,6 +329,7 @@ public actor OpenClawGatewayClient {
       "userAgent": .string("woven-matter-macos/1.0"),
     ]
     if let token { parameters["auth"] = .object(["token": .string(token)]) }
+    else if let deviceToken { parameters["auth"] = .object(["deviceToken": .string(deviceToken)]) }
     return .object(parameters)
   }
 
@@ -260,7 +348,7 @@ public actor OpenClawGatewayClient {
 
   static func capabilities(from payload: GatewayJSONValue) throws -> OpenClawGatewayCapabilities {
     guard let hello = payload.objectValue,
-          hello["protocol"]?.intValue != nil else {
+          hello["protocol"]?.intValue == 4 else {
       throw OpenClawGatewayClientError.malformedFrame
     }
     let features = hello["features"]?.objectValue
@@ -278,29 +366,49 @@ public actor OpenClawGatewayClient {
       methods: methods,
       events: events,
       maximumPayloadBytes: policy?["maxPayload"]?.intValue,
-      attachmentPolicy: attachmentPolicy
+      attachmentPolicy: attachmentPolicy,
+      grantedScopes: Set(hello["auth"]?.objectValue?["scopes"]?.arrayValue?.compactMap(\.stringValue) ?? []),
+      tickIntervalMilliseconds: min(300_000, max(1_000, policy?["tickIntervalMs"]?.intValue ?? 30_000)),
+      controlUIURL: hello["controlUiUrl"]?.stringValue.flatMap(URL.init(string:))
     )
   }
 
-  public func disconnect() {
+  public func disconnect() async {
+    // Explicit retirement (unlink/reconfigure/shutdown) is not a network outage.
+    // Owners must create a new client; stale callers may never reopen this one.
+    retired = true
+    generation = UUID()
+    connecting?.cancel()
+    connecting = nil
+    await closeTransport()
+  }
+
+  private func closeTransport() async {
     receiver?.cancel()
     receiver = nil
-    socket?.cancel(with: .normalClosure, reason: nil)
+    watchdog?.cancel()
+    watchdog = nil
+    let previous = socket
     socket = nil
     capabilities = nil
     failPending(OpenClawGatewayClientError.connectionClosed)
+    await previous?.close()
   }
 
   public func request(
     _ method: String,
     params: GatewayJSONValue = .object([:]),
-    timeout: Duration = .seconds(30)
+    timeout: Duration = .seconds(30),
+    expectedConnectionGeneration: UUID? = nil
   ) async throws -> GatewayJSONValue {
-    let capabilities = try await connect()
-    guard capabilities.supports(method) else {
-      throw OpenClawGatewayClientError.unsupportedCapability(method)
-    }
+    if let expectedConnectionGeneration {
+      guard connectedGeneration == expectedConnectionGeneration, !retired else {
+        throw OpenClawGatewayClientError.rejected("The connection changed. Refresh before making a decision.")
+      }
+    } else { _ = try await connect() }
+    try Task.checkCancellation()
     let id = UUID().uuidString.lowercased()
+    let requestGeneration = generation
     return try await withCheckedThrowingContinuation { continuation in
       pending[id] = continuation
       requestTimeouts[id] = Task {
@@ -312,7 +420,10 @@ public actor OpenClawGatewayClient {
         )
       }
       Task {
-        do { try await self.send(Frame(type: "req", id: id, method: method, params: params)) }
+        do {
+          guard self.generation == requestGeneration, self.pending[id] != nil else { return }
+          try await self.send(Frame(type: "req", id: id, method: method, params: params))
+        }
         catch { self.resumePending(id: id, with: .failure(error)) }
       }
     }
@@ -325,8 +436,13 @@ public actor OpenClawGatewayClient {
 
   static func sessionPreferences(from payload: GatewayJSONValue) -> OpenClawSessionPreferences {
     let object = payload.objectValue?["session"]?.objectValue ?? [:]
+    let model = object["model"]?.stringValue
+    let provider = object["modelProvider"]?.stringValue
     return OpenClawSessionPreferences(
-      model: object["model"]?.stringValue,
+      model: model.map { value in
+        guard !value.contains("/"), let provider, !provider.isEmpty else { return value }
+        return provider + "/" + value
+      },
       thinkingLevel: object["thinkingLevel"]?.stringValue
     )
   }
@@ -342,21 +458,36 @@ public actor OpenClawGatewayClient {
     return try await sessionPreferences(key: key)
   }
 
-  private func receiveLoop() async {
+  private func receiveLoop(from socket: any OpenClawGatewaySocket, generation attempt: UUID) async {
     do {
       while !Task.isCancelled {
-        let frame = try await receiveFrame()
+        let frame = try await receiveFrame(from: socket)
+        guard generation == attempt else { return }
+        lastFrameAt = .now
         if frame.type == "res", let id = frame.id {
           if frame.ok == true { resumePending(id: id, with: .success(frame.payload ?? .null)) }
           else { resumePending(id: id, with: .failure(frame.error.map(Self.responseError) ?? OpenClawGatewayClientError.malformedFrame)) }
         } else if frame.type == "event", let name = frame.event {
+          if let seq = frame.seq {
+            if let last = lastEventSequence {
+              if seq <= last { continue }
+              if seq != last + 1 {
+                throw OpenClawGatewayClientError.unavailable("Event stream interrupted; refreshing session history.", retryAfterMilliseconds: 250)
+              }
+            }
+            lastEventSequence = seq
+          }
           await eventHandler(OpenClawGatewayEvent(name: name, payload: frame.payload, sequence: frame.seq))
         }
       }
     } catch {
-      socket = nil
+      guard generation == attempt else { return }
+      self.socket = nil
       capabilities = nil
+      watchdog?.cancel()
+      watchdog = nil
       failPending(error)
+      await socket.close()
       if !Task.isCancelled {
         await disconnectHandler(error.localizedDescription)
       }
@@ -366,20 +497,14 @@ public actor OpenClawGatewayClient {
   private func send(_ frame: Frame) async throws {
     guard let socket else { throw OpenClawGatewayClientError.connectionClosed }
     let data = try JSONEncoder().encode(frame)
-    guard let text = String(data: data, encoding: .utf8) else {
-      throw OpenClawGatewayClientError.malformedFrame
+    if let limit = capabilities?.maximumPayloadBytes, data.count > limit {
+      throw OpenClawGatewayClientError.rejected("Request exceeds the Gateway payload limit.")
     }
-    try await socket.send(.string(text))
+    try await socket.send(data)
   }
 
-  private func receiveFrame() async throws -> Frame {
-    guard let socket else { throw OpenClawGatewayClientError.connectionClosed }
-    let message = try await socket.receive()
-    let data: Data = switch message {
-    case .data(let data): data
-    case .string(let text): Data(text.utf8)
-    @unknown default: throw OpenClawGatewayClientError.malformedFrame
-    }
+  private func receiveFrame(from socket: any OpenClawGatewaySocket) async throws -> Frame {
+    let data = try await socket.receive()
     return try JSONDecoder().decode(Frame.self, from: data)
   }
 

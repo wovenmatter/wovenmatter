@@ -103,6 +103,9 @@ public struct OpenClawGatewayCapabilities: Codable, Equatable, Sendable {
   public let maximumPayloadBytes: Int?
   public let attachmentPolicy: AttachmentPolicy?
   public let connectedAt: Date
+  public let grantedScopes: Set<String>
+  public let tickIntervalMilliseconds: Int
+  public let controlUIURL: URL?
 
   public init(
     applicationVersion: String? = nil,
@@ -110,7 +113,10 @@ public struct OpenClawGatewayCapabilities: Codable, Equatable, Sendable {
     events: Set<String>,
     maximumPayloadBytes: Int? = nil,
     attachmentPolicy: AttachmentPolicy? = nil,
-    connectedAt: Date = Date()
+    connectedAt: Date = Date(),
+    grantedScopes: Set<String> = [],
+    tickIntervalMilliseconds: Int = 30_000,
+    controlUIURL: URL? = nil
   ) {
     self.applicationVersion = applicationVersion
     self.methods = methods
@@ -118,6 +124,9 @@ public struct OpenClawGatewayCapabilities: Codable, Equatable, Sendable {
     self.maximumPayloadBytes = maximumPayloadBytes
     self.attachmentPolicy = attachmentPolicy
     self.connectedAt = connectedAt
+    self.grantedScopes = grantedScopes
+    self.tickIntervalMilliseconds = tickIntervalMilliseconds
+    self.controlUIURL = controlUIURL
   }
 
   public func supports(_ method: String) -> Bool { methods.contains(method) }
@@ -131,6 +140,10 @@ public struct OpenClawSessionPreferences: Codable, Equatable, Sendable {
     self.model = model
     self.thinkingLevel = thinkingLevel
   }
+}
+
+public enum OpenClawSessionSetting: String, CaseIterable, Sendable {
+  case model, thinkingLevel, fastMode, verboseLevel, reasoningLevel, responseUsage
 }
 
 public struct OpenClawHeartbeatConfiguration: Codable, Equatable, Sendable {

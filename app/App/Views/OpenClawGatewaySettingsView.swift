@@ -20,6 +20,8 @@ struct OpenClawGatewayAgentSettingsView: View {
             connectionCard
             nameCard
             if link != nil {
+                OpenClawSessionLibrary(model: model, agentID: agent.id)
+                    .id(agent.id)
                 restartCard
             }
         }
