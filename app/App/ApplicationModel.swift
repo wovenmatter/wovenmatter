@@ -2257,7 +2257,7 @@ final class ApplicationModel {
         note: WorkspaceNoteRecord? = nil
     ) async -> Bool {
         let conversationState = ensureConversationState(id: conversation.id)
-        guard conversation.localRuntimeKind == nil || installingLocalACPRuntimeKinds.isEmpty else {
+        guard !usesLocallyInstalledRuntime(conversation) || installingLocalACPRuntimeKinds.isEmpty else {
             conversationState.setError("Wait for runtime installation or update to finish before sending a message.")
             return false
         }
@@ -2813,7 +2813,8 @@ final class ApplicationModel {
     }
 
     func refreshRuntimeInventory() {
-        guard !checkingRuntimeInventory, checkingRuntimeKinds.isEmpty, installingLocalACPRuntimeKinds.isEmpty else { return }
+        guard !checkingRuntimeInventory, checkingRuntimeKinds.isEmpty, installingLocalACPRuntimeKinds.isEmpty,
+              preparedLocalACPRuntimeInstall == nil else { return }
         checkingRuntimeInventory = true
         runtimeInventoryGeneration &+= 1
         let generation = runtimeInventoryGeneration
@@ -2881,9 +2882,27 @@ final class ApplicationModel {
         localRunError = category
     }
 
+    private func usesLocallyInstalledRuntime(_ conversation: WorkspaceConversationRecord) -> Bool {
+        conversation.localRuntimeKind != nil && conversation.remoteWorkspaceID == nil
+            && !buzzBoundLocalACPConversationIDs.contains(conversation.id)
+            && !isOpenClawGatewayConversation(conversation.id)
+    }
+
+    var localRuntimeMaintenanceHasActiveConversation: Bool {
+        localRunningConversationIDs.contains { id in
+            if buzzBoundLocalACPConversationIDs.contains(id) || isOpenClawGatewayConversation(id) { return false }
+            // A newly accepted turn may precede the workspace snapshot refresh.
+            // Keep maintenance blocked until its execution location is known.
+            guard let conversation = workspaceOverview?.conversations.first(where: { $0.id == id }) else { return true }
+            return usesLocallyInstalledRuntime(conversation)
+        }
+    }
+
     func installLocalACPRuntimeComponent(_ runtimeKind: AgentRuntimeKind) {
-        guard installingLocalACPRuntimeKinds.isEmpty, openCode?.isInstalling != true, preparedLocalACPRuntimeInstall == nil,
-              localRunningConversationIDs.isEmpty,
+        // Finish the initial inventory before an install invalidates its generation.
+        // Otherwise the remaining runtime rows can be left without an inventory.
+        guard !checkingRuntimeInventory, installingLocalACPRuntimeKinds.isEmpty, openCode?.isInstalling != true, preparedLocalACPRuntimeInstall == nil,
+              !localRuntimeMaintenanceHasActiveConversation,
               let definition = LocalACPRuntimeCatalog.definition(for: runtimeKind) else { return }
         let inventory = runtimeInventories[runtimeKind]
         let cliMissing = definition.underlyingCLIName.map { name in
@@ -2920,8 +2939,8 @@ final class ApplicationModel {
     private func performRuntimeMaintenance(_ definition: LocalACPRuntimeDefinition, update: Bool,
                                           preview: LocalACPInstallerPreview? = nil) {
         let kind = definition.runtimeKind
-        guard installingLocalACPRuntimeKinds.isEmpty, openCode?.isInstalling != true,
-              preparedLocalACPRuntimeInstall == nil, localRunningConversationIDs.isEmpty else { return }
+        guard !checkingRuntimeInventory, installingLocalACPRuntimeKinds.isEmpty, openCode?.isInstalling != true,
+              preparedLocalACPRuntimeInstall == nil, !localRuntimeMaintenanceHasActiveConversation else { return }
         runtimeInventoryGeneration &+= 1
         installingLocalACPRuntimeKinds.insert(kind)
         if update { updatingRuntimeKinds.insert(kind) }

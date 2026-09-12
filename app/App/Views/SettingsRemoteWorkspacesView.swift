@@ -8,10 +8,8 @@ struct SettingsRemoteWorkspacesView: View {
     let credentialDisclosureAcknowledged: Bool
     let onAcknowledgeCredentialDisclosure: () -> Void
     var reservesRailControlSpace = false
-    var onOpenOpenClawAgent: ((RemoteWorkspaceConfiguration) -> Void)?
-    var onMoreRuntime: ((AgentRuntimeKind, RemoteWorkspaceConfiguration) -> Void)?
+    var onMoreRuntime: (AgentRuntimeKind, RemoteWorkspaceConfiguration) -> Void
     var onBack: () -> Void
-    @State private var selectedRuntime: AgentRuntimeKind?
     @State private var selectedWorkspaceID: UUID?
     @State private var name = ""
     @State private var workspaceID = ""
@@ -37,7 +35,6 @@ struct SettingsRemoteWorkspacesView: View {
                 if selectedWorkspaceID == nil {
                     onBack()
                 } else {
-                    selectedRuntime = nil
                     selectedWorkspaceID = nil
                 }
             }
@@ -45,15 +42,9 @@ struct SettingsRemoteWorkspacesView: View {
             VStack(alignment: .leading, spacing: 16) {
                 credentialAccessCard
                 if let selectedWorkspace {
-                    if let selectedRuntime {
-                        Button("Back to \(selectedWorkspace.name)") { self.selectedRuntime = nil }
-                            .buttonStyle(SettingsQuietButtonStyle())
-                        RemoteWorkspaceInstanceSettingsCard(model: model, configuration: selectedWorkspace, runtimeKind: selectedRuntime, onOpenAgentSettings: onOpenOpenClawAgent.map { callback in { callback(selectedWorkspace) } })
-                    } else {
-                        workspaceCard(selectedWorkspace)
-                        resourceCard(selectedWorkspace)
-                        harnessesCard(selectedWorkspace)
-                    }
+                    workspaceCard(selectedWorkspace)
+                    resourceCard(selectedWorkspace)
+                    harnessesCard(selectedWorkspace)
                     if let progress = model.progress {
                         SettingsNote(progress)
                     }
@@ -548,8 +539,7 @@ struct SettingsRemoteWorkspacesView: View {
             HStack(spacing: 8) {
                 if harness.id == .opencode || harness.id == .openclaw {
                     Button("More") {
-                        if let onMoreRuntime { onMoreRuntime(harness.id, workspace) }
-                        else { selectedRuntime = harness.id }
+                        onMoreRuntime(harness.id, workspace)
                     }.buttonStyle(SettingsQuietButtonStyle())
                 }
                 Button(checkUnavailable && !checking && !running ? "Retry check" : updateButtonTitle(runtime, checking: checking)) {
@@ -624,9 +614,7 @@ struct SettingsRemoteWorkspacesView: View {
 
     private func componentVersion(_ component: RemoteRuntimeComponent) -> String {
         let installed = component.installed ? (component.installedVersion ?? "version unavailable") : "missing"
-        let newer = component.installedVersion.flatMap { installed in
-            component.latestVersion.flatMap { RuntimeMaintenance.version(installed, precedes: $0) ? $0 : nil }
-        }
+        let newer = component.availableUpdateVersion
         return "\(component.displayName) \(installed)" + (newer.map { " → \($0)" } ?? "")
     }
 

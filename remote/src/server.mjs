@@ -441,25 +441,34 @@ function authenticationProcessLaunch(method) {
 }
 
 let gatewayUnlock = null
+let gatewayRestartTimer = null
+let gatewayGeneration = 0
 let gatewayLaunchReservation = null
 async function startGateway() {
   if (gatewayLaunchReservation) return gatewayLaunchReservation
+  const generation = gatewayGeneration
   gatewayLaunchReservation = (async () => {
     if (!await maintenance.isEnabled('openclaw') || maintenance.isBusy('openclaw')) throw httpError(409, 'runtime_not_enabled_or_busy')
+    requireGatewayStartCurrent(generation)
     if (gateway.ready && gateway.process) return
+    if (gateway.process) throw httpError(503, 'openclaw_gateway_start_in_progress')
     const unlock = await acquireHostLock(resolve(process.env.HOME, '.wovenmatter/runtime-operation.lock'), harnessEnvironment(), workspaceRoot, true)
     gatewayUnlock = unlock
-    try { await startGatewayProcess() }
+    try { requireGatewayStartCurrent(generation); await startGatewayProcess(generation) }
     catch (error) { if (!gateway.process) { unlock(); gatewayUnlock = null }; throw error }
   })().finally(() => { gatewayLaunchReservation = null })
   return gatewayLaunchReservation
 }
-async function startGatewayProcess() {
+function requireGatewayStartCurrent(generation) {
+  if (!gateway.desired || generation !== gatewayGeneration) throw httpError(409, 'openclaw_gateway_start_cancelled')
+}
+async function startGatewayProcess(generation) {
   if (gateway.ready && gateway.process) return
   if (gateway.startPromise) return gateway.startPromise
   if (gateway.process) throw httpError(503, 'openclaw_gateway_start_in_progress')
   if (await tcpListenerAvailable('127.0.0.1', gatewayPort, 500)) throw httpError(409, 'openclaw_gateway_port_in_use')
   if (!await commandExists('openclaw')) throw httpError(409, 'openclaw_not_installed')
+  requireGatewayStartCurrent(generation)
   const child = spawn('openclaw', ['gateway', 'run', '--bind', 'loopback', '--port', String(gatewayPort)], {
     cwd: workspaceRoot,
     env: harnessEnvironment(),
@@ -481,11 +490,15 @@ async function startGatewayProcess() {
     gateway.startPromise = null
     if (gateway.desired && gateway.restarts < 3) {
       gateway.restarts += 1
-      setTimeout(() => startGateway().catch((error) => { gateway.lastError = error.message }), 1000 * gateway.restarts)
+      gatewayRestartTimer = setTimeout(() => {
+        gatewayRestartTimer = null
+        if (gateway.desired) startGateway().catch((error) => { gateway.lastError = error.message })
+      }, 1000 * gateway.restarts)
     }
   })
   const startup = waitForTCPListener(gatewayPort, child, 15_000)
     .then(() => {
+      requireGatewayStartCurrent(generation)
       if (gateway.process !== child) throw httpError(503, 'openclaw_gateway_exited')
       gateway.ready = true
     })
@@ -502,7 +515,10 @@ async function startGatewayProcess() {
 }
 
 async function stopGateway() {
+  gatewayGeneration += 1
   gateway.desired = false
+  clearTimeout(gatewayRestartTimer)
+  gatewayRestartTimer = null
   const child = gateway.process
   if (!child) return
   child.kill('SIGTERM')

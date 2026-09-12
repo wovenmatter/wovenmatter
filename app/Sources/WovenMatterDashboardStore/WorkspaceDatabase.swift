@@ -1742,10 +1742,6 @@ public final class WorkspaceDatabase: @unchecked Sendable {
       try bind(timestamp, at: 9, to: session)
       try stepDone(session)
       if let link = openCodeAssociation {
-        guard runtimeKind == .opencode,
-              link.connectionID == "remote-workspace:" + remoteWorkspaceID.uuidString.lowercased() else {
-          throw LocalACPSessionDatabaseError.runtimeUnavailable
-        }
         let association = try prepareUnlocked("INSERT INTO desktop_opencode_sessions(conversation_id, connection_id, session_id, snapshot_json) VALUES (?, ?, ?, '{}')")
         defer { sqlite3_finalize(association) }
         try bind(conversationID, at: 1, to: association)

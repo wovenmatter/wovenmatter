@@ -23,7 +23,6 @@ public struct RuntimeInventory: Equatable, Sendable {
     public let kind: AgentRuntimeKind
     public let components: [RuntimeComponent]
     public let limitation: String?
-    public var updateNotice: String? = nil
     public var detectedUpdateAvailable = false
     public var versionCheckAvailable: Bool? = nil
     public var updateAvailable: Bool { outdated || detectedUpdateAvailable }
@@ -146,8 +145,6 @@ public enum RuntimeMaintenance {
             let check = result?.succeeded == true ? hermesCheck(result!.stdout) : nil
             inventory.detectedUpdateAvailable = check == true
             inventory.versionCheckAvailable = check != nil
-            inventory.updateNotice = check.map { $0 ? "Update available." : "Up to date." }
-                ?? "Latest unavailable."
         }
         return inventory
     }

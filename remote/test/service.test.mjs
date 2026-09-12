@@ -529,6 +529,77 @@ process.on('SIGTERM', () => server.close(() => process.exit(0)))
   assert.equal(await canConnect(gatewayPort), true)
 })
 
+test('Stopping a gateway during crash backoff cancels its pending restart', async (context) => {
+  const fixture = await temporaryFixture(context, 'wovenmatter-gateway-stop-')
+  await mkdir(resolve(fixture, '.wovenmatter'), { recursive: true })
+  await writeFile(resolve(fixture, '.wovenmatter/runtime-preferences.json'), JSON.stringify({ openclaw: { enabled: true } }))
+  const home = resolve(fixture, 'home')
+  const bin = resolve(home, '.local/bin')
+  const launches = resolve(fixture, 'launches')
+  await mkdir(bin, { recursive: true })
+  await writeFile(resolve(bin, 'openclaw'), `#!/usr/bin/env node
+require('node:fs').appendFileSync(${JSON.stringify(launches)}, 'started\\n')
+const server = require('node:net').createServer(socket => socket.destroy())
+server.listen(Number(process.argv[process.argv.indexOf('--port') + 1]), '127.0.0.1')
+process.on('SIGTERM', () => server.close(() => process.exit(0)))
+`)
+  await chmod(resolve(bin, 'openclaw'), 0o700)
+  const service = await startService({ workspace: fixture, home, catalog: catalogPath, token: 'stop-token' })
+  const headers = { authorization: 'Bearer stop-token' }
+  context.after(async () => {
+    const status = await fetch(`${service.url}/v1/openclaw/gateway`, { headers }).then(response => response.json())
+    if (status.pid) { try { process.kill(status.pid, 'SIGTERM') } catch {} }
+    service.child.kill('SIGTERM')
+  })
+  const response = await fetch(`${service.url}/v1/openclaw/gateway/start`, { method: 'POST', headers })
+  assert.equal(response.status, 202)
+  const started = await response.json()
+  process.kill(started.pid, 'SIGKILL')
+  await waitFor(`${service.url}/v1/openclaw/gateway`, headers, value => value.state === 'reconnecting')
+  const stopped = await fetch(`${service.url}/v1/workspace-instances/openclaw/stop`, { method: 'POST', headers })
+  assert.equal(stopped.status, 200)
+  assert.equal((await stopped.json()).state, 'stopped')
+  await new Promise(done => setTimeout(done, 1250))
+  const current = await fetch(`${service.url}/v1/openclaw/gateway`, { headers }).then(response => response.json())
+  assert.equal(current.state, 'stopped')
+  assert.equal(await readFile(launches, 'utf8'), 'started\n')
+})
+
+test('Stopping a gateway fences a start suspended while acquiring its host lock', async (context) => {
+  const fixture = await temporaryFixture(context, 'wovenmatter-gateway-pending-')
+  await mkdir(resolve(fixture, '.wovenmatter'), { recursive: true })
+  await writeFile(resolve(fixture, '.wovenmatter/runtime-preferences.json'), JSON.stringify({ openclaw: { enabled: true } }))
+  const home = resolve(fixture, 'home')
+  const service = await startService({ workspace: fixture, home, catalog: catalogPath, token: 'pending-token' })
+  context.after(() => service.child.kill('SIGTERM'))
+  const waiting = resolve(fixture, 'waiting'), release = resolve(fixture, 'release')
+  await writeFile(resolve(home, '.fixture-bin/flock'), `#!/usr/bin/env node
+const fs = require('node:fs')
+fs.writeFileSync(${JSON.stringify(waiting)}, '')
+const timer = setInterval(() => {
+  if (!fs.existsSync(${JSON.stringify(release)})) return
+  clearInterval(timer)
+  const child = require('node:child_process').spawn(process.argv[5], process.argv.slice(6), { stdio: 'inherit' })
+  child.on('exit', code => process.exit(code ?? 1))
+}, 10)
+`)
+  const headers = { authorization: 'Bearer pending-token' }
+  const pending = fetch(`${service.url}/v1/openclaw/gateway/start`, { method: 'POST', headers })
+  for (let attempts = 0; ; attempts++) {
+    try { await readFile(waiting); break } catch { assert.ok(attempts < 100, 'start should reach host lock') }
+    await new Promise(done => setTimeout(done, 10))
+  }
+  const stopped = await fetch(`${service.url}/v1/workspace-instances/openclaw/stop`, { method: 'POST', headers })
+  assert.equal(stopped.status, 200)
+  await writeFile(release, '')
+  const result = await pending
+  assert.equal(result.status, 409)
+  assert.equal((await result.json()).error, 'openclaw_gateway_start_cancelled')
+  const current = await fetch(`${service.url}/v1/openclaw/gateway`, { headers }).then(response => response.json())
+  assert.equal(current.state, 'stopped')
+  assert.equal(current.pid, null)
+})
+
 async function temporaryFixture(context, prefix) {
   const directory = await mkdtemp(resolve(tmpdir(), prefix))
   context.after(() => rm(directory, { recursive: true, force: true }))

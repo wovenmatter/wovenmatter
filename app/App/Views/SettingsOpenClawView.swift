@@ -24,21 +24,20 @@ struct SettingsOpenClawView: View {
             onBack: onBack
         ) {
             if !isWorkspaceScoped || workspaceID == nil {
-            SettingsCard(
-                title: "Local Agent Workspace",
-                detail: "Open an agent to manage its Woven Matter name and Gateway connection."
-            ) {
-                if openClawAgents.isEmpty {
-                    SettingsEmpty("Enable local OpenClaw to configure its agent and Gateway connection.")
-                } else {
-                    VStack(spacing: 8) {
-                        ForEach(openClawAgents) { agent in
-                            agentRow(agent)
+                SettingsCard(
+                    title: "Local Agent Workspace",
+                    detail: "Open an agent to manage its Woven Matter name and Gateway connection."
+                ) {
+                    if openClawAgents.isEmpty {
+                        SettingsEmpty("Enable local OpenClaw to configure its agent and Gateway connection.")
+                    } else {
+                        VStack(spacing: 8) {
+                            ForEach(openClawAgents) { agent in
+                                agentRow(agent)
+                            }
                         }
                     }
                 }
-            }
-
             }
             if !isWorkspaceScoped {
                 let buzzAgents = model.buzzWorkspaceAgents.filter { $0.runtimeKind == .openclaw }
