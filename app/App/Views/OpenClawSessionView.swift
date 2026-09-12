@@ -210,7 +210,10 @@ struct OpenClawSessionView: View {
         Task {
             defer { busy = false }
             do { try await operation() }
-            catch { self.error = error.localizedDescription + " Refresh before retrying a decision." }
+            catch {
+                snapshot = nil
+                self.error = error.localizedDescription + " Refresh before retrying a decision."
+            }
         }
     }
 }

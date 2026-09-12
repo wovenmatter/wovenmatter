@@ -1,8 +1,70 @@
-# OpenClaw 2026.9.2 integration upgrade
+# OpenClaw 2026.9.4 integration upgrade
 
-Protocol baseline: OpenClaw tag `v2026.9.2`, commit
-`3928bad9badfcb6c7d140530435e806fb8092190` (Gateway protocol v4).
-Woven Matter base: `dc39c49620f1f0777acb2be0d713fe85507d5607`.
+Protocol baseline: OpenClaw tag `v2026.9.4`, commit
+`3a9d69db306cd7f081e06254cb89c4bcc14a7107` (Gateway protocol v4).
+Woven Matter base: `cc6d2882c11239623c7f0925bf8db481a4a6985a`.
+The historical filename is retained for existing review links.
+
+## Current stable compatibility review (2026-09-12)
+
+The official release API reports **v2026.9.4**, published 2026-09-11 at
+03:46:22 UTC, as the latest stable feature release. The separately maintained
+v2026.6.35 release is the June extended-stable line, not a newer feature baseline.
+Source was fetched directly from the official repository over SSH and checked
+out at **3a9d69db306cd7f081e06254cb89c4bcc14a7107**. Compared with v2026.9.2
+(3928bad9badfcb6c7d140530435e806fb8092190), Gateway protocol remains **v4** and
+the signed device challenge payload remains **v3**. This is a source compatibility
+pin, not an installer change or an update of any enrolled Gateway.
+
+- [Official release](https://github.com/openclaw/openclaw/releases/tag/v2026.9.4)
+- [Protocol version](https://github.com/openclaw/openclaw/blob/3a9d69db306cd7f081e06254cb89c4bcc14a7107/packages/gateway-protocol/src/version.ts)
+- [Connect authentication selection](https://github.com/openclaw/openclaw/blob/3a9d69db306cd7f081e06254cb89c4bcc14a7107/packages/gateway-client/src/connect-auth.ts)
+- [Session-aware model discovery](https://github.com/openclaw/openclaw/blob/3a9d69db306cd7f081e06254cb89c4bcc14a7107/src/gateway/server-methods/models.ts)
+- [Native transcript run identity](https://github.com/openclaw/openclaw/blob/3a9d69db306cd7f081e06254cb89c4bcc14a7107/src/sessions/transcript-events.ts)
+
+### Changes and complete-PR audit findings
+
+- Persisted device credentials now use `auth.deviceToken`. Explicit shared
+  bearer credentials retain `auth.token` and precedence; the selected credential
+  remains covered by the Ed25519 signature. Device identity and Keychain scope
+  are unchanged. There is no automatic credential deletion or token fallback.
+- Model discovery sends the native `sessionKey` and `includeDetails: true`, while
+  retaining `view: configured`, `preparedOnly: true`, and the non-default agent.
+  Upstream can apply the session's account selection without provider discovery.
+  Described model names retain `modelProvider` for matching provider-qualified
+  catalog choices and their thinking levels. Account switching remains external.
+- Native `__openclaw.runId` now reconciles history when an idempotency key is
+  absent. Exact input idempotency keys still take precedence, preserving steering
+  correlation. Tool and synthetic records still cannot prove a successful reply.
+- The older in-conversation permission relay now captures enrollment and socket
+  authority before presenting a decision, sends once on that transport, and
+  leaves dismissed requests pending. Removed its automatic write retries and
+  unused retry helper. Existing permission options are preserved; the newer
+  inbox remains limited to one-time decisions.
+- Question replies require an `answered` result, including receipt probes after
+  uncertain delivery. A failed session-control operation clears the stale
+  snapshot so the user must refresh before submitting another decision.
+- Main was reconciled by a non-rewriting merge from cc6d2882c11239623c7f0925bf8db481a4a6985a,
+  retaining the prior 13ede3f audit. Interrupted local ACP recovery excludes both
+  Gateway and OpenCode sessions. Runtime/per-workspace settings, hover/visibility,
+  ACP behavior and the existing UI components remain in the resulting tree.
+
+### Contract comparison and limits
+
+| Area | 2026.9.4 result |
+| --- | --- |
+| Gateway/auth/device | v4 frames/v3 signatures retained; optional hello auth method is additive; separate device-token field honored. Pairing/scope upgrades still require the Gateway's normal authorization. |
+| Session list/import | Existing pagination and transactional import retained. New `activeOnly` is optional; the library intentionally lists all discoverable sessions. Native agent-qualified keys are retained. |
+| History/reconnect | Current upstream improves failed-attempt filtering and CLI identity projection. Woven consumes canonical tail pages and native run identity, reconnects and resubscribes without resending unknown input. Durable delta-cursor catch-up, reset branch replacement and full offline outbox remain unimplemented. |
+| Approvals/questions | Existing replay and resolution contracts remain compatible. Both native approval paths now avoid write retries across disconnects. Optional question URLs, secret storage and richer external interaction remain Control UI capabilities. |
+| Controls | Patch/reset, abort, reasoning/verbosity/usage and Fast settings retain existing contracts. Upstream Fast applicability metadata is additive; a stored preference is not proof the selected model fulfilled Fast mode. |
+| Models | Session-scoped prepared catalog and model-specific thinking metadata are consumed. Native account selection, provider connection/discovery and plugin management remain outside this PR. |
+| Events | New rate-limit retry metadata on nonterminal chat status is additive and does not complete a local run. Observer lifecycle revisions and plugin rendering additions are not a claim of native parity. |
+
+The complete diff was inspected for transport lifecycle, reconnect/write authority,
+input persistence, import concurrency, transcript projection, inbox state, UI
+wiring and main integration. No PR39/40/37 feature branch was merged, and no
+cross-harness streaming redesign is included.
 
 ## Implemented
 
@@ -61,8 +123,8 @@ This is a substantial integration upgrade, **not a claim of 100% native parity**
 
 ### PR #38 follow-up code review (2026-09-09)
 
-Reviewed the complete PR from `dc39c49` through `dd2efa5` against the pinned
-OpenClaw source above, then addressed these findings:
+Reviewed the complete PR from `dc39c49` through `dd2efa5` against the then-pinned
+OpenClaw v2026.9.2 source (3928bad9badfcb6c7d140530435e806fb8092190), then addressed these findings:
 
 - **P1 — stale transport authority:** an explicitly retired client could reopen,
   and controls captured before a WebSocket reconnect could still mutate the
@@ -135,3 +197,28 @@ Authoritative source contracts at the pinned OpenClaw tag:
 - `packages/gateway-protocol/src/schema/{frames,logs-chat,sessions,sessions-list,sessions-row}.ts`
 - `packages/gateway-protocol/src/schema/{approvals,questions,commands,agents-models-skills}.ts`
 - `src/gateway/server-methods/{chat-history-handler,sessions-subscriptions,approval,models}.ts`
+
+### Final isolated validation (2026-09-12)
+
+`WOVENMATTER_TEST_CACHE_DIR=/private/tmp/wovenmatter-pr38-sept12 scripts/test-changes.sh --all`
+passed: **166 Swift tests** (107 store/core and 59 client), **34 remote tests**,
+static/privacy checks, macOS Debug build and native bundle validation.
+`git diff --check` passed. The initial sandboxed attempt could not execute Swift
+macros; the authorized unsandboxed run passed without changing build settings.
+
+New regressions cover separate shared/device wire authentication, provider-qualified
+model selection, exact input ID precedence, native run-ID reconciliation after
+SQLite reopen, survival of Gateway runs during local ACP recovery, session-scoped
+prepared model requests, and cancelled question results without write retries.
+Existing retired-client, reconnect-decision, import-concurrency, missing-liveness,
+steering and tool-only recovery coverage also passes.
+
+A standalone native fixture compiled the actual `OpenClawSessionView`,
+`DashboardDesign` and `SettingsComponents` against a fake model, using a separate
+bundle identifier. Accessibility and rendered inspection confirmed controls,
+scrolling, question multi-selection, free-text entry and submission enablement.
+This is fixture evidence only: it does not validate a live approval, Gateway
+pairing, provider response or the full application's narrow/wide workspace layout.
+The fixture was closed. Shared Woven Matter Dev was neither replaced nor launched;
+all build products remained in the isolated cache. The manager's exact-head Dev
+integration and Trey's manual Gateway acceptance checklist remain outstanding.

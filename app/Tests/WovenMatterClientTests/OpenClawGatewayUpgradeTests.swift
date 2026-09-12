@@ -20,8 +20,30 @@ struct OpenClawGatewayUpgradeTests {
     let reopened = OpenClawGatewayClient(endpoint: endpoint, credentialStore: store, socketFactory: { _ in second })
     _ = try await reopened.connect()
     #expect(await second.connectParams?.objectValue?["device"]?.objectValue?["id"] == identity?.objectValue?["device"]?.objectValue?["id"])
-    #expect(await second.connectParams?.objectValue?["auth"]?.objectValue?["token"] == .string("fixture-device-token"))
+    #expect(await second.connectParams?.objectValue?["auth"]?.objectValue?["deviceToken"] == .string("fixture-device-token"))
+    #expect(await second.connectParams?.objectValue?["auth"]?.objectValue?["token"] == nil)
     await reopened.disconnect()
+  }
+
+  @Test func explicitSharedAuthenticationRemainsDistinctFromDeviceAuthentication() {
+    let params = OpenClawGatewayClient.connectParameters(deviceID: "device", publicKey: "key",
+      signature: "signature", signedAt: 1, nonce: "nonce", scopes: ["operator.read"],
+      token: "shared", deviceToken: "saved-device")
+    #expect(params.objectValue?["auth"] == .object(["token": .string("shared")]))
+  }
+
+  @Test func describedModelRetainsProviderForCatalogSelection() {
+    let preferences = OpenClawGatewayClient.sessionPreferences(from: .object(["session": .object([
+      "model": .string("reasoner"), "modelProvider": .string("fixture"), "thinkingLevel": .string("high")])]))
+    #expect(preferences.model == "fixture/reasoner")
+    #expect(preferences.thinkingLevel == "high")
+  }
+
+  @Test func exactInputIdentityTakesPrecedenceOverExecutionRunIdentity() throws {
+    let message = try #require(OpenClawGatewayHistoryMessage(payload: .object([
+      "role": .string("assistant"), "__openclaw": .object([
+        "idempotencyKey": .string("steering:assistant"), "runId": .string("initial")]) ])))
+    #expect(message.runID == "steering")
   }
 
   @Test func gatewayChallengeWaitIsBounded() async throws {

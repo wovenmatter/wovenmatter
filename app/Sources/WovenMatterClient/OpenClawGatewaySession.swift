@@ -1,7 +1,7 @@
 import CryptoKit
 import Foundation
 
-/// Small, typed projections of the 2026.9.2 Gateway v4 contract. Keep the raw
+/// Small, typed projections of the 2026.9.4 Gateway v4 contract. Keep the raw
 /// message alongside its projection so additive content blocks remain recoverable.
 public struct OpenClawGatewaySession: Identifiable, Equatable, Sendable {
   public let key: String
@@ -77,7 +77,7 @@ public struct OpenClawGatewayHistoryMessage: Equatable, Sendable {
         value.removeLast(suffix.count)
       }
       return value.hasPrefix("cli-assistant:") ? String(value.dropFirst(14)) : value
-    }
+    } ?? metadata["runId"]?.stringValue
     if let milliseconds = row["timestamp"]?.intValue {
       date = Date(timeIntervalSince1970: Double(milliseconds) / 1_000)
     } else if let timestamp = row["timestamp"]?.stringValue {

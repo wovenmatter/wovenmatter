@@ -833,10 +833,14 @@ public actor OpenClawGatewayCoordinator {
     if let approval = projection.approval {
       if approval.resolvedDecision != nil {
         approvalTasks[approval.id]?.cancel()
-      } else if approvalTasks[approval.id] == nil {
+      } else if approvalTasks[approval.id] == nil,
+                let approvalClient = clients[agentID],
+                let transportGeneration = await approvalClient.connectedGeneration,
+                isCurrentConnection(agentID, generation: generation) {
         approvalRunIDs[approval.id] = runID
         approvalTasks[approval.id] = Task {
-          await self.relayApproval(approval, runID: runID)
+          await self.relayApproval(approval, runID: runID, client: approvalClient,
+            generation: generation, transportGeneration: transportGeneration)
         }
       }
     }
@@ -902,7 +906,10 @@ public actor OpenClawGatewayCoordinator {
 
   private func relayApproval(
     _ approval: OpenClawGatewayEventProjection.Approval,
-    runID: String
+    runID: String,
+    client: OpenClawGatewayClient,
+    generation: UUID,
+    transportGeneration: UUID
   ) async {
     defer {
       approvalTasks.removeValue(forKey: approval.id)
@@ -910,7 +917,7 @@ public actor OpenClawGatewayCoordinator {
     }
     guard let active = activeRuns[runID],
           let handler = active.onPermission,
-          let client = try? await client(agentID: active.agentID) else {
+          isCurrentConnection(active.agentID, generation: generation) else {
       // A recovered run may not own a live permission presenter. Leave the
       // request pending for the Gateway approval inbox, never implicitly deny it.
       return
@@ -918,7 +925,8 @@ public actor OpenClawGatewayCoordinator {
     let details: GatewayJSONValue? = if approval.kind == "exec" {
       try? await client.request(
         "exec.approval.get",
-        params: .object(["id": .string(approval.id)])
+        params: .object(["id": .string(approval.id)]),
+        expectedConnectionGeneration: transportGeneration
       )
     } else {
       nil
@@ -938,23 +946,24 @@ public actor OpenClawGatewayCoordinator {
       title: title,
       options: options
     ))
-    guard !Task.isCancelled else { return }
-    let decision = decisions.contains(selection ?? "") ? selection! : "deny"
-    await resolveApproval(approval, decision: decision, runID: runID)
+    guard !Task.isCancelled, isCurrentConnection(active.agentID, generation: generation),
+          let decision = selection, decisions.contains(decision) else { return }
+    await resolveApproval(approval, decision: decision, runID: runID,
+      client: client, transportGeneration: transportGeneration)
   }
 
   private func resolveApproval(
     _ approval: OpenClawGatewayEventProjection.Approval,
     decision: String,
-    runID: String
+    runID: String,
+    client: OpenClawGatewayClient,
+    transportGeneration: UUID
   ) async {
-    guard let active = activeRuns[runID] else { return }
+    guard activeRuns[runID] != nil else { return }
     do {
-      _ = try await requestApprovalResolution(
-        agentID: active.agentID,
-        approval: approval,
-        decision: decision
-      )
+      _ = try await client.request(Self.approvalResolveMethod(kind: approval.kind), params: .object([
+        "id": .string(approval.id), "decision": .string(decision)
+      ]), expectedConnectionGeneration: transportGeneration)
     } catch {
       guard !Task.isCancelled else { return }
       let message = error.localizedDescription
@@ -1068,41 +1077,6 @@ public actor OpenClawGatewayCoordinator {
     let cocoaError = error as NSError
     return cocoaError.domain == NSURLErrorDomain
       || cocoaError.domain == NSPOSIXErrorDomain
-  }
-
-  static func isRetryableApprovalError(_ error: any Error) -> Bool {
-    if let gatewayError = error as? OpenClawGatewayClientError {
-      switch gatewayError {
-      case .connectionClosed, .requestTimedOut:
-        return true
-      default:
-        return false
-      }
-    }
-    return isRetryableWaitError(error)
-  }
-
-  private func requestApprovalResolution(
-    agentID: UUID,
-    approval: OpenClawGatewayEventProjection.Approval,
-    decision: String
-  ) async throws -> GatewayJSONValue {
-    let method = Self.approvalResolveMethod(kind: approval.kind)
-    let params: GatewayJSONValue = .object([
-      "id": .string(approval.id),
-      "decision": .string(decision),
-    ])
-    var retriesRemaining = 2
-    while true {
-      do {
-        return try await client(agentID: agentID).request(method, params: params)
-      } catch {
-        guard retriesRemaining > 0,
-              Self.isRetryableApprovalError(error) else { throw error }
-        retriesRemaining -= 1
-        try await Task.sleep(for: .milliseconds(250))
-      }
-    }
   }
 
   private func reconcileAssistantHistory(
@@ -1343,6 +1317,8 @@ public actor OpenClawGatewayCoordinator {
     let preferences = try await client.sessionPreferences(key: descriptor.sessionKey)
     let agentID = OpenClawGatewaySession.agentID(for: descriptor.sessionKey)
     var modelParams = Self.modelsListParameters.objectValue ?? [:]
+    modelParams["sessionKey"] = .string(descriptor.sessionKey)
+    modelParams["includeDetails"] = .bool(true)
     if let agentID { modelParams["agentId"] = .string(agentID) }
     let catalog = try await client.request("models.list", params: .object(modelParams))
     let choices = catalog.objectValue?["models"]?.arrayValue ?? []
@@ -1908,10 +1884,13 @@ public actor OpenClawGatewayCoordinator {
     }
     let resolutionID = UUID().uuidString.lowercased()
     do {
-      _ = try await socket.request("question.resolve", params: .object([
+      let result = try await socket.request("question.resolve", params: .object([
         "id": .string(id), "resolutionId": .string(resolutionID),
         "answers": .object(["answers": .object(answers.mapValues { .array($0.map(GatewayJSONValue.string)) })])
       ]), expectedConnectionGeneration: snapshot.transportGeneration)
+      guard result.objectValue?["status"]?.stringValue == "answered" else {
+        throw OpenClawGatewayClientError.rejected("This question was not answered. Refresh its current state.")
+      }
     } catch {
       guard Self.isRecoverableDeliveryError(error) else { throw error }
       // Probe the receipt, never resend an answer whose delivery is uncertain.
@@ -1919,7 +1898,8 @@ public actor OpenClawGatewayCoordinator {
       let receipt = try await socket.request("question.waitAnswer", params: .object([
         "id": .string(id), "timeoutMs": .number(1), "includeResolutionId": .bool(true)
       ]))
-      guard receipt.objectValue?["resolutionId"]?.stringValue == resolutionID else {
+      guard receipt.objectValue?["status"]?.stringValue == "answered",
+            receipt.objectValue?["resolutionId"]?.stringValue == resolutionID else {
         throw OpenClawGatewayClientError.rejected("Answer delivery could not be confirmed. Refresh; the answer was not resent.")
       }
     }
@@ -2031,20 +2011,11 @@ public actor OpenClawGatewayCoordinator {
     history: GatewayJSONValue,
     idempotencyKey: String
   ) -> String? {
-    let acceptedKeys = Set([
-      idempotencyKey,
-      "\(idempotencyKey):assistant",
-      "\(idempotencyKey):assistant-media",
-      "cli-assistant:\(idempotencyKey)",
-    ])
     let messages = history.objectValue?["messages"]?.arrayValue ?? []
     for value in messages.reversed() {
       guard let message = value.objectValue,
-            OpenClawGatewayHistoryMessage(payload: value)?.isAssistantResponse == true else { continue }
-      let metadata = message["__openclaw"]?.objectValue
-      let key = metadata?["idempotencyKey"]?.stringValue
-        ?? message["idempotencyKey"]?.stringValue
-      guard key.map(acceptedKeys.contains) == true else { continue }
+            let projected = OpenClawGatewayHistoryMessage(payload: value),
+            projected.isAssistantResponse, projected.runID == idempotencyKey else { continue }
       if let text = message["text"]?.stringValue { return text }
       let parts = message["content"]?.arrayValue ?? []
       let text = parts.compactMap { part -> String? in

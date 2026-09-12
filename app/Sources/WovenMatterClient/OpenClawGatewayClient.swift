@@ -243,7 +243,8 @@ public actor OpenClawGatewayClient {
       .base64URLEncodedString()
     let connectParams = Self.connectParameters(
       deviceID: deviceID, publicKey: publicKey, signature: signature,
-      signedAt: signedAt, nonce: nonce, scopes: scopes, token: token
+      signedAt: signedAt, nonce: nonce, scopes: scopes, token: sharedToken,
+      deviceToken: sharedToken == nil ? credentials.deviceToken : nil
     )
     try await send(Frame(type: "req", id: requestID, method: "connect", params: connectParams))
     let response = try await receiveFrame(from: socket)
@@ -301,7 +302,8 @@ public actor OpenClawGatewayClient {
     signedAt: Int,
     nonce: String,
     scopes: [String],
-    token: String? = nil
+    token: String? = nil,
+    deviceToken: String? = nil
   ) -> GatewayJSONValue {
     var parameters: [String: GatewayJSONValue] = [
       "minProtocol": .number(4), "maxProtocol": .number(4),
@@ -327,6 +329,7 @@ public actor OpenClawGatewayClient {
       "userAgent": .string("woven-matter-macos/1.0"),
     ]
     if let token { parameters["auth"] = .object(["token": .string(token)]) }
+    else if let deviceToken { parameters["auth"] = .object(["deviceToken": .string(deviceToken)]) }
     return .object(parameters)
   }
 
@@ -433,8 +436,13 @@ public actor OpenClawGatewayClient {
 
   static func sessionPreferences(from payload: GatewayJSONValue) -> OpenClawSessionPreferences {
     let object = payload.objectValue?["session"]?.objectValue ?? [:]
+    let model = object["model"]?.stringValue
+    let provider = object["modelProvider"]?.stringValue
     return OpenClawSessionPreferences(
-      model: object["model"]?.stringValue,
+      model: model.map { value in
+        guard !value.contains("/"), let provider, !provider.isEmpty else { return value }
+        return provider + "/" + value
+      },
       thinkingLevel: object["thinkingLevel"]?.stringValue
     )
   }
