@@ -637,7 +637,24 @@ public actor PiRPCClient {
         try input.write(contentsOf: data)
     }
 
-    private static func event(
+    private static func encodedJSON(_ value: Any?) -> String? {
+        guard let value, let data = try? JSONSerialization.data(withJSONObject: value, options: [.fragmentsAllowed, .sortedKeys]) else { return nil }
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    private static func toolResultText(_ value: Any?) -> String? {
+        if let text = value as? String { return text }
+        if let object = value as? [String: Any] {
+            return toolResultText(object["content"]) ?? (object["text"] as? String)
+        }
+        if let values = value as? [Any] {
+            let text = values.compactMap(toolResultText).joined(separator: "\n")
+            return text.isEmpty ? nil : text
+        }
+        return nil
+    }
+
+    static func event(
         from object: [String: Any]
     ) -> LocalACPEvent? {
         switch string(object["type"]) {
@@ -670,28 +687,24 @@ public actor PiRPCClient {
                 return nil
             }
             return .assistantBoundary
-        case "tool_execution_start":
-            return .activity(
-                AgentRunActivity(
-                    id: string(object["toolCallId"]) ?? "tool",
-                    kind: .tool,
-                    phase: "start",
-                    title: string(object["toolName"]) ?? "Tool",
-                    status: "pending",
-                    toolName: string(object["toolName"])
-                ),
-                appendsContent: false
-            )
-        case "tool_execution_end":
+        case "tool_execution_start", "tool_execution_update", "tool_execution_end":
+            let type = string(object["type"])
+            let isEnd = type == "tool_execution_end"
+            let isStart = type == "tool_execution_start"
             let failed = object["isError"] as? Bool == true
+            let result = object["result"] ?? object["partialResult"]
             return .activity(
                 AgentRunActivity(
                     id: string(object["toolCallId"]) ?? "tool",
                     kind: .tool,
-                    phase: "end",
+                    phase: isStart ? "start" : isEnd ? "end" : "update",
                     title: string(object["toolName"]),
-                    status: failed ? "failed" : "completed",
-                    toolName: string(object["toolName"])
+                    status: isEnd ? (failed ? "failed" : "completed") : "running",
+                    toolName: string(object["toolName"]),
+                    content: toolResultText(result),
+                    contentIsDelta: false,
+                    rawInputJSON: encodedJSON(object["args"]),
+                    rawOutputJSON: encodedJSON(result)
                 ),
                 appendsContent: false
             )

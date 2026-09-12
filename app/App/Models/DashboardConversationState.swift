@@ -5,6 +5,7 @@ import WovenMatterDashboardStore
 
 struct DashboardMessagePresentation: Sendable {
     let source: String
+    let displayedBody: String
     let status: String?
     let createdAt: String
     let document: ConversationMarkdownDocument?
@@ -157,9 +158,7 @@ struct DashboardConversationWindow: Equatable, Sendable {
     ) -> [WorkspaceRunActivityRecord] {
         var byID = Dictionary(uniqueKeysWithValues: first.map { ($0.id, $0) })
         for activity in second { byID[activity.id] = activity }
-        return byID.values.sorted {
-            $0.createdAt == $1.createdAt ? $0.id < $1.id : $0.createdAt < $1.createdAt
-        }
+        return byID.values.sorted(by: WorkspaceRunActivityRecord.precedes)
     }
 
     private static func merged(

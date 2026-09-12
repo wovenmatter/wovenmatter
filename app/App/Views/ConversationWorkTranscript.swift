@@ -18,23 +18,30 @@ struct ConversationWorkTranscript: View {
     let run: WorkspaceRunRecord
     let presentation: DashboardRunPresentation?
     let records: [WorkspaceRunActivityRecord]
+    let commentaryIDs: Set<String>
+    let hasFinalReply: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var expanded: Bool
 
     init(
         run: WorkspaceRunRecord,
         presentation: DashboardRunPresentation?,
-        records: [WorkspaceRunActivityRecord]
+        records: [WorkspaceRunActivityRecord],
+        commentaryIDs: Set<String> = [],
+        hasFinalReply: Bool = false
     ) {
         self.run = run
         self.presentation = presentation
         self.records = records
-        _expanded = State(initialValue: run.status == "running")
+        self.commentaryIDs = commentaryIDs
+        self.hasFinalReply = hasFinalReply
+        _expanded = State(initialValue: run.status != "completed" || !hasFinalReply)
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Button {
-                withAnimation(.easeInOut(duration: 0.16)) { expanded.toggle() }
+                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.16)) { expanded.toggle() }
             } label: {
                 HStack(spacing: 7) {
                     elapsedLabel
@@ -59,10 +66,15 @@ struct ConversationWorkTranscript: View {
                     ForEach(timelineItems) { item in
                         if item.activities.count == 1,
                            let activity = item.activities.first {
-                            ConversationActivityRow(
-                                activity: activity,
-                                runStatus: run.status
-                            )
+                            if activity.kind == .assistant {
+                                ConversationMarkdown(
+                                    document: ConversationMarkdownDocument(RemoteNoteEditEnvelope.redactingEnvelopes(in: activity.content ?? "")),
+                                    isStreaming: false
+                                )
+                                .textSelection(.enabled)
+                            } else {
+                                ConversationActivityRow(activity: activity, runStatus: run.status)
+                            }
                         } else {
                             ConversationToolGroup(
                                 activities: item.activities,
@@ -94,6 +106,7 @@ struct ConversationWorkTranscript: View {
         }
         .onChange(of: run.status) { _, status in
             if status == "running" { expanded = true }
+            else if status == "completed", hasFinalReply { expanded = false }
         }
     }
 
@@ -117,9 +130,9 @@ struct ConversationWorkTranscript: View {
     private var activities: [AgentRunActivity] {
         var order: [String] = []
         var values: [String: AgentRunActivity] = [:]
-        for record in records.sorted(by: {
-            $0.createdAt == $1.createdAt ? $0.id < $1.id : $0.createdAt < $1.createdAt
-        }) {
+        for record in records.filter({
+            $0.activity.phase != "clear" && ($0.activity.kind != .assistant || commentaryIDs.contains($0.activity.id))
+        }).sorted(by: WorkspaceRunActivityRecord.precedes) {
             let update = record.activity
             if let prior = values[update.id] {
                 values[update.id] = prior.merging(update)
@@ -154,7 +167,7 @@ struct ConversationWorkTranscript: View {
 
 private struct ConversationTimelineItem: Identifiable {
     let activities: [AgentRunActivity]
-    var id: String { activities.map(\.id).joined(separator: ":") }
+    var id: String { activities.first?.id ?? "empty" }
 }
 
 private struct ConversationToolGroup: View {
@@ -163,12 +176,11 @@ private struct ConversationToolGroup: View {
     @State private var expanded = false
 
     var body: some View {
-        if let activeActivity {
+        if !activeActivities.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
-                ConversationActivityRow(
-                    activity: activeActivity,
-                    runStatus: runStatus
-                )
+                ForEach(activeActivities) { activity in
+                    ConversationActivityRow(activity: activity, runStatus: runStatus)
+                }
                 if !priorActivities.isEmpty {
                     DisclosureGroup(isExpanded: $expanded) {
                         VStack(alignment: .leading, spacing: 8) {
@@ -212,20 +224,20 @@ private struct ConversationToolGroup: View {
         }
     }
 
-    private var activeActivity: AgentRunActivity? {
-        guard runStatus.lowercased() == "running" else { return nil }
-        return activities.last(where: {
+    private var activeActivities: [AgentRunActivity] {
+        guard runStatus.lowercased() == "running" else { return [] }
+        return activities.filter {
             conversationActivityShowsProgress(
                 runStatus: runStatus,
                 activityStatus: $0.status,
                 activityPhase: $0.phase
             )
-        })
+        }
     }
 
     private var priorActivities: [AgentRunActivity] {
-        guard let activeActivity else { return activities }
-        return activities.filter { $0.id != activeActivity.id }
+        let activeIDs = Set(activeActivities.map(\.id))
+        return activities.filter { !activeIDs.contains($0.id) }
     }
 
     private var summaryLabel: String {
@@ -295,7 +307,7 @@ private struct ConversationActivityRow: View {
     private var activityDetails: some View {
         VStack(alignment: .leading, spacing: 8) {
             if let expandedContent {
-                Text(expandedContent)
+                Text(String(expandedContent.prefix(120_000)) + (expandedContent.count > 120_000 ? "\n… (display truncated)" : ""))
                     .font(activity.kind == .thought
                         ? .system(size: 12.5)
                         : .system(size: 11.5, design: .monospaced))
@@ -327,6 +339,7 @@ private struct ConversationActivityRow: View {
 
     private var primaryLabel: String {
         let fallback: String = switch activity.kind {
+            case .assistant: "Commentary"
             case .thought: "Thinking"
             case .tool: "Used a tool"
             case .plan: "Updated the plan"
@@ -365,6 +378,7 @@ private struct ConversationActivityRow: View {
 
     private var systemImage: String {
         switch activity.kind {
+        case .assistant: "text.bubble"
         case .thought: "sparkles"
         case .tool: ConversationToolCategory(activity).systemImage
         case .plan: "list.bullet.clipboard"
@@ -390,7 +404,7 @@ private struct ConversationActivityRow: View {
                     .textCase(.uppercase)
                     .tracking(0.6)
                 ScrollView(.horizontal) {
-                    Text(value)
+                    Text(String(value.prefix(120_000)) + (value.count > 120_000 ? "\n… (display truncated)" : ""))
                         .font(.system(size: 11.5, design: .monospaced))
                         .textSelection(.enabled)
                         .fixedSize(horizontal: true, vertical: true)
@@ -499,6 +513,9 @@ private struct ConversationPlanProgress: View {
                 }
             }
             .padding(.leading, 4)
+            if let content = activity.content, !content.isEmpty {
+                ConversationMarkdown(document: ConversationMarkdownDocument(content), isStreaming: false)
+            }
         }
     }
 
