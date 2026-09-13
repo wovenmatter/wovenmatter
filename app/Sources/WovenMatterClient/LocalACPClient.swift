@@ -4,6 +4,7 @@ import WovenMatterCore
 
 public enum LocalACPEvent: Equatable, Sendable {
     case assistantChunk(String)
+    case assistantSnapshot(String)
     case assistantBoundary
     case activity(AgentRunActivity, appendsContent: Bool)
     case usage(UsageTokenCounts)
@@ -90,11 +91,13 @@ public struct LocalACPPlanRequest: Equatable, Sendable {
 public enum LocalACPInteractionRequest: Equatable, Sendable {
     case questions(LocalACPQuestionRequest)
     case plan(LocalACPPlanRequest)
+    case secret(prompt: String)
 }
 
 public enum LocalACPInteractionResponse: Equatable, Sendable {
     case answers([String: LocalACPQuestionAnswer])
     case planAccepted(Bool)
+    case secret(String)
     case cancelled
 }
 

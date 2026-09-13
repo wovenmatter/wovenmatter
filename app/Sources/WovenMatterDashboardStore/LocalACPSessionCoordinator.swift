@@ -63,6 +63,25 @@ struct LocalACPSessionDriver: Sendable {
         launch: LocalACPRuntimeLaunchConfiguration,
         workingDirectory: URL
     ) throws -> Self {
+        if launch.runtimeKind == .hermes {
+            let client = HermesGatewayClient(launch: launch)
+            return Self(
+                initializeSession: { cwd, existing, title, context in
+                    try await client.initializeSession(workingDirectory: cwd, existingSessionID: existing, title: title, systemPrompt: context)
+                },
+                prompt: { input, event, permission, interaction in
+                    try await client.prompt(input, onEvent: event, onPermission: permission, onInteraction: interaction)
+                },
+                configuration: { await client.sessionConfiguration() },
+                setConfiguration: { model, thinking in try await client.setSessionConfiguration(model: model, thinking: thinking) },
+                activeInput: { input in
+                    try await client.steer(input)
+                    return LocalACPActiveInputReceipt(completion: Task { nil })
+                },
+                cancel: { try await client.cancel() },
+                shutdown: { await client.shutdown() }
+            )
+        }
         if launch.runtimeKind == .pi {
             let client = PiRPCClient.start(
                 launch: launch,
@@ -447,6 +466,8 @@ public actor LocalACPSessionCoordinator {
                     switch event {
                     case .assistantChunk(let chunk):
                         try await streamWriter.append(chunk)
+                    case .assistantSnapshot(let content):
+                        try await streamWriter.replace(content)
                     case .assistantBoundary:
                         try await streamWriter.finishSegment()
                     case .activity(let activity, let appendsContent):
@@ -1279,7 +1300,7 @@ public actor LocalACPSessionCoordinator {
     }
 }
 
-private actor LocalACPAssistantStreamWriter {
+actor LocalACPAssistantStreamWriter {
     private static let immediateFlushCharacters = 4_096
     private static let coalescingDelay = Duration.milliseconds(50)
 
@@ -1288,6 +1309,8 @@ private actor LocalACPAssistantStreamWriter {
     private let conversationID: String
     private let onChange: LocalACPSessionCoordinator.ChangeHandler?
     private var buffer = ""
+    private var accumulatedText = ""
+    private var completedSegmentPrefix = ""
     private var flushTask: Task<Void, Never>?
     private var flushError: (any Error)?
     private var isPausedAtSegmentBoundary = false
@@ -1310,6 +1333,7 @@ private actor LocalACPAssistantStreamWriter {
         if let flushError { throw flushError }
         guard !chunk.isEmpty else { return }
         buffer += chunk
+        accumulatedText += chunk
         if buffer.count >= Self.immediateFlushCharacters {
             flushTask?.cancel()
             flushTask = nil
@@ -1321,6 +1345,19 @@ private actor LocalACPAssistantStreamWriter {
                 await self?.flushScheduled()
             }
         }
+    }
+
+    func replace(_ content: String) async throws {
+        await waitUntilResumed()
+        flushTask?.cancel(); flushTask = nil
+        if let flushError { throw flushError }
+        guard content.hasPrefix(completedSegmentPrefix) else {
+            throw LocalACPClientError.invalidResponse("The final response changed text before a steering boundary; earlier messages were preserved.")
+        }
+        buffer.removeAll(keepingCapacity: true)
+        accumulatedText = content
+        try database.replaceLocalACPAssistantMessage(runID: runID, content: String(content.dropFirst(completedSegmentPrefix.count)))
+        onChange?(DashboardConversationChange(conversationID: conversationID, runID: runID, phase: .content))
     }
 
     func finish() async throws {
@@ -1344,6 +1381,7 @@ private actor LocalACPAssistantStreamWriter {
         flushTask = nil
         if let flushError { throw flushError }
         try flush()
+        completedSegmentPrefix = accumulatedText
         isPausedAtSegmentBoundary = true
     }
 

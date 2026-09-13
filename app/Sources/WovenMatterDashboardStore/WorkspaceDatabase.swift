@@ -1571,13 +1571,27 @@ public final class WorkspaceDatabase: @unchecked Sendable {
     }
   }
 
+  public func knownHermesSessionIDs(home: String) throws -> Set<String> {
+    try lock.withLock {
+      let statement = try prepareUnlocked("SELECT acp_session_id FROM desktop_local_acp_sessions WHERE runtime_kind='hermes' AND acp_session_id IS NOT NULL")
+      defer { sqlite3_finalize(statement) }
+      var result: Set<String> = []
+      while sqlite3_step(statement) == SQLITE_ROW {
+        let parsed = HermesGatewayClient.parseIdentity(try text(statement, column: 0))
+        if parsed.home == nil || parsed.home == home { result.insert(parsed.storedID) }
+      }
+      return result
+    }
+  }
+
   @discardableResult
   public func createLocalACPSession(
     runtimeKind: AgentRuntimeKind,
     title: String,
     ownerDeviceID: UUID,
     createdAt: Date = Date(),
-    openCodeAssociation: (connectionID: String, sessionID: String)? = nil
+    openCodeAssociation: (connectionID: String, sessionID: String)? = nil,
+    hermesImport: HermesSessionImport? = nil
   ) throws -> String {
     guard LocalACPRuntimeCatalog.definition(for: runtimeKind) != nil,
           let codename = LocalACPRuntimeCatalog.conversationCodename(
@@ -1586,7 +1600,20 @@ public final class WorkspaceDatabase: @unchecked Sendable {
       throw LocalACPSessionDatabaseError.runtimeUnavailable
     }
     if openCodeAssociation != nil && runtimeKind != .opencode { throw LocalACPSessionDatabaseError.runtimeUnavailable }
+    if hermesImport != nil && runtimeKind != .hermes { throw LocalACPSessionDatabaseError.runtimeUnavailable }
     return try transaction {
+      if let imported = hermesImport {
+        let requested = HermesGatewayClient.parseIdentity(imported.identity)
+        guard requested.home != nil, !requested.storedID.isEmpty else { throw WorkspaceDatabaseError.corruptRow }
+        let existing = try prepareUnlocked("SELECT conversation_id, acp_session_id FROM desktop_local_acp_sessions WHERE runtime_kind='hermes' AND acp_session_id IS NOT NULL")
+        defer { sqlite3_finalize(existing) }
+        while sqlite3_step(existing) == SQLITE_ROW {
+          let linked = HermesGatewayClient.parseIdentity(try text(existing, column: 1))
+          if linked.storedID == requested.storedID && (linked.home == nil || linked.home == requested.home) {
+            return try text(existing, column: 0)
+          }
+        }
+      }
       if let link = openCodeAssociation {
         let existing = try prepareUnlocked("SELECT conversation_id FROM desktop_opencode_sessions WHERE connection_id=? AND session_id=?")
         defer { sqlite3_finalize(existing) }
@@ -1652,6 +1679,35 @@ public final class WorkspaceDatabase: @unchecked Sendable {
         defer { sqlite3_finalize(association) }
         try bind(conversationID, at: 1, to: association); try bind(link.connectionID, at: 2, to: association)
         try bind(link.sessionID, at: 3, to: association); try stepDone(association)
+      }
+      if let imported = hermesImport {
+        let association = try prepareUnlocked("UPDATE desktop_local_acp_sessions SET acp_session_id=? WHERE conversation_id=?")
+        defer { sqlite3_finalize(association) }
+        try bind(imported.identity, at: 1, to: association); try bind(conversationID, at: 2, to: association); try stepDone(association)
+        let message = try prepareUnlocked("""
+          INSERT INTO dashboard_messages (id, conversation_id, role, message_source, content, status,
+            governing_plane, authority_kind, authority_device_id, authority_agent_id, created_at, updated_at, desktop_owned)
+          VALUES (?, ?, ?, 'hermes_history', ?, 'completed', 'wovenmatter_macos', 'device_owned', ?, ?, ?, ?, 1)
+          """)
+        defer { sqlite3_finalize(message) }
+        var seen: Set<Double> = []
+        var previousDate = createdAt.addingTimeInterval(-0.001)
+        for row in imported.messages {
+          guard let rowID = row["id"].number, rowID >= 1, rowID <= 9_007_199_254_740_991, rowID.rounded() == rowID, seen.insert(rowID).inserted,
+                ["user", "assistant", "system", "tool"].contains(row["role"].text) else { throw WorkspaceDatabaseError.corruptRow }
+          let date = max(Date(timeIntervalSince1970: row["timestamp"].number ?? createdAt.timeIntervalSince1970), previousDate.addingTimeInterval(0.001))
+          previousDate = date
+          let rowTime = Self.timestamp(date)
+          var body = row["content"].string ?? (row["content"].isNull ? "" : row["content"].json)
+          if let reasoning = row["reasoning"].string ?? row["reasoning_content"].string, !reasoning.isEmpty { body = reasoning + "\n\n" + body }
+          if !row["tool_calls"].isNull { body += "\n\n" + row["tool_calls"].json }
+          sqlite3_reset(message); sqlite3_clear_bindings(message)
+          try bind("hermes-" + conversationID + "-" + String(Int64(rowID)), at: 1, to: message)
+          try bind(conversationID, at: 2, to: message); try bind(row["role"].text, at: 3, to: message)
+          try bind(body, at: 4, to: message); try bind(ownerDeviceID.uuidString.lowercased(), at: 5, to: message)
+          try bind(agentID, at: 6, to: message); try bind(rowTime, at: 7, to: message); try bind(rowTime, at: 8, to: message)
+          try stepDone(message)
+        }
       }
       return conversationID
     }

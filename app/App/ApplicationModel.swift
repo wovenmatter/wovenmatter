@@ -1845,6 +1845,18 @@ final class ApplicationModel {
         guard enabledLocalACPRuntimeKinds.contains(runtimeKind) else {
             return
         }
+        if runtimeKind == .hermes, let launch = localACPLaunchConfigurations[.hermes], let home = launch.environment["HERMES_HOME"] {
+            Task {
+                do {
+                    try await HermesGatewayService.shared.stopIfIdle(home: home)
+                    let state = localACPRuntimePreferences.disable(runtimeKind)
+                    enabledLocalACPRuntimeKinds = state.enabledRuntimeKinds
+                    shownLocalACPRuntimeKinds = state.shownRuntimeKinds
+                    refreshLocalACPRuntimesNow()
+                } catch { localRunError = error.localizedDescription }
+            }
+            return
+        }
         let state = localACPRuntimePreferences.disable(runtimeKind)
         enabledLocalACPRuntimeKinds = state.enabledRuntimeKinds
         shownLocalACPRuntimeKinds = state.shownRuntimeKinds
@@ -2991,6 +3003,26 @@ final class ApplicationModel {
                 await refreshLocalACPRuntimes()
             } catch { recordRuntimeFailure(kind, error: error, update: update) }
         }
+    }
+
+    func hermesGatewayConnection() async throws -> HermesGatewayConnection {
+        guard enabledLocalACPRuntimeKinds.contains(.hermes), let launch = localACPLaunchConfigurations[.hermes] else {
+            throw HermesGatewayError.message("Enable Hermes in Local Agent Workspace, then refresh this page.")
+        }
+        return try await HermesGatewayService.shared.ensure(launch: launch)
+    }
+
+    func knownHermesSessions(home: String) throws -> Set<String> {
+        try dashboardStore?.database.knownHermesSessionIDs(home: home) ?? []
+    }
+
+    func importHermesSession(connection: HermesGatewayConnection, sessionID: String) async throws {
+        guard let dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
+        let snapshot = try await HermesSessionHistory.load(connection: connection, sessionID: sessionID)
+        let owner = try await dashboardStore.dashboardDeviceID()
+        _ = try dashboardStore.database.createLocalACPSession(runtimeKind: .hermes, title: snapshot.title,
+            ownerDeviceID: owner, createdAt: snapshot.createdAt, hermesImport: snapshot)
+        await refreshWorkspace()
     }
 
     func refreshLocalACPRuntimesNow() {

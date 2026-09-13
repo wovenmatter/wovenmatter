@@ -89,7 +89,7 @@ struct RuntimeMaintenanceTests {
         #expect(RuntimeMaintenance.hermesCheck("Already up to date.\nUpdate available: 4 commits") == nil)
     }
 
-    @Test func hermesOfficialUpdateRequiresCleanIdleCheckoutAndVerifiesCurrentACP() throws {
+    @Test func hermesOfficialUpdateRequiresCleanIdleCheckoutAndVerifiesNativeGateway() throws {
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         try FileManager.default.createDirectory(at: root.appending(path: "venv/bin"), withIntermediateDirectories: true)
@@ -111,7 +111,8 @@ struct RuntimeMaintenanceTests {
             else if args == ["update", "--help"] { output = "--yes --check --plan" }
             else if args == ["update", "--yes"] { #expect(timeout == 600); updates += 1; output = "Update complete" }
             else if args == ["update", "--check"] { output = stale ? "Update available: 1 commit" : "Already up to date." }
-            else if args == ["acp", "--version"] { output = "0.21.2" }
+            else if args == ["--version"] { output = "0.21.2" }
+            else if args == ["serve", "--help"] { output = "--isolated --port" }
             else { output = "" }
             return LocalACPProcessResult(terminationStatus: 0, stdout: output)
         }
