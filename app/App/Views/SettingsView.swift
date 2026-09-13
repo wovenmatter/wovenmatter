@@ -157,7 +157,7 @@ struct SettingsView: View {
                 )
                 SettingsDestinationRow(
                     title: "Hermes",
-                    detail: "Native Gateway connection, profile, and conversation import.",
+                    detail: "Gateway connections and Woven Matter names for every Hermes agent.",
                     icon: { DashboardHarnessLogoIcon(logo: .hermes, size: 15) },
                     action: { section = .hermes }
                 )
