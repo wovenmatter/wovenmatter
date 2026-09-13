@@ -25,11 +25,11 @@ struct SettingsOpenClawView: View {
         ) {
             if !isWorkspaceScoped || workspaceID == nil {
                 SettingsCard(
-                    title: "Local Agent Workspace",
+                    title: "Local agent workspace",
                     detail: "Open an agent to manage its Woven Matter name and Gateway connection."
                 ) {
                     if openClawAgents.isEmpty {
-                        SettingsEmpty("Enable local OpenClaw to configure its agent and Gateway connection.")
+                        SettingsEmpty("No OpenClaw agents discovered.")
                     } else {
                         VStack(spacing: 8) {
                             ForEach(openClawAgents) { agent in
@@ -50,21 +50,41 @@ struct SettingsOpenClawView: View {
                     }
                 }
             }
-            ForEach(model.remoteWorkspaces.workspaces.filter { configuration in
-                isWorkspaceScoped ? configuration.id == workspaceID
-                    : model.remoteWorkspaces.isRuntimeEnabled(.openclaw, in: configuration)
-            }) { configuration in
-                RemoteWorkspaceInstanceSettingsCard(model: model.remoteWorkspaces,
-                    configuration: configuration, runtimeKind: .openclaw,
-                    onOpenAgentSettings: {
-                        Task {
-                            do { onOpenAgent(try await model.remoteOpenClawAgentID(for: configuration)) }
-                            catch { instanceError = error.localizedDescription }
+            if !isWorkspaceScoped || workspaceID != nil {
+                SettingsCard(title: "Remote agent workspaces", detail: "Discover agents in each connected workspace.") {
+                    let configurations = model.remoteWorkspaces.workspaces.filter { !isWorkspaceScoped || $0.id == workspaceID }
+                    if configurations.isEmpty { SettingsEmpty("No remote agent workspaces connected.") }
+                    ForEach(configurations) { configuration in
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(configuration.name).font(.system(size: 13, weight: .medium))
+                            Text(configuration.hostName).font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
+                            let agents = model.remoteWorkspaceAgents.filter { $0.runtimeKind == .openclaw && $0.runtimeDeviceID == configuration.id }
+                            if !agents.isEmpty {
+                                ForEach(agents) { agent in agentRow(agent) }
+                            } else if model.remoteWorkspaces.currentHarnesses(for: configuration).contains(where: { $0.id == .openclaw && $0.installationStatus == "installed" }) {
+                                SettingsInset {
+                                    HStack {
+                                        Text("OpenClaw").font(.system(size: 13, weight: .medium))
+                                        Spacer()
+                                        SettingsPill("Not connected", tone: .warning)
+                                        Button("Settings") {
+                                            Task {
+                                                do { onOpenAgent(try await model.remoteOpenClawAgentID(for: configuration)) }
+                                                catch { instanceError = error.localizedDescription }
+                                            }
+                                        }.buttonStyle(SettingsQuietButtonStyle())
+                                    }
+                                }
+                            } else { SettingsEmpty("No OpenClaw agents discovered.") }
+                            Button("Scan workspace") { model.remoteWorkspaces.refresh(configuration) }
+                                .buttonStyle(SettingsQuietButtonStyle())
+                                .disabled(model.remoteWorkspaces.busyWorkspaceIDs.contains(configuration.id))
                         }
-                    })
+                    }
+                }
             }
             if let instanceError { SettingsError(instanceError) }
-            SettingsNote("Each workspace owns its connection and gateway controls. Buzz is managed separately.")
+            SettingsNote("Each agent has its own connection and Gateway controls.")
         }
         .task(id: openClawAgents.map(\.id)) {
             for agent in openClawAgents
@@ -108,13 +128,13 @@ struct SettingsOpenClawView: View {
         if let link = model.openClawGatewayLink(agentID: agent.id) {
             return link.connectionStatus.label
         }
-        return "Not linked"
+        return "Not connected"
     }
 
     private func locationLabel(for agent: WorkspaceAgent) -> String {
         switch model.openClawGatewayLink(agentID: agent.id)?.location {
         case .buzzLocal: "Local Buzz workspace"
-        case .localAgentWorkspace: "Local Agent Workspace"
+        case .localAgentWorkspace: "Local agent workspace"
         case .remoteWorkspace: "Remote workspace"
         case nil: "Discovered OpenClaw"
         }

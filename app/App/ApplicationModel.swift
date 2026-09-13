@@ -138,6 +138,26 @@ final class ApplicationModel {
         await synchronizeRemoteOpenCodeInstances()
     }
 
+    func openCodeSettingsAgent(workspaceID: UUID?) async throws -> WorkspaceAgent {
+        guard let dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
+        if let workspaceID {
+            guard let configuration = remoteWorkspaces.configuration(id: workspaceID) else { throw ApplicationModelError.remoteHarnessUnavailable }
+            _ = try await dashboardStore.ensureRemoteHarnessAgent(runtimeKind: .opencode,
+                remoteWorkspaceID: workspaceID, remoteWorkspaceName: configuration.name)
+            await refreshWorkspace()
+        }
+        guard let agent = try dashboardStore.database.dashboardAgents().first(where: {
+            $0.runtimeKind == .opencode && (workspaceID == nil ? $0.governingPlane == .wovenmatterMacOS : $0.runtimeDeviceID == workspaceID)
+        }) else { throw ApplicationModelError.localACPRuntimeUnavailable }
+        return agent
+    }
+
+    func renameOpenCodeAgent(agentID: UUID, displayName: String) async throws {
+        guard let dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
+        try dashboardStore.database.renameOpenCodeAgent(id: agentID, displayName: displayName)
+        await refreshWorkspace()
+    }
+
     func remoteOpenClawAgentID(for configuration: RemoteWorkspaceConfiguration) async throws -> UUID {
         guard let dashboardStore, remoteWorkspaces.configuration(id: configuration.id) == configuration else {
             throw ApplicationModelError.remoteHarnessUnavailable

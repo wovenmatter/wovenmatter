@@ -163,7 +163,7 @@ struct OpenClawGatewayAgentSettingsView: View {
     private var locationLabel: String {
         switch link?.location {
         case .buzzLocal: "Local Buzz workspace"
-        case .localAgentWorkspace: "Local Agent Workspace"
+        case .localAgentWorkspace: "Local agent workspace"
         case .remoteWorkspace: "Remote workspace"
         case nil: "Discovered OpenClaw"
         }

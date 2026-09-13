@@ -14,7 +14,7 @@ struct SettingsBuzzWorkspacesView: View {
 
     var body: some View {
         SettingsPage(
-            title: "Buzz Agent Workspaces",
+            title: "Buzz agent workspaces",
             detail: "Optionally discover agents from Buzz data already stored on this Mac.",
             reservesRailControlSpace: reservesRailControlSpace,
             onBack: onBack
