@@ -24,7 +24,7 @@ struct SettingsHermesView: View {
             reservesRailControlSpace: reservesRailControlSpace, onBack: onBack) {
             if !isWorkspaceScoped || workspaceID == nil {
                 SettingsCard(title: "Local Agent Workspace", detail: "Open an agent to manage its Woven Matter name and Gateway connection.") {
-                    if agents.isEmpty { SettingsEmpty("No Hermes agents discovered") }
+                    if agents.isEmpty { SettingsEmpty("No Hermes agents discovered.") }
                     ForEach(agents) { agent in
                         SettingsInset {
                             HStack(spacing: 12) {
@@ -35,7 +35,7 @@ struct SettingsHermesView: View {
                                 }.frame(maxWidth: .infinity, alignment: .leading)
                                 let linked = model.isHermesGatewayLinked(agentID: agent.id)
                                 let ready = linked && !checking && model.hermesGatewayConnections[agent.id] != nil
-                                SettingsPill(checking && linked ? "Checking…" : ready ? "Ready" : linked ? "Not connected" : "Not linked",
+                                SettingsPill(checking && linked ? "Checking…" : ready ? "Ready" : "Not connected",
                                     tone: ready ? .neutral : .warning)
                                 Button("Settings") { onOpenAgent(agent.id) }.buttonStyle(SettingsQuietButtonStyle())
                             }
@@ -44,8 +44,8 @@ struct SettingsHermesView: View {
                 }
             }
             if !isWorkspaceScoped || workspaceID != nil {
-                SettingsCard(title: "Remote Agent Workspaces", detail: "Open an agent to manage its Woven Matter name and Gateway connection.") {
-                    if remoteConfigurations.isEmpty { SettingsEmpty("No remote workspaces connected.") }
+                SettingsCard(title: "Remote Agent Workspaces", detail: "Discover agents in each connected workspace.") {
+                    if remoteConfigurations.isEmpty { SettingsEmpty("No remote agent workspaces connected.") }
                     ForEach(remoteConfigurations) { configuration in
                         remoteWorkspace(configuration)
                     }
@@ -77,8 +77,6 @@ struct SettingsHermesView: View {
                         Text(configuration.name).font(.system(size: 13, weight: .medium))
                         Text(configuration.hostName).font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
                     }.frame(maxWidth: .infinity, alignment: .leading)
-                    Button("Test") { model.remoteWorkspaces.refresh(configuration) }
-                        .buttonStyle(SettingsQuietButtonStyle())
                 }
                 let found = model.remoteWorkspaces.currentHarnesses(for: configuration).first {
                     $0.id == .hermes && $0.installationStatus == "installed"
@@ -94,7 +92,7 @@ struct SettingsHermesView: View {
                         SettingsPill("Gateway unavailable", tone: .warning)
                     }
                     SettingsNote("Native Hermes Gateway connections are not yet supported in remote workspaces.")
-                } else { SettingsEmpty("No Hermes agents discovered") }
+                } else { SettingsEmpty("No Hermes agents discovered.") }
                 Button("Scan workspace") { model.remoteWorkspaces.refresh(configuration) }
                     .buttonStyle(SettingsQuietButtonStyle())
             }
