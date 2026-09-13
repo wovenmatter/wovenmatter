@@ -599,7 +599,39 @@ public final class WorkspaceDatabase: @unchecked Sendable {
     }
   }
 
+  public func knownOpenClawSessionKeys(agentID: UUID) throws -> Set<String> {
+    try knownSessionIDs(sql: "SELECT session_key FROM desktop_openclaw_gateway_sessions WHERE agent_id = ?", scope: agentID.uuidString.lowercased())
+  }
+
+  public func knownOpenCodeSessionIDs(connectionID: String) throws -> Set<String> {
+    try knownSessionIDs(sql: "SELECT session_id FROM desktop_opencode_sessions WHERE connection_id = ?", scope: connectionID)
+  }
+
+  private func knownSessionIDs(sql: String, scope: String) throws -> Set<String> {
+    try lock.withLock {
+      let statement = try prepareUnlocked(sql)
+      defer { sqlite3_finalize(statement) }
+      try bind(scope, at: 1, to: statement)
+      var ids: Set<String> = []
+      while true {
+        let code = sqlite3_step(statement)
+        if code == SQLITE_DONE { return ids }
+        guard code == SQLITE_ROW else { throw stepError() }
+        ids.insert(try text(statement, column: 0))
+      }
+    }
+  }
+
+  private func markSessionImportedUnlocked(conversationID: String) throws {
+    let statement = try prepareUnlocked("INSERT OR IGNORE INTO desktop_session_imports (conversation_id, imported_at) VALUES (?, ?)")
+    defer { sqlite3_finalize(statement) }
+    try bind(conversationID, at: 1, to: statement)
+    try bind(Self.timestamp(Date()), at: 2, to: statement)
+    try stepDone(statement)
+  }
+
   private func markOpenClawImportActivityUnlocked(conversationID: String) throws {
+    try markSessionImportedUnlocked(conversationID: conversationID)
     let timestamp = Self.timestamp(Date())
     let marker = try prepareUnlocked("INSERT INTO desktop_openclaw_import_activity (conversation_id, imported_at) VALUES (?, ?) ON CONFLICT(conversation_id) DO UPDATE SET imported_at = excluded.imported_at")
     defer { sqlite3_finalize(marker) }
@@ -1886,7 +1918,8 @@ public final class WorkspaceDatabase: @unchecked Sendable {
     title: String,
     ownerDeviceID: UUID,
     createdAt: Date = Date(),
-    openCodeAssociation: (connectionID: String, sessionID: String)? = nil
+    openCodeAssociation: (connectionID: String, sessionID: String)? = nil,
+    importedOpenCodeSnapshot: OpenCodeSessionSnapshot? = nil
   ) throws -> String {
     guard LocalACPRuntimeCatalog.definition(for: runtimeKind) != nil,
           let codename = LocalACPRuntimeCatalog.conversationCodename(
@@ -1895,6 +1928,10 @@ public final class WorkspaceDatabase: @unchecked Sendable {
       throw LocalACPSessionDatabaseError.runtimeUnavailable
     }
     if openCodeAssociation != nil && runtimeKind != .opencode { throw LocalACPSessionDatabaseError.runtimeUnavailable }
+    if let snapshot = importedOpenCodeSnapshot {
+      guard let link = openCodeAssociation, snapshot.info["id"].text == link.sessionID,
+            snapshot.olderCursor == nil else { throw WorkspaceDatabaseError.corruptRow }
+    }
     return try transaction {
       if let link = openCodeAssociation {
         let existing = try prepareUnlocked("SELECT conversation_id FROM desktop_opencode_sessions WHERE connection_id=? AND session_id=?")
@@ -1961,6 +1998,10 @@ public final class WorkspaceDatabase: @unchecked Sendable {
         defer { sqlite3_finalize(association) }
         try bind(conversationID, at: 1, to: association); try bind(link.connectionID, at: 2, to: association)
         try bind(link.sessionID, at: 3, to: association); try stepDone(association)
+      }
+      if let snapshot = importedOpenCodeSnapshot {
+        try markSessionImportedUnlocked(conversationID: conversationID)
+        try saveOpenCodeSnapshotUnlocked(snapshot, conversationID: conversationID, fallbackTitle: sessionTitle)
       }
       return conversationID
     }
@@ -4215,6 +4256,11 @@ public final class WorkspaceDatabase: @unchecked Sendable {
             ),
             'unread', unread, 'last_message_preview', last_message_preview,
             'openclaw_session_key', openclaw_session_key,
+            'imported_at', COALESCE(
+              (SELECT imported_at FROM desktop_session_imports WHERE conversation_id = dashboard_conversations.id),
+              (SELECT imported_at FROM desktop_openclaw_import_activity WHERE conversation_id = dashboard_conversations.id
+                AND instr(COALESCE(dashboard_conversations.openclaw_session_key, ''), ':wovenmatter:') = 0)
+            ),
             'last_message_at', last_message_at, 'folder_id', folder_id,
             'is_pinned', is_pinned,
             'is_archived', is_archived
@@ -4888,6 +4934,10 @@ public final class WorkspaceDatabase: @unchecked Sendable {
         device_id TEXT NOT NULL,
         bound_at TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS desktop_session_imports (
+        conversation_id TEXT PRIMARY KEY REFERENCES dashboard_conversations(id) ON DELETE CASCADE,
+        imported_at TEXT NOT NULL
+      );
       CREATE TABLE IF NOT EXISTS desktop_openclaw_import_activity (
         conversation_id TEXT PRIMARY KEY REFERENCES dashboard_conversations(id) ON DELETE CASCADE,
         imported_at TEXT NOT NULL
@@ -5429,6 +5479,11 @@ extension WorkspaceDatabase {
   public func saveOpenCodeSnapshot(_ snapshot: OpenCodeSessionSnapshot, conversationID: String) throws {
     let session = try localACPSession(conversationID: conversationID)
     try transaction {
+      try saveOpenCodeSnapshotUnlocked(snapshot, conversationID: conversationID, fallbackTitle: session.title)
+    }
+  }
+
+  private func saveOpenCodeSnapshotUnlocked(_ snapshot: OpenCodeSessionSnapshot, conversationID: String, fallbackTitle: String) throws {
       let now = Self.timestamp(Date())
       let json = String(decoding: try JSONEncoder().encode(snapshot), as: UTF8.self)
       let state = try prepareUnlocked("UPDATE desktop_opencode_sessions SET snapshot_json = ? WHERE conversation_id = ?")
@@ -5481,13 +5536,12 @@ extension WorkspaceDatabase {
           try bind(runStatus, at: 1, to: finish); try bind(runID, at: 2, to: finish); try stepDone(finish)
         }
       }
-      let update = try prepareUnlocked("UPDATE dashboard_conversations SET title=?, last_message_preview=?, last_message_at=?, updated_at=? WHERE id=?")
+      let update = try prepareUnlocked("UPDATE dashboard_conversations SET title=?, last_message_preview=?, last_message_at=MAX(?, COALESCE((SELECT imported_at FROM desktop_session_imports WHERE conversation_id=dashboard_conversations.id), '')), updated_at=? WHERE id=?")
       defer { sqlite3_finalize(update) }
-      try bind(snapshot.info["title"].string ?? session.title, at: 1, to: update)
+      try bind(snapshot.info["title"].string ?? fallbackTitle, at: 1, to: update)
       try bind(String(snapshot.messages.last.map(OpenCodeSessionSnapshot.text)?.prefix(240) ?? ""), at: 2, to: update)
       try bind(Self.timestamp(Date(timeIntervalSince1970: (snapshot.info["time"]["updated"].number ?? Date().timeIntervalSince1970 * 1000) / 1000)), at: 3, to: update)
       try bind(now, at: 4, to: update); try bind(conversationID, at: 5, to: update); try stepDone(update)
-    }
   }
 
   public func saveOpenCodeSubmission(conversationID: String, id: String, payload: OpenCodeValue, status: String) throws {

@@ -7,14 +7,15 @@ struct OpenClawSessionLibrary: View {
     let agentID: UUID
     @State private var sessions: [OpenClawGatewaySession] = []
     @State private var nextOffset: Int?
-    @State private var currentOffset = 0
+    @State private var pageOffsets = [0]
+    @State private var currentPage = 0
     @State private var busy = false
     @State private var feedback: String?
 
     var body: some View {
-        SettingsCard(title: "Shared OpenClaw sessions", detail: "Continue an existing session from OpenClaw without copying or starting a new chat. Imported sessions appear in this agent’s conversation list.") {
+        SettingsCard(title: "Shared OpenClaw sessions", detail: "Import an existing conversation with its original working directory.") {
             HStack {
-                Button("Refresh sessions") { load(offset: 0) }
+                Button("Refresh sessions") { pageOffsets = [0]; load(page: 0) }
                 if busy { ProgressView().controlSize(.small) }
             }
             .disabled(busy)
@@ -32,6 +33,7 @@ struct OpenClawSessionLibrary: View {
                             defer { busy = false }
                             do {
                                 try await model.importOpenClawSession(agentID: agentID, session: session)
+                                sessions.removeAll { $0.key == session.key }
                                 feedback = "“\(session.title)” is available in the conversation list."
                             } catch { feedback = error.localizedDescription }
                         }
@@ -41,24 +43,31 @@ struct OpenClawSessionLibrary: View {
                 }
             }
             HStack {
-                Button("Previous") { load(offset: max(0, currentOffset - 25)) }
-                    .disabled(busy || currentOffset == 0)
-                Text("Page \(currentOffset / 25 + 1) of up to 10").font(.caption)
-                Button("Next") { if let nextOffset { load(offset: nextOffset) } }
-                    .disabled(busy || nextOffset == nil || currentOffset >= 225)
+                Button("Previous") { load(page: currentPage - 1) }
+                    .disabled(busy || currentPage == 0)
+                Text("Page \(currentPage + 1) of up to 10").font(.caption)
+                Button("Next") {
+                    if let nextOffset {
+                        pageOffsets = Array(pageOffsets.prefix(currentPage + 1)) + [nextOffset]
+                        load(page: currentPage + 1)
+                    }
+                }
+                    .disabled(busy || nextOffset == nil || currentPage >= 9)
             }
             if let feedback { Text(feedback).font(.system(size: 12)).textSelection(.enabled) }
         }
     }
 
-    private func load(offset: Int) {
+    private func load(page index: Int) {
+        guard pageOffsets.indices.contains(index) else { return }
+        let offset = pageOffsets[index]
         busy = true; feedback = nil
         Task {
             defer { busy = false }
             do {
                 let page = try await model.openClawNativeSessions(agentID: agentID, offset: offset)
                 sessions = page.sessions
-                currentOffset = offset
+                currentPage = index
                 nextOffset = page.nextOffset.flatMap { $0 > offset ? $0 : nil }
                 if sessions.isEmpty { feedback = "No shared sessions are available." }
             } catch { feedback = error.localizedDescription }

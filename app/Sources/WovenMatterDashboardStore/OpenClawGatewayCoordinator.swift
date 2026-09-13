@@ -1784,22 +1784,47 @@ public actor OpenClawGatewayCoordinator {
     }
   }
 
-  public func nativeSessions(agentID: UUID, offset: Int = 0) async throws -> (sessions: [OpenClawGatewaySession], nextOffset: Int?) {
-    guard offset >= 0, offset < 250, offset % 25 == 0 else { throw OpenClawGatewayClientError.malformedFrame }
+  public func createWorkspaceSession(agentID: UUID, sessionKey: String, cwd: URL) async throws {
     let socket = try await client(agentID: agentID)
     let generation = connectionGenerations[agentID]
-    let result = try await socket.request("sessions.list", params: .object([
-      "limit": .number(25), "offset": .number(Double(offset))
+    let receipt = try await socket.request("sessions.create", params: .object([
+      "key": .string(sessionKey), "cwd": .string(cwd.path)
     ]))
     guard generation == connectionGenerations[agentID], !Task.isCancelled else { throw CancellationError() }
-    guard let row = result.objectValue, let sessions = row["sessions"]?.arrayValue else {
-      throw OpenClawGatewayClientError.malformedFrame
+    guard receipt.objectValue?["key"]?.stringValue == sessionKey,
+          receipt.objectValue?["entry"]?.objectValue?["spawnedCwd"]?.stringValue == cwd.path else {
+      throw OpenClawGatewayClientError.rejected("OpenClaw did not confirm this session's working directory.")
     }
-    return (sessions.compactMap(OpenClawGatewaySession.init(payload:)),
-      row["hasMore"]?.boolValue == true && offset < 225 ? offset + 25 : nil)
+  }
+
+  public func nativeSessions(agentID: UUID, offset: Int = 0) async throws -> (sessions: [OpenClawGatewaySession], nextOffset: Int?) {
+    guard offset >= 0 else { throw OpenClawGatewayClientError.malformedFrame }
+    let socket = try await client(agentID: agentID)
+    let generation = connectionGenerations[agentID]
+    var excluded = try database.knownOpenClawSessionKeys(agentID: agentID)
+    var eligible: [OpenClawGatewaySession] = []
+    var position = offset
+    while eligible.count < 25 {
+      let result = try await socket.request("sessions.list", params: .object([
+        "limit": .number(Double(25 - eligible.count)), "offset": .number(Double(position))
+      ]))
+      guard generation == connectionGenerations[agentID], !Task.isCancelled else { throw CancellationError() }
+      guard let row = result.objectValue, let rows = row["sessions"]?.arrayValue else { throw OpenClawGatewayClientError.malformedFrame }
+      for session in rows.compactMap(OpenClawGatewaySession.init(payload:)) {
+        if !session.key.contains(":wovenmatter:"), excluded.insert(session.key).inserted { eligible.append(session) }
+      }
+      position += rows.count
+      if row["hasMore"]?.boolValue != true { return (eligible, nil) }
+      guard !rows.isEmpty else { throw OpenClawGatewayClientError.malformedFrame }
+    }
+    return (eligible, position)
   }
 
   public func importSession(agentID: UUID, session: OpenClawGatewaySession) async throws -> String {
+    guard !session.key.contains(":wovenmatter:"),
+          !(try database.knownOpenClawSessionKeys(agentID: agentID)).contains(session.key) else {
+      throw NSError(domain: "OpenClawImport", code: 2, userInfo: [NSLocalizedDescriptionKey: "This session is already in Woven Matter. Refresh the list."])
+    }
     let socket = try await client(agentID: agentID)
     let generation = connectionGenerations[agentID]
     _ = try await socket.connect()

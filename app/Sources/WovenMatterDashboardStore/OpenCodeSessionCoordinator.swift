@@ -65,8 +65,75 @@ public actor OpenCodeSessionCoordinator {
             }
         }
         return try await call(connectionID: connectionID, method: "POST", path: "/api/session",
-            body: ["id": .string(id), "location": ["directory": .string(workspace.path)]])
+            body: ["id": .string(id), "location": ["directory": .string(workspace.path)], "metadata": ["wovenmatter": ["origin": "created"]]])
     }
+    public func importableSessions(connectionID: String, cursor: String? = nil) async throws -> (sessions: [OpenCodeValue], next: String?) {
+        guard let client = clients[connectionID] else { throw OpenCodeError.message("Connect to OpenCode first.") }
+        let token = connectionTokens[connectionID]
+        var excluded = try database.knownOpenCodeSessionIDs(connectionID: connectionID)
+        var result: [OpenCodeValue] = []
+        var next = cursor
+        var visited: Set<String> = []
+        repeat {
+            var query = ["limit": String(25 - result.count)]
+            if let next {
+                guard visited.insert(next).inserted else { throw OpenCodeError.message("OpenCode returned a repeated session cursor.") }
+                query["cursor"] = next
+            } else { query["order"] = "desc" }
+            let page = try await client.call("GET", "/api/session", query: query)
+            try Task.checkCancellation()
+            guard token == connectionTokens[connectionID] else { throw CancellationError() }
+            guard case .array(let rows) = page["data"] else { throw OpenCodeError.message("OpenCode returned an invalid session page.") }
+            for session in rows {
+                let id = session["id"].text
+                if !id.isEmpty, session["metadata"]["wovenmatter"]["origin"].text != "created", excluded.insert(id).inserted { result.append(session) }
+            }
+            next = page["data"].array.isEmpty ? nil : page["cursor"]["next"].string
+        } while result.count < 25 && next != nil
+        return (result, next)
+    }
+
+    public func completeImportSnapshot(connectionID: String, sessionID: String) async throws -> OpenCodeSessionSnapshot {
+        guard let client = clients[connectionID] else { throw OpenCodeError.message("Connect to OpenCode first.") }
+        let token = connectionTokens[connectionID]
+        let path = "/api/session/" + OpenCodeHTTPClient.segment(sessionID)
+        let info = try await client.call("GET", path)["data"]
+        guard info["metadata"]["wovenmatter"]["origin"].text != "created",
+              !(try database.knownOpenCodeSessionIDs(connectionID: connectionID)).contains(sessionID) else {
+            throw OpenCodeError.message("This session is already in Woven Matter. Refresh the list.")
+        }
+        guard info["id"].text == sessionID, !info["location"]["directory"].text.isEmpty else {
+            throw OpenCodeError.message("OpenCode did not return the session's original directory.")
+        }
+        var snapshot = OpenCodeSessionSnapshot()
+        snapshot.info = info
+        var descending: [OpenCodeValue] = []
+        var cursor: String?
+        var visited: Set<String> = []
+        repeat {
+            var query = ["limit": "100"]
+            if let cursor {
+                guard visited.insert(cursor).inserted else { throw OpenCodeError.message("OpenCode returned a repeated history cursor.") }
+                query["cursor"] = cursor
+            } else { query["order"] = "desc" }
+            let page = try await client.call("GET", path + "/message", query: query)
+            try Task.checkCancellation()
+            guard token == connectionTokens[connectionID] else { throw CancellationError() }
+            guard case .array(let messages) = page["data"], messages.allSatisfy({ !$0["id"].text.isEmpty }) else {
+                throw OpenCodeError.message("OpenCode returned an incomplete history page.")
+            }
+            descending += messages
+            cursor = messages.isEmpty ? nil : page["cursor"]["next"].string
+        } while cursor != nil
+        let latest = try await client.call("GET", path)["data"]
+        guard token == connectionTokens[connectionID], latest == info else {
+            throw OpenCodeError.message("This session changed during import. Please import it again.")
+        }
+        snapshot.mergeMessages(Array(descending.reversed()), replace: true)
+        snapshot.olderCursor = nil
+        return snapshot
+    }
+
     public func readFile(connectionID: String, path: String, query: [String: String]) async throws -> (Data, String) {
         guard let client = clients[connectionID] else { throw OpenCodeError.message("OpenCode is disconnected.") }
         return try await client.readFile(path: path, query: query)

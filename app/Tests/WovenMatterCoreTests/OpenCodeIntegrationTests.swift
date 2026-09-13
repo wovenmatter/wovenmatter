@@ -7,6 +7,61 @@ import WovenMatterCore
 
 @Suite(.serialized)
 struct OpenCodeIntegrationTests {
+    @Test func importPageExcludesKnownAndNativeSessionsAndStopsAtOnePage() async throws {
+        let fixture = OpenCodeFixture(); FixtureProtocol.fixture = fixture
+        fixture.sessions = (0..<60).map { ["id": .string("ses_\($0)"), "title": .string("Session \($0)")] }
+        fixture.sessions[1]["metadata"] = ["wovenmatter": ["origin": "created"]]
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let db = try WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
+        _ = try db.createLocalACPSession(runtimeKind: .opencode, title: "Known", ownerDeviceID: UUID(), openCodeAssociation: ("fixture", "ses_0"))
+        let session = fixtureSession()
+        let coordinator = OpenCodeSessionCoordinator(database: db, clientFactory: { OpenCodeHTTPClient(connection: $0, session: session) })
+        try await coordinator.connect(connection())
+        let first = try await coordinator.importableSessions(connectionID: "fixture")
+        #expect(first.sessions.count == 25)
+        #expect(first.sessions.first?["id"].text == "ses_2")
+        #expect(first.sessions.last?["id"].text == "ses_26")
+        #expect(fixture.listedCount == 27)
+        let second = try await coordinator.importableSessions(connectionID: "fixture", cursor: first.next)
+        #expect(second.sessions.first?["id"].text == "ses_27")
+        #expect(Set(first.sessions.map { $0["id"].text }).isDisjoint(with: second.sessions.map { $0["id"].text }))
+        await coordinator.shutdown()
+    }
+
+    @Test func fullImportPreservesDirectoryAndRecencyWithoutDuplicatingSessions() async throws {
+        let fixture = OpenCodeFixture(); FixtureProtocol.fixture = fixture
+        fixture.messages = (0..<250).map { message("msg_import_\($0)") }
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let db = try WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
+        let session = fixtureSession()
+        let coordinator = OpenCodeSessionCoordinator(database: db, clientFactory: { OpenCodeHTTPClient(connection: $0, session: session) })
+        try await coordinator.connect(connection())
+        let snapshot = try await coordinator.completeImportSnapshot(connectionID: "fixture", sessionID: "ses_fixture")
+        #expect(snapshot.messages.map { $0["id"] } == fixture.messages.map { $0["id"] })
+        #expect(snapshot.info["location"]["directory"].text == "/original/project")
+        #expect(snapshot.olderCursor == nil)
+        #expect(fixture.historyRequests == 4)
+        #expect(fixture.createCount == 0)
+        let id = try db.createLocalACPSession(runtimeKind: .opencode, title: "Imported", ownerDeviceID: UUID(),
+            openCodeAssociation: ("fixture", "ses_fixture"), importedOpenCodeSnapshot: snapshot)
+        let repeated = try db.createLocalACPSession(runtimeKind: .opencode, title: "Again", ownerDeviceID: UUID(),
+            openCodeAssociation: ("fixture", "ses_fixture"), importedOpenCodeSnapshot: snapshot)
+        #expect(repeated == id)
+        #expect(try db.knownOpenCodeSessionIDs(connectionID: "fixture") == ["ses_fixture"])
+        try db.saveOpenCodeSnapshot(snapshot, conversationID: id)
+        let reopened = try WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
+        #expect(try reopened.openCodeSnapshot(conversationID: id)?.messages.count == 250)
+        #expect(try reopened.conversationContent(id: id).messages.count == 250)
+        let record = try #require(try reopened.workspaceOverview().conversations.first { $0.id == id })
+        #expect(record.importedAt != nil)
+        #expect(record.lastMessageAt == record.importedAt)
+        await coordinator.shutdown()
+    }
+
     @Test func openCodeDownloadUsesPinnedPackageAndVerifiesExecutable() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -518,6 +573,8 @@ private final class OpenCodeFixture: @unchecked Sendable {
     var createCount = 0
     var version = OpenCodeConnection.supportedVersion
     var messages: [OpenCodeValue] = []
+    var sessions: [OpenCodeValue] = []
+    var listedCount = 0
     var losePromptResponse = false
     var acceptPrompt = true
     var promptCount = 0
@@ -563,12 +620,20 @@ private final class OpenCodeFixture: @unchecked Sendable {
             if path.hasSuffix("/form") { return (200, ["data": .array([["id": "form_pending"], ["id": "form_done"]])]) }
             if path.hasSuffix("/state") { return (200, ["data": ["status": path.contains("form_pending") ? "pending" : "answered"]]) }
             if path.hasSuffix("/inbox") { return (200, ["data": .array([])]) }
+            if path == "/api/session", request.httpMethod == "GET" {
+                let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems ?? []
+                let offset = query.first { $0.name == "cursor" }?.value.flatMap(Int.init) ?? 0
+                let limit = query.first { $0.name == "limit" }?.value.flatMap(Int.init) ?? 25
+                let rows = Array(sessions.dropFirst(offset).prefix(limit))
+                listedCount += rows.count
+                return (200, ["data": .array(rows), "cursor": ["next": offset + rows.count < sessions.count ? .string(String(offset + rows.count)) : .null]])
+            }
             if path == "/api/session", request.httpMethod == "POST" {
                 createCount += 1; sessionExists = true
                 return (200, ["data": ["id": "ses_fixture", "title": "Created fixture"]])
             }
             if path == "/api/session/ses_fixture", !sessionExists { return (404, [:]) }
-            if path == "/api/session/ses_fixture" { return (200, ["data": ["id": "ses_fixture", "title": "Shared fixture", "time": ["updated": .number(900)]]]) }
+            if path == "/api/session/ses_fixture" { return (200, ["data": ["id": "ses_fixture", "title": "Shared fixture", "location": ["directory": "/original/project"], "time": ["updated": .number(900)]]]) }
             return (404, [:])
         }
     }

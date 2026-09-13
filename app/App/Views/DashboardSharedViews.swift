@@ -590,7 +590,7 @@ struct DashboardConversationHoverCard: View {
                         harnessLogo: meta.runtimeKind.map {
                             DashboardHarnessLogo(runtimeKind: $0)
                         },
-                        text: runtime
+                        text: runtime + (presentation.conversation.importedAt == nil ? "" : " (imported)")
                     )
                 }
                 hoverRow(icon: meta.locationKind.glyph, text: meta.locationLabel)

@@ -46,6 +46,21 @@ struct OpenClawGatewayReviewTests {
     await fixture.coordinator.shutdown()
   }
 
+  @Test func newWorkspaceSessionSetsOnlyItsOwnDirectory() async throws {
+    let fixture = try ReviewGatewayFixture()
+    defer { fixture.remove() }
+    let key = "agent:eddie:wovenmatter:new"
+    try await fixture.coordinator.createWorkspaceSession(agentID: fixture.agentID, sessionKey: key,
+      cwd: URL(fileURLWithPath: "/shared/wovenmatter"))
+    #expect(await fixture.socket.creationParameters == .object([
+      "key": .string(key), "cwd": .string("/shared/wovenmatter")
+    ]))
+    let id = try fixture.database.importOpenClawGatewaySession(agentID: fixture.agentID, session: fixture.session)
+    #expect(try fixture.database.knownOpenClawSessionKeys(agentID: fixture.agentID).contains(fixture.session.key))
+    #expect(try fixture.database.openClawGatewaySession(conversationID: id).sessionKey == fixture.session.key)
+    await fixture.coordinator.shutdown()
+  }
+
   @Test func providerIdentityRepairsHistoryDuplicateAndContentRevisions() async throws {
     let fixture = try ReviewGatewayFixture()
     defer { fixture.remove() }
@@ -231,6 +246,7 @@ private struct ReviewCredentials: OpenClawGatewayCredentialStore {
 private actor ReviewGatewaySocket: OpenClawGatewaySocket {
   let denyHistory: Bool
   var modelParameters: GatewayJSONValue?
+  var creationParameters: GatewayJSONValue?
   var historyCalls = 0
   private var frames: [Data] = []
   private var waiter: CheckedContinuation<Data, any Error>?
@@ -249,9 +265,11 @@ private actor ReviewGatewaySocket: OpenClawGatewaySocket {
       || (row["params"]?.objectValue?["includeApprovals"] == .bool(true))
     if method == "chat.history" { historyCalls += 1 }
     if method == "models.list" { modelParameters = row["params"] }
+    if method == "sessions.create" { creationParameters = row["params"] }
     let payload: GatewayJSONValue
     switch method {
     case "connect": payload = .object(["protocol": .number(4)])
+    case "sessions.create": payload = .object(["key": row["params"]?.objectValue?["key"] ?? .null, "entry": .object(["spawnedCwd": row["params"]?.objectValue?["cwd"] ?? .null])])
     default: payload = .object(["messages": .array([]), "sessionInfo": .object(["hasActiveRun": .bool(false)])])
     }
     try push(.object(["type": .string("res"), "id": row["id"] ?? .null,

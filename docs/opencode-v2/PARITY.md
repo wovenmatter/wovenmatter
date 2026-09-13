@@ -40,3 +40,14 @@ Human acceptance should exercise the same session through Woven Matter and a v2-
 - Start on launch defaults on for an enabled integration. When off, startup may attach to an existing service but never launches one.
 - Stop on quit defaults off. When enabled, normal application termination waits for the shared server to stop. A stop failure offers Cancel quit or Quit anyway. Force Quit cannot run application shutdown handlers.
 - Disable remains separate: it disconnects Woven Matter without stopping the server.
+
+## Local session imports
+
+Settings lists eligible external sessions in pages of 25, up to ten pages, loading
+each page on demand. Native Woven Matter origin metadata and known connection/session
+associations exclude sessions already represented locally. Import reads all message
+pages and preserves the upstream session location without creating or patching the
+server session. The complete snapshot, association and import provenance commit
+atomically; import activity keeps the conversation at the top of Recents. The hover
+card shows `OpenCode (imported)`. Existing local snapshot rendering and native history
+paging continue to apply. The import library is local-only.

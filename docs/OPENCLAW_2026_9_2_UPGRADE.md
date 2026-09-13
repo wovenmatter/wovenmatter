@@ -20,8 +20,21 @@ compatibility. This source review does not update an installed Gateway.
 - Import fetches every available history page into private temporary files before
   one atomic database transaction. Native session keys and message dates remain
   intact, stable transcript anchors deduplicate rows, and reimport keeps one
-  conversation. The browsing cap does not limit transcript import. Changed
-  multi-page transcripts fail with a retry message instead of partial success.
+  conversation. Changed multi-page transcripts fail with a retry message instead of partial success.
+- New local OpenClaw chats use `sessions.create` with a session-specific `cwd`
+  pointing at the configured shared Woven Matter root. The response must confirm
+  that directory. Eddie's agent workspace, identity, defaults and imported sessions
+  are not changed; REPOS and Databases continue through the shared root's links.
+- Both local import lists exclude native Woven Matter sessions and already-linked
+  session identities, deduplicate entries and fetch only enough eligible records
+  for the requested page. Successful imports disappear from the list.
+- Local OpenCode v2 imports retain the server connection/session ID and original
+  location. Every message page is fetched before the association, complete snapshot
+  and imported marker are committed together. A changed session or failed page
+  leaves no partial import. New OpenCode sessions carry a native origin marker.
+- Imported conversations display `(imported)` only beside the harness in the
+  existing hover card. Stored import provenance survives restart and background
+  refresh; native Woven Matter conversations are not relabeled.
 - Native SQLite paging supplies older imported messages while scrolling. Separate
   import activity places old imports in Recents and survives scheduled history
   reconciliation without changing message timestamps.
