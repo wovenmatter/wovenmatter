@@ -178,6 +178,7 @@ private struct OpenCodeSessionLibrary: View {
             Text("Shared OpenCode sessions").font(.headline)
             HStack {
                 Button("Refresh sessions") { cursors = [nil]; load(page: 0) }
+                    .buttonStyle(SettingsQuietButtonStyle(horizontalPadding: 8, minimumHeight: 22))
                 if busy { ProgressView().controlSize(.small) }
             }
             ForEach(sessions, id: \.self) { session in
@@ -213,6 +214,7 @@ private struct OpenCodeSessionLibrary: View {
                     }
                 }.disabled(next == nil || page >= 9)
             }
+            .buttonStyle(SettingsQuietButtonStyle(horizontalPadding: 8, minimumHeight: 22))
             if let feedback { Text(feedback).font(.system(size: 12)).textSelection(.enabled) }
         }
         .disabled(busy || !model.isReady)
