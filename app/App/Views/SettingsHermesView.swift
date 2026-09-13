@@ -9,19 +9,22 @@ struct SettingsHermesView: View {
     var reservesRailControlSpace = false
     var onBack: () -> Void
     var onOpenAgent: (UUID) -> Void
-    @State private var busy = false
+    @State private var checking = false
     @State private var error: String?
 
     private var agents: [WorkspaceAgent] {
         model.localCLIAgents.filter { $0.runtimeKind == .hermes }
+    }
+    private var remoteConfigurations: [RemoteWorkspaceConfiguration] {
+        model.remoteWorkspaces.workspaces.filter { !isWorkspaceScoped || $0.id == workspaceID }
     }
 
     var body: some View {
         SettingsPage(title: "Hermes", detail: "Independent Hermes settings for this Mac and each remote workspace.",
             reservesRailControlSpace: reservesRailControlSpace, onBack: onBack) {
             if !isWorkspaceScoped || workspaceID == nil {
-                SettingsCard(title: "Local Agent Workspace", detail: "Connect an agent to manage its Woven Matter name and Gateway connection.") {
-                    if agents.isEmpty { SettingsEmpty("Enable local Hermes to configure its agent and Gateway connection.") }
+                SettingsCard(title: "Local Agent Workspace", detail: "Open an agent to manage its Woven Matter name and Gateway connection.") {
+                    if agents.isEmpty { SettingsEmpty("No Hermes agents discovered") }
                     ForEach(agents) { agent in
                         SettingsInset {
                             HStack(spacing: 12) {
@@ -30,44 +33,72 @@ struct SettingsHermesView: View {
                                     Text(agent.displayName).font(.system(size: 13, weight: .medium))
                                     Text("Local Agent Workspace").font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
                                 }.frame(maxWidth: .infinity, alignment: .leading)
-                                SettingsPill(model.hermesGatewayConnections[agent.id] != nil ? "Ready" : model.isHermesGatewayLinked(agentID: agent.id) ? "Linked" : "Not linked", tone: .neutral)
-                                if model.isHermesGatewayLinked(agentID: agent.id) {
-                                    Button("Settings") { onOpenAgent(agent.id) }.buttonStyle(SettingsQuietButtonStyle())
-                                } else {
-                                    Button(busy ? "Connecting…" : "Connect Gateway") {
-                                        Task {
-                                            busy = true; error = nil
-                                            defer { busy = false }
-                                            do { try await model.connectHermesGateway(agentID: agent.id) }
-                                            catch { self.error = error.localizedDescription }
-                                        }
-                                    }.buttonStyle(SettingsQuietButtonStyle())
-                                        .disabled(busy || !model.isLocalACPRuntimeCredentialAccessEnabled(.hermes))
-                                }
+                                let linked = model.isHermesGatewayLinked(agentID: agent.id)
+                                let ready = linked && !checking && model.hermesGatewayConnections[agent.id] != nil
+                                SettingsPill(checking && linked ? "Checking…" : ready ? "Ready" : linked ? "Not connected" : "Not linked",
+                                    tone: ready ? .neutral : .warning)
+                                Button("Settings") { onOpenAgent(agent.id) }.buttonStyle(SettingsQuietButtonStyle())
                             }
                         }
                     }
                 }
             }
-            ForEach(model.remoteWorkspaces.workspaces.filter { !isWorkspaceScoped || $0.id == workspaceID }) { configuration in
-                SettingsCard(title: configuration.name, detail: "Hermes on \(configuration.hostName).") {
-                    let found = model.remoteWorkspaces.currentHarnesses(for: configuration).contains { $0.id == .hermes }
-                    SettingsNote(found
-                        ? "Hermes is available in this workspace. Native Gateway connections require remote workspace service support that is not available yet."
-                        : "No Hermes agent discovered in this workspace.")
-                    Button("Scan workspace") { model.remoteWorkspaces.refresh(configuration) }
-                        .buttonStyle(SettingsQuietButtonStyle())
-                        .disabled(model.remoteWorkspaces.busyWorkspaceIDs.contains(configuration.id))
+            if !isWorkspaceScoped || workspaceID != nil {
+                SettingsCard(title: "Remote Agent Workspaces", detail: "Open an agent to manage its Woven Matter name and Gateway connection.") {
+                    if remoteConfigurations.isEmpty { SettingsEmpty("No remote workspaces connected.") }
+                    ForEach(remoteConfigurations) { configuration in
+                        remoteWorkspace(configuration)
+                    }
                 }
             }
             if let error { SettingsError(error) }
-            SettingsNote("Each workspace owns its connection and Gateway controls.")
+            SettingsNote("Each agent has its own connection and Gateway controls.")
         }
         .task {
             if !isWorkspaceScoped { model.remoteWorkspaces.refreshAll() }
             else if let workspaceID, let configuration = model.remoteWorkspaces.configuration(id: workspaceID) {
                 model.remoteWorkspaces.refresh(configuration)
             }
+            guard !isWorkspaceScoped || workspaceID == nil else { return }
+            checking = true; error = nil
+            defer { checking = false }
+            for agent in agents where model.isHermesGatewayLinked(agentID: agent.id) {
+                do { try await model.connectHermesGateway(agentID: agent.id) }
+                catch { self.error = error.localizedDescription }
+            }
+        }
+    }
+
+    private func remoteWorkspace(_ configuration: RemoteWorkspaceConfiguration) -> some View {
+        SettingsInset {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 12) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(configuration.name).font(.system(size: 13, weight: .medium))
+                        Text(configuration.hostName).font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
+                    }.frame(maxWidth: .infinity, alignment: .leading)
+                    Button("Test") { model.remoteWorkspaces.refresh(configuration) }
+                        .buttonStyle(SettingsQuietButtonStyle())
+                }
+                let found = model.remoteWorkspaces.currentHarnesses(for: configuration).first {
+                    $0.id == .hermes && $0.installationStatus == "installed"
+                }
+                if let found {
+                    HStack(spacing: 12) {
+                        DashboardHarnessLogoIcon(logo: .hermes, size: 20).frame(width: 28, height: 28)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(model.remoteWorkspaceAgents.first { $0.runtimeKind == .hermes && $0.runtimeDeviceID == configuration.id }?.displayName ?? found.displayName)
+                                .font(.system(size: 13, weight: .medium))
+                            Text(configuration.name).font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
+                        }.frame(maxWidth: .infinity, alignment: .leading)
+                        SettingsPill("Gateway unavailable", tone: .warning)
+                    }
+                    SettingsNote("Native Hermes Gateway connections are not yet supported in remote workspaces.")
+                } else { SettingsEmpty("No Hermes agents discovered") }
+                Button("Scan workspace") { model.remoteWorkspaces.refresh(configuration) }
+                    .buttonStyle(SettingsQuietButtonStyle())
+            }
+            .disabled(model.remoteWorkspaces.busyWorkspaceIDs.contains(configuration.id))
         }
     }
 }
