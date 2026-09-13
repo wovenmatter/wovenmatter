@@ -52,6 +52,20 @@ struct HermesIntegrationTests {
         #expect(try #require(later.lastMessageAt) > importedAt)
     }
 
+    @Test func hermesDisplayNameSurvivesCatalogRefresh() throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let database = try WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
+        let owner = UUID()
+        _ = try database.createLocalACPSession(runtimeKind: .hermes, title: "Chat", ownerDeviceID: owner)
+        let agent = try #require(database.dashboardAgents().first { $0.runtimeKind == .hermes })
+        try database.renameHermesAgent(id: agent.id, displayName: "  My Hermes  ")
+        try database.reconcileLocalCLIAgentCatalog(ownerDeviceID: owner)
+        #expect(try database.dashboardAgents().first { $0.id == agent.id }?.displayName == "My Hermes")
+        #expect(throws: (any Error).self) { try database.renameHermesAgent(id: UUID(), displayName: "Other") }
+    }
+
     @Test func importingAnAlreadyLinkedNativeConversationDoesNotDuplicateIt() throws {
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

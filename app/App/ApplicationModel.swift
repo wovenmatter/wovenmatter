@@ -3012,6 +3012,53 @@ final class ApplicationModel {
         }
     }
 
+    private(set) var hermesGatewayConnections: [UUID: HermesGatewayConnection] = [:]
+    private(set) var hermesGatewayCheckedAt: [UUID: Date] = [:]
+
+    func isHermesGatewayLinked(agentID: UUID) -> Bool {
+        guard enabledLocalACPRuntimeKinds.contains(.hermes),
+              let launch = localACPLaunchConfigurations[.hermes] else { return false }
+        let home = launch.environment["HERMES_HOME"] ?? FileManager.default.homeDirectoryForCurrentUser.appending(path: ".hermes").path
+        return applicationDefaults.string(forKey: "hermes.gateway.link." + agentID.uuidString) == home
+    }
+
+    func connectHermesGateway(agentID: UUID, restart: Bool = false) async throws {
+        guard localCLIAgents.contains(where: { $0.id == agentID && $0.runtimeKind == .hermes }) else {
+            throw HermesGatewayError.message("This Hermes agent is no longer available.")
+        }
+        hermesGatewayConnections[agentID] = nil
+        let connected: HermesGatewayConnection
+        if restart {
+            let current = try await hermesGatewayConnection()
+            try await HermesGatewayService.shared.stopIfIdle(home: current.home)
+        }
+        connected = try await hermesGatewayConnection()
+        let client = HermesGatewayRPC(connection: connected)
+        do {
+            try await client.connect()
+            let setup = try await client.call("setup.runtime_check")
+            guard setup["ok"].bool else {
+                throw HermesGatewayError.message("Hermes needs provider setup. Run hermes model for this profile, then reconnect.")
+            }
+            await client.disconnect()
+        } catch { await client.disconnect(); throw error }
+        hermesGatewayConnections[agentID] = connected
+        hermesGatewayCheckedAt[agentID] = Date()
+        applicationDefaults.set(connected.home, forKey: "hermes.gateway.link." + agentID.uuidString)
+    }
+
+    func unlinkHermesGateway(agentID: UUID) {
+        hermesGatewayConnections[agentID] = nil
+        hermesGatewayCheckedAt[agentID] = nil
+        applicationDefaults.removeObject(forKey: "hermes.gateway.link." + agentID.uuidString)
+    }
+
+    func renameHermesAgent(agentID: UUID, displayName: String) async throws {
+        guard let dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
+        try dashboardStore.database.renameHermesAgent(id: agentID, displayName: displayName)
+        await refreshWorkspace()
+    }
+
     func hermesGatewayConnection() async throws -> HermesGatewayConnection {
         guard enabledLocalACPRuntimeKinds.contains(.hermes), let launch = localACPLaunchConfigurations[.hermes] else {
             throw HermesGatewayError.message("Enable Hermes in Local Agent Workspace, then refresh this page.")

@@ -540,7 +540,7 @@ struct SettingsRemoteWorkspacesView: View {
         let busy = model.busyWorkspaceIDs.contains(workspace.id) || running || checking
         VStack(alignment: .trailing, spacing: 8) {
             HStack(spacing: 8) {
-                if harness.id == .opencode || harness.id == .openclaw {
+                if harness.id == .opencode || harness.id == .openclaw || harness.id == .hermes {
                     Button("More") {
                         onMoreRuntime(harness.id, workspace)
                     }.buttonStyle(SettingsQuietButtonStyle())

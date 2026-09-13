@@ -8,6 +8,8 @@ enum SettingsSection: Equatable {
     case openClaw
     case openCode
     case hermes
+    case hermesWorkspace(UUID?)
+    case hermesAgent(UUID)
     case openCodeWorkspace(UUID?)
     case openClawWorkspace(UUID?)
     case openClawAgent(UUID)
@@ -51,7 +53,17 @@ struct SettingsView: View {
                 )
             case .hermes:
                 SettingsHermesView(model: model, reservesRailControlSpace: reservesRailControlSpace,
-                    onBack: { section = .landing })
+                    onBack: { section = .landing },
+                    onOpenAgent: { providerReturnSection = .hermes; section = .hermesAgent($0) })
+            case .hermesWorkspace(let workspaceID):
+                SettingsHermesView(model: model, workspaceID: workspaceID, isWorkspaceScoped: true,
+                    reservesRailControlSpace: reservesRailControlSpace,
+                    onBack: { section = workspaceID == nil ? .localWorkspace : .remoteWorkspaces },
+                    onOpenAgent: { providerReturnSection = .hermesWorkspace(workspaceID); section = .hermesAgent($0) })
+            case .hermesAgent(let agentID):
+                SettingsHermesAgentView(model: model, agentID: agentID,
+                    reservesRailControlSpace: reservesRailControlSpace,
+                    onBack: { section = providerReturnSection })
             case .openCode:
                 SettingsOpenCodeView(model: model, reservesRailControlSpace: reservesRailControlSpace,
                     onBack: { section = .landing })
@@ -76,7 +88,7 @@ struct SettingsView: View {
                     model: model,
                     reservesRailControlSpace: reservesRailControlSpace,
                     onBack: { section = .landing },
-                    onMore: { section = $0 == .hermes ? .hermes : $0 == .opencode ? .openCodeWorkspace(nil) : .openClawWorkspace(nil) }
+                    onMore: { section = $0 == .hermes ? .hermesWorkspace(nil) : $0 == .opencode ? .openCodeWorkspace(nil) : .openClawWorkspace(nil) }
                 )
             case .remoteWorkspaces:
                 SettingsRemoteWorkspacesView(
@@ -88,7 +100,7 @@ struct SettingsView: View {
                     },
                     reservesRailControlSpace: reservesRailControlSpace,
                     onMoreRuntime: { kind, configuration in
-                        section = kind == .opencode ? .openCodeWorkspace(configuration.id) : .openClawWorkspace(configuration.id)
+                        section = kind == .hermes ? .hermesWorkspace(configuration.id) : kind == .opencode ? .openCodeWorkspace(configuration.id) : .openClawWorkspace(configuration.id)
                     },
                     onBack: { section = .landing }
                 )

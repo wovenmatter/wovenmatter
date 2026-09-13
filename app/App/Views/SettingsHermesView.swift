@@ -1,72 +1,193 @@
 import SwiftUI
 import WovenMatterClient
+import WovenMatterCore
 
 struct SettingsHermesView: View {
     @Bindable var model: ApplicationModel
+    var workspaceID: UUID?
+    var isWorkspaceScoped = false
     var reservesRailControlSpace = false
     var onBack: () -> Void
-    @State private var connection: HermesGatewayConnection?
+    var onOpenAgent: (UUID) -> Void
+    @State private var busy = false
+    @State private var error: String?
+
+    private var agents: [WorkspaceAgent] {
+        model.localCLIAgents.filter { $0.runtimeKind == .hermes }
+    }
+
+    var body: some View {
+        SettingsPage(title: "Hermes", detail: "Independent Hermes settings for this Mac and each remote workspace.",
+            reservesRailControlSpace: reservesRailControlSpace, onBack: onBack) {
+            if !isWorkspaceScoped || workspaceID == nil {
+                SettingsCard(title: "Local Agent Workspace", detail: "Connect an agent to manage its Woven Matter name and Gateway connection.") {
+                    if agents.isEmpty { SettingsEmpty("Enable local Hermes to configure its agent and Gateway connection.") }
+                    ForEach(agents) { agent in
+                        SettingsInset {
+                            HStack(spacing: 12) {
+                                DashboardHarnessLogoIcon(logo: .hermes, size: 20).frame(width: 28, height: 28)
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(agent.displayName).font(.system(size: 13, weight: .medium))
+                                    Text("Local Agent Workspace").font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
+                                }.frame(maxWidth: .infinity, alignment: .leading)
+                                SettingsPill(model.hermesGatewayConnections[agent.id] != nil ? "Ready" : model.isHermesGatewayLinked(agentID: agent.id) ? "Linked" : "Not linked", tone: .neutral)
+                                if model.isHermesGatewayLinked(agentID: agent.id) {
+                                    Button("Settings") { onOpenAgent(agent.id) }.buttonStyle(SettingsQuietButtonStyle())
+                                } else {
+                                    Button(busy ? "Connecting…" : "Connect Gateway") {
+                                        Task {
+                                            busy = true; error = nil
+                                            defer { busy = false }
+                                            do { try await model.connectHermesGateway(agentID: agent.id) }
+                                            catch { self.error = error.localizedDescription }
+                                        }
+                                    }.buttonStyle(SettingsQuietButtonStyle())
+                                        .disabled(busy || !model.isLocalACPRuntimeCredentialAccessEnabled(.hermes))
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            ForEach(model.remoteWorkspaces.workspaces.filter { !isWorkspaceScoped || $0.id == workspaceID }) { configuration in
+                SettingsCard(title: configuration.name, detail: "Hermes on \(configuration.hostName).") {
+                    let found = model.remoteWorkspaces.currentHarnesses(for: configuration).contains { $0.id == .hermes }
+                    SettingsNote(found
+                        ? "Hermes is available in this workspace. Native Gateway connections require remote workspace service support that is not available yet."
+                        : "No Hermes agent discovered in this workspace.")
+                    Button("Scan workspace") { model.remoteWorkspaces.refresh(configuration) }
+                        .buttonStyle(SettingsQuietButtonStyle())
+                        .disabled(model.remoteWorkspaces.busyWorkspaceIDs.contains(configuration.id))
+                }
+            }
+            if let error { SettingsError(error) }
+            SettingsNote("Each workspace owns its connection and Gateway controls.")
+        }
+        .task { model.remoteWorkspaces.refreshAll() }
+    }
+}
+
+struct SettingsHermesAgentView: View {
+    @Bindable var model: ApplicationModel
+    let agentID: UUID
+    var reservesRailControlSpace = false
+    var onBack: () -> Void
     @State private var sessions: [HermesValue] = []
     @State private var known: Set<String> = []
     @State private var busy = false
     @State private var error: String?
+    @State private var name = ""
     @State private var search = ""
+    @State private var page = 0
+    @State private var loaded = false
+
+    private var agent: WorkspaceAgent? { model.localCLIAgents.first { $0.id == agentID && $0.runtimeKind == .hermes } }
+    private var connection: HermesGatewayConnection? { model.hermesGatewayConnections[agentID] }
+    private var filtered: [HermesValue] {
+        sessions.filter { !known.contains($0["id"].text) && (search.isEmpty || $0["title"].text.localizedCaseInsensitiveContains(search)) }
+    }
+    private var pageCount: Int { max(1, (filtered.count + 24) / 25) }
 
     var body: some View {
-        SettingsPage(title: "Hermes", detail: "Connect to Hermes and continue its conversations in Woven Matter.",
+        SettingsPage(title: agent?.displayName ?? "Hermes", detail: "Woven Matter name and live Gateway connection for this agent.",
             reservesRailControlSpace: reservesRailControlSpace, onBack: onBack) {
-            SettingsCard(title: "Connection", detail: "Uses the installed Hermes native Gateway and its selected profile.") {
-                SettingsValueRow(label: "Profile home", value: connection?.home ?? "Not connected")
-                SettingsValueRow(label: "Gateway", value: connection.map { "127.0.0.1:\($0.port)" } ?? "Enable Hermes in Local Agent Workspace")
-                Text("Model and thinking choices apply to each conversation. Hermes keeps its own authentication and configuration.")
-                    .font(.system(size: 11.5)).foregroundStyle(DashboardPalette.mutedForeground)
-                Button(busy ? "Refreshing…" : "Refresh") { Task { await refresh() } }
-                    .buttonStyle(SettingsQuietButtonStyle()).disabled(busy)
-                if let error { Text(error).font(.system(size: 12)).foregroundStyle(DashboardPalette.mutedForeground) }
-            }
-            SettingsCard(title: "Conversations", detail: "Up to 100 recent Hermes sessions. Imported conversations retain their original workspace.") {
-                TextField("Search listed conversations", text: $search).textFieldStyle(.roundedBorder)
-                if sessions.isEmpty { Text("No sessions listed.").font(.system(size: 12)).foregroundStyle(DashboardPalette.mutedForeground) }
-                ForEach(sessions.filter { !known.contains($0["id"].text) && (search.isEmpty || $0["title"].text.localizedCaseInsensitiveContains(search)) }, id: \.self) { row in
-                    HStack(spacing: 10) {
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(row["title"].text.isEmpty ? "Untitled Hermes conversation" : row["title"].text)
-                                .font(.system(size: 12.5, weight: .medium)).lineLimit(1)
-                            Text(row["source"].text).font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
-                        }
-                        Spacer(minLength: 8)
-                        let id = row["id"].text
-                        Button("Import") {
-                            Task { await importSession(id) }
-                        }.buttonStyle(SettingsQuietButtonStyle()).disabled(busy)
+            if agent != nil {
+                SettingsCard(title: "Gateway connection", detail: "Live connection state for this Hermes on this Mac.") {
+                    HStack {
+                        SettingsPill(connection != nil ? "Ready" : "Not connected", tone: .neutral)
+                        Spacer()
+                        Button("Reconnect") { Task { await connect() } }.buttonStyle(SettingsQuietButtonStyle())
+                        Button("Unlink") {
+                            model.unlinkHermesGateway(agentID: agentID)
+                            onBack()
+                        }.buttonStyle(SettingsQuietButtonStyle())
+                    }
+                    SettingsValueRow(label: "Location", value: "Local Agent Workspace")
+                    if let checked = model.hermesGatewayCheckedAt[agentID] {
+                        SettingsValueRow(label: "Last checked", value: checked.formatted(date: .omitted, time: .standard))
                     }
                 }
-            }
-        }.task { await refresh() }
+                SettingsCard(title: "Woven Matter name", detail: "Changes how this agent appears in Woven Matter. It does not rename or reconfigure Hermes.") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Agent name").font(.system(size: 11, weight: .medium)).foregroundStyle(DashboardPalette.mutedForeground)
+                        TextField("Agent name", text: $name).textFieldStyle(.roundedBorder)
+                        Button("Save Woven Matter Name") {
+                            Task {
+                                busy = true; error = nil
+                                defer { busy = false }
+                                do { try await model.renameHermesAgent(agentID: agentID, displayName: name) }
+                                catch { self.error = error.localizedDescription }
+                            }
+                        }.buttonStyle(DashboardPrimaryButtonStyle()).disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }
+                }
+                SettingsCard(title: "Shared Hermes sessions", detail: "Import an existing conversation with its original working directory. Up to 100 recent sessions, 25 per page.") {
+                    Button("Refresh sessions") { Task { await refresh() } }
+                        .buttonStyle(SettingsQuietButtonStyle(horizontalPadding: 8, minimumHeight: 22)).disabled(connection == nil)
+                    if loaded {
+                        TextField("Search listed conversations", text: $search).textFieldStyle(.roundedBorder)
+                            .onChange(of: search) { _, _ in page = 0 }
+                        if filtered.isEmpty { SettingsEmpty("No sessions available to import.") }
+                        ForEach(Array(filtered.dropFirst(page * 25).prefix(25)), id: \.self) { row in
+                            HStack(spacing: 10) {
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(row["title"].text.isEmpty ? "Untitled Hermes conversation" : row["title"].text)
+                                        .font(.system(size: 12.5, weight: .medium)).lineLimit(1)
+                                    Text(row["source"].text).font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
+                                }
+                                Spacer(minLength: 8)
+                                Button("Import") { Task { await importSession(row["id"].text) } }
+                                    .buttonStyle(SettingsQuietButtonStyle(horizontalPadding: 8, minimumHeight: 22))
+                            }
+                        }
+                        HStack(spacing: 8) {
+                            Button("Previous") { page -= 1 }.disabled(page == 0)
+                            Text("Page \(page + 1) of \(pageCount)").font(.system(size: 10))
+                            Button("Next") { page += 1 }.disabled(page + 1 >= pageCount)
+                        }.buttonStyle(SettingsQuietButtonStyle(horizontalPadding: 8, minimumHeight: 22))
+                    }
+                }
+                SettingsCard(title: "Gateway", detail: "Restarts this Gateway when idle, reconnects Woven Matter, and confirms that it is healthy.") {
+                    Button("Restart Gateway") { Task { await connect(restart: true) } }
+                        .buttonStyle(DashboardPrimaryButtonStyle())
+                }
+            } else { SettingsEmpty("This agent is no longer available.") }
+            if let error { SettingsError(error) }
+        }
+        .disabled(busy)
+        .task(id: agentID) {
+            name = agent?.displayName ?? ""
+            if model.isHermesGatewayLinked(agentID: agentID) { await connect() }
+        }
     }
 
-    private func refresh() async {
+    private func connect(restart: Bool = false) async {
         guard !busy else { return }
         busy = true; error = nil
         defer { busy = false }
-        do {
-            let connected = try await model.hermesGatewayConnection()
-            connection = connected
-            let rpc = HermesGatewayRPC(connection: connected)
-            let fetched: [HermesValue]
-            do {
-                try await rpc.connect()
-                fetched = try await rpc.call("session.list", ["limit": .number(100)])["sessions"].array
-                await rpc.disconnect()
-            } catch { await rpc.disconnect(); throw error }
-            known = try model.knownHermesSessions(home: connected.home)
-            sessions = fetched.filter { !known.contains($0["id"].text) }
-        } catch { self.error = error.localizedDescription }
+        do { try await model.connectHermesGateway(agentID: agentID, restart: restart) }
+        catch { self.error = error.localizedDescription }
     }
-    private func importSession(_ id: String) async {
+
+    private func refresh() async {
         guard !busy, let connection else { return }
         busy = true; error = nil
         defer { busy = false }
+        let rpc = HermesGatewayRPC(connection: connection)
+        do {
+            try await rpc.connect()
+            let fetched = try await rpc.call("session.list", ["limit": .number(100)])["sessions"].array
+            await rpc.disconnect()
+            known = try model.knownHermesSessions(home: connection.home)
+            sessions = fetched.filter { !known.contains($0["id"].text) }
+            page = 0; loaded = true
+        } catch { await rpc.disconnect(); self.error = error.localizedDescription }
+    }
+
+    private func importSession(_ id: String) async {
+        guard !busy, let connection else { return }
+        busy = true; error = nil
+        defer { busy = false; page = min(page, pageCount - 1) }
         do {
             known = try model.knownHermesSessions(home: connection.home)
             sessions.removeAll { known.contains($0["id"].text) }

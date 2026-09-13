@@ -4280,6 +4280,48 @@ public final class WorkspaceDatabase: @unchecked Sendable {
     }
   }
 
+  public func renameHermesAgent(
+    id: UUID,
+    displayName: String,
+    updatedAt: Date = Date()
+  ) throws {
+    let cleanName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !cleanName.isEmpty else {
+      throw WorkspaceDatabaseError.execute("Enter a Woven Matter agent name.")
+    }
+    try transaction {
+      let rawID = id.uuidString.lowercased()
+      let ownership = try prepareUnlocked("""
+        SELECT 1
+        FROM dashboard_agents
+        WHERE id = ? AND runtime_kind = 'hermes'
+          AND authority_kind = 'device_owned' AND desktop_owned = 1
+          AND deleted_at IS NULL
+        """)
+      try bind(rawID, at: 1, to: ownership)
+      let code = sqlite3_step(ownership)
+      guard code == SQLITE_ROW else {
+        sqlite3_finalize(ownership)
+        throw code == SQLITE_DONE
+          ? WorkspaceDatabaseError.execute("This Hermes agent is not owned by Woven Matter on this Mac.")
+          : stepError()
+      }
+      sqlite3_finalize(ownership)
+
+      let statement = try prepareUnlocked("""
+        UPDATE dashboard_agents
+        SET display_name = ?, revision = revision + 1, updated_at = ?
+        WHERE id = ? AND display_name IS NOT ?
+        """)
+      defer { sqlite3_finalize(statement) }
+      try bind(cleanName, at: 1, to: statement)
+      try bind(Self.timestamp(updatedAt), at: 2, to: statement)
+      try bind(rawID, at: 3, to: statement)
+      try bind(cleanName, at: 4, to: statement)
+      try stepDone(statement)
+    }
+  }
+
   public func workspaceOverview() throws -> WorkspaceSnapshot {
     try lock.withLock {
       var folders: [WorkspaceFolderRecord] = []
