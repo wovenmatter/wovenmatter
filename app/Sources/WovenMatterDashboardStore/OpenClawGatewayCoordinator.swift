@@ -1099,7 +1099,8 @@ public actor OpenClawGatewayCoordinator {
         )
         if let response = Self.assistantText(
           history: history,
-          idempotencyKey: remoteRunID
+          idempotencyKey: remoteRunID,
+          knownInputIDs: Set(try database.openClawRunAssistantIDs(runID: runID).keys)
         ) {
           try database.replaceLocalACPAssistantMessage(
             runID: runID,
@@ -1900,7 +1901,7 @@ public actor OpenClawGatewayCoordinator {
           await self?.observeRecoveredRun(run: run, conversationID: conversationID)
         }
       } else if history.isIdle {
-        let final = history.messages.last { $0.runID == latestRemoteID && $0.isAssistantResponse }
+        let final = history.messages.last { $0.correlatedRunID(knownInputIDs: Set(inputs.keys)) == latestRemoteID && $0.isAssistantResponse }
         try database.completeLocalACPRun(runID: run.runID, error: final == nil
           ? "OpenClaw delivery could not be confirmed after reconnect. Check the shared session before retrying; this input was not resent."
           : final?.terminalError)
@@ -1917,7 +1918,8 @@ public actor OpenClawGatewayCoordinator {
         if history.isIdle {
           let cancelled = activeRuns[run.runID]?.cancelRequested == true
           let latestRemoteID = activeRuns[run.runID]?.lastRemoteRunID ?? run.runID
-          let final = history.messages.last { $0.isAssistantResponse && $0.runID == latestRemoteID }
+          let inputs = try database.openClawRunAssistantIDs(runID: run.runID)
+          let final = history.messages.last { $0.isAssistantResponse && $0.correlatedRunID(knownInputIDs: Set(inputs.keys)) == latestRemoteID }
           try database.completeLocalACPRun(runID: run.runID, error: cancelled
             ? "The OpenClaw Gateway run was cancelled."
             : (final == nil ? "OpenClaw delivery could not be confirmed after reconnect. This input was not resent." : final?.terminalError))
@@ -1934,13 +1936,14 @@ public actor OpenClawGatewayCoordinator {
 
   private static func assistantText(
     history: GatewayJSONValue,
-    idempotencyKey: String
+    idempotencyKey: String,
+    knownInputIDs: Set<String>
   ) -> String? {
     let messages = history.objectValue?["messages"]?.arrayValue ?? []
     for value in messages.reversed() {
       guard let message = value.objectValue,
             let projected = OpenClawGatewayHistoryMessage(payload: value),
-            projected.isAssistantResponse, projected.runID == idempotencyKey else { continue }
+            projected.isAssistantResponse, projected.correlatedRunID(knownInputIDs: knownInputIDs) == idempotencyKey else { continue }
       if let text = message["text"]?.stringValue { return text }
       let parts = message["content"]?.arrayValue ?? []
       let text = parts.compactMap { part -> String? in

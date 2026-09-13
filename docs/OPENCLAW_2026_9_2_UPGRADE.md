@@ -27,7 +27,12 @@ compatibility. This source review does not update an installed Gateway.
   reconciliation without changing message timestamps.
 - Gateway-owned runs recover without resending uncertain input. Missing liveness
   remains unknown; native run identity and exact input idempotency keys reconcile
-  optimistic rows. Live output is protected from stale history.
+  optimistic rows. Exact persisted input keys take precedence; provider-specific
+  keys fall back to explicit Gateway run identity. Reconciliation repairs orphan
+  history duplicates by native record identity while keeping local run references;
+  unique native projections survive content revisions. Separate records are not
+  merged merely because their text matches. Live output is protected from stale
+  history.
 - The existing composer retains model/thinking selection, prepared session-scoped
   model discovery, provider-qualified models, argument hints and stop behavior.
   Existing in-conversation permission handling retains its connection fences and
@@ -52,7 +57,9 @@ The existing `scripts/test-changes.sh --all` checks cover static/privacy checks,
 remote tests, Swift tests, an isolated macOS Debug build and native bundle
 validation. Tests exclusively covering the removed sheet APIs were removed;
 transport, history, recovery and in-conversation approval coverage remain. No new
-test infrastructure was introduced for these UI follow-ups.
+test infrastructure was introduced for these UI follow-ups. Focused duplicate
+repair regressions cover provider keys, content revisions, steering precedence
+and distinct same-text replies.
 
 The manager previously verified local Link Gateway reaches Ready. The manager
 owns shared Dev integration and live acceptance of the final head: browsing,
