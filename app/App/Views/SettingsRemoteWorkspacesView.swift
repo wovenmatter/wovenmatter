@@ -26,11 +26,11 @@ struct SettingsRemoteWorkspacesView: View {
 
     var body: some View {
         SettingsPage(
-            title: selectedWorkspace?.name ?? "Remote Agent Workspaces",
+            title: selectedWorkspace?.name ?? "Remote agent workspaces",
             detail: selectedWorkspace.map(workspaceLocation)
                 ?? "Create independent Woven Matter workspaces on Linux machines through your existing SSH configuration.",
             reservesRailControlSpace: reservesRailControlSpace,
-            backTitle: selectedWorkspace == nil ? "Settings" : "Remote Agent Workspaces",
+            backTitle: selectedWorkspace == nil ? "Settings" : "Remote agent workspaces",
             onBack: {
                 if selectedWorkspaceID == nil {
                     onBack()

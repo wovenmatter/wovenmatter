@@ -1602,7 +1602,7 @@ public final class WorkspaceDatabase: @unchecked Sendable {
       ON CONFLICT(id) DO UPDATE SET
         user_id = excluded.user_id,
         codename = excluded.codename,
-        display_name = excluded.display_name,
+        display_name = CASE WHEN excluded.runtime_kind = 'opencode' THEN dashboard_agents.display_name ELSE excluded.display_name END,
         icon = excluded.icon,
         execution_location = excluded.execution_location,
         agent_bucket = excluded.agent_bucket,
@@ -4200,6 +4200,48 @@ public final class WorkspaceDatabase: @unchecked Sendable {
         sqlite3_finalize(ownership)
         throw code == SQLITE_DONE
           ? WorkspaceDatabaseError.execute("This OpenClaw is not owned by Woven Matter on this Mac.")
+          : stepError()
+      }
+      sqlite3_finalize(ownership)
+
+      let statement = try prepareUnlocked("""
+        UPDATE dashboard_agents
+        SET display_name = ?, revision = revision + 1, updated_at = ?
+        WHERE id = ? AND display_name IS NOT ?
+        """)
+      defer { sqlite3_finalize(statement) }
+      try bind(cleanName, at: 1, to: statement)
+      try bind(Self.timestamp(updatedAt), at: 2, to: statement)
+      try bind(rawID, at: 3, to: statement)
+      try bind(cleanName, at: 4, to: statement)
+      try stepDone(statement)
+    }
+  }
+
+  public func renameOpenCodeAgent(
+    id: UUID,
+    displayName: String,
+    updatedAt: Date = Date()
+  ) throws {
+    let cleanName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !cleanName.isEmpty else {
+      throw WorkspaceDatabaseError.execute("Enter a Woven Matter agent name.")
+    }
+    try transaction {
+      let rawID = id.uuidString.lowercased()
+      let ownership = try prepareUnlocked("""
+        SELECT 1
+        FROM dashboard_agents
+        WHERE id = ? AND runtime_kind = 'opencode'
+          AND authority_kind = 'device_owned' AND desktop_owned = 1
+          AND deleted_at IS NULL
+        """)
+      try bind(rawID, at: 1, to: ownership)
+      let code = sqlite3_step(ownership)
+      guard code == SQLITE_ROW else {
+        sqlite3_finalize(ownership)
+        throw code == SQLITE_DONE
+          ? WorkspaceDatabaseError.execute("This OpenCode is not owned by Woven Matter on this Mac.")
           : stepError()
       }
       sqlite3_finalize(ownership)
