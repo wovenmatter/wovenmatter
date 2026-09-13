@@ -53,6 +53,8 @@
 		C04200000000000000000001 /* DashboardConversationPopover.swift in Sources */ = {isa = PBXBuildFile; fileRef = C04200000000000000000002 /* DashboardConversationPopover.swift */; };
 		4C606D43824083BD3A612FF1 /* OpenCodeModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3CE258FB55B3D55A39972D5B /* OpenCodeModel.swift */; };
 		E86083BC811D526E0900522B /* OpenCodeSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 97160C827D94B74AFAB2961A /* OpenCodeSettingsView.swift */; };
+		BA480090AAD04BE7A8327211 /* SettingsHermesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7A74DFD3BA4438CB7357741 /* SettingsHermesView.swift */; };
+		ECBF462874DF484F9FDD5C91 /* DashboardLocalSecretCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 502EF864DA314DFBB322C973 /* DashboardLocalSecretCard.swift */; };
 		8B47C81B917AA853D87FB56A /* OpenCodeInteractionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17AF06D69A7DE73E3F94E40A /* OpenCodeInteractionView.swift */; };
 		46E81C4CE9571D1C715098CA /* OpenCodeSessionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F6AFCDD4A429E11B0945492 /* OpenCodeSessionView.swift */; };
 /* End PBXBuildFile section */
@@ -105,6 +107,8 @@
 		C04200000000000000000002 /* DashboardConversationPopover.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardConversationPopover.swift; sourceTree = "<group>"; };
 		3CE258FB55B3D55A39972D5B /* OpenCodeModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenCodeModel.swift; sourceTree = "<group>"; };
 		97160C827D94B74AFAB2961A /* OpenCodeSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenCodeSettingsView.swift; sourceTree = "<group>"; };
+		D7A74DFD3BA4438CB7357741 /* SettingsHermesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsHermesView.swift; sourceTree = "<group>"; };
+		502EF864DA314DFBB322C973 /* DashboardLocalSecretCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardLocalSecretCard.swift; sourceTree = "<group>"; };
 		17AF06D69A7DE73E3F94E40A /* OpenCodeInteractionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenCodeInteractionView.swift; sourceTree = "<group>"; };
 		6F6AFCDD4A429E11B0945492 /* OpenCodeSessionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenCodeSessionView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -181,6 +185,8 @@
 				6F6AFCDD4A429E11B0945492 /* OpenCodeSessionView.swift */,
 				17AF06D69A7DE73E3F94E40A /* OpenCodeInteractionView.swift */,
 				97160C827D94B74AFAB2961A /* OpenCodeSettingsView.swift */,
+				D7A74DFD3BA4438CB7357741 /* SettingsHermesView.swift */,
+				502EF864DA314DFBB322C973 /* DashboardLocalSecretCard.swift */,
 				40D1B5DEF1B0023CB8C52B6D /* DashboardSharedViews.swift */,
 				C04200000000000000000002 /* DashboardConversationPopover.swift */,
 				3AB89D5EB3D93F04C3A5CB5E /* DashboardOpenClawCron.swift */,
@@ -342,6 +348,8 @@
 				46E81C4CE9571D1C715098CA /* OpenCodeSessionView.swift in Sources */,
 				8B47C81B917AA853D87FB56A /* OpenCodeInteractionView.swift in Sources */,
 				E86083BC811D526E0900522B /* OpenCodeSettingsView.swift in Sources */,
+				BA480090AAD04BE7A8327211 /* SettingsHermesView.swift in Sources */,
+				ECBF462874DF484F9FDD5C91 /* DashboardLocalSecretCard.swift in Sources */,
 				4C606D43824083BD3A612FF1 /* OpenCodeModel.swift in Sources */,
 				923D138C1F54FC887AA90493 /* DashboardSharedViews.swift in Sources */,
 				C04200000000000000000001 /* DashboardConversationPopover.swift in Sources */,

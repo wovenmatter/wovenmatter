@@ -222,9 +222,10 @@ public enum RuntimeMaintenance {
         let result = try run(executable, ["update", "--yes"], 600)
         guard result.succeeded else { throw LocalACPRuntimeInstallError.installFailed(result.combinedOutput) }
         let checked = try run(executable, ["update", "--check"], 30)
-        let acp = try run(executable, ["acp", "--check"], 30)
-        let version = try run(executable, ["acp", "--version"], 15)
-        guard checked.succeeded, hermesCheck(checked.stdout) == false, acp.succeeded,
+        let gateway = try run(executable, ["serve", "--help"], 30)
+        let version = try run(executable, ["--version"], 15)
+        guard checked.succeeded, hermesCheck(checked.stdout) == false, gateway.succeeded,
+              gateway.stdout.contains("--isolated"), gateway.stdout.contains("--port"),
               version.succeeded, normalizeVersion(version.stdout) != nil else { throw RuntimeMaintenanceError.verification }
     }
 

@@ -7,6 +7,7 @@ enum SettingsSection: Equatable {
     case general
     case openClaw
     case openCode
+    case hermes
     case openCodeWorkspace(UUID?)
     case openClawWorkspace(UUID?)
     case openClawAgent(UUID)
@@ -48,6 +49,9 @@ struct SettingsView: View {
                     onBack: { section = .landing },
                     onOpenAgent: { providerReturnSection = .openClaw; section = .openClawAgent($0) }
                 )
+            case .hermes:
+                SettingsHermesView(model: model, reservesRailControlSpace: reservesRailControlSpace,
+                    onBack: { section = .landing })
             case .openCode:
                 SettingsOpenCodeView(model: model, reservesRailControlSpace: reservesRailControlSpace,
                     onBack: { section = .landing })
@@ -72,7 +76,7 @@ struct SettingsView: View {
                     model: model,
                     reservesRailControlSpace: reservesRailControlSpace,
                     onBack: { section = .landing },
-                    onMore: { section = $0 == .opencode ? .openCodeWorkspace(nil) : .openClawWorkspace(nil) }
+                    onMore: { section = $0 == .hermes ? .hermes : $0 == .opencode ? .openCodeWorkspace(nil) : .openClawWorkspace(nil) }
                 )
             case .remoteWorkspaces:
                 SettingsRemoteWorkspacesView(
@@ -129,6 +133,12 @@ struct SettingsView: View {
                     detail: "Gateway connections and Woven Matter names for every OpenClaw agent.",
                     icon: { DashboardHarnessLogoIcon(logo: .openClaw, size: 15) },
                     action: { section = .openClaw }
+                )
+                SettingsDestinationRow(
+                    title: "Hermes",
+                    detail: "Native Gateway connection, profile, and conversation import.",
+                    icon: { DashboardHarnessLogoIcon(logo: .hermes, size: 15) },
+                    action: { section = .hermes }
                 )
                 SettingsDestinationRow(
                     title: "OpenCode",

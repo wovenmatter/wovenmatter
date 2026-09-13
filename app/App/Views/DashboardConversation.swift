@@ -600,6 +600,8 @@ struct DashboardLocalInteractionCard: View {
             DashboardLocalQuestionCard(request: request, onResolve: onResolve)
         case .plan(let request):
             DashboardLocalPlanCard(request: request, onResolve: onResolve)
+        case .secret(let prompt):
+            DashboardLocalSecretCard(prompt: prompt, onResolve: onResolve)
         }
     }
 }

@@ -240,10 +240,10 @@ struct SettingsLocalWorkspaceView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
 
                         RuntimeMaintenanceActions {
-                            if definition.runtimeKind == .openclaw {
-                                Button("More") { onMore(.openclaw) }
+                            if definition.runtimeKind == .openclaw || definition.runtimeKind == .hermes {
+                                Button("More") { onMore(definition.runtimeKind) }
                                     .buttonStyle(SettingsQuietButtonStyle())
-                                    .accessibilityLabel("More OpenClaw settings")
+                                    .accessibilityLabel("More \(definition.displayName) settings")
                             }
                             runtimeUpdateButton(definition.runtimeKind)
                             let isShown = model.isLocalACPRuntimeShown(
