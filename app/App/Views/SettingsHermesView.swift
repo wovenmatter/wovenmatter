@@ -23,7 +23,7 @@ struct SettingsHermesView: View {
         SettingsPage(title: "Hermes", detail: "Independent Hermes settings for this Mac and each remote workspace.",
             reservesRailControlSpace: reservesRailControlSpace, onBack: onBack) {
             if !isWorkspaceScoped || workspaceID == nil {
-                SettingsCard(title: "Local Agent Workspace", detail: "Open an agent to manage its Woven Matter name and Gateway connection.") {
+                SettingsCard(title: "Local agent workspace", detail: "Open an agent to manage its Woven Matter name and Gateway connection.") {
                     if agents.isEmpty { SettingsEmpty("No Hermes agents discovered.") }
                     ForEach(agents) { agent in
                         SettingsInset {
@@ -31,7 +31,7 @@ struct SettingsHermesView: View {
                                 DashboardHarnessLogoIcon(logo: .hermes, size: 20).frame(width: 28, height: 28)
                                 VStack(alignment: .leading, spacing: 3) {
                                     Text(agent.displayName).font(.system(size: 13, weight: .medium))
-                                    Text("Local Agent Workspace").font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
+                                    Text("Local agent workspace").font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
                                 }.frame(maxWidth: .infinity, alignment: .leading)
                                 let linked = model.isHermesGatewayLinked(agentID: agent.id)
                                 let ready = linked && !checking && model.hermesGatewayConnections[agent.id] != nil
@@ -44,7 +44,7 @@ struct SettingsHermesView: View {
                 }
             }
             if !isWorkspaceScoped || workspaceID != nil {
-                SettingsCard(title: "Remote Agent Workspaces", detail: "Discover agents in each connected workspace.") {
+                SettingsCard(title: "Remote agent workspaces", detail: "Discover agents in each connected workspace.") {
                     if remoteConfigurations.isEmpty { SettingsEmpty("No remote agent workspaces connected.") }
                     ForEach(remoteConfigurations) { configuration in
                         remoteWorkspace(configuration)
@@ -136,7 +136,7 @@ struct SettingsHermesAgentView: View {
                             onBack()
                         }.buttonStyle(SettingsQuietButtonStyle())
                     }
-                    SettingsValueRow(label: "Location", value: "Local Agent Workspace")
+                    SettingsValueRow(label: "Location", value: "Local agent workspace")
                     if let checked = model.hermesGatewayCheckedAt[agentID] {
                         SettingsValueRow(label: "Last checked", value: checked.formatted(date: .omitted, time: .standard))
                     }
