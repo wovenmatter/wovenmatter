@@ -46,6 +46,69 @@ struct OpenClawGatewayReviewTests {
     await fixture.coordinator.shutdown()
   }
 
+  @Test func providerIdentityRepairsHistoryDuplicateAndContentRevisions() async throws {
+    let fixture = try ReviewGatewayFixture()
+    defer { fixture.remove() }
+    let id = try fixture.database.importOpenClawGatewaySession(agentID: fixture.agentID, session: fixture.session)
+    let run = try fixture.database.beginLocalACPRun(conversationID: id, content: "Hello")
+    try fixture.database.replaceLocalACPAssistantMessage(runID: run.runID, assistantMessageID: run.assistantMessageID, content: "Reply")
+    func history(_ text: String, gatewayID: String?) throws -> OpenClawGatewayHistory {
+      var metadata: [String: GatewayJSONValue] = ["id": .string("answer"), "idempotencyKey": .string("codex-app-server:thread:turn:assistant")]
+      if let gatewayID { metadata["runId"] = .string(gatewayID) }
+      return try OpenClawGatewayHistory(payload: .object(["messages": .array([
+        .object(["role": .string("assistant"), "content": .string(text), "__openclaw": .object(metadata)])])]))
+    }
+    // Seed the same orphan history row the old parser created, without editing a live DB.
+    try fixture.database.synchronizeOpenClawHistory(conversationID: id, history: history("Reply", gatewayID: nil))
+    #expect(try fixture.database.conversationContent(id: id).messages.count == 3)
+    let reopened = try WorkspaceDatabase(url: fixture.directory.appending(path: "review.sqlite"))
+    try reopened.synchronizeOpenClawHistory(conversationID: id, history: history("Reply", gatewayID: run.runID))
+    try reopened.synchronizeOpenClawHistory(conversationID: id, history: history("Revised reply", gatewayID: run.runID))
+    try reopened.synchronizeOpenClawHistory(conversationID: id, history: history("Revised reply", gatewayID: run.runID))
+    #expect(try history("Reply", gatewayID: run.runID).messages.first?.correlatedRunID(knownInputIDs: [run.runID]) == run.runID)
+    let messages = try reopened.conversationContent(id: id).messages
+    #expect(messages.count == 2)
+    #expect(messages.first { $0.id == run.assistantMessageID }?.content == "Revised reply")
+    #expect(try reopened.interruptedOpenClawRuns(conversationID: id).first?.runID == run.runID)
+    await fixture.coordinator.shutdown()
+  }
+
+  @Test func exactSteeringKeyWinsOverExecutionIDAndDistinctRepliesRemain() async throws {
+    let fixture = try ReviewGatewayFixture()
+    defer { fixture.remove() }
+    let id = try fixture.database.importOpenClawGatewaySession(agentID: fixture.agentID, session: fixture.session)
+    let run = try fixture.database.beginLocalACPRun(conversationID: id, content: "First")
+    let steering = try fixture.database.beginLocalACPSteeringTurn(runID: run.runID, input: AgentMessageInput(text: "Second"), completesPreviousAssistant: false)
+    let rows: [GatewayJSONValue] = ["one", "two"].map { key in
+      .object(["role": .string("assistant"), "content": .string("Same text"),
+        "__openclaw": .object(["id": .string(key), "idempotencyKey": .string(steering.userMessageID + ":assistant"), "runId": .string(run.runID)])])
+    }
+    let history = try OpenClawGatewayHistory(payload: .object(["messages": .array(rows)]))
+    try fixture.database.synchronizeOpenClawHistory(conversationID: id, history: history)
+    try fixture.database.synchronizeOpenClawHistory(conversationID: id, history: history)
+    let messages = try fixture.database.conversationContent(id: id).messages
+    #expect(messages.count == 5)
+    #expect(messages.first { $0.id == steering.assistantMessageID }?.content == "Same text")
+    #expect(messages.first { $0.id == run.assistantMessageID }?.content != "Same text")
+    await fixture.coordinator.shutdown()
+  }
+
+  @Test func partialHistoryRetainsProjectedSiblings() async throws {
+    let fixture = try ReviewGatewayFixture()
+    defer { fixture.remove() }
+    let id = try fixture.database.importOpenClawGatewaySession(agentID: fixture.agentID, session: fixture.session)
+    let rows: [GatewayJSONValue] = ["First", "Second"].map { text in
+      .object(["role": .string("assistant"), "content": .string(text),
+        "__openclaw": .object(["id": .string("shared-record"), "runId": .string("external-run")])])
+    }
+    try fixture.database.synchronizeOpenClawHistory(conversationID: id,
+      history: OpenClawGatewayHistory(payload: .object(["messages": .array(rows)])))
+    try fixture.database.synchronizeOpenClawHistory(conversationID: id,
+      history: OpenClawGatewayHistory(payload: .object(["messages": .array([rows[1]])])))
+    #expect(try fixture.database.conversationContent(id: id).messages.count == 2)
+    await fixture.coordinator.shutdown()
+  }
+
   @Test func initialReplyDoesNotProveLatestSteeringWasDelivered() async throws {
     let fixture = try ReviewGatewayFixture()
     defer { fixture.remove() }

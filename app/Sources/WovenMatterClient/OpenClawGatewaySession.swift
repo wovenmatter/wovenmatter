@@ -36,6 +36,8 @@ public struct OpenClawGatewayHistoryMessage: Codable, Equatable, Sendable {
   public let isAssistantResponse: Bool
   public let text: String
   public let runID: String?
+  public let gatewayRunID: String?
+  public let transcriptIdentity: String?
   public let date: Date
   public let raw: Data
   public let terminalError: String?
@@ -70,6 +72,12 @@ public struct OpenClawGatewayHistoryMessage: Codable, Equatable, Sendable {
     let projectionData = (try? encoder.encode(projection)) ?? raw
     let projectionID = SHA256.hash(data: projectionData).map { String(format: "%02x", $0) }.joined()
     id = key + ":" + role + ":" + projectionID
+    // Native record identity survives content revisions; synthetic siblings retain
+    // their own kind/tool identity. No content-only identity is repair authority.
+    transcriptIdentity = (metadata["id"]?.stringValue ?? row["id"]?.stringValue).map {
+      $0 + ":" + role + ":" + (metadata["kind"]?.stringValue ?? "") + ":" + (row["toolCallId"]?.stringValue ?? "")
+    }
+    gatewayRunID = metadata["runId"]?.stringValue
     let idempotencyKey = metadata["idempotencyKey"]?.stringValue ?? row["idempotencyKey"]?.stringValue
     runID = idempotencyKey.map {
       var value = $0
@@ -86,6 +94,11 @@ public struct OpenClawGatewayHistoryMessage: Codable, Equatable, Sendable {
       date = formatter.date(from: timestamp) ?? ISO8601DateFormatter().date(from: timestamp) ?? .distantPast
     } else { date = .distantPast }
     text = Self.text(row)
+  }
+
+  public func correlatedRunID(knownInputIDs: Set<String>) -> String? {
+    if let runID, knownInputIDs.contains(runID) { return runID }
+    return gatewayRunID ?? runID
   }
 
   public static func text(_ row: [String: GatewayJSONValue]) -> String {
