@@ -502,6 +502,8 @@ extension View {
 }
 
 struct SettingsQuietButtonStyle: ButtonStyle {
+    var horizontalPadding: CGFloat = 12
+    var minimumHeight: CGFloat = 36
     @Environment(\.dashboardTheme) private var theme
     @Environment(\.isEnabled) private var isEnabled
     @State private var isHovering = false
@@ -510,8 +512,8 @@ struct SettingsQuietButtonStyle: ButtonStyle {
         configuration.label
             .font(.system(size: 12.5, weight: .medium))
             .foregroundStyle(DashboardPalette.foreground)
-            .padding(.horizontal, 12)
-            .frame(minHeight: 36)
+            .padding(.horizontal, horizontalPadding)
+            .frame(minHeight: minimumHeight)
             .background(
                 theme.palette.themeSoft.opacity(
                     configuration.isPressed ? 1 : (isHovering ? 0.72 : 0)

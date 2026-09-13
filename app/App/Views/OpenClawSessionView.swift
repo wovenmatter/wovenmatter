@@ -35,7 +35,9 @@ struct OpenClawSessionLibrary: View {
                                 feedback = "“\(session.title)” is available in the conversation list."
                             } catch { feedback = error.localizedDescription }
                         }
-                    }.disabled(busy)
+                    }
+                    .buttonStyle(SettingsQuietButtonStyle(horizontalPadding: 8, minimumHeight: 22))
+                    .disabled(busy)
                 }
             }
             HStack {
