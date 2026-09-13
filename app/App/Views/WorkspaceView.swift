@@ -317,7 +317,10 @@ struct WorkspaceView: View {
             )
         }
         .onChange(of: model.pendingHermesSettingsAgentID) { _, agentID in
-            if agentID != nil { openUtility(.settings) }
+            if agentID != nil {
+                closeNewChatChooser()
+                openUtility(.settings)
+            }
         }
         .confirmationDialog(
             "Connect the OpenClaw Gateway?",
