@@ -7,6 +7,7 @@ struct OpenClawSessionLibrary: View {
     let agentID: UUID
     @State private var sessions: [OpenClawGatewaySession] = []
     @State private var nextOffset: Int?
+    @State private var currentOffset = 0
     @State private var busy = false
     @State private var feedback: String?
 
@@ -37,7 +38,13 @@ struct OpenClawSessionLibrary: View {
                     }.disabled(busy)
                 }
             }
-            if let nextOffset { Button("Load more sessions") { load(offset: nextOffset) }.disabled(busy) }
+            HStack {
+                Button("Previous") { load(offset: max(0, currentOffset - 25)) }
+                    .disabled(busy || currentOffset == 0)
+                Text("Page \(currentOffset / 25 + 1) of up to 10").font(.caption)
+                Button("Next") { if let nextOffset { load(offset: nextOffset) } }
+                    .disabled(busy || nextOffset == nil || currentOffset >= 225)
+            }
             if let feedback { Text(feedback).font(.system(size: 12)).textSelection(.enabled) }
         }
     }
@@ -48,8 +55,8 @@ struct OpenClawSessionLibrary: View {
             defer { busy = false }
             do {
                 let page = try await model.openClawNativeSessions(agentID: agentID, offset: offset)
-                if offset == 0 { sessions = [] }
-                for session in page.sessions where !sessions.contains(where: { $0.key == session.key }) { sessions.append(session) }
+                sessions = page.sessions
+                currentOffset = offset
                 nextOffset = page.nextOffset.flatMap { $0 > offset ? $0 : nil }
                 if sessions.isEmpty { feedback = "No shared sessions are available." }
             } catch { feedback = error.localizedDescription }
@@ -63,7 +70,6 @@ struct OpenClawSessionView: View {
     let model: ApplicationModel
     let conversationID: String
     @State private var snapshot: OpenClawGatewayControls?
-    @State private var nextOffset: Int?
     @State private var busy = false
     @State private var error: String?
     @State private var refreshRevision = 0
@@ -98,11 +104,6 @@ struct OpenClawSessionView: View {
                                 perform {
                                     try await model.stopOpenClawSession(snapshot: snapshot)
                                     try await reload()
-                                }
-                            }
-                            if let nextOffset {
-                                Button("Load earlier transcript") {
-                                    perform { self.nextOffset = try await model.loadOpenClawHistory(conversationID: conversationID, offset: nextOffset) }
                                 }
                             }
                             if let url = snapshot.controlUIURL {
@@ -200,7 +201,7 @@ struct OpenClawSessionView: View {
 
     private func reload() async throws {
         snapshot = try await model.openClawSessionControls(conversationID: conversationID)
-        nextOffset = try await model.loadOpenClawHistory(conversationID: conversationID)
+        _ = try await model.loadOpenClawHistory(conversationID: conversationID)
     }
 
     private func perform(_ operation: @escaping @MainActor () async throws -> Void) {

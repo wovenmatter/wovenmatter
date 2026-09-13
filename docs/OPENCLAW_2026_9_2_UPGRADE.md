@@ -54,7 +54,7 @@ pin, not an installer change or an update of any enrolled Gateway.
 | Area | 2026.9.4 result |
 | --- | --- |
 | Gateway/auth/device | v4 frames/v3 signatures retained; optional hello auth method is additive; separate device-token field honored. Pairing/scope upgrades still require the Gateway's normal authorization. |
-| Session list/import | Existing pagination and transactional import retained. New `activeOnly` is optional; the library intentionally lists all discoverable sessions. Native agent-qualified keys are retained. |
+| Session list/import | Browsing uses 25 sessions per page, up to 10 pages. Import walks all available history pages and commits atomically. New `activeOnly` is optional; the library intentionally lists all discoverable sessions. Native agent-qualified keys are retained. |
 | History/reconnect | Current upstream improves failed-attempt filtering and CLI identity projection. Woven consumes canonical tail pages and native run identity, reconnects and resubscribes without resending unknown input. Durable delta-cursor catch-up, reset branch replacement and full offline outbox remain unimplemented. |
 | Approvals/questions | Existing replay and resolution contracts remain compatible. Both native approval paths now avoid write retries across disconnects. Optional question URLs, secret storage and richer external interaction remain Control UI capabilities. |
 | Controls | Patch/reset, abort, reasoning/verbosity/usage and Fast settings retain existing contracts. Upstream Fast applicability metadata is additive; a stored preference is not proof the selected model fulfilled Fast mode. |
@@ -75,11 +75,16 @@ cross-harness streaming redesign is included.
 - Bounded handshake, negotiated payload checks, idle watchdog, background
   reconnect/backoff, event-sequence gap recovery, and stale-connection fences.
   `hello.features` remains discovery metadata rather than an RPC allowlist.
-- Shared native session discovery with pagination and idempotent import. Import
+- Shared native session discovery with Previous/Next navigation (25 per page,
+  at most 10 pages) and idempotent import. Browsing never imports. Import
   keeps the native session key, including non-default agents; it does not copy
   the chat or send a prompt. Existing ACP compatibility remains unchanged.
-- Session subscriptions and bounded transcript snapshots, including manual
-  earlier-page loading. SQLite retains stable entry/display-row anchors and raw
+- Import fetches every available history page into private temporary files before
+  one database transaction; changing sessions fail with a retry message. The
+  browsing cap does not limit transcript import. Original message dates remain
+  intact; a separate import-activity timestamp puts the chat in Recents and
+  survives scheduled reconciliation. Native SQLite paging supplies older messages
+  while scrolling. SQLite retains stable entry/display-row anchors and raw
   content, reconciles local optimistic rows, and avoids rewinding live output.
 - Gateway-owned runs remain recoverable when Woven closes. Recovery observes
   the shared session without resending input. Missing liveness is unknown, not
@@ -102,8 +107,8 @@ cross-harness streaming redesign is included.
 
 This is a substantial integration upgrade, **not a claim of 100% native parity**.
 
-- History refresh uses a recent 100-row snapshot; older rows are loaded on
-  demand. Cursor-based full catch-up, reset/compaction branch reconciliation,
+- Ongoing history refresh uses a recent 100-row snapshot after full import.
+  Cursor-based background catch-up, reset/compaction branch reconciliation,
   and an offline delivery outbox remain future work. Numeric page offsets are
   not persisted as durable cursors. Already imported older rows remain local.
 - Incoming media is retained as raw Gateway content with an explicit Control UI

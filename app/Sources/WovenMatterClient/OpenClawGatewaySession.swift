@@ -29,7 +29,7 @@ public struct OpenClawGatewaySession: Identifiable, Equatable, Sendable {
   }
 }
 
-public struct OpenClawGatewayHistoryMessage: Equatable, Sendable {
+public struct OpenClawGatewayHistoryMessage: Codable, Equatable, Sendable {
   public let id: String
   public let role: String
   public let nativeRole: String
@@ -105,7 +105,7 @@ public struct OpenClawGatewayHistoryMessage: Equatable, Sendable {
   }
 }
 
-public struct OpenClawGatewayHistory: Sendable {
+public struct OpenClawGatewayHistory: Codable, Sendable {
   public let messages: [OpenClawGatewayHistoryMessage]
   public let sessionID: String?
   public let activeRunIDs: Set<String>?
@@ -115,6 +115,7 @@ public struct OpenClawGatewayHistory: Sendable {
   public let inFlightText: String?
   public let nextOffset: Int?
   public let cursor: String?
+  public let totalMessages: Int?
 
   public init(payload: GatewayJSONValue) throws {
     guard let row = payload.objectValue, let messages = row["messages"]?.arrayValue else {
@@ -134,7 +135,13 @@ public struct OpenClawGatewayHistory: Sendable {
     inFlightText = flight?["text"]?.stringValue
     isIdle = !hasActiveRun && inFlightRunID == nil && (session["hasActiveRun"]?.boolValue == false
       || session["activeRunIds"]?.arrayValue?.isEmpty == true)
-    nextOffset = row["hasMore"]?.boolValue == true ? row["nextOffset"]?.intValue : nil
+    if row["hasMore"]?.boolValue == true {
+      guard let next = row["nextOffset"]?.intValue, next > 0 else {
+        throw OpenClawGatewayClientError.malformedFrame
+      }
+      nextOffset = next
+    } else { nextOffset = nil }
+    totalMessages = row["totalMessages"]?.intValue
     cursor = row["deltaCursor"]?.stringValue
   }
 }

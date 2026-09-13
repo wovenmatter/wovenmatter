@@ -1784,17 +1784,18 @@ public actor OpenClawGatewayCoordinator {
   }
 
   public func nativeSessions(agentID: UUID, offset: Int = 0) async throws -> (sessions: [OpenClawGatewaySession], nextOffset: Int?) {
+    guard offset >= 0, offset < 250, offset % 25 == 0 else { throw OpenClawGatewayClientError.malformedFrame }
     let socket = try await client(agentID: agentID)
     let generation = connectionGenerations[agentID]
     let result = try await socket.request("sessions.list", params: .object([
-      "limit": .number(60), "offset": .number(Double(offset))
+      "limit": .number(25), "offset": .number(Double(offset))
     ]))
     guard generation == connectionGenerations[agentID], !Task.isCancelled else { throw CancellationError() }
     guard let row = result.objectValue, let sessions = row["sessions"]?.arrayValue else {
       throw OpenClawGatewayClientError.malformedFrame
     }
     return (sessions.compactMap(OpenClawGatewaySession.init(payload:)),
-      row["hasMore"]?.boolValue == true ? row["nextOffset"]?.intValue : nil)
+      row["hasMore"]?.boolValue == true && offset < 225 ? offset + 25 : nil)
   }
 
   public func sessionControls(conversationID: String) async throws -> OpenClawGatewayControls {
@@ -1912,12 +1913,45 @@ public actor OpenClawGatewayCoordinator {
   public func importSession(agentID: UUID, session: OpenClawGatewaySession) async throws -> String {
     let socket = try await client(agentID: agentID)
     let generation = connectionGenerations[agentID]
-    let history = try await fetchHistory(sessionKey: session.key, offset: 0, socket: socket)
-    guard generation == connectionGenerations[agentID], !Task.isCancelled else { throw CancellationError() }
-    // Do not leave a phantom local chat when history is denied or the link changes.
-    let id = try database.importOpenClawGatewaySession(agentID: agentID, session: session)
-    let liveIDs = history.isIdle ? [] : Set(activeRuns.values.filter { $0.conversationID == id }.flatMap(\.remoteRunIDs))
-    try database.synchronizeOpenClawHistory(conversationID: id, history: history, liveRunIDs: liveIDs)
+    _ = try await socket.connect()
+    guard let transportGeneration = await socket.connectedGeneration else { throw CancellationError() }
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent("wovenmatter-openclaw-import-" + UUID().uuidString)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false,
+                                           attributes: [.posixPermissions: 0o700])
+    defer { try? FileManager.default.removeItem(at: directory) }
+    var pages: [URL] = []
+    var offset = 0
+    var first: OpenClawGatewayHistory?
+    while true {
+      try Task.checkCancellation()
+      let page = try await fetchHistory(sessionKey: session.key, offset: offset, socket: socket)
+      guard generation == connectionGenerations[agentID],
+            transportGeneration == (await socket.connectedGeneration) else { throw CancellationError() }
+      if let first {
+        guard page.sessionID == first.sessionID, page.totalMessages == first.totalMessages else {
+          throw NSError(domain: "OpenClawImport", code: 1, userInfo: [NSLocalizedDescriptionKey: "This session changed during import. Please import it again."])
+        }
+      } else { first = page }
+      let file = directory.appendingPathComponent("\(pages.count).json")
+      try JSONEncoder().encode(page).write(to: file, options: .atomic)
+      pages.append(file)
+      guard let next = page.nextOffset else { break }
+      guard next > offset else { throw OpenClawGatewayClientError.malformedFrame }
+      offset = next
+    }
+    guard let first else { throw OpenClawGatewayClientError.malformedFrame }
+    let history = pages.count > 1
+      ? try await fetchHistory(sessionKey: session.key, offset: 0, socket: socket)
+      : first
+    guard history.sessionID == first.sessionID, history.totalMessages == first.totalMessages,
+          history.messages == first.messages else {
+      throw NSError(domain: "OpenClawImport", code: 1, userInfo: [NSLocalizedDescriptionKey: "This session changed during import. Please import it again."])
+    }
+    guard generation == connectionGenerations[agentID],
+          transportGeneration == (await socket.connectedGeneration), !Task.isCancelled else { throw CancellationError() }
+    let liveIDs = history.isIdle ? Set<String>() : Set(activeRuns.values.flatMap(\.remoteRunIDs))
+    let id = try database.importOpenClawGatewaySession(agentID: agentID, session: session,
+                                                      historyPages: pages, liveRunIDs: liveIDs)
     try recoverSessionRuns(conversationID: id, history: history)
     onChange?(DashboardConversationChange(conversationID: id, runID: "", phase: .content))
     return id
