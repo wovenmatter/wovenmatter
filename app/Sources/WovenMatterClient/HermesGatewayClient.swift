@@ -21,6 +21,7 @@ public actor HermesGatewayClient {
     private var stopped = false
     private var imported = false
     private var closed = false
+    private var recoveryInvalidated = false
     private var text = ""
     private var completedText = ""
     private var workingDirectory: URL?
@@ -46,6 +47,7 @@ public actor HermesGatewayClient {
     }
 
     public func initializeSession(workingDirectory: URL, existingSessionID: String?, title: String?, systemPrompt: String?) async throws -> LocalACPInitializedSession {
+        recoveryInvalidated = true
         self.workingDirectory = workingDirectory
         heartbeat?.cancel(); heartbeat = nil
         await rpc?.setHandlers(event: nil)
@@ -64,7 +66,8 @@ public actor HermesGatewayClient {
         await client.setHandlers(event: { [weak self] event in await self?.receive(event) }, disconnected: { [weak self] in await self?.recover() })
         try await client.connect()
         epoch = await client.epoch
-        var params: HermesValue = ["cwd": .string(workingDirectory.path), "source": "desktop", "lazy": .bool(true), "close_on_disconnect": .bool(false)]
+        var params: HermesValue = ["source": "desktop", "close_on_disconnect": .bool(false)]
+        if previous == nil { params["cwd"] = .string(workingDirectory.path); params["lazy"] = .bool(true) }
         if let title { params["title"] = .string(title) }
         let snapshot: HermesValue
         if let previous {
@@ -75,7 +78,7 @@ public actor HermesGatewayClient {
             // Same ACP v1 compatibility behavior: agent instructions accompany the first user turn.
             initialContext = systemPrompt
         }
-        try bind(snapshot)
+        try bind(snapshot, requestedStoredID: previous?.storedID)
         guard !snapshot["running"].bool else { throw HermesGatewayError.message("This Hermes conversation is already running. Wait for its current turn before continuing it here.") }
         let replay = try await client.call("session.events.since", ["session_id": .string(sessionID), "last_seen": .number(0)])
         sequence = replay["latest_seq"].number ?? 0
@@ -84,6 +87,7 @@ public actor HermesGatewayClient {
             _ = try await client.call("session.cwd.set", ["session_id": .string(sessionID), "cwd": .string(workingDirectory.path)])
         }
         try await refreshConfiguration()
+        recoveryInvalidated = false
         heartbeat = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(15))
@@ -95,12 +99,19 @@ public actor HermesGatewayClient {
             loadedExistingSession: previous != nil, configuration: configuration)
     }
 
-    private func bind(_ snapshot: HermesValue) throws {
+    private func bind(_ snapshot: HermesValue, requestedStoredID: String? = nil) throws {
         guard let live = snapshot["session_id"].string, !live.isEmpty,
               let stored = snapshot["stored_session_id"].string ?? snapshot["session_key"].string, !stored.isEmpty else {
             throw HermesGatewayError.message("Hermes did not return both runtime and durable conversation identities.")
         }
-        sessionID = live; storedID = stored
+        if let requestedStoredID, stored != requestedStoredID {
+            // Non-lazy native resume may follow a compression tip. Require the explicit
+            // resolution acknowledgement and retain the original durable association.
+            guard snapshot["resumed"].text == stored else {
+                throw HermesGatewayError.message("Hermes resumed an unexpected conversation identity.")
+            }
+        }
+        sessionID = live; storedID = requestedStoredID ?? stored
         let info = snapshot["info"]
         if !info["usage"].isNull { latestUsage = info["usage"] }
         configuration = LocalACPSessionConfiguration(model: info["model"].string, thinking: info["reasoning_effort"].string,
@@ -148,7 +159,8 @@ public actor HermesGatewayClient {
     public func prompt(_ input: AgentMessageInput, onEvent: LocalACPClient.EventHandler?,
                        onPermission: LocalACPClient.PermissionHandler?, onInteraction: LocalACPClient.InteractionHandler?) async throws -> LocalACPStopReason {
         guard !closed, !busy, !replaying, !sessionID.isEmpty else { throw HermesGatewayError.message("Hermes is busy or disconnected.") }
-        if await rpc?.isConnected != true, let workingDirectory {
+        let connected = await rpc?.isConnected == true
+        if (recoveryInvalidated || !connected), let workingDirectory {
             _ = try await initializeSession(workingDirectory: workingDirectory,
                 existingSessionID: Self.identity(home: home, storedID: storedID, imported: imported), title: nil, systemPrompt: nil)
         }
@@ -204,13 +216,13 @@ public actor HermesGatewayClient {
     }
 
     private func ping() async {
-        guard let rpc else { return }
+        guard !recoveryInvalidated, let rpc else { return }
         do { _ = try await rpc.call("ping") }
         catch { await recover() }
     }
 
     private func recover() async {
-        guard !closed, !replaying, let rpc, !storedID.isEmpty else { return }
+        guard !closed, !recoveryInvalidated, !replaying, let rpc, !storedID.isEmpty else { return }
         replaying = true; buffered = []
         defer { replaying = false }
         do {
@@ -219,8 +231,9 @@ public actor HermesGatewayClient {
             guard !closed else { await rpc.disconnect(); return }
             let newEpoch = await rpc.epoch
             let oldSession = sessionID
-            let snapshot = try await rpc.call("session.resume", ["session_id": .string(storedID), "lazy": .bool(true)])
-            try bind(snapshot)
+            let requested = storedID
+            let snapshot = try await rpc.call("session.resume", ["session_id": .string(requested)])
+            try bind(snapshot, requestedStoredID: requested)
             guard newEpoch == epoch, sessionID == oldSession else {
                 epoch = newEpoch; sequence = 0; buffered = []
                 throw HermesGatewayError.message("Hermes Gateway restarted. Conversation history is preserved; review it before continuing this interrupted turn.")
@@ -237,13 +250,16 @@ public actor HermesGatewayClient {
                 pending = buffered; buffered = []
             }
         } catch {
+            recoveryInvalidated = true
+            heartbeat?.cancel(); heartbeat = nil
             buffered = []
+            await rpc.disconnect()
             if busy { finish(.failure(error)) }
         }
     }
 
     private func receive(_ event: HermesValue) async {
-        guard event["session_id"].text == sessionID, !sessionID.isEmpty else { return }
+        guard !recoveryInvalidated, event["session_id"].text == sessionID, !sessionID.isEmpty else { return }
         if replaying { buffered.append(event); return }
         await apply(event)
     }

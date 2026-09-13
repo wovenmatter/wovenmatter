@@ -1571,6 +1571,14 @@ public final class WorkspaceDatabase: @unchecked Sendable {
     }
   }
 
+  private func markSessionImportedUnlocked(conversationID: String) throws {
+    let statement = try prepareUnlocked("INSERT OR IGNORE INTO desktop_session_imports (conversation_id, imported_at) VALUES (?, ?)")
+    defer { sqlite3_finalize(statement) }
+    try bind(conversationID, at: 1, to: statement)
+    try bind(Self.timestamp(Date()), at: 2, to: statement)
+    try stepDone(statement)
+  }
+
   public func knownHermesSessionIDs(home: String) throws -> Set<String> {
     try lock.withLock {
       let statement = try prepareUnlocked("SELECT acp_session_id FROM desktop_local_acp_sessions WHERE runtime_kind='hermes' AND acp_session_id IS NOT NULL")
@@ -1681,6 +1689,11 @@ public final class WorkspaceDatabase: @unchecked Sendable {
         try bind(link.sessionID, at: 3, to: association); try stepDone(association)
       }
       if let imported = hermesImport {
+        try markSessionImportedUnlocked(conversationID: conversationID)
+        let touch = try prepareUnlocked("UPDATE dashboard_conversations SET last_message_at = MAX(last_message_at, (SELECT imported_at FROM desktop_session_imports WHERE conversation_id = ?)), updated_at = ? WHERE id = ?")
+        defer { sqlite3_finalize(touch) }
+        try bind(conversationID, at: 1, to: touch); try bind(Self.timestamp(Date()), at: 2, to: touch)
+        try bind(conversationID, at: 3, to: touch); try stepDone(touch)
         let association = try prepareUnlocked("UPDATE desktop_local_acp_sessions SET acp_session_id=? WHERE conversation_id=?")
         defer { sqlite3_finalize(association) }
         try bind(imported.identity, at: 1, to: association); try bind(conversationID, at: 2, to: association); try stepDone(association)
@@ -2199,7 +2212,7 @@ public final class WorkspaceDatabase: @unchecked Sendable {
 
       let conversation = try prepareUnlocked("""
         UPDATE dashboard_conversations
-        SET last_message_preview = ?, last_message_at = ?, updated_at = ?
+        SET last_message_preview = ?, last_message_at = MAX(?, COALESCE((SELECT imported_at FROM desktop_session_imports WHERE conversation_id=dashboard_conversations.id), '')), updated_at = ?
         WHERE id = ? AND desktop_owned = 1
         """)
       defer { sqlite3_finalize(conversation) }
@@ -2436,7 +2449,7 @@ public final class WorkspaceDatabase: @unchecked Sendable {
 
       let conversation = try prepareUnlocked("""
         UPDATE dashboard_conversations
-        SET last_message_preview = ?, last_message_at = ?, updated_at = ?
+        SET last_message_preview = ?, last_message_at = MAX(?, COALESCE((SELECT imported_at FROM desktop_session_imports WHERE conversation_id=dashboard_conversations.id), '')), updated_at = ?
         WHERE id = ? AND desktop_owned = 1
         """)
       defer { sqlite3_finalize(conversation) }
@@ -2477,7 +2490,7 @@ public final class WorkspaceDatabase: @unchecked Sendable {
 
       let conversation = try prepareUnlocked("""
         UPDATE dashboard_conversations
-        SET last_message_preview = ?, last_message_at = ?, updated_at = ?
+        SET last_message_preview = ?, last_message_at = MAX(?, COALESCE((SELECT imported_at FROM desktop_session_imports WHERE conversation_id=dashboard_conversations.id), '')), updated_at = ?
         WHERE id = (
           SELECT conversation_id FROM dashboard_runs WHERE id = ?
         ) AND desktop_owned = 1
@@ -2518,7 +2531,7 @@ public final class WorkspaceDatabase: @unchecked Sendable {
 
       let conversation = try prepareUnlocked("""
         UPDATE dashboard_conversations
-        SET last_message_preview = ?, last_message_at = ?, updated_at = ?
+        SET last_message_preview = ?, last_message_at = MAX(?, COALESCE((SELECT imported_at FROM desktop_session_imports WHERE conversation_id=dashboard_conversations.id), '')), updated_at = ?
         WHERE id = ? AND desktop_owned = 1
         """)
       defer { sqlite3_finalize(conversation) }
@@ -2565,7 +2578,7 @@ public final class WorkspaceDatabase: @unchecked Sendable {
 
       let conversation = try prepareUnlocked("""
         UPDATE dashboard_conversations
-        SET last_message_preview = ?, last_message_at = ?, updated_at = ?
+        SET last_message_preview = ?, last_message_at = MAX(?, COALESCE((SELECT imported_at FROM desktop_session_imports WHERE conversation_id=dashboard_conversations.id), '')), updated_at = ?
         WHERE id = ? AND desktop_owned = 1
           AND ? = (
             SELECT assistant_message_id FROM dashboard_runs WHERE id = ?
@@ -2617,7 +2630,7 @@ public final class WorkspaceDatabase: @unchecked Sendable {
 
       let conversation = try prepareUnlocked("""
         UPDATE dashboard_conversations
-        SET last_message_preview = ?, last_message_at = ?, updated_at = ?
+        SET last_message_preview = ?, last_message_at = MAX(?, COALESCE((SELECT imported_at FROM desktop_session_imports WHERE conversation_id=dashboard_conversations.id), '')), updated_at = ?
         WHERE id = ? AND desktop_owned = 1
           AND ? = (
             SELECT assistant_message_id FROM dashboard_runs WHERE id = ?
@@ -3956,6 +3969,7 @@ public final class WorkspaceDatabase: @unchecked Sendable {
             ),
             'unread', unread, 'last_message_preview', last_message_preview,
             'openclaw_session_key', openclaw_session_key,
+            'imported_at', (SELECT imported_at FROM desktop_session_imports WHERE conversation_id = dashboard_conversations.id),
             'last_message_at', last_message_at, 'folder_id', folder_id,
             'is_pinned', is_pinned,
             'is_archived', is_archived
@@ -4629,6 +4643,10 @@ public final class WorkspaceDatabase: @unchecked Sendable {
         device_id TEXT NOT NULL,
         bound_at TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS desktop_session_imports (
+        conversation_id TEXT PRIMARY KEY REFERENCES dashboard_conversations(id) ON DELETE CASCADE,
+        imported_at TEXT NOT NULL
+      );
       CREATE TABLE IF NOT EXISTS desktop_buzz_workspace_links (
         id TEXT PRIMARY KEY,
         display_name TEXT NOT NULL,
@@ -5199,7 +5217,7 @@ extension WorkspaceDatabase {
           try bind(runStatus, at: 1, to: finish); try bind(runID, at: 2, to: finish); try stepDone(finish)
         }
       }
-      let update = try prepareUnlocked("UPDATE dashboard_conversations SET title=?, last_message_preview=?, last_message_at=?, updated_at=? WHERE id=?")
+      let update = try prepareUnlocked("UPDATE dashboard_conversations SET title=?, last_message_preview=?, last_message_at=MAX(?, COALESCE((SELECT imported_at FROM desktop_session_imports WHERE conversation_id=dashboard_conversations.id), '')), updated_at=? WHERE id=?")
       defer { sqlite3_finalize(update) }
       try bind(snapshot.info["title"].string ?? session.title, at: 1, to: update)
       try bind(String(snapshot.messages.last.map(OpenCodeSessionSnapshot.text)?.prefix(240) ?? ""), at: 2, to: update)

@@ -3018,6 +3018,7 @@ final class ApplicationModel {
 
     func importHermesSession(connection: HermesGatewayConnection, sessionID: String) async throws {
         guard let dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
+        guard try !dashboardStore.database.knownHermesSessionIDs(home: connection.home).contains(sessionID) else { return }
         let snapshot = try await HermesSessionHistory.load(connection: connection, sessionID: sessionID)
         let owner = try await dashboardStore.dashboardDeviceID()
         _ = try dashboardStore.database.createLocalACPSession(runtimeKind: .hermes, title: snapshot.title,

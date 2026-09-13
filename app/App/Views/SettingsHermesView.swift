@@ -27,7 +27,7 @@ struct SettingsHermesView: View {
             SettingsCard(title: "Conversations", detail: "Up to 100 recent Hermes sessions. Imported conversations retain their original workspace.") {
                 TextField("Search listed conversations", text: $search).textFieldStyle(.roundedBorder)
                 if sessions.isEmpty { Text("No sessions listed.").font(.system(size: 12)).foregroundStyle(DashboardPalette.mutedForeground) }
-                ForEach(sessions.filter { search.isEmpty || $0["title"].text.localizedCaseInsensitiveContains(search) }, id: \.self) { row in
+                ForEach(sessions.filter { !known.contains($0["id"].text) && (search.isEmpty || $0["title"].text.localizedCaseInsensitiveContains(search)) }, id: \.self) { row in
                     HStack(spacing: 10) {
                         VStack(alignment: .leading, spacing: 3) {
                             Text(row["title"].text.isEmpty ? "Untitled Hermes conversation" : row["title"].text)
@@ -36,9 +36,9 @@ struct SettingsHermesView: View {
                         }
                         Spacer(minLength: 8)
                         let id = row["id"].text
-                        Button(known.contains(id) ? "Added" : "Import") {
+                        Button("Import") {
                             Task { await importSession(id) }
-                        }.buttonStyle(SettingsQuietButtonStyle()).disabled(busy || known.contains(id))
+                        }.buttonStyle(SettingsQuietButtonStyle()).disabled(busy)
                     }
                 }
             }
@@ -53,12 +53,14 @@ struct SettingsHermesView: View {
             let connected = try await model.hermesGatewayConnection()
             connection = connected
             let rpc = HermesGatewayRPC(connection: connected)
+            let fetched: [HermesValue]
             do {
                 try await rpc.connect()
-                sessions = try await rpc.call("session.list", ["limit": .number(100)])["sessions"].array
+                fetched = try await rpc.call("session.list", ["limit": .number(100)])["sessions"].array
                 await rpc.disconnect()
             } catch { await rpc.disconnect(); throw error }
             known = try model.knownHermesSessions(home: connected.home)
+            sessions = fetched.filter { !known.contains($0["id"].text) }
         } catch { self.error = error.localizedDescription }
     }
     private func importSession(_ id: String) async {
@@ -66,7 +68,11 @@ struct SettingsHermesView: View {
         busy = true; error = nil
         defer { busy = false }
         do {
+            known = try model.knownHermesSessions(home: connection.home)
+            sessions.removeAll { known.contains($0["id"].text) }
+            guard !known.contains(id) else { return }
             try await model.importHermesSession(connection: connection, sessionID: id)
+            sessions.removeAll { $0["id"].text == id }
             known = try model.knownHermesSessions(home: connection.home)
         } catch { self.error = error.localizedDescription }
     }

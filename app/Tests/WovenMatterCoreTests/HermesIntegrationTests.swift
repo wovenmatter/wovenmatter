@@ -36,6 +36,20 @@ struct HermesIntegrationTests {
         }
         #expect(try !database.knownHermesSessionIDs(home: firstHome).contains("invalid"))
         #expect(try database.conversationContent(id: id).messages.count == 3)
+        let record = try #require(database.workspaceOverview().conversations.first { $0.id == id })
+        let importedAt = try #require(record.importedAt)
+        #expect(record.lastMessageAt == importedAt)
+        let reopened = try WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
+        #expect(try reopened.workspaceOverview().conversations.first { $0.id == id }?.importedAt == importedAt)
+        // Old transcript/turn timestamps must not move an imported conversation back down the sidebar.
+        let run = try reopened.beginLocalACPRun(conversationID: id, content: "Continue", createdAt: Date(timeIntervalSince1970: 200))
+        try reopened.appendLocalACPAssistantChunk(runID: run.runID, chunk: "Reply", updatedAt: Date(timeIntervalSince1970: 201))
+        #expect(try reopened.workspaceOverview().conversations.first { $0.id == id }?.lastMessageAt == importedAt)
+        // A genuinely newer turn still advances recency without changing import provenance.
+        try reopened.replaceLocalACPAssistantMessage(runID: run.runID, content: "Later reply", updatedAt: Date().addingTimeInterval(60))
+        let later = try #require(reopened.workspaceOverview().conversations.first { $0.id == id })
+        #expect(later.importedAt == importedAt)
+        #expect(try #require(later.lastMessageAt) > importedAt)
     }
 
     @Test func importingAnAlreadyLinkedNativeConversationDoesNotDuplicateIt() throws {

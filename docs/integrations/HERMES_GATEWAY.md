@@ -50,8 +50,11 @@ The private connection registration is scoped to the Hermes profile home.
 - Same-process reconnect holds live events while replaying `session.events.since`,
   orders/deduplicates by sequence, and checks the replay epoch. A changed epoch or
   truncated ring fails the interrupted turn visibly without resubmitting input.
-  Durable history stays in Hermes. An idle disconnected session reconnects on
-  the next explicit prompt.
+  Failed replay disconnects and suspends heartbeat recovery, forcing the next
+  explicit prompt through full guarded initialization. Durable history stays in
+  Hermes. Non-lazy resume may follow a compression tip: a changed durable ID must
+  match the backend's explicit `resumed` acknowledgement, while Woven Matter
+  retains its original durable association. Imported resume sends no cwd.
 - Settings lists at most 100 native sessions. Native `session.list` has a limit
   but no cursor; this is not an exhaustive inventory. Import uses the native
   export endpoint (32 MB bound), including durable message IDs and tool results.
@@ -81,11 +84,12 @@ acceptance remain manager-owned checks.
 
 The branch is based on main and does not contain PR38. Preserve both optional
 payloads when combining `WorkspaceDatabase.createLocalACPSession`:
-`importedOpenCodeSnapshot` from PR38 and `hermesImport` here. Within the Hermes
-import transaction, call PR38's existing
-`markSessionImportedUnlocked(conversationID:)` so the common
-`desktop_session_imports.imported_at` / `WorkspaceConversationRecord.importedAt`
-hover treatment applies. Do not add a Hermes-specific hover indicator.
+`importedOpenCodeSnapshot` from PR38 and `hermesImport` here. Both branches contain
+the same `desktop_session_imports` schema, `markSessionImportedUnlocked` helper,
+and `WorkspaceConversationRecord.importedAt` / shared hover definition. Hermes
+imports already call the marker inside their transaction and preserve import
+recency through later transcript updates. Keep one copy of those common hunks;
+PR38 additionally supplies its legacy OpenClaw provenance fallback.
 
 Other overlaps are ApplicationModel runtime/settings methods,
 LocalACPRuntime, LocalACPSessionCoordinator, SettingsView,
