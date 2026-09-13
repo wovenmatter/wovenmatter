@@ -62,6 +62,9 @@ struct OpenCodeSettingsCard: View {
                 .toggleStyle(DashboardSwitchToggleStyle())
             Text("Stopping the server also disconnects the browser and other OpenCode clients.")
                 .font(.caption).foregroundStyle(.secondary)
+            if !model.isRemote {
+                OpenCodeSessionLibrary(model: model)
+            }
             if let error = model.error { Text(error).font(.callout).foregroundStyle(.red) }
             if !model.canConnect {
                 Text(model.isRemote ? "Install and enable OpenCode in this remote workspace’s runtime settings to connect." : "Install OpenCode v2 to connect.").font(.caption).foregroundStyle(.secondary)
@@ -156,6 +159,77 @@ struct SettingsOpenCodeView: View {
             for configuration in remoteConfigurations {
                 model.remoteWorkspaces.refreshWorkspaceInstance(.opencode, configuration: configuration)
             }
+        }
+    }
+}
+
+
+private struct OpenCodeSessionLibrary: View {
+    @Bindable var model: OpenCodeModel
+    @State private var sessions: [OpenCodeValue] = []
+    @State private var cursors: [String?] = [nil]
+    @State private var page = 0
+    @State private var next: String?
+    @State private var busy = false
+    @State private var feedback: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Shared OpenCode sessions").font(.headline)
+            HStack {
+                Button("Refresh sessions") { cursors = [nil]; load(page: 0) }
+                if busy { ProgressView().controlSize(.small) }
+            }
+            ForEach(sessions, id: \.self) { session in
+                HStack {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(session["title"].string ?? "OpenCode conversation").font(.system(size: 13, weight: .medium))
+                        Text(session["location"]["directory"].text)
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(DashboardPalette.mutedForeground).lineLimit(2)
+                    }
+                    Spacer()
+                    Button("Import") {
+                        busy = true
+                        Task {
+                            defer { busy = false }
+                            do {
+                                try await model.importSession(session)
+                                sessions.removeAll { $0["id"] == session["id"] }
+                                feedback = "Imported into the conversation list."
+                            } catch { feedback = error.localizedDescription }
+                        }
+                    }
+                    .buttonStyle(SettingsQuietButtonStyle(horizontalPadding: 8, minimumHeight: 22))
+                }
+            }
+            HStack {
+                Button("Previous") { load(page: page - 1) }.disabled(page == 0)
+                Text("Page \(page + 1) of up to 10").font(.caption)
+                Button("Next") {
+                    if let next {
+                        cursors = Array(cursors.prefix(page + 1)) + [next]
+                        load(page: page + 1)
+                    }
+                }.disabled(next == nil || page >= 9)
+            }
+            if let feedback { Text(feedback).font(.system(size: 12)).textSelection(.enabled) }
+        }
+        .disabled(busy || !model.isReady)
+    }
+
+    private func load(page index: Int) {
+        guard cursors.indices.contains(index) else { return }
+        busy = true; feedback = nil
+        Task {
+            defer { busy = false }
+            do {
+                let result = try await model.importableSessions(cursor: cursors[index])
+                sessions = result.sessions
+                page = index
+                next = result.next
+                if sessions.isEmpty { feedback = "No sessions available to import." }
+            } catch { feedback = error.localizedDescription }
         }
     }
 }

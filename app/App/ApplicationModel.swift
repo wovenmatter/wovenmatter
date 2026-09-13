@@ -2656,6 +2656,13 @@ final class ApplicationModel {
             guard let dashboardStore else {
                 throw ApplicationModelError.dashboardStoreUnavailable
             }
+            let openClawAgent = runtimeKind == .openclaw
+                ? localCLIAgents.first(where: { $0.runtimeKind == .openclaw }) : nil
+            let gatewayKey = Self.openClawSessionKey(conversationID: UUID().uuidString.lowercased())
+            if let agent = openClawAgent, isOpenClawGatewayLinked(agentID: agent.id),
+               let workspace = localACPWorkspaceLaunchConfiguration {
+                try await dashboardStore.createOpenClawWorkspaceSession(agentID: agent.id, sessionKey: gatewayKey, cwd: workspace.rootURL)
+            }
             let conversationID = try await dashboardStore.createLocalACPSession(
                 runtimeKind: runtimeKind,
                 title: "New \(runtimeKind.displayName) chat"
@@ -2666,7 +2673,7 @@ final class ApplicationModel {
                 try await dashboardStore.attachOpenClawGatewaySession(
                     conversationID: conversationID,
                     agentID: agent.id,
-                    sessionKey: Self.openClawSessionKey(conversationID: conversationID)
+                    sessionKey: gatewayKey
                 )
                 openClawGatewayConversationIDs.insert(conversationID)
             }

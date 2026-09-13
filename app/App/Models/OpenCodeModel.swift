@@ -309,7 +309,24 @@ final class OpenCodeModel {
         }
     }
 
-    private func open(_ session: OpenCodeValue) async throws -> String {
+    func importableSessions(cursor: String? = nil) async throws -> (sessions: [OpenCodeValue], next: String?) {
+        guard isReady, !isRemote else { throw OpenCodeError.message("Connect to local OpenCode first.") }
+        return try await coordinator.importableSessions(connectionID: connectionID, cursor: cursor)
+    }
+
+    func importSession(_ session: OpenCodeValue) async throws {
+        guard isReady, !isRemote, !busy else { throw OpenCodeError.message("OpenCode is not ready to import.") }
+        let id = session["id"].text
+        guard !(try store.database.knownOpenCodeSessionIDs(connectionID: connectionID)).contains(id) else {
+            throw OpenCodeError.message("This session is already in Woven Matter. Refresh the list.")
+        }
+        busy = true
+        defer { busy = false }
+        let snapshot = try await coordinator.completeImportSnapshot(connectionID: connectionID, sessionID: id)
+        _ = try await open(snapshot.info, importedSnapshot: snapshot)
+    }
+
+    private func open(_ session: OpenCodeValue, importedSnapshot: OpenCodeSessionSnapshot? = nil) async throws -> String {
         let sessionID = session["id"].text
         guard sessionID.hasPrefix("ses") else { throw OpenCodeError.message("OpenCode did not return a session ID.") }
         let conversationID: String
@@ -321,11 +338,11 @@ final class OpenCodeModel {
         } else {
             conversationID = try store.database.createLocalACPSession(runtimeKind: .opencode,
                 title: session["title"].string ?? "New OpenCode chat", ownerDeviceID: ownerDeviceID,
-                openCodeAssociation: (connectionID, sessionID))
+                openCodeAssociation: (connectionID, sessionID), importedOpenCodeSnapshot: importedSnapshot)
         }
         let link = OpenCodeSessionLink(conversationID: conversationID, connectionID: connectionID, sessionID: sessionID)
         links[conversationID] = link
-        var initial = OpenCodeSessionSnapshot()
+        var initial = importedSnapshot ?? OpenCodeSessionSnapshot()
         initial.info = session
         snapshots[conversationID] = initial
         do { try await refreshCatalog(conversationID) }
