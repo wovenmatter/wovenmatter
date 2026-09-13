@@ -3023,7 +3023,7 @@ final class ApplicationModel {
 
     private func requireLocalHermesLink(conversationID: String? = nil, openSettings: Bool = false) throws {
         guard let agent = localCLIAgents.first(where: { $0.runtimeKind == .hermes }) else {
-            throw HermesGatewayError.message("Enable Hermes in Local Agent Workspace first.")
+            throw HermesGatewayError.message("Enable Hermes in Local agent workspace first.")
         }
         guard isHermesGatewayLinked(agentID: agent.id) else {
             if openSettings { pendingHermesSettingsAgentID = agent.id }
@@ -3083,7 +3083,7 @@ final class ApplicationModel {
 
     func hermesGatewayConnection() async throws -> HermesGatewayConnection {
         guard enabledLocalACPRuntimeKinds.contains(.hermes), let launch = localACPLaunchConfigurations[.hermes] else {
-            throw HermesGatewayError.message("Enable Hermes in Local Agent Workspace, then refresh this page.")
+            throw HermesGatewayError.message("Enable Hermes in Local agent workspace, then refresh this page.")
         }
         return try await HermesGatewayService.shared.ensure(launch: launch)
     }
