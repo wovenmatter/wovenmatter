@@ -142,10 +142,6 @@ public struct OpenClawSessionPreferences: Codable, Equatable, Sendable {
   }
 }
 
-public enum OpenClawSessionSetting: String, CaseIterable, Sendable {
-  case model, thinkingLevel, fastMode, verboseLevel, reasoningLevel, responseUsage
-}
-
 public struct OpenClawHeartbeatConfiguration: Codable, Equatable, Sendable {
   public var isEnabled: Bool
   public var interval: String

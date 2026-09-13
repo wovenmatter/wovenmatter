@@ -4163,39 +4163,6 @@ final class ApplicationModel {
         await refreshWorkspace()
     }
 
-    func openClawSessionControls(conversationID: String) async throws -> OpenClawGatewayControls {
-        guard let dashboardStore else { throw OpenClawGatewayClientError.connectionClosed }
-        return try await dashboardStore.openClawSessionControls(conversationID: conversationID)
-    }
-
-    func loadOpenClawHistory(conversationID: String, offset: Int = 0) async throws -> Int? {
-        guard let dashboardStore else { throw OpenClawGatewayClientError.connectionClosed }
-        let history = try await dashboardStore.synchronizeOpenClawSession(conversationID: conversationID, offset: offset)
-        await refreshConversation(id: conversationID)
-        return history.nextOffset
-    }
-
-    func setOpenClawSetting(_ setting: OpenClawSessionSetting, value: GatewayJSONValue, snapshot: OpenClawGatewayControls) async throws {
-        guard let dashboardStore else { throw OpenClawGatewayClientError.connectionClosed }
-        try await dashboardStore.setOpenClawSetting(setting, value: value, snapshot: snapshot)
-        await refreshOpenClawGatewaySession(conversationID: snapshot.conversationID)
-    }
-
-    func resolveOpenClawApproval(id: String, decision: String, snapshot: OpenClawGatewayControls) async throws {
-        guard let dashboardStore else { throw OpenClawGatewayClientError.connectionClosed }
-        try await dashboardStore.resolveOpenClawApproval(id: id, decision: decision, snapshot: snapshot)
-    }
-
-    func stopOpenClawSession(snapshot: OpenClawGatewayControls) async throws {
-        guard let dashboardStore else { throw OpenClawGatewayClientError.connectionClosed }
-        try await dashboardStore.stopOpenClawSession(snapshot: snapshot)
-    }
-
-    func answerOpenClawQuestion(id: String, answers: [String: [String]], snapshot: OpenClawGatewayControls) async throws {
-        guard let dashboardStore else { throw OpenClawGatewayClientError.connectionClosed }
-        try await dashboardStore.answerOpenClawQuestion(id: id, answers: answers, snapshot: snapshot)
-    }
-
     private func restoreOpenClawGatewayLinks() async {
         guard let dashboardStore else { return }
         for persisted in openClawGatewayLinks {
