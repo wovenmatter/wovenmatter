@@ -576,7 +576,45 @@ public final class WorkspaceDatabase: @unchecked Sendable {
 
   /// Import the native session key directly; never synthesize a new upstream chat.
   public func importOpenClawGatewaySession(agentID: UUID, session: OpenClawGatewaySession) throws -> String {
-    return try transaction {
+    try transaction {
+      let id = try importOpenClawGatewaySessionUnlocked(agentID: agentID, session: session)
+      try markOpenClawImportActivityUnlocked(conversationID: id)
+      return id
+    }
+  }
+
+  /// All pages have already been fetched. Commit the complete import atomically;
+  /// a failed page decode/database write leaves no partial imported conversation.
+  func importOpenClawGatewaySession(agentID: UUID, session: OpenClawGatewaySession,
+                                   historyPages: [URL], liveRunIDs: Set<String>) throws -> String {
+    try transaction {
+      let id = try importOpenClawGatewaySessionUnlocked(agentID: agentID, session: session)
+      for page in historyPages {
+        try Task.checkCancellation()
+        let history = try JSONDecoder().decode(OpenClawGatewayHistory.self, from: Data(contentsOf: page))
+        try synchronizeOpenClawHistoryUnlocked(conversationID: id, history: history, liveRunIDs: liveRunIDs)
+      }
+      try markOpenClawImportActivityUnlocked(conversationID: id)
+      return id
+    }
+  }
+
+  private func markOpenClawImportActivityUnlocked(conversationID: String) throws {
+    let timestamp = Self.timestamp(Date())
+    let marker = try prepareUnlocked("INSERT INTO desktop_openclaw_import_activity (conversation_id, imported_at) VALUES (?, ?) ON CONFLICT(conversation_id) DO UPDATE SET imported_at = excluded.imported_at")
+    defer { sqlite3_finalize(marker) }
+    try bind(conversationID, at: 1, to: marker)
+    try bind(timestamp, at: 2, to: marker)
+    try stepDone(marker)
+    let touch = try prepareUnlocked("UPDATE dashboard_conversations SET last_message_at = MAX(last_message_at, ?), updated_at = ? WHERE id = ?")
+    defer { sqlite3_finalize(touch) }
+    try bind(timestamp, at: 1, to: touch)
+    try bind(timestamp, at: 2, to: touch)
+    try bind(conversationID, at: 3, to: touch)
+    try stepDone(touch)
+  }
+
+  private func importOpenClawGatewaySessionUnlocked(agentID: UUID, session: OpenClawGatewaySession) throws -> String {
       let existing = try prepareUnlocked("""
         SELECT s.conversation_id FROM desktop_openclaw_gateway_sessions s
         JOIN dashboard_conversations c ON c.id = s.conversation_id
@@ -635,7 +673,6 @@ public final class WorkspaceDatabase: @unchecked Sendable {
       }
       try stepDone(gateway)
       return id
-    }
   }
 
   /// Upsert transcript anchors and reconcile optimistic local rows by idempotency key.
@@ -645,6 +682,14 @@ public final class WorkspaceDatabase: @unchecked Sendable {
     liveRunIDs: Set<String> = []
   ) throws {
     try transaction {
+      try synchronizeOpenClawHistoryUnlocked(conversationID: conversationID, history: history, liveRunIDs: liveRunIDs)
+    }
+  }
+
+  private func synchronizeOpenClawHistoryUnlocked(
+    conversationID: String, history: OpenClawGatewayHistory,
+    liveRunIDs: Set<String> = []
+  ) throws {
       let now = Self.timestamp(Date())
       var claimedLocalMessages: Set<String> = []
       for message in history.messages.reversed() {
@@ -718,8 +763,9 @@ public final class WorkspaceDatabase: @unchecked Sendable {
         try stepDone(row)
       }
       let touch = try prepareUnlocked("""
-        UPDATE dashboard_conversations SET last_message_at = COALESCE(
-          (SELECT MAX(created_at) FROM dashboard_messages WHERE conversation_id = ?), last_message_at
+        UPDATE dashboard_conversations SET last_message_at = MAX(
+          COALESCE((SELECT imported_at FROM desktop_openclaw_import_activity WHERE conversation_id = dashboard_conversations.id), ''),
+          COALESCE((SELECT MAX(created_at) FROM dashboard_messages WHERE conversation_id = ?), last_message_at)
         ), updated_at = ? WHERE id = ?
         """)
       defer { sqlite3_finalize(touch) }
@@ -727,7 +773,6 @@ public final class WorkspaceDatabase: @unchecked Sendable {
       try bind(now, at: 2, to: touch)
       try bind(conversationID, at: 3, to: touch)
       try stepDone(touch)
-    }
   }
 
   public func interruptedOpenClawRuns(conversationID: String) throws -> [LocalACPRunIdentifiers] {
@@ -4800,6 +4845,10 @@ public final class WorkspaceDatabase: @unchecked Sendable {
         singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
         device_id TEXT NOT NULL,
         bound_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS desktop_openclaw_import_activity (
+        conversation_id TEXT PRIMARY KEY REFERENCES dashboard_conversations(id) ON DELETE CASCADE,
+        imported_at TEXT NOT NULL
       );
       CREATE TABLE IF NOT EXISTS desktop_openclaw_transcript_entries (
         conversation_id TEXT NOT NULL, entry_id TEXT NOT NULL,
