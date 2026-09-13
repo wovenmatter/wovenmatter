@@ -63,7 +63,12 @@ struct SettingsHermesView: View {
             if let error { SettingsError(error) }
             SettingsNote("Each workspace owns its connection and Gateway controls.")
         }
-        .task { model.remoteWorkspaces.refreshAll() }
+        .task {
+            if !isWorkspaceScoped { model.remoteWorkspaces.refreshAll() }
+            else if let workspaceID, let configuration = model.remoteWorkspaces.configuration(id: workspaceID) {
+                model.remoteWorkspaces.refresh(configuration)
+            }
+        }
     }
 }
 
@@ -96,7 +101,7 @@ struct SettingsHermesAgentView: View {
                     HStack {
                         SettingsPill(connection != nil ? "Ready" : "Not connected", tone: .neutral)
                         Spacer()
-                        Button("Reconnect") { Task { await connect() } }.buttonStyle(SettingsQuietButtonStyle())
+                        Button(model.isHermesGatewayLinked(agentID: agentID) ? "Reconnect" : "Connect Gateway") { Task { await connect() } }.buttonStyle(SettingsQuietButtonStyle())
                         Button("Unlink") {
                             model.unlinkHermesGateway(agentID: agentID)
                             onBack()
