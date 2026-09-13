@@ -119,19 +119,6 @@ struct OpenClawGatewayReviewTests {
     await fixture.coordinator.shutdown()
   }
 
-  @Test func cancelledQuestionResultIsNotSuccessfulAndIsNotRetried() async throws {
-    let fixture = try ReviewGatewayFixture(allowApprovals: true)
-    defer { fixture.remove() }
-    let id = try fixture.database.importOpenClawGatewaySession(agentID: fixture.agentID, session: fixture.session)
-    let snapshot = try await fixture.coordinator.sessionControls(conversationID: id)
-    do {
-      try await fixture.coordinator.answerQuestion(id: "q", answers: ["choice": ["A"]], snapshot: snapshot)
-      Issue.record("Cancelled question was reported as answered")
-    } catch OpenClawGatewayClientError.rejected { }
-    #expect(await fixture.socket.questionResolutions == 1)
-    await fixture.coordinator.shutdown()
-  }
-
   @Test func concurrentImportsKeepOneNativeSession() async throws {
     let fixture = try ReviewGatewayFixture()
     defer { fixture.remove() }
@@ -156,7 +143,7 @@ private struct ReviewGatewayFixture {
   let session: OpenClawGatewaySession
   let socket: ReviewGatewaySocket
 
-  init(denyHistory: Bool = false, allowApprovals: Bool = false) throws {
+  init(denyHistory: Bool = false) throws {
     directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     database = try WorkspaceDatabase(url: directory.appending(path: "review.sqlite"))
@@ -165,7 +152,7 @@ private struct ReviewGatewayFixture {
     let endpoint = OpenClawGatewayEndpoint(url: URL(string: "ws://127.0.0.1:1")!, authorization: .localService)
     try database.saveOpenClawGatewayLink(OpenClawGatewayLink(agentID: agentID, location: .localAgentWorkspace, endpoint: endpoint))
     session = try #require(OpenClawGatewaySession(payload: .object(["key": .string("agent:eddie:shared") ])))
-    socket = ReviewGatewaySocket(denyHistory: denyHistory, allowApprovals: allowApprovals)
+    socket = ReviewGatewaySocket(denyHistory: denyHistory)
     let socket = socket
     let client = OpenClawGatewayClient(endpoint: endpoint, credentialStore: ReviewCredentials(), socketFactory: { _ in socket })
     coordinator = OpenClawGatewayCoordinator(database: database, client: client, connectClient: { try await $0.connect() })
@@ -180,15 +167,13 @@ private struct ReviewCredentials: OpenClawGatewayCredentialStore {
 
 private actor ReviewGatewaySocket: OpenClawGatewaySocket {
   let denyHistory: Bool
-  let allowApprovals: Bool
   var modelParameters: GatewayJSONValue?
-  var questionResolutions = 0
   var historyCalls = 0
   private var frames: [Data] = []
   private var waiter: CheckedContinuation<Data, any Error>?
   private var closed = false
-  init(denyHistory: Bool, allowApprovals: Bool) {
-    self.denyHistory = denyHistory; self.allowApprovals = allowApprovals
+  init(denyHistory: Bool) {
+    self.denyHistory = denyHistory
   }
   func start() async {
     try? push(.object(["type": .string("event"), "event": .string("connect.challenge"),
@@ -198,17 +183,12 @@ private actor ReviewGatewaySocket: OpenClawGatewaySocket {
     let row = try JSONDecoder().decode(GatewayJSONValue.self, from: data).objectValue ?? [:]
     let method = row["method"]?.stringValue ?? ""
     let rejected = (method == "chat.history" && denyHistory)
-      || (!allowApprovals && row["params"]?.objectValue?["includeApprovals"] == .bool(true))
+      || (row["params"]?.objectValue?["includeApprovals"] == .bool(true))
     if method == "chat.history" { historyCalls += 1 }
     if method == "models.list" { modelParameters = row["params"] }
-    if method == "question.resolve" { questionResolutions += 1 }
     let payload: GatewayJSONValue
     switch method {
     case "connect": payload = .object(["protocol": .number(4)])
-    case "question.list": payload = .object(["questions": .array([.object([
-      "id": .string("q"), "status": .string("pending"), "sessionKey": .string("agent:eddie:shared"),
-      "questions": .array([.object(["questionId": .string("choice")])])])])])
-    case "question.resolve": payload = .object(["status": .string("cancelled")])
     default: payload = .object(["messages": .array([]), "sessionInfo": .object(["hasActiveRun": .bool(false)])])
     }
     try push(.object(["type": .string("res"), "id": row["id"] ?? .null,

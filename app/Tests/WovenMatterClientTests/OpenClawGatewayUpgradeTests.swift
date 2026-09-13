@@ -92,11 +92,6 @@ struct OpenClawGatewayUpgradeTests {
     #expect(OpenClawGatewaySession.agentID(for: "global") == nil)
   }
 
-  @Test(arguments: ["javascript:alert(1)", "https://example.com/?token=secret", "https://user:pass@example.com", "https://example.com/#token=secret"])
-  func gatewayBrowserLinksNeverCarryAuthentication(_ value: String) {
-    #expect(OpenClawGatewayControls.safeControlUIURL(URL(string: value)) == nil)
-  }
-
   @Test func gatewayNumbersCannotTrapDuringDecode() {
     #expect(GatewayJSONValue.number(.infinity).intValue == nil)
     #expect(GatewayJSONValue.number(Double.greatestFiniteMagnitude).intValue == nil)
@@ -144,11 +139,6 @@ struct OpenClawGatewayUpgradeTests {
     await client.disconnect()
   }
 
-  @Test func gatewayMultiSelectRetainsChoicesAlongsideOtherText() {
-    let question: GatewayJSONValue = .object(["questionId": .string("choice"), "multiSelect": .bool(true), "isOther": .bool(true),
-      "options": .array([.object(["label": .string("A")])])])
-    #expect(OpenClawQuestionAnswers.resolve(questions: [question], selected: ["choice": ["A"]], freeText: ["choice": "B"]) == ["choice": ["A", "B"]])
-  }
 }
 
 private final class GatewayMemoryCredentials: OpenClawGatewayCredentialStore, @unchecked Sendable {

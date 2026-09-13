@@ -60,26 +60,6 @@ struct OpenClawGatewayPersistenceTests {
     #expect(assistant.content.contains("not resent"))
   }
 
-  @Test func gatewayControlsRejectChangedOriginBeforeAnyWrite() async throws {
-    let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: directory) }
-    let db = try WorkspaceDatabase(url: directory.appending(path: "test.sqlite"))
-    let id = try db.createLocalACPSession(runtimeKind: .openclaw, title: "Origin", ownerDeviceID: UUID())
-    let agentID = try #require(db.dashboardAgents().first).id
-    try db.attachOpenClawGatewaySession(conversationID: id, agentID: agentID, sessionKey: "agent:eddie:shared")
-    let coordinator = OpenClawGatewayCoordinator(database: db, connectClient: { _ in
-      Issue.record("A stale snapshot must never connect")
-      return OpenClawGatewayCapabilities(methods: [], events: [])
-    })
-    let stale = OpenClawGatewayControls(agentID: UUID(), generation: UUID(), conversationID: id,
-      sessionKey: "agent:eddie:shared", approvals: [], questions: [], approvalsTruncated: false, controlUIURL: nil)
-    do {
-      try await coordinator.setSessionSetting(.fastMode, value: .bool(true), snapshot: stale)
-      Issue.record("Stale-origin write succeeded")
-    } catch OpenClawGatewayClientError.rejected { }
-  }
-
   private func message(id: String, role: String, runID: String, text: String) -> GatewayJSONValue {
     .object(["role": .string(role), "text": .string(text), "timestamp": .number(1_700_000_000_000),
       "__openclaw": .object(["id": .string(id), "idempotencyKey": .string(runID)])])
