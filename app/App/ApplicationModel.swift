@@ -2269,6 +2269,11 @@ final class ApplicationModel {
         note: WorkspaceNoteRecord? = nil
     ) async -> Bool {
         let conversationState = ensureConversationState(id: conversation.id)
+        if conversation.localRuntimeKind == .hermes, conversation.remoteWorkspaceID == nil,
+           !buzzBoundLocalACPConversationIDs.contains(conversation.id) {
+            do { try requireLocalHermesLink(conversationID: conversation.id, openSettings: true) }
+            catch { conversationState.setError(error.localizedDescription); return false }
+        }
         guard !usesLocallyInstalledRuntime(conversation) || installingLocalACPRuntimeKinds.isEmpty else {
             conversationState.setError("Wait for runtime installation or update to finish before sending a message.")
             return false
@@ -2649,6 +2654,10 @@ final class ApplicationModel {
     func createLocalACPSession(
         runtimeKind: AgentRuntimeKind
     ) async -> String? {
+        if runtimeKind == .hermes {
+            do { try requireLocalHermesLink(openSettings: true) }
+            catch { localRunError = error.localizedDescription; return nil }
+        }
         if runtimeKind == .opencode {
             do {
                 guard let openCode else { throw OpenCodeError.message("OpenCode is still starting.") }
@@ -2786,6 +2795,7 @@ final class ApplicationModel {
                 processWorkingDirectory: processDirectory
             )
         }
+        if runtimeKind == .hermes { try requireLocalHermesLink(conversationID: conversation.id) }
         guard let launch = localACPLaunchConfigurations[runtimeKind],
               let workspace = localACPWorkspaceLaunchConfiguration else {
             throw ApplicationModelError.localACPRuntimeUnavailable
@@ -3012,8 +3022,27 @@ final class ApplicationModel {
         }
     }
 
+    private(set) var pendingHermesSettingsAgentID: UUID?
     private(set) var hermesGatewayConnections: [UUID: HermesGatewayConnection] = [:]
     private(set) var hermesGatewayCheckedAt: [UUID: Date] = [:]
+
+    func dismissPendingHermesSettings() { pendingHermesSettingsAgentID = nil }
+
+    private func requireLocalHermesLink(conversationID: String? = nil, openSettings: Bool = false) throws {
+        guard let agent = localCLIAgents.first(where: { $0.runtimeKind == .hermes }) else {
+            throw HermesGatewayError.message("Enable Hermes in Local Agent Workspace first.")
+        }
+        guard isHermesGatewayLinked(agentID: agent.id) else {
+            if openSettings { pendingHermesSettingsAgentID = agent.id }
+            throw HermesGatewayError.message("Connect this Hermes agent's Gateway in Settings before starting or continuing a chat.")
+        }
+        if let conversationID,
+           let stored = try dashboardStore?.database.localACPSession(conversationID: conversationID).acpSessionID,
+           let home = HermesGatewayClient.parseIdentity(stored).home,
+           home != applicationDefaults.string(forKey: "hermes.gateway.link." + agent.id.uuidString) {
+            throw HermesGatewayError.message("This chat belongs to another Hermes profile. Select and connect that profile before continuing.")
+        }
+    }
 
     func isHermesGatewayLinked(agentID: UUID) -> Bool {
         guard enabledLocalACPRuntimeKinds.contains(.hermes),
@@ -3072,6 +3101,10 @@ final class ApplicationModel {
 
     func importHermesSession(connection: HermesGatewayConnection, sessionID: String) async throws {
         guard let dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
+        try requireLocalHermesLink()
+        guard localCLIAgents.contains(where: { $0.runtimeKind == .hermes && hermesGatewayConnections[$0.id] == connection }) else {
+            throw HermesGatewayError.message("The Hermes connection changed. Reconnect before importing.")
+        }
         guard try !dashboardStore.database.knownHermesSessionIDs(home: connection.home).contains(sessionID) else { return }
         let snapshot = try await HermesSessionHistory.load(connection: connection, sessionID: sessionID)
         let owner = try await dashboardStore.dashboardDeviceID()

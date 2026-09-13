@@ -125,6 +125,15 @@ struct SettingsView: View {
         .task {
             model.refreshLocalACPRuntimesNow()
         }
+        .onAppear { openPendingHermesSettings() }
+        .onChange(of: model.pendingHermesSettingsAgentID) { _, _ in openPendingHermesSettings() }
+    }
+
+    private func openPendingHermesSettings() {
+        guard let agentID = model.pendingHermesSettingsAgentID else { return }
+        providerReturnSection = .hermes
+        section = .hermesAgent(agentID)
+        model.dismissPendingHermesSettings()
     }
 
     private var landing: some View {
