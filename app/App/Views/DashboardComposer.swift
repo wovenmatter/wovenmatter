@@ -42,6 +42,12 @@ struct DashboardComposer: View {
     let onUnavailableAction: (String) -> Void
     let onCommandNavigation: (DashboardComposerNavigationDirection) -> Bool
     let onSend: () -> Void
+    @Environment(\.dashboardTheme) private var theme
+    @State private var selectedSlashCommandID: String?
+    @State private var slashCommandsDismissed = false
+    @State private var slashNavigationRequest = 0
+    @State private var completionRequest = 0
+    @State private var caretAtEnd = true
     @State private var focused = false
     @State private var openMenu: DashboardComposerMenuKind?
     @State private var isDropTarget = false
@@ -90,37 +96,8 @@ struct DashboardComposer: View {
                 composerTextEditor(maximumVisibleLines: 7)
             }
 
-            if !matchingSlashCommands.isEmpty {
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(matchingSlashCommands.prefix(8)) { command in
-                        Button {
-                            applySlashCommand(command)
-                        } label: {
-                            HStack(spacing: 8) {
-                                Text("/\(command.name)")
-                                    .font(.system(size: 12.5, weight: .medium))
-                                    .foregroundStyle(DashboardPalette.foreground)
-                                if let detail = command.detail, !detail.isEmpty {
-                                    Text(detail)
-                                        .font(.system(size: 11.5))
-                                        .foregroundStyle(DashboardPalette.mutedForeground)
-                                        .lineLimit(1)
-                                }
-                                Spacer(minLength: 0)
-                            }
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 7)
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-                .background(DashboardPalette.background.opacity(0.96))
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .stroke(DashboardPalette.foreground.opacity(0.08), lineWidth: 1)
-                }
+            if showsSlashCommands {
+                slashCommandPicker
             }
 
             if !isCollapsed {
@@ -182,8 +159,14 @@ struct DashboardComposer: View {
             .allowsHitTesting(false)
         }
         .onExitCommand {
-            focused = false
-            openMenu = nil
+            if !dismissSlashCommands() {
+                focused = false
+                openMenu = nil
+            }
+        }
+        .onChange(of: draft) { _, _ in
+            slashCommandsDismissed = false
+            selectedSlashCommandID = nil
         }
         .dropDestination(for: URL.self) { urls, _ in
             onActivate()
@@ -216,11 +199,15 @@ struct DashboardComposer: View {
             placeholder: placeholder,
             maximumVisibleLines: maximumVisibleLines,
             onSubmit: {
-                if applyFirstSlashCommandIfNeeded() { return }
+                if applySelectedSlashCommandIfNeeded() { return }
                 if canSend { onSend() }
             },
-            onTab: applyFirstSlashCommandIfNeeded,
-            onCommandNavigation: onCommandNavigation
+            onTab: applySelectedSlashCommandIfNeeded,
+            onCommandNavigation: onCommandNavigation,
+            onMoveSelection: moveSlashSelection,
+            onEscape: dismissSlashCommands,
+            completionRequest: completionRequest,
+            onCaretAtEndChange: { caretAtEnd = $0 }
         )
         .frame(
             minHeight: isCollapsed ? 36 : 32,
@@ -240,7 +227,7 @@ struct DashboardComposer: View {
             separator: "\n",
             omittingEmptySubsequences: false
         ).last.map(String.init) ?? draft
-        guard line.hasPrefix("/"), !line.contains(" ") else { return nil }
+        guard line.hasPrefix("/"), !line.contains(where: \.isWhitespace) else { return nil }
         return String(line.dropFirst())
     }
 
@@ -256,8 +243,91 @@ struct DashboardComposer: View {
         }
     }
 
-    private func applyFirstSlashCommandIfNeeded() -> Bool {
-        guard let command = matchingSlashCommands.first else { return false }
+    private var showsSlashCommands: Bool {
+        focused && caretAtEnd && !slashCommandsDismissed && !matchingSlashCommands.isEmpty
+    }
+
+    private var selectedSlashCommand: LocalACPSlashCommand? {
+        matchingSlashCommands.first { $0.id == selectedSlashCommandID }
+            ?? matchingSlashCommands.first
+    }
+
+    private var slashCommandPicker: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(matchingSlashCommands) { command in
+                        Button {
+                            applySlashCommand(command)
+                        } label: {
+                            HStack(spacing: 8) {
+                                Text("/\(command.name)")
+                                    .font(.system(size: 12.5, weight: .medium))
+                                    .foregroundStyle(DashboardPalette.foreground)
+                                if let hint = command.argumentHint, !hint.isEmpty {
+                                    Text(hint)
+                                        .font(.system(size: 11.5, design: .monospaced))
+                                        .foregroundStyle(DashboardPalette.mutedForeground)
+                                        .lineLimit(1)
+                                }
+                                if let detail = command.detail, !detail.isEmpty {
+                                    Text(detail)
+                                        .font(.system(size: 11.5))
+                                        .foregroundStyle(DashboardPalette.mutedForeground)
+                                        .lineLimit(1)
+                                }
+                                Spacer(minLength: 0)
+                            }
+                            .padding(.horizontal, 10)
+                            .frame(height: 32)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .background(
+                            selectedSlashCommand?.id == command.id ? theme.palette.themeSoft : .clear,
+                            in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        )
+                        .onHover { hovering in
+                            if hovering { selectedSlashCommandID = command.id }
+                        }
+                        .accessibilityLabel("/\(command.name)")
+                        .accessibilityValue(selectedSlashCommand?.id == command.id ? "Selected" : "")
+                        .id(command.id)
+                    }
+                }
+            }
+            .frame(height: min(CGFloat(matchingSlashCommands.count) * 32, 224))
+            .onChange(of: slashNavigationRequest) { _, _ in
+                if let command = selectedSlashCommand {
+                    proxy.scrollTo(command.id)
+                }
+            }
+            .onChange(of: slashQuery) { _, _ in
+                if let command = matchingSlashCommands.first {
+                    proxy.scrollTo(command.id, anchor: .top)
+                }
+            }
+        }
+    }
+
+    private func moveSlashSelection(_ direction: Int) -> Bool {
+        guard showsSlashCommands else { return false }
+        let commands = matchingSlashCommands
+        let current = commands.firstIndex { $0.id == selectedSlashCommand?.id } ?? 0
+        let next = min(max(current + direction, 0), commands.count - 1)
+        selectedSlashCommandID = commands[next].id
+        slashNavigationRequest += 1
+        return true
+    }
+
+    private func dismissSlashCommands() -> Bool {
+        guard showsSlashCommands else { return false }
+        slashCommandsDismissed = true
+        return true
+    }
+
+    private func applySelectedSlashCommandIfNeeded() -> Bool {
+        guard showsSlashCommands, let command = selectedSlashCommand else { return false }
         applySlashCommand(command)
         return true
     }
@@ -274,6 +344,8 @@ struct DashboardComposer: View {
             next[next.count - 1] = "/\(command.name) "
         }
         draft = next.joined(separator: "\n")
+        completionRequest += 1
+        focused = true
         openMenu = nil
     }
 

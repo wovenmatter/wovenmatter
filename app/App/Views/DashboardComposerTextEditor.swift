@@ -10,6 +10,10 @@ struct DashboardComposerTextEditor: NSViewRepresentable {
     let onSubmit: () -> Void
     let onTab: () -> Bool
     let onCommandNavigation: (DashboardComposerNavigationDirection) -> Bool
+    var onMoveSelection: (Int) -> Bool = { _ in false }
+    var onEscape: () -> Bool = { false }
+    var completionRequest: Int = 0
+    var onCaretAtEndChange: (Bool) -> Void = { _ in }
 
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
@@ -32,6 +36,12 @@ struct DashboardComposerTextEditor: NSViewRepresentable {
         textView.onCommandNavigation = { [weak coordinator = context.coordinator] direction in
             coordinator?.parent.onCommandNavigation(direction) ?? false
         }
+        textView.onMoveSelection = { [weak coordinator = context.coordinator] direction in
+            coordinator?.parent.onMoveSelection(direction) ?? false
+        }
+        textView.onEscape = { [weak coordinator = context.coordinator] in
+            coordinator?.parent.onEscape() ?? false
+        }
         textView.onBecomeFirstResponder = { [weak coordinator = context.coordinator] in
             coordinator?.parent.isFocused = true
         }
@@ -46,14 +56,8 @@ struct DashboardComposerTextEditor: NSViewRepresentable {
         textView.placeholderString = placeholder
         textView.setAccessibilityLabel(placeholder)
 
-        if textView.string != text, !textView.hasMarkedText() {
-            let selection = textView.selectedRange()
-            textView.string = text
-            textView.setSelectedRange(NSRange(
-                location: min(selection.location, text.utf16.count),
-                length: 0
-            ))
-        }
+        context.coordinator.reconcileText(for: textView)
+        context.coordinator.scheduleCaretReport(for: textView)
         scrollView.updateDocumentLayout()
 
         context.coordinator.reconcileFocus(for: textView)
@@ -75,9 +79,56 @@ struct DashboardComposerTextEditor: NSViewRepresentable {
     @MainActor
     final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: DashboardComposerTextEditor
+        private var appliedCompletionRequest: Int
+        private var caretReportGeneration = 0
+        private var reportedCaretAtEnd: Bool?
 
         init(parent: DashboardComposerTextEditor) {
             self.parent = parent
+            self.appliedCompletionRequest = parent.completionRequest
+        }
+
+        func reconcileText(for textView: DashboardComposerNativeTextView) {
+            guard !textView.hasMarkedText() else { return }
+            let didComplete = appliedCompletionRequest != parent.completionRequest
+            if textView.string != parent.text {
+                let selection = textView.selectedRange()
+                textView.string = parent.text
+                let location = min(selection.location, parent.text.utf16.count)
+                textView.setSelectedRange(NSRange(
+                    location: location,
+                    length: min(selection.length, parent.text.utf16.count - location)
+                ))
+            }
+            if didComplete {
+                let caret = NSRange(location: parent.text.utf16.count, length: 0)
+                textView.setSelectedRange(caret)
+                textView.scrollRangeToVisible(caret)
+                appliedCompletionRequest = parent.completionRequest
+            }
+        }
+
+        func scheduleCaretReport(for textView: DashboardComposerNativeTextView) {
+            caretReportGeneration += 1
+            let generation = caretReportGeneration
+            // Selection also changes while SwiftUI applies an updated draft.
+            // Report after that update, reading the live selection rather than
+            // delivering a captured value that a newer edit may have invalidated.
+            DispatchQueue.main.async { [weak self, weak textView] in
+                guard let self, let textView,
+                      self.caretReportGeneration == generation else { return }
+                let selection = textView.selectedRange()
+                let isAtEnd = selection.length == 0
+                    && selection.location == textView.string.utf16.count
+                guard self.reportedCaretAtEnd != isAtEnd else { return }
+                self.reportedCaretAtEnd = isAtEnd
+                self.parent.onCaretAtEndChange(isAtEnd)
+            }
+        }
+
+        func textViewDidChangeSelection(_ notification: Notification) {
+            guard let textView = notification.object as? DashboardComposerNativeTextView else { return }
+            scheduleCaretReport(for: textView)
         }
 
         func reconcileFocus(for textView: DashboardComposerNativeTextView) {
@@ -130,6 +181,7 @@ struct DashboardComposerTextEditor: NSViewRepresentable {
         func textDidChange(_ notification: Notification) {
             guard let textView = notification.object as? DashboardComposerNativeTextView else { return }
             parent.text = textView.string
+            scheduleCaretReport(for: textView)
             (textView.enclosingScrollView as? DashboardComposerScrollView)?.updateDocumentLayout()
         }
     }
@@ -247,6 +299,8 @@ final class DashboardComposerNativeTextView: NSTextView {
     var onSubmit: (() -> Void)?
     var onTab: (() -> Bool)?
     var onCommandNavigation: ((DashboardComposerNavigationDirection) -> Bool)?
+    var onMoveSelection: ((Int) -> Bool)?
+    var onEscape: (() -> Bool)?
     var onBecomeFirstResponder: (() -> Void)?
     var placeholderString = "" {
         didSet { needsDisplay = true }
@@ -288,6 +342,17 @@ final class DashboardComposerNativeTextView: NSTextView {
             hasMarkedText: hasMarkedText()
         ), onCommandNavigation?(direction) == true {
             return
+        }
+        if !hasMarkedText(),
+           DashboardComposerKeyAction.normalizedModifiers(event.modifierFlags).isEmpty {
+            switch event.keyCode {
+            case 125 where onMoveSelection?(1) == true,
+                 126 where onMoveSelection?(-1) == true,
+                 53 where onEscape?() == true:
+                return
+            default:
+                break
+            }
         }
         if event.keyCode == 48,
            !hasMarkedText(),

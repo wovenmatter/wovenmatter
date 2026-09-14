@@ -178,6 +178,7 @@ final class ApplicationModel {
     private(set) var calendarMutationError: String?
     private(set) var isCreatingCalendarItem = false
     private(set) var noteDrafts: [String: DashboardNoteDraft] = [:]
+    var pendingComposerPrefills: [String: String] = [:]
     private(set) var localACPSessionMetadata: [
         String: LocalACPSessionMetadata
     ] = [:]
@@ -757,6 +758,22 @@ final class ApplicationModel {
     private func enqueueConversationChange(
         _ change: DashboardConversationChange
     ) {
+        if case .composerPrefill(let text) = change.phase {
+            pendingComposerPrefills[change.conversationID] = text
+            return
+        }
+        // Metadata changes are independent of run content and must not replace
+        // or be suppressed by a pending terminal notification.
+        if change.phase == .configuration {
+            Task { [weak self] in
+                guard let self,
+                      let conversation = self.workspaceOverview?.conversations.first(where: {
+                          $0.id == change.conversationID
+                      }) else { return }
+                await self.refreshLocalACPSession(conversation: conversation)
+            }
+            return
+        }
         if change.phase == .content,
            terminalRunIDsByConversation[change.conversationID] == change.runID {
             return

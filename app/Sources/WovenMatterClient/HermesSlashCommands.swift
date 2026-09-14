@@ -2,14 +2,15 @@ import Foundation
 
 /// Commands the native Hermes catalog makes available to desktop clients.
 public enum HermesSlashCommands {
+    // These are implemented by Hermes Desktop itself, not by the native slash
+    // worker. In particular, /new and /branch must not replace a worker's
+    // identity while Woven Matter still owns the original conversation link.
+    private static let clientActions: Set<String> = ["new", "reset", "branch", "fork", "resume", "sessions", "switch",
+        "prompt", "compose", "profile", "skin", "wake", "journey", "browser", "title", "handoff", "yolo"]
+
     public static func catalog(_ catalog: HermesValue) -> [LocalACPSlashCommand] {
         let tuiOnly = Set(catalog["categories"].array.filter { $0["name"].text == "TUI" }
             .flatMap { $0["pairs"].array.compactMap { $0.array.first?.string } })
-        // These are implemented by Hermes Desktop itself, not by the native slash
-        // worker. In particular, /new and /branch must not replace a worker's
-        // identity while Woven Matter still owns the original conversation link.
-        let clientActions: Set<String> = ["new", "reset", "branch", "fork", "resume", "sessions", "switch",
-            "prompt", "compose", "profile", "skin", "wake", "journey", "browser", "title", "handoff", "yolo"]
         var seen: Set<String> = []
         return catalog["pairs"].array.compactMap { pair in
             let values = pair.array
@@ -24,6 +25,9 @@ public enum HermesSlashCommands {
                          request: @Sendable (String, HermesValue) async throws -> HermesValue) async throws -> HermesValue {
         guard depth < 8, let name = HermesSlashCommands.name(in: text) else {
             throw HermesGatewayError.message("Hermes returned an invalid or circular command alias.")
+        }
+        guard !clientActions.contains(name) else {
+            throw HermesGatewayError.message("This Hermes command requires its own desktop interface.")
         }
         let argument = String(text.dropFirst(name.count + 1)).trimmingCharacters(in: .whitespacesAndNewlines)
         let result: HermesValue

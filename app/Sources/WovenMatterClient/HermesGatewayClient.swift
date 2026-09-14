@@ -196,12 +196,14 @@ public actor HermesGatewayClient {
                     try await onEvent?(.assistantSnapshot(notice))
                 }
                 return .endTurn
-            default:
+            case "", "exec", "plugin":
                 let output = [result["output"].string, result["warning"].string, result["notice"].string]
                     .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "\n\n")
                 if !output.isEmpty { try await onEvent?(.assistantSnapshot(output)) }
                 try? await refreshConfiguration()
                 return .endTurn
+            default:
+                throw HermesGatewayError.message("Hermes returned an unsupported command outcome.")
             }
         }
         if let initialContext, !initialContext.isEmpty { content = initialContext + "\n\n" + content }
