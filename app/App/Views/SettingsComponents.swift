@@ -97,6 +97,7 @@ struct SettingsBackButton: View {
         .environment(\.dashboardSidebarForeground, DashboardPalette.foreground)
         .accessibilityLabel("Back to " + title)
         .help("Back to " + title)
+        .offset(x: -8)
     }
 }
 
