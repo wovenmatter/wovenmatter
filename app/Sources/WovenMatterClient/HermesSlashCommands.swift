@@ -20,6 +20,32 @@ public enum HermesSlashCommands {
         }
     }
 
+    static func dispatch(_ text: String, sessionID: String, depth: Int = 0,
+                         request: @Sendable (String, HermesValue) async throws -> HermesValue) async throws -> HermesValue {
+        guard depth < 8, let name = HermesSlashCommands.name(in: text) else {
+            throw HermesGatewayError.message("Hermes returned an invalid or circular command alias.")
+        }
+        let argument = String(text.dropFirst(name.count + 1)).trimmingCharacters(in: .whitespacesAndNewlines)
+        let result: HermesValue
+        do {
+            result = try await request("command.dispatch", ["session_id": .string(sessionID),
+                "name": .string(name), "arg": .string(argument)])
+        } catch HermesGatewayError.rpc(let code, let message)
+            where code == 4018 && message == "not a quick/plugin/bundle/skill command: " + name {
+            // Only this explicit no-handler response permits fallback. Other errors can
+            // follow side effects, so retrying them through slash.exec could execute twice.
+            result = try await request("slash.exec", ["session_id": .string(sessionID), "command": .string(text)])
+        }
+        if result["type"].text == "alias" {
+            let target = result["target"].text
+            guard !target.isEmpty else { throw HermesGatewayError.message("Hermes returned an empty command alias.") }
+            let command = (target.hasPrefix("/") ? target : "/" + target)
+                + (argument.isEmpty ? "" : " " + argument)
+            return try await dispatch(command, sessionID: sessionID, depth: depth + 1, request: request)
+        }
+        return result
+    }
+
     static func name(in text: String) -> String? {
         guard text.hasPrefix("/"), let first = text.dropFirst().first, !first.isWhitespace, let token = text.dropFirst().split(whereSeparator: \.isWhitespace).first,
               !token.isEmpty else { return nil }
