@@ -16,7 +16,7 @@ struct OpenClawSessionLibrary: View {
         SettingsCard(title: "Shared OpenClaw sessions", detail: "Import an existing conversation with its original working directory.") {
             HStack {
                 Button("Refresh sessions") { pageOffsets = [0]; load(page: 0) }
-                    .buttonStyle(SettingsQuietButtonStyle(horizontalPadding: 8, minimumHeight: 22))
+                    .buttonStyle(SettingsQuietButtonStyle(horizontalPadding: 8, minimumHeight: 26))
                 if busy { ProgressView().controlSize(.small) }
             }
             .disabled(busy)
