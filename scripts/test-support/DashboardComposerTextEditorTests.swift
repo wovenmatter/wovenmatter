@@ -80,6 +80,7 @@ struct DashboardComposerTextEditorTests {
         testTabCompletionIsNarrowAndOptional()
         testPickerNavigationIsNarrowAndOptional()
         testCompletionMovesCaretWithoutChangingOrdinarySelection()
+        testTypingBeforeSwiftUIAppliesCompletion()
         testCaretReportsUseTheLatestNativeSelection()
         testSelectionAndPasteboardServicesRemainNative()
         testMultilineOverflowAndScrollRouting()
@@ -299,7 +300,7 @@ struct DashboardComposerTextEditorTests {
             onSubmit: {},
             onTab: { false },
             onCommandNavigation: { _ in false },
-            completionRequest: 1
+            completionRequest: .constant(1)
         )
         coordinator.parent = editor
         coordinator.reconcileText(for: textView)
@@ -310,10 +311,53 @@ struct DashboardComposerTextEditorTests {
         coordinator.reconcileText(for: textView)
         expect(textView.selectedRange() == NSRange(location: 1, length: 5), "ordinary updates must not replay completion or collapse a selection")
 
-        editor.completionRequest = 2
+        editor.completionRequest = .constant(2)
         coordinator.parent = editor
         coordinator.reconcileText(for: textView)
         expect(textView.selectedRange() == NSRange(location: textView.string.utf16.count, length: 0), "a new completion must move the caret even when the draft already matches")
+    }
+
+    private static func testTypingBeforeSwiftUIAppliesCompletion() {
+        var draft = "/"
+        var completion = 0
+        let editor = DashboardComposerTextEditor(
+            text: Binding(get: { draft }, set: { draft = $0 }),
+            isFocused: .constant(true), placeholder: "Message…", maximumVisibleLines: 3,
+            onSubmit: {}, onTab: { false }, onCommandNavigation: { _ in false },
+            completionRequest: Binding(get: { completion }, set: { completion = $0 })
+        )
+        let coordinator = editor.makeCoordinator()
+        let textView = DashboardComposerNativeTextView()
+        textView.delegate = coordinator
+        textView.string = "/"
+        textView.setSelectedRange(NSRange(location: 1, length: 0))
+        textView.onPrepareInput = { [weak coordinator, weak textView] in
+            guard let coordinator, let textView else { return }
+            coordinator.reconcilePendingCompletion(for: textView)
+        }
+        draft = "/command11 "
+        completion += 1
+        // The next key arrives before updateNSView refreshes coordinator.parent.
+        textView.keyDown(with: keyEvent(keyCode: 0, characters: ""))
+        expect(textView.string == "/command11 ", "a pending completion must settle before native input")
+        // Deliver text separately, as NSTextInputClient does, so the fixture
+        // does not depend on a window or the host keyboard input source.
+        textView.insertText("a", replacementRange: NSRange(location: NSNotFound, length: 0))
+        expect(textView.string == "/command11 a", "typing must first apply a pending command completion: \(textView.string.debugDescription)")
+        expect(draft == "/command11 a", "the native edit must keep the bound draft current")
+        textView.setSelectedRange(NSRange(location: 2, length: 0))
+        coordinator.reconcileText(for: textView)
+        expect(textView.selectedRange().location == 2, "a later SwiftUI update must not apply the same caret move again")
+    }
+
+    private static func drainCaretReports() {
+        var drained = false
+        DispatchQueue.main.async { drained = true }
+        let deadline = Date(timeIntervalSinceNow: 2)
+        while !drained && Date() < deadline {
+            RunLoop.main.run(mode: .default, before: Date(timeIntervalSinceNow: 0.01))
+        }
+        expect(drained, "main queue must drain pending caret reports")
     }
 
     private static func testCaretReportsUseTheLatestNativeSelection() {
@@ -336,15 +380,15 @@ struct DashboardComposerTextEditorTests {
         coordinator.scheduleCaretReport(for: textView)
         textView.setSelectedRange(NSRange(location: textView.string.utf16.count, length: 0))
         expect(reports.isEmpty, "caret reports must not mutate SwiftUI state during an editor update")
-        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.01))
+        drainCaretReports()
         expect(reports == [true], "queued reports must observe the latest caret and discard stale earlier positions")
 
         textView.setSelectedRange(NSRange(location: 1, length: 0))
-        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.01))
+        drainCaretReports()
         expect(reports == [true, false], "moving into the draft must hide end-of-draft completions")
 
         textView.setSelectedRange(NSRange(location: 0, length: textView.string.utf16.count))
-        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.01))
+        drainCaretReports()
         expect(reports == [true, false], "selecting text through the end is not an end caret and must not repeat the report")
     }
 

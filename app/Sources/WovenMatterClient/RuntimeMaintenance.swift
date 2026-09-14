@@ -110,20 +110,12 @@ public enum RuntimeMaintenance {
         }
         if kind == .hermes, let executable {
             let environment = ProcessInfo.processInfo.environment.merging(["PATH": LocalACPRuntimeResolver.executableSearchPath]) { _, new in new }
-            let version = try? LocalACPProcessRunner.run(executableURL: executable, arguments: ["acp", "--version"], environment: environment, timeout: 15)
-            let check = try? LocalACPProcessRunner.run(executableURL: executable, arguments: ["acp", "--check"], environment: environment, timeout: 30)
-            components.append(RuntimeComponent(name: "Native ACP", executable: executable,
-                installed: version?.succeeded == true ? normalizeVersion(version!.stdout) : nil, latest: latest,
-                package: "hermes-agent", required: true, present: check?.succeeded == true,
-                verified: check?.succeeded == true && version?.succeeded == true))
-            if let python = hermesPython(executable) {
-                let metadata = try? LocalACPProcessRunner.run(executableURL: python,
-                    arguments: ["-c", "import importlib.metadata; print(importlib.metadata.version('agent-client-protocol'))"], environment: environment, timeout: 15)
-                if metadata?.succeeded == true, let version = metadata.flatMap({ normalizeVersion($0.stdout) }) {
-                    components.append(RuntimeComponent(name: "ACP SDK", executable: nil, installed: version, latest: nil,
-                        package: "agent-client-protocol", required: false, present: true))
-                }
-            }
+            let check = try? LocalACPProcessRunner.run(executableURL: executable, arguments: ["serve", "--help"], environment: environment, timeout: 30)
+            let available = check?.succeeded == true && check?.stdout.contains("--isolated") == true
+                && check?.stdout.contains("--port") == true
+            components.append(RuntimeComponent(name: "Native Gateway", executable: executable,
+                installed: installed, latest: latest, package: "hermes-agent", required: true,
+                present: available, verified: available && installed != nil))
         }
         let limitation: String? = switch kind {
         case .codex: ProcessInfo.processInfo.environment["CODEX_PATH"]?.isEmpty == false
@@ -134,7 +126,7 @@ public enum RuntimeMaintenance {
             : "Chat uses the adapter’s bundled Claude SDK."
         case .opencode: "Service compatibility is pinned to \(OpenCodeConnection.supportedVersion). Newer releases require app support; the running service is not restarted."
         case .openclaw: "Local CLI only. Linked gateways and their provider runtimes are managed on the gateway host."
-        case .hermes: "Native ACP; updates require idle Hermes services."
+        case .hermes: "Native Gateway; updates require idle Hermes services."
         default: nil
         }
         var inventory = RuntimeInventory(kind: kind, components: components, limitation: limitation)

@@ -145,7 +145,7 @@ struct SettingsHermesAgentView: View {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Agent name").font(.system(size: 11, weight: .medium)).foregroundStyle(DashboardPalette.mutedForeground)
                         TextField("Agent name", text: $name).textFieldStyle(.roundedBorder)
-                        Button("Save Woven Matter Name") {
+                        Button("Save Woven Matter name") {
                             Task {
                                 busy = true; error = nil
                                 defer { busy = false }
@@ -215,7 +215,11 @@ struct SettingsHermesAgentView: View {
             known = try model.knownHermesSessions(home: connection.home)
             sessions = fetched.filter { !known.contains($0["id"].text) }
             page = 0; loaded = true
-        } catch { await rpc.disconnect(); self.error = error.localizedDescription }
+        } catch {
+            await rpc.disconnect()
+            model.invalidateHermesGatewayConnection(agentID: agentID, expected: connection)
+            self.error = error.localizedDescription
+        }
     }
 
     private func importSession(_ id: String) async {

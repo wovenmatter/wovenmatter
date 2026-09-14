@@ -3,8 +3,10 @@
 ## Verified upstream contract
 
 Inspected installed Hermes `422bc9bde9d212ab3741fbc45a871a3938436d59` and upstream
-`3f86ed75dad1933036c52018e991dbd839837126` on September 13, 2026. The session and
-prompt handlers match at those commits. The protocol is Hermes's Desktop/TUI
+`3f86ed75dad1933036c52018e991dbd839837126` on September 13, 2026. The original session and
+prompt handlers matched at those commits. The production-readiness review also
+inspected installed revision `d4063e6260ce1f015181a2712165503efee188f9` on September
+14. Its interactive request contract has changed to peer JSON-RPC requests. The protocol is Hermes's Desktop/TUI
 JSON-RPC backend, not OpenClaw's Gateway protocol.
 
 Primary sources at the inspected upstream revision:
@@ -13,6 +15,9 @@ Primary sources at the inspected upstream revision:
 - [Session RPC](https://github.com/NousResearch/hermes-agent/blob/3f86ed75dad1933036c52018e991dbd839837126/tui_gateway/methods_session.py)
 - [Prompt and interaction RPC](https://github.com/NousResearch/hermes-agent/blob/3f86ed75dad1933036c52018e991dbd839837126/tui_gateway/methods_prompt.py)
 - [Configuration](https://github.com/NousResearch/hermes-agent/blob/3f86ed75dad1933036c52018e991dbd839837126/tui_gateway/methods_config_set.py)
+- [Current server-to-client request transport](https://github.com/NousResearch/hermes-agent/blob/d4063e6260ce1f015181a2712165503efee188f9/tui_gateway/server_requests.py)
+- [Current request and response shapes](https://github.com/NousResearch/hermes-agent/blob/d4063e6260ce1f015181a2712165503efee188f9/tui_gateway/contracts/server_requests.py)
+- [Crash continuation behavior](https://github.com/NousResearch/hermes-agent/blob/d4063e6260ce1f015181a2712165503efee188f9/tui_gateway/session_auto_continue.py)
 - [Native session export](https://github.com/NousResearch/hermes-agent/blob/3f86ed75dad1933036c52018e991dbd839837126/hermes_cli/web_routers/sessions.py)
 
 Woven Matter launches the installed `hermes serve --isolated --host 127.0.0.1
@@ -46,10 +51,17 @@ The private connection registration is scoped to the Hermes profile home.
   with the backend's explanation, rather than bypassing confirmation.
 - Native approval choices remain intact. Clarification uses the existing question
   card. Secret/sudo responses use a transient SecureField and are never written
-  to messages, activity, preferences, or application logs.
+  to messages, activity, preferences, or application logs. Current Gateway requests
+  receive JSON-RPC response frames with the same request ID; `request.cancel`
+  dismisses the interaction, and replay restores `open_requests`. Unsupported
+  requests are declined. The older request-event protocol remains supported.
 - Same-process reconnect holds live events while replaying `session.events.since`,
   orders/deduplicates by sequence, and checks the replay epoch. A changed epoch or
   truncated ring fails the interrupted turn visibly without resubmitting input.
+  Epoch validation precedes recovery resume. Explicit resume uses `defer_history`
+  to avoid the native cold-resume path that automatically continues crashed turns.
+  Lost submit acknowledgements require a fresh running-state check before another
+  explicit send, so a still-running turn cannot silently receive a duplicate.
   Failed replay disconnects and suspends heartbeat recovery, forcing the next
   explicit prompt through full guarded initialization. Durable history stays in
   Hermes. Non-lazy resume may follow a compression tip: a changed durable ID must
@@ -76,9 +88,11 @@ not implemented here. Remote/container Hermes remains on its existing transport;
 this change is the direct local integration. Imported tool output is retained as
 transcript content rather than reconstructed as Woven Matter live-run activity.
 
-Validation is provider-free. No shared Dev app or installed Gateway was launched
-for testing. Actual provider turns, live service adoption, and rendered UI
-acceptance remain manager-owned checks.
+Validation is provider-free: a loopback WebSocket peer covers request-frame routing
+and reconnect epoch checks; transport fixtures cover approvals, clarification,
+secrets, cancellation, event replay, open requests, and lost acknowledgements.
+Database tests cover atomic import, profile identities, and streaming replacement.
+Actual provider turns and live service adoption require separate acceptance.
 
 ## Integration with PR38
 

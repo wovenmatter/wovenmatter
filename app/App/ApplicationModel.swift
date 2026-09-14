@@ -3083,7 +3083,13 @@ final class ApplicationModel {
         } catch { await client.disconnect(); throw error }
         hermesGatewayConnections[agentID] = connected
         hermesGatewayCheckedAt[agentID] = Date()
+        localRunError = nil
         applicationDefaults.set(connected.home, forKey: "hermes.gateway.link." + agentID.uuidString)
+    }
+
+    func invalidateHermesGatewayConnection(agentID: UUID, expected: HermesGatewayConnection) {
+        guard hermesGatewayConnections[agentID] == expected else { return }
+        hermesGatewayConnections[agentID] = nil
     }
 
     func unlinkHermesGateway(agentID: UUID) {
