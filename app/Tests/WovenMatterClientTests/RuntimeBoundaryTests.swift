@@ -140,9 +140,14 @@ struct RuntimeBoundaryTests {
       title: "Fake ACP"
     )
     #expect(session.sessionID == "fake-session")
+    #expect(session.configuration.slashCommands == [
+      LocalACPSlashCommand(name: "review", detail: "Review changes", argumentHint: "[scope]")
+    ])
+    #expect(session.configuration.model == "fixture-model")
     #expect(try await client.prompt("Hello") { event in
       await events.record(event)
     } == .endTurn)
+    #expect(await client.sessionConfiguration().slashCommands.isEmpty)
     await client.shutdown()
     #expect(await events.text() == "Hello from fake ACP")
   }
@@ -478,9 +483,12 @@ private struct FakeACPProcess {
       IFS= read -r request
       printf '%s\\n' '{"jsonrpc":"2.0","id":0,"result":{"protocolVersion":1,"agentCapabilities":{"loadSession":false}}}'
       IFS= read -r request
+      printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fake-session","update":{"sessionUpdate":"available_commands_update","availableCommands":[{"name":"review","description":"Review changes","input":{"hint":"[scope]"}},{"name":"review"},{"name":""}]}}}'
+      printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fake-session","update":{"sessionUpdate":"config_option_update","configOptions":[{"id":"model","name":"Model","category":"model","type":"select","currentValue":"fixture-model","options":[{"value":"fixture-model","name":"Fixture"}]}]}}}'
       printf '%s\\n' '{"jsonrpc":"2.0","id":1,"result":{"sessionId":"fake-session"}}'
       IFS= read -r request
       printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fake-session","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Hello from fake ACP"}}}}'
+      printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fake-session","update":{"sessionUpdate":"available_commands_update","availableCommands":[]}}}'
       printf '%s\\n' '{"jsonrpc":"2.0","id":2,"result":{"stopReason":"end_turn"}}'
       """.write(to: executable, atomically: true, encoding: .utf8)
     try FileManager.default.setAttributes(

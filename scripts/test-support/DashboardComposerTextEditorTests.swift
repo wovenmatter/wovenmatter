@@ -78,6 +78,9 @@ struct DashboardComposerTextEditorTests {
         testCommandArrowPanelNavigationIsResponderScoped()
         testNativeArrowCaretMovement()
         testTabCompletionIsNarrowAndOptional()
+        testPickerNavigationIsNarrowAndOptional()
+        testCompletionMovesCaretWithoutChangingOrdinarySelection()
+        testCaretReportsUseTheLatestNativeSelection()
         testSelectionAndPasteboardServicesRemainNative()
         testMultilineOverflowAndScrollRouting()
         testNativeFocusUpdatesTheBindingImmediately()
@@ -241,6 +244,108 @@ struct DashboardComposerTextEditorTests {
         }
         textView.keyDown(with: keyEvent(keyCode: 48, characters: "\t", modifiers: .command))
         expect(completionCount == 1, "modified Tab must remain a standard responder-chain command")
+    }
+
+    private static func testPickerNavigationIsNarrowAndOptional() {
+        let textView = DashboardComposerNativeTextView()
+        var moves: [Int] = []
+        var dismissals = 0
+        textView.onMoveSelection = {
+            moves.append($0)
+            return true
+        }
+        textView.onEscape = {
+            dismissals += 1
+            return true
+        }
+        textView.keyDown(with: keyEvent(keyCode: 125, characters: "\u{F701}"))
+        textView.keyDown(with: keyEvent(keyCode: 126, characters: "\u{F700}"))
+        textView.keyDown(with: keyEvent(keyCode: 53, characters: "\u{1B}"))
+        expect(moves == [1, -1], "plain arrows must navigate an active picker")
+        expect(dismissals == 1, "Escape must dismiss an active picker")
+
+        textView.keyDown(with: keyEvent(keyCode: 125, characters: "\u{F701}", modifiers: .shift))
+        textView.keyDown(with: keyEvent(keyCode: 126, characters: "\u{F700}", modifiers: .command))
+        expect(moves == [1, -1], "modified arrows must not navigate the picker")
+
+        textView.setMarkedText(
+            "候補",
+            selectedRange: NSRange(location: 2, length: 0),
+            replacementRange: NSRange(location: NSNotFound, length: 0)
+        )
+        textView.keyDown(with: keyEvent(keyCode: 125, characters: "\u{F701}"))
+        expect(moves == [1, -1], "IME candidate navigation must not reach the picker")
+    }
+
+    private static func testCompletionMovesCaretWithoutChangingOrdinarySelection() {
+        var editor = DashboardComposerTextEditor(
+            text: .constant("/"),
+            isFocused: .constant(true),
+            placeholder: "Message…",
+            maximumVisibleLines: 3,
+            onSubmit: {},
+            onTab: { false },
+            onCommandNavigation: { _ in false }
+        )
+        let coordinator = editor.makeCoordinator()
+        let textView = DashboardComposerNativeTextView()
+        textView.string = "/"
+        textView.setSelectedRange(NSRange(location: 1, length: 0))
+        editor = DashboardComposerTextEditor(
+            text: .constant("/skill 🦞 "),
+            isFocused: .constant(true),
+            placeholder: "Message…",
+            maximumVisibleLines: 3,
+            onSubmit: {},
+            onTab: { false },
+            onCommandNavigation: { _ in false },
+            completionRequest: 1
+        )
+        coordinator.parent = editor
+        coordinator.reconcileText(for: textView)
+        expect(textView.string == "/skill 🦞 ", "completion must apply the updated draft")
+        expect(textView.selectedRange() == NSRange(location: textView.string.utf16.count, length: 0), "completion must place the caret after the full UTF16 command")
+
+        textView.setSelectedRange(NSRange(location: 1, length: 5))
+        coordinator.reconcileText(for: textView)
+        expect(textView.selectedRange() == NSRange(location: 1, length: 5), "ordinary updates must not replay completion or collapse a selection")
+
+        editor.completionRequest = 2
+        coordinator.parent = editor
+        coordinator.reconcileText(for: textView)
+        expect(textView.selectedRange() == NSRange(location: textView.string.utf16.count, length: 0), "a new completion must move the caret even when the draft already matches")
+    }
+
+    private static func testCaretReportsUseTheLatestNativeSelection() {
+        var reports: [Bool] = []
+        let editor = DashboardComposerTextEditor(
+            text: .constant("/help 🦞"),
+            isFocused: .constant(true),
+            placeholder: "Message…",
+            maximumVisibleLines: 3,
+            onSubmit: {},
+            onTab: { false },
+            onCommandNavigation: { _ in false },
+            onCaretAtEndChange: { reports.append($0) }
+        )
+        let coordinator = editor.makeCoordinator()
+        let textView = DashboardComposerNativeTextView()
+        textView.delegate = coordinator
+        textView.string = "/help 🦞"
+        textView.setSelectedRange(NSRange(location: 0, length: 0))
+        coordinator.scheduleCaretReport(for: textView)
+        textView.setSelectedRange(NSRange(location: textView.string.utf16.count, length: 0))
+        expect(reports.isEmpty, "caret reports must not mutate SwiftUI state during an editor update")
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.01))
+        expect(reports == [true], "queued reports must observe the latest caret and discard stale earlier positions")
+
+        textView.setSelectedRange(NSRange(location: 1, length: 0))
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.01))
+        expect(reports == [true, false], "moving into the draft must hide end-of-draft completions")
+
+        textView.setSelectedRange(NSRange(location: 0, length: textView.string.utf16.count))
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.01))
+        expect(reports == [true, false], "selecting text through the end is not an end caret and must not repeat the report")
     }
 
     private static func testSelectionAndPasteboardServicesRemainNative() {

@@ -199,6 +199,12 @@ struct DashboardCloudConversation: View {
                         }
                     }
                 }
+                .onChange(of: conversation.flatMap { model.pendingComposerPrefills[$0.id] }, initial: true) { _, text in
+                    guard let text, let conversationID = conversation?.id else { return }
+                    model.pendingComposerPrefills.removeValue(forKey: conversationID)
+                    guard !text.isEmpty else { return }
+                    draft = draft.isEmpty ? text : draft + "\n" + text
+                }
                 .onChange(of: conversation?.id, initial: true) { _, conversationID in
                     scrollState.conversationChanged(to: conversationID)
                     pendingBottomConversationID = conversationID
