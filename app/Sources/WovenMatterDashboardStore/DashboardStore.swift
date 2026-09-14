@@ -70,7 +70,6 @@ public struct DashboardConversationChange: Equatable, Sendable {
   public enum Phase: Equatable, Sendable {
     case content
     case configuration
-    case composerPrefill(String)
     case terminal
   }
 

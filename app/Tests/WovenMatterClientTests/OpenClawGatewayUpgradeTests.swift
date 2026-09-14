@@ -7,6 +7,13 @@ import WovenMatterCore
 struct OpenClawGatewayUpgradeTests {
   private let endpoint = OpenClawGatewayEndpoint(url: URL(string: "ws://127.0.0.1:1")!, authorization: .localService)
 
+  @Test func developmentVariantsKeepGatewayCredentialsSeparateFromProduction() {
+    #expect(OpenClawGatewayKeychain.serviceName(bundleIdentifier: "wovenmatter.desktop") == "Woven Matter.desktop.OpenClaw")
+    #expect(OpenClawGatewayKeychain.serviceName(bundleIdentifier: nil) == "Woven Matter.desktop.OpenClaw")
+    #expect(OpenClawGatewayKeychain.serviceName(bundleIdentifier: "wovenmatter.desktop.dev") == "Woven Matter.desktop.dev.OpenClaw")
+    #expect(OpenClawGatewayKeychain.serviceName(bundleIdentifier: "wovenmatter.desktop.dev.review") == "Woven Matter.desktop.dev.review.OpenClaw")
+  }
+
   @Test func gatewayPersistsIdentityAndTokenWithoutMethodAllowlist() async throws {
     let store = GatewayMemoryCredentials()
     let first = GatewayFixtureSocket()

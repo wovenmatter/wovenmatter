@@ -198,7 +198,6 @@ final class ApplicationModel {
     private(set) var calendarMutationError: String?
     private(set) var isCreatingCalendarItem = false
     private(set) var noteDrafts: [String: DashboardNoteDraft] = [:]
-    var pendingComposerPrefills: [String: String] = [:]
     private(set) var localACPSessionMetadata: [
         String: LocalACPSessionMetadata
     ] = [:]
@@ -778,10 +777,6 @@ final class ApplicationModel {
     private func enqueueConversationChange(
         _ change: DashboardConversationChange
     ) {
-        if case .composerPrefill(let text) = change.phase {
-            pendingComposerPrefills[change.conversationID] = text
-            return
-        }
         // Metadata changes are independent of run content and must not replace
         // or be suppressed by a pending terminal notification.
         if change.phase == .configuration {

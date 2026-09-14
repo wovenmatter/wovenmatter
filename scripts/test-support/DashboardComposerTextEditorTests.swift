@@ -336,16 +336,26 @@ struct DashboardComposerTextEditorTests {
         coordinator.scheduleCaretReport(for: textView)
         textView.setSelectedRange(NSRange(location: textView.string.utf16.count, length: 0))
         expect(reports.isEmpty, "caret reports must not mutate SwiftUI state during an editor update")
-        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.01))
+        drainMainQueue()
         expect(reports == [true], "queued reports must observe the latest caret and discard stale earlier positions")
 
         textView.setSelectedRange(NSRange(location: 1, length: 0))
-        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.01))
+        drainMainQueue()
         expect(reports == [true, false], "moving into the draft must hide end-of-draft completions")
 
         textView.setSelectedRange(NSRange(location: 0, length: textView.string.utf16.count))
-        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.01))
+        drainMainQueue()
         expect(reports == [true, false], "selecting text through the end is not an end caret and must not repeat the report")
+    }
+
+    private static func drainMainQueue() {
+        var drained = false
+        DispatchQueue.main.async { drained = true }
+        let deadline = Date(timeIntervalSinceNow: 2)
+        while !drained && Date() < deadline {
+            RunLoop.main.run(mode: .default, before: deadline)
+        }
+        expect(drained, "the main queue must finish queued caret reports before assertions")
     }
 
     private static func testSelectionAndPasteboardServicesRemainNative() {
