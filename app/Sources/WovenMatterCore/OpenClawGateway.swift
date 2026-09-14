@@ -103,9 +103,7 @@ public struct OpenClawGatewayCapabilities: Codable, Equatable, Sendable {
   public let maximumPayloadBytes: Int?
   public let attachmentPolicy: AttachmentPolicy?
   public let connectedAt: Date
-  public let grantedScopes: Set<String>
   public let tickIntervalMilliseconds: Int
-  public let controlUIURL: URL?
 
   public init(
     applicationVersion: String? = nil,
@@ -114,9 +112,7 @@ public struct OpenClawGatewayCapabilities: Codable, Equatable, Sendable {
     maximumPayloadBytes: Int? = nil,
     attachmentPolicy: AttachmentPolicy? = nil,
     connectedAt: Date = Date(),
-    grantedScopes: Set<String> = [],
-    tickIntervalMilliseconds: Int = 30_000,
-    controlUIURL: URL? = nil
+    tickIntervalMilliseconds: Int = 30_000
   ) {
     self.applicationVersion = applicationVersion
     self.methods = methods
@@ -124,9 +120,7 @@ public struct OpenClawGatewayCapabilities: Codable, Equatable, Sendable {
     self.maximumPayloadBytes = maximumPayloadBytes
     self.attachmentPolicy = attachmentPolicy
     self.connectedAt = connectedAt
-    self.grantedScopes = grantedScopes
     self.tickIntervalMilliseconds = tickIntervalMilliseconds
-    self.controlUIURL = controlUIURL
   }
 
   public func supports(_ method: String) -> Bool { methods.contains(method) }

@@ -247,7 +247,7 @@ private struct OpenCodeSessionLibrary: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Shared OpenCode sessions").font(.headline)
             HStack {
-                Button("Refresh sessions") { cursors = [nil]; load(page: 0) }
+                Button("Refresh sessions") { load(page: 0) }
                     .buttonStyle(SettingsQuietButtonStyle(horizontalPadding: 8, minimumHeight: 26))
                 if busy { ProgressView().controlSize(.small) }
             }
@@ -297,6 +297,7 @@ private struct OpenCodeSessionLibrary: View {
             defer { busy = false }
             do {
                 let result = try await model.importableSessions(cursor: cursors[index])
+                if index == 0 { cursors = [nil] }
                 sessions = result.sessions
                 page = index
                 next = result.next

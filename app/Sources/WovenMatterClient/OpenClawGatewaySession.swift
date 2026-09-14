@@ -1,14 +1,10 @@
 import CryptoKit
 import Foundation
 
-/// Small, typed projections of the 2026.9.4 Gateway v4 contract. Keep the raw
-/// message alongside its projection so additive content blocks remain recoverable.
+/// A native session offered by the Gateway import library.
 public struct OpenClawGatewaySession: Identifiable, Equatable, Sendable {
   public let key: String
   public let title: String
-  public let agentID: String
-  public let isActive: Bool
-  public let updatedAt: Date?
   public var id: String { key }
 
   public init?(payload: GatewayJSONValue) {
@@ -18,9 +14,6 @@ public struct OpenClawGatewaySession: Identifiable, Equatable, Sendable {
     self.key = key
     title = row["displayName"]?.stringValue ?? row["title"]?.stringValue
       ?? row["label"]?.stringValue ?? key
-    agentID = row["agentId"]?.stringValue ?? Self.agentID(for: key) ?? "main"
-    isActive = row["hasActiveRun"]?.boolValue == true
-    updatedAt = row["updatedAt"]?.intValue.map { Date(timeIntervalSince1970: Double($0) / 1_000) }
   }
 
   public static func agentID(for key: String) -> String? {
@@ -121,13 +114,11 @@ public struct OpenClawGatewayHistoryMessage: Codable, Equatable, Sendable {
 public struct OpenClawGatewayHistory: Codable, Sendable {
   public let messages: [OpenClawGatewayHistoryMessage]
   public let sessionID: String?
-  public let activeRunIDs: Set<String>?
   public let hasActiveRun: Bool
   public let isIdle: Bool
   public let inFlightRunID: String?
   public let inFlightText: String?
   public let nextOffset: Int?
-  public let cursor: String?
   public let totalMessages: Int?
 
   public init(payload: GatewayJSONValue) throws {
@@ -141,7 +132,7 @@ public struct OpenClawGatewayHistory: Codable, Sendable {
     }
     let session = row["sessionInfo"]?.objectValue ?? [:]
     sessionID = row["sessionId"]?.stringValue ?? session["sessionId"]?.stringValue
-    activeRunIDs = session["activeRunIds"]?.arrayValue.map { Set($0.compactMap(\.stringValue)) }
+    let activeRunIDs = session["activeRunIds"]?.arrayValue.map { Set($0.compactMap(\.stringValue)) }
     hasActiveRun = session["hasActiveRun"]?.boolValue == true || activeRunIDs?.isEmpty == false
     let flight = row["inFlightRun"]?.objectValue
     inFlightRunID = flight?["runId"]?.stringValue
@@ -155,6 +146,5 @@ public struct OpenClawGatewayHistory: Codable, Sendable {
       nextOffset = next
     } else { nextOffset = nil }
     totalMessages = row["totalMessages"]?.intValue
-    cursor = row["deltaCursor"]?.stringValue
   }
 }

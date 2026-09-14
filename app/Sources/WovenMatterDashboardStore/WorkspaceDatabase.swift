@@ -647,64 +647,64 @@ public final class WorkspaceDatabase: @unchecked Sendable {
   }
 
   private func importOpenClawGatewaySessionUnlocked(agentID: UUID, session: OpenClawGatewaySession) throws -> String {
-      let existing = try prepareUnlocked("""
-        SELECT s.conversation_id FROM desktop_openclaw_gateway_sessions s
-        JOIN dashboard_conversations c ON c.id = s.conversation_id
-        WHERE s.agent_id = ? AND s.session_key = ? AND c.deleted_at IS NULL LIMIT 1
-        """)
-      defer { sqlite3_finalize(existing) }
-      try bind(agentID.uuidString.lowercased(), at: 1, to: existing)
-      try bind(session.key, at: 2, to: existing)
-      let code = sqlite3_step(existing)
-      if code == SQLITE_ROW {
-        let id = try text(existing, column: 0)
-        let restore = try prepareUnlocked("UPDATE dashboard_conversations SET is_archived = 0 WHERE id = ?")
-        defer { sqlite3_finalize(restore) }
-        try bind(id, at: 1, to: restore)
-        try stepDone(restore)
-        return id
-      }
-      guard code == SQLITE_DONE else { throw stepError() }
-      let id = UUID().uuidString.lowercased()
-      let timestamp = Self.timestamp(Date())
-      let conversation = try prepareUnlocked("""
-        INSERT INTO dashboard_conversations (
-          id, user_id, agent_id, agent_codename, governing_plane, authority_kind,
-          authority_device_id, authority_agent_id, title, kind, is_deletable,
-          created_at, updated_at, last_message_at, desktop_owned
-        ) SELECT ?, user_id, id, codename, 'wovenmatter_macos', 'device_owned',
-          authority_device_id, id, ?, 'local_acp', 1, ?, ?, ?, 1
-        FROM dashboard_agents WHERE id = ? AND desktop_owned = 1 AND deleted_at IS NULL
-        """)
-      defer { sqlite3_finalize(conversation) }
-      for (index, value) in [id, session.title, timestamp, timestamp, timestamp, agentID.uuidString.lowercased()].enumerated() {
-        try bind(value, at: Int32(index + 1), to: conversation)
-      }
-      try stepDone(conversation)
-      guard sqlite3_changes(connection) == 1 else { throw LocalACPSessionDatabaseError.sessionNotFound }
-      let local = try prepareUnlocked("""
-        INSERT INTO desktop_local_acp_sessions (
-          conversation_id, agent_id, runtime_kind, governing_plane, authority_kind,
-          authority_device_id, authority_agent_id, title, acp_session_id, created_at, updated_at
-        ) SELECT id, agent_id, 'openclaw', governing_plane, authority_kind,
-          authority_device_id, authority_agent_id, title, ?, ?, ?
-        FROM dashboard_conversations WHERE id = ?
-        """)
-      defer { sqlite3_finalize(local) }
-      for (index, value) in [session.key, timestamp, timestamp, id].enumerated() {
-        try bind(value, at: Int32(index + 1), to: local)
-      }
-      try stepDone(local)
-      let gateway = try prepareUnlocked("""
-        INSERT INTO desktop_openclaw_gateway_sessions
-          (conversation_id, agent_id, session_key, created_at, updated_at) VALUES (?, ?, ?, ?, ?)
-        """)
-      defer { sqlite3_finalize(gateway) }
-      for (index, value) in [id, agentID.uuidString.lowercased(), session.key, timestamp, timestamp].enumerated() {
-        try bind(value, at: Int32(index + 1), to: gateway)
-      }
-      try stepDone(gateway)
+    let existing = try prepareUnlocked("""
+      SELECT s.conversation_id FROM desktop_openclaw_gateway_sessions s
+      JOIN dashboard_conversations c ON c.id = s.conversation_id
+      WHERE s.agent_id = ? AND s.session_key = ? AND c.deleted_at IS NULL LIMIT 1
+      """)
+    defer { sqlite3_finalize(existing) }
+    try bind(agentID.uuidString.lowercased(), at: 1, to: existing)
+    try bind(session.key, at: 2, to: existing)
+    let code = sqlite3_step(existing)
+    if code == SQLITE_ROW {
+      let id = try text(existing, column: 0)
+      let restore = try prepareUnlocked("UPDATE dashboard_conversations SET is_archived = 0 WHERE id = ?")
+      defer { sqlite3_finalize(restore) }
+      try bind(id, at: 1, to: restore)
+      try stepDone(restore)
       return id
+    }
+    guard code == SQLITE_DONE else { throw stepError() }
+    let id = UUID().uuidString.lowercased()
+    let timestamp = Self.timestamp(Date())
+    let conversation = try prepareUnlocked("""
+      INSERT INTO dashboard_conversations (
+        id, user_id, agent_id, agent_codename, governing_plane, authority_kind,
+        authority_device_id, authority_agent_id, title, kind, is_deletable,
+        created_at, updated_at, last_message_at, desktop_owned
+      ) SELECT ?, user_id, id, codename, 'wovenmatter_macos', 'device_owned',
+        authority_device_id, id, ?, 'local_acp', 1, ?, ?, ?, 1
+      FROM dashboard_agents WHERE id = ? AND desktop_owned = 1 AND deleted_at IS NULL
+      """)
+    defer { sqlite3_finalize(conversation) }
+    for (index, value) in [id, session.title, timestamp, timestamp, timestamp, agentID.uuidString.lowercased()].enumerated() {
+      try bind(value, at: Int32(index + 1), to: conversation)
+    }
+    try stepDone(conversation)
+    guard sqlite3_changes(connection) == 1 else { throw LocalACPSessionDatabaseError.sessionNotFound }
+    let local = try prepareUnlocked("""
+      INSERT INTO desktop_local_acp_sessions (
+        conversation_id, agent_id, runtime_kind, governing_plane, authority_kind,
+        authority_device_id, authority_agent_id, title, acp_session_id, created_at, updated_at
+      ) SELECT id, agent_id, 'openclaw', governing_plane, authority_kind,
+        authority_device_id, authority_agent_id, title, ?, ?, ?
+      FROM dashboard_conversations WHERE id = ?
+      """)
+    defer { sqlite3_finalize(local) }
+    for (index, value) in [session.key, timestamp, timestamp, id].enumerated() {
+      try bind(value, at: Int32(index + 1), to: local)
+    }
+    try stepDone(local)
+    let gateway = try prepareUnlocked("""
+      INSERT INTO desktop_openclaw_gateway_sessions
+        (conversation_id, agent_id, session_key, created_at, updated_at) VALUES (?, ?, ?, ?, ?)
+      """)
+    defer { sqlite3_finalize(gateway) }
+    for (index, value) in [id, agentID.uuidString.lowercased(), session.key, timestamp, timestamp].enumerated() {
+      try bind(value, at: Int32(index + 1), to: gateway)
+    }
+    try stepDone(gateway)
+    return id
   }
 
   /// Upsert transcript anchors and reconcile optimistic local rows by idempotency key.
@@ -722,131 +722,136 @@ public final class WorkspaceDatabase: @unchecked Sendable {
     conversationID: String, history: OpenClawGatewayHistory,
     liveRunIDs: Set<String> = []
   ) throws {
-      let now = Self.timestamp(Date())
-      var claimedLocalMessages: Set<String> = []
-      var anchors: [(entry: String, message: String, history: OpenClawGatewayHistoryMessage)] = []
-      let stored = try prepareUnlocked("SELECT entry_id, message_id, payload FROM desktop_openclaw_transcript_entries WHERE conversation_id = ?")
-      defer { sqlite3_finalize(stored) }
-      try bind(conversationID, at: 1, to: stored)
-      while sqlite3_step(stored) == SQLITE_ROW {
-        let payload = try JSONDecoder().decode(GatewayJSONValue.self, from: blob(stored, column: 2))
-        if let history = OpenClawGatewayHistoryMessage(payload: payload) {
-          anchors.append((try text(stored, column: 0), try text(stored, column: 1), history))
+    let now = Self.timestamp(Date())
+    var claimedLocalMessages: Set<String> = []
+    var anchors: [(entry: String, message: String, history: OpenClawGatewayHistoryMessage)] = []
+    let stored = try prepareUnlocked("SELECT entry_id, message_id, payload FROM desktop_openclaw_transcript_entries WHERE conversation_id = ?")
+    defer { sqlite3_finalize(stored) }
+    try bind(conversationID, at: 1, to: stored)
+    while true {
+      let code = sqlite3_step(stored)
+      if code == SQLITE_DONE { break }
+      guard code == SQLITE_ROW else { throw stepError() }
+      let payload = try JSONDecoder().decode(GatewayJSONValue.self, from: blob(stored, column: 2))
+      if let history = OpenClawGatewayHistoryMessage(payload: payload) {
+        anchors.append((try text(stored, column: 0), try text(stored, column: 1), history))
+      }
+    }
+    let identities = Dictionary(grouping: history.messages.compactMap { message in
+      message.transcriptIdentity.map { ($0, message.id) }
+    }, by: { $0.0 })
+    for message in history.messages.reversed() {
+      let digest = SHA256.hash(data: Data((conversationID + ":" + message.id).utf8))
+        .map { String(format: "%02x", $0) }.joined()
+      // Only a unique native record projection can supersede earlier content.
+      let uniqueIdentity = message.transcriptIdentity.flatMap { identity in
+        Set(identities[identity, default: []].map { $0.1 }).count == 1 ? identity : nil
+      }
+      let exact = anchors.filter { $0.entry == message.id }
+      let revisions = anchors.filter {
+        uniqueIdentity != nil && $0.history.transcriptIdentity == uniqueIdentity
+          && message.gatewayRunID != nil && $0.history.gatewayRunID == message.gatewayRunID
+          && $0.history.runID == message.runID
+      }
+      // An exact projected sibling must never absorb another sibling, including
+      // when a later byte-bounded page contains only one of them.
+      let matching = !exact.isEmpty ? exact : (revisions.count == 1 ? revisions : [])
+      var id = matching.first?.message ?? "gateway:" + digest
+      if message.nativeRole == "user" || message.isAssistantResponse {
+        // An exact persisted input key wins (including steering). Provider keys
+        // that do not name an input fall back to the explicit Gateway run ID.
+        for remoteRunID in [message.runID, message.gatewayRunID].compactMap({ $0 }) {
+          let existing = try prepareUnlocked("""
+            SELECT id FROM dashboard_messages WHERE conversation_id = ? AND role = ?
+              AND message_source = 'local_acp' AND id = COALESCE(
+                (SELECT CASE WHEN ? = 'user' THEN user_message_id ELSE assistant_message_id END
+                 FROM desktop_openclaw_run_inputs WHERE conversation_id = ? AND remote_run_id = ?),
+                (SELECT id FROM dashboard_messages WHERE conversation_id = ? AND run_id = ? AND role = ?
+                 AND message_source = 'local_acp' ORDER BY created_at DESC LIMIT 1))
+            """)
+          defer { sqlite3_finalize(existing) }
+          for (index, value) in [conversationID, message.role, message.role, conversationID, remoteRunID,
+                                conversationID, remoteRunID, message.role].enumerated() {
+            try bind(value, at: Int32(index + 1), to: existing)
+          }
+          let code = sqlite3_step(existing)
+          if code == SQLITE_DONE { continue }
+          guard code == SQLITE_ROW else { throw stepError() }
+          let candidate = try text(existing, column: 0)
+          let previous = anchors.filter { $0.message == candidate }
+          if !claimedLocalMessages.contains(candidate), previous.allSatisfy({ anchor in
+            matching.contains { $0.entry == anchor.entry }
+          }) { id = candidate }
+          // A known input must not fall through to another execution's row.
+          break
         }
       }
-      let identities = Dictionary(grouping: history.messages.compactMap { message in
-        message.transcriptIdentity.map { ($0, message.id) }
-      }, by: { $0.0 })
-      for message in history.messages.reversed() {
-        let digest = SHA256.hash(data: Data((conversationID + ":" + message.id).utf8))
-          .map { String(format: "%02x", $0) }.joined()
-        // Only a unique native record projection can supersede earlier content.
-        let uniqueIdentity = message.transcriptIdentity.flatMap { identity in
-          Set(identities[identity, default: []].map { $0.1 }).count == 1 ? identity : nil
+      claimedLocalMessages.insert(id)
+      for old in matching where old.message != id || old.entry != message.id {
+        let remap = try prepareUnlocked("DELETE FROM desktop_openclaw_transcript_entries WHERE conversation_id = ? AND entry_id = ?")
+        defer { sqlite3_finalize(remap) }
+        try bind(conversationID, at: 1, to: remap); try bind(old.entry, at: 2, to: remap)
+        try stepDone(remap)
+        if old.message != id {
+          // Never delete the optimistic row or any run/trace-owned message.
+          let remove = try prepareUnlocked("""
+            DELETE FROM dashboard_messages WHERE id = ? AND conversation_id = ?
+              AND message_source = 'openclaw_history' AND run_id IS NULL
+              AND id NOT IN (SELECT message_id FROM desktop_openclaw_transcript_entries)
+              AND id NOT IN (SELECT message_id FROM dashboard_message_attachments)
+              AND id NOT IN (SELECT message_id FROM dashboard_message_references)
+              AND NOT EXISTS (SELECT 1 FROM dashboard_runs WHERE user_message_id = dashboard_messages.id OR assistant_message_id = dashboard_messages.id)
+              AND NOT EXISTS (SELECT 1 FROM desktop_openclaw_run_inputs WHERE user_message_id = dashboard_messages.id OR assistant_message_id = dashboard_messages.id)
+            """)
+          defer { sqlite3_finalize(remove) }
+          try bind(old.message, at: 1, to: remove); try bind(conversationID, at: 2, to: remove)
+          try stepDone(remove)
         }
-        let exact = anchors.filter { $0.entry == message.id }
-        let revisions = anchors.filter {
-          uniqueIdentity != nil && $0.history.transcriptIdentity == uniqueIdentity
-            && message.gatewayRunID != nil && $0.history.gatewayRunID == message.gatewayRunID
-            && $0.history.runID == message.runID
-        }
-        // An exact projected sibling must never absorb another sibling, including
-        // when a later byte-bounded page contains only one of them.
-        let matching = !exact.isEmpty ? exact : (revisions.count == 1 ? revisions : [])
-        var id = matching.first?.message ?? "gateway:" + digest
-        if message.nativeRole == "user" || message.isAssistantResponse {
-          // An exact persisted input key wins (including steering). Provider keys
-          // that do not name an input fall back to the explicit Gateway run ID.
-          for remoteRunID in [message.runID, message.gatewayRunID].compactMap({ $0 }) {
-            let existing = try prepareUnlocked("""
-              SELECT id FROM dashboard_messages WHERE conversation_id = ? AND role = ?
-                AND message_source = 'local_acp' AND id = COALESCE(
-                  (SELECT CASE WHEN ? = 'user' THEN user_message_id ELSE assistant_message_id END
-                   FROM desktop_openclaw_run_inputs WHERE conversation_id = ? AND remote_run_id = ?),
-                  (SELECT id FROM dashboard_messages WHERE conversation_id = ? AND run_id = ? AND role = ?
-                   AND message_source = 'local_acp' ORDER BY created_at DESC LIMIT 1))
-              """)
-            defer { sqlite3_finalize(existing) }
-            for (index, value) in [conversationID, message.role, message.role, conversationID, remoteRunID,
-                                  conversationID, remoteRunID, message.role].enumerated() {
-              try bind(value, at: Int32(index + 1), to: existing)
-            }
-            guard sqlite3_step(existing) == SQLITE_ROW else { continue }
-            let candidate = try text(existing, column: 0)
-            let previous = anchors.filter { $0.message == candidate }
-            if !claimedLocalMessages.contains(candidate), previous.allSatisfy({ anchor in
-              matching.contains { $0.entry == anchor.entry }
-            }) { id = candidate }
-            // A known input must not fall through to another execution's row.
-            break
-          }
-        }
-        claimedLocalMessages.insert(id)
-        for old in matching where old.message != id || old.entry != message.id {
-          let remap = try prepareUnlocked("DELETE FROM desktop_openclaw_transcript_entries WHERE conversation_id = ? AND entry_id = ?")
-          defer { sqlite3_finalize(remap) }
-          try bind(conversationID, at: 1, to: remap); try bind(old.entry, at: 2, to: remap)
-          try stepDone(remap)
-          if old.message != id {
-            // Never delete the optimistic row or any run/trace-owned message.
-            let remove = try prepareUnlocked("""
-              DELETE FROM dashboard_messages WHERE id = ? AND conversation_id = ?
-                AND message_source = 'openclaw_history' AND run_id IS NULL
-                AND id NOT IN (SELECT message_id FROM desktop_openclaw_transcript_entries)
-                AND id NOT IN (SELECT message_id FROM dashboard_message_attachments)
-                AND id NOT IN (SELECT message_id FROM dashboard_message_references)
-                AND NOT EXISTS (SELECT 1 FROM dashboard_runs WHERE user_message_id = dashboard_messages.id OR assistant_message_id = dashboard_messages.id)
-                AND NOT EXISTS (SELECT 1 FROM desktop_openclaw_run_inputs WHERE user_message_id = dashboard_messages.id OR assistant_message_id = dashboard_messages.id)
-              """)
-            defer { sqlite3_finalize(remove) }
-            try bind(old.message, at: 1, to: remove); try bind(conversationID, at: 2, to: remove)
-            try stepDone(remove)
-          }
-        }
-        anchors.removeAll { anchor in matching.contains { $0.entry == anchor.entry } }
-        anchors.append((message.id, id, message))
-        let retained = try prepareUnlocked("""
-          INSERT INTO desktop_openclaw_transcript_entries (conversation_id, entry_id, message_id, payload)
-          VALUES (?, ?, ?, ?) ON CONFLICT(conversation_id, entry_id)
-          DO UPDATE SET payload = excluded.payload, message_id = excluded.message_id
-          """)
-        defer { sqlite3_finalize(retained) }
-        try bind(conversationID, at: 1, to: retained)
-        try bind(message.id, at: 2, to: retained)
-        try bind(id, at: 3, to: retained)
-        try bind(message.raw, at: 4, to: retained)
-        try stepDone(retained)
-        // A history snapshot may lag a live streamed item. Do not rewind it.
-        if message.role == "assistant", [message.runID, message.gatewayRunID].compactMap({ $0 }).contains(where: liveRunIDs.contains) { continue }
-        let row = try prepareUnlocked("""
-          INSERT INTO dashboard_messages (
-            id, conversation_id, role, message_source, content, status, governing_plane,
-            authority_kind, authority_device_id, authority_agent_id, created_at, updated_at, desktop_owned
-          ) SELECT ?, id, ?, 'openclaw_history', ?, ?, governing_plane,
-            authority_kind, authority_device_id, authority_agent_id, ?, ?, 1
-          FROM dashboard_conversations WHERE id = ? AND deleted_at IS NULL
-          ON CONFLICT(id) DO UPDATE SET content = excluded.content,
-            status = CASE WHEN dashboard_messages.status = 'streaming' THEN dashboard_messages.status ELSE excluded.status END,
-            updated_at = excluded.updated_at
-          """)
-        defer { sqlite3_finalize(row) }
-        let content = message.text.isEmpty ? (message.terminalError ?? "") : message.text
-        for (index, value) in [id, message.role, content, message.terminalError == nil ? "completed" : "failed", Self.timestamp(message.date), now, conversationID].enumerated() {
-          try bind(value, at: Int32(index + 1), to: row)
-        }
-        try stepDone(row)
       }
-      let touch = try prepareUnlocked("""
-        UPDATE dashboard_conversations SET last_message_at = MAX(
-          COALESCE((SELECT imported_at FROM desktop_openclaw_import_activity WHERE conversation_id = dashboard_conversations.id), ''),
-          COALESCE((SELECT MAX(created_at) FROM dashboard_messages WHERE conversation_id = ?), last_message_at)
-        ), updated_at = ? WHERE id = ?
+      anchors.removeAll { anchor in matching.contains { $0.entry == anchor.entry } }
+      anchors.append((message.id, id, message))
+      let retained = try prepareUnlocked("""
+        INSERT INTO desktop_openclaw_transcript_entries (conversation_id, entry_id, message_id, payload)
+        VALUES (?, ?, ?, ?) ON CONFLICT(conversation_id, entry_id)
+        DO UPDATE SET payload = excluded.payload, message_id = excluded.message_id
         """)
-      defer { sqlite3_finalize(touch) }
-      try bind(conversationID, at: 1, to: touch)
-      try bind(now, at: 2, to: touch)
-      try bind(conversationID, at: 3, to: touch)
-      try stepDone(touch)
+      defer { sqlite3_finalize(retained) }
+      try bind(conversationID, at: 1, to: retained)
+      try bind(message.id, at: 2, to: retained)
+      try bind(id, at: 3, to: retained)
+      try bind(message.raw, at: 4, to: retained)
+      try stepDone(retained)
+      // A history snapshot may lag a live streamed item. Do not rewind it.
+      if message.role == "assistant", [message.runID, message.gatewayRunID].compactMap({ $0 }).contains(where: liveRunIDs.contains) { continue }
+      let row = try prepareUnlocked("""
+        INSERT INTO dashboard_messages (
+          id, conversation_id, role, message_source, content, status, governing_plane,
+          authority_kind, authority_device_id, authority_agent_id, created_at, updated_at, desktop_owned
+        ) SELECT ?, id, ?, 'openclaw_history', ?, ?, governing_plane,
+          authority_kind, authority_device_id, authority_agent_id, ?, ?, 1
+        FROM dashboard_conversations WHERE id = ? AND deleted_at IS NULL
+        ON CONFLICT(id) DO UPDATE SET content = excluded.content,
+          status = CASE WHEN dashboard_messages.status = 'streaming' THEN dashboard_messages.status ELSE excluded.status END,
+          updated_at = excluded.updated_at
+        """)
+      defer { sqlite3_finalize(row) }
+      let content = message.text.isEmpty ? (message.terminalError ?? "") : message.text
+      for (index, value) in [id, message.role, content, message.terminalError == nil ? "completed" : "failed", Self.timestamp(message.date), now, conversationID].enumerated() {
+        try bind(value, at: Int32(index + 1), to: row)
+      }
+      try stepDone(row)
+    }
+    let touch = try prepareUnlocked("""
+      UPDATE dashboard_conversations SET last_message_at = MAX(
+        COALESCE((SELECT imported_at FROM desktop_openclaw_import_activity WHERE conversation_id = dashboard_conversations.id), ''),
+        COALESCE((SELECT MAX(created_at) FROM dashboard_messages WHERE conversation_id = ?), last_message_at)
+      ), updated_at = ? WHERE id = ?
+      """)
+    defer { sqlite3_finalize(touch) }
+    try bind(conversationID, at: 1, to: touch)
+    try bind(now, at: 2, to: touch)
+    try bind(conversationID, at: 3, to: touch)
+    try stepDone(touch)
   }
 
   public func interruptedOpenClawRuns(conversationID: String) throws -> [LocalACPRunIdentifiers] {
@@ -4236,15 +4241,14 @@ public final class WorkspaceDatabase: @unchecked Sendable {
           AND authority_kind = 'device_owned' AND desktop_owned = 1
           AND deleted_at IS NULL
         """)
+      defer { sqlite3_finalize(ownership) }
       try bind(rawID, at: 1, to: ownership)
       let code = sqlite3_step(ownership)
       guard code == SQLITE_ROW else {
-        sqlite3_finalize(ownership)
         throw code == SQLITE_DONE
           ? WorkspaceDatabaseError.execute("This OpenCode is not owned by Woven Matter on this Mac.")
           : stepError()
       }
-      sqlite3_finalize(ownership)
 
       let statement = try prepareUnlocked("""
         UPDATE dashboard_agents

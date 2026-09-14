@@ -89,7 +89,7 @@ public actor OpenClawGatewayCoordinator {
   private var contentPublicationTasks: [String: Task<Void, Never>] = [:]
   private static let contentPublicationDelay = Duration.milliseconds(50)
   private var monitorTasks: [UUID: Task<Void, Never>] = [:]
-  private var historyTasks: [String: Task<Void, Never>] = [:]
+  private var historyTasks: [String: (agentID: UUID, task: Task<Void, Never>)] = [:]
   private var dirtyHistories: Set<String> = []
   private var lastRunSequences: [String: Int] = [:]
   private var testClient: OpenClawGatewayClient?
@@ -129,9 +129,10 @@ public actor OpenClawGatewayCoordinator {
 
   private func invalidateConnection(agentID: UUID) -> OpenClawGatewayClient? {
     monitorTasks.removeValue(forKey: agentID)?.cancel()
-    for session in (try? database.openClawGatewaySessions(agentID: agentID)) ?? [] {
-      historyTasks.removeValue(forKey: session.conversationID)?.cancel()
-      dirtyHistories.remove(session.conversationID)
+    for (conversationID, refresh) in historyTasks where refresh.agentID == agentID {
+      refresh.task.cancel()
+      historyTasks.removeValue(forKey: conversationID)
+      dirtyHistories.remove(conversationID)
     }
     connectionGenerations.removeValue(forKey: agentID)
     pendingClientConnections.removeValue(forKey: agentID)?.cancel()
@@ -200,17 +201,13 @@ public actor OpenClawGatewayCoordinator {
   }
 
   public func disconnect(agentID: UUID) async {
-    monitorTasks.removeValue(forKey: agentID)?.cancel()
-    for session in (try? database.openClawGatewaySessions(agentID: agentID)) ?? [] {
-      historyTasks.removeValue(forKey: session.conversationID)?.cancel()
-    }
     await invalidateConnection(agentID: agentID)?.disconnect()
   }
 
   public func shutdown() async {
     isShuttingDown = true
     for task in runTasks.values { task.cancel() }
-    for task in historyTasks.values { task.cancel() }
+    for refresh in historyTasks.values { refresh.task.cancel() }
     for task in monitorTasks.values { task.cancel() }
     for agentID in Set(clients.keys).union(pendingClientConnections.keys) {
       await disconnect(agentID: agentID)
@@ -1641,8 +1638,8 @@ public actor OpenClawGatewayCoordinator {
         disconnectHandler: { [weak self] detail in
           await self?.handleGatewayDisconnect(agentID: agentID, generation: generation, detail: detail)
         },
-        connectionHandler: { [weak self] hello in
-          await self?.didConnect(agentID: agentID, generation: generation, hello: hello)
+        connectionHandler: { [weak self] in
+          await self?.didConnect(agentID: agentID, generation: generation)
         }
       )
       do {
@@ -1737,7 +1734,7 @@ public actor OpenClawGatewayCoordinator {
     }
   }
 
-  private func didConnect(agentID: UUID, generation: UUID, hello: OpenClawGatewayCapabilities) async {
+  private func didConnect(agentID: UUID, generation: UUID) async {
     guard isCurrentConnection(agentID, generation: generation) else { return }
     do {
       let socket = try await client(agentID: agentID)
@@ -1761,13 +1758,13 @@ public actor OpenClawGatewayCoordinator {
       dirtyHistories.insert(conversationID)
       return
     }
-    historyTasks[conversationID] = Task { [weak self] in
+    historyTasks[conversationID] = (agentID, Task { [weak self] in
       do { try await Task.sleep(for: .milliseconds(500)) } catch { return }
       guard let self, await self.isCurrentConnection(agentID, generation: generation) else { return }
       do { _ = try await self.synchronizeSession(conversationID: conversationID) }
       catch { await self.historyRefreshFailed(conversationID: conversationID, agentID: agentID, generation: generation, error: error) }
       await self.finishedHistoryRefresh(conversationID: conversationID, agentID: agentID, generation: generation)
-    }
+    })
   }
 
   private func finishedHistoryRefresh(conversationID: String, agentID: UUID, generation: UUID) {

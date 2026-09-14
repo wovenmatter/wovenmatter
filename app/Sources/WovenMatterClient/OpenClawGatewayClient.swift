@@ -95,7 +95,7 @@ public enum OpenClawGatewayClientError: LocalizedError, Equatable, Sendable {
 public actor OpenClawGatewayClient {
   public typealias EventHandler = @Sendable (OpenClawGatewayEvent) async -> Void
   public typealias DisconnectHandler = @Sendable (String) async -> Void
-  public typealias ConnectionHandler = @Sendable (OpenClawGatewayCapabilities) async -> Void
+  public typealias ConnectionHandler = @Sendable () async -> Void
 
   private struct Frame: Codable {
     var type: String
@@ -141,7 +141,7 @@ public actor OpenClawGatewayClient {
     credentialStore: any OpenClawGatewayCredentialStore = OpenClawGatewayKeychain.shared,
     eventHandler: @escaping EventHandler = { _ in },
     disconnectHandler: @escaping DisconnectHandler = { _ in },
-    connectionHandler: @escaping ConnectionHandler = { _ in }
+    connectionHandler: @escaping ConnectionHandler = {}
   ) {
     self.endpoint = endpoint
     self.requestHeaders = requestHeaders
@@ -171,7 +171,7 @@ public actor OpenClawGatewayClient {
     self.socketFactory = socketFactory
     self.eventHandler = eventHandler
     self.disconnectHandler = { _ in }
-    self.connectionHandler = { _ in }
+    self.connectionHandler = {}
   }
 
   public func connect() async throws -> OpenClawGatewayCapabilities {
@@ -186,7 +186,7 @@ public actor OpenClawGatewayClient {
       let hello = try await task.value
       guard generation == attempt else { throw CancellationError() }
       connecting = nil
-      Task { await connectionHandler(hello) }
+      Task { await connectionHandler() }
       return hello
     } catch {
       if generation == attempt {
@@ -373,9 +373,7 @@ public actor OpenClawGatewayClient {
       events: events,
       maximumPayloadBytes: policy?["maxPayload"]?.intValue,
       attachmentPolicy: attachmentPolicy,
-      grantedScopes: Set(hello["auth"]?.objectValue?["scopes"]?.arrayValue?.compactMap(\.stringValue) ?? []),
-      tickIntervalMilliseconds: min(300_000, max(1_000, policy?["tickIntervalMs"]?.intValue ?? 30_000)),
-      controlUIURL: hello["controlUiUrl"]?.stringValue.flatMap(URL.init(string:))
+      tickIntervalMilliseconds: min(300_000, max(1_000, policy?["tickIntervalMs"]?.intValue ?? 30_000))
     )
   }
 
@@ -494,7 +492,7 @@ public actor OpenClawGatewayClient {
       watchdog = nil
       failPending(error)
       await socket.close()
-      if !Task.isCancelled {
+      if generation == attempt, !Task.isCancelled {
         await disconnectHandler(error.localizedDescription)
       }
     }
