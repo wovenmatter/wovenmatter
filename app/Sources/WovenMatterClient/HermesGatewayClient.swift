@@ -233,8 +233,9 @@ public actor HermesGatewayClient {
         if result["type"].text == "alias" {
             let target = result["target"].text
             guard !target.isEmpty else { throw HermesGatewayError.message("Hermes returned an empty command alias.") }
-            if target.hasPrefix("/") { return try await dispatchCommand(target, rpc: rpc, depth: depth + 1) }
-            return ["type": "send", "message": .string(target)]
+            let command = (target.hasPrefix("/") ? target : "/" + target)
+                + (argument.isEmpty ? "" : " " + argument)
+            return try await dispatchCommand(command, rpc: rpc, depth: depth + 1)
         }
         return result
     }
