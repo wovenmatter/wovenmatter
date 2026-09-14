@@ -157,7 +157,7 @@ struct SettingsHermesAgentView: View {
                 }
                 SettingsCard(title: "Shared Hermes sessions", detail: "Import an existing conversation with its original working directory. Up to 100 recent sessions, 25 per page.") {
                     Button("Refresh sessions") { Task { await refresh() } }
-                        .buttonStyle(SettingsQuietButtonStyle(horizontalPadding: 8, minimumHeight: 22)).disabled(connection == nil)
+                        .buttonStyle(SettingsQuietButtonStyle(horizontalPadding: 8, minimumHeight: 26)).disabled(connection == nil)
                     if loaded {
                         TextField("Search listed conversations", text: $search).textFieldStyle(.roundedBorder)
                             .onChange(of: search) { _, _ in page = 0 }
