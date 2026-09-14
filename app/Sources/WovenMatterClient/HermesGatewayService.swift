@@ -99,7 +99,6 @@ public actor HermesGatewayService {
                 catch { await client.disconnect(); throw error }
             }
         }
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         let ready = folder.appending(path: "ready-" + UUID().uuidString + ".json")
         defer { try? FileManager.default.removeItem(at: ready) }
         let process = Process()

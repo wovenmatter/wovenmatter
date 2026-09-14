@@ -472,6 +472,8 @@ public actor LocalACPSessionCoordinator {
                     switch event {
                     case .assistantChunk(let chunk):
                         try await streamWriter.append(chunk)
+                    case .sessionIdentity(let sessionID):
+                        try await self.persistSessionIdentity(sessionID, conversationID: descriptor.conversationID, runID: run.runID)
                     case .assistantSnapshot(let content):
                         try await streamWriter.replace(content)
                     case .assistantBoundary:
@@ -521,10 +523,14 @@ public actor LocalACPSessionCoordinator {
                 conversationID: descriptor.conversationID,
                 initialStopReason: stopReason
             )
-            try persistPendingDurableSessionID(
-                conversationID: descriptor.conversationID,
-                runID: run.runID
-            )
+            // Hermes slash commands need not create a durable native row. Its
+            // client publishes the identity immediately before a provider submit.
+            if descriptor.runtimeKind != .hermes {
+                try persistPendingDurableSessionID(
+                    conversationID: descriptor.conversationID,
+                    runID: run.runID
+                )
+            }
             try persistConfiguration(
                 await client.configuration(),
                 conversationID: descriptor.conversationID
@@ -1136,9 +1142,8 @@ public actor LocalACPSessionCoordinator {
                 throw LifecycleError.shutDown
             }
             if initialized.sessionID != descriptor.acpSessionID {
-                // Cursor and Pi allocate IDs before their session stores are
-                // durable. Persist those IDs only after the first prompt has
-                // materialized a session that a later process can resume.
+                // Cursor, Pi and Hermes allocate IDs before their session stores
+                // are durable. Configuration-only drafts must remain recreatable.
                 if !Self.defersNewSessionPersistence(descriptor.runtimeKind)
                     || initialized.loadedExistingSession {
                     try database.updateLocalACPSessionID(
@@ -1273,7 +1278,7 @@ public actor LocalACPSessionCoordinator {
     private static func defersNewSessionPersistence(
         _ runtimeKind: AgentRuntimeKind
     ) -> Bool {
-        runtimeKind == .cursor || runtimeKind == .pi
+        runtimeKind == .cursor || runtimeKind == .pi || runtimeKind == .hermes
     }
 
     private func persistConfiguration(
@@ -1285,6 +1290,11 @@ public actor LocalACPSessionCoordinator {
             model: configuration.model,
             thinking: configuration.thinking
         )
+    }
+
+    private func persistSessionIdentity(_ sessionID: String, conversationID: String, runID: String) throws {
+        try database.updateLocalACPSessionID(conversationID: conversationID, runID: runID, sessionID: sessionID)
+        activeSessions[conversationID]?.pendingDurableSessionID = nil
     }
 
     private func persistPendingDurableSessionID(

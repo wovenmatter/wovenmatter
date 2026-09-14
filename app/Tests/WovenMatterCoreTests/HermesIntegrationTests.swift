@@ -5,6 +5,48 @@ import WovenMatterCore
 @testable import WovenMatterDashboardStore
 
 struct HermesIntegrationTests {
+    @Test func nativeDraftsAreNotPersistedButUncertainSubmissionsKeepTheirIdentity() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let database = try WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
+        let id = try database.createLocalACPSession(runtimeKind: .hermes, title: "Draft", ownerDeviceID: UUID())
+        let identity = HermesGatewayClient.identity(home: root.path, storedID: "native-id")
+        let (events, continuation) = AsyncStream<Void>.makeStream()
+        var iterator = events.makeAsyncIterator()
+        let coordinator = LocalACPSessionCoordinator(database: database,
+            processLease: try LocalACPProcessLease(fileURL: root.appending(path: "process.lock")),
+            onChange: { if $0.phase == .terminal { continuation.yield(()) } },
+            clientFactory: { _, _ in
+                LocalACPSessionDriver(initializeSession: { _, existing, _, _ in
+                    #expect(existing == nil)
+                    return LocalACPInitializedSession(sessionID: identity, loadedExistingSession: false, configuration: .empty)
+                }, prompt: { input, onEvent, _, _ in
+                    if input.text == "/help" {
+                        try await onEvent?(.assistantSnapshot("Native help"))
+                        return .endTurn
+                    }
+                    try await onEvent?(.sessionIdentity(identity))
+                    #expect(try database.localACPSession(conversationID: id).acpSessionID == identity)
+                    throw HermesGatewayError.message("Submit acknowledgement lost")
+                }, configuration: { .empty }, setConfiguration: { _, _ in .empty }, cancel: {}, shutdown: {})
+            })
+        let launch = LocalACPRuntimeLaunchConfiguration(runtimeKind: .hermes, executableURL: root, arguments: [])
+        let workspace = LocalACPWorkspaceLaunchConfiguration(rootURL: root, repositoriesURL: root)
+        for _ in 0..<2 {
+            _ = try await coordinator.configuration(conversationID: id, launch: launch, workspace: workspace)
+            #expect(try database.localACPSession(conversationID: id).acpSessionID == nil)
+        }
+        _ = try await coordinator.accept(conversationID: id, content: "/help", launch: launch, workspace: workspace)
+        _ = await iterator.next()
+        #expect(try database.localACPSession(conversationID: id).acpSessionID == nil)
+        _ = try await coordinator.accept(conversationID: id, content: "Hello", launch: launch, workspace: workspace)
+        _ = await iterator.next()
+        #expect(try database.localACPSession(conversationID: id).acpSessionID == identity)
+        await coordinator.shutdown()
+        continuation.finish()
+    }
+
     @Test func importsKeepDistinctProfilesAndAreAtomicAndIdempotent() throws {
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

@@ -70,7 +70,10 @@ public actor HermesGatewayClient {
         var environment = launch.environment
         if let pinnedHome = previous?.home { environment["HERMES_HOME"] = pinnedHome }
         let scoped = LocalACPRuntimeLaunchConfiguration(runtimeKind: .hermes, executableURL: launch.executableURL,
-            arguments: launch.arguments, environment: environment)
+            arguments: launch.arguments, environment: environment,
+            environmentKeysToRemove: launch.environmentKeysToRemove,
+            environmentKeyPrefixesToRemove: launch.environmentKeyPrefixesToRemove,
+            processWorkingDirectoryURL: launch.processWorkingDirectoryURL)
         let (profileHome, client) = try await connectTransport(scoped)
         home = profileHome
         rpc = client
@@ -79,14 +82,14 @@ public actor HermesGatewayClient {
         try await client.connect()
         epoch = await client.epoch
         var params: HermesValue = ["source": "desktop", "close_on_disconnect": .bool(false)]
-        if previous == nil { params["cwd"] = .string(workingDirectory.path); params["lazy"] = .bool(true) }
-        if let title { params["title"] = .string(title) }
+        if previous == nil { params["cwd"] = .string(workingDirectory.path) }
         let snapshot: HermesValue
         if let previous {
             params["session_id"] = .string(previous.storedID)
             params["defer_history"] = .bool(true)
             snapshot = try await client.call("session.resume", params)
         } else {
+            if let title { params["title"] = .string(title) }
             snapshot = try await client.call("session.create", params)
             // Same ACP v1 compatibility behavior: agent instructions accompany the first user turn.
             initialContext = systemPrompt
@@ -220,12 +223,29 @@ public actor HermesGatewayClient {
             }
         }
         if let initialContext, !initialContext.isEmpty { content = initialContext + "\n\n" + content }
-        for file in input.files {
-            let method = file.kind == .image ? "image.attach" : "file.attach"
-            let attached = try await rpc.call(method, ["session_id": .string(sessionID), "path": .string(file.localURL.path), "name": .string(file.fileName)])
-            if let reference = attached["ref_text"].string { content += "\n" + reference }
+        var stagedImages: [String] = []
+        do {
+            for file in input.files {
+                let path = file.localURL.resolvingSymlinksInPath().path
+                let method = file.kind == .image ? "image.attach" : "file.attach"
+                var params: HermesValue = ["session_id": .string(sessionID), "path": .string(path)]
+                if file.kind == .image { stagedImages.append(path) }
+                else { params["name"] = .string(file.fileName) }
+                let attached = try await rpc.call(method, params)
+                if let reference = attached["ref_text"].string { content += "\n" + reference }
+            }
+        } catch {
+            // No prompt was submitted. Remove images already queued by this attempt
+            // so a failed attachment cannot accompany a later, unrelated message.
+            for path in stagedImages {
+                _ = try? await rpc.call("image.detach", ["session_id": .string(sessionID), "path": .string(path)])
+            }
+            throw error
         }
         do {
+            // Configuration and local slash commands can use an unpersisted native
+            // draft. Pin its identity before submission, including an uncertain ack.
+            try await onEvent?(.sessionIdentity(Self.identity(home: home, storedID: storedID, imported: imported)))
             _ = try await rpc.call("prompt.submit", ["session_id": .string(sessionID), "text": .string(content)])
             initialContext = nil
             if let terminal { return try terminal.get() }
@@ -267,11 +287,6 @@ public actor HermesGatewayClient {
         finish(.failure(CancellationError()))
     }
 
-    public func history() async throws -> [HermesValue] {
-        guard let rpc else { throw HermesGatewayError.message("Hermes is disconnected.") }
-        return try await rpc.call("session.history", ["session_id": .string(sessionID)])["messages"].array
-    }
-
     private func ping() async {
         guard !recoveryInvalidated, let rpc else { return }
         do { _ = try await rpc.call("ping", [:]) }
@@ -294,8 +309,7 @@ public actor HermesGatewayClient {
             let requested = storedID
             let snapshot = try await rpc.call("session.resume", ["session_id": .string(requested), "defer_history": .bool(true)])
             try bind(snapshot, requestedStoredID: requested)
-            guard newEpoch == epoch, sessionID == oldSession else {
-                epoch = newEpoch; sequence = 0; buffered = []
+            guard sessionID == oldSession else {
                 throw HermesGatewayError.message("Hermes Gateway restarted. Conversation history is preserved; review it before continuing this interrupted turn.")
             }
             let replay = try await rpc.call("session.events.since", ["session_id": .string(sessionID), "last_seen": .number(sequence)])

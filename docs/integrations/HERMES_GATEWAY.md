@@ -2,23 +2,23 @@
 
 ## Verified upstream contract
 
-Inspected installed Hermes `422bc9bde9d212ab3741fbc45a871a3938436d59` and upstream
-`3f86ed75dad1933036c52018e991dbd839837126` on September 13, 2026. The original session and
-prompt handlers matched at those commits. The production-readiness review also
-inspected installed revision `d4063e6260ce1f015181a2712165503efee188f9` on September
-14. Its interactive request contract has changed to peer JSON-RPC requests. The protocol is Hermes's Desktop/TUI
-JSON-RPC backend, not OpenClaw's Gateway protocol.
+Verified against installed Hermes v0.21.2 at revision
+`d4063e6260ce1f015181a2712165503efee188f9` on September 14, 2026, including
+its strict request schemas and live backend. Woven Matter is a client of the
+native Desktop/TUI JSON-RPC API. `hermes gateway` manages messaging platforms;
+that separate service is not required for this integration.
 
-Primary sources at the inspected upstream revision:
+Native implementation and contracts at the verified revision:
 
-- [WebSocket transport](https://github.com/NousResearch/hermes-agent/blob/3f86ed75dad1933036c52018e991dbd839837126/tui_gateway/ws.py)
-- [Session RPC](https://github.com/NousResearch/hermes-agent/blob/3f86ed75dad1933036c52018e991dbd839837126/tui_gateway/methods_session.py)
-- [Prompt and interaction RPC](https://github.com/NousResearch/hermes-agent/blob/3f86ed75dad1933036c52018e991dbd839837126/tui_gateway/methods_prompt.py)
-- [Configuration](https://github.com/NousResearch/hermes-agent/blob/3f86ed75dad1933036c52018e991dbd839837126/tui_gateway/methods_config_set.py)
+- [WebSocket transport](https://github.com/NousResearch/hermes-agent/blob/d4063e6260ce1f015181a2712165503efee188f9/tui_gateway/ws.py)
+- [Strict session request schemas](https://github.com/NousResearch/hermes-agent/blob/d4063e6260ce1f015181a2712165503efee188f9/tui_gateway/contracts/sessions.py)
+- [Session RPC](https://github.com/NousResearch/hermes-agent/blob/d4063e6260ce1f015181a2712165503efee188f9/tui_gateway/methods_session.py)
+- [Prompt and interaction RPC](https://github.com/NousResearch/hermes-agent/blob/d4063e6260ce1f015181a2712165503efee188f9/tui_gateway/methods_prompt.py)
+- [Configuration](https://github.com/NousResearch/hermes-agent/blob/d4063e6260ce1f015181a2712165503efee188f9/tui_gateway/methods_config_set.py)
 - [Current server-to-client request transport](https://github.com/NousResearch/hermes-agent/blob/d4063e6260ce1f015181a2712165503efee188f9/tui_gateway/server_requests.py)
 - [Current request and response shapes](https://github.com/NousResearch/hermes-agent/blob/d4063e6260ce1f015181a2712165503efee188f9/tui_gateway/contracts/server_requests.py)
 - [Crash continuation behavior](https://github.com/NousResearch/hermes-agent/blob/d4063e6260ce1f015181a2712165503efee188f9/tui_gateway/session_auto_continue.py)
-- [Native session export](https://github.com/NousResearch/hermes-agent/blob/3f86ed75dad1933036c52018e991dbd839837126/hermes_cli/web_routers/sessions.py)
+- [Native session export](https://github.com/NousResearch/hermes-agent/blob/d4063e6260ce1f015181a2712165503efee188f9/hermes_cli/web_routers/sessions.py)
 
 Woven Matter launches the installed `hermes serve --isolated --host 127.0.0.1
 --port 0`. Hermes publishes the selected port through its supported
@@ -32,6 +32,11 @@ The private connection registration is scoped to the Hermes profile home.
 - Native `session.create` and `session.resume` return live IDs distinct from the
   durable conversation key. Woven Matter stores the durable key with its profile
   home. Existing ACP IDs address Hermes's same `state.db` and remain resumable.
+  Empty drafts have no durable native row and may be reaped after disconnect.
+  Configuration and local slash commands therefore do not persist a new ID.
+  The client publishes the identity before `prompt.submit`, so a failed database
+  write prevents submission and a lost acknowledgement cannot orphan accepted work.
+  Create, resume and image requests use their distinct native parameter schemas.
 - `session.cwd.set` applies the existing local workspace root only to Woven
   Matter-created sessions, including legacy local ACP sessions. Its REPOS and
   Databases links retain their configured external targets. Imported sessions
@@ -78,9 +83,8 @@ The private connection registration is scoped to the Hermes profile home.
 There is no client-supplied durable input receipt in the inspected `prompt.submit`
 handler. Cross-process restart or a replay gap therefore cannot safely establish
 which unacknowledged input was accepted. The client reports uncertainty and never
-matches inputs by text or automatically resends them. A draft that never reached
-Hermes's first prompt may have no durable database row after a server restart;
-its failed resume is reported instead of silently replacing it with a new session.
+matches inputs by text or automatically resends them. A configuration-only draft can be recreated. Once submission has been attempted,
+a failed resume is reported instead of silently replacing the conversation.
 
 Secure input supports the native secret/sudo requests; Hermes-specific vault,
 terminal-preview, browser-control, voice, and Desktop tour request surfaces are
@@ -92,7 +96,15 @@ Validation is provider-free: a loopback WebSocket peer covers request-frame rout
 and reconnect epoch checks; transport fixtures cover approvals, clarification,
 secrets, cancellation, event replay, open requests, and lost acknowledgements.
 Database tests cover atomic import, profile identities, and streaming replacement.
-Actual provider turns and live service adoption require separate acceptance.
+Live acceptance also used the installed backend with the existing Hermes profile:
+startup/reuse, authenticated ping and profile/epoch validation, provider readiness,
+session listing and durable export, create/resume, and guarded idle shutdown.
+The isolated native app verified Ready, real history import, new-chat controls,
+and native `/help` execution after the 20-second orphan-draft grace period.
+Image attach/detach and file staging also passed against the live backend,
+including filenames containing spaces.
+No provider prompts were submitted; actual model execution remains a separate
+acceptance check. The user's Hermes Desktop process was left running.
 
 ## Integration with PR38
 

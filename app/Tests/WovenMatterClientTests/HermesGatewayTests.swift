@@ -4,6 +4,41 @@ import WovenMatterCore
 @testable import WovenMatterClient
 
 struct HermesGatewayTests {
+    @Test func createAndResumeUseTheirOwnNativeParameterSchemas() async throws {
+        let transport = HermesTransportFixture()
+        let client = makeClient(transport)
+        let created = try await client.initializeSession(workingDirectory: URL(fileURLWithPath: "/tmp"),
+            existingSessionID: nil, title: "A conversation", systemPrompt: nil)
+        _ = try await client.initializeSession(workingDirectory: URL(fileURLWithPath: "/tmp"),
+            existingSessionID: created.sessionID, title: "A conversation", systemPrompt: nil)
+        #expect(await transport.calls.first { $0.0 == "session.create" }?.1["title"] == "A conversation")
+        #expect(await transport.calls.first { $0.0 == "session.resume" }?.1["defer_history"] == .bool(true))
+        await client.shutdown()
+    }
+
+    @Test func attachmentsUseNativeSchemasAndRollBackImagesWhenStagingFails() async throws {
+        let transport = HermesTransportFixture()
+        let client = makeClient(transport)
+        _ = try await client.initializeSession(workingDirectory: URL(fileURLWithPath: "/tmp"), existingSessionID: nil, title: nil, systemPrompt: nil)
+        let image = AgentFileAttachmentDraft(kind: .image, fileName: "image.png", mimeType: "image/png",
+            sizeBytes: 1, contentHash: "image", localURL: URL(fileURLWithPath: "/tmp/image.png"))
+        let file = AgentFileAttachmentDraft(kind: .file, fileName: "file.txt", mimeType: "text/plain",
+            sizeBytes: 1, contentHash: "file", localURL: URL(fileURLWithPath: "/tmp/file.txt"))
+        let input = AgentMessageInput(text: "Inspect these", attachments: [.file(image), .file(file)])
+        await transport.rejectFiles()
+        await #expect(throws: (any Error).self) {
+            try await client.prompt(input, onEvent: nil, onPermission: nil, onInteraction: nil)
+        }
+        #expect(await transport.calls.contains { $0.0 == "image.detach" })
+        #expect(await !transport.calls.contains { $0.0 == "prompt.submit" })
+        await transport.rejectFiles(false)
+        let turn = Task { try await client.prompt(input, onEvent: nil, onPermission: nil, onInteraction: nil) }
+        try await transport.waitForSubmit()
+        await transport.complete()
+        #expect(try await turn.value == .endTurn)
+        await client.shutdown()
+    }
+
     @Test func nativeRequestsUseResponseFramesAndKeepTheReaderAvailable() async throws {
         let transport = HermesTransportFixture()
         let client = makeClient(transport)
@@ -80,6 +115,22 @@ struct HermesGatewayTests {
         await client.shutdown()
     }
 
+    @Test func identityIsPublishedBeforeAnyProviderSubmission() async throws {
+        let transport = HermesTransportFixture()
+        let client = makeClient(transport)
+        _ = try await client.initializeSession(workingDirectory: URL(fileURLWithPath: "/tmp"), existingSessionID: nil, title: nil, systemPrompt: nil)
+        await #expect(throws: (any Error).self) {
+            try await client.prompt(AgentMessageInput(text: "Hello"), onEvent: { event in
+                if case .sessionIdentity(let identity) = event {
+                    #expect(HermesGatewayClient.parseIdentity(identity).storedID == "stored")
+                    throw HermesGatewayError.message("Cannot persist the identity")
+                }
+            }, onPermission: nil, onInteraction: nil)
+        }
+        #expect(await !transport.calls.contains { $0.0 == "prompt.submit" })
+        await client.shutdown()
+    }
+
     @Test func lostSubmitAcknowledgementRequiresRunningCheckBeforeNextSend() async throws {
         let transport = HermesTransportFixture()
         await transport.loseNextSubmit()
@@ -133,6 +184,7 @@ private actor HermesTransportFixture: HermesGatewayTransport {
     private var onDisconnect: (@Sendable () async -> Void)?
     private var running = false
     private var loseSubmit = false
+    private var rejectFile = false
     private var sequence = 0
     private var replay: HermesValue?
 
@@ -143,7 +195,23 @@ private actor HermesTransportFixture: HermesGatewayTransport {
     func disconnect() { isConnected = false }
     func call(_ method: String, _ params: HermesValue) throws -> HermesValue {
         calls.append((method, params))
+        // Allowed keys from installed Hermes d4063e62's strict Pydantic contracts.
+        // Unlike the old permissive fixture, reject fields the real Gateway rejects.
+        let fields: Set<String>?
         switch method {
+        case "session.create": fields = ["profile", "cols", "source", "cwd", "messages", "parent_session_id", "title", "model", "provider", "reasoning_effort", "fast", "close_on_disconnect", "hidden", "room_plumbing", "follow_profile_config"]
+        case "session.resume": fields = ["session_id", "cols", "source", "lazy", "defer_history", "omit_messages", "eager_build", "close_on_disconnect"]
+        case "image.attach", "image.detach": fields = ["session_id", "path"]
+        case "file.attach": fields = ["session_id", "path", "data_url", "name"]
+        default: fields = nil
+        }
+        if let fields, !Set(params.object.keys).isSubset(of: fields) {
+            throw HermesGatewayError.rpc(code: 4000, message: "Invalid parameters for " + method)
+        }
+        switch method {
+        case "file.attach":
+            if rejectFile { throw HermesGatewayError.rpc(code: 5028, message: "File could not be staged") }
+            return ["attached": .bool(true), "ref_text": "@file:file.txt"]
         case "session.create", "session.resume":
             return ["session_id": "live", "stored_session_id": "stored", "running": .bool(running)]
         case "session.events.since": return replay ?? ["latest_seq": .number(Double(sequence)), "epoch": .string(epoch ?? "")]
@@ -180,6 +248,7 @@ private actor HermesTransportFixture: HermesGatewayTransport {
         await onDisconnect?()
     }
     func loseNextSubmit() { loseSubmit = true }
+    func rejectFiles(_ reject: Bool = true) { rejectFile = reject }
     func waitForSubmit() async throws {
         for _ in 0..<200 {
             if running { return }
