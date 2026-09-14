@@ -57,6 +57,7 @@ final class OpenCodeModel {
     private var selectionTasks: [String: Task<Void, Error>] = [:]
     private var defaultModels: [String: OpenCodeValue] = [:]
     private var models: [String: [OpenCodeValue]] = [:]
+    private var commands: [String: [OpenCodeValue]] = [:]
 
     private var connectionID: String {
         remoteConfiguration.map { "remote-workspace:" + $0.id.uuidString.lowercased() }
@@ -387,11 +388,14 @@ final class OpenCodeModel {
         let fallback = try await coordinator.call(connectionID: connectionID, path: "/api/model/default", query: locationQuery(id))
         models[id] = result["data"].array.filter { $0["enabled"].bool }
         defaultModels[id] = fallback["data"]
+        commands[id] = []
+        let catalog = try await coordinator.call(connectionID: connectionID, path: "/api/command", query: locationQuery(id))
+        commands[id] = catalog["data"].array
     }
 
     func metadata(_ id: String) -> LocalACPSessionMetadata? {
         guard let snapshot = snapshots[id], isLocalSession(id) else { return nil }
-        return OpenCodeComposerMetadata.metadata(session: snapshot.info, models: models[id] ?? [], defaultModel: defaultModels[id] ?? .null, hiddenModels: hiddenModels)
+        return OpenCodeComposerMetadata.metadata(session: snapshot.info, models: models[id] ?? [], defaultModel: defaultModels[id] ?? .null, hiddenModels: hiddenModels, commands: commands[id] ?? [])
     }
 
     func updateSelection(_ id: String, model: String? = nil, thinking: String? = nil) {
@@ -428,7 +432,12 @@ final class OpenCodeModel {
         if !isReady { try await connectLocal() }
         // A failed selection remains a send barrier until the user selects again.
         if let selection = selectionTasks[id] { try await selection.value }
-        try await coordinator.prompt(link, input: input)
+        if let command = OpenCodeComposerMetadata.invocation(input.text, commands: commands[id] ?? []) {
+            try await coordinator.command(link, name: command.name,
+                input: AgentMessageInput(text: command.arguments, attachments: input.attachments))
+        } else {
+            try await coordinator.prompt(link, input: input)
+        }
     }
 
     func perform(_ operation: @escaping @MainActor () async throws -> Void) {

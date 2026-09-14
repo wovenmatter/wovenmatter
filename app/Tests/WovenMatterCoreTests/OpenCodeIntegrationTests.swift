@@ -89,6 +89,46 @@ struct OpenCodeIntegrationTests {
         #expect(!FileManager.default.fileExists(atPath: registration.path))
     }
 
+    @Test func nativeCommandCatalogPreservesDescriptionsAndOnlyRoutesKnownCommands() {
+        let catalog: [OpenCodeValue] = [
+            ["name": "review", "description": "Review changes"], ["name": "review"],
+            ["name": ""], ["name": "invalid command"], ["name": "help"]
+        ]
+        let metadata = OpenCodeComposerMetadata.metadata(session: ["id": "ses_fixture"], models: [], commands: catalog)
+        #expect(metadata.slashCommands.map(\.name) == ["review", "help"])
+        #expect(metadata.slashCommands.first?.detail == "Review changes")
+        let command = OpenCodeComposerMetadata.invocation("/review  current changes\nincluding tests", commands: catalog)
+        #expect(command?.name == "review")
+        #expect(command?.arguments == "current changes\nincluding tests")
+        #expect(OpenCodeComposerMetadata.invocation("/unknown text", commands: catalog) == nil)
+        #expect(OpenCodeComposerMetadata.invocation("explain /review", commands: catalog) == nil)
+    }
+
+    @Test func nativeCommandsAcceptNoContentAndNeverRetryLostResponsesAsPrompts() async throws {
+        let fixture = OpenCodeFixture(); FixtureProtocol.fixture = fixture
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let database = try WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+        let id = try database.createLocalACPSession(runtimeKind: .opencode, title: "Commands", ownerDeviceID: UUID(), openCodeAssociation: ("fixture", "ses_fixture"))
+        let link = OpenCodeSessionLink(conversationID: id, connectionID: "fixture", sessionID: "ses_fixture")
+        let session = fixtureSession()
+        let coordinator = OpenCodeSessionCoordinator(database: database, clientFactory: { OpenCodeHTTPClient(connection: $0, session: session) })
+        try await coordinator.connect(connection())
+        try await coordinator.command(link, name: "review", input: .init(text: "current changes"))
+        #expect(fixture.commandCount == 1)
+        #expect(fixture.lastCommand["command"].text == "review")
+        #expect(fixture.lastCommand["text"].text == "current changes")
+        #expect(fixture.lastCommand["id"].isNull)
+        #expect(try database.openCodeUncertainSubmissions(conversationID: id).isEmpty)
+        fixture.loseCommandResponse = true
+        await #expect(throws: OpenCodeError.self) { try await coordinator.command(link, name: "review", input: .init(text: "again")) }
+        #expect(fixture.commandCount == 2)
+        #expect(fixture.promptCount == 0)
+        #expect(try database.openCodeUncertainSubmissions(conversationID: id).isEmpty)
+        await coordinator.shutdown()
+    }
+
     @Test func hiddenModelsLeaveSessionAndThinkingIntactButDisappearFromChoices() throws {
         let models: [OpenCodeValue] = [
             ["id": "chosen", "providerID": "one", "variants": .array([["id": "high"]])],
@@ -578,6 +618,9 @@ private final class OpenCodeFixture: @unchecked Sendable {
     var losePromptResponse = false
     var acceptPrompt = true
     var promptCount = 0
+    var commandCount = 0
+    var loseCommandResponse = false
+    var lastCommand: OpenCodeValue = .null
     var interruptCount = 0
     var historyRequests = 0
     var streamTimeout: TimeInterval?
@@ -588,8 +631,7 @@ private final class OpenCodeFixture: @unchecked Sendable {
             if path == "/api/health" { return (200, ["healthy": .bool(true), "version": .string(version), "pid": .number(Double(ProcessInfo.processInfo.processIdentifier))]) }
             if path == "/api/session/active" { return (200, ["data": [:]]) }
             if path.hasSuffix("/interrupt") { interruptCount += 1; return (200, [:]) }
-            if path.hasSuffix("/prompt") {
-                promptCount += 1
+            if path.hasSuffix("/prompt") || path.hasSuffix("/command") {
                 var bytes = request.httpBody ?? Data()
                 if let stream = request.httpBodyStream {
                     stream.open(); defer { stream.close() }
@@ -597,6 +639,13 @@ private final class OpenCodeFixture: @unchecked Sendable {
                     while stream.hasBytesAvailable { let n = stream.read(&buffer, maxLength: buffer.count); if n <= 0 { break }; bytes.append(contentsOf: buffer.prefix(n)) }
                 }
                 let input = try OpenCodeValue.decode(bytes)
+                if path.hasSuffix("/command") {
+                    commandCount += 1
+                    lastCommand = input
+                    if loseCommandResponse { throw URLError(.networkConnectionLost) }
+                    return (204, .null)
+                }
+                promptCount += 1
                 let message: OpenCodeValue = ["id": input["id"], "text": input["text"], "type": "user", "time": ["created": .number(900)]]
                 if acceptPrompt { messages.append(message) }
                 if losePromptResponse { throw URLError(.networkConnectionLost) }
@@ -653,7 +702,7 @@ private final class FixtureProtocol: URLProtocol, @unchecked Sendable {
         do {
             let (status, value) = try Self.fixture.respond(request)
             client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json"])!, cacheStoragePolicy: .notAllowed)
-            client?.urlProtocol(self, didLoad: try JSONEncoder().encode(value))
+            if status != 204 { client?.urlProtocol(self, didLoad: try JSONEncoder().encode(value)) }
             client?.urlProtocolDidFinishLoading(self)
         } catch { client?.urlProtocol(self, didFailWithError: error) }
     }
