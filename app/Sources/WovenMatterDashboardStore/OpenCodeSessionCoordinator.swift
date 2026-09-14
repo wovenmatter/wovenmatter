@@ -303,6 +303,12 @@ public actor OpenCodeSessionCoordinator {
         snapshots[link.conversationID] = snapshot; emit(link.conversationID, status: "Connected")
     }
     public func prompt(_ link: OpenCodeSessionLink, input: AgentMessageInput) async throws {
+        try await submit(link, input: input, command: nil)
+    }
+    public func command(_ link: OpenCodeSessionLink, name: String, input: AgentMessageInput) async throws {
+        try await submit(link, input: input, command: name)
+    }
+    private func submit(_ link: OpenCodeSessionLink, input: AgentMessageInput, command: String?) async throws {
         guard sending.insert(link.conversationID).inserted else { throw OpenCodeError.message("The previous input is still being submitted.") }
         defer { sending.remove(link.conversationID) }
         guard let client = clients[link.connectionID] else { throw OpenCodeError.message("Connect to OpenCode before sending input.") }
@@ -315,6 +321,21 @@ public actor OpenCodeSessionCoordinator {
             let bytes = try Data(contentsOf: file.localURL)
             guard bytes.count <= AgentMessageAttachmentLimits.maximumFileBytes else { throw OpenCodeError.message("Attachment exceeds Woven Matter's size limit.") }
             files.append(["uri": .string("data:\(file.mimeType);base64," + bytes.base64EncodedString()), "name": .string(file.fileName)])
+        }
+        if let command {
+            // Native commands return 204 and do not accept a caller message ID.
+            // Never journal or retry them as idempotent prompt submissions.
+            let payload: OpenCodeValue = ["command": .string(command),
+                "text": .string(input.textWithReferenceContext), "files": .array(files)]
+            do {
+                _ = try await client.call("POST", "/api/session/\(OpenCodeHTTPClient.segment(link.sessionID))/command", body: payload)
+            } catch {
+                if case OpenCodeError.http(let code) = error, [400, 401, 403, 404, 422].contains(code) { throw error }
+                try? await refresh(link)
+                throw OpenCodeError.message("OpenCode did not confirm the command outcome. Check the session before running it again; Woven Matter has not retried it.")
+            }
+            try? await refresh(link)
+            return
         }
         let payload: OpenCodeValue = ["id": .string(id), "text": .string(input.textWithReferenceContext), "files": .array(files)]
         try database.saveOpenCodeSubmission(conversationID: link.conversationID, id: id, payload: payload, status: "sending")
