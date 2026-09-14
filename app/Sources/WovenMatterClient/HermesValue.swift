@@ -53,5 +53,11 @@ extension HermesValue: ExpressibleByDictionaryLiteral {
 
 public enum HermesGatewayError: LocalizedError, Sendable {
     case message(String)
-    public var errorDescription: String? { switch self { case .message(let text): return text } }
+    case rpc(code: Int, message: String)
+    public var errorDescription: String? {
+        switch self {
+        case .message(let text): return text
+        case .rpc(_, let message): return "Hermes: " + message
+        }
+    }
 }

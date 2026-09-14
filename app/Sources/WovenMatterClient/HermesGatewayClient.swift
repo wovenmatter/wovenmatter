@@ -115,7 +115,7 @@ public actor HermesGatewayClient {
         let info = snapshot["info"]
         if !info["usage"].isNull { latestUsage = info["usage"] }
         configuration = LocalACPSessionConfiguration(model: info["model"].string, thinking: info["reasoning_effort"].string,
-            modelOptions: configuration.modelOptions, thinkingOptions: configuration.thinkingOptions)
+            modelOptions: configuration.modelOptions, thinkingOptions: configuration.thinkingOptions, slashCommands: configuration.slashCommands)
     }
 
     public func sessionConfiguration() -> LocalACPSessionConfiguration { configuration }
@@ -130,7 +130,7 @@ public actor HermesGatewayClient {
             }
             configuration = LocalACPSessionConfiguration(model: key == "model" ? value : configuration.model,
                 thinking: key == "reasoning" ? value : configuration.thinking,
-                modelOptions: configuration.modelOptions, thinkingOptions: configuration.thinkingOptions)
+                modelOptions: configuration.modelOptions, thinkingOptions: configuration.thinkingOptions, slashCommands: configuration.slashCommands)
         }
         try await refreshConfiguration()
         return configuration
@@ -152,8 +152,10 @@ public actor HermesGatewayClient {
         var efforts = ["minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
         if capabilities["reasoning"] == .bool(false) { efforts = [] }
         else if capabilities["can_disable_reasoning"] != .bool(false) { efforts.insert("none", at: 0) }
+        let catalog = try? await rpc.call("commands.catalog", ["session_id": .string(sessionID)])
         configuration = LocalACPSessionConfiguration(model: provider.isEmpty ? currentModel : currentModel + " --provider " + provider,
-            thinking: reasoning["value"].string, modelOptions: models, thinkingOptions: efforts)
+            thinking: reasoning["value"].string, modelOptions: models, thinkingOptions: efforts,
+            slashCommands: catalog.map(HermesSlashCommands.catalog) ?? configuration.slashCommands)
     }
 
     public func prompt(_ input: AgentMessageInput, onEvent: LocalACPClient.EventHandler?,
@@ -170,6 +172,33 @@ public actor HermesGatewayClient {
         usageBaseline = latestUsage
         defer { busy = false; self.onEvent = nil; self.onPermission = nil; self.onInteraction = nil }
         var content = input.transportText()
+        if input.files.isEmpty, HermesSlashCommands.name(in: content).map({ name in
+            configuration.slashCommands.contains { $0.name == name }
+        }) == true {
+            let result = try await dispatchCommand(content, rpc: rpc)
+            switch result["type"].text {
+            case "send", "skill":
+                guard let message = result["message"].string else {
+                    throw HermesGatewayError.message("Hermes returned a command without its message.")
+                }
+                content = message
+            case "prefill":
+                guard let message = result["message"].string else {
+                    throw HermesGatewayError.message("Hermes returned a command without its draft.")
+                }
+                try await onEvent?(.composerPrefill(message))
+                if let notice = result["notice"].string, !notice.isEmpty {
+                    try await onEvent?(.assistantSnapshot(notice))
+                }
+                return .endTurn
+            default:
+                let output = [result["output"].string, result["warning"].string, result["notice"].string]
+                    .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "\n\n")
+                if !output.isEmpty { try await onEvent?(.assistantSnapshot(output)) }
+                try? await refreshConfiguration()
+                return .endTurn
+            }
+        }
         if let initialContext, !initialContext.isEmpty { content = initialContext + "\n\n" + content }
         for file in input.files {
             let method = file.kind == .image ? "image.attach" : "file.attach"
@@ -184,6 +213,30 @@ public actor HermesGatewayClient {
                 try await withCheckedThrowingContinuation { completion = $0 }
             } onCancel: { Task { try? await self.cancel() } }
         } catch { finish(.failure(error)); throw error }
+    }
+
+    private func dispatchCommand(_ text: String, rpc: HermesGatewayRPC, depth: Int = 0) async throws -> HermesValue {
+        guard depth < 8, let name = HermesSlashCommands.name(in: text) else {
+            throw HermesGatewayError.message("Hermes returned an invalid or circular command alias.")
+        }
+        let argument = String(text.dropFirst(name.count + 1)).trimmingCharacters(in: .whitespacesAndNewlines)
+        let result: HermesValue
+        do {
+            result = try await rpc.call("command.dispatch", ["session_id": .string(sessionID),
+                "name": .string(name), "arg": .string(argument)])
+        } catch HermesGatewayError.rpc(let code, let message)
+            where code == 4018 && message == "not a quick/plugin/bundle/skill command: " + name {
+            // Only this explicit no-handler response permits fallback. Other errors can
+            // follow side effects, so retrying them through slash.exec could execute twice.
+            result = try await rpc.call("slash.exec", ["session_id": .string(sessionID), "command": .string(text)])
+        }
+        if result["type"].text == "alias" {
+            let target = result["target"].text
+            guard !target.isEmpty else { throw HermesGatewayError.message("Hermes returned an empty command alias.") }
+            if target.hasPrefix("/") { return try await dispatchCommand(target, rpc: rpc, depth: depth + 1) }
+            return ["type": "send", "message": .string(target)]
+        }
+        return result
     }
 
     public func steer(_ input: AgentMessageInput) async throws {

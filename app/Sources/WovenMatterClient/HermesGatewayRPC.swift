@@ -99,7 +99,7 @@ public actor HermesGatewayRPC {
             timeouts.removeValue(forKey: id)?.cancel()
             guard let continuation = pending.removeValue(forKey: id) else { return }
             if !frame["error"].isNull {
-                continuation.resume(throwing: HermesGatewayError.message("Hermes: " + (frame["error"]["message"].string ?? "RPC rejected")))
+                continuation.resume(throwing: HermesGatewayError.rpc(code: Int(frame["error"]["code"].number ?? 0), message: frame["error"]["message"].string ?? "RPC rejected"))
             } else { continuation.resume(returning: frame["result"]) }
         } else if frame["method"].text == "event" {
             let event = frame["params"]
