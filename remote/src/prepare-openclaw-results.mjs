@@ -18,7 +18,12 @@ export async function prepareOpenClawResults({ executable = 'openclaw', environm
     if (!String(error.stdout).includes('Config path is valid but unset: plugins.')) throw error
     plugins = {}
   }
-  if (plugins.enabled === false || plugins.deny?.includes(id)) throw new Error('Scheduled result plugin is disabled by OpenClaw configuration.')
+  if (plugins.enabled === false || plugins.deny?.includes(id) || plugins.entries?.[id]?.enabled === false) {
+    throw new Error('Scheduled result plugin is disabled by OpenClaw configuration.')
+  }
+  if (plugins.entries?.[id]?.hooks?.allowConversationAccess === false) {
+    throw new Error('Scheduled result conversation access is disabled by OpenClaw configuration.')
+  }
   mkdirSync(destination, { recursive: true, mode: 0o700 })
   // The installed path survives app moves and container image replacement.
   cpSync(source, destination, { recursive: true })

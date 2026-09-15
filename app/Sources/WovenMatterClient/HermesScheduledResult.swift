@@ -64,7 +64,6 @@ public enum HermesDelivery {
     // Native GET returns the config document; PUT deep-merges just these keys.
     let document = config["config"].isNull ? config : config["config"]
     var enabled = document["plugins"]["enabled"].array.compactMap(\.string)
-    let needsRestart = !enabled.contains("wovenmatter-delivery")
     if !enabled.contains("wovenmatter-delivery") { enabled.append("wovenmatter-delivery") }
     guard !document["plugins"]["disabled"].array.contains(.string("wovenmatter-delivery")) else {
       throw HermesGatewayError.message(
@@ -79,6 +78,20 @@ public enum HermesDelivery {
           "platforms": ["wovenmatter": ["enabled": .bool(true)]],
         ]
       ])
-    return needsRestart
+    // A previous enable may have saved the config but failed its idle restart.
+    // Inspect this process so retrying still loads the newly enabled plugin.
+    let rpc = HermesGatewayRPC(connection: connection)
+    do {
+      try await rpc.connect()
+      let loaded = try await rpc.call("plugins.list")
+      await rpc.disconnect()
+      guard case .array(let plugins) = loaded["plugins"] else {
+        throw HermesGatewayError.message("Hermes did not report its loaded delivery plugins.")
+      }
+      return !plugins.contains { $0["name"].text == "wovenmatter-delivery" && $0["enabled"].bool }
+    } catch {
+      await rpc.disconnect()
+      throw error
+    }
   }
 }

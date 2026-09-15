@@ -79,6 +79,9 @@ public actor HermesGatewayClient {
             environmentKeyPrefixesToRemove: launch.environmentKeyPrefixesToRemove,
             processWorkingDirectoryURL: launch.processWorkingDirectoryURL)
         let (profileHome, client) = try await connectTransport(scoped)
+        if let pinnedHome = previous?.home, pinnedHome != profileHome {
+            throw HermesGatewayError.message("This conversation belongs to another Hermes profile or remote workspace. Reconnect its original workspace before continuing.")
+        }
         home = profileHome
         rpc = client
         await client.setHandlers(event: { [weak self] event in await self?.receive(event) }, disconnected: { [weak self] in await self?.recover() },

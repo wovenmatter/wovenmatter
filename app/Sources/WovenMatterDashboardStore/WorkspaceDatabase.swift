@@ -4704,7 +4704,9 @@ public final class WorkspaceDatabase: @unchecked Sendable {
               WHERE local_session.conversation_id = dashboard_conversations.id
             ),
             'unread', unread, 'last_message_preview', last_message_preview,
-            'openclaw_session_key', openclaw_session_key,
+            'openclaw_session_key', COALESCE(openclaw_session_key,
+              (SELECT session_key FROM desktop_openclaw_gateway_sessions
+               WHERE conversation_id = dashboard_conversations.id)),
             'imported_at', COALESCE(
               (SELECT imported_at FROM desktop_session_imports WHERE conversation_id = dashboard_conversations.id),
               (SELECT imported_at FROM desktop_openclaw_import_activity WHERE conversation_id = dashboard_conversations.id

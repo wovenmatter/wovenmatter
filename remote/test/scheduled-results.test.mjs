@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync, readFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, readFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import { createResultStore } from '../src/openclaw-results/store.mjs'
@@ -98,4 +98,24 @@ test('native plugin configuration patch preserves unrelated secrets and existing
   } })
   assert.equal(calls.length, 2)
   await assert.rejects(prepareOpenClawResults({ environment: { HOME: home }, execute: async () => ({ stdout: '{"enabled":false}' }) }), /disabled/)
+})
+
+test('explicit plugin and conversation-access denials prevent installation and config writes', async t => {
+  const id = 'wovenmatter-scheduled-results'
+  for (const plugins of [
+    { enabled: false },
+    { deny: [id] },
+    { entries: { [id]: { enabled: false } } },
+    { entries: { [id]: { enabled: true, hooks: { allowConversationAccess: false } } } },
+  ]) {
+    const home = fixture(t)
+    let calls = 0
+    await assert.rejects(prepareOpenClawResults({ environment: { HOME: home }, execute: async (_, args) => {
+      calls++
+      assert.deepEqual(args, ['config', 'get', 'plugins', '--json'])
+      return { stdout: JSON.stringify(plugins) }
+    } }), /disabled/)
+    assert.equal(calls, 1)
+    assert.equal(existsSync(resolve(home, '.wovenmatter')), false)
+  }
 })
