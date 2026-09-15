@@ -374,6 +374,7 @@ struct DashboardDatabasesView: View {
                     }
                 }
                 .frame(width: 160)
+                .disabled(model.updatingDatabasePreferenceIDs.contains(database.id))
                 if let url = database.localURL {
                     Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([url]) }
                 }

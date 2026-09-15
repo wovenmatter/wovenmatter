@@ -230,7 +230,10 @@ def operation(root, request):
                 for entry in entries:
                     if entry.name.startswith('.') or not entry.is_dir(follow_symlinks=False):
                         continue
-                    database_name = name(entry.name)
+                    try:
+                        database_name = name(entry.name)
+                    except CatalogError:
+                        continue  # Unrelated folders must not hide the valid catalog.
                     with directory(database_name, databases) as db:
                         result.append({'id': database_name, 'name': database_name, 'preference': get_preference(db)})
                     require(len(result) <= 256, 'This workspace has too many databases to list.')
