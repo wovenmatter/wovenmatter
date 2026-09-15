@@ -114,8 +114,6 @@ public enum LocalACPRuntimeCatalog {
         switch runtimeKind {
         case .codex:
             ["CODEX_CONFIG": #"{"approvals_reviewer":"auto_review"}"#]
-        case .hermes:
-            ["HERMES_ACP_SKIP_CONFIGURED_MCP": "0"]
         default:
             [:]
         }
@@ -125,13 +123,6 @@ public enum LocalACPRuntimeCatalog {
         for runtimeKind: AgentRuntimeKind
     ) -> LocalACPRuntimeReadinessProbe? {
         switch runtimeKind {
-        case .hermes:
-            LocalACPRuntimeReadinessProbe(
-                expectedAgentName: "hermes-agent",
-                setupAuthenticationMethodID: "hermes-setup",
-                readyDetail: "Hermes ACP is connected to the current Hermes profile.",
-                setupRequiredDetail: "Hermes needs provider setup. Run “hermes model” in your terminal, then refresh its status."
-            )
         case .cursor:
             LocalACPRuntimeReadinessProbe(
                 setupAuthenticationMethodID: CursorACPSupport.authMethodID,
@@ -285,7 +276,7 @@ public struct LocalACPRuntimeAvailability: Equatable, Identifiable, Sendable {
     public var compactDetail: String {
         switch state {
         case .ready:
-            "Ready through ACP"
+            runtimeKind == .hermes ? "Ready through native Gateway" : "Ready through ACP"
         case .authenticationRequired:
             "Needs sign-in — see Settings"
         case .cliMissing, .adapterMissing, .adapterOutdated,
@@ -374,6 +365,27 @@ public enum LocalACPRuntimeVerifier {
                 launch: launch,
                 workingDirectory: workingDirectory
             )
+        }
+        if definition.runtimeKind == .hermes {
+            do {
+                let connection = try await HermesGatewayService.shared.ensure(launch: launch)
+                let client = HermesGatewayRPC(connection: connection)
+                do {
+                    try await client.connect()
+                    let setup = try await client.call("setup.runtime_check")
+                    await client.disconnect()
+                    guard setup["ok"].bool else {
+                        return failedResolution(definition: definition, resolution: resolution, state: .authenticationRequired,
+                            detail: "Hermes needs provider setup. Run hermes model for the selected profile.")
+                    }
+                } catch { await client.disconnect(); throw error }
+                return LocalACPRuntimeResolution(availability: LocalACPRuntimeAvailability(runtimeKind: .hermes,
+                    displayName: definition.displayName, state: .ready, detail: "Hermes native Gateway is connected to its own profile.",
+                    executablePath: resolution.availability.executablePath), launchConfiguration: launch)
+            } catch {
+                return failedResolution(definition: definition, resolution: resolution, state: .executableUnavailable,
+                    detail: error.localizedDescription)
+            }
         }
         guard let requirement = definition.readinessProbe else {
             return resolution

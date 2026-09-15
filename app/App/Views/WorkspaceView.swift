@@ -316,6 +316,12 @@ struct WorkspaceView: View {
                 }
             )
         }
+        .onChange(of: model.pendingHermesSettingsAgentID) { _, agentID in
+            if agentID != nil {
+                closeNewChatChooser()
+                openUtility(.settings)
+            }
+        }
         .confirmationDialog(
             "Connect the OpenClaw Gateway?",
             isPresented: Binding(
@@ -630,7 +636,7 @@ struct WorkspaceView: View {
                 case .calendar:
                     DashboardCalendarSurface(model: model)
                 case .cronJobs:
-                    OpenClawCronSurface(
+                    DashboardCronSurface(
                         model: model,
                         onOpenConversation: { conversationID in
                             destination = .workspace

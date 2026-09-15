@@ -7,6 +7,9 @@ enum SettingsSection: Equatable {
     case general
     case openClaw
     case openCode
+    case hermes
+    case hermesWorkspace(UUID?)
+    case hermesAgent(UUID)
     case openCodeAgent(UUID?)
     case openCodeWorkspace(UUID?)
     case openClawWorkspace(UUID?)
@@ -49,6 +52,19 @@ struct SettingsView: View {
                     onBack: { section = .landing },
                     onOpenAgent: { providerReturnSection = .openClaw; section = .openClawAgent($0) }
                 )
+            case .hermes:
+                SettingsHermesView(model: model, reservesRailControlSpace: reservesRailControlSpace,
+                    onBack: { section = .landing },
+                    onOpenAgent: { providerReturnSection = .hermes; section = .hermesAgent($0) })
+            case .hermesWorkspace(let workspaceID):
+                SettingsHermesView(model: model, workspaceID: workspaceID, isWorkspaceScoped: true,
+                    reservesRailControlSpace: reservesRailControlSpace,
+                    onBack: { section = workspaceID == nil ? .localWorkspace : .remoteWorkspaces },
+                    onOpenAgent: { providerReturnSection = .hermesWorkspace(workspaceID); section = .hermesAgent($0) })
+            case .hermesAgent(let agentID):
+                SettingsHermesAgentView(model: model, agentID: agentID,
+                    reservesRailControlSpace: reservesRailControlSpace,
+                    onBack: { section = providerReturnSection })
             case .openCode:
                 SettingsOpenCodeView(model: model, reservesRailControlSpace: reservesRailControlSpace,
                     onBack: { section = .landing },
@@ -78,7 +94,7 @@ struct SettingsView: View {
                     model: model,
                     reservesRailControlSpace: reservesRailControlSpace,
                     onBack: { section = .landing },
-                    onMore: { section = $0 == .opencode ? .openCodeWorkspace(nil) : .openClawWorkspace(nil) }
+                    onMore: { section = $0 == .hermes ? .hermesWorkspace(nil) : $0 == .opencode ? .openCodeWorkspace(nil) : .openClawWorkspace(nil) }
                 )
             case .remoteWorkspaces:
                 SettingsRemoteWorkspacesView(
@@ -90,7 +106,7 @@ struct SettingsView: View {
                     },
                     reservesRailControlSpace: reservesRailControlSpace,
                     onMoreRuntime: { kind, configuration in
-                        section = kind == .opencode ? .openCodeWorkspace(configuration.id) : .openClawWorkspace(configuration.id)
+                        section = kind == .hermes ? .hermesWorkspace(configuration.id) : kind == .opencode ? .openCodeWorkspace(configuration.id) : .openClawWorkspace(configuration.id)
                     },
                     onBack: { section = .landing }
                 )
@@ -115,6 +131,15 @@ struct SettingsView: View {
         .task {
             model.refreshLocalACPRuntimesNow()
         }
+        .onAppear { openPendingHermesSettings() }
+        .onChange(of: model.pendingHermesSettingsAgentID) { _, _ in openPendingHermesSettings() }
+    }
+
+    private func openPendingHermesSettings() {
+        guard let agentID = model.pendingHermesSettingsAgentID else { return }
+        providerReturnSection = .hermes
+        section = .hermesAgent(agentID)
+        model.dismissPendingHermesSettings()
     }
 
     private var landing: some View {
@@ -135,6 +160,12 @@ struct SettingsView: View {
                     detail: "Gateway connections and Woven Matter names for every OpenClaw agent.",
                     icon: { DashboardHarnessLogoIcon(logo: .openClaw, size: 15) },
                     action: { section = .openClaw }
+                )
+                SettingsDestinationRow(
+                    title: "Hermes",
+                    detail: "Gateway connections and Woven Matter names for every Hermes agent.",
+                    icon: { DashboardHarnessLogoIcon(logo: .hermes, size: 15) },
+                    action: { section = .hermes }
                 )
                 SettingsDestinationRow(
                     title: "OpenCode",

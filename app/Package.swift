@@ -27,7 +27,8 @@ let package = Package(
         .enableUpcomingFeature("ExistentialAny")
       ],
       linkerSettings: [
-        .linkedFramework("Security")
+        .linkedFramework("Security"),
+        .linkedLibrary("sqlite3")
       ]
     ),
     .target(

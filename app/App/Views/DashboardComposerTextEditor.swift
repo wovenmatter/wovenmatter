@@ -12,7 +12,7 @@ struct DashboardComposerTextEditor: NSViewRepresentable {
     let onCommandNavigation: (DashboardComposerNavigationDirection) -> Bool
     var onMoveSelection: (Int) -> Bool = { _ in false }
     var onEscape: () -> Bool = { false }
-    var completionRequest: Int = 0
+    var completionRequest: Binding<Int> = .constant(0)
     var onCaretAtEndChange: (Bool) -> Void = { _ in }
 
     func makeCoordinator() -> Coordinator {
@@ -24,6 +24,10 @@ struct DashboardComposerTextEditor: NSViewRepresentable {
         scrollView.maximumVisibleLines = maximumVisibleLines
         let textView = scrollView.composerTextView
         textView.delegate = context.coordinator
+        textView.onPrepareInput = { [weak coordinator = context.coordinator, weak textView] in
+            guard let coordinator, let textView else { return }
+            coordinator.reconcilePendingCompletion(for: textView)
+        }
         textView.placeholderString = placeholder
         textView.setAccessibilityLabel(placeholder)
         textView.string = text
@@ -85,12 +89,19 @@ struct DashboardComposerTextEditor: NSViewRepresentable {
 
         init(parent: DashboardComposerTextEditor) {
             self.parent = parent
-            self.appliedCompletionRequest = parent.completionRequest
+            self.appliedCompletionRequest = parent.completionRequest.wrappedValue
+        }
+
+        func reconcilePendingCompletion(for textView: DashboardComposerNativeTextView) {
+            // A key can arrive before SwiftUI delivers updateNSView. Read the
+            // live binding and settle completion before AppKit edits the draft.
+            guard appliedCompletionRequest != parent.completionRequest.wrappedValue else { return }
+            reconcileText(for: textView)
         }
 
         func reconcileText(for textView: DashboardComposerNativeTextView) {
             guard !textView.hasMarkedText() else { return }
-            let didComplete = appliedCompletionRequest != parent.completionRequest
+            let didComplete = appliedCompletionRequest != parent.completionRequest.wrappedValue
             if textView.string != parent.text {
                 let selection = textView.selectedRange()
                 textView.string = parent.text
@@ -104,7 +115,7 @@ struct DashboardComposerTextEditor: NSViewRepresentable {
                 let caret = NSRange(location: parent.text.utf16.count, length: 0)
                 textView.setSelectedRange(caret)
                 textView.scrollRangeToVisible(caret)
-                appliedCompletionRequest = parent.completionRequest
+                appliedCompletionRequest = parent.completionRequest.wrappedValue
             }
         }
 
@@ -298,6 +309,7 @@ final class DashboardComposerNativeTextView: NSTextView {
 
     var onSubmit: (() -> Void)?
     var onTab: (() -> Bool)?
+    var onPrepareInput: (() -> Void)?
     var onCommandNavigation: ((DashboardComposerNavigationDirection) -> Bool)?
     var onMoveSelection: ((Int) -> Bool)?
     var onEscape: (() -> Bool)?
@@ -336,6 +348,7 @@ final class DashboardComposerNativeTextView: NSTextView {
     }
 
     override func keyDown(with event: NSEvent) {
+        onPrepareInput?()
         if let direction = DashboardComposerNavigationDirection.resolve(
             keyCode: event.keyCode,
             modifierFlags: event.modifierFlags,

@@ -66,6 +66,25 @@ struct LocalACPSessionDriver: Sendable {
         launch: LocalACPRuntimeLaunchConfiguration,
         workingDirectory: URL
     ) throws -> Self {
+        if launch.runtimeKind == .hermes {
+            let client = HermesGatewayClient(launch: launch)
+            return Self(
+                initializeSession: { cwd, existing, title, context in
+                    try await client.initializeSession(workingDirectory: cwd, existingSessionID: existing, title: title, systemPrompt: context)
+                },
+                prompt: { input, event, permission, interaction in
+                    try await client.prompt(input, onEvent: event, onPermission: permission, onInteraction: interaction)
+                },
+                configuration: { await client.sessionConfiguration() },
+                setConfiguration: { model, thinking in try await client.setSessionConfiguration(model: model, thinking: thinking) },
+                activeInput: { input in
+                    try await client.steer(input)
+                    return LocalACPActiveInputReceipt(completion: Task { nil })
+                },
+                cancel: { try await client.cancel() },
+                shutdown: { await client.shutdown() }
+            )
+        }
         if launch.runtimeKind == .pi {
             let client = PiRPCClient.start(
                 launch: launch,
@@ -453,6 +472,10 @@ public actor LocalACPSessionCoordinator {
                     switch event {
                     case .assistantChunk(let chunk):
                         try await streamWriter.append(chunk)
+                    case .sessionIdentity(let sessionID):
+                        try await self.persistSessionIdentity(sessionID, conversationID: descriptor.conversationID, runID: run.runID)
+                    case .assistantSnapshot(let content):
+                        try await streamWriter.replace(content)
                     case .assistantBoundary:
                         try await streamWriter.finishSegment()
                     case .activity(let activity, let appendsContent):
@@ -466,6 +489,12 @@ public actor LocalACPSessionCoordinator {
                             conversationID: descriptor.conversationID,
                             runID: run.runID,
                             phase: .content
+                        )
+                    case .composerPrefill(let text):
+                        await self.publishChange(
+                            conversationID: descriptor.conversationID,
+                            runID: run.runID,
+                            phase: .composerPrefill(text)
                         )
                     case .usage(let tokens):
                         let configuration = await client.configuration()
@@ -494,10 +523,14 @@ public actor LocalACPSessionCoordinator {
                 conversationID: descriptor.conversationID,
                 initialStopReason: stopReason
             )
-            try persistPendingDurableSessionID(
-                conversationID: descriptor.conversationID,
-                runID: run.runID
-            )
+            // Hermes slash commands need not create a durable native row. Its
+            // client publishes the identity immediately before a provider submit.
+            if descriptor.runtimeKind != .hermes {
+                try persistPendingDurableSessionID(
+                    conversationID: descriptor.conversationID,
+                    runID: run.runID
+                )
+            }
             try persistConfiguration(
                 await client.configuration(),
                 conversationID: descriptor.conversationID
@@ -1109,9 +1142,8 @@ public actor LocalACPSessionCoordinator {
                 throw LifecycleError.shutDown
             }
             if initialized.sessionID != descriptor.acpSessionID {
-                // Cursor and Pi allocate IDs before their session stores are
-                // durable. Persist those IDs only after the first prompt has
-                // materialized a session that a later process can resume.
+                // Cursor, Pi and Hermes allocate IDs before their session stores
+                // are durable. Configuration-only drafts must remain recreatable.
                 if !Self.defersNewSessionPersistence(descriptor.runtimeKind)
                     || initialized.loadedExistingSession {
                     try database.updateLocalACPSessionID(
@@ -1246,7 +1278,7 @@ public actor LocalACPSessionCoordinator {
     private static func defersNewSessionPersistence(
         _ runtimeKind: AgentRuntimeKind
     ) -> Bool {
-        runtimeKind == .cursor || runtimeKind == .pi
+        runtimeKind == .cursor || runtimeKind == .pi || runtimeKind == .hermes
     }
 
     private func persistConfiguration(
@@ -1258,6 +1290,11 @@ public actor LocalACPSessionCoordinator {
             model: configuration.model,
             thinking: configuration.thinking
         )
+    }
+
+    private func persistSessionIdentity(_ sessionID: String, conversationID: String, runID: String) throws {
+        try database.updateLocalACPSessionID(conversationID: conversationID, runID: runID, sessionID: sessionID)
+        activeSessions[conversationID]?.pendingDurableSessionID = nil
     }
 
     private func persistPendingDurableSessionID(
@@ -1295,7 +1332,7 @@ public actor LocalACPSessionCoordinator {
     }
 }
 
-private actor LocalACPAssistantStreamWriter {
+actor LocalACPAssistantStreamWriter {
     private static let immediateFlushCharacters = 4_096
     private static let coalescingDelay = Duration.milliseconds(50)
 
@@ -1304,6 +1341,8 @@ private actor LocalACPAssistantStreamWriter {
     private let conversationID: String
     private let onChange: LocalACPSessionCoordinator.ChangeHandler?
     private var buffer = ""
+    private var accumulatedText = ""
+    private var completedSegmentPrefix = ""
     private var flushTask: Task<Void, Never>?
     private var flushError: (any Error)?
     private var isPausedAtSegmentBoundary = false
@@ -1326,6 +1365,7 @@ private actor LocalACPAssistantStreamWriter {
         if let flushError { throw flushError }
         guard !chunk.isEmpty else { return }
         buffer += chunk
+        accumulatedText += chunk
         if buffer.count >= Self.immediateFlushCharacters {
             flushTask?.cancel()
             flushTask = nil
@@ -1337,6 +1377,19 @@ private actor LocalACPAssistantStreamWriter {
                 await self?.flushScheduled()
             }
         }
+    }
+
+    func replace(_ content: String) async throws {
+        await waitUntilResumed()
+        flushTask?.cancel(); flushTask = nil
+        if let flushError { throw flushError }
+        guard content.hasPrefix(completedSegmentPrefix) else {
+            throw LocalACPClientError.invalidResponse("The final response changed text before a steering boundary; earlier messages were preserved.")
+        }
+        buffer.removeAll(keepingCapacity: true)
+        accumulatedText = content
+        try database.replaceLocalACPAssistantMessage(runID: runID, content: String(content.dropFirst(completedSegmentPrefix.count)))
+        onChange?(DashboardConversationChange(conversationID: conversationID, runID: runID, phase: .content))
     }
 
     func finish() async throws {
@@ -1360,6 +1413,7 @@ private actor LocalACPAssistantStreamWriter {
         flushTask = nil
         if let flushError { throw flushError }
         try flush()
+        completedSegmentPrefix = accumulatedText
         isPausedAtSegmentBoundary = true
     }
 

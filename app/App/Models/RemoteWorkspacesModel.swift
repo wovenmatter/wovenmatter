@@ -271,6 +271,39 @@ final class RemoteWorkspacesModel {
         }
     }
 
+    func restartHermes(for configuration: RemoteWorkspaceConfiguration, action: String = "restart") async throws {
+        let identity=try requestIdentity(configuration)
+        let client=try await serviceClient(for:configuration)
+        try requireCurrent(identity)
+        _ = try await client.workspaceInstance(.hermes,action:action)
+        try requireCurrent(identity)
+    }
+
+    func hermesResults(for configuration: RemoteWorkspaceConfiguration, offset: Int) async throws -> [HermesScheduledResult] {
+        let identity = try requestIdentity(configuration)
+        let client = try await serviceClient(for:configuration)
+        try requireCurrent(identity)
+        let results = try await client.hermesResults(offset:offset)
+        try requireCurrent(identity)
+        return results
+    }
+
+    func prepareHermesConnection(for configuration: RemoteWorkspaceConfiguration) async throws -> HermesGatewayConnection {
+        let identity = try requestIdentity(configuration)
+        guard isRuntimeEnabled(.hermes, in: configuration) else { throw RemoteWorkspaceClientError.harnessUnavailable }
+        let client = try await serviceClient(for: configuration)
+        try requireCurrent(identity)
+        let status = try await client.workspaceInstance(.hermes, action: "start")
+        try requireCurrent(identity)
+        guard status.state == "running", let port = await tunnels[configuration.id]?.localPort,
+              let token = try await credentials.token(for: configuration.id) else {
+            throw RemoteWorkspaceClientError.invalidResponse("The workspace Hermes Gateway is unavailable.")
+        }
+        try requireCurrent(identity)
+        workspaceInstances[configuration.id, default: [:]][.hermes] = status
+        return HermesGatewayConnection(home: "/home/.hermes", port: port, token: token, pid: 0, remoteWorkspaceID: configuration.id)
+    }
+
     func prepareOpenCodeConnection(for configuration: RemoteWorkspaceConfiguration, allowStart: Bool = true) async throws -> OpenCodeConnection {
         let identity = try requestIdentity(configuration)
         guard isRuntimeEnabled(.opencode, in: configuration), runtimeMaintenance[configuration.id]?.contains(where: {

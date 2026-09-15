@@ -129,11 +129,11 @@
     {
       "id": "hermes",
       "displayName": "Hermes",
-      "transport": "acp",
+      "transport": "hermes-native",
       "command": "hermes",
-      "arguments": ["acp"],
+      "arguments": ["serve", "--isolated"],
       "cliCommand": "hermes",
-      "transportCheckCommand": "hermes acp --check",
+      "transportCheckCommand": "hermes serve --help",
       "install": {
         "kind": "official-script",
         "source": "https://hermes-agent.nousresearch.com/install.sh",
