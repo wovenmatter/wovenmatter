@@ -24,9 +24,10 @@ export function databaseOperation(workspaceRoot, request) {
     child.stderr.resume()
     child.stdin.on('error', () => {})
     child.on('error', error => { clearTimeout(timer); reject(error) })
-    child.on('close', code => {
+    child.on('close', (code, signal) => {
       clearTimeout(timer)
       if (failure) return reject(failure)
+      if (signal) return reject(Object.assign(new Error('Database request exceeded its resource limit. Try a smaller query.'), { statusCode: 400 }))
       try {
         const result = JSON.parse(Buffer.concat(chunks).toString('utf8'))
         if (code !== 0) return reject(Object.assign(new Error(result.error ?? 'Database unavailable.'), { statusCode: 400 }))
