@@ -30,8 +30,8 @@ enum DashboardAgentSidebarGroup: String, CaseIterable, Identifiable, Hashable, S
     var title: String {
         switch self {
         case .pinned: "Pinned"
-        case .localWorkspace: "Local Agent Workspace"
-        case .remoteWorkspaces: "Remote Agent Workspaces"
+        case .localWorkspace: "Local agent workspace"
+        case .remoteWorkspaces: "Remote agent workspaces"
         }
     }
 
@@ -138,7 +138,7 @@ enum DashboardAgentSidebarGroup: String, CaseIterable, Identifiable, Hashable, S
 }
 
 enum DashboardAgentSidebarHeading {
-    static let buzzWorkspaces = "Buzz Agent Workspaces"
+    static let buzzWorkspaces = "Buzz agent workspaces"
 }
 
 struct DashboardRemoteWorkspaceSidebarLink: Equatable, Identifiable {

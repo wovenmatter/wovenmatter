@@ -69,6 +69,7 @@ public struct WorkspaceConversationHistoryPage: Equatable, Sendable {
 public struct DashboardConversationChange: Equatable, Sendable {
   public enum Phase: Equatable, Sendable {
     case content
+    case configuration
     case terminal
   }
 
@@ -250,6 +251,28 @@ public actor DashboardStore {
     return OpenClawGatewayEndpointResolver.localAgentWorkspace(port: port)
   }
 
+  private func prepareLocalOpenClawResults(executable: URL, environment: [String: String]) async throws {
+    guard let resources = Bundle.main.resourceURL else { return }
+    let script = resources.appending(path: "remote/src/prepare-openclaw-results.mjs")
+    guard FileManager.default.fileExists(atPath: script.path) else {
+      throw OpenClawGatewayClientError.rejected("The app is missing its scheduled-result helper.")
+    }
+    try await Task.detached {
+      let process = Process()
+      process.executableURL = URL(filePath: "/usr/bin/env")
+      process.arguments = ["node", script.path, executable.path]
+      process.environment = environment
+      process.standardOutput = FileHandle.nullDevice
+      process.standardError = FileHandle.nullDevice
+      process.standardInput = FileHandle.nullDevice
+      try process.run()
+      process.waitUntilExit()
+      guard process.terminationStatus == 0 else {
+        throw OpenClawGatewayClientError.rejected("Could not enable durable scheduled results. Check OpenClaw's plugin configuration and restart the Gateway after enabling the Woven Matter plugin.")
+      }
+    }.value
+  }
+
   public func prepareLocalWorkspaceOpenClawGateway(
     agentID: UUID,
     workingDirectory: URL
@@ -257,26 +280,40 @@ public actor DashboardStore {
     guard let base = LocalACPRuntimeResolver().resolve(runtimeKind: .openclaw).launchConfiguration else {
       throw LocalACPSessionDatabaseError.runtimeUnavailable
     }
-    let identity = "local-workspace:\(agentID.uuidString.lowercased())"
-    let port = OpenClawLocalGatewayLifecycle.stablePort(for: identity)
+    var environment = ProcessInfo.processInfo.environment
+    for key in base.environmentKeysToRemove { environment.removeValue(forKey: key) }
+    for prefix in base.environmentKeyPrefixesToRemove {
+      for key in environment.keys where key.hasPrefix(prefix) { environment.removeValue(forKey: key) }
+    }
+    environment.merge(base.environment) { _, configured in configured }
+    let configuration = try OpenClawLocalGatewayConfiguration(environment: environment)
+    let identity = "local-config:" + configuration.configURL.standardizedFileURL.path
+    var launchEnvironment = base.environment
+    launchEnvironment["OPENCLAW_CONFIG_PATH"] = configuration.configURL.path
+    // Keep resolved credentials out of argv and available to diagnostic redaction.
+    if let token = configuration.token { launchEnvironment["OPENCLAW_GATEWAY_TOKEN"] = token }
+    if let password = configuration.password { launchEnvironment["OPENCLAW_GATEWAY_PASSWORD"] = password }
     let launch = LocalACPRuntimeLaunchConfiguration(
       runtimeKind: .openclaw,
       executableURL: base.executableURL,
-      arguments: [
-        "gateway", "--port", String(port), "--bind", "loopback", "--auth", "none",
-      ],
-      environment: base.environment,
-      environmentKeysToRemove: [
-        "OPENCLAW_GATEWAY_PASSWORD", "OPENCLAW_GATEWAY_TOKEN", "BUZZ_PRIVATE_KEY",
-        "NOSTR_PRIVATE_KEY",
-      ],
-      environmentKeyPrefixesToRemove: ["BUZZ_", "NOSTR_"]
+      // Keep the user's authentication, bind and Tailscale settings. Never force
+      // another listener or use --force against an existing OpenClaw service.
+      arguments: ["gateway", "--port", String(configuration.port)],
+      environment: launchEnvironment,
+      environmentKeysToRemove: base.environmentKeysToRemove + ["BUZZ_PRIVATE_KEY", "NOSTR_PRIVATE_KEY"],
+      environmentKeyPrefixesToRemove: base.environmentKeyPrefixesToRemove + ["BUZZ_", "NOSTR_"]
     )
+    try await prepareLocalOpenClawResults(executable: base.executableURL, environment: environment.merging(launchEnvironment) { _, value in value })
     _ = try await localOpenClawGateways.ensure(
       agentID: agentID, identity: identity, launch: launch,
-      workingDirectory: workingDirectory
+      workingDirectory: workingDirectory, configuredPort: configuration.port,
+      reuseExistingListener: true
     )
-    return OpenClawGatewayEndpointResolver.localAgentWorkspace(port: port)
+    let endpoint = OpenClawGatewayEndpointResolver.localAgentWorkspace(port: configuration.port)
+    await openClawGateway.configureTransport(agentID: agentID, endpoint: endpoint,
+      requestHeaders: configuration.token.map { ["Authorization": "Bearer " + $0] } ?? [:],
+      password: configuration.password)
+    return endpoint
   }
 
   public func attachOpenClawGatewaySession(
@@ -293,6 +330,22 @@ public actor DashboardStore {
 
   public func openClawGatewayConversationIDs() throws -> Set<String> {
     try database.openClawGatewayConversationIDs()
+  }
+
+  public func createOpenClawWorkspaceSession(agentID: UUID, sessionKey: String, cwd: URL) async throws {
+    try await openClawGateway.createWorkspaceSession(agentID: agentID, sessionKey: sessionKey, cwd: cwd)
+  }
+
+  public func openClawNativeSessions(agentID: UUID, offset: Int = 0) async throws -> (sessions: [OpenClawGatewaySession], nextOffset: Int?) {
+    try await openClawGateway.nativeSessions(agentID: agentID, offset: offset)
+  }
+
+  public func importOpenClawSession(agentID: UUID, session: OpenClawGatewaySession) async throws -> String {
+    try await openClawGateway.importSession(agentID: agentID, session: session)
+  }
+
+  public func synchronizeOpenClawSession(conversationID: String, offset: Int = 0) async throws -> OpenClawGatewayHistory {
+    try await openClawGateway.synchronizeSession(conversationID: conversationID, offset: offset)
   }
 
   @discardableResult
@@ -391,6 +444,30 @@ public actor DashboardStore {
 
   public func syncOpenClawCron(agentID: UUID) async throws {
     try await openClawGateway.syncCron(agentID: agentID)
+  }
+
+  public func createOpenClawCron(agentID: UUID, name: String, message: String, expression: String,
+                                timeZone: String, declarationKey: String, destination: String) async throws {
+    try await openClawGateway.createCron(agentID: agentID, name: name, message: message,
+      expression: expression, timeZone: timeZone, declarationKey: declarationKey, destination: destination)
+  }
+
+  public func updateOpenClawCron(job: OpenClawCronJob, patch: GatewayJSONValue) async throws {
+    let payload = try JSONDecoder().decode(GatewayJSONValue.self, from: job.remotePayload)
+    try await openClawGateway.updateCron(agentID: job.agentID, jobID: job.id, patch: patch,
+      revision: payload.objectValue?["configRevision"]?.stringValue)
+  }
+
+  public func performOpenClawCronAction(job: OpenClawCronJob, action: String) async throws {
+    try await openClawGateway.performCronAction(agentID: job.agentID, jobID: job.id, action: action)
+  }
+
+  public func openClawResultRoutes(agentID: UUID) throws -> [String: String] {
+    try database.openClawResultRoutes(agentID: agentID)
+  }
+
+  public func setOpenClawResultRoute(agentID: UUID, jobID: String, destination: String) throws {
+    try database.setOpenClawResultRoute(agentID: agentID, jobID: jobID, destination: destination)
   }
 
   public func openClawCronJobs(agentID: UUID? = nil) throws -> [OpenClawCronJob] {
@@ -929,6 +1006,7 @@ public actor DashboardStore {
   }
 
   public func shutdownLocalACPSessions() async {
+    await openClawGateway.shutdown()
     await localSessions.shutdown()
     await localOpenClawGateways.shutdown()
   }

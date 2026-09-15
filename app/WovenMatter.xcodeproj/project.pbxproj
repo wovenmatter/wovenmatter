@@ -12,6 +12,7 @@
 		A11C00000000000000000001 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A11C00000000000000000002 /* Assets.xcassets */; };
 		073565BA0B01598641B11348 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C49C2130B0B0B01A795C7504 /* SettingsView.swift */; };
 		0C1A00000000000000000001 /* OpenClawGatewaySettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C1A00000000000000000002 /* OpenClawGatewaySettingsView.swift */; };
+		0C1A00000000000000000003 /* OpenClawSessionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C1A00000000000000000004 /* OpenClawSessionView.swift */; };
 		5E7A00000000000000000001 /* SettingsComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E7A00000000000000000002 /* SettingsComponents.swift */; };
 		5E7A00000000000000000003 /* SettingsGeneralView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E7A00000000000000000004 /* SettingsGeneralView.swift */; };
 		5E7A00000000000000000005 /* SettingsOpenClawView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E7A00000000000000000006 /* SettingsOpenClawView.swift */; };
@@ -66,6 +67,7 @@
 		624CEC46A7441DADEBBCE79E /* WovenMatterApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WovenMatterApp.swift; sourceTree = "<group>"; };
 		C49C2130B0B0B01A795C7504 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		0C1A00000000000000000002 /* OpenClawGatewaySettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenClawGatewaySettingsView.swift; sourceTree = "<group>"; };
+		0C1A00000000000000000004 /* OpenClawSessionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenClawSessionView.swift; sourceTree = "<group>"; };
 		5E7A00000000000000000002 /* SettingsComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsComponents.swift; sourceTree = "<group>"; };
 		5E7A00000000000000000004 /* SettingsGeneralView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsGeneralView.swift; sourceTree = "<group>"; };
 		5E7A00000000000000000006 /* SettingsOpenClawView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsOpenClawView.swift; sourceTree = "<group>"; };
@@ -198,6 +200,7 @@
 				A11C00000000000000000004 /* WorkspaceView.swift */,
 				489A29D04369BF898400D045 /* RootView.swift */,
 				0C1A00000000000000000002 /* OpenClawGatewaySettingsView.swift */,
+				0C1A00000000000000000004 /* OpenClawSessionView.swift */,
 				C49C2130B0B0B01A795C7504 /* SettingsView.swift */,
 				5E7A00000000000000000002 /* SettingsComponents.swift */,
 				5E7A00000000000000000004 /* SettingsGeneralView.swift */,
@@ -369,6 +372,7 @@
 				5E64711B441F5A188A2862AC /* RootView.swift in Sources */,
 				073565BA0B01598641B11348 /* SettingsView.swift in Sources */,
 				0C1A00000000000000000001 /* OpenClawGatewaySettingsView.swift in Sources */,
+				0C1A00000000000000000003 /* OpenClawSessionView.swift in Sources */,
 				5E7A00000000000000000001 /* SettingsComponents.swift in Sources */,
 				5E7A00000000000000000003 /* SettingsGeneralView.swift in Sources */,
 				5E7A00000000000000000005 /* SettingsOpenClawView.swift in Sources */,

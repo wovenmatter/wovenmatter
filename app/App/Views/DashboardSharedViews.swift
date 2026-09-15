@@ -581,7 +581,7 @@ struct DashboardConversationHoverCard: View {
 
             VStack(alignment: .leading, spacing: 7) {
                 hoverRow(icon: .folder, text: meta.folderLabel)
-                if let agent = presentation.agent, agent.runtimeKind == .openclaw {
+                if let agent = presentation.agent, agent.runtimeKind == .openclaw || agent.runtimeKind == .opencode {
                     hoverRow(icon: .bot, text: dashboardAgentDisplayName(agent))
                 }
                 if let runtime = meta.runtimeLabel {
@@ -590,7 +590,7 @@ struct DashboardConversationHoverCard: View {
                         harnessLogo: meta.runtimeKind.map {
                             DashboardHarnessLogo(runtimeKind: $0)
                         },
-                        text: runtime
+                        text: runtime + (presentation.conversation.importedAt == nil ? "" : " (imported)")
                     )
                 }
                 hoverRow(icon: meta.locationKind.glyph, text: meta.locationLabel)

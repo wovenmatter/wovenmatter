@@ -138,6 +138,26 @@ final class ApplicationModel {
         await synchronizeRemoteOpenCodeInstances()
     }
 
+    func openCodeSettingsAgent(workspaceID: UUID?) async throws -> WorkspaceAgent {
+        guard let dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
+        if let workspaceID {
+            guard let configuration = remoteWorkspaces.configuration(id: workspaceID) else { throw ApplicationModelError.remoteHarnessUnavailable }
+            _ = try await dashboardStore.ensureRemoteHarnessAgent(runtimeKind: .opencode,
+                remoteWorkspaceID: workspaceID, remoteWorkspaceName: configuration.name)
+            await refreshWorkspace()
+        }
+        guard let agent = try dashboardStore.database.dashboardAgents().first(where: {
+            $0.runtimeKind == .opencode && (workspaceID == nil ? $0.governingPlane == .wovenmatterMacOS : $0.runtimeDeviceID == workspaceID)
+        }) else { throw ApplicationModelError.localACPRuntimeUnavailable }
+        return agent
+    }
+
+    func renameOpenCodeAgent(agentID: UUID, displayName: String) async throws {
+        guard let dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
+        try dashboardStore.database.renameOpenCodeAgent(id: agentID, displayName: displayName)
+        await refreshWorkspace()
+    }
+
     func remoteOpenClawAgentID(for configuration: RemoteWorkspaceConfiguration) async throws -> UUID {
         guard let dashboardStore, remoteWorkspaces.configuration(id: configuration.id) == configuration else {
             throw ApplicationModelError.remoteHarnessUnavailable
@@ -164,6 +184,9 @@ final class ApplicationModel {
     private(set) var openClawCronRuns: [OpenClawCronRun] = []
     private(set) var isRefreshingOpenClawCron = false
     private(set) var openClawCronError: String?
+    private(set) var openClawCronBusy = false
+    private(set) var openClawResultRoutes: [UUID: [String: String]] = [:]
+    private var lastOpenClawCronRefresh = Date.distantPast
     private var openClawGatewayConversationIDs: Set<String> = []
     private var buzzBoundLocalACPConversationIDs: Set<String> = []
     private(set) var workspaceOverview: DashboardWorkspaceOverview?
@@ -757,6 +780,18 @@ final class ApplicationModel {
     private func enqueueConversationChange(
         _ change: DashboardConversationChange
     ) {
+        // Metadata changes are independent of run content and must not replace
+        // or be suppressed by a pending terminal notification.
+        if change.phase == .configuration {
+            Task { [weak self] in
+                guard let self,
+                      let conversation = self.workspaceOverview?.conversations.first(where: {
+                          $0.id == change.conversationID
+                      }) else { return }
+                await self.refreshLocalACPSession(conversation: conversation)
+            }
+            return
+        }
         if change.phase == .content,
            terminalRunIDsByConversation[change.conversationID] == change.runID {
             return
@@ -896,6 +931,10 @@ final class ApplicationModel {
     }
 
     private func refreshWorkspace(force: Bool) async {
+        if Date().timeIntervalSince(lastOpenClawCronRefresh) >= 30 {
+            lastOpenClawCronRefresh = Date()
+            Task { await refreshOpenClawCron() }
+        }
         do {
             guard let dashboardStore else {
                 throw ApplicationModelError.dashboardStoreUnavailable
@@ -2656,6 +2695,13 @@ final class ApplicationModel {
             guard let dashboardStore else {
                 throw ApplicationModelError.dashboardStoreUnavailable
             }
+            let openClawAgent = runtimeKind == .openclaw
+                ? localCLIAgents.first(where: { $0.runtimeKind == .openclaw }) : nil
+            let gatewayKey = Self.openClawSessionKey(conversationID: UUID().uuidString.lowercased())
+            if let agent = openClawAgent, isOpenClawGatewayLinked(agentID: agent.id),
+               let workspace = localACPWorkspaceLaunchConfiguration {
+                try await dashboardStore.createOpenClawWorkspaceSession(agentID: agent.id, sessionKey: gatewayKey, cwd: workspace.rootURL)
+            }
             let conversationID = try await dashboardStore.createLocalACPSession(
                 runtimeKind: runtimeKind,
                 title: "New \(runtimeKind.displayName) chat"
@@ -2666,7 +2712,7 @@ final class ApplicationModel {
                 try await dashboardStore.attachOpenClawGatewaySession(
                     conversationID: conversationID,
                     agentID: agent.id,
-                    sessionKey: Self.openClawSessionKey(conversationID: conversationID)
+                    sessionKey: gatewayKey
                 )
                 openClawGatewayConversationIDs.insert(conversationID)
             }
@@ -4127,6 +4173,7 @@ final class ApplicationModel {
     func refreshOpenClawGatewaySession(conversationID: String) async {
         guard let dashboardStore else { return }
         do {
+            _ = try await dashboardStore.synchronizeOpenClawSession(conversationID: conversationID)
             openClawGatewaySessionMetadata[conversationID] = try await dashboardStore
                 .openClawGatewaySessionMetadata(conversationID: conversationID)
             ensureConversationState(id: conversationID).setError(nil)
@@ -4148,6 +4195,18 @@ final class ApplicationModel {
                 openClawGatewayErrors[link.agentID] = error.localizedDescription
             }
         }
+    }
+
+    func openClawNativeSessions(agentID: UUID, offset: Int = 0) async throws -> (sessions: [OpenClawGatewaySession], nextOffset: Int?) {
+        guard let dashboardStore else { throw OpenClawGatewayClientError.connectionClosed }
+        return try await dashboardStore.openClawNativeSessions(agentID: agentID, offset: offset)
+    }
+
+    func importOpenClawSession(agentID: UUID, session: OpenClawGatewaySession) async throws {
+        guard let dashboardStore else { throw OpenClawGatewayClientError.connectionClosed }
+        _ = try await dashboardStore.importOpenClawSession(agentID: agentID, session: session)
+        await refreshOpenClawGateways()
+        await refreshWorkspace()
     }
 
     private func restoreOpenClawGatewayLinks() async {
@@ -4190,9 +4249,10 @@ final class ApplicationModel {
     func refreshOpenClawCron() async {
         guard !isRefreshingOpenClawCron, let dashboardStore else { return }
         isRefreshingOpenClawCron = true
+        lastOpenClawCronRefresh = Date()
         defer { isRefreshingOpenClawCron = false }
         var failures: [String] = []
-        for link in openClawGatewayLinks where link.connectionStatus == .ready {
+        for link in openClawGatewayLinks {
             do {
                 try await dashboardStore.syncOpenClawCron(agentID: link.agentID)
             } catch {
@@ -4200,7 +4260,62 @@ final class ApplicationModel {
             }
         }
         await loadOpenClawCronSnapshot()
-        openClawCronError = failures.first
+        openClawCronError = failures.isEmpty ? nil : failures.joined(separator: "\n")
+    }
+
+    func saveOpenClawCron(agentID: UUID, job: OpenClawCronJob?, name: String, message: String,
+                          expression: String, timeZone: String, declarationKey: String,
+                          destination: String, preserveSchedule: Bool = false) async -> String? {
+        guard let dashboardStore, !openClawCronBusy else { return "Another job change is in progress." }
+        openClawCronBusy = true
+        defer { openClawCronBusy = false }
+        do {
+            if let job {
+                var patch: [String: GatewayJSONValue] = ["name": .string(name),
+                    "schedule": .object(["kind": .string("cron"), "expr": .string(expression), "tz": .string(timeZone)])]
+                if preserveSchedule { patch.removeValue(forKey: "schedule") }
+                if !message.isEmpty { patch["payload"] = .object(["message": .string(message)]) }
+                try await dashboardStore.updateOpenClawCron(job: job, patch: .object(patch))
+                try await dashboardStore.setOpenClawResultRoute(agentID: agentID, jobID: job.id, destination: destination)
+            } else {
+                try await dashboardStore.createOpenClawCron(agentID: agentID, name: name, message: message,
+                    expression: expression, timeZone: timeZone, declarationKey: declarationKey, destination: destination)
+            }
+            await refreshOpenClawCron()
+            return nil
+        } catch {
+            return error.localizedDescription + " Refresh the job list before retrying; the Gateway may have accepted the change."
+        }
+    }
+
+    func performOpenClawCronAction(job: OpenClawCronJob, action: String) {
+        guard let dashboardStore, !openClawCronBusy else { return }
+        openClawCronBusy = true
+        Task {
+            defer { openClawCronBusy = false }
+            do {
+                if action == "toggle" {
+                    try await dashboardStore.updateOpenClawCron(job: job, patch: .object(["enabled": .bool(!job.enabled)]))
+                } else {
+                    try await dashboardStore.performOpenClawCronAction(job: job, action: action)
+                }
+                await refreshOpenClawCron()
+            } catch {
+                openClawCronError = error.localizedDescription + " Refresh before retrying; this action was not automatically retried."
+            }
+        }
+    }
+
+    func setOpenClawResultRoute(job: OpenClawCronJob, destination: String) {
+        guard let dashboardStore else { return }
+        Task {
+            do {
+                try await dashboardStore.setOpenClawResultRoute(agentID: job.agentID, jobID: job.id, destination: destination)
+                await loadOpenClawCronSnapshot()
+                await refreshOpenClawCron()
+                await refreshWorkspace()
+            } catch { openClawCronError = error.localizedDescription }
+        }
     }
 
     func emptyOpenClawCronTrash() {
@@ -4252,6 +4367,9 @@ final class ApplicationModel {
         do {
             openClawCronJobs = try await dashboardStore.openClawCronJobs()
             openClawCronRuns = try await dashboardStore.openClawCronRuns()
+            for link in openClawGatewayLinks {
+                openClawResultRoutes[link.agentID] = try await dashboardStore.openClawResultRoutes(agentID: link.agentID)
+            }
         } catch {
             openClawCronError = error.localizedDescription
         }

@@ -16,6 +16,7 @@ struct LocalACPSessionDriver: Sendable {
         _ onInteraction: LocalACPClient.InteractionHandler?
     ) async throws -> LocalACPStopReason
     let configuration: @Sendable () async -> LocalACPSessionConfiguration
+    let observeConfiguration: (@Sendable (@escaping @Sendable () -> Void) async -> Void)?
     let setConfiguration: @Sendable (
         _ model: String?,
         _ thinking: String?
@@ -40,6 +41,7 @@ struct LocalACPSessionDriver: Sendable {
             _ onInteraction: LocalACPClient.InteractionHandler?
         ) async throws -> LocalACPStopReason,
         configuration: @escaping @Sendable () async -> LocalACPSessionConfiguration,
+        observeConfiguration: (@Sendable (@escaping @Sendable () -> Void) async -> Void)? = nil,
         setConfiguration: @escaping @Sendable (
             _ model: String?,
             _ thinking: String?
@@ -53,6 +55,7 @@ struct LocalACPSessionDriver: Sendable {
         self.initializeSession = initializeSession
         self.prompt = prompt
         self.configuration = configuration
+        self.observeConfiguration = observeConfiguration
         self.setConfiguration = setConfiguration
         self.activeInput = activeInput
         self.cancel = cancel
@@ -135,6 +138,9 @@ struct LocalACPSessionDriver: Sendable {
             },
             configuration: {
                 await client.sessionConfiguration()
+            },
+            observeConfiguration: { handler in
+                await client.setConfigurationHandler(handler)
             },
             setConfiguration: { model, thinking in
                 try await client.setSessionConfiguration(
@@ -1151,6 +1157,16 @@ public actor LocalACPSessionCoordinator {
                 activeUseCount: 0,
                 lastUsedSequence: useSequence
             )
+            if let observeConfiguration = started.observeConfiguration {
+                let onChange = self.onChange
+                await observeConfiguration {
+                    onChange?(DashboardConversationChange(
+                        conversationID: descriptor.conversationID,
+                        runID: runID ?? "",
+                        phase: .configuration
+                    ))
+                }
+            }
             return started
         } catch {
             await started.shutdown()

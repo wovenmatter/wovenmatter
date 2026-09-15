@@ -126,10 +126,12 @@ public struct LocalACPSlashCommand: Codable, Equatable, Identifiable, Sendable {
     public var id: String { name }
     public let name: String
     public let detail: String?
+    public let argumentHint: String?
 
-    public init(name: String, detail: String? = nil) {
+    public init(name: String, detail: String? = nil, argumentHint: String? = nil) {
         self.name = name
         self.detail = detail
+        self.argumentHint = argumentHint
     }
 }
 
@@ -480,6 +482,7 @@ public actor LocalACPClient {
     private var steeringSupported = false
     private var sessionID: String?
     private var configuration = LocalACPSessionConfiguration.empty
+    private var configurationHandler: (@Sendable () -> Void)?
     private var modelConfigurationID: String?
     private var modelUsesSessionModelMethod = false
     private var thinkingConfigurationID: String?
@@ -794,7 +797,8 @@ public actor LocalACPClient {
                 model: configuration.model ?? models.first,
                 thinking: configuration.thinking,
                 modelOptions: models,
-                thinkingOptions: configuration.thinkingOptions
+                thinkingOptions: configuration.thinkingOptions,
+                slashCommands: configuration.slashCommands
             )
         } catch {
             // session/new already advertised a catalog; keep that if the
@@ -855,6 +859,11 @@ public actor LocalACPClient {
 
     public func sessionConfiguration() -> LocalACPSessionConfiguration {
         configuration
+    }
+
+    public func setConfigurationHandler(_ handler: @escaping @Sendable () -> Void) {
+        configurationHandler = handler
+        handler()
     }
 
     public func setSessionConfiguration(
@@ -1386,9 +1395,14 @@ public actor LocalACPClient {
 
     private func handleNotification(_ envelope: ACPEnvelope) async throws {
         if envelope.method == "session/update" {
-            if envelope.params?["update"]?["sessionUpdate"]?.stringValue
-                == "config_option_update" {
-                captureSessionConfiguration(from: envelope.params?["update"])
+            let update = envelope.params?["update"]
+            switch update?["sessionUpdate"]?.stringValue {
+            case "config_option_update", "available_commands_update":
+                let previousConfiguration = configuration
+                captureSessionConfiguration(from: update)
+                if previousConfiguration != configuration { configurationHandler?() }
+            default:
+                break
             }
             if let event = Self.event(
                 from: envelope,
@@ -1440,6 +1454,26 @@ public actor LocalACPClient {
 
     private func captureSessionConfiguration(from value: ACPJSONValue?) {
         guard let value else { return }
+        if let commands = value["availableCommands"]?.arrayValue {
+            var seen: Set<String> = []
+            let slashCommands = commands.compactMap { command -> LocalACPSlashCommand? in
+                guard let name = command["name"]?.stringValue?
+                    .trimmingCharacters(in: .whitespacesAndNewlines),
+                      !name.isEmpty, seen.insert(name).inserted else { return nil }
+                return LocalACPSlashCommand(
+                    name: name,
+                    detail: command["description"]?.stringValue,
+                    argumentHint: command["input"]?["hint"]?.stringValue
+                )
+            }
+            configuration = LocalACPSessionConfiguration(
+                model: configuration.model,
+                thinking: configuration.thinking,
+                modelOptions: configuration.modelOptions,
+                thinkingOptions: configuration.thinkingOptions,
+                slashCommands: slashCommands
+            )
+        }
         if let configOptions = value["configOptions"]?.arrayValue {
             let parsed = Self.configuration(from: configOptions)
             if let model = parsed.model {
@@ -1456,7 +1490,8 @@ public actor LocalACPClient {
                     modelOptions: parsed.model?.options
                         ?? configuration.modelOptions,
                     thinkingOptions: parsed.thinking?.options
-                        ?? configuration.thinkingOptions
+                        ?? configuration.thinkingOptions,
+                    slashCommands: configuration.slashCommands
                 )
             }
         }
@@ -1473,7 +1508,8 @@ public actor LocalACPClient {
                 model: modelState.model ?? configuration.model,
                 thinking: configuration.thinking,
                 modelOptions: modelState.options,
-                thinkingOptions: configuration.thinkingOptions
+                thinkingOptions: configuration.thinkingOptions,
+                slashCommands: configuration.slashCommands
             )
         }
         if let grokConfiguration = Self.grokConfiguration(from: value) {
@@ -1484,7 +1520,8 @@ public actor LocalACPClient {
                 // writable ACP configuration contract. Keep only choices
                 // independently advertised by standard `configOptions`.
                 modelOptions: configuration.modelOptions,
-                thinkingOptions: configuration.thinkingOptions
+                thinkingOptions: configuration.thinkingOptions,
+                slashCommands: configuration.slashCommands
             )
         }
     }

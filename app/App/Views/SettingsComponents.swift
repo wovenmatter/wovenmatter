@@ -85,32 +85,19 @@ struct SettingsWorkspaceSidebarVisibilityControl: View {
 }
 
 struct SettingsBackButton: View {
-    @Environment(\.dashboardTheme) private var theme
     let title: String
     let action: () -> Void
-    @State private var isHovering = false
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 6) {
-                DashboardLucideIcon(glyph: .arrowLeft, size: 10)
-                Text(title)
-                    .font(.system(size: 12, weight: .medium))
-            }
-            .foregroundStyle(DashboardPalette.mutedForeground)
-            .padding(.horizontal, 8)
-            .frame(minHeight: 26)
-            .background(isHovering ? theme.palette.themeWhisper : Color.clear)
-            .clipShape(
-                RoundedRectangle(
-                    cornerRadius: DashboardMetrics.controlRadius,
-                    style: .continuous
-                )
-            )
-            .contentShape(Rectangle())
+            DashboardLucideIcon(glyph: .panelLeftClose, size: 16)
+                .frame(width: 32, height: 32)
         }
-        .buttonStyle(.plain)
-        .onHover { isHovering = $0 }
+        .buttonStyle(DashboardIconButtonStyle())
+        .environment(\.dashboardSidebarForeground, DashboardPalette.foreground)
+        .accessibilityLabel("Back to " + title)
+        .help("Back to " + title)
+        .offset(x: -8)
     }
 }
 
@@ -502,6 +489,8 @@ extension View {
 }
 
 struct SettingsQuietButtonStyle: ButtonStyle {
+    var horizontalPadding: CGFloat = 12
+    var minimumHeight: CGFloat = 36
     @Environment(\.dashboardTheme) private var theme
     @Environment(\.isEnabled) private var isEnabled
     @State private var isHovering = false
@@ -510,8 +499,8 @@ struct SettingsQuietButtonStyle: ButtonStyle {
         configuration.label
             .font(.system(size: 12.5, weight: .medium))
             .foregroundStyle(DashboardPalette.foreground)
-            .padding(.horizontal, 12)
-            .frame(minHeight: 36)
+            .padding(.horizontal, horizontalPadding)
+            .frame(minHeight: minimumHeight)
             .background(
                 theme.palette.themeSoft.opacity(
                     configuration.isPressed ? 1 : (isHovering ? 0.72 : 0)

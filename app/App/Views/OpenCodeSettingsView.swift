@@ -1,5 +1,6 @@
 import SwiftUI
 import WovenMatterClient
+import WovenMatterCore
 
 struct OpenCodeSettingsCard: View {
     @Environment(\.openURL) private var openURL
@@ -10,15 +11,14 @@ struct OpenCodeSettingsCard: View {
     @State private var loadingModels = false
     @State private var modelsError: String?
     var body: some View {
-        SettingsCard(title: model.workspaceName, detail: model.isRemote
-            ? "OpenCode v2 through this remote workspace’s authenticated SSH connection."
-            : "OpenCode v2 on this Mac. New chats use your Woven Matter workspace.") {
+        SettingsCard(title: "Server connection", detail: "Live connection state for this OpenCode agent.") {
+            SettingsValueRow(label: "Location", value: model.workspaceName)
             if let configuration = model.remoteConfiguration {
                 SettingsValueRow(label: "Host", value: configuration.hostName)
                 SettingsNote("Authenticated workspace service over SSH, port \(configuration.remotePort). Connection settings belong to this remote workspace.")
             }
             HStack {
-                SettingsPill(model.isConnecting ? "Connecting…" : model.isReady ? "Connected" : "Not connected", tone: model.isReady ? .neutral : .warning)
+                SettingsPill(model.isConnecting ? "Connecting…" : model.isReady ? "Ready" : "Not connected", tone: model.isReady ? .neutral : .warning)
                 Spacer()
                 if model.isReady && !model.isRemote {
                     Button("Open in browser") {
@@ -62,6 +62,9 @@ struct OpenCodeSettingsCard: View {
                 .toggleStyle(DashboardSwitchToggleStyle())
             Text("Stopping the server also disconnects the browser and other OpenCode clients.")
                 .font(.caption).foregroundStyle(.secondary)
+            if !model.isRemote {
+                OpenCodeSessionLibrary(model: model)
+            }
             if let error = model.error { Text(error).font(.callout).foregroundStyle(.red) }
             if !model.canConnect {
                 Text(model.isRemote ? "Install and enable OpenCode in this remote workspace’s runtime settings to connect." : "Install OpenCode v2 to connect.").font(.caption).foregroundStyle(.secondary)
@@ -119,43 +122,187 @@ struct OpenCodeSettingsCard: View {
 
 struct SettingsOpenCodeView: View {
     @Bindable var model: ApplicationModel
-    /// nil scope shows all eligible workspaces; a scoped nil ID means this Mac.
     var workspaceID: UUID?
     var isWorkspaceScoped = false
     var reservesRailControlSpace = false
     var onBack: () -> Void
+    var onOpenAgent: (UUID?) -> Void
 
     private var remoteConfigurations: [RemoteWorkspaceConfiguration] {
-        if isWorkspaceScoped {
-            return model.remoteWorkspaces.workspaces.filter { $0.id == workspaceID }
-        }
-        return model.remoteWorkspaces.enabledRuntimeWorkspaces(.opencode)
+        model.remoteWorkspaces.workspaces.filter { !isWorkspaceScoped || $0.id == workspaceID }
     }
 
     var body: some View {
-        SettingsPage(title: "OpenCode",
-            detail: "Independent OpenCode v2 connections for each workspace.",
+        SettingsPage(title: "OpenCode", detail: "Independent OpenCode settings for this Mac and each remote workspace.",
             reservesRailControlSpace: reservesRailControlSpace, onBack: onBack) {
-            if !isWorkspaceScoped || workspaceID == nil, let openCode = model.openCode {
-                OpenCodeSettingsCard(model: openCode, workspace: model.localACPWorkspaceAvailability.rootPath
-                    ?? FileManager.default.homeDirectoryForCurrentUser.appending(path: ".woven-matter").path)
-            }
-            ForEach(remoteConfigurations) { configuration in
-                if let instance = model.remoteOpenCodes[configuration.id] {
-                    OpenCodeSettingsCard(model: instance,
-                        workspace: model.remoteWorkspaces.remoteWorkspaceRoot(for: configuration))
-                } else {
-                    SettingsNote("Preparing the OpenCode connection for \(configuration.name)…")
+            if !isWorkspaceScoped || workspaceID == nil {
+                SettingsCard(title: "Local agent workspace", detail: "Open an agent to manage its Woven Matter name and server connection.") {
+                    if let instance = model.openCode, instance.isInstalled {
+                        agentRow(instance, workspaceID: nil)
+                    } else { SettingsEmpty("No OpenCode agents discovered.") }
                 }
             }
+            if !isWorkspaceScoped || workspaceID != nil {
+                SettingsCard(title: "Remote agent workspaces", detail: "Discover agents in each connected workspace.") {
+                    if remoteConfigurations.isEmpty { SettingsEmpty("No remote agent workspaces connected.") }
+                    ForEach(remoteConfigurations) { configuration in
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(configuration.name).font(.system(size: 13, weight: .medium))
+                            Text(configuration.hostName).font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
+                            if let instance = model.remoteOpenCodes[configuration.id], instance.isInstalled {
+                                agentRow(instance, workspaceID: configuration.id)
+                            } else { SettingsEmpty("No OpenCode agents discovered.") }
+                            Button("Scan workspace") { model.remoteWorkspaces.refresh(configuration) }
+                                .buttonStyle(SettingsQuietButtonStyle())
+                                .disabled(model.remoteWorkspaces.busyWorkspaceIDs.contains(configuration.id))
+                        }
+                    }
+                }
+            }
+            SettingsNote("Each agent has its own connection and server controls.")
         }
         .task {
             await model.synchronizeRemoteOpenCodeInstances()
-            // A disabled runtime may still own a running server. Its workspace
-            // status keeps Stop available without reconnecting or enabling it.
             for configuration in remoteConfigurations {
                 model.remoteWorkspaces.refreshWorkspaceInstance(.opencode, configuration: configuration)
             }
+        }
+    }
+
+    private func agentRow(_ instance: OpenCodeModel, workspaceID: UUID?) -> some View {
+        let agent = (model.localCLIAgents + model.remoteWorkspaceAgents).first {
+            $0.runtimeKind == .opencode && (workspaceID == nil ? $0.governingPlane != .remoteWorkspace : $0.runtimeDeviceID == workspaceID)
+        }
+        return SettingsInset {
+            HStack(spacing: 12) {
+                DashboardHarnessLogoIcon(logo: .openCode, size: 20).frame(width: 28, height: 28)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(agent?.displayName ?? "OpenCode").font(.system(size: 13, weight: .medium))
+                    Text(instance.workspaceName).font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
+                }.frame(maxWidth: .infinity, alignment: .leading)
+                SettingsPill(instance.isReady ? "Ready" : "Not connected", tone: instance.isReady ? .neutral : .warning)
+                Button("Settings") { onOpenAgent(workspaceID) }.buttonStyle(SettingsQuietButtonStyle())
+            }
+        }
+    }
+}
+
+struct SettingsOpenCodeAgentView: View {
+    @Bindable var model: ApplicationModel
+    let workspaceID: UUID?
+    var reservesRailControlSpace = false
+    var onBack: () -> Void
+    @State private var agentID: UUID?
+    @State private var name = ""
+    @State private var error: String?
+    @State private var saving = false
+
+    private var instance: OpenCodeModel? { workspaceID.flatMap { model.remoteOpenCodes[$0] } ?? (workspaceID == nil ? model.openCode : nil) }
+    private var workspace: String {
+        if let configuration = instance?.remoteConfiguration { return model.remoteWorkspaces.remoteWorkspaceRoot(for: configuration) }
+        return model.localACPWorkspaceAvailability.rootPath ?? FileManager.default.homeDirectoryForCurrentUser.appending(path: ".woven-matter").path
+    }
+    var body: some View {
+        SettingsPage(title: name.isEmpty ? "OpenCode" : name, detail: "Woven Matter name and live server connection for this agent.",
+            reservesRailControlSpace: reservesRailControlSpace, onBack: onBack) {
+            if let instance {
+                SettingsCard(title: "Woven Matter name", detail: "Changes how this agent appears in Woven Matter. It does not rename or reconfigure OpenCode.") {
+                    Text("Agent name").font(.system(size: 11, weight: .medium)).foregroundStyle(DashboardPalette.mutedForeground)
+                    TextField("Agent name", text: $name).textFieldStyle(.roundedBorder)
+                    Button("Save Woven Matter Name") {
+                        guard let agentID else { return }
+                        Task {
+                            saving = true; error = nil
+                            defer { saving = false }
+                            do { try await model.renameOpenCodeAgent(agentID: agentID, displayName: name) }
+                            catch { self.error = error.localizedDescription }
+                        }
+                    }.buttonStyle(DashboardPrimaryButtonStyle())
+                        .disabled(agentID == nil || saving || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+                OpenCodeSettingsCard(model: instance, workspace: workspace)
+            } else { SettingsEmpty("This agent is no longer available.") }
+            if let error { SettingsError(error) }
+        }
+        .task(id: workspaceID) {
+            do {
+                let agent = try await model.openCodeSettingsAgent(workspaceID: workspaceID)
+                agentID = agent.id; name = agent.displayName
+            } catch { self.error = error.localizedDescription }
+        }
+    }
+}
+
+
+private struct OpenCodeSessionLibrary: View {
+    @Bindable var model: OpenCodeModel
+    @State private var sessions: [OpenCodeValue] = []
+    @State private var cursors: [String?] = [nil]
+    @State private var page = 0
+    @State private var next: String?
+    @State private var busy = false
+    @State private var feedback: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Shared OpenCode sessions").font(.headline)
+            HStack {
+                Button("Refresh sessions") { load(page: 0) }
+                    .buttonStyle(SettingsQuietButtonStyle(horizontalPadding: 8, minimumHeight: 26))
+                if busy { ProgressView().controlSize(.small) }
+            }
+            ForEach(sessions, id: \.self) { session in
+                HStack {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(session["title"].string ?? "OpenCode conversation").font(.system(size: 13, weight: .medium))
+                        Text(session["location"]["directory"].text)
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(DashboardPalette.mutedForeground).lineLimit(2)
+                    }
+                    Spacer()
+                    Button("Import") {
+                        busy = true
+                        Task {
+                            defer { busy = false }
+                            do {
+                                try await model.importSession(session)
+                                sessions.removeAll { $0["id"] == session["id"] }
+                                feedback = "Imported into the conversation list."
+                            } catch { feedback = error.localizedDescription }
+                        }
+                    }
+                    .buttonStyle(SettingsQuietButtonStyle(horizontalPadding: 8, minimumHeight: 22))
+                }
+            }
+            HStack {
+                Button("Previous") { load(page: page - 1) }.disabled(page == 0)
+                Text("Page \(page + 1) of up to 10").font(.caption)
+                Button("Next") {
+                    if let next {
+                        cursors = Array(cursors.prefix(page + 1)) + [next]
+                        load(page: page + 1)
+                    }
+                }.disabled(next == nil || page >= 9)
+            }
+            .buttonStyle(SettingsQuietButtonStyle(horizontalPadding: 8, minimumHeight: 22))
+            if let feedback { Text(feedback).font(.system(size: 12)).textSelection(.enabled) }
+        }
+        .disabled(busy || !model.isReady)
+    }
+
+    private func load(page index: Int) {
+        guard cursors.indices.contains(index) else { return }
+        busy = true; feedback = nil
+        Task {
+            defer { busy = false }
+            do {
+                let result = try await model.importableSessions(cursor: cursors[index])
+                if index == 0 { cursors = [nil] }
+                sessions = result.sessions
+                page = index
+                next = result.next
+                if sessions.isEmpty { feedback = "No sessions available to import." }
+            } catch { feedback = error.localizedDescription }
         }
     }
 }
