@@ -76,11 +76,11 @@ struct OpenClawGatewayStreamingTests {
 
   @Test func canonicalHistoryRecoveryRetriesEmptyAndMatchesExactInput() async {
     let fixture = HistoryFixture()
-    let result = await GatewayHistoryRecovery.assistantText(
+    let result = await GatewayHistoryRecovery.assistantMessage(
       remoteRunID: "owned", knownInputIDs: ["owned"],
       fetch: { await fixture.fetch() }, pause: { _ in }
     )
-    #expect(result == "Canonical final")
+    #expect(result?.text == "Canonical final")
     #expect(await fixture.calls == 3)
   }
 

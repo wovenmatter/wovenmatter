@@ -1914,7 +1914,7 @@ public actor LocalACPClient {
                 AgentRunActivity(
                     id: "plan",
                     kind: .plan,
-                    phase: "update",
+                    phase: entries.isEmpty ? "clear" : "update",
                     title: "Plan",
                     status: entries.allSatisfy { $0.status == "completed" } ? "completed" : "running",
                     planEntries: entries,

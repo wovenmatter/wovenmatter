@@ -101,6 +101,12 @@ struct ACPHarnessStreamingReviewTests {
     }
     #expect(tools.map(\.phase) == ["start", "end"])
     #expect(tools.last?.content == " result ")
+    let plans = values.compactMap { event -> AgentRunActivity? in
+      guard case .activity(let activity, _) = event, activity.kind == .plan else { return nil }
+      return activity
+    }
+    #expect(plans.map(\.phase) == ["update", "clear"])
+    #expect(plans.count == 2 && plans[0].merging(plans[1]).planEntries.isEmpty)
   }
 }
 
@@ -142,6 +148,8 @@ private struct ACPHarnessFixture {
             printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"tool_call","toolCallId":"tool","kind":"shell","title":"Shell"}}}'
             printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"tool_call_update","toolCallId":"tool","kind":"shell","status":"completed","content":[{"type":"content","content":{"text":" result "}}]}}}'
             printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"agent_thought_chunk","content":{"text":"second"}}}}'
+            printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"plan","entries":[{"content":"Inspect","status":"pending"}]}}}'
+            printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"plan","entries":[]}}}'
             \(promptFinish) ;;
           \(extraCases)
           *'"method":"_x.ai/interject"'*) respond "$id" '{}'; respond "$((id-1))" '{"stopReason":"end_turn"}' ;;

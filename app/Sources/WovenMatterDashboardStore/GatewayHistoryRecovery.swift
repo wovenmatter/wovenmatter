@@ -26,17 +26,4 @@ enum GatewayHistoryRecovery {
     return nil
   }
 
-  static func assistantText(
-    remoteRunID: String,
-    knownInputIDs: Set<String>,
-    fetch: @Sendable () async throws -> GatewayJSONValue,
-    pause: @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
-  ) async -> String? {
-    await assistantMessage(
-      remoteRunID: remoteRunID,
-      knownInputIDs: knownInputIDs,
-      fetch: fetch,
-      pause: pause
-    )?.text
-  }
 }
