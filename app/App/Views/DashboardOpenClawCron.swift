@@ -62,7 +62,7 @@ struct OpenClawCronSurface: View {
                 Spacer()
                 Picker("OpenClaw", selection: $selectedAgentID) {
                     Text("All agents").tag(nil as UUID?)
-                    ForEach(agents) { Text($0.displayName).tag(agentOptional($0.id)) }
+                    ForEach(agents) { Text($0.displayName).tag(Optional($0.id)) }
                 }
                 .frame(maxWidth: 190)
                 Toggle("Deleted", isOn: $showsDeleted).toggleStyle(.button)
@@ -194,7 +194,7 @@ struct OpenClawCronSurface: View {
                 if let run { DashboardCronPill(run.status.capitalized, warning: run.status != "ok") }
             }
             if let run {
-                Text(run.output?.isEmpty == false ? run.output! : "No captured output")
+                Text(run.output.flatMap { $0.isEmpty ? nil : $0 } ?? "No captured output")
                     .font(.system(size: 11.5))
                     .foregroundStyle(DashboardPalette.mutedForeground)
                     .lineLimit(4)
@@ -230,7 +230,7 @@ struct OpenClawCronSurface: View {
                         DisclosureGroup("\(historyRun.status.capitalized) · \((historyRun.startedAt ?? historyRun.completedAt)?.formatted(date: .abbreviated, time: .shortened) ?? "Time unavailable")") {
                             VStack(alignment: .leading, spacing: 5) {
                                 Text("Run ID: \(historyRun.id)").font(.system(size: 10.5, design: .monospaced)).textSelection(.enabled)
-                                Text(historyRun.output?.isEmpty == false ? historyRun.output! : "No captured output")
+                                Text(historyRun.output.flatMap { $0.isEmpty ? nil : $0 } ?? "No captured output")
                                     .font(.system(size: 11.5)).textSelection(.enabled)
                                 if job.archiveState == .active {
                                     Button("Continue from Output") {
@@ -277,7 +277,6 @@ struct OpenClawCronSurface: View {
         }
     }
 
-    private func agentOptional(_ id: UUID) -> UUID? { id }
 
     private func jobRuns(_ job: OpenClawCronJob) -> [OpenClawCronRun] {
         model.openClawCronRuns.filter { $0.agentID == job.agentID && $0.jobID == job.id }
