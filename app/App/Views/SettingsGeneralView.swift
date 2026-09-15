@@ -345,7 +345,7 @@ private struct SettingsThemeChoiceButtonStyle: ButtonStyle {
                 configuration.isPressed
                     ? theme.palette.themeStrong
                     : isSelected
-                        ? theme.palette.themeSoft
+                        ? (isHovering ? theme.palette.themeStrong : theme.palette.themeSoft)
                         : isHovering
                             ? theme.palette.themeSoft.opacity(0.72)
                             : theme.palette.themeWhisper

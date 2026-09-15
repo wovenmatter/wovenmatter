@@ -274,6 +274,7 @@ struct DashboardCalendarSurface: View {
             isInDisplayedMonth: day.isInDisplayedMonth
         ))
         .accessibilityLabel(day.date.formatted(date: .complete, time: .omitted))
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
     private func monthNavigationButton(

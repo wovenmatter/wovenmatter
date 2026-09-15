@@ -197,6 +197,9 @@ struct DashboardDatabasesView: View {
                     .buttonStyle(DashboardDatabaseSourceButtonStyle(
                         isSelected: selectedSourceID == source.id
                     ))
+                    .accessibilityAddTraits(
+                        selectedSourceID == source.id ? .isSelected : []
+                    )
                 }
             }
             .padding(12)
@@ -297,6 +300,9 @@ struct DashboardDatabasesView: View {
         .buttonStyle(DashboardDatabaseRowButtonStyle(
             isSelected: database.id == selectedDatabaseID
         ))
+        .accessibilityAddTraits(
+            database.id == selectedDatabaseID ? .isSelected : []
+        )
     }
 
     private func databaseDetail(_ database: DashboardAgentDatabase) -> some View {
