@@ -206,7 +206,7 @@ struct DashboardComposer: View {
             onCommandNavigation: onCommandNavigation,
             onMoveSelection: moveSlashSelection,
             onEscape: dismissSlashCommands,
-            completionRequest: completionRequest,
+            completionRequest: $completionRequest,
             onCaretAtEndChange: { caretAtEnd = $0 }
         )
         .frame(

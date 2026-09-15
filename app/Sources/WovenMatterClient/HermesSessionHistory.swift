@@ -32,22 +32,24 @@ public enum HermesSessionHistory {
                 throw HermesGatewayError.message("Hermes export is missing unique message identities.")
             }
         }
-        return HermesSessionImport(identity: HermesGatewayClient.identity(home: connection.home, storedID: sessionID, imported: true),
+        return HermesSessionImport(identity: HermesGatewayClient.identity(home: connection.identityHome, storedID: sessionID, imported: true),
             title: snapshot["title"].string ?? "Hermes conversation",
             createdAt: Date(timeIntervalSince1970: snapshot["started_at"].number ?? Date().timeIntervalSince1970), messages: messages)
     }
-    static func fetch(connection: HermesGatewayConnection, path: String) async throws -> HermesValue {
+    public static func fetch(connection: HermesGatewayConnection, path: String, method: String = "GET", body: HermesValue? = nil) async throws -> HermesValue {
         guard (1...65535).contains(connection.port), path.hasPrefix("/api/"), !path.contains("..") else {
             throw HermesGatewayError.message("Invalid Hermes request.")
         }
-        let url = URL(string: "http://127.0.0.1:\(connection.port)" + path)!
+        let url = URL(string: "http://127.0.0.1:\(connection.port)" + connection.apiPrefix + path)!
         var request = URLRequest(url: url)
         request.setValue("Bearer " + connection.token, forHTTPHeaderField: "Authorization")
+        request.httpMethod = method
+        if let body { request.httpBody = try JSONEncoder().encode(body); request.setValue("application/json", forHTTPHeaderField: "Content-Type") }
         request.timeoutInterval = 45
         let session = URLSession(configuration: .ephemeral, delegate: HermesHTTPDelegate(), delegateQueue: nil)
         defer { session.invalidateAndCancel() }
         let (bytes, response) = try await session.bytes(for: request)
-        guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+        guard let status = (response as? HTTPURLResponse)?.statusCode, (200...299).contains(status) else {
             throw HermesGatewayError.message("Hermes could not complete the request. Its existing state has not been changed.")
         }
         var data = Data()

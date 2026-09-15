@@ -5,6 +5,7 @@ import WovenMatterCore
 public enum LocalACPEvent: Equatable, Sendable {
     case assistantChunk(String)
     case assistantSnapshot(String)
+    case sessionIdentity(String)
     case assistantBoundary
     case activity(AgentRunActivity, appendsContent: Bool)
     case usage(UsageTokenCounts)

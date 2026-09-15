@@ -89,9 +89,18 @@ struct SettingsHermesView: View {
                                 .font(.system(size: 13, weight: .medium))
                             Text(configuration.name).font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
                         }.frame(maxWidth: .infinity, alignment: .leading)
-                        SettingsPill("Gateway unavailable", tone: .warning)
+                        SettingsPill(model.remoteHermesConnections[configuration.id] == nil ? "Not connected" : "Ready", tone: .neutral)
                     }
-                    SettingsNote("Native Hermes Gateway connections are not yet supported in remote workspaces.")
+                    Button("Connect Gateway") {
+                        Task {
+                            do { try await model.connectRemoteHermes(configuration) }
+                            catch { self.error = error.localizedDescription }
+                        }
+                    }.buttonStyle(SettingsQuietButtonStyle())
+                    Button("Stop Gateway and scheduler") {
+                        Task { do { try await model.stopRemoteHermes(configuration) } catch { self.error=error.localizedDescription } }
+                    }.buttonStyle(SettingsQuietButtonStyle())
+                    SettingsNote("The container keeps Hermes and its scheduler running when Woven Matter disconnects. Stopping it pauses scheduling until it is connected again.")
                 } else { SettingsEmpty("No Hermes agents discovered.") }
                 Button("Scan workspace") { model.remoteWorkspaces.refresh(configuration) }
                     .buttonStyle(SettingsQuietButtonStyle())
@@ -145,7 +154,7 @@ struct SettingsHermesAgentView: View {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Agent name").font(.system(size: 11, weight: .medium)).foregroundStyle(DashboardPalette.mutedForeground)
                         TextField("Agent name", text: $name).textFieldStyle(.roundedBorder)
-                        Button("Save Woven Matter Name") {
+                        Button("Save Woven Matter name") {
                             Task {
                                 busy = true; error = nil
                                 defer { busy = false }
@@ -215,7 +224,11 @@ struct SettingsHermesAgentView: View {
             known = try model.knownHermesSessions(home: connection.home)
             sessions = fetched.filter { !known.contains($0["id"].text) }
             page = 0; loaded = true
-        } catch { await rpc.disconnect(); self.error = error.localizedDescription }
+        } catch {
+            await rpc.disconnect()
+            model.invalidateHermesGatewayConnection(agentID: agentID, expected: connection)
+            self.error = error.localizedDescription
+        }
     }
 
     private func importSession(_ id: String) async {

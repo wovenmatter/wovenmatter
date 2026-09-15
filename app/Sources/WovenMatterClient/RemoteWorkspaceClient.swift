@@ -933,6 +933,10 @@ public struct RemoteWorkspaceServiceClient: Sendable {
         return document.harnesses
     }
 
+    public func hermesResults(offset: Int) async throws -> [HermesScheduledResult] {
+        try await request(path: "v1/workspace-instances/hermes/results", method:"GET", body:nil, queryItems:[URLQueryItem(name:"offset",value:String(offset))])
+    }
+
     public func workspaceInstance(
         _ kind: AgentRuntimeKind, action: String? = nil
     ) async throws -> RemoteWorkspaceInstanceStatus {
@@ -1082,7 +1086,8 @@ public struct RemoteWorkspaceServiceClient: Sendable {
     private func request<Value: Decodable>(
         path: String,
         method: String,
-        body: Data?
+        body: Data?,
+        queryItems: [URLQueryItem]? = nil
     ) async throws -> Value {
         let endpoint = baseURL.appending(path: path)
         guard var components = URLComponents(
@@ -1091,7 +1096,7 @@ public struct RemoteWorkspaceServiceClient: Sendable {
         ) else {
             throw RemoteWorkspaceClientError.invalidResponse("The workspace URL is invalid.")
         }
-        components.queryItems = nil
+        components.queryItems = queryItems
         guard let url = components.url else {
             throw RemoteWorkspaceClientError.invalidResponse("The workspace URL is invalid.")
         }

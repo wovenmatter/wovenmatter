@@ -1,7 +1,17 @@
 import Foundation
 
+protocol HermesGatewayTransport: Sendable {
+    var epoch: String? { get async }
+    var isConnected: Bool { get async }
+    func setHandlers(event: HermesGatewayRPC.EventHandler?, disconnected: (@Sendable () async -> Void)?, request: HermesGatewayRPC.EventHandler?) async
+    func connect() async throws
+    func disconnect() async
+    func call(_ method: String, _ params: HermesValue) async throws -> HermesValue
+    func respond(id: String, result: HermesValue) async throws
+}
+
 /// Native Hermes JSON-RPC 2.0, including newline-batched WebSocket frames.
-public actor HermesGatewayRPC {
+public actor HermesGatewayRPC: HermesGatewayTransport {
     public typealias EventHandler = @Sendable (HermesValue) async -> Void
     public let connection: HermesGatewayConnection
     private let session: URLSession
@@ -10,6 +20,7 @@ public actor HermesGatewayRPC {
     private var pending: [String: CheckedContinuation<HermesValue, any Error>] = [:]
     private var timeouts: [String: Task<Void, Never>] = [:]
     private var eventHandler: EventHandler?
+    private var requestHandler: EventHandler?
     private var disconnectHandler: (@Sendable () async -> Void)?
     public private(set) var epoch: String?
     public var isConnected: Bool { socket != nil }
@@ -23,8 +34,8 @@ public actor HermesGatewayRPC {
         session = URLSession(configuration: config)
     }
 
-    public func setHandlers(event: EventHandler?, disconnected: (@Sendable () async -> Void)? = nil) {
-        eventHandler = event; disconnectHandler = disconnected
+    public func setHandlers(event: EventHandler?, disconnected: (@Sendable () async -> Void)? = nil, request: EventHandler? = nil) {
+        eventHandler = event; disconnectHandler = disconnected; requestHandler = request
     }
 
     public func connect() async throws {
@@ -33,7 +44,10 @@ public actor HermesGatewayRPC {
             throw HermesGatewayError.message("Hermes connection registration is invalid.")
         }
         let current = UUID(); generation = current
-        let socket = session.webSocketTask(with: connection.websocketURL)
+        epoch = nil
+        var request = URLRequest(url: connection.websocketURL)
+        for (key, value) in connection.requestHeaders { request.setValue(value, forHTTPHeaderField: key) }
+        let socket = session.webSocketTask(with: request)
         socket.maximumMessageSize = 32 * 1_024 * 1_024
         self.socket = socket
         socket.resume()
@@ -93,9 +107,24 @@ public actor HermesGatewayRPC {
         } onCancel: { Task { await self.expire(id) } }
     }
 
+    public func respond(id: String, result: HermesValue) async throws {
+        try await send(["jsonrpc": "2.0", "id": .string(id), "result": result])
+    }
+
+    private func send(_ frame: HermesValue) async throws {
+        guard let socket else { throw HermesGatewayError.message("Hermes Gateway is disconnected.") }
+        try await socket.send(.string(String(decoding: try JSONEncoder().encode(frame), as: UTF8.self)))
+    }
+
     private func receive(_ frame: HermesValue, generation current: UUID) async {
         guard generation == current else { return }
-        if let id = frame["id"].string {
+        if let id = frame["id"].string, frame["method"].string != nil {
+            if let requestHandler { await requestHandler(frame) }
+            else {
+                try? await send(["jsonrpc": "2.0", "id": .string(id),
+                    "error": ["code": .number(-32601), "message": "This client does not support this request."]])
+            }
+        } else if let id = frame["id"].string {
             timeouts.removeValue(forKey: id)?.cancel()
             guard let continuation = pending.removeValue(forKey: id) else { return }
             if !frame["error"].isNull {

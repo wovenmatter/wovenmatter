@@ -114,8 +114,6 @@ public enum LocalACPRuntimeCatalog {
         switch runtimeKind {
         case .codex:
             ["CODEX_CONFIG": #"{"approvals_reviewer":"auto_review"}"#]
-        case .hermes:
-            [:]
         default:
             [:]
         }
@@ -125,13 +123,6 @@ public enum LocalACPRuntimeCatalog {
         for runtimeKind: AgentRuntimeKind
     ) -> LocalACPRuntimeReadinessProbe? {
         switch runtimeKind {
-        case .hermes:
-            LocalACPRuntimeReadinessProbe(
-                expectedAgentName: "hermes-agent",
-                setupAuthenticationMethodID: "hermes-setup",
-                readyDetail: "Hermes native Gateway is connected to the current Hermes profile.",
-                setupRequiredDetail: "Hermes needs provider setup. Run “hermes model” in your terminal, then refresh its status."
-            )
         case .cursor:
             LocalACPRuntimeReadinessProbe(
                 setupAuthenticationMethodID: CursorACPSupport.authMethodID,

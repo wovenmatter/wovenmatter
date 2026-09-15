@@ -233,7 +233,7 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
       s.enabled = installed
       await persist()
     }
-    let notice = h.id === 'hermes' ? 'Native ACP; updates require idle Hermes services.' : h.id === 'opencode' ? `OpenCode v2 compatibility is pinned to ${h.install.package.split('@').at(-1)}.` : h.adapterPackage ? 'Chat uses the adapter and bundled engine shown here; sign-in CLI updates do not update that engine.' : null
+    let notice = h.id === 'hermes' ? 'Native Hermes Gateway; updates require idle Hermes services.' : h.id === 'opencode' ? `OpenCode v2 compatibility is pinned to ${h.install.package.split('@').at(-1)}.` : h.adapterPackage ? 'Chat uses the adapter and bundled engine shown here; sign-in CLI updates do not update that engine.' : null
     if (h.id === 'hermes' && s.hermesNotice) notice += ' ' + s.hermesNotice
     const bundled = components.find(c => c.id === 'bundled')
     if (bundled?.latestVersion && bundled.latestVersion !== bundled.updateTargetVersion) notice += ' The newest bundled dependency may exceed the adapter’s declared compatibility; only compatible dependency updates are offered.'

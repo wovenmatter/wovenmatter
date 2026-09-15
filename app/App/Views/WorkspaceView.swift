@@ -636,7 +636,7 @@ struct WorkspaceView: View {
                 case .calendar:
                     DashboardCalendarSurface(model: model)
                 case .cronJobs:
-                    OpenClawCronSurface(
+                    DashboardCronSurface(
                         model: model,
                         onOpenConversation: { conversationID in
                             destination = .workspace

@@ -82,6 +82,27 @@ struct RuntimeMaintenanceTests {
         #expect(RuntimeMaintenance.bundledEngine(in: root, kind: .claudeCode) == native.appending(path: "claude"))
     }
 
+    @Test func hermesInventoryRequiresNativeGatewayWithoutACP() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let executable = root.appending(path: "hermes")
+        try """
+        #!/bin/sh
+        case "$*" in
+          '--version') echo 0.21.2 ;;
+          'serve --help') echo '--isolated --port' ;;
+          *) exit 1 ;;
+        esac
+        """.write(to: executable, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
+        let inventory = await RuntimeMaintenance.inspect(.hermes, checkLatest: false,
+            resolver: LocalACPRuntimeResolver(executableSearchDirectories: [root.path]))
+        #expect(inventory.isInstalled)
+        #expect(inventory.components.map(\.name) == ["hermes", "Native Gateway"])
+        #expect(inventory.components.allSatisfy { $0.verified })
+    }
+
     @Test func hermesCheckDoesNotTreatFailedOrAmbiguousChecksAsCurrent() {
         #expect(RuntimeMaintenance.hermesCheck("✓ Already up to date.") == false)
         #expect(RuntimeMaintenance.hermesCheck("⚕ Update available: 4 commits behind origin/main.") == true)
