@@ -2216,7 +2216,7 @@ public final class WorkspaceDatabase: @unchecked Sendable {
     importedOpenCodeSnapshot: OpenCodeSessionSnapshot? = nil,
     hermesImport: HermesSessionImport? = nil
   ) throws -> String {
-    try transaction { try createLocalACPSessionUnlocked(runtimeKind: runtimeKind, title: title, ownerDeviceID: ownerDeviceID, createdAt: createdAt, openCodeAssociation: openCodeAssociation, hermesImport: hermesImport) }
+    try transaction { try createLocalACPSessionUnlocked(runtimeKind: runtimeKind, title: title, ownerDeviceID: ownerDeviceID, createdAt: createdAt, openCodeAssociation: openCodeAssociation, importedOpenCodeSnapshot: importedOpenCodeSnapshot, hermesImport: hermesImport) }
   }
 
   @discardableResult
@@ -2226,6 +2226,7 @@ public final class WorkspaceDatabase: @unchecked Sendable {
     ownerDeviceID: UUID,
     createdAt: Date = Date(),
     openCodeAssociation: (connectionID: String, sessionID: String)? = nil,
+    importedOpenCodeSnapshot: OpenCodeSessionSnapshot? = nil,
     hermesImport: HermesSessionImport? = nil
   ) throws -> String {
     guard LocalACPRuntimeCatalog.definition(for: runtimeKind) != nil,
