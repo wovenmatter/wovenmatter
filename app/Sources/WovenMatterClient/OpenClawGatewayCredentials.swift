@@ -24,8 +24,15 @@ public final class OpenClawGatewayKeychain: OpenClawGatewayCredentialStore, @unc
   private let service: String
 
   public init(service: String? = nil) {
-    self.service = service ?? (Bundle.main.bundleIdentifier == "wovenmatter.desktop.dev"
-      ? "Woven Matter.desktop.dev.OpenClaw" : "Woven Matter.desktop.OpenClaw")
+    self.service = service ?? Self.serviceName(bundleIdentifier: Bundle.main.bundleIdentifier)
+  }
+
+  static func serviceName(bundleIdentifier: String?) -> String {
+    if let bundleIdentifier,
+       bundleIdentifier == "wovenmatter.desktop.dev" || bundleIdentifier.hasPrefix("wovenmatter.desktop.dev.") {
+      return "Woven Matter.desktop.dev" + bundleIdentifier.dropFirst("wovenmatter.desktop.dev".count) + ".OpenClaw"
+    }
+    return "Woven Matter.desktop.OpenClaw"
   }
 
   public func credentials(for scope: String) throws -> OpenClawGatewayCredentials {

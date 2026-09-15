@@ -28,6 +28,7 @@ actor OpenClawLocalGatewayLifecycle {
     var agents: Set<UUID>
     let port: Int
     let generation: UUID
+    var ready = false
   }
   private struct Pending {
     let generation: UUID
@@ -162,6 +163,7 @@ actor OpenClawLocalGatewayLifecycle {
         try Task.checkCancellation()
         guard !isShutDown, entries[identity]?.generation == generation else { throw CancellationError() }
         if isReady(port) {
+          entries[identity]?.ready = true
           entries[identity]?.agents.formUnion(stale?.agents ?? [])
           return port
         }
@@ -210,19 +212,36 @@ actor OpenClawLocalGatewayLifecycle {
     }
     environment.merge(launch.environment) { _, staged in staged }
     process.environment = environment
-    let pipe = Pipe()
-    let output = try GatewayStartupOutput(pipe: pipe, environment: environment)
-    process.standardOutput = pipe
-    process.standardError = pipe
+    // A pipe would break when the desktop exits and can terminate the Gateway
+    // on its next log write. A private host log has an independent lifetime.
+    let logURL = FileManager.default.temporaryDirectory.appending(path: "wovenmatter-openclaw-\(UUID().uuidString).log")
+    guard FileManager.default.createFile(atPath: logURL.path, contents: nil,
+      attributes: [.posixPermissions: 0o600]) else { throw CocoaError(.fileWriteUnknown) }
+    let log = try FileHandle(forWritingTo: logURL)
+    process.standardOutput = log
+    process.standardError = log
+    process.standardInput = FileHandle.nullDevice
     do { try process.run() }
-    catch { output.finish(); throw error }
-    // Only the child keeps the write side. EOF must not depend on Process lifetime.
-    try? pipe.fileHandleForWriting.close()
+    catch { try? log.close(); try? FileManager.default.removeItem(at: logURL); throw error }
+    try? log.close()
     let owner = GatewayProcessOwner(process)
+    let sensitiveValues = environment.compactMap { key, value in
+      let name = key.lowercased()
+      return ["token", "password", "secret", "credential", "api_key", "private_key"].contains(where: name.contains) && !value.isEmpty ? value : nil
+    }.sorted { $0.count > $1.count }
     return OwnedProcess(isRunning: { process.isRunning }, terminate: { owner.terminate() },
-      waitForExit: { await owner.waitForExit(); output.finish() },
+      waitForExit: { await owner.waitForExit() },
       exitStatus: { process.isRunning ? nil : process.terminationStatus },
-      startupOutput: { output.summary() })
+      startupOutput: {
+        guard let file = try? FileHandle(forReadingFrom: logURL) else { return "" }
+        defer { try? file.close() }
+        guard let length = try? file.seekToEnd() else { return "" }
+        try? file.seek(toOffset: length > 16384 ? length - 16384 : 0)
+        let data = (try? file.read(upToCount: 16_384)) ?? Data()
+        var lines = String(decoding: data, as: UTF8.self).components(separatedBy: .newlines)
+        if length > 16384, !lines.isEmpty { lines.removeFirst() }
+        return GatewayStartupOutput.redact(lines.joined(separator: "\n"), sensitiveValues: sensitiveValues)
+      })
   }
 
   private static func portAcceptsConnections(_ port: Int) -> Bool {
@@ -248,7 +267,7 @@ actor OpenClawLocalGatewayLifecycle {
   func release(agentID: UUID) {
     guard let key = keysByAgent.removeValue(forKey: agentID), var entry = entries[key] else { return }
     entry.agents.remove(agentID)
-    if entry.agents.isEmpty {
+    if entry.agents.isEmpty && !entry.ready {
       retire(entry.process, identity: key)
       entries.removeValue(forKey: key)
     } else {
@@ -260,7 +279,9 @@ actor OpenClawLocalGatewayLifecycle {
     isShutDown = true
     for start in pending.values { start.task.cancel() }
     pending.removeAll()
-    for (identity, entry) in entries { retire(entry.process, identity: identity) }
+    // A ready Gateway owns scheduled execution beyond the desktop lifetime.
+    // Only incomplete startup is cancelled when the application closes.
+    for (identity, entry) in entries where !entry.ready { retire(entry.process, identity: identity) }
     entries.removeAll()
     keysByAgent.removeAll()
     let retirements = retiring.values.map(\.task)
@@ -316,73 +337,7 @@ private struct GatewayStartupFailure: LocalizedError {
   }
 }
 
-/// Continuously drain both streams without a pipe deadlock or an unbounded log.
-/// Raw bytes live only in a small in-memory tail; diagnostics are sanitized on read.
-final class GatewayStartupOutput: @unchecked Sendable {
-  private let queue = DispatchQueue(label: "wovenmatter.openclaw-startup-output")
-  private let source: any DispatchSourceRead
-  private let descriptor: Int32
-  private let sensitiveValues: [String]
-  private var tail = Data()
-  private var finished = false
-  private var truncated = false
-  static let maximumBytes = 16_384
-
-  init(pipe: Pipe, environment: [String: String]) throws {
-    descriptor = dup(pipe.fileHandleForReading.fileDescriptor)
-    guard descriptor >= 0 else { throw POSIXError(.EMFILE) }
-    _ = fcntl(descriptor, F_SETFL, O_NONBLOCK)
-    try? pipe.fileHandleForReading.close()
-    sensitiveValues = environment.compactMap { key, value in
-      let name = key.lowercased()
-      return ["token", "password", "secret", "credential", "api_key", "private_key"].contains(where: name.contains)
-        && !value.isEmpty ? value : nil
-    }.sorted { $0.count > $1.count }
-    source = DispatchSource.makeReadSource(fileDescriptor: descriptor, queue: queue)
-    let descriptor = descriptor
-    source.setCancelHandler { Darwin.close(descriptor) }
-    source.setEventHandler { [weak self] in self?.drain() }
-    source.resume()
-  }
-
-  private func drain() {
-    guard !finished else { return }
-    var bytes = [UInt8](repeating: 0, count: 4096)
-    // Bound each turn even when a child writes continuously.
-    for _ in 0..<16 {
-      let count = Darwin.read(descriptor, &bytes, bytes.count)
-      if count <= 0 {
-        if count == 0 { finished = true; source.cancel() }
-        return
-      }
-      tail.append(contentsOf: bytes.prefix(count))
-      if tail.count > Self.maximumBytes {
-        tail.removeFirst(tail.count - Self.maximumBytes)
-        truncated = true
-      }
-    }
-  }
-
-  func finish() {
-    queue.sync {
-      drain()
-      finished = true
-      source.cancel()
-    }
-  }
-
-  func summary() -> String {
-    queue.sync {
-      var data = tail
-      if truncated {
-        // Do not expose a fragment of a secret whose field name was truncated.
-        if let newline = data.firstIndex(of: 10) { data = Data(data.suffix(from: data.index(after: newline))) }
-        else { data = Data() }
-      }
-      return Self.redact(String(decoding: data, as: UTF8.self), sensitiveValues: sensitiveValues)
-    }
-  }
-
+private enum GatewayStartupOutput {
   static func redact(_ output: String, sensitiveValues: [String] = []) -> String {
     if output.contains("gateway.auth.mode=none cannot be used with gateway.tailscale.mode=") {
       return "OpenClaw rejected unauthenticated startup with Tailscale Serve/Funnel enabled. Tailscale Serve/Funnel requires an authenticated Gateway."
@@ -399,6 +354,4 @@ final class GatewayStartupOutput: @unchecked Sendable {
     }.filter { !$0.isEmpty }.suffix(8).joined(separator: "\n")
     return String(result.prefix(2048))
   }
-
-  deinit { source.cancel() }
 }

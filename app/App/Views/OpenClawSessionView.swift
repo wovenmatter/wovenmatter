@@ -15,7 +15,7 @@ struct OpenClawSessionLibrary: View {
     var body: some View {
         SettingsCard(title: "Shared OpenClaw sessions", detail: "Import an existing conversation with its original working directory.") {
             HStack {
-                Button("Refresh sessions") { pageOffsets = [0]; load(page: 0) }
+                Button("Refresh sessions") { load(page: 0) }
                     .buttonStyle(SettingsQuietButtonStyle(horizontalPadding: 8, minimumHeight: 26))
                 if busy { ProgressView().controlSize(.small) }
             }
@@ -68,6 +68,7 @@ struct OpenClawSessionLibrary: View {
             defer { busy = false }
             do {
                 let page = try await model.openClawNativeSessions(agentID: agentID, offset: offset)
+                if index == 0 { pageOffsets = [0] }
                 sessions = page.sessions
                 currentPage = index
                 nextOffset = page.nextOffset.flatMap { $0 > offset ? $0 : nil }

@@ -1,5 +1,7 @@
 import { createRuntimeMaintenance, acquireHostLock } from './runtime-maintenance.mjs'
 import { createWorkspaceInstances } from './workspace-instances.mjs'
+import { prepareOpenClawResults } from './prepare-openclaw-results.mjs'
+import { durableJSON } from './openclaw-results/store.mjs'
 import { createServer } from 'node:http'
 import { timingSafeEqual, randomUUID, createHash } from 'node:crypto'
 import { readFile, writeFile, mkdir } from 'node:fs/promises'
@@ -21,6 +23,7 @@ const apiToken = runningAsService
   ? requiredEnvironment('WOVENMATTER_API_TOKEN')
   : process.env.WOVENMATTER_API_TOKEN ?? ''
 const gatewayPort = parsePositiveInteger(process.env.WOVENMATTER_GATEWAY_PORT, 18789)
+const gatewayDesiredPath = resolve(workspaceRoot, '.wovenmatter', 'openclaw-desired.json')
 
 const catalogDocument = runningAsService
   ? JSON.parse(await readFile(catalogPath, 'utf8'))
@@ -47,8 +50,8 @@ const instances = createWorkspaceInstances({
   workspaceRoot, environment: harnessEnvironment,
   gateway: {
     status: gatewayStatus,
-    start: async () => { gateway.desired = true; await startGateway() },
-    stop: async () => { await stopGateway(); gateway.desired = false },
+    start: async () => { setGatewayDesired(true); await startGateway() },
+    stop: async () => { setGatewayDesired(false); await stopGateway() },
   },
   isEnabled: async id => await maintenance.isEnabled(id),
 })
@@ -178,13 +181,13 @@ const server = createServer(async (request, response) => {
       return json(response, 200, gatewayStatus())
     }
     if (request.method === 'POST' && url.pathname === '/v1/openclaw/gateway/start') {
-      gateway.desired = true
+      setGatewayDesired(true)
       await startGateway()
       return json(response, 202, gatewayStatus())
     }
     if (request.method === 'POST' && url.pathname === '/v1/openclaw/gateway/restart') {
       if (!await maintenance.isEnabled('openclaw') || maintenance.isBusy('openclaw')) throw httpError(409, 'runtime_not_enabled_or_busy')
-      gateway.desired = true
+      setGatewayDesired(true)
       gateway.restarts = 0
       await stopGateway()
       gateway.desired = true
@@ -220,9 +223,35 @@ server.on('upgrade', (request, socket, head) => {
 })
 
 if (runningAsService) {
+  try {
+    const saved = JSON.parse(await readFile(gatewayDesiredPath, 'utf8'))
+    gateway.desired = saved.running === true
+  } catch (error) {
+    if (error.code !== 'ENOENT') gateway.lastError = 'openclaw_desired_state_unavailable'
+  }
   server.listen(listenPort, listenHost, () => {
     process.stdout.write(`Woven Matter remote service listening on ${listenHost}:${listenPort}\n`)
   })
+  // Host supervision is independent of desktop connections and survives a
+  // bounded startup failure. Explicit Stop clears the persisted intent.
+  setInterval(() => {
+    if (gateway.desired && !gateway.process && !gatewayLaunchReservation) {
+      startGateway().catch(() => { gateway.lastError = 'openclaw_gateway_start_failed' })
+    }
+  }, 10000).unref()
+  queueMicrotask(() => {
+    if (gateway.desired) startGateway().catch(() => { gateway.lastError = 'openclaw_gateway_start_failed' })
+  })
+  process.once('SIGTERM', async () => {
+    server.close()
+    try { await stopGateway(); process.exit(0) }
+    catch { process.exit(1) }
+  })
+}
+
+function setGatewayDesired(running) {
+  durableJSON(gatewayDesiredPath, { running })
+  gateway.desired = running
 }
 
 function authorized(request) {
@@ -469,6 +498,8 @@ async function startGatewayProcess(generation) {
   if (await tcpListenerAvailable('127.0.0.1', gatewayPort, 500)) throw httpError(409, 'openclaw_gateway_port_in_use')
   if (!await commandExists('openclaw')) throw httpError(409, 'openclaw_not_installed')
   requireGatewayStartCurrent(generation)
+  await prepareOpenClawResults({ environment: harnessEnvironment() })
+  requireGatewayStartCurrent(generation)
   const child = spawn('openclaw', ['gateway', 'run', '--bind', 'loopback', '--port', String(gatewayPort)], {
     cwd: workspaceRoot,
     env: harnessEnvironment(),
@@ -529,6 +560,7 @@ async function stopGateway() {
       resolvePromise()
     })
   })
+  if (child.exitCode === null && child.signalCode === null) throw httpError(503, 'openclaw_gateway_stop_pending')
 }
 
 async function waitForTCPListener(port, child, timeoutMilliseconds) {
