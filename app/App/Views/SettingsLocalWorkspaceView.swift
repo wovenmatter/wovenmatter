@@ -175,7 +175,11 @@ struct SettingsLocalWorkspaceView: View {
             title: "Runtimes",
             detail: "Woven Matter discovers installed CLIs and adapters automatically and can install what’s missing."
         ) {
-            ForEach(LocalACPRuntimeCatalog.definitions) { definition in
+            ForEach(
+                LocalACPRuntimeCatalog.definitions.sorted {
+                    $0.runtimeKind.presentationRank < $1.runtimeKind.presentationRank
+                }
+            ) { definition in
                 if definition.runtimeKind == .opencode {
                     openCodeRuntimeRow
                 } else {
@@ -240,11 +244,9 @@ struct SettingsLocalWorkspaceView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
 
                         RuntimeMaintenanceActions {
-                            if definition.runtimeKind == .openclaw || definition.runtimeKind == .hermes {
-                                Button("More") { onMore(definition.runtimeKind) }
-                                    .buttonStyle(SettingsQuietButtonStyle())
-                                    .accessibilityLabel("More \(definition.displayName) settings")
-                            }
+                            Button("Settings") { onMore(definition.runtimeKind) }
+                                .buttonStyle(SettingsQuietButtonStyle())
+                                .accessibilityLabel("Open \(definition.displayName) settings")
                             runtimeUpdateButton(definition.runtimeKind)
                             let isShown = model.isLocalACPRuntimeShown(
                                 definition.runtimeKind
@@ -334,8 +336,8 @@ struct SettingsLocalWorkspaceView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 RuntimeMaintenanceActions {
-                    Button("More") { onMore(.opencode) }
-                        .accessibilityLabel("More OpenCode settings")
+                    Button("Settings") { onMore(.opencode) }
+                        .accessibilityLabel("Open OpenCode settings")
                     runtimeUpdateButton(.opencode)
                     let shown = model.isLocalACPRuntimeShown(.opencode)
                     Button(shown ? "Hide" : "Show") { model.setLocalACPRuntimeShown(!shown, runtimeKind: .opencode) }
