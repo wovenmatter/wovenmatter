@@ -27,6 +27,13 @@ Woven Matter launches the installed `hermes serve --isolated --host 127.0.0.1
 service proxy; the native backend token remains on the agent host.
 The private connection registration is scoped to the Hermes profile home.
 
+Independent review on September 15 checked installed revision
+`78d338b9ee917b73468c38ba4633ed53de4942e6`: the session, replay,
+attachment and server-request contracts used here remain compatible. This was
+source inspection, not a repeat of the live acceptance described below.
+Saved conversation identities are checked against the resolved profile and
+remote workspace before any resume request.
+
 ## Behavior
 
 - Native `session.create` and `session.resume` return live IDs distinct from the
@@ -142,6 +149,8 @@ Enabling a delivery destination installs and enables the plugin in that profile.
 An idle Woven Matter-owned backend may restart once to load it. A separate
 `hermes gateway` that already owns scheduling needs an explicit restart by its
 operator after initial plugin enablement; Woven Matter never restarts that service.
+Restart decisions inspect the running backend's `plugins.list`, so an earlier
+enable whose idle restart was blocked can be retried after active work finishes.
 The native desktop scheduler runs with `HERMES_DESKTOP=1` and respects Hermes's
 gateway ownership check. Active turns and scheduled executions block explicit stop.
 

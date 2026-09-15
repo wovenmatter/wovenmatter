@@ -67,10 +67,16 @@ export function createHermesInstance({ environment, isEnabled, spawnProcess = sp
     for (const key of ['HERMES_DESKTOP_PARENT_PID', 'HERMES_DESKTOP_PARENT_IDENTITY', 'TERMINAL_CWD', 'HERMES_TUI_SIDECAR_URL']) delete env[key]
     const process = spawnProcess('hermes', ['serve', '--isolated', '--host', '127.0.0.1', '--port', '0'], { env, stdio: 'ignore' })
     child = process
-    process.on('error', () => { lastError = 'Hermes could not start. Check its installation.' })
+    let spawnFailed = false
+    process.on('error', () => {
+      spawnFailed = true
+      if (child === process) child = null
+      lastError = 'Hermes could not start. Check its installation.'
+    })
     process.on('exit', () => { if (child === process) { child = null; info = null; lastError = 'Hermes stopped. Reconnecting automatically.' } })
     try {
       for (let attempt = 0; attempt < 180; attempt++) {
+        if (spawnFailed) throw fail('hermes_backend_spawn_failed')
         if (process.exitCode !== null || process.signalCode !== null) throw fail('hermes_backend_exited')
         let readyInfo
         try { readyInfo = JSON.parse(await readFile(ready, 'utf8')) } catch (error) { if (error.code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error }

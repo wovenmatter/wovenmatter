@@ -42,6 +42,24 @@ test('disabled Hermes never launches', async()=>{
   finally{instance.close()}
 })
 
+test('a failed spawn releases runtime ownership and permits a retry', async () => {
+  const root = await mkdtemp(resolve(tmpdir(), 'hermes-spawn-failure-'))
+  let attempts = 0
+  const instance = createHermesInstance({
+    environment: () => ({ ...process.env, HOME: root }), isEnabled: async () => true,
+    pluginSource: resolve(import.meta.dirname, '../../harnesses/hermes-delivery'),
+    acquireLock: async () => () => {},
+    spawnProcess: () => { attempts++; return spawn(resolve(root, 'missing-hermes')) },
+  })
+  try {
+    await assert.rejects(instance.start(), /hermes_backend_spawn_failed/)
+    assert.equal(instance.hasActiveRuntime(), false)
+    await assert.rejects(instance.start(), /hermes_backend_spawn_failed/)
+    assert.equal(attempts, 2)
+    assert.equal(instance.hasActiveRuntime(), false)
+  } finally { instance.close(); await rm(root, { recursive: true, force: true }) }
+})
+
 test('native delivery plugin has provider-free durable-identity tests', async()=>{
   const child=spawn('python3',[resolve(import.meta.dirname,'../../harnesses/hermes-delivery/test_delivery.py')],{env:{...process.env,PYTHONDONTWRITEBYTECODE:'1'},stdio:'pipe'})
   let error='';child.stderr.on('data',bytes=>{error+=bytes})

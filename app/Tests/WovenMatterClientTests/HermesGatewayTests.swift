@@ -4,6 +4,19 @@ import WovenMatterCore
 @testable import WovenMatterClient
 
 struct HermesGatewayTests {
+    @Test func pinnedIdentityCannotResumeOnAnotherProfileOrWorkspace() async throws {
+        let transport = HermesTransportFixture()
+        let client = makeClient(transport)
+        let identity = HermesGatewayClient.identity(home: "/remote-workspaces/other/home/.hermes", storedID: "stored")
+        await #expect(throws: (any Error).self) {
+            try await client.initializeSession(workingDirectory: URL(fileURLWithPath: "/tmp"),
+                existingSessionID: identity, title: nil, systemPrompt: nil)
+        }
+        #expect(await transport.calls.isEmpty)
+        #expect(await !transport.isConnected)
+        await client.shutdown()
+    }
+
     @Test func createAndResumeUseTheirOwnNativeParameterSchemas() async throws {
         let transport = HermesTransportFixture()
         let client = makeClient(transport)
