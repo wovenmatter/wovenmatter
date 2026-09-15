@@ -970,7 +970,7 @@ struct DashboardUsageView: View {
                         Button("Retry access") {
                             requestCredentialAction(.retryProvider(.claude))
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(DashboardIconButtonStyle())
                         .font(.system(size: 10.5, weight: .medium))
                     } else if account.provider == .codex,
                               model.codexUsageWorkspaces.count > 1,
@@ -983,7 +983,7 @@ struct DashboardUsageView: View {
                         ) {
                             model.reconnectSelectedCodexUsageWorkspace()
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(DashboardIconButtonStyle())
                         .font(.system(size: 10.5, weight: .medium))
                         .disabled(
                             model.signingInUsageProviders.contains(.codex)
@@ -999,7 +999,7 @@ struct DashboardUsageView: View {
                         ) {
                             model.signInUsageProvider(account.provider)
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(DashboardIconButtonStyle())
                         .font(.system(size: 10.5, weight: .medium))
                         .disabled(
                             model.signingInUsageProviders.contains(account.provider)
@@ -1014,7 +1014,7 @@ struct DashboardUsageView: View {
                                 )
                             }
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(DashboardIconButtonStyle())
                         .font(.system(size: 10.5, weight: .medium))
                         .foregroundStyle(DashboardPalette.mutedForeground)
                     }
@@ -1348,7 +1348,7 @@ private struct UsageFilterSelector: View {
             )
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(SettingsQuietButtonStyle(horizontalPadding: 0, minimumHeight: 34, isActive: isPresented))
         .accessibilityLabel(title)
         .accessibilityValue(selectedLabel)
         .popover(isPresented: $isPresented, arrowEdge: .bottom) {
@@ -1373,11 +1373,13 @@ private struct UsageFilterSelector: View {
                         .padding(.vertical, 6)
                         .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(SettingsMenuOptionButtonStyle())
+                    .accessibilityAddTraits(option.key == selection ? .isSelected : [])
                 }
             }
             .padding(6)
             .frame(minWidth: 180)
+            .onExitCommand { isPresented = false }
         }
     }
 

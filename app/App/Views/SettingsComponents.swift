@@ -276,7 +276,7 @@ struct SettingsMenuPicker: View {
             .frame(width: width, height: 36, alignment: .leading)
             .contentShape(RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius, style: .continuous))
         }
-        .buttonStyle(SettingsMenuTriggerButtonStyle(isPresented: isPresented))
+        .buttonStyle(SettingsQuietButtonStyle(horizontalPadding: 0, isActive: isPresented))
         .accessibilityValue(selection.isEmpty ? "No selection" : label(for: selection))
         .accessibilityHint(isPresented ? "Options are open" : "Shows available options")
         .popover(isPresented: $isPresented, arrowEdge: .bottom) {
@@ -325,7 +325,7 @@ struct SettingsMenuPicker: View {
     }
 }
 
-private struct SettingsMenuOptionButtonStyle: ButtonStyle {
+struct SettingsMenuOptionButtonStyle: ButtonStyle {
     @Environment(\.dashboardTheme) private var theme
     @Environment(\.isEnabled) private var isEnabled
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -347,30 +347,6 @@ private struct SettingsMenuOptionButtonStyle: ButtonStyle {
                 )
             )
             .scaleEffect(configuration.isPressed && !reduceMotion ? 0.99 : 1)
-            .opacity(isEnabled ? 1 : 0.4)
-            .onHover { isHovering = $0 }
-    }
-}
-
-private struct SettingsMenuTriggerButtonStyle: ButtonStyle {
-    @Environment(\.dashboardTheme) private var theme
-    @Environment(\.isEnabled) private var isEnabled
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var isHovering = false
-
-    let isPresented: Bool
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .background(
-                theme.palette.themeSoft.opacity(
-                    configuration.isPressed || isPresented
-                        ? 1
-                        : (isEnabled && isHovering ? 0.72 : 0)
-                )
-            )
-            .clipShape(RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius, style: .continuous))
-            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.985 : 1)
             .opacity(isEnabled ? 1 : 0.4)
             .onHover { isHovering = $0 }
     }
@@ -546,6 +522,7 @@ extension View {
 struct SettingsQuietButtonStyle: ButtonStyle {
     var horizontalPadding: CGFloat = 12
     var minimumHeight: CGFloat = 36
+    var isActive = false
     @Environment(\.dashboardTheme) private var theme
     @Environment(\.isEnabled) private var isEnabled
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -559,7 +536,7 @@ struct SettingsQuietButtonStyle: ButtonStyle {
             .frame(minHeight: minimumHeight)
             .background(
                 theme.palette.themeSoft.opacity(
-                    configuration.isPressed ? 1 : (isEnabled && isHovering ? 0.72 : 0)
+                    configuration.isPressed || isActive ? 1 : (isEnabled && isHovering ? 0.72 : 0)
                 )
             )
             .clipShape(RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius, style: .continuous))
