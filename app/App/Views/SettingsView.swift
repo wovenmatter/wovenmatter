@@ -155,6 +155,18 @@ struct SettingsView: View {
                     action: { section = .general }
                 )
                 SettingsDestinationRow(
+                    title: "Local agent workspace",
+                    detail: "Agents and files on this Mac.",
+                    icon: { DashboardLucideIcon(glyph: .terminal, size: 15) },
+                    action: { section = .localWorkspace }
+                )
+                SettingsDestinationRow(
+                    title: "Remote agent workspaces",
+                    detail: "Agents and files on remote Linux machines.",
+                    icon: { DashboardLucideIcon(glyph: .container, size: 15) },
+                    action: { section = .remoteWorkspaces }
+                )
+                SettingsDestinationRow(
                     title: "OpenClaw",
                     detail: "Agent names and connections.",
                     icon: { DashboardHarnessLogoIcon(logo: .openClaw, size: 15) },
@@ -171,18 +183,6 @@ struct SettingsView: View {
                     detail: "Agent names and connections.",
                     icon: { DashboardHarnessLogoIcon(logo: .openCode, size: 15) },
                     action: { section = .openCode }
-                )
-                SettingsDestinationRow(
-                    title: "Local agent workspace",
-                    detail: "Agents and files on this Mac.",
-                    icon: { DashboardLucideIcon(glyph: .terminal, size: 15) },
-                    action: { section = .localWorkspace }
-                )
-                SettingsDestinationRow(
-                    title: "Remote agent workspaces",
-                    detail: "Agents and files on remote Linux machines.",
-                    icon: { DashboardLucideIcon(glyph: .container, size: 15) },
-                    action: { section = .remoteWorkspaces }
                 )
                 SettingsDestinationRow(
                     title: "Buzz agent workspaces",

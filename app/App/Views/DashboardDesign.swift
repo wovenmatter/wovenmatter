@@ -1036,17 +1036,23 @@ struct DashboardActiveConversationRowBackground: View {
 struct DashboardCard<Content: View>: View {
     @Environment(\.dashboardTheme) private var theme
     let showsBorder: Bool
+    let showsBackground: Bool
     let content: Content
 
-    init(showsBorder: Bool = true, @ViewBuilder content: () -> Content) {
+    init(
+        showsBorder: Bool = true,
+        showsBackground: Bool = true,
+        @ViewBuilder content: () -> Content
+    ) {
         self.showsBorder = showsBorder
+        self.showsBackground = showsBackground
         self.content = content()
     }
 
     var body: some View {
         content
             .padding(16)
-            .background(DashboardPalette.background.opacity(0.72))
+            .background(showsBackground ? DashboardPalette.background.opacity(0.72) : .clear)
             .clipShape(RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius, style: .continuous))
             .overlay {
                 if showsBorder {
