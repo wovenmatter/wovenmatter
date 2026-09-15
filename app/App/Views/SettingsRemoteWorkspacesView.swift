@@ -293,7 +293,7 @@ struct SettingsRemoteWorkspacesView: View {
     private func workspaceLocation(
         _ workspace: RemoteWorkspaceConfiguration
     ) -> String {
-        "\(workspace.userName.map { "\($0)@" } ?? "")\(workspace.hostName) · \(workspace.workspaceID)"
+        "\(workspace.workspaceID) · \(workspace.userName.map { "\($0)@" } ?? "")\(workspace.hostName)"
     }
 
     private var createCard: some View {
