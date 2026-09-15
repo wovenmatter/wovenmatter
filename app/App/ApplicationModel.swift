@@ -987,6 +987,8 @@ final class ApplicationModel {
                     var nextMessages = previous.messagesByID
                     for (messageID, presentation) in Self.renderMessagePresentations(
                         page.messages,
+                        activities: page.activities,
+                        runs: page.runs,
                         reusing: previous.messagesByID
                     ) {
                         nextMessages[messageID] = presentation
@@ -1003,6 +1005,8 @@ final class ApplicationModel {
                 } else {
                     messagesByID = Self.renderMessagePresentations(
                         page.messages,
+                        activities: page.activities,
+                        runs: page.runs,
                         reusing: previous?.messagesByID ?? [:]
                     )
                     runsByID = Self.renderRunPresentations(
@@ -1066,6 +1070,8 @@ final class ApplicationModel {
             let renderTask = Task.detached(priority: .userInitiated) {
                 let messagesByID = Self.renderMessagePresentations(
                     page.messages,
+                    activities: page.activities,
+                    runs: page.runs,
                     reusing: current.messagesByID
                 )
                 let runsByID = Self.renderRunPresentations(
@@ -1150,14 +1156,27 @@ final class ApplicationModel {
 
     private nonisolated static func renderMessagePresentations(
         _ messages: [WorkspaceMessageRecord],
+        activities: [WorkspaceRunActivityRecord],
+        runs: [WorkspaceRunRecord],
         reusing previous: [String: DashboardMessagePresentation]
     ) -> [String: DashboardMessagePresentation] {
         var result: [String: DashboardMessagePresentation] = [:]
+        let workRunsByReply = Dictionary(runs.compactMap { run in
+            run.assistantMessageID.map { ($0, run.id) }
+        }, uniquingKeysWith: { _, latest in latest })
+        let activitiesByRun = Dictionary(grouping: activities.sorted(by: WorkspaceRunActivityRecord.precedes), by: \.runID)
         result.reserveCapacity(messages.count)
         for message in messages {
             guard !Task.isCancelled else { return result }
+            // Older steering replies have no work disclosure of their own;
+            // retain their complete canonical text instead of hiding commentary.
+            let displayedBody = workRunsByReply[message.id].map { runID in
+                AssistantTranscriptProjection(messageID: message.id,
+                    content: message.content, activities: (activitiesByRun[runID] ?? []).map(\.activity)).body
+            } ?? message.content
             if let existing = previous[message.id],
                existing.source == message.content,
+               existing.displayedBody == displayedBody,
                existing.status == message.status,
                existing.createdAt == message.createdAt {
                 result[message.id] = existing
@@ -1165,11 +1184,12 @@ final class ApplicationModel {
             }
             result[message.id] = DashboardMessagePresentation(
                 source: message.content,
+                displayedBody: displayedBody,
                 status: message.status,
                 createdAt: message.createdAt,
                 document: message.role == "assistant"
                     ? ConversationMarkdownDocument(
-                        RemoteNoteEditEnvelope.redactingEnvelopes(in: message.content)
+                        RemoteNoteEditEnvelope.redactingEnvelopes(in: displayedBody)
                     )
                     : nil
             )

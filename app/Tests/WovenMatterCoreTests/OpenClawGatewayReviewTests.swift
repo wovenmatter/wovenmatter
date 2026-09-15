@@ -223,6 +223,66 @@ struct OpenClawGatewayReviewTests {
     await fixture.coordinator.shutdown()
   }
 
+  @Test(arguments: [false, true])
+  func idleHistoryPreservesCommentaryThroughCoordinatorRecovery(tracked: Bool) async throws {
+    let fixture = try ReviewGatewayFixture()
+    defer { fixture.remove() }
+    let id = try fixture.database.importOpenClawGatewaySession(agentID: fixture.agentID, session: fixture.session)
+    let run = try fixture.database.beginLocalACPRun(conversationID: id, content: "Start")
+    try fixture.database.appendLocalACPAssistantChunk(runID: run.runID, chunk: "Commentary\n\n")
+    try fixture.database.recordAssistantStreamBoundary(runID: run.runID)
+    try fixture.database.appendLocalACPAssistantChunk(runID: run.runID, chunk: "Draft final")
+    try fixture.database.recordAssistantStreamBoundary(runID: run.runID, finalSegment: true)
+    try fixture.database.upsertDeviceOwnedRunActivity(runID: run.runID,
+      activity: AgentRunActivity(id: "late", kind: .thought, content: "Late reasoning"))
+    let payload: GatewayJSONValue = .object([
+      "sessionInfo": .object(["hasActiveRun": .bool(false)]),
+      "messages": .array([.object(["role": .string("assistant"), "text": .string("Final answer"),
+        "__openclaw": .object(["id": .string("final"), "runId": .string(run.runID), "idempotencyKey": .string(run.runID + ":assistant")])])]),
+    ])
+    await fixture.socket.setHistory(payload)
+    if tracked {
+      let active = try OpenClawGatewayHistory(payload: .object([
+        "sessionInfo": .object(["hasActiveRun": .bool(true)]), "messages": .array([]),
+      ]))
+      try await fixture.coordinator.recoverSessionRuns(conversationID: id, history: active)
+      // The recovered observer must perform the actual idle synchronization
+      // before it terminalizes the locally tracked run.
+      for _ in 0..<400 {
+        if try fixture.database.conversationContent(id: id).runs.first?.status == "completed" { break }
+        try await Task.sleep(for: .milliseconds(5))
+      }
+    } else {
+      _ = try await fixture.coordinator.synchronizeSession(conversationID: id)
+    }
+    let page = try fixture.database.conversationHistoryPage(id: id, limit: 20)
+    let reply = try #require(page.messages.first { $0.id == run.assistantMessageID })
+    #expect(reply.content == "Commentary\n\nFinal answer")
+    #expect(page.runs.first?.status == "completed")
+    let projection = AssistantTranscriptProjection(messageID: reply.id, content: reply.content,
+      activities: page.activities.map(\.activity))
+    #expect(projection.body == "Final answer")
+    #expect(projection.commentary.map(\.content) == ["Commentary\n\n"])
+    // Ordinary refresh after completion and database reopen must not erase
+    // the preserved prefix, even when this page contains only the final row.
+    _ = try await fixture.coordinator.synchronizeSession(conversationID: id)
+    #expect(try fixture.database.conversationContent(id: id).messages.first { $0.id == run.assistantMessageID }?.content == reply.content)
+    let reopened = try WorkspaceDatabase(url: fixture.directory.appending(path: "review.sqlite"))
+    try reopened.synchronizeOpenClawHistory(conversationID: id, history: OpenClawGatewayHistory(payload: payload))
+    #expect(try reopened.conversationContent(id: id).messages.first { $0.id == run.assistantMessageID }?.content == reply.content)
+    let replacement = try OpenClawGatewayHistory(payload: .object([
+      "messages": .array([.object(["role": .string("assistant"), "text": .string("Authoritative replacement"),
+        "__openclaw": .object(["id": .string("final"), "runId": .string(run.runID)])])]),
+    ]))
+    try reopened.synchronizeOpenClawHistory(conversationID: id, history: replacement)
+    let replaced = try reopened.conversationHistoryPage(id: id, limit: 20)
+    let replacedReply = try #require(replaced.messages.first { $0.id == run.assistantMessageID })
+    #expect(replacedReply.content == "Authoritative replacement")
+    #expect(AssistantTranscriptProjection(messageID: replacedReply.id, content: replacedReply.content,
+      activities: replaced.activities.map(\.activity)).commentary.isEmpty)
+    await fixture.coordinator.shutdown()
+  }
+
   @Test func modelDiscoveryUsesTheImportedSessionAndPreparedDetails() async throws {
     let fixture = try ReviewGatewayFixture()
     defer { fixture.remove() }
@@ -288,6 +348,8 @@ private actor ReviewGatewaySocket: OpenClawGatewaySocket {
   var modelParameters: GatewayJSONValue?
   var creationParameters: GatewayJSONValue?
   var historyCalls = 0
+  private var historyPayload: GatewayJSONValue?
+  func setHistory(_ payload: GatewayJSONValue) { historyPayload = payload }
   private var frames: [Data] = []
   private var waiter: CheckedContinuation<Data, any Error>?
   private var closed = false
@@ -309,6 +371,7 @@ private actor ReviewGatewaySocket: OpenClawGatewaySocket {
     let payload: GatewayJSONValue
     switch method {
     case "connect": payload = .object(["protocol": .number(4)])
+    case "chat.history": payload = historyPayload ?? .object(["messages": .array([]), "sessionInfo": .object(["hasActiveRun": .bool(false)])])
     case "sessions.create": payload = .object(["key": row["params"]?.objectValue?["key"] ?? .null, "entry": .object(["spawnedCwd": row["params"]?.objectValue?["cwd"] ?? .null])])
     default: payload = .object(["messages": .array([]), "sessionInfo": .object(["hasActiveRun": .bool(false)])])
     }

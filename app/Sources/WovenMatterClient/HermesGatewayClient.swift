@@ -26,6 +26,10 @@ public actor HermesGatewayClient {
     private var recoveryInvalidated = false
     private var text = ""
     private var completedText = ""
+    private var reasoningPhase = 0
+    private var activeReasoningID: String?
+    private var lastReasoningID: String?
+    private var lastReasoningText = ""
     private var workingDirectory: URL?
     private var latestUsage: HermesValue = [:]
     private var usageBaseline: HermesValue = [:]
@@ -191,7 +195,8 @@ public actor HermesGatewayClient {
         }
         guard let rpc else { throw HermesGatewayError.message("Hermes is disconnected.") }
         self.onEvent = onEvent; self.onPermission = onPermission; self.onInteraction = onInteraction
-        busy = true; terminal = nil; text = ""; completedText = ""; stopped = false
+        busy = true; terminal = nil; text = ""; completedText = ""; stopped = false; activeReasoningID = nil
+        lastReasoningID = nil; lastReasoningText = ""
         usageBaseline = latestUsage
         defer { busy = false; self.onEvent = nil; self.onPermission = nil; self.onInteraction = nil }
         var content = input.transportText()
@@ -371,22 +376,34 @@ public actor HermesGatewayClient {
             switch event["type"].text {
             case "message.delta":
                 guard busy else { return }
+                activeReasoningID = nil
                 let delta = payload["text"].text; text += delta
                 try await onEvent?(.assistantChunk(delta))
             case "message.interim":
                 guard busy else { return }
+                activeReasoningID = nil
                 let interim = payload["text"].text
                 completedText += interim + "\n\n"
                 try await onEvent?(.assistantSnapshot(completedText))
+                try await onEvent?(.assistantBoundary)
                 text = ""
             case "message.complete":
                 guard busy else { return }
+                activeReasoningID = nil
                 let final = payload["text"].text
                 if !payload["response_previewed"].bool, !final.isEmpty || text.isEmpty {
                     try await onEvent?(.assistantSnapshot(completedText + final))
                 }
-                if let reasoning = payload["reasoning"].string, !reasoning.isEmpty {
-                    try await onEvent?(.activity(AgentRunActivity(id: "hermes-thinking", kind: .thought, content: reasoning, contentIsDelta: false), appendsContent: false))
+                try await onEvent?(.assistantBoundary)
+                if let reasoning = payload["reasoning"].string, !reasoning.isEmpty, reasoning != lastReasoningText {
+                    if let id = lastReasoningID, reasoning.hasPrefix(lastReasoningText) {
+                        let suffix = String(reasoning.dropFirst(lastReasoningText.count))
+                        try await onEvent?(.activity(AgentRunActivity(id: id, kind: .thought, content: suffix, contentIsDelta: true), appendsContent: true))
+                    } else {
+                        activeReasoningID = nil
+                        let id = reasoningID()
+                        try await onEvent?(.activity(AgentRunActivity(id: id, kind: .thought, content: reasoning, contentIsDelta: false), appendsContent: false))
+                    }
                 }
                 if !payload["usage"].isNull {
                     let usage = payload["usage"]
@@ -403,8 +420,12 @@ public actor HermesGatewayClient {
             case "session.info":
                 if !payload["usage"].isNull { latestUsage = payload["usage"] }
             case "reasoning.delta", "thinking.delta":
-                try await onEvent?(.activity(AgentRunActivity(id: "hermes-thinking", kind: .thought, content: payload["text"].text, contentIsDelta: true), appendsContent: true))
+                let id = reasoningID()
+                let delta = payload["text"].text
+                lastReasoningText += delta
+                try await onEvent?(.activity(AgentRunActivity(id: id, kind: .thought, content: delta, contentIsDelta: true), appendsContent: true))
             case "tool.start", "tool.complete":
+                activeReasoningID = nil
                 let complete = event["type"].text == "tool.complete"
                 try await onEvent?(.activity(AgentRunActivity(id: payload["tool_id"].text, kind: .tool,
                     title: payload["name"].string, status: complete ? "completed" : "running", toolName: payload["name"].string,
@@ -419,6 +440,16 @@ public actor HermesGatewayClient {
             default: break
             }
         } catch { finish(.failure(error)) }
+    }
+
+    private func reasoningID() -> String {
+        if let activeReasoningID { return activeReasoningID }
+        reasoningPhase += 1
+        let id = "hermes-thinking-\(reasoningPhase)"
+        activeReasoningID = id
+        lastReasoningID = id
+        lastReasoningText = ""
+        return id
     }
 
     private func finish(_ result: Result<LocalACPStopReason, any Error>) {
