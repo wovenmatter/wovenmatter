@@ -109,6 +109,28 @@ struct AssistantTranscriptProjectionTests {
   }
 
 
+  @Test("corrected snapshots resume at the last matching commentary checkpoint")
+  func correctedBoundary() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let database = try WorkspaceDatabase(url: directory.appendingPathComponent("workspace.sqlite"))
+    let conversation = try database.createLocalACPSession(runtimeKind: .codex, title: "Repair", ownerDeviceID: UUID())
+    let run = try database.beginLocalACPRun(conversationID: conversation, content: "Start")
+    try database.appendLocalACPAssistantChunk(runID: run.runID, chunk: "Commentary\n")
+    try database.recordAssistantStreamBoundary(runID: run.runID)
+    try database.appendLocalACPAssistantChunk(runID: run.runID, chunk: "Damaged final")
+    try database.recordAssistantStreamBoundary(runID: run.runID)
+    try database.replaceLocalACPAssistantMessage(runID: run.runID, content: "Commentary\nCorrected final")
+    try database.recordAssistantStreamBoundary(runID: run.runID, finalSegment: true)
+    let page = try database.conversationHistoryPage(id: conversation, limit: 20)
+    let reply = try #require(page.messages.first { $0.role == "assistant" })
+    let projection = AssistantTranscriptProjection(messageID: reply.id, content: reply.content,
+      activities: page.activities.map(\.activity))
+    #expect(projection.body == "Corrected final")
+    #expect(projection.commentary.map(\.content) == ["Commentary\n"])
+  }
+
   @Test("trace events remain interleaved with persisted activity")
   func traceInterleaving() {
     let earlyTrace = WorkspaceRunActivityRecord(id: "trace", runID: "run", conversationID: "chat",

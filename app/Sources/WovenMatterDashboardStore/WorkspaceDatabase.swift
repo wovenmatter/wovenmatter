@@ -3335,7 +3335,7 @@ public final class WorkspaceDatabase: @unchecked Sendable {
     createdAt: Date = Date()
   ) throws {
     try transaction {
-      _ = try appendDeviceOwnedGatewayTraceEventUnlocked(runID: runID,
+      _ = try claimDeviceOwnedGatewayTraceEventUnlocked(runID: runID,
         remoteRunID: remoteRunID, eventName: eventName, eventStream: eventStream,
         sequence: sequence, eventType: eventType,
         eventPhase: eventPhase, toolName: toolName, content: content,
@@ -3404,24 +3404,6 @@ public final class WorkspaceDatabase: @unchecked Sendable {
         guard code == SQLITE_ROW else { throw stepError() }
         result.append((Int(sqlite3_column_int64(statement, 0)), try text(statement, column: 1)))
       }
-    }
-  }
-
-  private func appendDeviceOwnedGatewayTraceEventUnlocked(
-    runID: String, remoteRunID: String?, eventName: String, eventStream: String?,
-    sequence: Int, eventType: String,
-    eventPhase: String?, toolName: String?, content: String?, rawEventJSON: String,
-    createdAt: Date
-  ) throws -> Bool {
-    switch try claimDeviceOwnedGatewayTraceEventUnlocked(runID: runID,
-      remoteRunID: remoteRunID, eventName: eventName, eventStream: eventStream,
-      sequence: sequence, eventType: eventType,
-      eventPhase: eventPhase, toolName: toolName, content: content,
-      rawEventJSON: rawEventJSON, createdAt: createdAt) {
-    case .applied:
-      return true
-    case .duplicate, .legacyUncertain:
-      return false
     }
   }
 
@@ -3583,10 +3565,13 @@ public final class WorkspaceDatabase: @unchecked Sendable {
     let segments = try runActivityRecordsUnlocked(runIDs: [runID], assistantOnly: true)
       .map(\.activity).filter { $0.kind == .assistant && $0.assistantMessageID == assistantMessageID }
     let prefix = segments.compactMap(\.content).joined()
-    let tail = segments.last?.assistantCheckpoint?.followingText(in: content)
+    // A canonical snapshot may invalidate later checkpoints while retaining
+    // earlier commentary. Resume at the last prefix that still matches.
+    let matchingSegment = segments.last { $0.assistantCheckpoint?.followingText(in: content) != nil }
+    let tail = matchingSegment?.assistantCheckpoint?.followingText(in: content)
       ?? (content.hasPrefix(prefix) ? String(content.dropFirst(prefix.count)) : content)
     guard !tail.isEmpty else {
-      if finalSegment, let last = segments.last {
+      if finalSegment, let last = matchingSegment ?? segments.last {
         try upsertDeviceOwnedRunActivityUnlocked(runID: runID,
           activity: AgentRunActivity(id: last.id, kind: .assistant, phase: "final"),
           appendingContent: false, updatedAt: updatedAt)
