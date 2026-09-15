@@ -170,7 +170,11 @@ struct SettingsLocalWorkspaceView: View {
 
     private var runtimesCard: some View {
         SettingsCard(title: "Runtimes") {
-            ForEach(LocalACPRuntimeCatalog.definitions) { definition in
+            ForEach(
+                LocalACPRuntimeCatalog.definitions.sorted {
+                    $0.runtimeKind.presentationRank < $1.runtimeKind.presentationRank
+                }
+            ) { definition in
                 if definition.runtimeKind == .opencode {
                     openCodeRuntimeRow
                 } else {
@@ -235,11 +239,9 @@ struct SettingsLocalWorkspaceView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
 
                         RuntimeMaintenanceActions {
-                            if definition.runtimeKind == .openclaw || definition.runtimeKind == .hermes {
-                                Button("Settings") { onMore(definition.runtimeKind) }
-                                    .buttonStyle(SettingsQuietButtonStyle())
-                                    .accessibilityLabel("Open \(definition.displayName) settings")
-                            }
+                            Button("Settings") { onMore(definition.runtimeKind) }
+                                .buttonStyle(SettingsQuietButtonStyle())
+                                .accessibilityLabel("Open \(definition.displayName) settings")
                             runtimeUpdateButton(definition.runtimeKind)
                             let isShown = model.isLocalACPRuntimeShown(
                                 definition.runtimeKind

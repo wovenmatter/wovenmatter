@@ -88,15 +88,15 @@ struct SettingsBuzzWorkspacesView: View {
                     if candidates.isEmpty {
                         SettingsEmpty("No supported agents were found in this catalog.")
                     } else {
-                        ForEach(candidates) { candidate in
+                        ForEach(candidates.sorted(by: harnessOrder)) { candidate in
                             candidateRow(candidate)
                         }
                     }
                 }
 
-                let enrollments = model.buzzWorkspaceAgentEnrollments.filter {
-                    $0.workspaceLinkID == link.id
-                }
+                let enrollments = model.buzzWorkspaceAgentEnrollments
+                    .filter { $0.workspaceLinkID == link.id }
+                    .sorted(by: harnessOrder)
                 ForEach(enrollments) { enrollment in
                     HStack {
                         Text(enrollment.displayNameSnapshot)
@@ -143,6 +143,29 @@ struct SettingsBuzzWorkspacesView: View {
             .buttonStyle(SettingsQuietButtonStyle())
             .disabled(enrolled)
         }
+    }
+
+    private func harnessOrder(
+        _ lhs: BuzzWorkspaceAgentCandidate,
+        _ rhs: BuzzWorkspaceAgentCandidate
+    ) -> Bool {
+        let lhsRank = lhs.runtimeKind?.presentationRank ?? Int.max
+        let rhsRank = rhs.runtimeKind?.presentationRank ?? Int.max
+        if lhsRank != rhsRank { return lhsRank < rhsRank }
+        return lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName)
+            == .orderedAscending
+    }
+
+    private func harnessOrder(
+        _ lhs: BuzzWorkspaceAgentEnrollment,
+        _ rhs: BuzzWorkspaceAgentEnrollment
+    ) -> Bool {
+        let lhsRank = lhs.runtimeKind?.presentationRank ?? Int.max
+        let rhsRank = rhs.runtimeKind?.presentationRank ?? Int.max
+        if lhsRank != rhsRank { return lhsRank < rhsRank }
+        return lhs.displayNameSnapshot.localizedCaseInsensitiveCompare(
+            rhs.displayNameSnapshot
+        ) == .orderedAscending
     }
 
     private var addWorkspace: some View {

@@ -2,10 +2,24 @@ import SwiftUI
 import WovenMatterClient
 import WovenMatterCore
 
-enum SettingsSection: Equatable {
+private enum HarnessSettingsOrigin: Equatable {
+    case landing
+    case localWorkspace
+    case remoteWorkspaces
+
+    var section: SettingsSection {
+        switch self {
+        case .landing: .landing
+        case .localWorkspace: .localWorkspace
+        case .remoteWorkspaces: .remoteWorkspaces
+        }
+    }
+}
+
+private enum SettingsSection: Equatable {
     case landing
     case general
-    case harness(AgentRuntimeKind)
+    case harness(AgentRuntimeKind, UUID?, HarnessSettingsOrigin)
     case openClaw
     case openCode
     case hermes
@@ -46,12 +60,13 @@ struct SettingsView: View {
                     reservesRailControlSpace: reservesRailControlSpace,
                     onBack: { section = .landing }
                 )
-            case .harness(let runtimeKind):
+            case .harness(let runtimeKind, let workspaceID, let origin):
                 SettingsHarnessView(
                     model: model,
                     runtimeKind: runtimeKind,
+                    workspaceID: workspaceID,
                     reservesRailControlSpace: reservesRailControlSpace,
-                    onBack: { section = .landing }
+                    onBack: { section = origin.section }
                 )
             case .openClaw:
                 SettingsOpenClawView(
@@ -102,7 +117,13 @@ struct SettingsView: View {
                     model: model,
                     reservesRailControlSpace: reservesRailControlSpace,
                     onBack: { section = .landing },
-                    onMore: { section = $0 == .hermes ? .hermesWorkspace(nil) : $0 == .opencode ? .openCodeWorkspace(nil) : .openClawWorkspace(nil) }
+                    onMore: {
+                        section = harnessSettingsSection(
+                            $0,
+                            workspaceID: nil,
+                            origin: .localWorkspace
+                        )
+                    }
                 )
             case .remoteWorkspaces:
                 SettingsRemoteWorkspacesView(
@@ -114,7 +135,11 @@ struct SettingsView: View {
                     },
                     reservesRailControlSpace: reservesRailControlSpace,
                     onMoreRuntime: { kind, configuration in
-                        section = kind == .hermes ? .hermesWorkspace(configuration.id) : kind == .opencode ? .openCodeWorkspace(configuration.id) : .openClawWorkspace(configuration.id)
+                        section = harnessSettingsSection(
+                            kind,
+                            workspaceID: configuration.id,
+                            origin: .remoteWorkspaces
+                        )
                     },
                     onBack: { section = .landing }
                 )
@@ -178,25 +203,25 @@ struct SettingsView: View {
                     title: "Codex",
                     detail: "Local runtime status and workspace settings.",
                     icon: { DashboardHarnessLogoIcon(logo: .codex, size: 15) },
-                    action: { section = .harness(.codex) }
+                    action: { section = .harness(.codex, nil, .landing) }
                 )
                 SettingsDestinationRow(
                     title: "Claude Code",
                     detail: "Local runtime status and workspace settings.",
                     icon: { DashboardHarnessLogoIcon(logo: .claude, size: 15) },
-                    action: { section = .harness(.claudeCode) }
+                    action: { section = .harness(.claudeCode, nil, .landing) }
                 )
                 SettingsDestinationRow(
                     title: "Grok Build",
                     detail: "Local runtime status and workspace settings.",
                     icon: { DashboardHarnessLogoIcon(logo: .grok, size: 15) },
-                    action: { section = .harness(.grokBuild) }
+                    action: { section = .harness(.grokBuild, nil, .landing) }
                 )
                 SettingsDestinationRow(
                     title: "Cursor",
                     detail: "Local runtime status and workspace settings.",
                     icon: { DashboardHarnessLogoIcon(logo: .cursor, size: 15) },
-                    action: { section = .harness(.cursor) }
+                    action: { section = .harness(.cursor, nil, .landing) }
                 )
                 SettingsDestinationRow(
                     title: "OpenClaw",
@@ -220,7 +245,7 @@ struct SettingsView: View {
                     title: "Pi",
                     detail: "Local runtime status and workspace settings.",
                     icon: { DashboardHarnessLogoIcon(logo: .pi, size: 15) },
-                    action: { section = .harness(.pi) }
+                    action: { section = .harness(.pi, nil, .landing) }
                 )
                 SettingsDestinationRow(
                     title: "Buzz agent workspaces",
@@ -237,11 +262,25 @@ struct SettingsView: View {
             }
         }
     }
+
+    private func harnessSettingsSection(
+        _ runtimeKind: AgentRuntimeKind,
+        workspaceID: UUID?,
+        origin: HarnessSettingsOrigin
+    ) -> SettingsSection {
+        switch runtimeKind {
+        case .openclaw: .openClawWorkspace(workspaceID)
+        case .hermes: .hermesWorkspace(workspaceID)
+        case .opencode: .openCodeWorkspace(workspaceID)
+        default: .harness(runtimeKind, workspaceID, origin)
+        }
+    }
 }
 
 private struct SettingsHarnessView: View {
     @Bindable var model: ApplicationModel
     let runtimeKind: AgentRuntimeKind
+    var workspaceID: UUID?
     var reservesRailControlSpace = false
     let onBack: () -> Void
 
@@ -249,14 +288,38 @@ private struct SettingsHarnessView: View {
         model.localACPRuntimeAvailability.first { $0.runtimeKind == runtimeKind }
     }
 
+    private var remoteWorkspace: RemoteWorkspaceConfiguration? {
+        workspaceID.flatMap { model.remoteWorkspaces.configuration(id: $0) }
+    }
+
+    private var remoteRuntime: RemoteRuntimeMaintenance? {
+        guard let workspaceID else { return nil }
+        return model.remoteWorkspaces.runtimeMaintenance[workspaceID]?.first {
+            $0.id == runtimeKind
+        }
+    }
+
+    private var remoteHarness: RemoteHarnessStatus? {
+        guard let remoteWorkspace else { return nil }
+        return model.remoteWorkspaces.currentHarnesses(for: remoteWorkspace).first {
+            $0.id == runtimeKind
+        }
+    }
+
     var body: some View {
         SettingsPage(
             title: runtimeKind.displayName,
-            detail: "\(runtimeKind.displayName) on this Mac.",
+            detail: workspaceID == nil
+                ? "\(runtimeKind.displayName) on this Mac."
+                : remoteWorkspace.map { "\(runtimeKind.displayName) in \($0.name)." },
             reservesRailControlSpace: reservesRailControlSpace,
             onBack: onBack
         ) {
-            SettingsCard(title: "Local agent workspace") {
+            SettingsCard(
+                title: workspaceID == nil
+                    ? "Local agent workspace"
+                    : remoteWorkspace?.name ?? "Remote agent workspace"
+            ) {
                 SettingsInset {
                     HStack(alignment: .center, spacing: 12) {
                         DashboardHarnessLogoIcon(
@@ -287,12 +350,42 @@ private struct SettingsHarnessView: View {
     }
 
     private var runtimeIsReady: Bool {
-        !model.checkingLocalACPRuntimeKinds.contains(runtimeKind)
+        if workspaceID != nil {
+            guard let remoteWorkspace else { return false }
+            return model.remoteWorkspaces.isHarnessReady(runtimeKind, in: remoteWorkspace)
+        }
+        return !model.checkingLocalACPRuntimeKinds.contains(runtimeKind)
             && availability?.isReady == true
             && model.isLocalACPAgentReady(runtimeKind)
     }
 
     private var runtimeStatus: String {
+        if let workspaceID {
+            if model.remoteWorkspaces.checkingRuntimeIDs[workspaceID]?.contains(runtimeKind) == true {
+                return "Checking"
+            }
+            guard let remoteWorkspace, let remoteRuntime else {
+                return "Not checked"
+            }
+            if model.remoteWorkspaces.isHarnessReady(runtimeKind, in: remoteWorkspace) {
+                return "Ready"
+            }
+            if !remoteRuntime.installed
+                || model.remoteWorkspaces.isRuntimeInventoryUnavailable(
+                    runtimeKind,
+                    configuration: remoteWorkspace
+                )
+                || remoteRuntime.operation?.status == "running" {
+                return "Unavailable"
+            }
+            if !remoteRuntime.enabled {
+                return "Not enabled"
+            }
+            let state = remoteHarness?.state
+                .replacingOccurrences(of: "_", with: " ")
+                .capitalized
+            return state == "Ready" ? "Unavailable" : state ?? "Not checked"
+        }
         if model.checkingLocalACPRuntimeKinds.contains(runtimeKind) {
             return "Checking"
         }
@@ -315,6 +408,16 @@ private struct SettingsHarnessView: View {
     }
 
     private var runtimeDetail: String {
+        if workspaceID != nil {
+            guard let remoteRuntime else { return "Runtime inventory unavailable." }
+            return remoteRuntime.components.map { component in
+                let installed = component.installed
+                    ? component.installedVersion ?? "version unavailable"
+                    : "missing"
+                let newer = component.availableUpdateVersion.map { " → \($0)" } ?? ""
+                return "\(component.displayName) \(installed)\(newer)"
+            }.joined(separator: " · ")
+        }
         if let inventory = model.runtimeInventories[runtimeKind] {
             return inventory.summary
         }

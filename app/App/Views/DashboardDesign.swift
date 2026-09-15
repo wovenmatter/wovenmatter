@@ -72,10 +72,9 @@ enum DashboardAgentSidebarGroup: String, CaseIterable, Identifiable, Hashable, S
             let defaultOrder = agents
                 .filter { contains($0, in: group, pinnedIDs: pinnedIDs) }
                 .sorted { lhs, rhs in
-                    let lhsHarness = DashboardHarnessLogo(runtimeKind: lhs.runtimeKind)
-                    let rhsHarness = DashboardHarnessLogo(runtimeKind: rhs.runtimeKind)
-                    if lhsHarness != rhsHarness {
-                        return lhsHarness.sortsBefore(rhsHarness)
+                    if lhs.runtimeKind != rhs.runtimeKind {
+                        return lhs.runtimeKind.presentationRank
+                            < rhs.runtimeKind.presentationRank
                     }
                     let comparison = lhs.displayName.localizedCaseInsensitiveCompare(
                         rhs.displayName
@@ -87,13 +86,17 @@ enum DashboardAgentSidebarGroup: String, CaseIterable, Identifiable, Hashable, S
         case .remoteWorkspaces:
             let defaultOrder = agents
                 .filter { contains($0, in: group, pinnedIDs: pinnedIDs) }
-                .sorted {
-                    if $0.displayName != $1.displayName {
-                        return $0.displayName.localizedCaseInsensitiveCompare(
-                            $1.displayName
+                .sorted { lhs, rhs in
+                    if lhs.runtimeKind != rhs.runtimeKind {
+                        return lhs.runtimeKind.presentationRank
+                            < rhs.runtimeKind.presentationRank
+                    }
+                    if lhs.displayName != rhs.displayName {
+                        return lhs.displayName.localizedCaseInsensitiveCompare(
+                            rhs.displayName
                         ) == .orderedAscending
                     }
-                    return $0.id.uuidString < $1.id.uuidString
+                    return lhs.id.uuidString < rhs.id.uuidString
                 }
             return applyPreferredOrder(defaultOrder, preferred: customOrder)
         }
@@ -168,12 +171,8 @@ enum DashboardRemoteWorkspaceSidebarModel {
                     configuration: configuration,
                     readyTargets: (targetsByWorkspaceID[configuration.id] ?? [])
                         .sorted { lhs, rhs in
-                            let comparison = lhs.harness.displayName
-                                .localizedCaseInsensitiveCompare(rhs.harness.displayName)
-                            if comparison != .orderedSame {
-                                return comparison == .orderedAscending
-                            }
-                            return lhs.harness.id.rawValue < rhs.harness.id.rawValue
+                            lhs.harness.id.presentationRank
+                                < rhs.harness.id.presentationRank
                         }
                 )
             }
@@ -238,6 +237,9 @@ enum DashboardBuzzWorkspaceSidebarModel {
     }
 
     private static func agentSort(_ lhs: WorkspaceAgent, _ rhs: WorkspaceAgent) -> Bool {
+        if lhs.runtimeKind != rhs.runtimeKind {
+            return lhs.runtimeKind.presentationRank < rhs.runtimeKind.presentationRank
+        }
         let result = lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName)
         if result == .orderedSame {
             return lhs.id.uuidString < rhs.id.uuidString
@@ -541,15 +543,7 @@ enum DashboardHarnessLogo: String, CaseIterable, Sendable {
     case openCode
 
     static var displayCases: [DashboardHarnessLogo] {
-        allCases.sorted(by: { $0.sortsBefore($1) })
-    }
-
-    func sortsBefore(_ other: DashboardHarnessLogo) -> Bool {
-        if self == .codex { return other != .codex }
-        if other == .codex { return false }
-        let comparison = displayName.localizedCaseInsensitiveCompare(other.displayName)
-        if comparison != .orderedSame { return comparison == .orderedAscending }
-        return rawValue < other.rawValue
+        AgentRuntimeKind.presentationOrder.map(Self.init(runtimeKind:))
     }
 
     init(runtimeKind: AgentRuntimeKind) {

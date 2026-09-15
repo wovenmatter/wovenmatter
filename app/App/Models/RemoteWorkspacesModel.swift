@@ -137,9 +137,7 @@ final class RemoteWorkspacesModel {
                     $1.configuration.name
                 ) == .orderedAscending
             }
-            return $0.harness.displayName.localizedCaseInsensitiveCompare(
-                $1.harness.displayName
-            ) == .orderedAscending
+            return $0.harness.id.presentationRank < $1.harness.id.presentationRank
         }
     }
 
@@ -149,7 +147,7 @@ final class RemoteWorkspacesModel {
                 instance: workspaceInstances[configuration.id]?[.opencode],
                 installed: runtimeMaintenance[configuration.id]?.first(where: { $0.id == .opencode })?.installed
             )
-        }
+        }.sorted { $0.id.presentationRank < $1.id.presentationRank }
     }
 
     func configuration(id: UUID) -> RemoteWorkspaceConfiguration? {
