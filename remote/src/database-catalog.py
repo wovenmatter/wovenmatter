@@ -16,6 +16,7 @@ import uuid
 
 FILE_LIMIT = 4 * 1024 * 1024
 SNAPSHOT_LIMIT = 256 * 1024 * 1024
+SQLITE_HEAP_LIMIT = 32 * 1024 * 1024
 SCHEMA = 'wovenmatter.database.v1'
 
 
@@ -114,6 +115,28 @@ def signature(status):
     return (status.st_dev, status.st_ino, status.st_size, status.st_mtime_ns, status.st_ctime_ns)
 
 
+def result_value(value, remaining):
+    """Check JSON wire size before allocating hex or escaped copies of a cell."""
+    if isinstance(value, bytes):
+        size = len(value) * 2 + 2  # Hex digits and JSON quotes.
+        require(size <= remaining, 'The query result is too large.')
+        return value.hex(), size
+    text = '' if value is None else value if isinstance(value, str) else str(value)
+    require(len(text) + 2 <= remaining, 'The query result is too large.')
+    size = 2
+    # Match json.dumps' default ensure_ascii encoding without allocating it.
+    for character in text:
+        code = ord(character)
+        if code in (8, 9, 10, 12, 13, 34, 92):
+            size += 2
+        elif code < 32 or code >= 127:
+            size += 6 if code <= 0xffff else 12
+        else:
+            size += 1
+        require(size <= remaining, 'The query result is too large.')
+    return text, size
+
+
 def sqlite_query(parent, filename, query):
     require(isinstance(query, str) and 0 < len(query.encode()) <= 65536,
             'Enter a read-only SQLite query.')
@@ -157,6 +180,13 @@ def sqlite_query(parent, filename, query):
                     continue
                 connection = sqlite3.connect(target)
                 try:
+                    # SQLite materializes expression columns before Python can check
+                    # the result budget. Bound that native heap as well as conversion.
+                    heap = connection.execute(f'PRAGMA hard_heap_limit={SQLITE_HEAP_LIMIT}').fetchone()
+                    # Linux is the service runtime. Apple's test-host SQLite disables
+                    # memory accounting and reports zero for this pragma.
+                    if sys.platform == 'linux':
+                        require(heap and 0 < heap[0] <= SQLITE_HEAP_LIMIT, 'SQLite memory limits are unavailable.')
                     connection.execute('PRAGMA query_only=ON')
                     if hasattr(connection, 'enable_load_extension'):
                         connection.enable_load_extension(False)
@@ -173,11 +203,14 @@ def sqlite_query(parent, filename, query):
                     columns = [column[0] for column in cursor.description or []]
                     require(columns and len(columns) <= 128 and len(set(columns)) == len(columns), 'Use unique column names in the query.')
                     rows = []
-                    size = len(json.dumps(columns).encode())
+                    size = len(json.dumps({'contractVersion': 1, 'columns': columns, 'rows': []}).encode())
                     for row in cursor:
-                        values = ['' if value is None else value.hex() if isinstance(value, bytes) else str(value) for value in row]
-                        size += len(json.dumps(values).encode())
-                        require(size <= FILE_LIMIT - 1024, 'The query result is too large.')
+                        size += (2 if rows else 0) + 2 + max(0, len(row) - 1) * 2
+                        values = []
+                        for value in row:
+                            text, encoded_size = result_value(value, FILE_LIMIT - size)
+                            values.append(text)
+                            size += encoded_size
                         rows.append(values)
                         if len(rows) == 1000:
                             break
@@ -236,9 +269,12 @@ if __name__ == '__main__':
         resource.setrlimit(resource.RLIMIT_CPU, (8, 8))
         resource.setrlimit(resource.RLIMIT_FSIZE, (SNAPSHOT_LIMIT, SNAPSHOT_LIMIT))
         if sys.platform == 'linux':
-            resource.setrlimit(resource.RLIMIT_AS, (512 * 1024 * 1024, 512 * 1024 * 1024))
+            resource.setrlimit(resource.RLIMIT_AS, (128 * 1024 * 1024, 128 * 1024 * 1024))
         result = operation(sys.argv[1], json.load(sys.stdin))
         print(json.dumps(result))
+    except MemoryError:
+        print('{"error":"The query exceeds the memory limit. Use a smaller result."}')
+        sys.exit(1)
     except (CatalogError, OSError, ValueError, sqlite3.Error, sqlite3.Warning) as error:
         if isinstance(error, FileExistsError):
             message = 'A database with that name already exists.'

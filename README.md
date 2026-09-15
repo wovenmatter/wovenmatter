@@ -180,8 +180,10 @@ The service bounds JSON reads to 4 MiB and SQLite snapshots to 256 MiB including
 WAL state. Queries return up to 1,000 rows and 128 uniquely named columns with a
 4 MiB result budget. SQLite permits SELECT/CTE queries; mutation, ATTACH, PRAGMA,
 and extension loading are denied. Busy or changing databases return an error
-that can be retried. Queries run in bounded helper processes; they do not start
-agents or consume provider services.
+that can be retried. The Linux service bounds SQLite’s native heap to 32 MiB
+and each helper process to 128 MiB; query memory exhaustion returns a controlled
+error. Output conversion checks the remaining response budget before encoding
+each value. Queries do not start agents or consume provider services.
 
 ## Limitations
 
