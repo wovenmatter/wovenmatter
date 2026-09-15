@@ -9,7 +9,6 @@ struct DashboardDatabasesView: View {
     @State private var selectedSourceID: String?
     @State private var selectedDatabaseID: String?
     @State private var showsCreateDatabase = false
-    @State private var remoteWorkspaceFilterID: String?
     @State private var creationSourceID: String?
     @State private var isCreatingDatabase = false
 
@@ -18,9 +17,7 @@ struct DashboardDatabasesView: View {
     }
 
     private var filteredSources: [DashboardDatabaseSource] {
-        model.databasesSnapshot.sources.filter {
-            filter.includes($0.kind) && ($0.kind != .remote || remoteWorkspaceFilterID == nil || $0.id == remoteWorkspaceFilterID)
-        }
+        model.databasesSnapshot.sources.filter { filter.includes($0.kind) }
     }
 
     private var selectedDatabase: DashboardAgentDatabase? {
@@ -45,12 +42,7 @@ struct DashboardDatabasesView: View {
             await model.refreshDatabases()
             selectDefaultSource()
         }
-        .onChange(of: remoteWorkspaceFilterID) { _, _ in selectDefaultSource() }
-        .onChange(of: model.remoteWorkspaces.workspaces) { _, configurations in
-            if let id = remoteWorkspaceFilterID,
-               !configurations.contains(where: { ApplicationModel.remoteDatabaseSourceID($0.id) == id }) {
-                remoteWorkspaceFilterID = nil
-            }
+        .onChange(of: model.remoteWorkspaces.workspaces) { _, _ in
             Task { await model.refreshDatabases() }
         }
         .onChange(of: model.remoteWorkspaces.isCredentialAccessEnabled) { _, _ in
@@ -155,9 +147,6 @@ struct DashboardDatabasesView: View {
     private var sourceList: some View {
         ScrollView {
             LazyVStack(spacing: 4) {
-                if filter == .remote || filter == .all {
-                    remoteWorkspaceMenu
-                }
                 ForEach(filteredSources) { source in
                     Button {
                         selectedSourceID = source.id
@@ -385,25 +374,6 @@ struct DashboardDatabasesView: View {
             Button("Refresh") { Task { await model.refreshDatabases() } }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    private var remoteWorkspaceMenu: some View {
-        Picker("Remote workspace", selection: $remoteWorkspaceFilterID) {
-            Text("All remote workspaces").tag(String?.none)
-            ForEach(model.remoteWorkspaces.workspaces) { workspace in
-                Text(workspace.name).tag(Optional(ApplicationModel.remoteDatabaseSourceID(workspace.id)))
-            }
-        }
-        .pickerStyle(.menu)
-        .labelsHidden()
-        .lineLimit(1)
-        .menuStyle(.borderlessButton)
-        .accessibilityLabel("Filter remote workspaces")
-        .accessibilityValue(model.remoteWorkspaces.workspaces.first {
-            ApplicationModel.remoteDatabaseSourceID($0.id) == remoteWorkspaceFilterID
-        }?.name ?? "All remote workspaces")
-        .padding(.horizontal, 8)
-        .padding(.vertical, 6)
     }
 
     private func beginCreatingDatabase() {
