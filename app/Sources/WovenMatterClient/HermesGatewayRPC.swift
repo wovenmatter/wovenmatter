@@ -45,7 +45,9 @@ public actor HermesGatewayRPC: HermesGatewayTransport {
         }
         let current = UUID(); generation = current
         epoch = nil
-        let socket = session.webSocketTask(with: connection.websocketURL)
+        var request = URLRequest(url: connection.websocketURL)
+        for (key, value) in connection.requestHeaders { request.setValue(value, forHTTPHeaderField: key) }
+        let socket = session.webSocketTask(with: request)
         socket.maximumMessageSize = 32 * 1_024 * 1_024
         self.socket = socket
         socket.resume()

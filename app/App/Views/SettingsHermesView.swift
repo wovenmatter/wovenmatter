@@ -89,9 +89,18 @@ struct SettingsHermesView: View {
                                 .font(.system(size: 13, weight: .medium))
                             Text(configuration.name).font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
                         }.frame(maxWidth: .infinity, alignment: .leading)
-                        SettingsPill("Gateway unavailable", tone: .warning)
+                        SettingsPill(model.remoteHermesConnections[configuration.id] == nil ? "Not connected" : "Ready", tone: .neutral)
                     }
-                    SettingsNote("Native Hermes Gateway connections are not yet supported in remote workspaces.")
+                    Button("Connect Gateway") {
+                        Task {
+                            do { try await model.connectRemoteHermes(configuration) }
+                            catch { self.error = error.localizedDescription }
+                        }
+                    }.buttonStyle(SettingsQuietButtonStyle())
+                    Button("Stop Gateway and scheduler") {
+                        Task { do { try await model.stopRemoteHermes(configuration) } catch { self.error=error.localizedDescription } }
+                    }.buttonStyle(SettingsQuietButtonStyle())
+                    SettingsNote("The container keeps Hermes and its scheduler running when Woven Matter disconnects. Stopping it pauses scheduling until it is connected again.")
                 } else { SettingsEmpty("No Hermes agents discovered.") }
                 Button("Scan workspace") { model.remoteWorkspaces.refresh(configuration) }
                     .buttonStyle(SettingsQuietButtonStyle())

@@ -1,3 +1,4 @@
+import { createHermesInstance } from './hermes-instance.mjs'
 import { createRuntimeMaintenance, acquireHostLock } from './runtime-maintenance.mjs'
 import { createWorkspaceInstances } from './workspace-instances.mjs'
 import { createServer } from 'node:http'
@@ -43,6 +44,8 @@ let gateway = {
   startPromise: null,
 }
 
+const hermes = createHermesInstance({ environment: harnessEnvironment, pluginSource: resolve(dirname(catalogPath), 'hermes-delivery'), isEnabled: async () => await maintenance.isEnabled('hermes') })
+
 const instances = createWorkspaceInstances({
   workspaceRoot, environment: harnessEnvironment,
   gateway: {
@@ -54,7 +57,7 @@ const instances = createWorkspaceInstances({
 })
 const maintenance = createRuntimeMaintenance({
   catalog, workspaceRoot, environment: harnessEnvironment, verifiedInstaller,
-  hasActiveRuntime: async id => await instances.hasActiveRuntime(id)
+  hasActiveRuntime: async id => (id === 'hermes' && hermes.hasActiveRuntime()) || await instances.hasActiveRuntime(id)
     || [...authenticationSessions.values()].some(s => s.harness.id === id && s.state === 'waiting_for_user'),
 })
 
@@ -63,6 +66,7 @@ const server = createServer(async (request, response) => {
     if (!authorized(request)) return json(response, 401, { error: 'unauthorized' })
     const url = new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`)
 
+    if (await hermes.handle(request, response, url)) return
     if (await instances.handle(request, response, url)) return
     if (request.method === 'GET' && url.pathname === '/v1/runtime-maintenance') {
       return json(response, 200, await maintenance.list())
@@ -198,7 +202,11 @@ const server = createServer(async (request, response) => {
   }
 })
 
-server.on('upgrade', (request, socket, head) => {
+server.on('upgrade', async (request, socket, head) => {
+  if (authorized(request) && request.url === '/v1/workspace-instances/hermes/socket') {
+    try { await hermes.upgrade(request, socket, head) } catch { socket.destroy() }
+    return
+  }
   if (!authorized(request) || request.url !== '/v1/openclaw/gateway/socket') {
     socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n')
     return socket.destroy()
@@ -220,6 +228,7 @@ server.on('upgrade', (request, socket, head) => {
 })
 
 if (runningAsService) {
+  void hermes.restore()
   server.listen(listenPort, listenHost, () => {
     process.stdout.write(`Woven Matter remote service listening on ${listenHost}:${listenPort}\n`)
   })
@@ -234,6 +243,16 @@ function authorized(request) {
 }
 
 async function harnessStatus(harness) {
+  if (harness.id === 'hermes') {
+    const inventory = await maintenance.inventory(harness)
+    const running = hermes.status().state === 'running'
+    return { id: harness.id, displayName: harness.displayName, transport: 'hermes-native', capabilities: harness.capabilities,
+      state: inventory.installed ? (running ? 'ready' : 'transport_unavailable') : 'cli_missing',
+      installationStatus: inventory.installed ? 'installed' : 'cli_missing', authenticationStatus: 'unknown',
+      transportStatus: running ? 'ready' : 'unavailable', transportError: running ? null : 'Connect Hermes in this workspace’s settings.',
+      setupMethods: (harness.authentication.methods ?? []).map(({ id, displayName }) => ({ id, displayName })),
+      detectedProviders: [] }
+  }
   if (harness.transport === 'opencode-v2') {
     const inventory = await maintenance.inventory(harness)
     const instance = await instances.status('opencode')

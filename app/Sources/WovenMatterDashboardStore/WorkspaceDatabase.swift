@@ -1579,6 +1579,102 @@ public final class WorkspaceDatabase: @unchecked Sendable {
     try stepDone(statement)
   }
 
+
+  public func hermesResultConversation(agentID: UUID, jobID: String, runID: String) throws -> String? {
+    try lock.withLock {
+      let query=try prepareUnlocked("SELECT r.conversation_id FROM desktop_scheduled_result_receipts r JOIN dashboard_conversations c ON c.id=r.conversation_id WHERE r.provider='hermes' AND r.agent_id=? AND r.job_id=? AND r.run_id=? AND c.deleted_at IS NULL AND c.is_archived=0")
+      defer { sqlite3_finalize(query) }
+      for (index,value) in [agentID.uuidString.lowercased(),jobID,runID].enumerated() { try bind(value,at:Int32(index+1),to:query) }
+      let code=sqlite3_step(query)
+      if code == SQLITE_DONE { return nil }
+      guard code == SQLITE_ROW else { throw stepError() }
+      return try text(query,column:0)
+    }
+  }
+
+  public func hermesResultRoutes(agentID: UUID) throws -> [String: String] {
+    try lock.withLock {
+      let query = try prepareUnlocked("SELECT job_id, destination FROM desktop_scheduled_result_routes WHERE provider='hermes' AND agent_id=?")
+      defer { sqlite3_finalize(query) }
+      try bind(agentID.uuidString.lowercased(), at: 1, to: query)
+      var result: [String: String] = [:]
+      while true {
+        let code = sqlite3_step(query)
+        if code == SQLITE_DONE { return result }
+        guard code == SQLITE_ROW else { throw stepError() }
+        result[try text(query, column: 0)] = try text(query, column: 1)
+      }
+    }
+  }
+
+  public func setHermesResultRoute(agentID: UUID, jobID: String, destination: String) throws {
+    try transaction {
+      if !destination.isEmpty && destination != "new" { try validateHermesResultDestinationUnlocked(agentID: agentID, conversationID: destination) }
+      let query = try prepareUnlocked("INSERT INTO desktop_scheduled_result_routes VALUES('hermes',?,?,?) ON CONFLICT(provider,agent_id,job_id) DO UPDATE SET destination=excluded.destination")
+      defer { sqlite3_finalize(query) }
+      for (index, value) in [agentID.uuidString.lowercased(), jobID, destination].enumerated() { try bind(value, at: Int32(index+1), to: query) }
+      try stepDone(query)
+    }
+  }
+
+  private func validateHermesResultDestinationUnlocked(agentID: UUID, conversationID: String) throws {
+    let query = try prepareUnlocked("SELECT 1 FROM dashboard_conversations c JOIN desktop_local_acp_sessions s ON s.conversation_id=c.id WHERE c.id=? AND s.agent_id=? AND s.runtime_kind='hermes' AND c.deleted_at IS NULL AND c.is_archived=0 AND c.desktop_owned=1")
+    defer { sqlite3_finalize(query) }
+    try bind(conversationID, at: 1, to: query); try bind(agentID.uuidString.lowercased(), at: 2, to: query)
+    let code = sqlite3_step(query)
+    if code == SQLITE_DONE { throw HermesGatewayError.message("Choose an available Hermes conversation in Cron Jobs.") }
+    guard code == SQLITE_ROW else { throw stepError() }
+  }
+
+  @discardableResult
+  public func collectHermesResult(agentID: UUID, jobID: String, runID: String, title: String, output: String,
+                                 ownerDeviceID: UUID, remoteWorkspaceID: UUID? = nil, remoteWorkspaceName: String = "") throws -> String? {
+    try transaction {
+      let agent = agentID.uuidString.lowercased()
+      let receipt = try prepareUnlocked("SELECT 1 FROM desktop_scheduled_result_receipts WHERE provider='hermes' AND agent_id=? AND job_id=? AND run_id=?")
+      defer { sqlite3_finalize(receipt) }
+      for (index, value) in [agent,jobID,runID].enumerated() { try bind(value, at: Int32(index+1), to: receipt) }
+      let code = sqlite3_step(receipt)
+      if code == SQLITE_ROW { return nil }
+      guard code == SQLITE_DONE else { throw stepError() }
+      let route = try prepareUnlocked("SELECT destination FROM desktop_scheduled_result_routes WHERE provider='hermes' AND agent_id=? AND job_id=?")
+      defer { sqlite3_finalize(route) }
+      try bind(agent, at: 1, to: route); try bind(jobID, at: 2, to: route)
+      let routeCode = sqlite3_step(route)
+      if routeCode == SQLITE_DONE { return nil }
+      guard routeCode == SQLITE_ROW else { throw stepError() }
+      let destination = try text(route,column:0)
+      guard !destination.isEmpty else { return nil }
+      let conversationID: String
+      if destination == "new" {
+        if let remoteWorkspaceID {
+          conversationID = try createRemoteACPSessionUnlocked(runtimeKind:.hermes, remoteWorkspaceID:remoteWorkspaceID, remoteWorkspaceName:remoteWorkspaceName,title:title,ownerDeviceID:ownerDeviceID)
+        } else {
+          conversationID = try createLocalACPSessionUnlocked(runtimeKind:.hermes,title:title,ownerDeviceID:ownerDeviceID)
+        }
+      } else { conversationID = destination }
+      try validateHermesResultDestinationUnlocked(agentID:agentID,conversationID:conversationID)
+      let messageID = UUID().uuidString.lowercased()
+      let now = Self.timestamp(Date())
+      let message = try prepareUnlocked("""
+        INSERT INTO dashboard_messages(id,conversation_id,role,message_source,content,status,governing_plane,authority_kind,authority_device_id,authority_agent_id,created_at,updated_at,desktop_owned)
+        SELECT ?,id,'assistant','scheduled_result',?,'completed',governing_plane,authority_kind,authority_device_id,authority_agent_id,?,?,1 FROM dashboard_conversations WHERE id=?
+        """)
+      defer { sqlite3_finalize(message) }
+      for (index,value) in [messageID,output,now,now,conversationID].enumerated() { try bind(value,at:Int32(index+1),to:message) }
+      try stepDone(message)
+      let touch = try prepareUnlocked("UPDATE dashboard_conversations SET unread=1,last_message_at=MAX(last_message_at,?),last_message_preview=?,updated_at=? WHERE id=?")
+      defer { sqlite3_finalize(touch) }
+      for (index,value) in [now,String(output.prefix(240)),now,conversationID].enumerated() { try bind(value,at:Int32(index+1),to:touch) }
+      try stepDone(touch)
+      let ack = try prepareUnlocked("INSERT INTO desktop_scheduled_result_receipts VALUES('hermes',?,?,?,?,?,?)")
+      defer { sqlite3_finalize(ack) }
+      for (index,value) in [agent,jobID,runID,conversationID,messageID,now].enumerated() { try bind(value,at:Int32(index+1),to:ack) }
+      try stepDone(ack)
+      return conversationID
+    }
+  }
+
   public func knownHermesSessionIDs(home: String) throws -> Set<String> {
     try lock.withLock {
       let statement = try prepareUnlocked("SELECT acp_session_id FROM desktop_local_acp_sessions WHERE runtime_kind='hermes' AND acp_session_id IS NOT NULL")
@@ -1601,6 +1697,18 @@ public final class WorkspaceDatabase: @unchecked Sendable {
     openCodeAssociation: (connectionID: String, sessionID: String)? = nil,
     hermesImport: HermesSessionImport? = nil
   ) throws -> String {
+    try transaction { try createLocalACPSessionUnlocked(runtimeKind: runtimeKind, title: title, ownerDeviceID: ownerDeviceID, createdAt: createdAt, openCodeAssociation: openCodeAssociation, hermesImport: hermesImport) }
+  }
+
+  @discardableResult
+  private func createLocalACPSessionUnlocked(
+    runtimeKind: AgentRuntimeKind,
+    title: String,
+    ownerDeviceID: UUID,
+    createdAt: Date = Date(),
+    openCodeAssociation: (connectionID: String, sessionID: String)? = nil,
+    hermesImport: HermesSessionImport? = nil
+  ) throws -> String {
     guard LocalACPRuntimeCatalog.definition(for: runtimeKind) != nil,
           let codename = LocalACPRuntimeCatalog.conversationCodename(
             for: runtimeKind
@@ -1609,7 +1717,7 @@ public final class WorkspaceDatabase: @unchecked Sendable {
     }
     if openCodeAssociation != nil && runtimeKind != .opencode { throw LocalACPSessionDatabaseError.runtimeUnavailable }
     if hermesImport != nil && runtimeKind != .hermes { throw LocalACPSessionDatabaseError.runtimeUnavailable }
-    return try transaction {
+
       if let imported = hermesImport {
         let requested = HermesGatewayClient.parseIdentity(imported.identity)
         guard requested.home != nil, !requested.storedID.isEmpty else { throw WorkspaceDatabaseError.corruptRow }
@@ -1723,7 +1831,6 @@ public final class WorkspaceDatabase: @unchecked Sendable {
         }
       }
       return conversationID
-    }
   }
 
   @discardableResult
@@ -1736,10 +1843,23 @@ public final class WorkspaceDatabase: @unchecked Sendable {
     createdAt: Date = Date(),
     openCodeAssociation: (connectionID: String, sessionID: String)? = nil
   ) throws -> String {
+    try transaction { try createRemoteACPSessionUnlocked(runtimeKind: runtimeKind, remoteWorkspaceID: remoteWorkspaceID, remoteWorkspaceName: remoteWorkspaceName, title: title, ownerDeviceID: ownerDeviceID, createdAt: createdAt, openCodeAssociation: openCodeAssociation) }
+  }
+
+  @discardableResult
+  private func createRemoteACPSessionUnlocked(
+    runtimeKind: AgentRuntimeKind,
+    remoteWorkspaceID: UUID,
+    remoteWorkspaceName: String,
+    title: String,
+    ownerDeviceID: UUID,
+    createdAt: Date = Date(),
+    openCodeAssociation: (connectionID: String, sessionID: String)? = nil
+  ) throws -> String {
     guard LocalACPRuntimeCatalog.definition(for: runtimeKind) != nil else {
       throw LocalACPSessionDatabaseError.runtimeUnavailable
     }
-    return try transaction {
+
       if let link = openCodeAssociation {
         guard runtimeKind == .opencode,
               link.connectionID == "remote-workspace:" + remoteWorkspaceID.uuidString.lowercased() else {
@@ -1819,7 +1939,6 @@ public final class WorkspaceDatabase: @unchecked Sendable {
         try stepDone(association)
       }
       return conversationID
-    }
   }
 
   @discardableResult
@@ -4533,6 +4652,15 @@ public final class WorkspaceDatabase: @unchecked Sendable {
         is_pinned INTEGER NOT NULL DEFAULT 0, position INTEGER NOT NULL DEFAULT 0,
         deleted_at TEXT, original_folder_id TEXT, origin_device_id TEXT,
         created_at TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL DEFAULT ''
+      );
+      CREATE TABLE IF NOT EXISTS desktop_scheduled_result_routes (
+        provider TEXT NOT NULL, agent_id TEXT NOT NULL, job_id TEXT NOT NULL,
+        destination TEXT NOT NULL, PRIMARY KEY(provider, agent_id, job_id)
+      );
+      CREATE TABLE IF NOT EXISTS desktop_scheduled_result_receipts (
+        provider TEXT NOT NULL, agent_id TEXT NOT NULL, job_id TEXT NOT NULL,
+        run_id TEXT NOT NULL, conversation_id TEXT NOT NULL, message_id TEXT NOT NULL,
+        collected_at TEXT NOT NULL, PRIMARY KEY(provider, agent_id, job_id, run_id)
       );
       CREATE TABLE IF NOT EXISTS desktop_opencode_sessions (
         conversation_id TEXT PRIMARY KEY REFERENCES dashboard_conversations(id),

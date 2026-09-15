@@ -23,8 +23,8 @@ Native implementation and contracts at the verified revision:
 Woven Matter launches the installed `hermes serve --isolated --host 127.0.0.1
 --port 0`. Hermes publishes the selected port through its supported
 `HERMES_DESKTOP_READY_FILE`. A random `HERMES_DASHBOARD_SESSION_TOKEN` authenticates
-`/api/ws`; HTTP export uses the same token in an Authorization header. No custom
-server, proxy, OpenClaw credential, or Hermes configuration rewrite is involved.
+`/api/ws`; HTTP export uses the same token in an Authorization header. Local clients connect directly. Remote clients use the authenticated workspace
+service proxy; the native backend token remains on the agent host.
 The private connection registration is scoped to the Hermes profile home.
 
 ## Behavior
@@ -88,8 +88,8 @@ a failed resume is reported instead of silently replacing the conversation.
 
 Secure input supports the native secret/sudo requests; Hermes-specific vault,
 terminal-preview, browser-control, voice, and Desktop tour request surfaces are
-not implemented here. Remote/container Hermes remains on its existing transport;
-this change is the direct local integration. Imported tool output is retained as
+not implemented here. Remote/container Hermes uses the same native transport
+through the workspace service. Imported tool output is retained as
 transcript content rather than reconstructed as Woven Matter live-run activity.
 
 Validation is provider-free: a loopback WebSocket peer covers request-frame routing
@@ -121,3 +121,39 @@ Other overlaps are ApplicationModel runtime/settings methods,
 LocalACPRuntime, LocalACPSessionCoordinator, SettingsView,
 SettingsLocalWorkspaceView, DashboardConversation, and the Xcode source list.
 Keep PR38's OpenClaw per-session cwd and OpenCode import behavior intact.
+
+## Scheduled results and remote containers
+
+The Cron Jobs page groups Hermes and OpenClaw. Hermes supports creating paused
+jobs, pausing/resuming, viewing retained textual outputs, and routing results to
+a new conversation per run or an existing conversation belonging to that agent.
+“Continue from Output” opens an unsent draft; the user explicitly sends it.
+
+The bundled native `wovenmatter-delivery` platform writes each output to the
+profile's `.woven-matter/scheduled-results.sqlite` before acknowledging delivery.
+Its identity comes from Hermes's execution ledger, not timestamps or content.
+The desktop commits the message, unread state, and receipt together, so reconnect
+or restart cannot duplicate a collected execution. Receipts survive conversation
+deletion. Routes and receipts include the profile and remote workspace identity.
+Host outputs are currently retained without pruning. Attachments are rejected
+with a visible delivery error; this destination currently supports text only.
+
+Enabling a delivery destination installs and enables the plugin in that profile.
+An idle Woven Matter-owned backend may restart once to load it. A separate
+`hermes gateway` that already owns scheduling needs an explicit restart by its
+operator after initial plugin enablement; Woven Matter never restarts that service.
+The native desktop scheduler runs with `HERMES_DESKTOP=1` and respects Hermes's
+gateway ownership check. Active turns and scheduled executions block explicit stop.
+
+In remote workspace containers, the service persists the enabled preference and
+authenticated native process registration. It restores the backend after container
+restart and reuses a healthy registered process after service reconnect. Closing
+Woven Matter or its tunnel does not stop the remote scheduler. Explicit Stop
+Gateway disables automatic restart. The container must have compatible Hermes
+installed, a configured provider, and a persistent home volume; execution while
+the container or host is stopped requires that infrastructure to resume.
+
+Provider-free code checks cover durable delivery, retries, conversation routing,
+remote ownership, and persisted restart preferences. A native no-agent scheduler
+probe also delivered a script result through the plugin. Live model execution
+and Linux container acceptance remain user validation.

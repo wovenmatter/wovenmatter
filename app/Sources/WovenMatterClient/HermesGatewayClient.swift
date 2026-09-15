@@ -5,6 +5,7 @@ import WovenMatterCore
 /// Persisted identities include the profile home; runtime session IDs never reach the database.
 public actor HermesGatewayClient {
     private let launch: LocalACPRuntimeLaunchConfiguration
+    private var remoteConnection: HermesGatewayConnection?
     private var rpc: (any HermesGatewayTransport)?
     private let connectTransport: @Sendable (LocalACPRuntimeLaunchConfiguration) async throws -> (String, any HermesGatewayTransport)
     private var sessionID = ""
@@ -36,9 +37,12 @@ public actor HermesGatewayClient {
 
     public init(launch: LocalACPRuntimeLaunchConfiguration) {
         self.launch = launch
+        if let encoded=launch.environment["WOVENMATTER_HERMES_CONNECTION"], let bytes=Data(base64Encoded:encoded) {
+            self.remoteConnection = try? JSONDecoder().decode(HermesGatewayConnection.self,from:bytes)
+        }
         self.connectTransport = { scoped in
             let connection = try await HermesGatewayService.shared.ensure(launch: scoped)
-            return (connection.home, HermesGatewayRPC(connection: connection))
+            return (connection.identityHome, HermesGatewayRPC(connection: connection))
         }
     }
 
@@ -226,7 +230,22 @@ public actor HermesGatewayClient {
         var stagedImages: [String] = []
         do {
             for file in input.files {
-                let path = file.localURL.resolvingSymlinksInPath().path
+                var path = file.localURL.resolvingSymlinksInPath().path
+                if let connection=remoteConnection {
+                    let bytes=try Data(contentsOf:file.localURL)
+                    guard bytes.count <= 16 * 1024 * 1024 else { throw HermesGatewayError.message("Remote Hermes attachments must be 16 MB or smaller.") }
+                    let dataURL="data:" + file.mimeType + ";base64," + bytes.base64EncodedString()
+                    if file.kind == .image {
+                        let uploaded=try await HermesSessionHistory.fetch(connection:connection,path:"/api/chat/image-upload",method:"POST",body:["filename":.string(file.fileName),"data_url":.string(dataURL)])
+                        guard let uploadedPath=uploaded["path"].string,uploadedPath.hasPrefix(connection.home + "/images/") else { throw HermesGatewayError.message("Hermes did not confirm the uploaded image path.") }
+                        path=uploadedPath
+                    } else {
+                        let basename=URL(fileURLWithPath:file.fileName).lastPathComponent
+                        path=connection.home + "/wovenmatter-attachments/" + UUID().uuidString + "-" + basename
+                        let uploaded=try await HermesSessionHistory.fetch(connection:connection,path:"/api/files/upload",method:"POST",body:["path":.string(path),"data_url":.string(dataURL),"overwrite":.bool(false)])
+                        guard uploaded["ok"].bool else { throw HermesGatewayError.message("Hermes could not upload the attachment.") }
+                    }
+                }
                 let method = file.kind == .image ? "image.attach" : "file.attach"
                 var params: HermesValue = ["session_id": .string(sessionID), "path": .string(path)]
                 if file.kind == .image { stagedImages.append(path) }

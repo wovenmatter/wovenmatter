@@ -1,6 +1,7 @@
 import CryptoKit
 import Darwin
 import Foundation
+import SQLite3
 
 /// Hermes's built-in `serve` backend. No ACP adapter or custom server is involved.
 public struct HermesGatewayConnection: Codable, Equatable, Sendable {
@@ -9,12 +10,19 @@ public struct HermesGatewayConnection: Codable, Equatable, Sendable {
     public let token: String
     public let pid: Int32
 
-    public var identity: String { "hermes:" + home }
+    public var remoteWorkspaceID: UUID? = nil
+    public var identityHome: String { remoteWorkspaceID.map { "/remote-workspaces/" + $0.uuidString.lowercased() + home } ?? home }
+    public var identity: String { "hermes:" + identityHome }
+    public var apiPrefix: String { remoteWorkspaceID == nil ? "" : "/v1/workspace-instances/hermes" }
+    public var requestHeaders: [String: String] { ["Authorization": "Bearer " + token] }
+    public init(home: String, port: Int, token: String, pid: Int32, remoteWorkspaceID: UUID? = nil) {
+        self.home = home; self.port = port; self.token = token; self.pid = pid; self.remoteWorkspaceID = remoteWorkspaceID
+    }
     public var websocketURL: URL {
         var parts = URLComponents()
         parts.scheme = "ws"; parts.host = "127.0.0.1"; parts.port = port
-        parts.path = "/api/ws"
-        parts.queryItems = [URLQueryItem(name: "token", value: token)]
+        parts.path = remoteWorkspaceID == nil ? "/api/ws" : apiPrefix + "/socket"
+        if remoteWorkspaceID == nil { parts.queryItems = [URLQueryItem(name: "token", value: token)] }
         return parts.url!
     }
 }
@@ -24,6 +32,12 @@ public actor HermesGatewayService {
     private var starting: [String: Task<HermesGatewayConnection, any Error>] = [:]
 
     public func ensure(launch: LocalACPRuntimeLaunchConfiguration) async throws -> HermesGatewayConnection {
+        if let encoded = launch.environment["WOVENMATTER_HERMES_CONNECTION"], let bytes = Data(base64Encoded: encoded) {
+            return try JSONDecoder().decode(HermesGatewayConnection.self, from: bytes)
+        }
+        guard launch.executableURL.lastPathComponent != "ssh" else {
+            throw HermesGatewayError.message("Connect this remote Hermes Gateway before opening a chat.")
+        }
         let home = launch.environment["HERMES_HOME"] ?? FileManager.default.homeDirectoryForCurrentUser.appending(path: ".hermes").path
         if let task = starting[home] { return try await task.value }
         let task = Task { try await Self.startOrReuse(launch: launch, home: home) }
@@ -45,6 +59,7 @@ public actor HermesGatewayService {
         let connection = try JSONDecoder().decode(HermesGatewayConnection.self, from: Data(contentsOf: registration))
         guard connection.home == home, connection.pid > 0 else { throw HermesGatewayError.message("Hermes service identity is invalid.") }
         guard kill(connection.pid, 0) == 0 || errno != ESRCH else { return }
+        try Self.requireIdleScheduler(home: home)
         let client = HermesGatewayRPC(connection: connection)
         do {
             try await client.connect()
@@ -67,6 +82,27 @@ public actor HermesGatewayService {
             try await Task.sleep(for: .milliseconds(125))
         }
         throw HermesGatewayError.message("Hermes is still shutting down. Wait before updating it.")
+    }
+
+    private static func requireIdleScheduler(home: String) throws {
+        let path=URL(fileURLWithPath:home).appending(path:"cron/executions.db").path
+        guard FileManager.default.fileExists(atPath:path) else { return }
+        var database:OpaquePointer?
+        guard sqlite3_open_v2(path,&database,SQLITE_OPEN_READONLY,nil) == SQLITE_OK, let database else {
+            if let database { sqlite3_close(database) }
+            throw HermesGatewayError.message("Could not verify scheduled jobs before stopping Hermes.")
+        }
+        defer { sqlite3_close(database) }
+        sqlite3_busy_timeout(database,5000)
+        var query:OpaquePointer?
+        guard sqlite3_prepare_v2(database,"SELECT 1 FROM executions WHERE status IN ('claimed','running') LIMIT 1",-1,&query,nil) == SQLITE_OK,let query else {
+            throw HermesGatewayError.message("Could not verify scheduled jobs before stopping Hermes.")
+        }
+        defer { sqlite3_finalize(query) }
+        let code=sqlite3_step(query)
+        guard code == SQLITE_DONE else {
+            throw HermesGatewayError.message("Wait for scheduled jobs to finish before restarting or stopping Hermes.")
+        }
     }
 
     private static func startOrReuse(launch: LocalACPRuntimeLaunchConfiguration, home: String) async throws -> HermesGatewayConnection {
@@ -114,6 +150,7 @@ public actor HermesGatewayService {
         environment["HERMES_DESKTOP_READY_FILE"] = ready.path
         // Do not inherit another Desktop's process owner, cron launcher, or workspace override.
         for key in ["HERMES_DESKTOP", "HERMES_DESKTOP_PARENT_PID", "HERMES_DESKTOP_PARENT_IDENTITY", "TERMINAL_CWD", "HERMES_TUI_SIDECAR_URL"] { environment.removeValue(forKey: key) }
+        environment["HERMES_DESKTOP"] = "1"
         process.environment = environment
         process.currentDirectoryURL = URL(fileURLWithPath: home, isDirectory: true)
         process.standardInput = FileHandle.nullDevice
