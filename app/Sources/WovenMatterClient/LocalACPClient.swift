@@ -9,6 +9,7 @@ public enum LocalACPEvent: Equatable, Sendable {
     case assistantBoundary
     case activity(AgentRunActivity, appendsContent: Bool)
     case usage(UsageTokenCounts)
+    case composerPrefill(String)
 }
 
 public struct LocalACPPermissionOption: Equatable, Identifiable, Sendable {

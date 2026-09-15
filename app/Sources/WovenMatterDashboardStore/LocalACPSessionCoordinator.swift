@@ -490,6 +490,12 @@ public actor LocalACPSessionCoordinator {
                             runID: run.runID,
                             phase: .content
                         )
+                    case .composerPrefill(let text):
+                        await self.publishChange(
+                            conversationID: descriptor.conversationID,
+                            runID: run.runID,
+                            phase: .composerPrefill(text)
+                        )
                     case .usage(let tokens):
                         let configuration = await client.configuration()
                         let sessionID = await self.usageSessionID(
