@@ -127,14 +127,9 @@ struct DashboardCalendarSurface: View {
                     cornerRadius: DashboardMetrics.controlRadius,
                     style: .continuous
                 ))
-            VStack(alignment: .leading, spacing: 3) {
-                Text("Calendar")
-                    .font(.system(size: 22, weight: .semibold))
-                    .tracking(-0.3)
-                Text("Events, reminders, and scheduled agent work.")
-                    .font(.system(size: 12.5))
-                    .foregroundStyle(DashboardPalette.mutedForeground)
-            }
+            Text("Calendar")
+                .font(.system(size: 22, weight: .semibold))
+                .tracking(-0.3)
             Spacer()
             Button(action: presentAddEvent) {
                 HStack(spacing: 7) {
@@ -150,7 +145,7 @@ struct DashboardCalendarSurface: View {
 
     private func monthCard(itemsByDay: [Date: [WorkspaceCalendarItemRecord]]) -> some View {
         let layout = DashboardCalendarMonthLayout(displaying: displayedMonth, calendar: calendar)
-        return DashboardCard {
+        return DashboardCard(showsBackground: false) {
             VStack(spacing: 14) {
                 HStack(spacing: 8) {
                     Text(layout.monthStart.formatted(.dateTime.month(.wide).year()))
@@ -193,7 +188,7 @@ struct DashboardCalendarSurface: View {
     }
 
     private func selectedDayCard(items: [WorkspaceCalendarItemRecord]) -> some View {
-        DashboardCard {
+        DashboardCard(showsBackground: false) {
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
                     VStack(alignment: .leading, spacing: 3) {
@@ -206,7 +201,7 @@ struct DashboardCalendarSurface: View {
                         .buttonStyle(DashboardQuietButtonStyle())
                 }
                 if items.isEmpty {
-                    Text("No events scheduled for this day.")
+                    Text("No events.")
                         .font(.system(size: 12.5))
                         .foregroundStyle(DashboardPalette.mutedForeground)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -273,21 +268,13 @@ struct DashboardCalendarSurface: View {
             .foregroundStyle(DashboardPalette.foreground)
             .frame(maxWidth: .infinity, minHeight: 76, alignment: .topLeading)
             .padding(8)
-            .background(
-                selected ? theme.palette.themeSoft : DashboardPalette.muted.opacity(0.32),
-                in: RoundedRectangle(cornerRadius: 10, style: .continuous)
-            )
-            .overlay {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .stroke(
-                        selected ? theme.palette.themeRing : theme.palette.border.opacity(0.65),
-                        lineWidth: selected ? 1.5 : 1
-                    )
-            }
-            .opacity(day.isInDisplayedMonth ? 1 : 0.45)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(DashboardCalendarDayButtonStyle(
+            isSelected: selected,
+            isInDisplayedMonth: day.isInDisplayedMonth
+        ))
         .accessibilityLabel(day.date.formatted(date: .complete, time: .omitted))
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
     private func monthNavigationButton(
@@ -319,6 +306,36 @@ struct DashboardCalendarSurface: View {
     }
 }
 
+private struct DashboardCalendarDayButtonStyle: ButtonStyle {
+    @Environment(\.dashboardTheme) private var theme
+    @State private var isHovering = false
+    let isSelected: Bool
+    let isInDisplayedMonth: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background(
+                configuration.isPressed
+                    ? theme.palette.themeStrong
+                    : isSelected
+                        ? (isHovering ? theme.palette.themeStrong : theme.palette.themeSoft)
+                        : isHovering
+                            ? theme.palette.themeWhisper
+                            : DashboardPalette.muted.opacity(0.32),
+                in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(
+                        isSelected ? theme.palette.themeRing : theme.palette.border.opacity(0.65),
+                        lineWidth: isSelected ? 1.5 : 1
+                    )
+            }
+            .opacity(isInDisplayedMonth ? 1 : 0.45)
+            .onHover { isHovering = $0 }
+    }
+}
+
 private struct DashboardAddCalendarEventSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Bindable var model: ApplicationModel
@@ -326,13 +343,8 @@ private struct DashboardAddCalendarEventSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Add event")
-                    .font(.system(size: 20, weight: .semibold))
-                Text("Create an event in your Woven Matter calendar.")
-                    .font(.system(size: 12.5))
-                    .foregroundStyle(DashboardPalette.mutedForeground)
-            }
+            Text("Add event")
+                .font(.system(size: 20, weight: .semibold))
 
             VStack(alignment: .leading, spacing: 12) {
                 TextField("Event title", text: $draft.title)

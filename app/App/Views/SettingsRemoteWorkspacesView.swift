@@ -27,8 +27,7 @@ struct SettingsRemoteWorkspacesView: View {
     var body: some View {
         SettingsPage(
             title: selectedWorkspace?.name ?? "Remote agent workspaces",
-            detail: selectedWorkspace.map(workspaceLocation)
-                ?? "Create independent Woven Matter workspaces on Linux machines through your existing SSH configuration.",
+            detail: selectedWorkspace.map(workspaceLocation),
             reservesRailControlSpace: reservesRailControlSpace,
             backTitle: selectedWorkspace == nil ? "Settings" : "Remote agent workspaces",
             onBack: {
@@ -73,7 +72,7 @@ struct SettingsRemoteWorkspacesView: View {
         }
         .sheet(isPresented: $showsCredentialDisclosure) {
             CredentialAccessDisclosureView(
-                purpose: "Enable Remote Workspaces so Woven Matter can read their saved API tokens from this Mac's Keychain and reconnect automatically.",
+                purpose: "Allow Woven Matter to read remote workspace API tokens from this Mac’s Keychain and reconnect automatically.",
                 onEnable: {
                     onAcknowledgeCredentialDisclosure()
                     showsCredentialDisclosure = false
@@ -96,7 +95,7 @@ struct SettingsRemoteWorkspacesView: View {
             ),
             titleVisibility: .visible
         ) {
-            Button("Authorize and Prepare") {
+            Button("Authorize and prepare") {
                 model.authorizeHostPreparation()
             }
             Button("Cancel", role: .cancel) {
@@ -163,8 +162,8 @@ struct SettingsRemoteWorkspacesView: View {
         SettingsCard(
             title: "Credential access",
             detail: model.isCredentialAccessEnabled
-                ? "Remote Workspaces can reconnect automatically using their saved Keychain tokens."
-                : "Saved workspace details remain visible, but Woven Matter will not read their Keychain tokens until you enable access."
+                ? "Uses saved Keychain tokens to reconnect."
+                : "Enable access to saved Keychain tokens to reconnect."
         ) {
             HStack {
                 SettingsPill(
@@ -205,7 +204,7 @@ struct SettingsRemoteWorkspacesView: View {
     private var workspacesCard: some View {
         SettingsCard(
             title: "Workspaces",
-            detail: "Each container has its own persistent home, installed harnesses, credentials, and conversations."
+            detail: "Each workspace keeps its own files, agents, and credentials."
         ) {
             if model.workspaces.isEmpty {
                 SettingsEmpty("No remote workspaces yet.")
@@ -249,10 +248,7 @@ struct SettingsRemoteWorkspacesView: View {
     ) -> some View {
         let status = model.statuses[workspace.id]
         let busy = model.busyWorkspaceIDs.contains(workspace.id)
-        return SettingsCard(
-            title: "Workspace",
-            detail: "Container lifecycle and live resource status."
-        ) {
+        return SettingsCard(title: "Workspace") {
             HStack(spacing: 8) {
                 SettingsPill(
                     busy ? "Working" : (status?.state.capitalized ?? "Unknown"),
@@ -268,7 +264,7 @@ struct SettingsRemoteWorkspacesView: View {
                     Button("Restart") { model.lifecycle(.restart, configuration: workspace) }
                         .disabled(!status.running)
                 }
-                Button("Update Container") {
+                Button("Update container") {
                     model.updateContainer(workspace)
                 }
                 Button("Delete…") { pendingDeletion = workspace }
@@ -297,14 +293,11 @@ struct SettingsRemoteWorkspacesView: View {
     private func workspaceLocation(
         _ workspace: RemoteWorkspaceConfiguration
     ) -> String {
-        "\(workspace.userName.map { "\($0)@" } ?? "")\(workspace.hostName) · \(workspace.workspaceID)"
+        "\(workspace.workspaceID) · \(workspace.userName.map { "\($0)@" } ?? "")\(workspace.hostName)"
     }
 
     private var createCard: some View {
-        SettingsCard(
-            title: "Create New Workspace",
-            detail: "Woven Matter checks the machine, builds the pinned workspace image there, and binds its service to remote loopback."
-        ) {
+        SettingsCard(title: "Create workspace") {
             SettingsField("Tailnet machines") {
                 VStack(alignment: .leading, spacing: 8) {
                     let onlineMachines = model.machineCandidates.filter(\.online)
@@ -341,7 +334,8 @@ struct SettingsRemoteWorkspacesView: View {
                 TextField("Resolved by SSH config", text: $userName)
                     .settingsInput()
             }
-            Button(model.isCheckingHost ? "Inspecting Host…" : "Inspect Host") {
+            SettingsNote("Uses your SSH agent. Woven Matter does not store SSH keys.")
+            Button(model.isCheckingHost ? "Inspecting host…" : "Inspect host") {
                 model.checkHost(
                     hostName: hostName,
                     userName: userName
@@ -350,7 +344,7 @@ struct SettingsRemoteWorkspacesView: View {
             .buttonStyle(SettingsQuietButtonStyle())
             .disabled(model.isCheckingHost || hostName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             if currentPreflight == nil {
-                Text("Inspection is read-only. Woven Matter will explain and ask before changing the host.")
+                Text("Inspecting the host makes no changes.")
                     .font(.system(size: 11.5))
                     .foregroundStyle(DashboardPalette.mutedForeground)
             }
@@ -399,9 +393,6 @@ struct SettingsRemoteWorkspacesView: View {
                                     .font(.system(size: 11.5))
                                     .foregroundStyle(DashboardPalette.mutedForeground)
                             }
-                            Text("Create Workspace will ask for explicit authorization before applying these changes.")
-                                .font(.system(size: 11.5))
-                                .foregroundStyle(DashboardPalette.mutedForeground)
                         }
                     }
                 }
@@ -419,9 +410,10 @@ struct SettingsRemoteWorkspacesView: View {
                     .settingsInput()
             }
 
-            SettingsNote("Memory and additional swap are measured in GB. Enter 0 to disable swap, or leave it blank to use the host default. Every workspace has a dedicated persistent volume mounted at /home. Workspace storage has no fixed limit and uses the available capacity of the remote host. The service is available only through SSH on the remote machine's loopback address. Woven Matter uses your SSH agent and does not store SSH keys.")
+            SettingsNote("Use 0 to disable swap, or leave it blank for the host default.")
+            SettingsNote("Files use available disk space on the remote machine.")
 
-            Button(model.isCreating ? "Creating…" : "Create New Workspace") {
+            Button(model.isCreating ? "Creating…" : "Create workspace") {
                 model.create(
                     name: name,
                     workspaceID: workspaceID,
@@ -447,7 +439,7 @@ struct SettingsRemoteWorkspacesView: View {
     ) -> some View {
         SettingsCard(
             title: "\(workspace.name) resources",
-            detail: "Changing memory or swap recreates only the container. The dedicated workspace volume is retained."
+            detail: "Applying these limits recreates the workspace container. Its files are kept."
         ) {
             SettingsField("Memory limit (GB)") {
                 TextField("8", text: $managedMemoryLimit)
@@ -462,12 +454,12 @@ struct SettingsRemoteWorkspacesView: View {
                     remoteValueRow(label: "Workspace data", value: workspaceUsageLabel(status))
                     remoteValueRow(label: "Host storage", value: hostStorageLabel(status))
                 }
-                SettingsNote("Workspace storage has no fixed limit. Files, harnesses, credentials, configuration, and caches persist in the dedicated /home volume and use available space on the remote host.")
+                SettingsNote("Files use available disk space on the remote machine.")
                 if let warning = status.storageWarning, !warning.isEmpty {
                     storageWarning(warning)
                 }
             }
-            Button("Apply Resources") {
+            Button("Apply resources") {
                 model.applyResources(
                     workspace,
                     memoryLimit: managedMemoryLimit,
@@ -482,13 +474,10 @@ struct SettingsRemoteWorkspacesView: View {
     private func harnessesCard(
         _ workspace: RemoteWorkspaceConfiguration
     ) -> some View {
-        SettingsCard(
-            title: "\(workspace.name) runtimes",
-            detail: "Runtime components and credentials belong to this remote workspace. Installation and updates run here through its authenticated SSH connection."
-        ) {
+        SettingsCard(title: "\(workspace.name) runtimes") {
             let harnesses = model.currentHarnesses(for: workspace)
             if harnesses.isEmpty {
-                SettingsEmpty("Start the workspace and refresh to inspect its harnesses.")
+                SettingsEmpty("Start the workspace or refresh to check for agents.")
             } else {
                 ForEach(harnesses) { harness in
                     SettingsInset {
@@ -541,9 +530,11 @@ struct SettingsRemoteWorkspacesView: View {
         VStack(alignment: .trailing, spacing: 8) {
             HStack(spacing: 8) {
                 if harness.id == .opencode || harness.id == .openclaw || harness.id == .hermes {
-                    Button("More") {
+                    Button("Settings") {
                         onMoreRuntime(harness.id, workspace)
-                    }.buttonStyle(SettingsQuietButtonStyle())
+                    }
+                    .buttonStyle(SettingsQuietButtonStyle())
+                    .accessibilityLabel("Open \(harness.displayName) settings")
                 }
                 Button(checkUnavailable && !checking && !running ? "Retry check" : updateButtonTitle(runtime, checking: checking)) {
                     if let runtime, runtime.installed,
@@ -570,7 +561,7 @@ struct SettingsRemoteWorkspacesView: View {
                                 model.setRuntimePreferences(runtime, configuration: workspace, enabled: false)
                             }.buttonStyle(SettingsQuietButtonStyle()).disabled(busy || unavailable)
                         }
-                        Button(running && runtime.operation?.action == "install" ? "Installing…" : (runtime.failureCount > 0 ? "Retry Install" : "Install")) {
+                        Button(running && runtime.operation?.action == "install" ? "Installing…" : (runtime.failureCount > 0 ? "Retry install" : "Install")) {
                             model.prepareHarnessAction("install", harness: harness, configuration: workspace)
                         }.buttonStyle(DashboardPrimaryButtonStyle()).disabled(busy || unavailable)
                     }
@@ -586,7 +577,7 @@ struct SettingsRemoteWorkspacesView: View {
         if checking { return "Checking…" }
         if runtime?.operation?.status == "running", runtime?.operation?.action == "update" { return "Updating…" }
         if let runtime, runtime.installed {
-            if runtime.failureCount > 0 && runtime.operation?.action == "update" { return "Retry Update" }
+            if runtime.failureCount > 0 && runtime.operation?.action == "update" { return "Retry update" }
             if runtime.updateAvailable { return "Update" }
         }
         return "Check for updates"
@@ -600,14 +591,14 @@ struct SettingsRemoteWorkspacesView: View {
                     .help(component.path ?? "No installed path")
             }
             if model.runtimeCheckErrors[workspace.id]?[runtime.id] != nil || runtime.versionCheckAvailable == false {
-                Text("Update check unavailable")
+                Text("Couldn’t check for updates.")
                     .font(.system(size: 11.5)).foregroundStyle(DashboardPalette.mutedForeground)
             }
             if runtime.operation?.status == "failed", let error = runtime.operation?.error {
                 Text(error).font(.system(size: 11.5)).foregroundStyle(DashboardPalette.mutedForeground).lineLimit(2)
             }
             if runtime.failureCount >= 2, let prompt = runtime.diagnosticPrompt {
-                Button("Copy Diagnostic Prompt") {
+                Button("Copy diagnostic prompt") {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(prompt, forType: .string)
                 }.buttonStyle(SettingsQuietButtonStyle())
@@ -634,12 +625,12 @@ struct SettingsRemoteWorkspacesView: View {
         } else if harness.state == "authentication_required" {
             if harness.setupMethods.count == 1,
                let method = harness.setupMethods.first {
-                Button("Set Up") {
+                Button("Set up") {
                     startSignIn(harness, method: method, workspace: workspace)
                 }
                 .buttonStyle(DashboardPrimaryButtonStyle())
             } else if !harness.setupMethods.isEmpty {
-                Menu("Set Up…") {
+                Menu("Set up…") {
                     ForEach(harness.setupMethods) { method in
                         Button(method.displayName) {
                             startSignIn(harness, method: method, workspace: workspace)
@@ -713,7 +704,7 @@ struct SettingsRemoteWorkspacesView: View {
                 }
 
                 if let url = session.verificationURL {
-                    Button("Open Sign-In Page") {
+                    Button("Open sign-in page") {
                         NSWorkspace.shared.open(url)
                     }
                     .buttonStyle(DashboardPrimaryButtonStyle())
@@ -730,7 +721,7 @@ struct SettingsRemoteWorkspacesView: View {
                                 .textSelection(.enabled)
                         }
                         Spacer()
-                        Button("Copy Code") { copy(userCode) }
+                        Button("Copy code") { copy(userCode) }
                             .buttonStyle(SettingsQuietButtonStyle())
                     }
                 }
