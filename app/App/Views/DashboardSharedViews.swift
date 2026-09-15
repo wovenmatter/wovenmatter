@@ -744,7 +744,7 @@ struct DashboardIconButtonStyle: ButtonStyle {
             .foregroundStyle(sidebarForeground ?? DashboardPalette.mutedForeground)
             .background(
                 isEnabled && (configuration.isPressed || hovered)
-                    ? theme.palette.themeSoft
+                    ? (configuration.isPressed ? theme.palette.themeSoft : theme.palette.themeWhisper)
                     : .clear
             )
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
