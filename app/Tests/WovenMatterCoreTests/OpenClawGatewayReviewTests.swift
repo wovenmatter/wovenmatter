@@ -5,6 +5,46 @@ import WovenMatterCore
 @testable import WovenMatterDashboardStore
 
 struct OpenClawGatewayReviewTests {
+  @Test(arguments: ["off", "serve", "funnel"])
+  func localConfigurationPreservesAuthenticationAndTailscale(mode: String) throws {
+    let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let url = directory.appending(path: "openclaw.json")
+    let data = Data("""
+      { "gateway": { "mode": "local", "port": 19789, "bind": "loopback",
+        "auth": { "mode": "token", "token": "${FIXTURE_GATEWAY_TOKEN}" },
+        "tailscale": { "mode": "\(mode)", "resetOnExit": false } } }
+      """.utf8)
+    try data.write(to: url)
+    let config = try OpenClawLocalGatewayConfiguration(environment: [
+      "HOME": directory.path, "OPENCLAW_CONFIG_PATH": url.path,
+      "FIXTURE_GATEWAY_TOKEN": "fixture-token", "OPENCLAW_GATEWAY_PASSWORD": "unrelated-password"
+    ])
+    #expect(config.port == 19789)
+    #expect(config.token == "fixture-token")
+    #expect(config.password == nil)
+    #expect(try Data(contentsOf: url) == data)
+  }
+
+  @Test func localPasswordModeDoesNotReadAnUnusedTokenReference() throws {
+    let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let url = directory.appending(path: "openclaw.json")
+    try Data("""
+      { "gateway": { "mode": "local", "auth": { "mode": "password",
+        "password": { "source": "env", "id": "FIXTURE_PASSWORD" },
+        "token": { "source": "store", "id": "unavailable-unused-token" } } } }
+      """.utf8).write(to: url)
+    let config = try OpenClawLocalGatewayConfiguration(environment: [
+      "HOME": directory.path, "OPENCLAW_CONFIG_PATH": url.path, "FIXTURE_PASSWORD": "fixture-password"
+    ])
+    #expect(config.port == 18789)
+    #expect(config.password == "fixture-password")
+    #expect(config.token == nil)
+  }
+
   @Test func steeringHistoryReconcilesExactMessagesAfterReopen() async throws {
     let fixture = try ReviewGatewayFixture()
     defer { fixture.remove() }

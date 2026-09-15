@@ -27,6 +27,8 @@ struct OpenClawScheduledResultTests {
     let conversationID = try #require(collected)
     #expect(try db.workspaceOverview().conversations.first { $0.id == conversationID }?.unread == true)
     let reopened = try WorkspaceDatabase(url: url)
+    #expect(try reopened.workspaceOverview().conversations.first { $0.id == conversationID }?.openClawSessionKey
+      == reopened.openClawGatewaySession(conversationID: conversationID).sessionKey)
     #expect(try reopened.collectOpenClawResult(run, title: "Daily report", output: fullOutput, destination: "new") == nil)
     #expect(try reopened.conversationContent(id: conversationID).messages.count == 1)
     try reopened.synchronizeOpenClawHistory(conversationID: conversationID,
@@ -48,6 +50,10 @@ struct OpenClawScheduledResultTests {
     let seed = try db.createLocalACPSession(runtimeKind: .openclaw, title: "Inbox", ownerDeviceID: UUID())
     let agentID = try #require(db.dashboardAgents().first).id
     try db.attachOpenClawGatewaySession(conversationID: seed, agentID: agentID, sessionKey: "agent:main:inbox")
+    let unrelated = try db.createLocalACPSession(runtimeKind: .codex, title: "Unrelated", ownerDeviceID: UUID())
+    let snapshot = try db.workspaceOverview()
+    #expect(snapshot.conversations.first { $0.id == seed }?.openClawSessionKey == "agent:main:inbox")
+    #expect(snapshot.conversations.first { $0.id == unrelated }?.openClawSessionKey == nil)
     let run = OpenClawCronRun(id: "run-1", jobID: "job-1", agentID: agentID, status: "error", remotePayload: Data())
     #expect(throws: (any Error).self) {
       try db.setOpenClawResultRoute(agentID: agentID, jobID: run.jobID, destination: "missing")
