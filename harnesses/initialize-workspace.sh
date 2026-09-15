@@ -24,6 +24,8 @@ cat > "$managed_file" <<'EOF'
 
 - Work in the appropriate checkout under `REPOS/`.
 - Put durable guides, plans, research, work summaries, and deliverables in the matching workspace folders.
+- Store agent-accessible data in `Databases/<name>/`. Each database is an ordinary folder.
+- `Databases/<name>/.wovenmatter/database.json` records optional `none`, `json`, or `sqlite` format guidance using schema `wovenmatter.database.v1`. Keep linked JSON files and SQLite databases inside their database folder; remote links cannot follow symlinks.
 - `.scratch/` is disposable.
 <!-- END WOVEN MATTER MANAGED -->
 EOF
