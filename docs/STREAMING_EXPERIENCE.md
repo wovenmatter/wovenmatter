@@ -1,11 +1,32 @@
-# Streaming experience — first iteration
+# Streaming experience: PR #39 reference
+
+## Start here
+
+Read [First-class harness streaming](FIRST_CLASS_STREAMING.md) for the product
+definition, individual harness plans, integration decisions, and rebuild checklist.
+PR #39 is an implementation reference, not an all-eight-harness acceptance result.
+
+The September 15, 2026 assessment found that this branch predates native OpenCode
+v2 on main and native Hermes in PR #45. PR #38 also changes OpenClaw recovery in
+ways that overlap this patch. Recheck their actual merged state before rebuilding
+these changes alongside the separate broader UI work. Preserving this patch's
+structure or exact visual layout is not a requirement.
+
+## Historical implementation baseline
+
+Implementation commit: `b49707a02f209226ec94c65580f097c583fc2674` in
+[PR #39](https://github.com/wovenmatter/wovenmatter/pull/39).
 
 Based on the OpenClaw UI streaming analysis prepared 2026-09-03 against
 `openclaw/openclaw@6cd743c2a39fda64249213da58fd6ecf30242c3a`.
-The progress-card and startup-status wire shapes were also checked against the
-local `v2026.9.2` source. Woven Matter baseline: `dc39c49620f1f0777acb2be0d713fe85507d5607`.
+The original implementation notes report checking progress-card and startup-status
+wire shapes against local `v2026.9.2` source. These are historical references, not
+a fresh verification of the currently installed provider contract.
+Woven Matter baseline: `dc39c49620f1f0777acb2be0d713fe85507d5607`.
 
-## Implemented
+## What the patch implements
+
+These describe code in the original commit, not guarantees for every transport.
 
 | Report lesson | Woven Matter behavior |
 | --- | --- |
@@ -22,14 +43,27 @@ local `v2026.9.2` source. Woven Matter baseline: `dc39c49620f1f0777acb2be0d713fe
 | Ambiguous sends are not blindly retried | The local input/run is durable before transport. A lost send receipt triggers exact-run history probing, never another `chat.send`, and retains an explicit unconfirmed-delivery explanation. |
 | Reader owns scrolling | Deferred follows are invalidated by user scrolling or conversation changes; history prepending cannot trigger follow. “Latest reply” uses the existing quiet button style. Reduce Motion disables work-disclosure animation. |
 
-The shared ACP/Pi coordinator changes apply to all eight catalogued harnesses;
-Gateway-specific behavior remains in its own adapter. Only provider-exposed
-reasoning/activity is presented. No provider-hidden reasoning is requested.
+The shared coordinator changes benefit the harnesses routed through it. Catalog
+membership does not establish transport coverage: native OpenCode bypasses that
+writer, and Hermes gains authoritative replacement behavior in #45. Gateway-specific
+behavior remains in its own adapter. Only provider-exposed reasoning/activity can
+be presented.
 
-No theme, palette, typography, geometry constants, assets, or dependency changes.
-The new return-to-latest control reuses the existing button style.
+Several choices need revision when rebuilding: the commentary/final classification
+is heuristic; updating one reasoning row does not preserve separate reasoning
+phases; #38 and #39 differ on Gateway identity, sequences, and uncertain delivery.
+The [handoff](FIRST_CLASS_STREAMING.md#integration-decisions) records those decisions.
 
-## Validation
+The original patch reused existing styling, including the return-to-latest button.
+That historical choice does not constrain the user-directed broader UI work;
+follow the target checkout's current style guide.
+
+## Validation evidence and limits
+
+Existing GitHub checks for the original commit passed CI and macOS validation on
+September 8, 2026. Remote workspace checks were skipped. The September 15 assessment
+inspected that evidence; it did not rerun implementation tests or submit provider
+prompts. The original PR reports running:
 
 ```sh
 # Avoid inheriting the agent runner's account location into an existing test
@@ -38,15 +72,19 @@ The new return-to-latest control reuses the existing button style.
 env -u CODEX_HOME scripts/test-changes.sh --all
 ```
 
-Deterministic tests cover all-eight-harness buffered failures, persisted/reopened
-commentary, text-before-tool ordering, replacement snapshots and Unicode,
-terminal fencing, mirror deduplication, exact-run history recovery, progress-card
-clears, Pi tool lifecycle details, and preservation of partial output.
-Tests use temporary databases and fake drivers, not provider services.
+Source tests cover persisted/reopened commentary, text-before-tool ordering,
+replacement snapshots and Unicode, terminal fencing, mirror deduplication,
+exact-run history recovery, progress-card clears, Pi tool details, and partial
+output. Tests use temporary databases and fake drivers, not provider services.
 
-Rendered before/after tool/reasoning/Markdown fixtures at 420 and 768 points in
-both Green and Cognac produced identical PNG hashes. The fixture uses the actual
-transcript, Markdown and style source; it is not a whole-app interaction test.
+The test parameterized over all eight runtime names injects the same fake driver,
+emits one text chunk, and throws. It verifies shared buffered-failure handling;
+it does not exercise eight adapters or eight provider executions.
+
+The original PR reports identical before/after PNG hashes for selected
+tool/reasoning/Markdown fixtures at 420 and 768 points in Green and Cognac. That
+evidence does not establish full-app scrolling, new commentary layouts, interaction
+continuity, performance, or VoiceOver behavior.
 
 ## Boundaries of this iteration
 
@@ -54,9 +92,9 @@ This is not full OpenClaw Control UI parity. It does not add a new offline
 FIFO outbox, automatic replay, branch/settings compare-and-swap, session-wide
 multi-client transcript import, or Gateway session recovery across app restart.
 Existing local durable inputs and interrupted-run recovery remain in place.
-The separate OpenClaw integration-upgrade work owns session discovery, inbox
-backfill, Gateway question forms, and reconnect/session synchronization; this
-branch does not copy or modify that worktree.
+PR #38 supplies separate import and session-recovery work. Inspect its actual merged
+implementation before assigning remaining scope; this document does not claim
+that it supplies every Gateway question/task/subagent surface.
 
 Local ACP question and approval cards retain their existing resolution path.
 Gateway approvals retain their existing handler. Gateway question/task/subagent
