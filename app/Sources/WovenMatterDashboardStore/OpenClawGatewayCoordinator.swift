@@ -23,6 +23,8 @@ public actor OpenClawGatewayCoordinator {
     var terminalStatesByRemoteRunID: [
       String: OpenClawGatewayEventProjection.TerminalState
     ] = [:]
+    var eventFence = GatewayStreamEventFence()
+    var assistantSource = GatewayAssistantStreamSource()
     var cancelRequested = false
     var fallbackSequence = 0
     var liveToolCallIDs: Set<String> = []
@@ -755,6 +757,20 @@ public actor OpenClawGatewayCoordinator {
       bufferedGatewayEventsByRunID[runID, default: []].append((event, agentID, generation))
       return
     }
+    let remoteRunID = projection.runID ?? active.lastRemoteRunID
+    switch active.eventFence.evaluate(
+      event, remoteRunID: remoteRunID
+    ) {
+    case .duplicate:
+      return
+    case .gap:
+      scheduleHistoryRefresh(
+        conversationID: active.conversationID, agentID: agentID,
+        generation: generation
+      )
+    case .accept:
+      break
+    }
     if event.name == "agent", let row = event.payload?.objectValue,
        let remoteID = row["runId"]?.stringValue, let sequence = row["seq"]?.intValue {
       let sequenceKey = agentID.uuidString + ":" + remoteID
@@ -784,8 +800,11 @@ public actor OpenClawGatewayCoordinator {
         rawEventJSON: raw
       )
     }
-    if let assistantUpdate = projection.assistantUpdate {
-      let remoteRunID = projection.runID ?? active.lastRemoteRunID
+    if let assistantUpdate = projection.assistantUpdate,
+       active.assistantSource.accepts(
+         event, runID: remoteRunID, update: assistantUpdate,
+         terminal: projection.terminalState != nil
+       ) {
       let assistantMessageID = active.assistantMessageIDsByRemoteRunID[remoteRunID]
       switch assistantUpdate {
       case .append(let chunk):
@@ -807,9 +826,14 @@ public actor OpenClawGatewayCoordinator {
       }
     }
     if let activity = projection.activity {
+      if let assistantMessageID = active.assistantMessageIDsByRemoteRunID[remoteRunID] {
+        try? database.recordAssistantStreamBoundary(
+          runID: runID, assistantMessageID: assistantMessageID
+        )
+      }
       try? database.upsertDeviceOwnedRunActivity(
         runID: runID,
-        activity: activity,
+        activity: projection.approval == nil ? activity.scoped(to: remoteRunID) : activity,
         appendingContent: activity.contentIsDelta == true
       )
       if activity.kind == .tool,
@@ -818,7 +842,7 @@ public actor OpenClawGatewayCoordinator {
       }
     }
     if let terminal = projection.terminalState {
-      let remoteRunID = projection.runID ?? active.lastRemoteRunID
+      active.assistantSource.finish(runID: remoteRunID)
       active.terminalStatesByRemoteRunID[remoteRunID] = terminal
     }
     if let approval = projection.approval {
@@ -1077,30 +1101,27 @@ public actor OpenClawGatewayCoordinator {
     sessionKey: String,
     agentID: UUID
   ) async {
-    for _ in 0..<3 {
-      do {
-        let history = try await client(agentID: agentID).request(
+    let assistantIDs = (try? database.openClawRunAssistantIDs(runID: runID)) ?? [:]
+    let knownInputIDs = Set(assistantIDs.keys)
+    if let response = await GatewayHistoryRecovery.assistantText(
+      remoteRunID: remoteRunID,
+      knownInputIDs: knownInputIDs,
+      fetch: {
+        try await self.client(agentID: agentID).request(
           "chat.history",
           params: .object([
             "sessionKey": .string(sessionKey),
             "limit": .number(50),
-          ])
+          ]),
+          timeout: .seconds(5)
         )
-        if let response = Self.assistantText(
-          history: history,
-          idempotencyKey: remoteRunID,
-          knownInputIDs: Set(try database.openClawRunAssistantIDs(runID: runID).keys)
-        ) {
-          try database.replaceLocalACPAssistantMessage(
-            runID: runID,
-            assistantMessageID: assistantMessageID,
-            content: response
-          )
-        }
-        return
-      } catch {
-        try? await Task.sleep(for: .milliseconds(250))
       }
+    ) {
+      try? database.replaceLocalACPAssistantMessage(
+        runID: runID,
+        assistantMessageID: assistantMessageID,
+        content: response
+      )
     }
   }
 
@@ -2135,7 +2156,7 @@ public actor OpenClawGatewayCoordinator {
     }
   }
 
-  private static func assistantText(
+  static func assistantText(
     history: GatewayJSONValue,
     idempotencyKey: String,
     knownInputIDs: Set<String>

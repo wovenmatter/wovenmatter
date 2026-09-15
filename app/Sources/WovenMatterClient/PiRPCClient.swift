@@ -85,6 +85,14 @@ public actor PiRPCClient {
     private var promptEvents: LocalACPClient.EventHandler?
     private var promptPermission: LocalACPClient.PermissionHandler?
     private var promptGeneration: UUID?
+    private var reasoningPhaseSequence = 0
+    private var activeReasoningPhaseID: String?
+    private var assistantMessageSequence = 0
+    private var assistantMessageOpen = false
+    private var completedVisibleText = ""
+    private var currentTextBlocks: [Int: String] = [:]
+    private var latestStopReason: LocalACPStopReason?
+    private var latestTerminalError: String?
     private var hasQueuedSettlement = false
     private var settlement: Result<Void, any Error>?
     private var transportError: (any Error)?
@@ -236,6 +244,14 @@ public actor PiRPCClient {
         hasQueuedSettlement = false
         settlement = nil
         cancelled = false
+        reasoningPhaseSequence = 0
+        activeReasoningPhaseID = nil
+        assistantMessageSequence = 0
+        assistantMessageOpen = false
+        completedVisibleText = ""
+        currentTextBlocks = [:]
+        latestStopReason = nil
+        latestTerminalError = nil
         promptEvents = onEvent
         promptPermission = onPermission
         defer {
@@ -256,7 +272,10 @@ public actor PiRPCClient {
                 }
                 try Task.checkCancellation()
                 try await waitUntilSettled()
-                return cancelled ? .cancelled : .endTurn
+                if let latestTerminalError {
+                    throw PiRPCClientError.commandFailed(latestTerminalError)
+                }
+                return cancelled ? .cancelled : (latestStopReason ?? .endTurn)
             } catch {
                 failSettledWaiters(error)
                 throw error
@@ -429,13 +448,13 @@ public actor PiRPCClient {
             }
             return
         }
-        let event = Self.event(from: object)
+        let events = projectedEvents(from: object)
         let extensionRequest = type == "extension_ui_request"
             ? Self.extensionUIRequest(from: object)
             : nil
         guard extensionRequest != nil
                 || type == "agent_settled"
-                || event != nil else { return }
+                || !events.isEmpty else { return }
         if type == "agent_settled" { hasQueuedSettlement = true }
         let previous = eventTask
         eventTask = Task { [weak self] in
@@ -445,7 +464,7 @@ public actor PiRPCClient {
                 if let extensionRequest {
                     try await self.handleExtensionUI(extensionRequest)
                 } else {
-                    if let event {
+                    for event in events {
                         try await self.promptEvents?(event)
                     }
                     if type == "agent_settled" {
@@ -637,23 +656,93 @@ public actor PiRPCClient {
         try input.write(contentsOf: data)
     }
 
-    private static func event(
+    private static func encodedJSON(_ value: Any?) -> String? {
+        guard let value,
+              let data = try? JSONSerialization.data(
+                withJSONObject: value,
+                options: [.fragmentsAllowed, .sortedKeys]
+              ) else { return nil }
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    private static func toolResultText(_ value: Any?) -> String? {
+        if let text = value as? String { return text }
+        if let object = value as? [String: Any] {
+            return toolResultText(object["content"]) ?? (object["text"] as? String)
+        }
+        if let values = value as? [Any] {
+            let text = values.compactMap(toolResultText).joined(separator: "\n")
+            return text.isEmpty ? nil : text
+        }
+        return nil
+    }
+
+    private func projectedEvents(
         from object: [String: Any]
-    ) -> LocalACPEvent? {
+    ) -> [LocalACPEvent] {
         switch string(object["type"]) {
+        case "message_start":
+            guard string(dictionary(object["message"])?["role"]) == "assistant" else {
+                return []
+            }
+            beginAssistantMessage()
+            return []
         case "message_update":
             let event = dictionary(object["assistantMessageEvent"])
             let kind = string(event?["type"])
-            let delta = (event?["delta"] as? String)
-                ?? (event?["text"] as? String)
-            guard let delta, !delta.isEmpty else { return nil }
+            let contentIndex = Self.integer(event?["contentIndex"]) ?? 0
+            ensureAssistantMessage()
+            if kind == "text_start" {
+                currentTextBlocks[contentIndex] = ""
+                activeReasoningPhaseID = nil
+                return []
+            }
             if kind == "text_delta" {
-                return .assistantChunk(delta)
+                guard let delta = event?["delta"] as? String, !delta.isEmpty else { return [] }
+                currentTextBlocks[contentIndex, default: ""] += delta
+                activeReasoningPhaseID = nil
+                return [.assistantChunk(delta)]
+            }
+            if kind == "text_end" {
+                if let content = event?["content"] as? String {
+                    currentTextBlocks[contentIndex] = content
+                }
+                activeReasoningPhaseID = nil
+                return []
+            }
+            if kind == "thinking_start" {
+                reasoningPhaseSequence += 1
+                let reasoningID = reasoningIdentity(
+                    contentIndex: contentIndex,
+                    fallbackSequence: reasoningPhaseSequence
+                )
+                activeReasoningPhaseID = reasoningID
+                return [.activity(
+                    AgentRunActivity(
+                        id: reasoningID, kind: .thought, phase: "start",
+                        title: "Thinking", status: "running", content: "",
+                        contentIsDelta: false
+                    ),
+                    appendsContent: false
+                )]
             }
             if kind == "thinking_delta" {
-                return .activity(
+                guard let delta = (event?["delta"] as? String)
+                    ?? (event?["text"] as? String), !delta.isEmpty else { return [] }
+                let reasoningID: String
+                if let activeReasoningPhaseID {
+                    reasoningID = activeReasoningPhaseID
+                } else {
+                    reasoningPhaseSequence += 1
+                    reasoningID = reasoningIdentity(
+                        contentIndex: contentIndex,
+                        fallbackSequence: reasoningPhaseSequence
+                    )
+                    activeReasoningPhaseID = reasoningID
+                }
+                return [.activity(
                     AgentRunActivity(
-                        id: "thought",
+                        id: reasoningID,
                         kind: .thought,
                         phase: "update",
                         title: "Thinking",
@@ -662,42 +751,119 @@ public actor PiRPCClient {
                         contentIsDelta: true
                     ),
                     appendsContent: true
+                )]
+            }
+            if kind == "thinking_end" {
+                let reasoningID = activeReasoningPhaseID ?? reasoningIdentity(
+                    contentIndex: contentIndex,
+                    fallbackSequence: reasoningPhaseSequence + 1
                 )
+                let content = (event?["content"] as? String)
+                    ?? (event?["text"] as? String)
+                activeReasoningPhaseID = nil
+                return [.activity(
+                    AgentRunActivity(
+                        id: reasoningID, kind: .thought, phase: "end",
+                        title: "Thinking", status: "completed", content: content,
+                        contentIsDelta: false
+                    ),
+                    appendsContent: false
+                )]
             }
-            return nil
+            return []
         case "message_end":
-            guard string(dictionary(object["message"])?["role"]) == "assistant" else {
-                return nil
+            guard let message = dictionary(object["message"]),
+                  string(message["role"]) == "assistant" else {
+                return []
             }
-            return .assistantBoundary
-        case "tool_execution_start":
-            return .activity(
-                AgentRunActivity(
-                    id: string(object["toolCallId"]) ?? "tool",
-                    kind: .tool,
-                    phase: "start",
-                    title: string(object["toolName"]) ?? "Tool",
-                    status: "pending",
-                    toolName: string(object["toolName"])
-                ),
-                appendsContent: false
-            )
-        case "tool_execution_end":
+            activeReasoningPhaseID = nil
+            ensureAssistantMessage()
+            let canonical = Self.assistantText(message)
+            let total = completedVisibleText + canonical
+            completedVisibleText = total
+            currentTextBlocks = [:]
+            assistantMessageOpen = false
+            captureTerminalStatus(message)
+            return [.assistantSnapshot(total), .assistantBoundary]
+        case "tool_execution_start", "tool_execution_update", "tool_execution_end":
+            activeReasoningPhaseID = nil
+            let type = string(object["type"])
+            let isStart = type == "tool_execution_start"
+            let isEnd = type == "tool_execution_end"
             let failed = object["isError"] as? Bool == true
-            return .activity(
+            let result = object["result"] ?? object["partialResult"]
+            return [.activity(
                 AgentRunActivity(
                     id: string(object["toolCallId"]) ?? "tool",
                     kind: .tool,
-                    phase: "end",
-                    title: string(object["toolName"]),
-                    status: failed ? "failed" : "completed",
-                    toolName: string(object["toolName"])
+                    phase: isStart ? "start" : isEnd ? "end" : "update",
+                    title: string(object["toolName"]) ?? "Tool",
+                    status: isEnd ? (failed ? "failed" : "completed") : "running",
+                    toolName: string(object["toolName"]),
+                    content: Self.toolResultText(result),
+                    contentIsDelta: false,
+                    rawInputJSON: Self.encodedJSON(object["args"]),
+                    rawOutputJSON: Self.encodedJSON(result)
                 ),
                 appendsContent: false
-            )
+            )]
+        case "agent_end":
+            if object["willRetry"] as? Bool != true,
+               let messages = object["messages"] as? [[String: Any]],
+               let assistant = messages.last(where: { string($0["role"]) == "assistant" }) {
+                captureTerminalStatus(assistant)
+            }
+            return []
         default:
-            return nil
+            return []
         }
+    }
+
+    private func beginAssistantMessage() {
+        assistantMessageSequence += 1
+        assistantMessageOpen = true
+        currentTextBlocks = [:]
+        activeReasoningPhaseID = nil
+    }
+
+    private func ensureAssistantMessage() {
+        if !assistantMessageOpen { beginAssistantMessage() }
+    }
+
+    private func reasoningIdentity(
+        contentIndex: Int,
+        fallbackSequence: Int
+    ) -> String {
+        "thought-\(assistantMessageSequence)-\(contentIndex)-\(fallbackSequence)"
+    }
+
+    private func captureTerminalStatus(_ message: [String: Any]) {
+        let error = string(message["errorMessage"])
+        latestTerminalError = error
+        switch string(message["stopReason"])?.lowercased() {
+        case "length", "max_tokens", "max-tokens":
+            latestStopReason = .maxTokens
+        case "aborted", "cancelled", "canceled":
+            latestStopReason = .cancelled
+        case "refusal", "refused":
+            latestStopReason = .refusal
+        default:
+            latestStopReason = .endTurn
+        }
+    }
+
+    private static func assistantText(_ message: [String: Any]) -> String {
+        if let text = message["content"] as? String { return text }
+        guard let content = message["content"] as? [[String: Any]] else { return "" }
+        return content.compactMap { block in
+            string(block["type"]) == "text" ? block["text"] as? String : nil
+        }.joined()
+    }
+
+    private static func integer(_ value: Any?) -> Int? {
+        if let value = value as? Int { return value }
+        if let value = value as? NSNumber { return value.intValue }
+        return nil
     }
 }
 

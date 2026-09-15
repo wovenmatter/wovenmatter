@@ -128,17 +128,19 @@ struct HermesIntegrationTests {
         let database = try WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
         let id = try database.createLocalACPSession(runtimeKind: .hermes, title: "Streaming", ownerDeviceID: UUID())
         let run = try database.beginLocalACPRun(conversationID: id, content: "Start")
-        let writer = LocalACPAssistantStreamWriter(database: database, runID: run.runID, conversationID: id, onChange: nil)
+        let writer = LocalACPAssistantStreamWriter(database: database, runID: run.runID,
+            assistantMessageID: run.assistantMessageID, conversationID: id, onChange: nil)
         try await writer.append("Before steering. ")
         try await writer.finishSegmentAndPause()
-        _ = try database.beginLocalACPSteeringTurn(runID: run.runID, content: "Continue")
-        await writer.resumeAfterSegmentBoundary()
+        let steering = try database.beginLocalACPSteeringTurn(runID: run.runID, content: "Continue")
+        await writer.resumeAfterSegmentBoundary(assistantMessageID: steering.assistantMessageID)
         try await writer.append("Draft")
         try await writer.replace("Before steering. Final answer")
+        await #expect(throws: (any Error).self) { try await writer.replace("Changed earlier text") }
         try await writer.finish()
         let assistants = try database.conversationContent(id: id).messages.filter { $0.role == "assistant" }.map(\.content)
         #expect(assistants == ["Before steering. ", "Final answer"])
-        await #expect(throws: (any Error).self) { try await writer.replace("Changed earlier text") }
+        try await writer.replace("Ignored after completion")
         #expect(try database.conversationContent(id: id).messages.filter { $0.role == "assistant" }.map(\.content) == assistants)
     }
 

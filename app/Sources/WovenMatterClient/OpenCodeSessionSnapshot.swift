@@ -97,6 +97,7 @@ public struct OpenCodeSessionSnapshot: Codable, Equatable, Sendable {
     public func containsInput(_ id: String) -> Bool {
         messages.contains { $0["id"].text == id } || inbox.contains { $0["id"].text == id }
     }
+
     public static func presentsMessage(_ message: OpenCodeValue) -> Bool {
         // Configuration events remain in the recovery snapshot, but are not
         // empty system bubbles in the conversation. Assistant placeholders
@@ -119,11 +120,23 @@ public struct OpenCodeSessionSnapshot: Codable, Equatable, Sendable {
         default: return ""
         }
     }
-    public static func activities(_ message: OpenCodeValue) -> [AgentRunActivity] {
-        message["content"].array.enumerated().compactMap { index, part in
+    public static func activities(_ message: OpenCodeValue, assistantMessageID: String? = nil) -> [AgentRunActivity] {
+        let parts = message["content"].array
+        let finalTextIndex = parts.lastIndex { $0["type"].text == "text" }
+        var cumulativeText = ""
+        return parts.enumerated().compactMap { index, part in
             let id = message["id"].text + ":" + (part["id"].string ?? String(index))
+            if part["type"].text == "text" {
+                let separator = index == finalTextIndex ? "" : "\n\n"
+                let segment = part["text"].text + separator
+                cumulativeText += segment
+                return AgentRunActivity(id: id, kind: .assistant, phase: "boundary", title: "Assistant",
+                                        status: "completed", content: segment, contentIsDelta: false,
+                                        assistantMessageID: assistantMessageID,
+                                        assistantCheckpoint: AssistantTextCheckpoint(cumulativeText), position: index)
+            }
             if part["type"].text == "reasoning" {
-                return AgentRunActivity(id: id, kind: .thought, title: "Reasoning", content: part["text"].text)
+                return AgentRunActivity(id: id, kind: .thought, title: "Reasoning", content: part["text"].text, position: index)
             }
             guard part["type"].text == "tool" else { return nil }
             let state = part["state"]
@@ -131,6 +144,7 @@ public struct OpenCodeSessionSnapshot: Codable, Equatable, Sendable {
             return AgentRunActivity(id: id, kind: .tool, title: state["title"].string ?? part["name"].text,
                                     status: state["status"].string ?? state["type"].string,
                                     toolName: part["name"].text, content: output,
+                                    position: index,
                                     rawInputJSON: state["input"].isNull ? nil : state["input"].json,
                                     rawOutputJSON: state.json, rawPayloadJSON: part.json)
         }

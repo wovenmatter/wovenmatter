@@ -79,6 +79,7 @@ public struct AgentRunPlanEntry: Codable, Equatable, Identifiable, Sendable {
 
 public struct AgentRunActivity: Codable, Equatable, Identifiable, Sendable {
   public enum Kind: String, Codable, Sendable {
+    case assistant
     case thought
     case tool
     case plan
@@ -98,6 +99,11 @@ public struct AgentRunActivity: Codable, Equatable, Identifiable, Sendable {
   /// `true` when `content` is a stream delta to append to the prior activity
   /// with the same ID; `false` marks an authoritative snapshot.
   public let contentIsDelta: Bool?
+  /// Owning reply for a frozen commentary segment; absent in older records.
+  public let assistantMessageID: String?
+  public let assistantCheckpoint: AssistantTextCheckpoint?
+  /// Canonical native part order when the provider supplies an ordered snapshot.
+  public let position: Int?
   public let locations: [AgentRunLocation]
   public let changes: [AgentRunFileChange]
   public let planEntries: [AgentRunPlanEntry]
@@ -115,6 +121,9 @@ public struct AgentRunActivity: Codable, Equatable, Identifiable, Sendable {
     toolName: String? = nil,
     content: String? = nil,
     contentIsDelta: Bool? = nil,
+    assistantMessageID: String? = nil,
+    assistantCheckpoint: AssistantTextCheckpoint? = nil,
+    position: Int? = nil,
     locations: [AgentRunLocation] = [],
     changes: [AgentRunFileChange] = [],
     planEntries: [AgentRunPlanEntry] = [],
@@ -131,12 +140,23 @@ public struct AgentRunActivity: Codable, Equatable, Identifiable, Sendable {
     self.toolName = toolName
     self.content = content
     self.contentIsDelta = contentIsDelta
+    self.assistantMessageID = assistantMessageID
+    self.assistantCheckpoint = assistantCheckpoint
+    self.position = position
     self.locations = locations
     self.changes = changes
     self.planEntries = planEntries
     self.rawInputJSON = rawInputJSON
     self.rawOutputJSON = rawOutputJSON
     self.rawPayloadJSON = rawPayloadJSON
+  }
+
+  public func scoped(to runID: String) -> Self {
+    Self(id: "\(runID):\(id)", kind: kind, phase: phase, title: title, detail: detail,
+      status: status, toolName: toolName, content: content, contentIsDelta: contentIsDelta,
+      assistantMessageID: assistantMessageID, assistantCheckpoint: assistantCheckpoint, position: position, locations: locations, changes: changes,
+      planEntries: planEntries, rawInputJSON: rawInputJSON, rawOutputJSON: rawOutputJSON,
+      rawPayloadJSON: rawPayloadJSON)
   }
 
   public func merging(_ update: Self, appendingContent: Bool = false) -> Self {
@@ -158,9 +178,12 @@ public struct AgentRunActivity: Codable, Equatable, Identifiable, Sendable {
       toolName: update.toolName ?? toolName,
       content: mergedContent,
       contentIsDelta: update.contentIsDelta ?? contentIsDelta,
+      assistantMessageID: update.assistantMessageID ?? assistantMessageID,
+      assistantCheckpoint: update.assistantCheckpoint ?? assistantCheckpoint,
+      position: update.position ?? position,
       locations: update.locations.isEmpty ? locations : update.locations,
       changes: update.changes.isEmpty ? changes : update.changes,
-      planEntries: update.planEntries.isEmpty ? planEntries : update.planEntries,
+      planEntries: update.phase == "clear" ? [] : update.planEntries.isEmpty ? planEntries : update.planEntries,
       rawInputJSON: update.rawInputJSON ?? rawInputJSON,
       rawOutputJSON: update.rawOutputJSON ?? rawOutputJSON,
       rawPayloadJSON: update.rawPayloadJSON ?? rawPayloadJSON
@@ -174,18 +197,36 @@ public struct WorkspaceRunActivityRecord: Codable, Equatable, Identifiable, Send
   public let conversationID: String
   public let activity: AgentRunActivity
   public let createdAt: String
+  public let sequence: Int64?
 
   public init(
     id: String,
     runID: String,
     conversationID: String,
     activity: AgentRunActivity,
-    createdAt: String
+    createdAt: String,
+    sequence: Int64? = nil
   ) {
     self.id = id
     self.runID = runID
     self.conversationID = conversationID
     self.activity = activity
     self.createdAt = createdAt
+    self.sequence = sequence
+  }
+}
+
+public extension WorkspaceRunActivityRecord {
+  static func precedes(_ lhs: Self, _ rhs: Self) -> Bool {
+    if lhs.runID != rhs.runID { return lhs.runID < rhs.runID }
+    if let left = lhs.activity.position, let right = rhs.activity.position, left != right {
+      return left < right
+    }
+    if lhs.createdAt != rhs.createdAt { return lhs.createdAt < rhs.createdAt }
+    if (lhs.sequence != nil) != (rhs.sequence != nil) { return lhs.sequence != nil }
+    if let left = lhs.sequence, let right = rhs.sequence, left != right {
+      return left < right
+    }
+    return lhs.id < rhs.id
   }
 }

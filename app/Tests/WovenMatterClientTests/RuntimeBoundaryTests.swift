@@ -149,7 +149,32 @@ struct RuntimeBoundaryTests {
     } == .endTurn)
     #expect(await client.sessionConfiguration().slashCommands.isEmpty)
     await client.shutdown()
-    #expect(await events.text() == "Hello from fake ACP")
+    #expect(await events.text() == "  Hello from fake ACP ")
+  }
+
+  @Test("ACP adapters preserve ordered whitespace and reasoning identities")
+  func acpStreamingVariants() async throws {
+    for runtimeKind in [AgentRuntimeKind.codex, .claudeCode, .grokBuild, .cursor] {
+      let fixture = try FakeACPProcess()
+      defer { fixture.remove() }
+      let events = EventCollector()
+      let client = try LocalACPClient.start(
+        launch: .init(runtimeKind: runtimeKind, executableURL: fixture.executable, arguments: []),
+        workingDirectory: fixture.directory
+      )
+      _ = try await client.initializeSession(workingDirectory: fixture.directory,
+                                             existingSessionID: nil, title: "Fixture")
+      _ = try await client.prompt("Hello") { event in await events.record(event) }
+      let values = await events.values()
+      let thoughts = values.compactMap { event -> AgentRunActivity? in
+        guard case .activity(let activity, _) = event, activity.kind == .thought else { return nil }
+        return activity
+      }
+      #expect(thoughts.map(\.content) == [" first\n", " second "])
+      #expect(thoughts.count == 2 && thoughts[0].id != thoughts[1].id)
+      #expect(await events.text() == "  Hello from fake ACP ")
+      await client.shutdown()
+    }
   }
 
   @Test("remote commands preserve data and reject unsafe input")
@@ -324,7 +349,7 @@ struct RuntimeBoundaryTests {
     let argumentsFile = fixture.url.appending(path: "arguments")
     try """
       #!/bin/sh
-      printf '%s\\n' "$@" > "\(argumentsFile.path)"
+            printf '%s\\n' "$@" > "\(argumentsFile.path)"
       prefix=''
       while [ "$#" -gt 0 ]; do
         if [ "$1" = '--prefix' ]; then
@@ -461,11 +486,14 @@ private actor InstallerDownloads {
 }
 
 private actor EventCollector {
+  private var events: [LocalACPEvent] = []
   private var collected = ""
   func record(_ event: LocalACPEvent) {
+    events.append(event)
     if case .assistantChunk(let text) = event { collected += text }
   }
   func text() -> String { collected }
+  func values() -> [LocalACPEvent] { events }
 }
 
 private struct FakeACPProcess {
@@ -480,16 +508,27 @@ private struct FakeACPProcess {
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     try """
       #!/bin/sh
-      IFS= read -r request
-      printf '%s\\n' '{"jsonrpc":"2.0","id":0,"result":{"protocolVersion":1,"agentCapabilities":{"loadSession":false}}}'
-      IFS= read -r request
-      printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fake-session","update":{"sessionUpdate":"available_commands_update","availableCommands":[{"name":"review","description":"Review changes","input":{"hint":"[scope]"}},{"name":"review"},{"name":""}]}}}'
-      printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fake-session","update":{"sessionUpdate":"config_option_update","configOptions":[{"id":"model","name":"Model","category":"model","type":"select","currentValue":"fixture-model","options":[{"value":"fixture-model","name":"Fixture"}]}]}}}'
-      printf '%s\\n' '{"jsonrpc":"2.0","id":1,"result":{"sessionId":"fake-session"}}'
-      IFS= read -r request
-      printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fake-session","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Hello from fake ACP"}}}}'
-      printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fake-session","update":{"sessionUpdate":"available_commands_update","availableCommands":[]}}}'
-      printf '%s\\n' '{"jsonrpc":"2.0","id":2,"result":{"stopReason":"end_turn"}}'
+      while IFS= read -r request; do
+        request_id=$(printf '%s' "$request" | sed -E 's/.*"id":([0-9]+).*/\\1/')
+        case "$request" in
+          *'"method":"initialize"'*)
+            printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":1,"agentCapabilities":{"loadSession":false}}}\\n' "$request_id" ;;
+          *'"method":"authenticate"'*)
+            printf '{"jsonrpc":"2.0","id":%s,"result":{}}\\n' "$request_id" ;;
+          *'cursor'*'list_available_models'*)
+            printf '{"jsonrpc":"2.0","id":%s,"result":{"models":[]}}\\n' "$request_id" ;;
+          *'session'*'new'*)
+            printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fake-session","update":{"sessionUpdate":"available_commands_update","availableCommands":[{"name":"review","description":"Review changes","input":{"hint":"[scope]"}},{"name":"review"},{"name":""}]}}}'
+            printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fake-session","update":{"sessionUpdate":"config_option_update","configOptions":[{"id":"model","name":"Model","category":"model","type":"select","currentValue":"fixture-model","options":[{"value":"fixture-model","name":"Fixture"}]}]}}}'
+            printf '{"jsonrpc":"2.0","id":%s,"result":{"sessionId":"fake-session"}}\\n' "$request_id" ;;
+          *'session'*'prompt'*)
+            printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fake-session","update":{"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":" first\\n"}}}}'
+            printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fake-session","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"  Hello from fake ACP "}}}}'
+            printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fake-session","update":{"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":" second "}}}}'
+            printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fake-session","update":{"sessionUpdate":"available_commands_update","availableCommands":[]}}}'
+            printf '{"jsonrpc":"2.0","id":%s,"result":{"stopReason":"end_turn"}}\\n' "$request_id" ;;
+        esac
+      done
       """.write(to: executable, atomically: true, encoding: .utf8)
     try FileManager.default.setAttributes(
       [.posixPermissions: 0o700], ofItemAtPath: executable.path
