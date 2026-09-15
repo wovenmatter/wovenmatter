@@ -418,19 +418,15 @@ struct DashboardDatabasesView: View {
     }
 
     private var remoteWorkspaceMenu: some View {
-        Menu {
-            Picker("Remote workspace", selection: $remoteWorkspaceFilterID) {
-                Text("All remote workspaces").tag(String?.none)
-                ForEach(model.remoteWorkspaces.workspaces) { workspace in
-                    Text(workspace.name).tag(Optional(ApplicationModel.remoteDatabaseSourceID(workspace.id)))
-                }
+        Picker("Remote workspace", selection: $remoteWorkspaceFilterID) {
+            Text("All remote workspaces").tag(String?.none)
+            ForEach(model.remoteWorkspaces.workspaces) { workspace in
+                Text(workspace.name).tag(Optional(ApplicationModel.remoteDatabaseSourceID(workspace.id)))
             }
-        } label: {
-            Text(model.remoteWorkspaces.workspaces.first {
-                ApplicationModel.remoteDatabaseSourceID($0.id) == remoteWorkspaceFilterID
-            }?.name ?? "All remote workspaces")
-                .lineLimit(1)
         }
+        .pickerStyle(.menu)
+        .labelsHidden()
+        .lineLimit(1)
         .menuStyle(.borderlessButton)
         .accessibilityLabel("Filter remote workspaces")
         .accessibilityValue(model.remoteWorkspaces.workspaces.first {
