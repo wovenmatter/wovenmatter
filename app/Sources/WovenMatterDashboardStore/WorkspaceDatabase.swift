@@ -555,6 +555,352 @@ public final class WorkspaceDatabase: @unchecked Sendable {
     }
   }
 
+  public func openClawGatewaySessions(agentID: UUID) throws -> [(conversationID: String, sessionKey: String)] {
+    try lock.withLock {
+      let statement = try prepareUnlocked("""
+        SELECT s.conversation_id, s.session_key FROM desktop_openclaw_gateway_sessions s
+        JOIN dashboard_conversations c ON c.id = s.conversation_id
+        WHERE s.agent_id = ? AND c.deleted_at IS NULL AND c.is_archived = 0
+        """)
+      defer { sqlite3_finalize(statement) }
+      try bind(agentID.uuidString.lowercased(), at: 1, to: statement)
+      var rows: [(String, String)] = []
+      while true {
+        let code = sqlite3_step(statement)
+        if code == SQLITE_DONE { return rows }
+        guard code == SQLITE_ROW else { throw stepError() }
+        rows.append((try text(statement, column: 0), try text(statement, column: 1)))
+      }
+    }
+  }
+
+  /// Import the native session key directly; never synthesize a new upstream chat.
+  public func importOpenClawGatewaySession(agentID: UUID, session: OpenClawGatewaySession) throws -> String {
+    try transaction {
+      let id = try importOpenClawGatewaySessionUnlocked(agentID: agentID, session: session)
+      try markOpenClawImportActivityUnlocked(conversationID: id)
+      return id
+    }
+  }
+
+  /// All pages have already been fetched. Commit the complete import atomically;
+  /// a failed page decode/database write leaves no partial imported conversation.
+  func importOpenClawGatewaySession(agentID: UUID, session: OpenClawGatewaySession,
+                                   historyPages: [URL], liveRunIDs: Set<String>) throws -> String {
+    try transaction {
+      let id = try importOpenClawGatewaySessionUnlocked(agentID: agentID, session: session)
+      for page in historyPages {
+        try Task.checkCancellation()
+        let history = try JSONDecoder().decode(OpenClawGatewayHistory.self, from: Data(contentsOf: page))
+        try synchronizeOpenClawHistoryUnlocked(conversationID: id, history: history, liveRunIDs: liveRunIDs)
+      }
+      try markOpenClawImportActivityUnlocked(conversationID: id)
+      return id
+    }
+  }
+
+  public func knownOpenClawSessionKeys(agentID: UUID) throws -> Set<String> {
+    try knownSessionIDs(sql: "SELECT session_key FROM desktop_openclaw_gateway_sessions WHERE agent_id = ?", scope: agentID.uuidString.lowercased())
+  }
+
+  public func knownOpenCodeSessionIDs(connectionID: String) throws -> Set<String> {
+    try knownSessionIDs(sql: "SELECT session_id FROM desktop_opencode_sessions WHERE connection_id = ?", scope: connectionID)
+  }
+
+  private func knownSessionIDs(sql: String, scope: String) throws -> Set<String> {
+    try lock.withLock {
+      let statement = try prepareUnlocked(sql)
+      defer { sqlite3_finalize(statement) }
+      try bind(scope, at: 1, to: statement)
+      var ids: Set<String> = []
+      while true {
+        let code = sqlite3_step(statement)
+        if code == SQLITE_DONE { return ids }
+        guard code == SQLITE_ROW else { throw stepError() }
+        ids.insert(try text(statement, column: 0))
+      }
+    }
+  }
+
+  private func markSessionImportedUnlocked(conversationID: String) throws {
+    let statement = try prepareUnlocked("INSERT OR IGNORE INTO desktop_session_imports (conversation_id, imported_at) VALUES (?, ?)")
+    defer { sqlite3_finalize(statement) }
+    try bind(conversationID, at: 1, to: statement)
+    try bind(Self.timestamp(Date()), at: 2, to: statement)
+    try stepDone(statement)
+  }
+
+  private func markOpenClawImportActivityUnlocked(conversationID: String) throws {
+    try markSessionImportedUnlocked(conversationID: conversationID)
+    let timestamp = Self.timestamp(Date())
+    let marker = try prepareUnlocked("INSERT INTO desktop_openclaw_import_activity (conversation_id, imported_at) VALUES (?, ?) ON CONFLICT(conversation_id) DO UPDATE SET imported_at = excluded.imported_at")
+    defer { sqlite3_finalize(marker) }
+    try bind(conversationID, at: 1, to: marker)
+    try bind(timestamp, at: 2, to: marker)
+    try stepDone(marker)
+    let touch = try prepareUnlocked("UPDATE dashboard_conversations SET last_message_at = MAX(COALESCE(last_message_at, ''), ?), updated_at = ? WHERE id = ?")
+    defer { sqlite3_finalize(touch) }
+    try bind(timestamp, at: 1, to: touch)
+    try bind(timestamp, at: 2, to: touch)
+    try bind(conversationID, at: 3, to: touch)
+    try stepDone(touch)
+  }
+
+  private func importOpenClawGatewaySessionUnlocked(agentID: UUID, session: OpenClawGatewaySession) throws -> String {
+    let existing = try prepareUnlocked("""
+      SELECT s.conversation_id FROM desktop_openclaw_gateway_sessions s
+      JOIN dashboard_conversations c ON c.id = s.conversation_id
+      WHERE s.agent_id = ? AND s.session_key = ? AND c.deleted_at IS NULL LIMIT 1
+      """)
+    defer { sqlite3_finalize(existing) }
+    try bind(agentID.uuidString.lowercased(), at: 1, to: existing)
+    try bind(session.key, at: 2, to: existing)
+    let code = sqlite3_step(existing)
+    if code == SQLITE_ROW {
+      let id = try text(existing, column: 0)
+      let restore = try prepareUnlocked("UPDATE dashboard_conversations SET is_archived = 0 WHERE id = ?")
+      defer { sqlite3_finalize(restore) }
+      try bind(id, at: 1, to: restore)
+      try stepDone(restore)
+      return id
+    }
+    guard code == SQLITE_DONE else { throw stepError() }
+    let id = UUID().uuidString.lowercased()
+    let timestamp = Self.timestamp(Date())
+    let conversation = try prepareUnlocked("""
+      INSERT INTO dashboard_conversations (
+        id, user_id, agent_id, agent_codename, governing_plane, authority_kind,
+        authority_device_id, authority_agent_id, title, kind, is_deletable,
+        created_at, updated_at, last_message_at, desktop_owned
+      ) SELECT ?, user_id, id, codename, 'wovenmatter_macos', 'device_owned',
+        authority_device_id, id, ?, 'local_acp', 1, ?, ?, ?, 1
+      FROM dashboard_agents WHERE id = ? AND desktop_owned = 1 AND deleted_at IS NULL
+      """)
+    defer { sqlite3_finalize(conversation) }
+    for (index, value) in [id, session.title, timestamp, timestamp, timestamp, agentID.uuidString.lowercased()].enumerated() {
+      try bind(value, at: Int32(index + 1), to: conversation)
+    }
+    try stepDone(conversation)
+    guard sqlite3_changes(connection) == 1 else { throw LocalACPSessionDatabaseError.sessionNotFound }
+    let local = try prepareUnlocked("""
+      INSERT INTO desktop_local_acp_sessions (
+        conversation_id, agent_id, runtime_kind, governing_plane, authority_kind,
+        authority_device_id, authority_agent_id, title, acp_session_id, created_at, updated_at
+      ) SELECT id, agent_id, 'openclaw', governing_plane, authority_kind,
+        authority_device_id, authority_agent_id, title, ?, ?, ?
+      FROM dashboard_conversations WHERE id = ?
+      """)
+    defer { sqlite3_finalize(local) }
+    for (index, value) in [session.key, timestamp, timestamp, id].enumerated() {
+      try bind(value, at: Int32(index + 1), to: local)
+    }
+    try stepDone(local)
+    let gateway = try prepareUnlocked("""
+      INSERT INTO desktop_openclaw_gateway_sessions
+        (conversation_id, agent_id, session_key, created_at, updated_at) VALUES (?, ?, ?, ?, ?)
+      """)
+    defer { sqlite3_finalize(gateway) }
+    for (index, value) in [id, agentID.uuidString.lowercased(), session.key, timestamp, timestamp].enumerated() {
+      try bind(value, at: Int32(index + 1), to: gateway)
+    }
+    try stepDone(gateway)
+    return id
+  }
+
+  /// Upsert transcript anchors and reconcile optimistic local rows by idempotency key.
+  /// A tail-page refresh never deletes earlier pages or unconfirmed local input.
+  public func synchronizeOpenClawHistory(
+    conversationID: String, history: OpenClawGatewayHistory,
+    liveRunIDs: Set<String> = []
+  ) throws {
+    try transaction {
+      try synchronizeOpenClawHistoryUnlocked(conversationID: conversationID, history: history, liveRunIDs: liveRunIDs)
+    }
+  }
+
+  private func synchronizeOpenClawHistoryUnlocked(
+    conversationID: String, history: OpenClawGatewayHistory,
+    liveRunIDs: Set<String> = []
+  ) throws {
+    let now = Self.timestamp(Date())
+    var claimedLocalMessages: Set<String> = []
+    var anchors: [(entry: String, message: String, history: OpenClawGatewayHistoryMessage)] = []
+    let stored = try prepareUnlocked("SELECT entry_id, message_id, payload FROM desktop_openclaw_transcript_entries WHERE conversation_id = ?")
+    defer { sqlite3_finalize(stored) }
+    try bind(conversationID, at: 1, to: stored)
+    while true {
+      let code = sqlite3_step(stored)
+      if code == SQLITE_DONE { break }
+      guard code == SQLITE_ROW else { throw stepError() }
+      let payload = try JSONDecoder().decode(GatewayJSONValue.self, from: blob(stored, column: 2))
+      if let history = OpenClawGatewayHistoryMessage(payload: payload) {
+        anchors.append((try text(stored, column: 0), try text(stored, column: 1), history))
+      }
+    }
+    let identities = Dictionary(grouping: history.messages.compactMap { message in
+      message.transcriptIdentity.map { ($0, message.id) }
+    }, by: { $0.0 })
+    for message in history.messages.reversed() {
+      let digest = SHA256.hash(data: Data((conversationID + ":" + message.id).utf8))
+        .map { String(format: "%02x", $0) }.joined()
+      // Only a unique native record projection can supersede earlier content.
+      let uniqueIdentity = message.transcriptIdentity.flatMap { identity in
+        Set(identities[identity, default: []].map { $0.1 }).count == 1 ? identity : nil
+      }
+      let exact = anchors.filter { $0.entry == message.id }
+      let revisions = anchors.filter {
+        uniqueIdentity != nil && $0.history.transcriptIdentity == uniqueIdentity
+          && message.gatewayRunID != nil && $0.history.gatewayRunID == message.gatewayRunID
+          && $0.history.runID == message.runID
+      }
+      // An exact projected sibling must never absorb another sibling, including
+      // when a later byte-bounded page contains only one of them.
+      let matching = !exact.isEmpty ? exact : (revisions.count == 1 ? revisions : [])
+      var id = matching.first?.message ?? "gateway:" + digest
+      if message.nativeRole == "user" || message.isAssistantResponse {
+        // An exact persisted input key wins (including steering). Provider keys
+        // that do not name an input fall back to the explicit Gateway run ID.
+        for remoteRunID in [message.runID, message.gatewayRunID].compactMap({ $0 }) {
+          let existing = try prepareUnlocked("""
+            SELECT id FROM dashboard_messages WHERE conversation_id = ? AND role = ?
+              AND message_source = 'local_acp' AND id = COALESCE(
+                (SELECT CASE WHEN ? = 'user' THEN user_message_id ELSE assistant_message_id END
+                 FROM desktop_openclaw_run_inputs WHERE conversation_id = ? AND remote_run_id = ?),
+                (SELECT id FROM dashboard_messages WHERE conversation_id = ? AND run_id = ? AND role = ?
+                 AND message_source = 'local_acp' ORDER BY created_at DESC LIMIT 1))
+            """)
+          defer { sqlite3_finalize(existing) }
+          for (index, value) in [conversationID, message.role, message.role, conversationID, remoteRunID,
+                                conversationID, remoteRunID, message.role].enumerated() {
+            try bind(value, at: Int32(index + 1), to: existing)
+          }
+          let code = sqlite3_step(existing)
+          if code == SQLITE_DONE { continue }
+          guard code == SQLITE_ROW else { throw stepError() }
+          let candidate = try text(existing, column: 0)
+          let previous = anchors.filter { $0.message == candidate }
+          if !claimedLocalMessages.contains(candidate), previous.allSatisfy({ anchor in
+            matching.contains { $0.entry == anchor.entry }
+          }) { id = candidate }
+          // A known input must not fall through to another execution's row.
+          break
+        }
+      }
+      claimedLocalMessages.insert(id)
+      for old in matching where old.message != id || old.entry != message.id {
+        let remap = try prepareUnlocked("DELETE FROM desktop_openclaw_transcript_entries WHERE conversation_id = ? AND entry_id = ?")
+        defer { sqlite3_finalize(remap) }
+        try bind(conversationID, at: 1, to: remap); try bind(old.entry, at: 2, to: remap)
+        try stepDone(remap)
+        if old.message != id {
+          // Never delete the optimistic row or any run/trace-owned message.
+          let remove = try prepareUnlocked("""
+            DELETE FROM dashboard_messages WHERE id = ? AND conversation_id = ?
+              AND message_source = 'openclaw_history' AND run_id IS NULL
+              AND id NOT IN (SELECT message_id FROM desktop_openclaw_transcript_entries)
+              AND id NOT IN (SELECT message_id FROM dashboard_message_attachments)
+              AND id NOT IN (SELECT message_id FROM dashboard_message_references)
+              AND NOT EXISTS (SELECT 1 FROM dashboard_runs WHERE user_message_id = dashboard_messages.id OR assistant_message_id = dashboard_messages.id)
+              AND NOT EXISTS (SELECT 1 FROM desktop_openclaw_run_inputs WHERE user_message_id = dashboard_messages.id OR assistant_message_id = dashboard_messages.id)
+            """)
+          defer { sqlite3_finalize(remove) }
+          try bind(old.message, at: 1, to: remove); try bind(conversationID, at: 2, to: remove)
+          try stepDone(remove)
+        }
+      }
+      anchors.removeAll { anchor in matching.contains { $0.entry == anchor.entry } }
+      anchors.append((message.id, id, message))
+      let retained = try prepareUnlocked("""
+        INSERT INTO desktop_openclaw_transcript_entries (conversation_id, entry_id, message_id, payload)
+        VALUES (?, ?, ?, ?) ON CONFLICT(conversation_id, entry_id)
+        DO UPDATE SET payload = excluded.payload, message_id = excluded.message_id
+        """)
+      defer { sqlite3_finalize(retained) }
+      try bind(conversationID, at: 1, to: retained)
+      try bind(message.id, at: 2, to: retained)
+      try bind(id, at: 3, to: retained)
+      try bind(message.raw, at: 4, to: retained)
+      try stepDone(retained)
+      // A history snapshot may lag a live streamed item. Do not rewind it.
+      if message.role == "assistant", [message.runID, message.gatewayRunID].compactMap({ $0 }).contains(where: liveRunIDs.contains) { continue }
+      let row = try prepareUnlocked("""
+        INSERT INTO dashboard_messages (
+          id, conversation_id, role, message_source, content, status, governing_plane,
+          authority_kind, authority_device_id, authority_agent_id, created_at, updated_at, desktop_owned
+        ) SELECT ?, id, ?, 'openclaw_history', ?, ?, governing_plane,
+          authority_kind, authority_device_id, authority_agent_id, ?, ?, 1
+        FROM dashboard_conversations WHERE id = ? AND deleted_at IS NULL
+        ON CONFLICT(id) DO UPDATE SET content = excluded.content,
+          status = CASE WHEN dashboard_messages.status = 'streaming' THEN dashboard_messages.status ELSE excluded.status END,
+          updated_at = excluded.updated_at
+        """)
+      defer { sqlite3_finalize(row) }
+      let content = message.text.isEmpty ? (message.terminalError ?? "") : message.text
+      for (index, value) in [id, message.role, content, message.terminalError == nil ? "completed" : "failed", Self.timestamp(message.date), now, conversationID].enumerated() {
+        try bind(value, at: Int32(index + 1), to: row)
+      }
+      try stepDone(row)
+    }
+    let touch = try prepareUnlocked("""
+      UPDATE dashboard_conversations SET last_message_at = MAX(
+        COALESCE((SELECT imported_at FROM desktop_openclaw_import_activity WHERE conversation_id = dashboard_conversations.id), ''),
+        COALESCE((SELECT MAX(created_at) FROM dashboard_messages WHERE conversation_id = ?), last_message_at)
+      ), updated_at = ? WHERE id = ?
+      """)
+    defer { sqlite3_finalize(touch) }
+    try bind(conversationID, at: 1, to: touch)
+    try bind(now, at: 2, to: touch)
+    try bind(conversationID, at: 3, to: touch)
+    try stepDone(touch)
+  }
+
+  public func interruptedOpenClawRuns(conversationID: String) throws -> [LocalACPRunIdentifiers] {
+    try lock.withLock {
+      let statement = try prepareUnlocked("""
+        SELECT id, user_message_id, assistant_message_id FROM dashboard_runs
+        WHERE conversation_id = ? AND desktop_owned = 1 AND status = 'running'
+        """)
+      defer { sqlite3_finalize(statement) }
+      try bind(conversationID, at: 1, to: statement)
+      var rows: [LocalACPRunIdentifiers] = []
+      while true {
+        let code = sqlite3_step(statement)
+        if code == SQLITE_DONE { return rows }
+        guard code == SQLITE_ROW else { throw stepError() }
+        rows.append(LocalACPRunIdentifiers(runID: try text(statement, column: 0),
+          userMessageID: try text(statement, column: 1), assistantMessageID: try text(statement, column: 2)))
+      }
+    }
+  }
+
+  public func openClawRunAssistantIDs(runID: String) throws -> [String: String] {
+    try lock.withLock {
+      let statement = try prepareUnlocked("SELECT remote_run_id, assistant_message_id FROM desktop_openclaw_run_inputs WHERE local_run_id = ?")
+      defer { sqlite3_finalize(statement) }
+      try bind(runID, at: 1, to: statement)
+      var result: [String: String] = [:]
+      while true {
+        let code = sqlite3_step(statement)
+        if code == SQLITE_DONE { return result }
+        guard code == SQLITE_ROW else { throw stepError() }
+        result[try text(statement, column: 0)] = try text(statement, column: 1)
+      }
+    }
+  }
+
+  private func recordOpenClawInputUnlocked(conversationID: String, localRunID: String, remoteRunID: String,
+                                          userMessageID: String, assistantMessageID: String) throws {
+    let statement = try prepareUnlocked("""
+      INSERT INTO desktop_openclaw_run_inputs (conversation_id, local_run_id, remote_run_id, user_message_id, assistant_message_id)
+      SELECT ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM desktop_openclaw_gateway_sessions WHERE conversation_id = ?)
+      """)
+    defer { sqlite3_finalize(statement) }
+    for (index, value) in [conversationID, localRunID, remoteRunID, userMessageID, assistantMessageID, conversationID].enumerated() {
+      try bind(value, at: Int32(index + 1), to: statement)
+    }
+    try stepDone(statement)
+  }
+
   public func openClawGatewaySession(
     conversationID: String
   ) throws -> (agentID: UUID, sessionKey: String, preferences: OpenClawSessionPreferences) {
@@ -600,6 +946,144 @@ public final class WorkspaceDatabase: @unchecked Sendable {
       guard sqlite3_changes(connection) == 1 else {
         throw LocalACPSessionDatabaseError.sessionNotFound
       }
+    }
+  }
+
+  /// Routes and receipts are local delivery state, separate from scheduler execution.
+  /// A missing route leaves results in the cron library until the user chooses a destination.
+  public func openClawResultRoutes(agentID: UUID) throws -> [String: String] {
+    try lock.withLock {
+      let statement = try prepareUnlocked("SELECT job_id, destination FROM desktop_scheduled_result_routes WHERE provider = 'openclaw' AND agent_id = ?")
+      defer { sqlite3_finalize(statement) }
+      try bind(agentID.uuidString.lowercased(), at: 1, to: statement)
+      var routes: [String: String] = [:]
+      while true {
+        let code = sqlite3_step(statement)
+        if code == SQLITE_DONE { return routes }
+        guard code == SQLITE_ROW else { throw stepError() }
+        routes[try text(statement, column: 0)] = try text(statement, column: 1)
+      }
+    }
+  }
+
+  public func setOpenClawResultRoute(agentID: UUID, jobID: String, destination: String) throws {
+    try transaction {
+      if !destination.isEmpty && destination != "new" {
+        try validateScheduledResultDestinationUnlocked(agentID: agentID, conversationID: destination)
+      }
+      let statement = try prepareUnlocked("""
+        INSERT INTO desktop_scheduled_result_routes(provider, agent_id, job_id, destination)
+        VALUES ('openclaw', ?, ?, ?) ON CONFLICT(provider, agent_id, job_id)
+        DO UPDATE SET destination = excluded.destination
+        """)
+      defer { sqlite3_finalize(statement) }
+      for (index, value) in [agentID.uuidString.lowercased(), jobID, destination].enumerated() {
+        try bind(value, at: Int32(index + 1), to: statement)
+      }
+      try stepDone(statement)
+    }
+  }
+
+  public func collectedOpenClawResultIDs(agentID: UUID, jobID: String) throws -> Set<String> {
+    try lock.withLock {
+      let statement = try prepareUnlocked("SELECT run_id FROM desktop_scheduled_result_receipts WHERE provider = 'openclaw' AND agent_id = ? AND job_id = ?")
+      defer { sqlite3_finalize(statement) }
+      try bind(agentID.uuidString.lowercased(), at: 1, to: statement)
+      try bind(jobID, at: 2, to: statement)
+      var ids: Set<String> = []
+      while true {
+        let code = sqlite3_step(statement)
+        if code == SQLITE_DONE { return ids }
+        guard code == SQLITE_ROW else { throw stepError() }
+        ids.insert(try text(statement, column: 0))
+      }
+    }
+  }
+
+  private func validateScheduledResultDestinationUnlocked(agentID: UUID, conversationID: String) throws {
+    let statement = try prepareUnlocked("""
+      SELECT 1 FROM dashboard_conversations c
+      JOIN desktop_openclaw_gateway_sessions s ON s.conversation_id = c.id
+      WHERE c.id = ? AND s.agent_id = ? AND c.deleted_at IS NULL
+        AND c.is_archived = 0 AND c.desktop_owned = 1
+      """)
+    defer { sqlite3_finalize(statement) }
+    try bind(conversationID, at: 1, to: statement)
+    try bind(agentID.uuidString.lowercased(), at: 2, to: statement)
+    let code = sqlite3_step(statement)
+    if code == SQLITE_DONE {
+      throw OpenClawGatewayClientError.rejected("The scheduled-result conversation is unavailable. Choose another destination in Cron Jobs.")
+    }
+    guard code == SQLITE_ROW else { throw stepError() }
+  }
+
+  /// The receipt, message and unread state commit together. A retry, route change,
+  /// app restart or deleted conversation cannot cause an acknowledged run to reappear.
+  @discardableResult
+  public func collectOpenClawResult(_ run: OpenClawCronRun, title: String, output: String,
+                                   destination: String, collectedAt: Date = Date()) throws -> String? {
+    try transaction {
+      let agent = run.agentID.uuidString.lowercased()
+      let receipt = try prepareUnlocked("SELECT 1 FROM desktop_scheduled_result_receipts WHERE provider = 'openclaw' AND agent_id = ? AND job_id = ? AND run_id = ?")
+      defer { sqlite3_finalize(receipt) }
+      for (index, value) in [agent, run.jobID, run.id].enumerated() {
+        try bind(value, at: Int32(index + 1), to: receipt)
+      }
+      let code = sqlite3_step(receipt)
+      if code == SQLITE_ROW { return nil }
+      guard code == SQLITE_DONE else { throw stepError() }
+      // Recheck routing inside the transaction after any asynchronous history fetch.
+      let route = try prepareUnlocked("SELECT destination FROM desktop_scheduled_result_routes WHERE provider = 'openclaw' AND agent_id = ? AND job_id = ?")
+      defer { sqlite3_finalize(route) }
+      try bind(agent, at: 1, to: route)
+      try bind(run.jobID, at: 2, to: route)
+      let routeCode = sqlite3_step(route)
+      if routeCode == SQLITE_DONE { return nil }
+      guard routeCode == SQLITE_ROW else { throw stepError() }
+      guard !destination.isEmpty, try text(route, column: 0) == destination else { return nil }
+      let conversationID: String
+      if destination == "new" {
+        guard let nativeAgent = run.nativeSessionKey.flatMap(OpenClawGatewaySession.agentID(for:)) else {
+          throw OpenClawGatewayClientError.rejected("This run has no native agent identity for a new conversation. Choose an existing conversation.")
+        }
+        let key = "agent:\(nativeAgent):wovenmatter:scheduled:\(UUID().uuidString.lowercased())"
+        guard let session = OpenClawGatewaySession(payload: .object(["key": .string(key), "title": .string(title)])) else {
+          throw WorkspaceDatabaseError.corruptRow
+        }
+        conversationID = try importOpenClawGatewaySessionUnlocked(agentID: run.agentID, session: session)
+      } else {
+        conversationID = destination
+        try validateScheduledResultDestinationUnlocked(agentID: run.agentID, conversationID: conversationID)
+      }
+      let messageID = UUID().uuidString.lowercased()
+      let now = Self.timestamp(collectedAt)
+      let message = try prepareUnlocked("""
+        INSERT INTO dashboard_messages(id, conversation_id, role, message_source, content,
+          status, governing_plane, authority_kind, authority_device_id, authority_agent_id,
+          created_at, updated_at, desktop_owned)
+        SELECT ?, id, 'assistant', 'scheduled_result', ?, 'completed', governing_plane,
+          authority_kind, authority_device_id, authority_agent_id, ?, ?, 1
+        FROM dashboard_conversations WHERE id = ?
+        """)
+      defer { sqlite3_finalize(message) }
+      let body = "**\(title)**\n\n\(output)\n\nJob: \(run.jobID) · Run: \(run.id) · \(run.status)"
+      for (index, value) in [messageID, body, now, now, conversationID].enumerated() {
+        try bind(value, at: Int32(index + 1), to: message)
+      }
+      try stepDone(message)
+      let touch = try prepareUnlocked("UPDATE dashboard_conversations SET unread = 1, last_message_at = MAX(COALESCE(last_message_at, ''), ?), last_message_preview = ?, updated_at = ? WHERE id = ?")
+      defer { sqlite3_finalize(touch) }
+      for (index, value) in [now, String(output.prefix(240)), now, conversationID].enumerated() {
+        try bind(value, at: Int32(index + 1), to: touch)
+      }
+      try stepDone(touch)
+      let ack = try prepareUnlocked("INSERT INTO desktop_scheduled_result_receipts(provider, agent_id, job_id, run_id, conversation_id, message_id, collected_at) VALUES ('openclaw', ?, ?, ?, ?, ?, ?)")
+      defer { sqlite3_finalize(ack) }
+      for (index, value) in [agent, run.jobID, run.id, conversationID, messageID, now].enumerated() {
+        try bind(value, at: Int32(index + 1), to: ack)
+      }
+      try stepDone(ack)
+      return conversationID
     }
   }
 
@@ -668,36 +1152,77 @@ public final class WorkspaceDatabase: @unchecked Sendable {
         try bind(id, at: 3, to: deleted)
         try stepDone(deleted)
       }
-      let runStatement = try prepareUnlocked("""
-        INSERT INTO desktop_openclaw_cron_runs (
-          agent_id, remote_run_id, remote_job_id, status, output,
-          native_session_id, native_session_key, started_at, completed_at,
-          remote_payload
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(agent_id, remote_run_id) DO UPDATE SET
-          remote_job_id = excluded.remote_job_id, status = excluded.status,
-          output = excluded.output,
-          native_session_id = excluded.native_session_id,
-          native_session_key = excluded.native_session_key,
-          started_at = excluded.started_at, completed_at = excluded.completed_at,
-          remote_payload = excluded.remote_payload
+      try saveOpenClawRunsUnlocked(runs)
+    }
+  }
+
+  private func saveOpenClawRunsUnlocked(_ runs: [OpenClawCronRun], fullOutput: Bool = false) throws {
+    let runStatement = try prepareUnlocked("""
+      INSERT INTO desktop_openclaw_cron_runs (
+        agent_id, remote_run_id, remote_job_id, status, output,
+        native_session_id, native_session_key, started_at, completed_at,
+        remote_payload, full_output
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(agent_id, remote_run_id) DO UPDATE SET
+        remote_job_id = excluded.remote_job_id, status = excluded.status,
+        output = CASE WHEN full_output = 1 AND excluded.full_output = 0 THEN output ELSE excluded.output END,
+        full_output = MAX(full_output, excluded.full_output),
+        native_session_id = excluded.native_session_id,
+        native_session_key = excluded.native_session_key,
+        started_at = excluded.started_at, completed_at = excluded.completed_at,
+        remote_payload = excluded.remote_payload
+      """)
+    defer { sqlite3_finalize(runStatement) }
+    for run in runs {
+      let rawAgentID = run.agentID.uuidString.lowercased()
+      sqlite3_reset(runStatement)
+      sqlite3_clear_bindings(runStatement)
+      try bind(rawAgentID, at: 1, to: runStatement)
+      try bind(run.id, at: 2, to: runStatement)
+      try bind(run.jobID, at: 3, to: runStatement)
+      try bind(run.status, at: 4, to: runStatement)
+      try bindNullable(run.output, at: 5, to: runStatement)
+      try bindNullable(run.nativeSessionID, at: 6, to: runStatement)
+      try bindNullable(run.nativeSessionKey, at: 7, to: runStatement)
+      try bindNullable(run.startedAt.map(Self.timestamp), at: 8, to: runStatement)
+      try bindNullable(run.completedAt.map(Self.timestamp), at: 9, to: runStatement)
+      try bind(run.remotePayload, at: 10, to: runStatement)
+      guard sqlite3_bind_int(runStatement, 11, fullOutput ? 1 : 0) == SQLITE_OK else { throw bindError() }
+      try stepDone(runStatement)
+    }
+  }
+
+  public func retainedOpenClawResult(agentID: UUID, runID: String) throws -> String? {
+    try lock.withLock {
+      let statement = try prepareUnlocked("SELECT output FROM desktop_openclaw_cron_runs WHERE agent_id = ? AND remote_run_id = ? AND full_output = 1")
+      defer { sqlite3_finalize(statement) }
+      try bind(agentID.uuidString.lowercased(), at: 1, to: statement)
+      try bind(runID, at: 2, to: statement)
+      let code = sqlite3_step(statement)
+      if code == SQLITE_DONE { return nil }
+      guard code == SQLITE_ROW else { throw stepError() }
+      return optionalText(statement, column: 0)
+    }
+  }
+
+  public func retainOpenClawResult(_ run: OpenClawCronRun, title: String, output: String) throws {
+    try transaction {
+      // Deleted native jobs still need a visible home for pending results.
+      let job = try prepareUnlocked("""
+        INSERT OR IGNORE INTO desktop_openclaw_cron_jobs
+          (agent_id, remote_job_id, name, schedule, enabled, archive_state, remote_payload, updated_at)
+        VALUES (?, ?, ?, 'Schedule unavailable', 0, 'deleted', ?, ?)
         """)
-      defer { sqlite3_finalize(runStatement) }
-      for run in runs {
-        sqlite3_reset(runStatement)
-        sqlite3_clear_bindings(runStatement)
-        try bind(rawAgentID, at: 1, to: runStatement)
-        try bind(run.id, at: 2, to: runStatement)
-        try bind(run.jobID, at: 3, to: runStatement)
-        try bind(run.status, at: 4, to: runStatement)
-        try bindNullable(run.output, at: 5, to: runStatement)
-        try bindNullable(run.nativeSessionID, at: 6, to: runStatement)
-        try bindNullable(run.nativeSessionKey, at: 7, to: runStatement)
-        try bindNullable(run.startedAt.map(Self.timestamp), at: 8, to: runStatement)
-        try bindNullable(run.completedAt.map(Self.timestamp), at: 9, to: runStatement)
-        try bind(run.remotePayload, at: 10, to: runStatement)
-        try stepDone(runStatement)
-      }
+      defer { sqlite3_finalize(job) }
+      try bind(run.agentID.uuidString.lowercased(), at: 1, to: job)
+      try bind(run.jobID, at: 2, to: job)
+      try bind(title, at: 3, to: job)
+      try bind(Data("{}".utf8), at: 4, to: job)
+      try bind(Self.timestamp(Date()), at: 5, to: job)
+      try stepDone(job)
+      var retained = run
+      retained.output = output
+      try saveOpenClawRunsUnlocked([retained], fullOutput: true)
     }
   }
 
@@ -1261,7 +1786,7 @@ public final class WorkspaceDatabase: @unchecked Sendable {
       ON CONFLICT(id) DO UPDATE SET
         user_id = excluded.user_id,
         codename = excluded.codename,
-        display_name = excluded.display_name,
+        display_name = CASE WHEN excluded.runtime_kind = 'opencode' THEN dashboard_agents.display_name ELSE excluded.display_name END,
         icon = excluded.icon,
         execution_location = excluded.execution_location,
         agent_bucket = excluded.agent_bucket,
@@ -1571,13 +2096,6 @@ public final class WorkspaceDatabase: @unchecked Sendable {
     }
   }
 
-  private func markSessionImportedUnlocked(conversationID: String) throws {
-    let statement = try prepareUnlocked("INSERT OR IGNORE INTO desktop_session_imports (conversation_id, imported_at) VALUES (?, ?)")
-    defer { sqlite3_finalize(statement) }
-    try bind(conversationID, at: 1, to: statement)
-    try bind(Self.timestamp(Date()), at: 2, to: statement)
-    try stepDone(statement)
-  }
 
 
   public func hermesResultConversation(agentID: UUID, jobID: String, runID: String) throws -> String? {
@@ -1695,9 +2213,10 @@ public final class WorkspaceDatabase: @unchecked Sendable {
     ownerDeviceID: UUID,
     createdAt: Date = Date(),
     openCodeAssociation: (connectionID: String, sessionID: String)? = nil,
+    importedOpenCodeSnapshot: OpenCodeSessionSnapshot? = nil,
     hermesImport: HermesSessionImport? = nil
   ) throws -> String {
-    try transaction { try createLocalACPSessionUnlocked(runtimeKind: runtimeKind, title: title, ownerDeviceID: ownerDeviceID, createdAt: createdAt, openCodeAssociation: openCodeAssociation, hermesImport: hermesImport) }
+    try transaction { try createLocalACPSessionUnlocked(runtimeKind: runtimeKind, title: title, ownerDeviceID: ownerDeviceID, createdAt: createdAt, openCodeAssociation: openCodeAssociation, importedOpenCodeSnapshot: importedOpenCodeSnapshot, hermesImport: hermesImport) }
   }
 
   @discardableResult
@@ -1707,6 +2226,7 @@ public final class WorkspaceDatabase: @unchecked Sendable {
     ownerDeviceID: UUID,
     createdAt: Date = Date(),
     openCodeAssociation: (connectionID: String, sessionID: String)? = nil,
+    importedOpenCodeSnapshot: OpenCodeSessionSnapshot? = nil,
     hermesImport: HermesSessionImport? = nil
   ) throws -> String {
     guard LocalACPRuntimeCatalog.definition(for: runtimeKind) != nil,
@@ -1716,6 +2236,10 @@ public final class WorkspaceDatabase: @unchecked Sendable {
       throw LocalACPSessionDatabaseError.runtimeUnavailable
     }
     if openCodeAssociation != nil && runtimeKind != .opencode { throw LocalACPSessionDatabaseError.runtimeUnavailable }
+    if let snapshot = importedOpenCodeSnapshot {
+      guard let link = openCodeAssociation, snapshot.info["id"].text == link.sessionID,
+            snapshot.olderCursor == nil else { throw WorkspaceDatabaseError.corruptRow }
+    }
     if hermesImport != nil && runtimeKind != .hermes { throw LocalACPSessionDatabaseError.runtimeUnavailable }
 
       if let imported = hermesImport {
@@ -1795,6 +2319,10 @@ public final class WorkspaceDatabase: @unchecked Sendable {
         defer { sqlite3_finalize(association) }
         try bind(conversationID, at: 1, to: association); try bind(link.connectionID, at: 2, to: association)
         try bind(link.sessionID, at: 3, to: association); try stepDone(association)
+      }
+      if let snapshot = importedOpenCodeSnapshot {
+        try markSessionImportedUnlocked(conversationID: conversationID)
+        try saveOpenCodeSnapshotUnlocked(snapshot, conversationID: conversationID, fallbackTitle: sessionTitle)
       }
       if let imported = hermesImport {
         try markSessionImportedUnlocked(conversationID: conversationID)
@@ -2341,6 +2869,8 @@ public final class WorkspaceDatabase: @unchecked Sendable {
       try bind(conversationID, at: 4, to: conversation)
       try stepDone(conversation)
 
+      try recordOpenClawInputUnlocked(conversationID: conversationID, localRunID: identifiers.runID,
+        remoteRunID: identifiers.runID, userMessageID: identifiers.userMessageID, assistantMessageID: identifiers.assistantMessageID)
       return identifiers
     }
   }
@@ -2578,6 +3108,8 @@ public final class WorkspaceDatabase: @unchecked Sendable {
       try bind(authority.conversationID, at: 4, to: conversation)
       try stepDone(conversation)
 
+      try recordOpenClawInputUnlocked(conversationID: authority.conversationID, localRunID: runID,
+        remoteRunID: identifiers.userMessageID, userMessageID: identifiers.userMessageID, assistantMessageID: identifiers.assistantMessageID)
       return identifiers
     }
   }
@@ -3031,6 +3563,7 @@ public final class WorkspaceDatabase: @unchecked Sendable {
           SELECT assistant_message_id
           FROM dashboard_runs
           WHERE desktop_owned = 1 AND status = 'running'
+            AND conversation_id NOT IN (SELECT conversation_id FROM desktop_openclaw_gateway_sessions)
           AND conversation_id NOT IN (SELECT conversation_id FROM desktop_opencode_sessions)
         )
         """)
@@ -3044,6 +3577,7 @@ public final class WorkspaceDatabase: @unchecked Sendable {
           error = 'The local agent stopped when Woven Matter closed.',
           completed_at = ?, updated_at = ?
         WHERE desktop_owned = 1 AND status = 'running'
+          AND conversation_id NOT IN (SELECT conversation_id FROM desktop_openclaw_gateway_sessions)
           AND conversation_id NOT IN (SELECT conversation_id FROM desktop_opencode_sessions)
         """)
       defer { sqlite3_finalize(run) }
@@ -4092,6 +4626,47 @@ public final class WorkspaceDatabase: @unchecked Sendable {
     }
   }
 
+  public func renameOpenCodeAgent(
+    id: UUID,
+    displayName: String,
+    updatedAt: Date = Date()
+  ) throws {
+    let cleanName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !cleanName.isEmpty else {
+      throw WorkspaceDatabaseError.execute("Enter a Woven Matter agent name.")
+    }
+    try transaction {
+      let rawID = id.uuidString.lowercased()
+      let ownership = try prepareUnlocked("""
+        SELECT 1
+        FROM dashboard_agents
+        WHERE id = ? AND runtime_kind = 'opencode'
+          AND authority_kind = 'device_owned' AND desktop_owned = 1
+          AND deleted_at IS NULL
+        """)
+      defer { sqlite3_finalize(ownership) }
+      try bind(rawID, at: 1, to: ownership)
+      let code = sqlite3_step(ownership)
+      guard code == SQLITE_ROW else {
+        throw code == SQLITE_DONE
+          ? WorkspaceDatabaseError.execute("This OpenCode is not owned by Woven Matter on this Mac.")
+          : stepError()
+      }
+
+      let statement = try prepareUnlocked("""
+        UPDATE dashboard_agents
+        SET display_name = ?, revision = revision + 1, updated_at = ?
+        WHERE id = ? AND display_name IS NOT ?
+        """)
+      defer { sqlite3_finalize(statement) }
+      try bind(cleanName, at: 1, to: statement)
+      try bind(Self.timestamp(updatedAt), at: 2, to: statement)
+      try bind(rawID, at: 3, to: statement)
+      try bind(cleanName, at: 4, to: statement)
+      try stepDone(statement)
+    }
+  }
+
   public func workspaceOverview() throws -> WorkspaceSnapshot {
     try lock.withLock {
       var folders: [WorkspaceFolderRecord] = []
@@ -4129,8 +4704,14 @@ public final class WorkspaceDatabase: @unchecked Sendable {
               WHERE local_session.conversation_id = dashboard_conversations.id
             ),
             'unread', unread, 'last_message_preview', last_message_preview,
-            'openclaw_session_key', openclaw_session_key,
-            'imported_at', (SELECT imported_at FROM desktop_session_imports WHERE conversation_id = dashboard_conversations.id),
+            'openclaw_session_key', COALESCE(openclaw_session_key,
+              (SELECT session_key FROM desktop_openclaw_gateway_sessions
+               WHERE conversation_id = dashboard_conversations.id)),
+            'imported_at', COALESCE(
+              (SELECT imported_at FROM desktop_session_imports WHERE conversation_id = dashboard_conversations.id),
+              (SELECT imported_at FROM desktop_openclaw_import_activity WHERE conversation_id = dashboard_conversations.id
+                AND instr(COALESCE(dashboard_conversations.openclaw_session_key, ''), ':wovenmatter:') = 0)
+            ),
             'last_message_at', last_message_at, 'folder_id', folder_id,
             'is_pinned', is_pinned,
             'is_archived', is_archived
@@ -4817,6 +5398,29 @@ public final class WorkspaceDatabase: @unchecked Sendable {
         conversation_id TEXT PRIMARY KEY REFERENCES dashboard_conversations(id) ON DELETE CASCADE,
         imported_at TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS desktop_openclaw_import_activity (
+        conversation_id TEXT PRIMARY KEY REFERENCES dashboard_conversations(id) ON DELETE CASCADE,
+        imported_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS desktop_openclaw_transcript_entries (
+        conversation_id TEXT NOT NULL, entry_id TEXT NOT NULL,
+        message_id TEXT NOT NULL, payload BLOB NOT NULL,
+        PRIMARY KEY (conversation_id, entry_id)
+      );
+      CREATE TRIGGER IF NOT EXISTS desktop_openclaw_transcript_delete
+      AFTER DELETE ON dashboard_conversations BEGIN
+        DELETE FROM desktop_openclaw_transcript_entries WHERE conversation_id = OLD.id;
+      END;
+      CREATE TABLE IF NOT EXISTS desktop_openclaw_run_inputs (
+        conversation_id TEXT NOT NULL, local_run_id TEXT NOT NULL, remote_run_id TEXT NOT NULL,
+        user_message_id TEXT NOT NULL, assistant_message_id TEXT NOT NULL,
+        PRIMARY KEY (conversation_id, remote_run_id)
+      );
+      CREATE INDEX IF NOT EXISTS desktop_openclaw_run_inputs_local ON desktop_openclaw_run_inputs(local_run_id);
+      CREATE TRIGGER IF NOT EXISTS desktop_openclaw_run_inputs_delete
+      AFTER DELETE ON dashboard_conversations BEGIN
+        DELETE FROM desktop_openclaw_run_inputs WHERE conversation_id = OLD.id;
+      END;
       CREATE TABLE IF NOT EXISTS desktop_buzz_workspace_links (
         id TEXT PRIMARY KEY,
         display_name TEXT NOT NULL,
@@ -4894,6 +5498,15 @@ public final class WorkspaceDatabase: @unchecked Sendable {
         remote_payload BLOB NOT NULL,
         PRIMARY KEY (agent_id, remote_run_id)
       );
+      CREATE TABLE IF NOT EXISTS desktop_scheduled_result_routes (
+        provider TEXT NOT NULL, agent_id TEXT NOT NULL, job_id TEXT NOT NULL,
+        destination TEXT NOT NULL, PRIMARY KEY(provider, agent_id, job_id)
+      );
+      CREATE TABLE IF NOT EXISTS desktop_scheduled_result_receipts (
+        provider TEXT NOT NULL, agent_id TEXT NOT NULL, job_id TEXT NOT NULL,
+        run_id TEXT NOT NULL, conversation_id TEXT NOT NULL, message_id TEXT NOT NULL,
+        collected_at TEXT NOT NULL, PRIMARY KEY(provider, agent_id, job_id, run_id)
+      );
       CREATE TABLE IF NOT EXISTS dashboard_calendar_items (
         id TEXT PRIMARY KEY, user_id TEXT NOT NULL DEFAULT '', kind TEXT NOT NULL DEFAULT '',
         title TEXT NOT NULL DEFAULT '', description TEXT, starts_at TEXT NOT NULL DEFAULT '',
@@ -4945,6 +5558,19 @@ public final class WorkspaceDatabase: @unchecked Sendable {
   }
 
   private func addCurrentColumnsUnlocked() throws {
+    let cron = try prepareUnlocked("PRAGMA table_info(desktop_openclaw_cron_runs)")
+    defer { sqlite3_finalize(cron) }
+    var hasFullOutput = false
+    while true {
+      let code = sqlite3_step(cron)
+      if code == SQLITE_DONE { break }
+      guard code == SQLITE_ROW else { throw stepError() }
+      if optionalText(cron, column: 1) == "full_output" { hasFullOutput = true }
+    }
+    if !hasFullOutput {
+      try executeUnlocked("ALTER TABLE desktop_openclaw_cron_runs ADD COLUMN full_output INTEGER NOT NULL DEFAULT 0")
+    }
+
     let statement = try prepareUnlocked(
       "PRAGMA table_info(desktop_local_acp_sessions)"
     )
@@ -5335,6 +5961,11 @@ extension WorkspaceDatabase {
   public func saveOpenCodeSnapshot(_ snapshot: OpenCodeSessionSnapshot, conversationID: String) throws {
     let session = try localACPSession(conversationID: conversationID)
     try transaction {
+      try saveOpenCodeSnapshotUnlocked(snapshot, conversationID: conversationID, fallbackTitle: session.title)
+    }
+  }
+
+  private func saveOpenCodeSnapshotUnlocked(_ snapshot: OpenCodeSessionSnapshot, conversationID: String, fallbackTitle: String) throws {
       let now = Self.timestamp(Date())
       let json = String(decoding: try JSONEncoder().encode(snapshot), as: UTF8.self)
       let state = try prepareUnlocked("UPDATE desktop_opencode_sessions SET snapshot_json = ? WHERE conversation_id = ?")
@@ -5389,11 +6020,10 @@ extension WorkspaceDatabase {
       }
       let update = try prepareUnlocked("UPDATE dashboard_conversations SET title=?, last_message_preview=?, last_message_at=MAX(?, COALESCE((SELECT imported_at FROM desktop_session_imports WHERE conversation_id=dashboard_conversations.id), '')), updated_at=? WHERE id=?")
       defer { sqlite3_finalize(update) }
-      try bind(snapshot.info["title"].string ?? session.title, at: 1, to: update)
+      try bind(snapshot.info["title"].string ?? fallbackTitle, at: 1, to: update)
       try bind(String(snapshot.messages.last.map(OpenCodeSessionSnapshot.text)?.prefix(240) ?? ""), at: 2, to: update)
       try bind(Self.timestamp(Date(timeIntervalSince1970: (snapshot.info["time"]["updated"].number ?? Date().timeIntervalSince1970 * 1000) / 1000)), at: 3, to: update)
       try bind(now, at: 4, to: update); try bind(conversationID, at: 5, to: update); try stepDone(update)
-    }
   }
 
   public func saveOpenCodeSubmission(conversationID: String, id: String, payload: OpenCodeValue, status: String) throws {

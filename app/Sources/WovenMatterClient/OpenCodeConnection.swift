@@ -47,7 +47,7 @@ public struct OpenCodeConnection: Equatable, Sendable {
     }
     public static func discover(file: URL = registrationURL()) throws -> Self {
         guard let data = try? Data(contentsOf: file), data.count <= 65_536 else {
-            throw OpenCodeError.message("The local OpenCode v2 service is not running. Connect to OpenCode in Local Agent Workspace.")
+            throw OpenCodeError.message("The local OpenCode v2 service is not running. Connect to OpenCode in Local agent workspace.")
         }
         let info = try OpenCodeValue.decode(data)
         guard var components = URLComponents(string: info["url"].text),

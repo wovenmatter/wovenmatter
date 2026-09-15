@@ -10,6 +10,14 @@ struct OpenClawCronSurface: View {
     let onOpenConversation: (String) -> Void
     @State private var showsDeleted = false
     @State private var selectedAgentID: UUID?
+    @State private var editor: CronEditorSelection?
+    @State private var deletingJob: OpenClawCronJob?
+
+    private struct CronEditorSelection: Identifiable {
+        let id = UUID()
+        let agentID: UUID
+        var job: OpenClawCronJob?
+    }
 
     private var agents: [WorkspaceAgent] {
         let all = model.localCLIAgents
@@ -48,12 +56,12 @@ struct OpenClawCronSurface: View {
                     .clipShape(RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius, style: .continuous))
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Cron Jobs").font(.system(size: 22, weight: .semibold))
-                    Text("OpenClaw Heartbeat, schedules, history, and output")
+                    Text("Schedules, result delivery, and execution history")
                         .font(.system(size: 12.5)).foregroundStyle(DashboardPalette.mutedForeground)
                 }
                 Spacer()
                 Picker("OpenClaw", selection: $selectedAgentID) {
-                    Text("All OpenClaws").tag(nil as UUID?)
+                    Text("All agents").tag(nil as UUID?)
                     ForEach(agents) { Text($0.displayName).tag(agentOptional($0.id)) }
                 }
                 .frame(maxWidth: 190)
@@ -68,12 +76,12 @@ struct OpenClawCronSurface: View {
                 .buttonStyle(DashboardQuietButtonStyle())
                 .disabled(model.isRefreshingOpenClawCron)
                 if agents.count == 1, let agent = agents.first {
-                    Button("New Cron") { createConversation(agentID: agent.id, context: nil) }
+                    Button("New Job") { editor = CronEditorSelection(agentID: agent.id) }
                         .buttonStyle(DashboardPrimaryButtonStyle())
                 } else {
-                    Menu("New Cron") {
+                    Menu("New Job") {
                         ForEach(agents) { agent in
-                            Button(agent.displayName) { createConversation(agentID: agent.id, context: nil) }
+                            Button(agent.displayName) { editor = CronEditorSelection(agentID: agent.id) }
                         }
                     }
                     .buttonStyle(DashboardPrimaryButtonStyle())
@@ -100,7 +108,7 @@ struct OpenClawCronSurface: View {
                 DashboardConversationEmptyState(
                     icon: .calendarClockControl,
                     title: showsDeleted ? "Cron Trash is empty" : "No scheduled jobs",
-                    detail: "Refresh imports jobs and execution history from each linked OpenClaw. Woven Matter never creates, edits, or deletes remote cron jobs here."
+                    detail: showsDeleted ? "Deleted jobs and their retained results appear here." : "Create a job on a linked OpenClaw. Results are retained on its host and collected when Woven Matter reconnects."
                 )
                 .frame(maxHeight: .infinity)
             } else {
@@ -114,6 +122,21 @@ struct OpenClawCronSurface: View {
             }
         }
         .background(theme.palette.workspace)
+        .sheet(item: $editor) { selection in
+            OpenClawCronEditor(model: model, agentID: selection.agentID, job: selection.job)
+        }
+        .confirmationDialog("Delete this scheduled job?", isPresented: Binding(
+            get: { deletingJob != nil }, set: { if !$0 { deletingJob = nil } }
+        ), titleVisibility: .visible) {
+            if let job = deletingJob {
+                Button("Delete \(job.name)", role: .destructive) {
+                    model.performOpenClawCronAction(job: job, action: "remove")
+                    deletingJob = nil
+                }
+            }
+        } message: {
+            Text("Future executions stop. Retained results remain in Cron Jobs.")
+        }
         .task(id: heartbeatAgent?.id) {
             guard let agentID = heartbeatAgent?.id else { return }
             await model.loadOpenClawHeartbeat(agentID: agentID)
@@ -179,6 +202,21 @@ struct OpenClawCronSurface: View {
                 Text("Latest execution first · \((run.startedAt ?? run.completedAt)?.formatted(date: .abbreviated, time: .shortened) ?? "Time unavailable")")
                     .font(.system(size: 10.5)).foregroundStyle(DashboardPalette.mutedForeground)
             }
+            Picker("Collect results", selection: Binding(
+                get: { model.openClawResultRoutes[job.agentID]?[job.id] ?? "" },
+                set: { model.setOpenClawResultRoute(job: job, destination: $0) }
+            )) {
+                Text("Cron history only").tag("")
+                Text("New conversation per result").tag("new")
+                ForEach((model.workspaceOverview?.conversations ?? []).filter {
+                    $0.agentID == job.agentID.uuidString.lowercased() && !$0.isArchived && $0.openClawSessionKey != nil
+                }) { conversation in
+                    Text(conversation.title).tag(conversation.id)
+                }
+            }
+            .frame(maxWidth: 420, alignment: .leading)
+            Text("Results appear unread in the selected destination. Changing this setting collects any retained results that have not already been delivered.")
+                .font(.system(size: 10.5)).foregroundStyle(DashboardPalette.mutedForeground)
             DisclosureGroup("Job details and run history") {
                 VStack(alignment: .leading, spacing: 8) {
                     if let description = cronText(job.remotePayload, keys: ["description", "message", "text", "script", "argv"]) {
@@ -206,6 +244,16 @@ struct OpenClawCronSurface: View {
             }
             if job.archiveState == .active {
                 HStack {
+                    Button(job.enabled ? "Pause" : "Resume") {
+                        model.performOpenClawCronAction(job: job, action: "toggle")
+                    }.buttonStyle(DashboardQuietButtonStyle())
+                    Button("Run Now") { model.performOpenClawCronAction(job: job, action: "run") }
+                        .buttonStyle(DashboardQuietButtonStyle())
+                    Button("Edit") { editor = CronEditorSelection(agentID: job.agentID, job: job) }
+                        .buttonStyle(DashboardQuietButtonStyle())
+                    Button("Delete", role: .destructive) { deletingJob = job }
+                        .buttonStyle(DashboardQuietButtonStyle())
+                    Spacer()
                     Button("Edit with Agent") {
                         createConversation(agentID: job.agentID, context: jobContext(job, run: nil, action: "Edit this cron job"))
                     }
@@ -217,6 +265,7 @@ struct OpenClawCronSurface: View {
                         .buttonStyle(DashboardQuietButtonStyle())
                     }
                 }
+                .disabled(model.openClawCronBusy)
             }
         }
         .padding(14)
@@ -415,5 +464,86 @@ struct DashboardCronPill: View {
             .padding(.vertical, 4)
             .background((warning ? DashboardPalette.warning : DashboardPalette.mutedForeground).opacity(0.08))
             .clipShape(Capsule())
+    }
+}
+
+private struct OpenClawCronEditor: View {
+    @Environment(\.dismiss) private var dismiss
+    @Bindable var model: ApplicationModel
+    let agentID: UUID
+    let job: OpenClawCronJob?
+    @State private var name = ""
+    @State private var message = ""
+    @State private var expression = "0 9 * * *"
+    @State private var timeZone = TimeZone.current.identifier
+    @State private var destination = "new"
+    @State private var error: String?
+    @State private var declarationKey = "wovenmatter-" + UUID().uuidString.lowercased()
+    @State private var hasAgentPrompt = true
+    @State private var originalSchedule: GatewayJSONValue?
+    @State private var changesSchedule = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text(job == nil ? "New scheduled job" : "Edit scheduled job")
+                .font(.system(size: 20, weight: .semibold))
+            TextField("Job name", text: $name)
+            if hasAgentPrompt {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Instructions").font(.system(size: 12, weight: .medium))
+                    TextEditor(text: $message).frame(height: 120)
+                        .font(.system(size: 13))
+                }
+            }
+            if originalSchedule?.objectValue?["kind"]?.stringValue != "cron", job != nil {
+                Toggle("Replace the existing schedule with a cron expression", isOn: $changesSchedule)
+            }
+            if job == nil || originalSchedule?.objectValue?["kind"]?.stringValue == "cron" || changesSchedule {
+                HStack {
+                    TextField("Cron expression", text: $expression)
+                    TextField("Time zone", text: $timeZone)
+                }
+                Text("Minute · hour · day of month · month · day of week")
+                    .font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
+            }
+            Picker("Deliver results", selection: $destination) {
+                Text("Cron history only").tag("")
+                Text("New conversation per result").tag("new")
+                ForEach((model.workspaceOverview?.conversations ?? []).filter {
+                    $0.agentID == agentID.uuidString.lowercased() && !$0.isArchived && $0.openClawSessionKey != nil
+                }) { Text($0.title).tag($0.id) }
+            }
+            Text("The agent host runs this job while the app is closed. New jobs use an isolated session and store results for Woven Matter.")
+                .font(.system(size: 12)).foregroundStyle(DashboardPalette.mutedForeground)
+            if let error { Text(error).font(.system(size: 12)).foregroundStyle(DashboardPalette.danger).textSelection(.enabled) }
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button(model.openClawCronBusy ? "Saving…" : "Save") {
+                    Task {
+                        error = await model.saveOpenClawCron(agentID: agentID, job: job,
+                            name: name.trimmingCharacters(in: .whitespacesAndNewlines), message: message,
+                            expression: expression, timeZone: timeZone, declarationKey: declarationKey,
+                            destination: destination, preserveSchedule: job != nil && !changesSchedule && originalSchedule?.objectValue?["kind"]?.stringValue != "cron")
+                        if error == nil { dismiss() }
+                    }
+                }
+                .buttonStyle(DashboardPrimaryButtonStyle())
+                .disabled(model.openClawCronBusy || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || (hasAgentPrompt && message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
+            }
+        }
+        .padding(24)
+        .frame(width: 540)
+        .onAppear {
+            guard let job else { return }
+            name = job.name
+            destination = model.openClawResultRoutes[agentID]?[job.id] ?? ""
+            let payload = (try? JSONDecoder().decode(GatewayJSONValue.self, from: job.remotePayload))?.objectValue
+            originalSchedule = payload?["schedule"]
+            expression = originalSchedule?.objectValue?["expr"]?.stringValue ?? "0 9 * * *"
+            timeZone = originalSchedule?.objectValue?["tz"]?.stringValue ?? TimeZone.current.identifier
+            hasAgentPrompt = payload?["payload"]?.objectValue?["kind"]?.stringValue == "agentTurn"
+            message = payload?["payload"]?.objectValue?["message"]?.stringValue ?? ""
+        }
     }
 }

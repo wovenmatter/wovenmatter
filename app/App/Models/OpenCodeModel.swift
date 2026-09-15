@@ -13,7 +13,7 @@ final class OpenCodeModel {
     let ownerDeviceID: UUID
     let remoteConfiguration: RemoteWorkspaceConfiguration?
     private weak var remoteWorkspaces: RemoteWorkspacesModel?
-    var workspaceName: String { remoteConfiguration?.name ?? "Local Agent Workspace" }
+    var workspaceName: String { remoteConfiguration?.name ?? "Local agent workspace" }
     var isRemote: Bool { remoteConfiguration != nil }
     private let defaults: UserDefaults
     private let registration = OpenCodeConnection.registrationURL()
@@ -57,6 +57,7 @@ final class OpenCodeModel {
     private var selectionTasks: [String: Task<Void, Error>] = [:]
     private var defaultModels: [String: OpenCodeValue] = [:]
     private var models: [String: [OpenCodeValue]] = [:]
+    private var commands: [String: [OpenCodeValue]] = [:]
 
     private var connectionID: String {
         remoteConfiguration.map { "remote-workspace:" + $0.id.uuidString.lowercased() }
@@ -309,7 +310,24 @@ final class OpenCodeModel {
         }
     }
 
-    private func open(_ session: OpenCodeValue) async throws -> String {
+    func importableSessions(cursor: String? = nil) async throws -> (sessions: [OpenCodeValue], next: String?) {
+        guard isReady, !isRemote else { throw OpenCodeError.message("Connect to local OpenCode first.") }
+        return try await coordinator.importableSessions(connectionID: connectionID, cursor: cursor)
+    }
+
+    func importSession(_ session: OpenCodeValue) async throws {
+        guard isReady, !isRemote, !busy else { throw OpenCodeError.message("OpenCode is not ready to import.") }
+        let id = session["id"].text
+        guard !(try store.database.knownOpenCodeSessionIDs(connectionID: connectionID)).contains(id) else {
+            throw OpenCodeError.message("This session is already in Woven Matter. Refresh the list.")
+        }
+        busy = true
+        defer { busy = false }
+        let snapshot = try await coordinator.completeImportSnapshot(connectionID: connectionID, sessionID: id)
+        _ = try await open(snapshot.info, importedSnapshot: snapshot)
+    }
+
+    private func open(_ session: OpenCodeValue, importedSnapshot: OpenCodeSessionSnapshot? = nil) async throws -> String {
         let sessionID = session["id"].text
         guard sessionID.hasPrefix("ses") else { throw OpenCodeError.message("OpenCode did not return a session ID.") }
         let conversationID: String
@@ -321,11 +339,11 @@ final class OpenCodeModel {
         } else {
             conversationID = try store.database.createLocalACPSession(runtimeKind: .opencode,
                 title: session["title"].string ?? "New OpenCode chat", ownerDeviceID: ownerDeviceID,
-                openCodeAssociation: (connectionID, sessionID))
+                openCodeAssociation: (connectionID, sessionID), importedOpenCodeSnapshot: importedSnapshot)
         }
         let link = OpenCodeSessionLink(conversationID: conversationID, connectionID: connectionID, sessionID: sessionID)
         links[conversationID] = link
-        var initial = OpenCodeSessionSnapshot()
+        var initial = importedSnapshot ?? OpenCodeSessionSnapshot()
         initial.info = session
         snapshots[conversationID] = initial
         do { try await refreshCatalog(conversationID) }
@@ -370,11 +388,14 @@ final class OpenCodeModel {
         let fallback = try await coordinator.call(connectionID: connectionID, path: "/api/model/default", query: locationQuery(id))
         models[id] = result["data"].array.filter { $0["enabled"].bool }
         defaultModels[id] = fallback["data"]
+        commands[id] = []
+        let catalog = try await coordinator.call(connectionID: connectionID, path: "/api/command", query: locationQuery(id))
+        commands[id] = catalog["data"].array
     }
 
     func metadata(_ id: String) -> LocalACPSessionMetadata? {
         guard let snapshot = snapshots[id], isLocalSession(id) else { return nil }
-        return OpenCodeComposerMetadata.metadata(session: snapshot.info, models: models[id] ?? [], defaultModel: defaultModels[id] ?? .null, hiddenModels: hiddenModels)
+        return OpenCodeComposerMetadata.metadata(session: snapshot.info, models: models[id] ?? [], defaultModel: defaultModels[id] ?? .null, hiddenModels: hiddenModels, commands: commands[id] ?? [])
     }
 
     func updateSelection(_ id: String, model: String? = nil, thinking: String? = nil) {
@@ -411,7 +432,12 @@ final class OpenCodeModel {
         if !isReady { try await connectLocal() }
         // A failed selection remains a send barrier until the user selects again.
         if let selection = selectionTasks[id] { try await selection.value }
-        try await coordinator.prompt(link, input: input)
+        if let command = OpenCodeComposerMetadata.invocation(input.text, commands: commands[id] ?? []) {
+            try await coordinator.command(link, name: command.name,
+                input: AgentMessageInput(text: command.arguments, attachments: input.attachments))
+        } else {
+            try await coordinator.prompt(link, input: input)
+        }
     }
 
     func perform(_ operation: @escaping @MainActor () async throws -> Void) {

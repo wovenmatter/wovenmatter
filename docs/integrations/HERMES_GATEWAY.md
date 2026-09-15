@@ -115,8 +115,10 @@ acceptance check. The user's Hermes Desktop process was left running.
 
 ## Integration with PR38
 
-The branch is based on main and does not contain PR38. Preserve both optional
-payloads when combining `WorkspaceDatabase.createLocalACPSession`:
+Merge PR38 before PR45. This branch includes reviewed PR38 head
+`0187e88387c86d01350a758b823399683bc58983` through an explicit compatibility
+merge. Until PR38 merges, its changes also appear in PR45's main-based diff.
+Both optional payloads are preserved in `WorkspaceDatabase.createLocalACPSession`:
 `importedOpenCodeSnapshot` from PR38 and `hermesImport` here. Both branches contain
 the same `desktop_session_imports` schema, `markSessionImportedUnlocked` helper,
 and `WorkspaceConversationRecord.importedAt` / shared hover definition. Hermes
@@ -124,10 +126,11 @@ imports already call the marker inside their transaction and preserve import
 recency through later transcript updates. Keep one copy of those common hunks;
 PR38 additionally supplies its legacy OpenClaw provenance fallback.
 
-Other overlaps are ApplicationModel runtime/settings methods,
-LocalACPRuntime, LocalACPSessionCoordinator, SettingsView,
-SettingsLocalWorkspaceView, DashboardConversation, and the Xcode source list.
-Keep PR38's OpenClaw per-session cwd and OpenCode import behavior intact.
+The combined branch retains both cron refreshers, both remote startup
+restorations, one native-test queue-drain helper, Hermes composer-prefill
+delivery, and the imported OpenCode snapshot forwarded through the extracted
+session helper. PR38's OpenClaw per-session cwd and OpenCode import behavior
+remain intact.
 
 ## Scheduled results and remote containers
 

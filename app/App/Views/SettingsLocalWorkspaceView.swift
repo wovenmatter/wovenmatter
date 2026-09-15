@@ -12,7 +12,7 @@ struct SettingsLocalWorkspaceView: View {
 
     var body: some View {
         SettingsPage(
-            title: "Local Agent Workspace",
+            title: "Local agent workspace",
             detail: "Run Codex, Claude Code, Cursor, Grok Build, Hermes, OpenClaw, OpenCode, or Pi as direct sessions on this Mac.",
             reservesRailControlSpace: reservesRailControlSpace,
             onBack: onBack
@@ -85,7 +85,7 @@ struct SettingsLocalWorkspaceView: View {
             SettingsInset {
                 VStack(alignment: .leading, spacing: 10) {
                     HStack {
-                        Text("Local Agent Workspace")
+                        Text("Local agent workspace")
                             .font(.system(size: 13, weight: .medium))
                         Spacer()
                         SettingsPill(
@@ -261,8 +261,8 @@ struct SettingsLocalWorkspaceView: View {
                             )
                             .accessibilityHint(
                                 isShown
-                                    ? "Removes the runtime from the Local Agent Workspace sidebar without changing its enabled state."
-                                    : "Adds the runtime to the Local Agent Workspace sidebar without changing its enabled state."
+                                    ? "Removes the runtime from the Local agent workspace sidebar without changing its enabled state."
+                                    : "Adds the runtime to the Local agent workspace sidebar without changing its enabled state."
                             )
 
                             if inventory?.isInstalled != true {

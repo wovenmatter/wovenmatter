@@ -9,7 +9,7 @@ public enum OpenCodeComposerMetadata {
         return model["providerID"].text.isEmpty ? id : model["providerID"].text + "/" + id
     }
 
-    public static func metadata(session: OpenCodeValue, models: [OpenCodeValue], defaultModel: OpenCodeValue = .null, hiddenModels: Set<String> = []) -> LocalACPSessionMetadata {
+    public static func metadata(session: OpenCodeValue, models: [OpenCodeValue], defaultModel: OpenCodeValue = .null, hiddenModels: Set<String> = [], commands: [OpenCodeValue] = []) -> LocalACPSessionMetadata {
         let selected = modelKey(session["model"]).isEmpty ? defaultModel : session["model"]
         let key = modelKey(selected)
         let option = models.first { modelKey($0) == key }
@@ -19,7 +19,26 @@ public enum OpenCodeComposerMetadata {
             thinking: selected["variant"].string ?? (variants.isEmpty ? nil : "default"),
             modelOptions: models.map(modelKey),
             excludedModels: hiddenModels.sorted(),
-            thinkingLevels: variants.isEmpty ? [] : ["default"] + variants)
+            thinkingLevels: variants.isEmpty ? [] : ["default"] + variants,
+            slashCommands: slashCommands(commands))
+    }
+
+    public static func slashCommands(_ commands: [OpenCodeValue]) -> [LocalACPSlashCommand] {
+        var seen: Set<String> = []
+        return commands.compactMap { command in
+            let name = command["name"].text
+            guard !name.isEmpty, !name.contains(where: { $0.isWhitespace }),
+                  seen.insert(name).inserted else { return nil }
+            return LocalACPSlashCommand(name: name, detail: command["description"].string)
+        }
+    }
+
+    public static func invocation(_ text: String, commands: [OpenCodeValue]) -> (name: String, arguments: String)? {
+        guard text.first == "/" else { return nil }
+        let body = text.dropFirst()
+        let name = String(body.prefix { !$0.isWhitespace })
+        guard slashCommands(commands).contains(where: { $0.name == name }) else { return nil }
+        return (name, String(body.dropFirst(name.count).drop(while: { $0.isWhitespace })))
     }
 
     public static func matchesSelection(_ actual: OpenCodeValue, _ expected: OpenCodeValue) -> Bool {

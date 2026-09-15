@@ -581,7 +581,7 @@ struct DashboardConversationHoverCard: View {
 
             VStack(alignment: .leading, spacing: 7) {
                 hoverRow(icon: .folder, text: meta.folderLabel)
-                if let agent = presentation.agent, agent.runtimeKind == .openclaw || agent.runtimeKind == .hermes {
+                if let agent = presentation.agent, agent.runtimeKind == .openclaw || agent.runtimeKind == .hermes || agent.runtimeKind == .opencode {
                     hoverRow(icon: .bot, text: dashboardAgentDisplayName(agent))
                 }
                 if let runtime = meta.runtimeLabel {

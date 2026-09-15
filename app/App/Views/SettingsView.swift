@@ -10,6 +10,7 @@ enum SettingsSection: Equatable {
     case hermes
     case hermesWorkspace(UUID?)
     case hermesAgent(UUID)
+    case openCodeAgent(UUID?)
     case openCodeWorkspace(UUID?)
     case openClawWorkspace(UUID?)
     case openClawAgent(UUID)
@@ -66,11 +67,16 @@ struct SettingsView: View {
                     onBack: { section = providerReturnSection })
             case .openCode:
                 SettingsOpenCodeView(model: model, reservesRailControlSpace: reservesRailControlSpace,
-                    onBack: { section = .landing })
+                    onBack: { section = .landing },
+                    onOpenAgent: { providerReturnSection = .openCode; section = .openCodeAgent($0) })
             case .openCodeWorkspace(let workspaceID):
                 SettingsOpenCodeView(model: model, workspaceID: workspaceID, isWorkspaceScoped: true,
                     reservesRailControlSpace: reservesRailControlSpace,
-                    onBack: { section = workspaceID == nil ? .localWorkspace : .remoteWorkspaces })
+                    onBack: { section = workspaceID == nil ? .localWorkspace : .remoteWorkspaces },
+                    onOpenAgent: { providerReturnSection = .openCodeWorkspace(workspaceID); section = .openCodeAgent($0) })
+            case .openCodeAgent(let workspaceID):
+                SettingsOpenCodeAgentView(model: model, workspaceID: workspaceID,
+                    reservesRailControlSpace: reservesRailControlSpace, onBack: { section = providerReturnSection })
             case .openClawWorkspace(let workspaceID):
                 SettingsOpenClawView(model: model, workspaceID: workspaceID, isWorkspaceScoped: true,
                     reservesRailControlSpace: reservesRailControlSpace,
@@ -163,24 +169,24 @@ struct SettingsView: View {
                 )
                 SettingsDestinationRow(
                     title: "OpenCode",
-                    detail: "The local OpenCode v2 service and browser connection.",
+                    detail: "Server connections and Woven Matter names for every OpenCode agent.",
                     icon: { DashboardHarnessLogoIcon(logo: .openCode, size: 15) },
                     action: { section = .openCode }
                 )
                 SettingsDestinationRow(
-                    title: "Local Agent Workspace",
+                    title: "Local agent workspace",
                     detail: "Direct CLI and ACP sessions, runtimes, and workspace folders.",
                     icon: { DashboardLucideIcon(glyph: .terminal, size: 15) },
                     action: { section = .localWorkspace }
                 )
                 SettingsDestinationRow(
-                    title: "Remote Agent Workspaces",
+                    title: "Remote agent workspaces",
                     detail: "Standalone Linux workspaces deployed through SSH.",
                     icon: { DashboardLucideIcon(glyph: .container, size: 15) },
                     action: { section = .remoteWorkspaces }
                 )
                 SettingsDestinationRow(
-                    title: "Buzz Agent Workspaces",
+                    title: "Buzz agent workspaces",
                     detail: "Optional local workspace discovery and agent enrollment.",
                     icon: { DashboardLucideIcon(glyph: .radioTower, size: 15) },
                     action: { section = .buzzWorkspaces }
