@@ -42,7 +42,7 @@ struct RuntimeLifecycleTests {
     #expect(state.launches == 1)
   }
 
-  @Test func sharedLocalStartupRetainsUntilBothAgentsRelease() async throws {
+  @Test func readyLocalSchedulerSurvivesUnlinkAndDesktopShutdown() async throws {
     let state = FakeGatewayProcess()
     let gate = RuntimeGate()
     let lifecycle = OpenClawLocalGatewayLifecycle(launchProcess: { _, _ in state.launch() },
@@ -60,7 +60,9 @@ struct RuntimeLifecycleTests {
     await lifecycle.release(agentID: firstID)
     #expect(state.running)
     await lifecycle.release(agentID: secondID)
-    #expect(!state.running)
+    #expect(state.running)
+    await lifecycle.shutdown()
+    #expect(state.running)
   }
 
   @Test func staleGatewayConnectionCannotClearOrReplaceNewConnection() async throws {

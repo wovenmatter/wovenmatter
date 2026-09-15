@@ -45,15 +45,7 @@ public actor OpenClawGatewayCoordinator {
     "preparedOnly": .bool(true),
   ])
   private static let agentsListParameters: GatewayJSONValue = .object([:])
-  private static let cronListParameters: GatewayJSONValue = .object([
-    "includeDisabled": .bool(true), "limit": .number(200),
-    "offset": .number(0), "sortBy": .string("updatedAtMs"),
-    "sortDir": .string("desc"),
-  ])
-  private static let cronRunsParameters: GatewayJSONValue = .object([
-    "scope": .string("all"), "limit": .number(200),
-    "sortDir": .string("desc"),
-  ])
+  private var cronSyncAgents: Set<UUID> = []
 
   typealias ConnectClient = @Sendable (OpenClawGatewayClient) async throws -> OpenClawGatewayCapabilities
   private let connectClient: ConnectClient
@@ -1532,27 +1524,212 @@ public actor OpenClawGatewayCoordinator {
     }
   }
 
-  public func syncCron(agentID: UUID) async throws {
-    let client = try await client(agentID: agentID)
-    let list = try await client.request(
-      "cron.list", params: Self.cronListParameters
-    )
-    let history = try await client.request(
-      "cron.runs", params: Self.cronRunsParameters
-    )
-    let encoder = JSONEncoder()
-    let jobs: [OpenClawCronJob] = try (list.objectValue?["jobs"]?.arrayValue ?? [])
-      .compactMap { try Self.cronJob(agentID: agentID, value: $0, encoder: encoder) }
-    let runValues = history.objectValue?["entries"]?.arrayValue
-      ?? history.objectValue?["runs"]?.arrayValue ?? []
-    let runs: [OpenClawCronRun] = try runValues.compactMap {
-      try Self.cronRun(agentID: agentID, value: $0, encoder: encoder)
+  public func createCron(agentID: UUID, name: String, message: String, expression: String,
+                         timeZone: String, declarationKey: String, destination: String) async throws {
+    let socket = try await client(agentID: agentID)
+    // Do not create an always-on job on a host whose durable collector is absent.
+    _ = try await socket.request("wovenmatter.results.list", params: .object([
+      "consumer": .string(agentID.uuidString.lowercased()), "limit": .number(1)
+    ]))
+    let result = try await socket.request("cron.add", params: .object([
+      "name": .string(name), "declarationKey": .string(declarationKey), "enabled": .bool(false),
+      "schedule": .object(["kind": .string("cron"), "expr": .string(expression), "tz": .string(timeZone)]),
+      "sessionTarget": .string("isolated"), "wakeMode": .string("now"),
+      "payload": .object(["kind": .string("agentTurn"), "message": .string(message)]),
+      "delivery": .object(["mode": .string("none")])
+    ]))
+    guard let id = result.objectValue?["job"]?.objectValue?["id"]?.stringValue ?? result.objectValue?["id"]?.stringValue else {
+      throw OpenClawGatewayClientError.malformedFrame
     }
-    try database.replaceOpenClawCronSnapshot(
-      agentID: agentID,
-      jobs: jobs,
-      runs: runs
-    )
+    // A newly created job cannot fire before its local destination is saved.
+    try database.setOpenClawResultRoute(agentID: agentID, jobID: id, destination: destination)
+    _ = try await socket.request("cron.update", params: .object([
+      "id": .string(id), "patch": .object(["enabled": .bool(true)])
+    ]))
+  }
+
+  public func updateCron(agentID: UUID, jobID: String, patch: GatewayJSONValue,
+                         revision: String? = nil) async throws {
+    let socket = try await client(agentID: agentID)
+    var parameters: [String: GatewayJSONValue] = ["id": .string(jobID), "patch": patch]
+    if let revision { parameters["expectedConfigRevision"] = .string(revision) }
+    _ = try await socket.request("cron.update", params: .object(parameters))
+  }
+
+  public func performCronAction(agentID: UUID, jobID: String, action: String) async throws {
+    guard ["run", "remove"].contains(action) else { throw OpenClawGatewayClientError.malformedFrame }
+    let socket = try await client(agentID: agentID)
+    _ = try await socket.request("cron." + action, params: .object(["id": .string(jobID)]))
+  }
+
+  public func syncCron(agentID: UUID) async throws {
+    guard cronSyncAgents.insert(agentID).inserted else { return }
+    defer { cronSyncAgents.remove(agentID) }
+    let socket = try await client(agentID: agentID)
+    let generation = connectionGenerations[agentID]
+    let jobs = try await cronPages(socket: socket, method: "cron.list", field: "jobs", parameters: [
+      "includeDisabled": .bool(true), "sortBy": .string("updatedAtMs"), "sortDir": .string("asc")
+    ]).map { value -> OpenClawCronJob in
+      guard let job = try Self.cronJob(agentID: agentID, value: value) else { throw OpenClawGatewayClientError.malformedFrame }
+      return job
+    }
+    // Ascending pages and a fresh scan each time avoid a permanent high-water mark
+    // skipping late completions or equal timestamps. Receipts provide deduplication.
+    let runs = try await cronPages(socket: socket, method: "cron.runs", field: "entries", parameters: [
+      "scope": .string("all"), "sortDir": .string("asc")
+    ]).map { value -> OpenClawCronRun in
+      guard let run = try Self.cronRun(agentID: agentID, value: value) else { throw OpenClawGatewayClientError.malformedFrame }
+      return run
+    }
+    guard generation == connectionGenerations[agentID], !Task.isCancelled else { throw CancellationError() }
+    try database.replaceOpenClawCronSnapshot(agentID: agentID, jobs: jobs, runs: runs)
+    let routes = try database.openClawResultRoutes(agentID: agentID)
+    var receipts: [String: Set<String>] = [:]
+    var failure: (any Error)?
+    do { try await collectRetainedResults(agentID: agentID, socket: socket, generation: generation) }
+    catch { failure = error }
+    // Include cached pending runs even if OpenClaw has since pruned its run ledger.
+    for run in try database.openClawCronRuns(agentID: agentID).reversed() {
+      guard let destination = routes[run.jobID], !destination.isEmpty else { continue }
+      if receipts[run.jobID] == nil {
+        receipts[run.jobID] = try database.collectedOpenClawResultIDs(agentID: agentID, jobID: run.jobID)
+      }
+      guard receipts[run.jobID]?.contains(run.id) != true else { continue }
+      do {
+        let output: String
+        if let retained = try database.retainedOpenClawResult(agentID: agentID, runID: run.id) {
+          output = retained
+        } else {
+          output = try await scheduledOutput(run: run, socket: socket)
+          try database.retainOpenClawResult(run, title: jobs.first { $0.id == run.jobID }?.name ?? "Scheduled result", output: output)
+        }
+        guard generation == connectionGenerations[agentID], !Task.isCancelled else { throw CancellationError() }
+        let title = jobs.first { $0.id == run.jobID }?.name ?? "Scheduled result"
+        if let conversationID = try database.collectOpenClawResult(run, title: title, output: output, destination: destination) {
+          receipts[run.jobID, default: []].insert(run.id)
+          onChange?(DashboardConversationChange(conversationID: conversationID, runID: run.id, phase: .content))
+        }
+      } catch is CancellationError { throw CancellationError() }
+      catch { failure = failure ?? error }
+    }
+    if let failure { throw failure }
+  }
+
+  private func collectRetainedResults(agentID: UUID, socket: OpenClawGatewayClient, generation: UUID?) async throws {
+    let consumer = agentID.uuidString.lowercased()
+    var after = ""
+    var failure: String?
+    while true {
+      let response = try await socket.request("wovenmatter.results.list", params: .object([
+        "consumer": .string(consumer), "after": .string(after), "limit": .number(100)
+      ]))
+      guard let page = response.objectValue, let entries = page["entries"]?.arrayValue else {
+        throw OpenClawGatewayClientError.malformedFrame
+      }
+      failure = failure ?? page["error"]?.stringValue
+      for entry in entries {
+        try Task.checkCancellation()
+        guard generation == connectionGenerations[agentID] else { throw CancellationError() }
+        guard let row = entry.objectValue, let id = row["id"]?.stringValue,
+              let payload = row["run"], let run = try Self.cronRun(agentID: agentID, value: payload) else {
+          throw OpenClawGatewayClientError.malformedFrame
+        }
+        guard row["available"]?.boolValue == true else {
+          failure = failure ?? row["error"]?.stringValue ?? "A scheduled result is unavailable."
+          continue
+        }
+        if try database.retainedOpenClawResult(agentID: agentID, runID: run.id) == nil {
+          var output = ""
+          var offset = 0
+          while true {
+            let chunk = try await socket.request("wovenmatter.results.output", params: .object([
+              "id": .string(id), "offset": .number(Double(offset))
+            ]))
+            guard let text = chunk.objectValue?["text"]?.stringValue else { throw OpenClawGatewayClientError.malformedFrame }
+            output += text
+            guard let next = chunk.objectValue?["nextOffset"]?.intValue else { break }
+            guard next > offset, !text.isEmpty else { throw OpenClawGatewayClientError.malformedFrame }
+            offset = next
+          }
+          guard generation == connectionGenerations[agentID], !Task.isCancelled else { throw CancellationError() }
+          try database.retainOpenClawResult(run, title: row["title"]?.stringValue ?? "Scheduled result", output: output)
+        }
+        // The durable local history commit precedes the host receipt. A lost
+        // acknowledgement is retried without another message or another run.
+        _ = try await socket.request("wovenmatter.results.ack", params: .object([
+          "consumer": .string(consumer), "id": .string(id)
+        ]))
+      }
+      guard let next = page["next"]?.stringValue else { break }
+      guard next > after, !entries.isEmpty else { throw OpenClawGatewayClientError.malformedFrame }
+      after = next
+    }
+    if let failure { throw OpenClawGatewayClientError.rejected(failure) }
+  }
+
+  private func cronPages(socket: OpenClawGatewayClient, method: String, field: String,
+                         parameters: [String: GatewayJSONValue]) async throws -> [GatewayJSONValue] {
+    var offset = 0
+    var values: [GatewayJSONValue] = []
+    while true {
+      try Task.checkCancellation()
+      var parameters = parameters
+      parameters["limit"] = .number(200)
+      parameters["offset"] = .number(Double(offset))
+      let result = try await socket.request(method, params: .object(parameters))
+      guard let row = result.objectValue, let page = row[field]?.arrayValue,
+            let more = row["hasMore"]?.boolValue else { throw OpenClawGatewayClientError.malformedFrame }
+      values.append(contentsOf: page)
+      if !more { return values }
+      guard let next = row["nextOffset"]?.intValue, next > offset, !page.isEmpty else {
+        throw OpenClawGatewayClientError.malformedFrame
+      }
+      offset = next
+    }
+  }
+
+  private func scheduledOutput(run: OpenClawCronRun, socket: OpenClawGatewayClient) async throws -> String {
+    guard let key = run.nativeSessionKey, let sessionID = run.nativeSessionID else {
+      // Main-session wakeups and failed/skipped runs can have no transcript.
+      guard run.status != "ok" else {
+        throw OpenClawGatewayClientError.rejected("Job \(run.jobID): no run transcript is available. The result remains uncollected.")
+      }
+      return run.output ?? "OpenClaw reported \(run.status) without output."
+    }
+    var offset = 0
+    var first: OpenClawGatewayHistory?
+    var messages: [OpenClawGatewayHistoryMessage] = []
+    var seen: Set<String> = []
+    while true {
+      let history = try await fetchHistory(sessionKey: key, offset: offset, socket: socket)
+      guard history.sessionID == sessionID, history.isIdle else {
+        throw OpenClawGatewayClientError.rejected("Job \(run.jobID): the run transcript is unavailable or still changing. Collection will retry.")
+      }
+      if let first, first.totalMessages != history.totalMessages { throw OpenClawGatewayClientError.rejected("The run transcript changed during collection.") }
+      if first == nil { first = history }
+      messages.append(contentsOf: history.messages.filter { seen.insert($0.id).inserted })
+      guard let next = history.nextOffset else { break }
+      guard next > offset else { throw OpenClawGatewayClientError.malformedFrame }
+      offset = next
+    }
+    // A run-specific cron key owns the isolated transcript. Reused/main sessions
+    // require explicit native run identity; timestamps alone are not authority.
+    let isolated = key.contains(":cron:\(run.jobID):run:")
+    let replies = messages.filter {
+      $0.isAssistantResponse && (isolated || $0.gatewayRunID == run.id || $0.runID == run.id)
+    }.sorted { $0.date < $1.date }
+    let output = replies.map(\.text).filter { !$0.isEmpty }.joined(separator: "\n\n")
+    guard !output.isEmpty else {
+      throw OpenClawGatewayClientError.rejected("Job \(run.jobID): full output is not available. Its retained summary has not been acknowledged as a complete result.")
+    }
+    if let first {
+      let check = try await fetchHistory(sessionKey: key, offset: 0, socket: socket)
+      guard check.sessionID == first.sessionID, check.totalMessages == first.totalMessages,
+            check.messages == first.messages, !check.hasActiveRun, check.inFlightRunID == nil else {
+        throw OpenClawGatewayClientError.rejected("The run transcript changed during collection.")
+      }
+    }
+    return output
   }
 
   static func cronJob(
@@ -1582,7 +1759,9 @@ public actor OpenClawGatewayCoordinator {
   ) throws -> OpenClawCronRun? {
     guard let object = value.objectValue,
           let jobID = object["jobId"]?.stringValue,
-          case .number(let timestampMilliseconds)? = object["ts"] else { return nil }
+          object["action"]?.stringValue == "finished",
+          case .number(let timestampMilliseconds)? = object["ts"],
+          timestampMilliseconds.isFinite, timestampMilliseconds >= 0, timestampMilliseconds < Double(Int64.max) else { return nil }
     let id = object["runId"]?.stringValue
       ?? "history:\(jobID):\(Int(timestampMilliseconds))"
     let runAt = object["runAtMs"]?.dateFromMilliseconds
@@ -1597,7 +1776,7 @@ public actor OpenClawGatewayCoordinator {
     return OpenClawCronRun(
       id: id, jobID: jobID, agentID: agentID,
       status: object["status"]?.stringValue ?? "unknown",
-      output: object["summary"]?.stringValue,
+      output: object["summary"]?.stringValue ?? object["error"]?.stringValue,
       nativeSessionID: object["sessionId"]?.stringValue,
       nativeSessionKey: object["sessionKey"]?.stringValue,
       startedAt: startedAt, completedAt: completedAt,

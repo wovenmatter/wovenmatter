@@ -500,6 +500,7 @@ test('Gateway start reports running only after its listener accepts connections'
   await mkdir(bin, { recursive: true })
   const openclaw = resolve(bin, 'openclaw')
   await writeFile(openclaw, `#!/usr/bin/env node
+if (process.argv[2] === 'config') { console.log('{}'); process.exit(0) }
 const { createServer } = require('node:net')
 const port = Number(process.argv[process.argv.indexOf('--port') + 1])
 const server = createServer((socket) => socket.destroy())
@@ -527,6 +528,18 @@ process.on('SIGTERM', () => server.close(() => process.exit(0)))
   })
   assert.equal(status.state, 'running')
   assert.equal(await canConnect(gatewayPort), true)
+  assert.equal(JSON.parse(await readFile(resolve(fixture, '.wovenmatter/openclaw-desired.json'))).running, true)
+  service.child.kill('SIGTERM')
+  await new Promise(done => service.child.once('exit', done))
+  const restarted = await startService({ workspace: fixture, home, catalog: catalogPath,
+    token: 'gateway-ready-token', gatewayPort })
+  context.after(() => restarted.child.kill('SIGTERM'))
+  const headers = { authorization: 'Bearer gateway-ready-token' }
+  const recovered = await waitFor(`${restarted.url}/v1/openclaw/gateway`, headers, value => value.state === 'running')
+  assert.notEqual(recovered.pid, status.pid)
+  const stopped = await fetch(`${restarted.url}/v1/workspace-instances/openclaw/stop`, { method: 'POST', headers })
+  assert.equal(stopped.status, 200)
+  assert.equal(JSON.parse(await readFile(resolve(fixture, '.wovenmatter/openclaw-desired.json'))).running, false)
 })
 
 test('Stopping a gateway during crash backoff cancels its pending restart', async (context) => {
@@ -538,6 +551,7 @@ test('Stopping a gateway during crash backoff cancels its pending restart', asyn
   const launches = resolve(fixture, 'launches')
   await mkdir(bin, { recursive: true })
   await writeFile(resolve(bin, 'openclaw'), `#!/usr/bin/env node
+if (process.argv[2] === 'config') { console.log('{}'); process.exit(0) }
 require('node:fs').appendFileSync(${JSON.stringify(launches)}, 'started\\n')
 const server = require('node:net').createServer(socket => socket.destroy())
 server.listen(Number(process.argv[process.argv.indexOf('--port') + 1]), '127.0.0.1')
@@ -639,12 +653,15 @@ async function fixtureEnvironment(home) {
   const temporary = resolve(home, '.fixture-tmp')
   await mkdir(tools, { recursive: true })
   await mkdir(temporary, { recursive: true })
-  await symlink(process.execPath, resolve(tools, 'node'))
-  await symlink('/usr/bin/touch', resolve(tools, 'touch'))
-  await symlink('/bin/cat', resolve(tools, 'cat'))
+  const link = async (source, destination) => {
+    try { await symlink(source, destination) } catch (error) { if (error.code !== 'EEXIST') throw error }
+  }
+  await link(process.execPath, resolve(tools, 'node'))
+  await link('/usr/bin/touch', resolve(tools, 'touch'))
+  await link('/bin/cat', resolve(tools, 'cat'))
   await writeFile(resolve(tools, 'flock'), '#!/bin/sh\nshift 3\nexec "$@"\n')
   await chmod(resolve(tools, 'flock'), 0o700)
-  await symlink('/usr/bin/grep', resolve(tools, 'grep'))
+  await link('/usr/bin/grep', resolve(tools, 'grep'))
   return {
     HOME: home,
     PATH: `${resolve(home, '.local/bin')}:${tools}`,

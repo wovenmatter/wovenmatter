@@ -251,6 +251,28 @@ public actor DashboardStore {
     return OpenClawGatewayEndpointResolver.localAgentWorkspace(port: port)
   }
 
+  private func prepareLocalOpenClawResults(executable: URL, environment: [String: String]) async throws {
+    guard let resources = Bundle.main.resourceURL else { return }
+    let script = resources.appending(path: "remote/src/prepare-openclaw-results.mjs")
+    guard FileManager.default.fileExists(atPath: script.path) else {
+      throw OpenClawGatewayClientError.rejected("The app is missing its scheduled-result helper.")
+    }
+    try await Task.detached {
+      let process = Process()
+      process.executableURL = URL(filePath: "/usr/bin/env")
+      process.arguments = ["node", script.path, executable.path]
+      process.environment = environment
+      process.standardOutput = FileHandle.nullDevice
+      process.standardError = FileHandle.nullDevice
+      process.standardInput = FileHandle.nullDevice
+      try process.run()
+      process.waitUntilExit()
+      guard process.terminationStatus == 0 else {
+        throw OpenClawGatewayClientError.rejected("Could not enable durable scheduled results. Check OpenClaw's plugin configuration and restart the Gateway after enabling the Woven Matter plugin.")
+      }
+    }.value
+  }
+
   public func prepareLocalWorkspaceOpenClawGateway(
     agentID: UUID,
     workingDirectory: URL
@@ -281,6 +303,7 @@ public actor DashboardStore {
       environmentKeysToRemove: base.environmentKeysToRemove + ["BUZZ_PRIVATE_KEY", "NOSTR_PRIVATE_KEY"],
       environmentKeyPrefixesToRemove: base.environmentKeyPrefixesToRemove + ["BUZZ_", "NOSTR_"]
     )
+    try await prepareLocalOpenClawResults(executable: base.executableURL, environment: environment.merging(launchEnvironment) { _, value in value })
     _ = try await localOpenClawGateways.ensure(
       agentID: agentID, identity: identity, launch: launch,
       workingDirectory: workingDirectory, configuredPort: configuration.port,
@@ -421,6 +444,30 @@ public actor DashboardStore {
 
   public func syncOpenClawCron(agentID: UUID) async throws {
     try await openClawGateway.syncCron(agentID: agentID)
+  }
+
+  public func createOpenClawCron(agentID: UUID, name: String, message: String, expression: String,
+                                timeZone: String, declarationKey: String, destination: String) async throws {
+    try await openClawGateway.createCron(agentID: agentID, name: name, message: message,
+      expression: expression, timeZone: timeZone, declarationKey: declarationKey, destination: destination)
+  }
+
+  public func updateOpenClawCron(job: OpenClawCronJob, patch: GatewayJSONValue) async throws {
+    let payload = try JSONDecoder().decode(GatewayJSONValue.self, from: job.remotePayload)
+    try await openClawGateway.updateCron(agentID: job.agentID, jobID: job.id, patch: patch,
+      revision: payload.objectValue?["configRevision"]?.stringValue)
+  }
+
+  public func performOpenClawCronAction(job: OpenClawCronJob, action: String) async throws {
+    try await openClawGateway.performCronAction(agentID: job.agentID, jobID: job.id, action: action)
+  }
+
+  public func openClawResultRoutes(agentID: UUID) throws -> [String: String] {
+    try database.openClawResultRoutes(agentID: agentID)
+  }
+
+  public func setOpenClawResultRoute(agentID: UUID, jobID: String, destination: String) throws {
+    try database.setOpenClawResultRoute(agentID: agentID, jobID: jobID, destination: destination)
   }
 
   public func openClawCronJobs(agentID: UUID? = nil) throws -> [OpenClawCronJob] {
