@@ -2,6 +2,51 @@ import AppKit
 import SwiftUI
 import WovenMatterCore
 
+private struct DashboardDatabaseSourceButtonStyle: ButtonStyle {
+    @Environment(\.dashboardTheme) private var theme
+    @State private var isHovering = false
+    let isSelected: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background(
+                configuration.isPressed
+                    ? theme.palette.themeStrong
+                    : isSelected
+                        ? (isHovering ? theme.palette.themeStrong : theme.palette.themeSoft)
+                        : isHovering ? theme.palette.themeWhisper : .clear,
+                in: RoundedRectangle(
+                    cornerRadius: DashboardMetrics.controlRadius,
+                    style: .continuous
+                )
+            )
+            .onHover { isHovering = $0 }
+    }
+}
+
+private struct DashboardDatabaseRowButtonStyle: ButtonStyle {
+    @Environment(\.dashboardTheme) private var theme
+    @State private var isHovering = false
+    let isSelected: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background(
+                configuration.isPressed
+                    ? theme.palette.themeStrong
+                    : isSelected
+                        ? (isHovering ? theme.palette.themeStrong : theme.palette.themeSoft)
+                        : isHovering ? theme.palette.themeWhisper : theme.palette.input,
+                in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(theme.palette.border, lineWidth: 1)
+            }
+            .onHover { isHovering = $0 }
+    }
+}
+
 struct DashboardDatabasesView: View {
     @Environment(\.dashboardTheme) private var theme
     @Bindable var model: ApplicationModel
@@ -9,8 +54,6 @@ struct DashboardDatabasesView: View {
     @State private var selectedSourceID: String?
     @State private var selectedDatabaseID: String?
     @State private var showsCreateDatabase = false
-    @State private var hoveredSourceID: String?
-    @State private var hoveredDatabaseID: String?
 
     private var filteredSources: [DashboardDatabaseSource] {
         model.databasesSnapshot.sources.filter { filter.includes($0.kind) }
@@ -91,7 +134,6 @@ struct DashboardDatabasesView: View {
                 value.displayName
             }
             .frame(maxWidth: 360)
-            .accessibilityLabel("Location")
             Button {
                 Task { await model.refreshDatabases() }
             } label: {
@@ -150,23 +192,14 @@ struct DashboardDatabasesView: View {
                         }
                         .padding(.horizontal, 12)
                         .frame(minHeight: 48)
-                        .background(
-                            selectedSourceID == source.id
-                                ? theme.palette.themeStrong
-                                : hoveredSourceID == source.id
-                                    ? theme.palette.themeWhisper
-                                    : .clear,
-                            in: RoundedRectangle(
-                                cornerRadius: DashboardMetrics.controlRadius,
-                                style: .continuous
-                            )
-                        )
                         .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
-                    .onHover { hovering in
-                        hoveredSourceID = hovering ? source.id : (hoveredSourceID == source.id ? nil : hoveredSourceID)
-                    }
+                    .buttonStyle(DashboardDatabaseSourceButtonStyle(
+                        isSelected: selectedSourceID == source.id
+                    ))
+                    .accessibilityAddTraits(
+                        selectedSourceID == source.id ? .isSelected : []
+                    )
                 }
             }
             .padding(12)
@@ -262,24 +295,14 @@ struct DashboardDatabasesView: View {
             }
             .padding(.horizontal, 14)
             .frame(minHeight: 62)
-            .background(
-                database.id == selectedDatabaseID
-                    ? theme.palette.themeStrong
-                    : hoveredDatabaseID == database.id
-                        ? theme.palette.themeWhisper
-                        : theme.palette.input,
-                in: RoundedRectangle(cornerRadius: 10, style: .continuous)
-            )
-            .overlay {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .stroke(theme.palette.border, lineWidth: 1)
-            }
             .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         }
-        .buttonStyle(.plain)
-        .onHover { hovering in
-            hoveredDatabaseID = hovering ? database.id : (hoveredDatabaseID == database.id ? nil : hoveredDatabaseID)
-        }
+        .buttonStyle(DashboardDatabaseRowButtonStyle(
+            isSelected: database.id == selectedDatabaseID
+        ))
+        .accessibilityAddTraits(
+            database.id == selectedDatabaseID ? .isSelected : []
+        )
     }
 
     private func databaseDetail(_ database: DashboardAgentDatabase) -> some View {

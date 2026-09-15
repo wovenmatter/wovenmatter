@@ -7,45 +7,65 @@ struct DashboardCronSurface: View {
   let onOpenConversation: (String) -> Void
   @State private var provider = "Hermes"
   var body: some View {
-    VStack(spacing: 0) {
-      DashboardSegmentedSelector(
-        options: ["Hermes", "OpenClaw"],
-        selection: $provider
-      ) { $0 }
-      .frame(width: 240)
-      .padding(.top, 16)
-      .accessibilityLabel("Agent")
-      if provider == "Hermes" {
-        HermesCronSurface(model: model, onOpenConversation: onOpenConversation)
-      } else {
-        OpenClawCronSurface(model: model, onOpenConversation: onOpenConversation)
-      }
+    if provider == "Hermes" {
+      HermesCronSurface(
+        model: model,
+        provider: $provider,
+        onOpenConversation: onOpenConversation
+      )
+    } else {
+      OpenClawCronSurface(
+        model: model,
+        provider: $provider,
+        onOpenConversation: onOpenConversation
+      )
     }
   }
 }
 
 struct HermesCronSurface: View {
   @Bindable var model: ApplicationModel
+  @Binding var provider: String
   let onOpenConversation: (String) -> Void
   @State private var selectedAgent: UUID?
   var body: some View {
-    VStack(alignment: .leading, spacing: 16) {
-      HStack {
-        Text("Cron Jobs").font(.system(size: 22, weight: .semibold))
-        Spacer()
-        Picker("Workspace", selection: $selectedAgent) {
-          Text("All workspaces").tag(nil as UUID?)
-          ForEach(model.hermesCronAgents) { Text($0.displayName).tag(Optional($0.id)) }
-        }.frame(maxWidth: 200)
-        Button(model.isRefreshingHermesCron ? "Refreshing…" : "Refresh") {
-          Task { await model.refreshHermesCron() }
+    VStack(spacing: 0) {
+      VStack(alignment: .leading, spacing: 12) {
+        HStack(spacing: 12) {
+          DashboardLucideIcon(glyph: .calendarClockControl, size: 18)
+            .foregroundStyle(DashboardPalette.primary)
+            .frame(width: 36, height: 36)
+            .background(DashboardPalette.muted)
+            .clipShape(RoundedRectangle(
+              cornerRadius: DashboardMetrics.controlRadius,
+              style: .continuous
+            ))
+          Text("Cron Jobs").font(.system(size: 22, weight: .semibold))
+          Spacer(minLength: 16)
+          cronProviderSelector
         }
-        .buttonStyle(DashboardQuietButtonStyle()).disabled(model.isRefreshingHermesCron)
+        HStack(spacing: 8) {
+          Spacer(minLength: 0)
+          Picker("Workspace", selection: $selectedAgent) {
+            Text("All workspaces").tag(nil as UUID?)
+            ForEach(model.hermesCronAgents) { Text($0.displayName).tag(Optional($0.id)) }
+          }
+          .frame(maxWidth: 200)
+          Button(model.isRefreshingHermesCron ? "Refreshing…" : "Refresh") {
+            Task { await model.refreshHermesCron() }
+          }
+          .buttonStyle(DashboardQuietButtonStyle())
+          .disabled(model.isRefreshingHermesCron)
+        }
+        Text(
+          "Jobs keep running while Woven Matter is closed, as long as Hermes and its host stay running."
+        )
+        .font(.system(size: 12)).foregroundStyle(DashboardPalette.mutedForeground)
       }
-      Text(
-        "Jobs keep running while Woven Matter is closed, as long as Hermes and its host stay running."
-      )
-      .font(.system(size: 12)).foregroundStyle(DashboardPalette.mutedForeground)
+      .padding(.horizontal, 32)
+      .padding(.top, 48)
+      .padding(.bottom, 20)
+
       ScrollView {
         LazyVStack(alignment: .leading, spacing: 16) {
           if model.hermesCronAgents.isEmpty {
@@ -94,9 +114,21 @@ struct HermesCronSurface: View {
               }
             }
           }
-        }.frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 32)
+        .padding(.bottom, 32)
       }
-    }.padding(32).task { await model.refreshHermesCron() }
+    }
+    .task { await model.refreshHermesCron() }
+  }
+
+  private var cronProviderSelector: some View {
+    DashboardSegmentedSelector(
+      options: ["Hermes", "OpenClaw"],
+      selection: $provider
+    ) { $0 }
+    .frame(width: 220)
   }
 
   private func jobCard(agent: WorkspaceAgent, job: HermesValue) -> some View {

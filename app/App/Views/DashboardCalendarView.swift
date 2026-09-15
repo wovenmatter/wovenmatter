@@ -84,7 +84,6 @@ struct DashboardCalendarSurface: View {
     @State private var selectedDate = Calendar.autoupdatingCurrent.startOfDay(for: Date())
     @State private var eventDraft = DashboardCalendarEventDraft(selectedDate: Date())
     @State private var showingAddEvent = false
-    @State private var hoveredDate: Date?
 
     private let calendar = Calendar.autoupdatingCurrent
     private let columns = Array(
@@ -269,28 +268,13 @@ struct DashboardCalendarSurface: View {
             .foregroundStyle(DashboardPalette.foreground)
             .frame(maxWidth: .infinity, minHeight: 76, alignment: .topLeading)
             .padding(8)
-            .background(
-                selected
-                    ? theme.palette.themeSoft
-                    : hoveredDate == day.date
-                        ? theme.palette.themeWhisper
-                        : DashboardPalette.muted.opacity(0.32),
-                in: RoundedRectangle(cornerRadius: 10, style: .continuous)
-            )
-            .overlay {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .stroke(
-                        selected ? theme.palette.themeRing : theme.palette.border.opacity(0.65),
-                        lineWidth: selected ? 1.5 : 1
-                    )
-            }
-            .opacity(day.isInDisplayedMonth ? 1 : 0.45)
         }
-        .buttonStyle(.plain)
-        .onHover { hovering in
-            hoveredDate = hovering ? day.date : (hoveredDate == day.date ? nil : hoveredDate)
-        }
+        .buttonStyle(DashboardCalendarDayButtonStyle(
+            isSelected: selected,
+            isInDisplayedMonth: day.isInDisplayedMonth
+        ))
         .accessibilityLabel(day.date.formatted(date: .complete, time: .omitted))
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
     private func monthNavigationButton(
@@ -319,6 +303,36 @@ struct DashboardCalendarSurface: View {
         model.clearCalendarMutationError()
         eventDraft = DashboardCalendarEventDraft(selectedDate: selectedDate)
         showingAddEvent = true
+    }
+}
+
+private struct DashboardCalendarDayButtonStyle: ButtonStyle {
+    @Environment(\.dashboardTheme) private var theme
+    @State private var isHovering = false
+    let isSelected: Bool
+    let isInDisplayedMonth: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background(
+                configuration.isPressed
+                    ? theme.palette.themeStrong
+                    : isSelected
+                        ? (isHovering ? theme.palette.themeStrong : theme.palette.themeSoft)
+                        : isHovering
+                            ? theme.palette.themeWhisper
+                            : DashboardPalette.muted.opacity(0.32),
+                in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(
+                        isSelected ? theme.palette.themeRing : theme.palette.border.opacity(0.65),
+                        lineWidth: isSelected ? 1.5 : 1
+                    )
+            }
+            .opacity(isInDisplayedMonth ? 1 : 0.45)
+            .onHover { isHovering = $0 }
     }
 }
 

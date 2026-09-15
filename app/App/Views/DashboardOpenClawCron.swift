@@ -7,6 +7,7 @@ import WovenMatterCore
 struct OpenClawCronSurface: View {
     @Environment(\.dashboardTheme) private var theme
     @Bindable var model: ApplicationModel
+    @Binding var provider: String
     let onOpenConversation: (String) -> Void
     @State private var showsDeleted = false
     @State private var selectedAgentID: UUID?
@@ -48,40 +49,36 @@ struct OpenClawCronSurface: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 12) {
-                DashboardLucideIcon(glyph: .calendarClockControl, size: 18)
-                    .foregroundStyle(DashboardPalette.primary)
-                    .frame(width: 36, height: 36)
-                    .background(DashboardPalette.muted)
-                    .clipShape(RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius, style: .continuous))
-                Text("Cron Jobs").font(.system(size: 22, weight: .semibold))
-                Spacer()
-                Picker("OpenClaw", selection: $selectedAgentID) {
-                    Text("All agents").tag(nil as UUID?)
-                    ForEach(agents) { Text($0.displayName).tag(Optional($0.id)) }
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 12) {
+                    DashboardLucideIcon(glyph: .calendarClockControl, size: 18)
+                        .foregroundStyle(DashboardPalette.primary)
+                        .frame(width: 36, height: 36)
+                        .background(DashboardPalette.muted)
+                        .clipShape(RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius, style: .continuous))
+                    Text("Cron Jobs").font(.system(size: 22, weight: .semibold))
+                    Spacer(minLength: 16)
+                    DashboardSegmentedSelector(
+                        options: ["Hermes", "OpenClaw"],
+                        selection: $provider
+                    ) { $0 }
+                    .frame(width: 220)
                 }
-                .frame(maxWidth: 190)
-                Toggle("Deleted", isOn: $showsDeleted).toggleStyle(.button)
-                if showsDeleted {
-                    Button("Empty trash") { model.emptyOpenClawCronTrash() }
-                        .buttonStyle(DashboardQuietButtonStyle())
-                }
-                Button(model.isRefreshingOpenClawCron ? "Refreshing…" : "Refresh") {
-                    Task { await model.refreshOpenClawCron() }
-                }
-                .buttonStyle(DashboardQuietButtonStyle())
-                .disabled(model.isRefreshingOpenClawCron)
-                if agents.count == 1, let agent = agents.first {
-                    Button("New job") { editor = CronEditorSelection(agentID: agent.id) }
-                        .buttonStyle(DashboardPrimaryButtonStyle())
-                } else {
-                    Menu("New job") {
-                        ForEach(agents) { agent in
-                            Button(agent.displayName) { editor = CronEditorSelection(agentID: agent.id) }
+                ViewThatFits(in: .horizontal) {
+                    openClawHeaderActions
+                    VStack(alignment: .trailing, spacing: 8) {
+                        HStack(spacing: 8) {
+                            Spacer(minLength: 0)
+                            agentPicker
+                            deletedToggle
+                            refreshButton
+                        }
+                        HStack(spacing: 8) {
+                            Spacer(minLength: 0)
+                            emptyTrashButton
+                            newJobButton
                         }
                     }
-                    .buttonStyle(DashboardPrimaryButtonStyle())
-                    .disabled(agents.isEmpty)
                 }
             }
             .padding(.horizontal, 32)
@@ -140,6 +137,61 @@ struct OpenClawCronSurface: View {
         .task(id: heartbeatAgent?.id) {
             guard let agentID = heartbeatAgent?.id else { return }
             await model.loadOpenClawHeartbeat(agentID: agentID)
+        }
+    }
+
+    private var openClawHeaderActions: some View {
+        HStack(spacing: 8) {
+            Spacer(minLength: 0)
+            agentPicker
+            deletedToggle
+            emptyTrashButton
+            refreshButton
+            newJobButton
+        }
+    }
+
+    private var agentPicker: some View {
+        Picker("OpenClaw", selection: $selectedAgentID) {
+            Text("All agents").tag(nil as UUID?)
+            ForEach(agents) { Text($0.displayName).tag(Optional($0.id)) }
+        }
+        .frame(maxWidth: 190)
+    }
+
+    private var deletedToggle: some View {
+        Toggle("Deleted", isOn: $showsDeleted).toggleStyle(.button)
+    }
+
+    @ViewBuilder
+    private var emptyTrashButton: some View {
+        if showsDeleted {
+            Button("Empty trash") { model.emptyOpenClawCronTrash() }
+                .buttonStyle(DashboardQuietButtonStyle())
+        }
+    }
+
+    private var refreshButton: some View {
+        Button(model.isRefreshingOpenClawCron ? "Refreshing…" : "Refresh") {
+            Task { await model.refreshOpenClawCron() }
+        }
+        .buttonStyle(DashboardQuietButtonStyle())
+        .disabled(model.isRefreshingOpenClawCron)
+    }
+
+    @ViewBuilder
+    private var newJobButton: some View {
+        if agents.count == 1, let agent = agents.first {
+            Button("New job") { editor = CronEditorSelection(agentID: agent.id) }
+                .buttonStyle(DashboardPrimaryButtonStyle())
+        } else {
+            Menu("New job") {
+                ForEach(agents) { agent in
+                    Button(agent.displayName) { editor = CronEditorSelection(agentID: agent.id) }
+                }
+            }
+            .buttonStyle(DashboardPrimaryButtonStyle())
+            .disabled(agents.isEmpty)
         }
     }
 
@@ -230,7 +282,7 @@ struct OpenClawCronSurface: View {
                         DisclosureGroup("\(historyRun.status.capitalized) · \((historyRun.startedAt ?? historyRun.completedAt)?.formatted(date: .abbreviated, time: .shortened) ?? "Time unavailable")") {
                             VStack(alignment: .leading, spacing: 5) {
                                 Text("Run ID: \(historyRun.id)").font(.system(size: 10.5, design: .monospaced)).textSelection(.enabled)
-                                    Text(historyRun.output.flatMap { $0.isEmpty ? nil : $0 } ?? "No output")
+                                Text(historyRun.output.flatMap { $0.isEmpty ? nil : $0 } ?? "No output")
                                     .font(.system(size: 11.5)).textSelection(.enabled)
                                 if job.archiveState == .active {
                                     Button("Continue in chat") {
@@ -259,7 +311,7 @@ struct OpenClawCronSurface: View {
                     }
                     .buttonStyle(DashboardQuietButtonStyle())
                     if let run {
-                                    Button("Continue in chat") {
+                        Button("Continue in chat") {
                             createConversation(agentID: job.agentID, context: jobContext(job, run: run, action: "Continue from this cron output"))
                         }
                         .buttonStyle(DashboardQuietButtonStyle())
