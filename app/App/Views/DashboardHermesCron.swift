@@ -222,6 +222,7 @@ private struct HermesCronJobForm: View {
       .padding(.horizontal, 4)
       .padding(.top, 10)
       .padding(.bottom, 4)
+      .frame(maxWidth: .infinity, alignment: .leading)
     }
   }
 }
