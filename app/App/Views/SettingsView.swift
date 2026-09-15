@@ -5,6 +5,7 @@ import WovenMatterCore
 enum SettingsSection: Equatable {
     case landing
     case general
+    case harness(AgentRuntimeKind)
     case openClaw
     case openCode
     case hermes
@@ -44,6 +45,14 @@ struct SettingsView: View {
                     model: model,
                     reservesRailControlSpace: reservesRailControlSpace,
                     onBack: { section = .landing }
+                )
+            case .harness(let runtimeKind):
+                SettingsHarnessView(
+                    model: model,
+                    runtimeKind: runtimeKind,
+                    reservesRailControlSpace: reservesRailControlSpace,
+                    onBack: { section = .landing },
+                    onOpenLocalWorkspace: { section = .localWorkspace }
                 )
             case .openClaw:
                 SettingsOpenClawView(
@@ -156,6 +165,42 @@ struct SettingsView: View {
                     action: { section = .general }
                 )
                 SettingsDestinationRow(
+                    title: "Local agent workspace",
+                    detail: "Direct CLI and ACP sessions, runtimes, and workspace folders.",
+                    icon: { DashboardLucideIcon(glyph: .terminal, size: 15) },
+                    action: { section = .localWorkspace }
+                )
+                SettingsDestinationRow(
+                    title: "Remote agent workspaces",
+                    detail: "Standalone Linux workspaces deployed through SSH.",
+                    icon: { DashboardLucideIcon(glyph: .container, size: 15) },
+                    action: { section = .remoteWorkspaces }
+                )
+                SettingsDestinationRow(
+                    title: "Codex",
+                    detail: "Local runtime status and workspace settings.",
+                    icon: { DashboardHarnessLogoIcon(logo: .codex, size: 15) },
+                    action: { section = .harness(.codex) }
+                )
+                SettingsDestinationRow(
+                    title: "Claude Code",
+                    detail: "Local runtime status and workspace settings.",
+                    icon: { DashboardHarnessLogoIcon(logo: .claude, size: 15) },
+                    action: { section = .harness(.claudeCode) }
+                )
+                SettingsDestinationRow(
+                    title: "Grok Build",
+                    detail: "Local runtime status and workspace settings.",
+                    icon: { DashboardHarnessLogoIcon(logo: .grok, size: 15) },
+                    action: { section = .harness(.grokBuild) }
+                )
+                SettingsDestinationRow(
+                    title: "Cursor",
+                    detail: "Local runtime status and workspace settings.",
+                    icon: { DashboardHarnessLogoIcon(logo: .cursor, size: 15) },
+                    action: { section = .harness(.cursor) }
+                )
+                SettingsDestinationRow(
                     title: "OpenClaw",
                     detail: "Gateway connections and Woven Matter names for every OpenClaw agent.",
                     icon: { DashboardHarnessLogoIcon(logo: .openClaw, size: 15) },
@@ -174,16 +219,10 @@ struct SettingsView: View {
                     action: { section = .openCode }
                 )
                 SettingsDestinationRow(
-                    title: "Local agent workspace",
-                    detail: "Direct CLI and ACP sessions, runtimes, and workspace folders.",
-                    icon: { DashboardLucideIcon(glyph: .terminal, size: 15) },
-                    action: { section = .localWorkspace }
-                )
-                SettingsDestinationRow(
-                    title: "Remote agent workspaces",
-                    detail: "Standalone Linux workspaces deployed through SSH.",
-                    icon: { DashboardLucideIcon(glyph: .container, size: 15) },
-                    action: { section = .remoteWorkspaces }
+                    title: "Pi",
+                    detail: "Local runtime status and workspace settings.",
+                    icon: { DashboardHarnessLogoIcon(logo: .pi, size: 15) },
+                    action: { section = .harness(.pi) }
                 )
                 SettingsDestinationRow(
                     title: "Buzz agent workspaces",
@@ -199,5 +238,131 @@ struct SettingsView: View {
                 )
             }
         }
+    }
+}
+
+private struct SettingsHarnessView: View {
+    @Bindable var model: ApplicationModel
+    let runtimeKind: AgentRuntimeKind
+    var reservesRailControlSpace = false
+    let onBack: () -> Void
+    let onOpenLocalWorkspace: () -> Void
+
+    private var availability: LocalACPRuntimeAvailability? {
+        model.localACPRuntimeAvailability.first { $0.runtimeKind == runtimeKind }
+    }
+
+    private var agents: [WorkspaceAgent] {
+        model.localCLIAgents
+            .filter { $0.runtimeKind == runtimeKind }
+            .sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
+    }
+
+    var body: some View {
+        SettingsPage(
+            title: runtimeKind.displayName,
+            detail: "\(runtimeKind.displayName) on this Mac.",
+            reservesRailControlSpace: reservesRailControlSpace,
+            onBack: onBack
+        ) {
+            SettingsCard(
+                title: "Local agent workspace",
+                detail: "Runtime status and agents on this Mac."
+            ) {
+                SettingsInset {
+                    HStack(alignment: .center, spacing: 12) {
+                        DashboardHarnessLogoIcon(
+                            logo: DashboardHarnessLogo(runtimeKind: runtimeKind),
+                            size: 24
+                        )
+                        .frame(width: 28, height: 28)
+
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(runtimeKind.displayName)
+                                .font(.system(size: 13, weight: .medium))
+                            Text(runtimeDetail)
+                                .font(.system(size: 11))
+                                .foregroundStyle(DashboardPalette.mutedForeground)
+                                .textSelection(.enabled)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                        SettingsPill(
+                            runtimeStatus,
+                            tone: runtimeIsReady ? .neutral : .warning
+                        )
+                    }
+                }
+
+                if agents.isEmpty {
+                    SettingsEmpty("No \(runtimeKind.displayName) agents discovered.")
+                } else {
+                    VStack(spacing: 8) {
+                        ForEach(agents) { agent in
+                            SettingsInset {
+                                HStack(alignment: .center, spacing: 12) {
+                                    DashboardHarnessLogoIcon(
+                                        logo: DashboardHarnessLogo(runtimeKind: runtimeKind),
+                                        size: 20
+                                    )
+                                    .frame(width: 28, height: 28)
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Text(agent.displayName)
+                                            .font(.system(size: 13, weight: .medium))
+                                        Text("Local agent workspace")
+                                            .font(.system(size: 11))
+                                            .foregroundStyle(DashboardPalette.mutedForeground)
+                                    }
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                }
+                            }
+                        }
+                    }
+                }
+
+                SettingsDestinationRow(
+                    title: "Manage local workspace",
+                    detail: "Manage runtimes and workspace folders.",
+                    icon: { DashboardLucideIcon(glyph: .terminal, size: 15) },
+                    action: onOpenLocalWorkspace
+                )
+            }
+        }
+    }
+
+    private var runtimeIsReady: Bool {
+        !model.checkingLocalACPRuntimeKinds.contains(runtimeKind)
+            && availability?.isReady == true
+            && model.isLocalACPAgentReady(runtimeKind)
+    }
+
+    private var runtimeStatus: String {
+        if model.checkingLocalACPRuntimeKinds.contains(runtimeKind) {
+            return "Checking"
+        }
+        if !model.isLocalACPRuntimeCredentialAccessEnabled(runtimeKind),
+           availability?.executablePath != nil {
+            return "Not enabled"
+        }
+        if availability?.isReady == true, !model.isLocalACPAgentReady(runtimeKind) {
+            return "Workspace unavailable"
+        }
+        guard let availability else { return "Checking" }
+        return switch availability.state {
+        case .ready: "Ready"
+        case .cliMissing: "CLI required"
+        case .adapterMissing: "Adapter required"
+        case .adapterOutdated: "Update required"
+        case .authenticationRequired: "Sign in required"
+        case .executableUnavailable: "Setup required"
+        }
+    }
+
+    private var runtimeDetail: String {
+        if let inventory = model.runtimeInventories[runtimeKind] {
+            return inventory.summary
+        }
+        return availability?.detail ?? "Checking the local runtime…"
     }
 }
