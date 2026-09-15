@@ -161,6 +161,28 @@ image. Their commands and sources are declared in `harnesses/catalog.json` and
 run only after explicit user action. Native ACP, agent-stdio, Gateway, and Pi RPC
 transports are checked after installation instead of being assumed present.
 
+## Remote databases
+
+Databases includes All, Local, Remote, and Buzz locations. The Remote workspace
+menu filters configured workspaces, including unavailable ones. Select a workspace
+to create a database folder or change its data preference. Agents use the same
+persistent `Databases/<name>/` folder and `.wovenmatter/database.json` metadata.
+Existing remote services need an explicit service update in Settings before these
+operations are available.
+
+Linked notes, tables, and HTML artifacts can read remote JSON and run read-only
+SQLite queries through the existing authenticated SSH tunnel. Remote paths are
+never treated as Mac files. External folder links and symlinks are unavailable;
+all catalog operations stay within that workspace’s database root. Database
+preferences guide agents without enforcing a storage format.
+
+The service bounds JSON reads to 4 MiB and SQLite snapshots to 256 MiB including
+WAL state. Queries return up to 1,000 rows and 128 uniquely named columns with a
+4 MiB result budget. SQLite permits SELECT/CTE queries; mutation, ATTACH, PRAGMA,
+and extension loading are denied. Busy or changing databases return an error
+that can be retried. Queries run in bounded helper processes; they do not start
+agents or consume provider services.
+
 ## Limitations
 
 - Remote workspaces require a reachable Linux Docker host.

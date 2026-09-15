@@ -3751,6 +3751,29 @@ final class ApplicationModel {
             ))
         }
 
+        let remoteCatalogIdentity = remoteWorkspaces.databaseCatalogIdentity
+        let configurations = remoteCatalogIdentity.configurations
+        for configuration in configurations {
+            let sourceID = Self.remoteDatabaseSourceID(configuration.id)
+            do {
+                let rows = try await remoteWorkspaces.databases(for: configuration)
+                sources.append(DashboardDatabaseSource(
+                    id: sourceID, name: configuration.name, kind: .remote,
+                    detail: "\(configuration.hostName) · Databases",
+                    databases: rows.map { DashboardAgentDatabase(
+                        sourceID: sourceID, databaseID: $0.id, name: $0.name,
+                        preference: $0.preference, localURL: nil, isExternal: false
+                    ) }, error: nil, allowsCreation: true, allowsExternalLinks: false
+                ))
+            } catch {
+                sources.append(DashboardDatabaseSource(
+                    id: sourceID, name: configuration.name, kind: .remote,
+                    detail: configuration.hostName, databases: [],
+                    error: error is CancellationError ? "Workspace connection changed. Refresh to reconnect." : error.localizedDescription,
+                    allowsCreation: false, allowsExternalLinks: false
+                ))
+            }
+        }
         for link in buzzWorkspaceSnapshot.links where link.isEnabled {
             let sourceID = "buzz:\(link.id.uuidString.lowercased())"
             let root = link.localWorkspaceURL.appending(
@@ -3782,8 +3805,39 @@ final class ApplicationModel {
             }
         }
 
+            guard remoteCatalogIdentity == remoteWorkspaces.databaseCatalogIdentity else {
+                databaseRefreshRequestedWhileRunning = true
+                continue
+            }
             databasesSnapshot = DashboardDatabasesSnapshot(sources: sources)
         } while databaseRefreshRequestedWhileRunning
+    }
+
+    static func remoteDatabaseSourceID(_ id: UUID) -> String {
+        "remote:\(id.uuidString.lowercased())"
+    }
+
+    private func remoteDatabaseConfiguration(sourceID: String) -> RemoteWorkspaceConfiguration? {
+        remoteWorkspaces.workspaces.first { Self.remoteDatabaseSourceID($0.id) == sourceID }
+    }
+
+    @discardableResult
+    func createDatabase(sourceID: String, name: String, preference: AgentDatabasePreference) async -> String? {
+        if sourceID == "local" { return await createLocalDatabase(name: name, preference: preference) }
+        guard let configuration = remoteDatabaseConfiguration(sourceID: sourceID) else {
+            databaseError = "Choose an available workspace."
+            return nil
+        }
+        do {
+            let row = try await remoteWorkspaces.createDatabase(
+                name: name.trimmingCharacters(in: .whitespacesAndNewlines), preference: preference, in: configuration)
+            databaseError = nil
+            await refreshDatabases()
+            return "\(sourceID):\(row.id)"
+        } catch {
+            databaseError = error.localizedDescription
+            return nil
+        }
     }
 
     @discardableResult
@@ -3835,14 +3889,16 @@ final class ApplicationModel {
         _ preference: AgentDatabasePreference,
         database: DashboardAgentDatabase
     ) async {
-        guard let url = database.localURL else {
-            databaseError = "Remote database preferences are managed by their agent."
-            return
-        }
         do {
-            try await Task.detached(priority: .userInitiated) {
-                try AgentDatabaseCatalog.setPreference(preference, for: url)
-            }.value
+            if let configuration = remoteDatabaseConfiguration(sourceID: database.sourceID) {
+                try await remoteWorkspaces.setDatabasePreference(preference, databaseID: database.databaseID, in: configuration)
+            } else if let url = database.localURL {
+                try await Task.detached(priority: .userInitiated) {
+                    try AgentDatabaseCatalog.setPreference(preference, for: url)
+                }.value
+            } else {
+                throw DashboardDatabaseLinkError.databaseUnavailable
+            }
             databaseError = nil
             await refreshDatabases()
         } catch {
@@ -3855,6 +3911,14 @@ final class ApplicationModel {
     }
 
     func linkedData(for link: DatabaseArtifactLink) async throws -> DatabaseTabularData {
+        if let configuration = remoteDatabaseConfiguration(sourceID: link.sourceID) {
+            let result = try await remoteWorkspaces.databaseData(for: link, in: configuration)
+            if let query = result.query { return try DatabaseLinkedData.load(queryResponse: query) }
+            guard let encoded = result.jsonBase64, let data = Data(base64Encoded: encoded) else {
+                throw DashboardDatabaseLinkError.remoteDataUnavailable
+            }
+            return try DatabaseLinkedData.load(data: data, fileExtension: "json", preference: .json, sqliteQuery: nil)
+        }
         var database = databasesSnapshot.database(
             sourceID: link.sourceID,
             databaseID: link.databaseID

@@ -4,6 +4,13 @@ import Security
 import WovenMatterClient
 import WovenMatterCore
 
+struct RemoteDatabaseCatalogIdentity: Equatable {
+    let configurations: [RemoteWorkspaceConfiguration]
+    let credentialEpoch: UUID
+    let workspaceEpochs: [UUID: UUID]
+    let credentialsEnabled: Bool
+}
+
 struct RemoteHarnessChatTarget: Equatable, Identifiable {
     let configuration: RemoteWorkspaceConfiguration
     let harness: RemoteHarnessStatus
@@ -357,6 +364,47 @@ final class RemoteWorkspacesModel {
             runtimeChecksVerifiedAfterError.removeValue(forKey: configuration.id)
             runtimeErrors[configuration.id] = "Runtime inventory unavailable. Update this workspace service if it predates runtime management. " + error.localizedDescription
         }
+    }
+
+    var databaseCatalogIdentity: RemoteDatabaseCatalogIdentity {
+        RemoteDatabaseCatalogIdentity(configurations: workspaces, credentialEpoch: credentialEpoch,
+                                      workspaceEpochs: workspaceEpochs, credentialsEnabled: isCredentialAccessEnabled)
+    }
+
+    // Validate both sides of every suspension so credentials or destination changes
+    // cannot publish a result belonging to an obsolete workspace connection.
+    func databases(for configuration: RemoteWorkspaceConfiguration) async throws -> [RemoteAgentDatabase] {
+        try await databaseRequest(configuration) { try await $0.databases() }
+    }
+
+    func createDatabase(name: String, preference: AgentDatabasePreference,
+                        in configuration: RemoteWorkspaceConfiguration) async throws -> RemoteAgentDatabase {
+        try await databaseRequest(configuration) { try await $0.createDatabase(name: name, preference: preference) }
+    }
+
+    func setDatabasePreference(_ preference: AgentDatabasePreference, databaseID: String,
+                               in configuration: RemoteWorkspaceConfiguration) async throws {
+        _ = try await databaseRequest(configuration) { try await $0.setDatabasePreference(preference, databaseID: databaseID) }
+    }
+
+    func databaseData(for link: DatabaseArtifactLink,
+                      in configuration: RemoteWorkspaceConfiguration) async throws -> RemoteDatabaseData {
+        try await databaseRequest(configuration) { try await $0.databaseData(for: link) }
+    }
+
+    private func databaseRequest<Value: Sendable>(
+        _ configuration: RemoteWorkspaceConfiguration,
+        operation: (RemoteWorkspaceServiceClient) async throws -> Value
+    ) async throws -> Value {
+        guard isCredentialAccessEnabled else {
+            throw RemoteWorkspaceClientError.invalidResponse("Enable credential access in Settings to connect.")
+        }
+        let identity = try requestIdentity(configuration)
+        let client = try await serviceClient(for: configuration)
+        try requireCurrent(identity)
+        let value = try await operation(client)
+        try requireCurrent(identity)
+        return value
     }
 
     private func requestIdentity(_ configuration: RemoteWorkspaceConfiguration) throws -> RemoteWorkspaceRequestIdentity {
