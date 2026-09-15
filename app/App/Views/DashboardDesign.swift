@@ -1081,26 +1081,8 @@ struct DashboardSegmentedSelector<Option: Hashable>: View {
                         .frame(maxWidth: .infinity)
                         .frame(height: 27)
                         .contentShape(Rectangle())
-                        .background(
-                            isSelected
-                                ? DashboardPalette.background
-                                : Color.clear
-                        )
-                        .clipShape(
-                            RoundedRectangle(
-                                cornerRadius: DashboardMetrics.controlRadius - 4,
-                                style: .continuous
-                            )
-                        )
-                        .shadow(
-                            color: isSelected
-                                ? DashboardPalette.foreground.opacity(0.06)
-                                : .clear,
-                            radius: 2,
-                            y: 1
-                        )
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(DashboardSegmentButtonStyle(isSelected: isSelected))
                 .accessibilityAddTraits(isSelected ? .isSelected : [])
             }
         }
@@ -1115,6 +1097,49 @@ struct DashboardSegmentedSelector<Option: Hashable>: View {
         .transaction { transaction in
             transaction.animation = nil
         }
+    }
+}
+
+private struct DashboardSegmentButtonStyle: ButtonStyle {
+    @Environment(\.dashboardTheme) private var theme
+    @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @State private var isHovering = false
+
+    let isSelected: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        let shape = RoundedRectangle(
+            cornerRadius: DashboardMetrics.controlRadius - 4,
+            style: .continuous
+        )
+
+        configuration.label
+            .background(
+                shape.fill(backgroundColor(isPressed: configuration.isPressed))
+            )
+            .shadow(
+                color: isSelected && isEnabled
+                    ? DashboardPalette.foreground.opacity(0.06)
+                    : .clear,
+                radius: 2,
+                y: 1
+            )
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.98 : 1)
+            .opacity(isEnabled ? 1 : 0.42)
+            .onHover { isHovering = $0 }
+    }
+
+    private func backgroundColor(isPressed: Bool) -> Color {
+        if isSelected {
+            return DashboardPalette.background.opacity(reduceTransparency ? 1 : 0.96)
+        }
+        guard isEnabled else { return .clear }
+        if isPressed {
+            return theme.palette.themeSoft
+        }
+        return isHovering ? theme.palette.themeWhisper : .clear
     }
 }
 
@@ -1182,6 +1207,8 @@ struct DashboardSwitchToggleStyle: ToggleStyle {
 
 struct DashboardPrimaryButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var isHovering = false
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
@@ -1189,15 +1216,23 @@ struct DashboardPrimaryButtonStyle: ButtonStyle {
             .foregroundStyle(DashboardPalette.primaryForeground)
             .padding(.horizontal, 14)
             .frame(minHeight: 36)
-            .background(DashboardPalette.primary.opacity(configuration.isPressed ? 0.82 : 1))
+            .background(
+                DashboardPalette.primary.opacity(
+                    configuration.isPressed ? 0.78 : (isEnabled && isHovering ? 0.9 : 1)
+                )
+            )
             .clipShape(RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius, style: .continuous))
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.985 : 1)
             .opacity(isEnabled ? 1 : 0.4)
+            .onHover { isHovering = $0 }
     }
 }
 
 struct DashboardQuietButtonStyle: ButtonStyle {
     @Environment(\.dashboardTheme) private var theme
     @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var isHovering = false
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
@@ -1205,8 +1240,14 @@ struct DashboardQuietButtonStyle: ButtonStyle {
             .foregroundStyle(DashboardPalette.foreground)
             .padding(.horizontal, 12)
             .frame(minHeight: 36)
-            .background(theme.palette.themeSoft.opacity(configuration.isPressed ? 1 : 0.72))
+            .background(
+                theme.palette.themeSoft.opacity(
+                    configuration.isPressed ? 1 : (isEnabled && isHovering ? 0.72 : 0.5)
+                )
+            )
             .clipShape(RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius, style: .continuous))
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.985 : 1)
             .opacity(isEnabled ? 1 : 0.4)
+            .onHover { isHovering = $0 }
     }
 }

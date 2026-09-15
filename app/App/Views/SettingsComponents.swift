@@ -245,8 +245,6 @@ struct SettingsNote: View {
 /// popover instead of Menu/Picker: native menu styles add internal padding
 /// that breaks edge alignment and tint the label with the accent color.
 struct SettingsMenuPicker: View {
-    @Environment(\.dashboardTheme) private var theme
-    @State private var isHovering = false
     @State private var isPresented = false
 
     let selection: String
@@ -272,12 +270,11 @@ struct SettingsMenuPicker: View {
             }
             .padding(.horizontal, 12)
             .frame(width: width, height: 36, alignment: .leading)
-            .background(theme.palette.themeSoft.opacity(isHovering ? 0.72 : 0))
-            .clipShape(RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius, style: .continuous))
             .contentShape(RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius, style: .continuous))
-            .onHover { isHovering = $0 }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(SettingsMenuTriggerButtonStyle(isPresented: isPresented))
+        .accessibilityValue(selection.isEmpty ? "No selection" : label(for: selection))
+        .accessibilityHint(isPresented ? "Options are open" : "Shows available options")
         .popover(isPresented: $isPresented, arrowEdge: .bottom) {
             VStack(alignment: .leading, spacing: 2) {
                 if options.isEmpty {
@@ -308,16 +305,42 @@ struct SettingsMenuPicker: View {
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
+                        .accessibilityAddTraits(option == selection ? .isSelected : [])
                     }
                 }
             }
             .padding(6)
             .frame(minWidth: width)
+            .onExitCommand { isPresented = false }
         }
     }
 
     private func label(for option: String) -> String {
         capitalizeOptions ? option.capitalized : option
+    }
+}
+
+private struct SettingsMenuTriggerButtonStyle: ButtonStyle {
+    @Environment(\.dashboardTheme) private var theme
+    @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var isHovering = false
+
+    let isPresented: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background(
+                theme.palette.themeSoft.opacity(
+                    configuration.isPressed || isPresented
+                        ? 1
+                        : (isEnabled && isHovering ? 0.72 : 0)
+                )
+            )
+            .clipShape(RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius, style: .continuous))
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.985 : 1)
+            .opacity(isEnabled ? 1 : 0.4)
+            .onHover { isHovering = $0 }
     }
 }
 
@@ -493,6 +516,7 @@ struct SettingsQuietButtonStyle: ButtonStyle {
     var minimumHeight: CGFloat = 36
     @Environment(\.dashboardTheme) private var theme
     @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isHovering = false
 
     func makeBody(configuration: Configuration) -> some View {
@@ -503,10 +527,11 @@ struct SettingsQuietButtonStyle: ButtonStyle {
             .frame(minHeight: minimumHeight)
             .background(
                 theme.palette.themeSoft.opacity(
-                    configuration.isPressed ? 1 : (isHovering ? 0.72 : 0)
+                    configuration.isPressed ? 1 : (isEnabled && isHovering ? 0.72 : 0)
                 )
             )
             .clipShape(RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius, style: .continuous))
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.985 : 1)
             .opacity(isEnabled ? 1 : 0.4)
             .onHover { isHovering = $0 }
     }
