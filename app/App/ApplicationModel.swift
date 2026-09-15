@@ -225,6 +225,7 @@ final class ApplicationModel {
     private(set) var databasesSnapshot = DashboardDatabasesSnapshot.empty
     private(set) var isRefreshingDatabases = false
     private(set) var databaseError: String?
+    private(set) var updatingDatabasePreferenceIDs: Set<String> = []
     @ObservationIgnored
     private var databaseRefreshWaiters: [CheckedContinuation<Void, Never>] = []
     @ObservationIgnored
@@ -3712,98 +3713,98 @@ final class ApplicationModel {
         repeat {
             databaseRefreshRequestedWhileRunning = false
             var sources: [DashboardDatabaseSource] = []
-        if let root = localACPWorkspaceLaunchConfiguration?.databasesURL {
-            do {
-                let rows = try await Task.detached(priority: .utility) {
-                    try AgentDatabaseCatalog.list(at: root)
-                }.value
-                sources.append(Self.databaseSource(
-                    id: "local",
-                    name: "Local workspace",
-                    kind: .local,
-                    detail: root.path,
-                    rows: rows,
-                    allowsCreation: true,
-                    allowsExternalLinks: true
-                ))
-            } catch {
+            if let root = localACPWorkspaceLaunchConfiguration?.databasesURL {
+                do {
+                    let rows = try await Task.detached(priority: .utility) {
+                        try AgentDatabaseCatalog.list(at: root)
+                    }.value
+                    sources.append(Self.databaseSource(
+                        id: "local",
+                        name: "Local workspace",
+                        kind: .local,
+                        detail: root.path,
+                        rows: rows,
+                        allowsCreation: true,
+                        allowsExternalLinks: true
+                    ))
+                } catch {
+                    sources.append(DashboardDatabaseSource(
+                        id: "local",
+                        name: "Local workspace",
+                        kind: .local,
+                        detail: root.path,
+                        databases: [],
+                        error: error.localizedDescription,
+                        allowsCreation: true,
+                        allowsExternalLinks: true
+                    ))
+                }
+            } else {
                 sources.append(DashboardDatabaseSource(
                     id: "local",
                     name: "Local workspace",
                     kind: .local,
-                    detail: root.path,
+                    detail: "Set up the local agent workspace in Settings.",
                     databases: [],
-                    error: error.localizedDescription,
-                    allowsCreation: true,
-                    allowsExternalLinks: true
-                ))
-            }
-        } else {
-            sources.append(DashboardDatabaseSource(
-                id: "local",
-                name: "Local workspace",
-                kind: .local,
-                detail: "Set up the local agent workspace in Settings.",
-                databases: [],
-                error: localACPWorkspaceAvailability.detail,
-                allowsCreation: false,
-                allowsExternalLinks: false
-            ))
-        }
-
-        let remoteCatalogIdentity = remoteWorkspaces.databaseCatalogIdentity
-        let configurations = remoteCatalogIdentity.configurations
-        for configuration in configurations {
-            let sourceID = Self.remoteDatabaseSourceID(configuration.id)
-            do {
-                let rows = try await remoteWorkspaces.databases(for: configuration)
-                sources.append(DashboardDatabaseSource(
-                    id: sourceID, name: configuration.name, kind: .remote,
-                    detail: "\(configuration.hostName) · Databases",
-                    databases: rows.map { DashboardAgentDatabase(
-                        sourceID: sourceID, databaseID: $0.id, name: $0.name,
-                        preference: $0.preference, localURL: nil, isExternal: false
-                    ) }, error: nil, allowsCreation: true, allowsExternalLinks: false
-                ))
-            } catch {
-                sources.append(DashboardDatabaseSource(
-                    id: sourceID, name: configuration.name, kind: .remote,
-                    detail: configuration.hostName, databases: [],
-                    error: error is CancellationError ? "Workspace connection changed. Refresh to reconnect." : error.localizedDescription,
-                    allowsCreation: false, allowsExternalLinks: false
-                ))
-            }
-        }
-        for link in buzzWorkspaceSnapshot.links where link.isEnabled {
-            let sourceID = "buzz:\(link.id.uuidString.lowercased())"
-            let root = link.localWorkspaceURL.appending(
-                path: LocalACPWorkspaceProvisioner.databasesDirectoryName,
-                directoryHint: .isDirectory
-            )
-            do {
-                let rows = try await Task.detached(priority: .utility) {
-                    try AgentDatabaseCatalog.list(at: root)
-                }.value
-                sources.append(Self.databaseSource(
-                    id: sourceID,
-                    name: link.displayName,
-                    kind: .buzz,
-                    detail: root.path,
-                    rows: rows
-                ))
-            } catch {
-                sources.append(DashboardDatabaseSource(
-                    id: sourceID,
-                    name: link.displayName,
-                    kind: .buzz,
-                    detail: root.path,
-                    databases: [],
-                    error: error.localizedDescription,
+                    error: localACPWorkspaceAvailability.detail,
                     allowsCreation: false,
                     allowsExternalLinks: false
                 ))
             }
-        }
+
+            let remoteCatalogIdentity = remoteWorkspaces.databaseCatalogIdentity
+            let configurations = remoteCatalogIdentity.configurations
+            for configuration in configurations {
+                let sourceID = Self.remoteDatabaseSourceID(configuration.id)
+                do {
+                    let rows = try await remoteWorkspaces.databases(for: configuration)
+                    sources.append(DashboardDatabaseSource(
+                        id: sourceID, name: configuration.name, kind: .remote,
+                        detail: "\(configuration.hostName) · Databases",
+                        databases: rows.map { DashboardAgentDatabase(
+                            sourceID: sourceID, databaseID: $0.id, name: $0.name,
+                            preference: $0.preference, localURL: nil, isExternal: false
+                        ) }, error: nil, allowsCreation: true, allowsExternalLinks: false
+                    ))
+                } catch {
+                    sources.append(DashboardDatabaseSource(
+                        id: sourceID, name: configuration.name, kind: .remote,
+                        detail: configuration.hostName, databases: [],
+                        error: error is CancellationError ? "Workspace connection changed. Refresh to reconnect." : error.localizedDescription,
+                        allowsCreation: false, allowsExternalLinks: false
+                    ))
+                }
+            }
+            for link in buzzWorkspaceSnapshot.links where link.isEnabled {
+                let sourceID = "buzz:\(link.id.uuidString.lowercased())"
+                let root = link.localWorkspaceURL.appending(
+                    path: LocalACPWorkspaceProvisioner.databasesDirectoryName,
+                    directoryHint: .isDirectory
+                )
+                do {
+                    let rows = try await Task.detached(priority: .utility) {
+                        try AgentDatabaseCatalog.list(at: root)
+                    }.value
+                    sources.append(Self.databaseSource(
+                        id: sourceID,
+                        name: link.displayName,
+                        kind: .buzz,
+                        detail: root.path,
+                        rows: rows
+                    ))
+                } catch {
+                    sources.append(DashboardDatabaseSource(
+                        id: sourceID,
+                        name: link.displayName,
+                        kind: .buzz,
+                        detail: root.path,
+                        databases: [],
+                        error: error.localizedDescription,
+                        allowsCreation: false,
+                        allowsExternalLinks: false
+                    ))
+                }
+            }
 
             guard remoteCatalogIdentity == remoteWorkspaces.databaseCatalogIdentity else {
                 databaseRefreshRequestedWhileRunning = true
@@ -3889,6 +3890,8 @@ final class ApplicationModel {
         _ preference: AgentDatabasePreference,
         database: DashboardAgentDatabase
     ) async {
+        guard updatingDatabasePreferenceIDs.insert(database.id).inserted else { return }
+        defer { updatingDatabasePreferenceIDs.remove(database.id) }
         do {
             if let configuration = remoteDatabaseConfiguration(sourceID: database.sourceID) {
                 try await remoteWorkspaces.setDatabasePreference(preference, databaseID: database.databaseID, in: configuration)
@@ -3913,11 +3916,17 @@ final class ApplicationModel {
     func linkedData(for link: DatabaseArtifactLink) async throws -> DatabaseTabularData {
         if let configuration = remoteDatabaseConfiguration(sourceID: link.sourceID) {
             let result = try await remoteWorkspaces.databaseData(for: link, in: configuration)
-            if let query = result.query { return try DatabaseLinkedData.load(queryResponse: query) }
-            guard let encoded = result.jsonBase64, let data = Data(base64Encoded: encoded) else {
-                throw DashboardDatabaseLinkError.remoteDataUnavailable
-            }
-            return try DatabaseLinkedData.load(data: data, fileExtension: "json", preference: .json, sqliteQuery: nil)
+            let identity = remoteWorkspaces.databaseCatalogIdentity
+            let data = try await Task.detached(priority: .utility) {
+                if let query = result.query { return try DatabaseLinkedData.load(queryResponse: query) }
+                guard let encoded = result.jsonBase64, let data = Data(base64Encoded: encoded) else {
+                    throw DashboardDatabaseLinkError.remoteDataUnavailable
+                }
+                return try DatabaseLinkedData.load(data: data, fileExtension: "json", preference: .json, sqliteQuery: nil)
+            }.value
+            guard identity == remoteWorkspaces.databaseCatalogIdentity else { throw CancellationError() }
+            try Task.checkCancellation()
+            return data
         }
         var database = databasesSnapshot.database(
             sourceID: link.sourceID,

@@ -19,6 +19,9 @@ test('catalog creation, agent-written discovery and preferences remain workspace
   const first = await fixture(t), second = await fixture(t)
   assert.deepEqual(await create(first, 'Metrics', 'sqlite'), { id: 'Metrics', name: 'Metrics', preference: 'sqlite' })
   await mkdir(join(first, 'Databases', 'Agent data'))
+  for (const folder of ['a'.repeat(129), 'agent\n scratch', 'agent\\scratch']) {
+    await mkdir(join(first, 'Databases', folder))
+  }
   assert.deepEqual((await databaseOperation(first, { action: 'list' })).databases.map(r => r.id), ['Agent data', 'Metrics'])
   assert.deepEqual(await databaseOperation(second, { action: 'list' }), { databases: [] })
   await databaseOperation(first, { action: 'preference', databaseID: 'Metrics', preference: 'json' })
