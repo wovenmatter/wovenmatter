@@ -292,7 +292,7 @@ struct SettingsGeneralView: View {
                         Button {
                             storedCodexLogoStyle = codexLogoStyle.next.rawValue
                         } label: {
-                            supportedHarnessTile(harness)
+                            supportedHarnessTile(harness, showsBackground: false)
                                 .overlay(alignment: .topTrailing) {
                                     Image(systemName: "arrow.triangle.2.circlepath")
                                         .font(.system(size: 10, weight: .semibold))
@@ -301,7 +301,7 @@ struct SettingsGeneralView: View {
                                         .accessibilityHidden(true)
                                 }
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(SettingsThemeChoiceButtonStyle(isSelected: false))
                         .help("Switch Codex to the \(codexLogoStyle.next.displayName) logo")
                         .accessibilityLabel("Codex harness logo")
                         .accessibilityValue(codexLogoStyle.displayName)
@@ -314,7 +314,10 @@ struct SettingsGeneralView: View {
         }
     }
 
-    private func supportedHarnessTile(_ harness: DashboardHarnessLogo) -> some View {
+    private func supportedHarnessTile(
+        _ harness: DashboardHarnessLogo,
+        showsBackground: Bool = true
+    ) -> some View {
         VStack(spacing: 9) {
             DashboardHarnessLogoIcon(logo: harness, size: 34)
                 .frame(height: 38)
@@ -326,7 +329,7 @@ struct SettingsGeneralView: View {
         .frame(maxWidth: .infinity)
         .padding(.vertical, 13)
         .padding(.horizontal, 8)
-        .background(theme.palette.themeWhisper)
+        .background(showsBackground ? theme.palette.themeWhisper : .clear)
         .clipShape(DashboardShapes.card)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(harness.displayName)

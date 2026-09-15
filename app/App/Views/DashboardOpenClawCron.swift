@@ -160,7 +160,7 @@ struct OpenClawCronSurface: View {
     }
 
     private var deletedToggle: some View {
-        Toggle("Deleted", isOn: $showsDeleted).toggleStyle(.button)
+        Toggle("Deleted", isOn: $showsDeleted)
     }
 
     @ViewBuilder

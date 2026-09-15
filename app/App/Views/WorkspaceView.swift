@@ -337,7 +337,7 @@ struct WorkspaceView: View {
                 model.dismissPendingOpenClawGatewayLink()
             }
         } message: {
-            Text("ACP is ready. Connect this remote OpenClaw Gateway for durable sessions, events, models, attachments, cron, and heartbeat features.")
+            Text("You can chat now with ACP. Connect the Gateway to also use shared sessions and scheduled jobs.")
         }
     }
 
