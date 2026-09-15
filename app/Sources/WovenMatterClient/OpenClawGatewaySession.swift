@@ -89,6 +89,17 @@ public struct OpenClawGatewayHistoryMessage: Codable, Equatable, Sendable {
     text = Self.text(row)
   }
 
+  /// The Gateway persists its final text under this idempotent suffix. Other
+  /// transcript records retain whole-message replacement semantics.
+  public var isFinalOnlyAssistantTranscript: Bool {
+    guard isAssistantResponse,
+          let payload = try? JSONDecoder().decode(GatewayJSONValue.self, from: raw),
+          let row = payload.objectValue else { return false }
+    let key = row["__openclaw"]?.objectValue?["idempotencyKey"]?.stringValue
+      ?? row["idempotencyKey"]?.stringValue
+    return key?.hasSuffix(":assistant") == true
+  }
+
   public func correlatedRunID(knownInputIDs: Set<String>) -> String? {
     if let runID, knownInputIDs.contains(runID) { return runID }
     return gatewayRunID ?? runID

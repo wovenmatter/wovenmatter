@@ -512,6 +512,11 @@ public actor LocalACPClient {
     private var activePermissionHandler: PermissionHandler?
     private var activeInteractionHandler: InteractionHandler?
     private var activePromptRequestCount = 0
+    // ACP does not provide an identifier for thought chunks. Keep one stable
+    // identity for adjacent deltas, then advance it when another stream kind
+    // separates reasoning phases so distinct commentary is not merged.
+    private var reasoningPhaseSequence = 0
+    private var activeReasoningPhaseID: String?
     private var closed = false
     private var shutdownTask: Task<Void, Never>?
 
@@ -1409,7 +1414,7 @@ public actor LocalACPClient {
             default:
                 break
             }
-            if let event = Self.event(
+            if let event = projectedEvent(
                 from: envelope,
                 workingDirectory: workingDirectory
             ) {
@@ -1849,7 +1854,7 @@ public actor LocalACPClient {
             )
     }
 
-    private static func event(
+    private func projectedEvent(
         from envelope: ACPEnvelope,
         workingDirectory: URL
     ) -> LocalACPEvent? {
@@ -1857,33 +1862,45 @@ public actor LocalACPClient {
               let kind = update["sessionUpdate"]?.stringValue else { return nil }
         switch kind {
         case "agent_message_chunk":
+            activeReasoningPhaseID = nil
             return update["content"]?["text"]?.stringValue.map(LocalACPEvent.assistantChunk)
         case "agent_thought_chunk":
             guard let text = update["content"]?["text"]?.stringValue else { return nil }
+            let reasoningID: String
+            if let activeReasoningPhaseID {
+                reasoningID = activeReasoningPhaseID
+            } else {
+                reasoningPhaseSequence += 1
+                reasoningID = "thought-\(reasoningPhaseSequence)"
+                activeReasoningPhaseID = reasoningID
+            }
             return .activity(
                 AgentRunActivity(
-                    id: "thought",
+                    id: reasoningID,
                     kind: .thought,
                     phase: "update",
                     title: "Thinking",
                     status: "running",
                     content: text,
                     contentIsDelta: true,
-                    rawPayloadJSON: jsonString(update)
+                    rawPayloadJSON: Self.jsonString(update)
                 ),
                 appendsContent: true
             )
         case "tool_call":
+            activeReasoningPhaseID = nil
             return .activity(
-                toolActivity(update, phase: "start", workingDirectory: workingDirectory),
+                Self.toolActivity(update, phase: "start", workingDirectory: workingDirectory),
                 appendsContent: false
             )
         case "tool_call_update":
+            activeReasoningPhaseID = nil
             return .activity(
-                toolActivity(update, phase: "update", workingDirectory: workingDirectory),
+                Self.toolActivity(update, phase: "update", workingDirectory: workingDirectory),
                 appendsContent: false
             )
         case "plan":
+            activeReasoningPhaseID = nil
             let entries = update["entries"]?.arrayValue?.compactMap { value -> AgentRunPlanEntry? in
                 guard let content = value["content"]?.stringValue,
                       let status = value["status"]?.stringValue else { return nil }
@@ -1897,11 +1914,11 @@ public actor LocalACPClient {
                 AgentRunActivity(
                     id: "plan",
                     kind: .plan,
-                    phase: "update",
+                    phase: entries.isEmpty ? "clear" : "update",
                     title: "Plan",
                     status: entries.allSatisfy { $0.status == "completed" } ? "completed" : "running",
                     planEntries: entries,
-                    rawPayloadJSON: jsonString(update)
+                    rawPayloadJSON: Self.jsonString(update)
                 ),
                 appendsContent: false
             )

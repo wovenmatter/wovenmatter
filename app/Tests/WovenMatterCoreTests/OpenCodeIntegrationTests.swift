@@ -248,6 +248,59 @@ struct OpenCodeIntegrationTests {
         #expect(snapshot.messages == [first, second])
     }
 
+    @Test func canonicalPartsKeepAssistantBoundariesAndNativeOrder() throws {
+        let message: OpenCodeValue = ["id": "msg", "type": "assistant", "content": .array([
+            ["type": "text", "text": "  commentary\n"],
+            ["type": "reasoning", "text": "reason"],
+            ["type": "tool", "id": "call", "name": "read", "state": ["status": "completed", "content": .array([["type": "text", "text": "ok"]])]],
+            ["type": "text", "text": "final  "]
+        ])]
+        let activities = OpenCodeSessionSnapshot.activities(message, assistantMessageID: "stored-message")
+        #expect(activities.map(\.kind) == [.assistant, .thought, .tool, .assistant])
+        #expect(activities.map(\.position) == [0, 1, 2, 3])
+        #expect(activities.first?.content == "  commentary\n\n\n")
+        #expect(activities.last?.content == "final  ")
+        #expect(activities.last?.assistantMessageID == "stored-message")
+        #expect(activities.last?.assistantCheckpoint?.followingText(in: "  commentary\n\n\nfinal  ") == "")
+    }
+
+    @Test func durableEventsCoalesceAndRefreshAgainAfterAnInflightSnapshot() async throws {
+        let fixture = OpenCodeFixture(); FixtureProtocol.fixture = fixture
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let database = try WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+        let id = try database.createLocalACPSession(runtimeKind: .opencode, title: "Events", ownerDeviceID: UUID(), openCodeAssociation: ("fixture", "ses_fixture"))
+        let link = OpenCodeSessionLink(conversationID: id, connectionID: "fixture", sessionID: "ses_fixture")
+        let session = fixtureSession()
+        let coordinator = OpenCodeSessionCoordinator(database: database, clientFactory: { OpenCodeHTTPClient(connection: $0, session: session) })
+        try await coordinator.connect(connection())
+        let baseline = fixture.historyRequests
+        fixture.messages = [message("first")]
+        for seq in 1...5 { await coordinator.receiveLogEvent(["type": "session.text.delta", "durable": ["seq": .number(Double(seq))]], link: link) }
+        try await fixture.waitForHistoryRequests(baseline + 1)
+        try await Task.sleep(for: .milliseconds(125))
+        #expect(fixture.historyRequests == baseline + 1)
+
+        fixture.heldPath = "/api/session/ses_fixture/form/form_pending/state"
+        fixture.messages = [message("during-first")]
+        await coordinator.receiveLogEvent(["type": "session.text.delta", "durable": ["seq": .number(6)]], link: link)
+        await fixture.gate.waitForArrival()
+        fixture.messages = [message("during-second")]
+        await coordinator.receiveLogEvent(["type": "session.execution.failed", "durable": ["seq": .number(7)]], link: link)
+        fixture.heldPath = nil
+        fixture.gate.release()
+        try await fixture.waitForHistoryRequests(baseline + 3)
+        for _ in 0..<400 {
+            if try database.openCodeSnapshot(conversationID: id)?.cursor == 7 { break }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        let saved = try #require(try database.openCodeSnapshot(conversationID: id))
+        #expect(saved.messages.last?["id"].text == "during-second")
+        #expect(saved.cursor == 7)
+        await coordinator.shutdown()
+    }
+
     @Test func connectionRefusesWrongOriginsAndMalformedProcessIdentity() throws {
         #expect(throws: OpenCodeError.self) { try OpenCodeConnection(identity: "bad", url: URL(string: "https://user:secret@example.com")!, password: "fixture") }
         #expect(throws: OpenCodeError.self) { try OpenCodeConnection(identity: "bad", url: URL(string: "https://example.com/api")!, password: "fixture") }
@@ -385,7 +438,7 @@ struct OpenCodeIntegrationTests {
         #expect(content.messages.count == 2)
         #expect(content.runs.count == 1)
         #expect(content.runs.first?.completedAt?.hasPrefix("1970-01-01T00:00:00.003") == true)
-        #expect(try reopened.conversationHistoryPage(id: id, limit: 100).activities.count == 2)
+        #expect(try reopened.conversationHistoryPage(id: id, limit: 100).activities.count == 3)
     }
 
     @Test func existingV1MessageContentIsRetainedWhenContinuationIsRejected() throws {
@@ -624,6 +677,13 @@ private final class OpenCodeFixture: @unchecked Sendable {
     var interruptCount = 0
     var historyRequests = 0
     var streamTimeout: TimeInterval?
+    func waitForHistoryRequests(_ count: Int) async throws {
+        for _ in 0..<400 {
+            if lock.withLock({ historyRequests >= count }) { return }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        throw OpenCodeError.message("Fixture did not receive expected history refreshes.")
+    }
     func respond(_ request: URLRequest) throws -> (Int, OpenCodeValue) {
         try lock.withLock {
             let path = request.url!.path

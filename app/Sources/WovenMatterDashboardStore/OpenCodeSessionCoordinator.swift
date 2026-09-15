@@ -20,6 +20,9 @@ public actor OpenCodeSessionCoordinator {
     private var generations: [String: UUID] = [:]
     private var snapshots: [String: OpenCodeSessionSnapshot] = [:]
     private var pendingCursors: [String: Int64] = [:]
+    private var eventRefreshes: [String: Task<Void, Never>] = [:]
+    private var eventRefreshTokens: [String: UUID] = [:]
+    private var eventRefreshDirty: Set<String> = []
     private var refreshing: Set<String> = []
     private var sending: Set<String> = []
 
@@ -41,13 +44,16 @@ public actor OpenCodeSessionCoordinator {
         connectionTokens.removeValue(forKey: connectionID)
         for link in (try? database.openCodeLinks()) ?? [] where link.connectionID == connectionID {
             workers.removeValue(forKey: link.conversationID)?.cancel()
+            eventRefreshes.removeValue(forKey: link.conversationID)?.cancel()
+            eventRefreshTokens.removeValue(forKey: link.conversationID)
+            eventRefreshDirty.remove(link.conversationID)
             generations.removeValue(forKey: link.conversationID)
             pendingCursors.removeValue(forKey: link.conversationID)
             emit(link.conversationID, status: "Disconnected")
         }
         clients.removeValue(forKey: connectionID)
     }
-    public func shutdown() { workers.values.forEach { $0.cancel() }; workers.removeAll(); generations.removeAll(); clients.removeAll(); connectionTokens.removeAll(); pendingCursors.removeAll() }
+    public func shutdown() { workers.values.forEach { $0.cancel() }; eventRefreshes.values.forEach { $0.cancel() }; workers.removeAll(); eventRefreshes.removeAll(); eventRefreshTokens.removeAll(); eventRefreshDirty.removeAll(); generations.removeAll(); clients.removeAll(); connectionTokens.removeAll(); pendingCursors.removeAll() }
     public func call(connectionID: String, method: String = "GET", path: String,
                      query: [String: String] = [:], body: OpenCodeValue? = nil) async throws -> OpenCodeValue {
         guard let client = clients[connectionID] else { throw OpenCodeError.message("Connect to the OpenCode service first.") }
@@ -173,8 +179,9 @@ public actor OpenCodeSessionCoordinator {
                     }
                     group.addTask {
                         while !Task.isCancelled {
-                            let active = await self.snapshots[link.conversationID]?.active == true
-                            try await Task.sleep(for: .milliseconds(active ? 500 : 2500))
+                            // Durable events trigger a coalesced authoritative
+                            // refresh. Polling remains a low-frequency repair path.
+                            try await Task.sleep(for: .milliseconds(2500))
                             try await self.refresh(link, generation: generation)
                         }
                     }
@@ -200,12 +207,39 @@ public actor OpenCodeSessionCoordinator {
         guard generations[link.conversationID] == generation else { return }
         if let seq = event["durable"]["seq"].number ?? event["seq"].number,
            seq >= 0, seq <= 9_007_199_254_740_991, seq.rounded() == seq {
-            pendingCursors[link.conversationID] = max(pendingCursors[link.conversationID] ?? -1, Int64(seq))
+            let cursor = Int64(seq)
+            guard cursor > (snapshots[link.conversationID]?.cursor ?? -1) else { return }
+            pendingCursors[link.conversationID] = max(pendingCursors[link.conversationID] ?? -1, cursor)
         }
-        // Reverts invalidate the displayed message set. Durable history remains
-        // available from the server; the next snapshot establishes the new view.
-        if event["type"].text == "session.revert.committed" {
-            snapshots[link.conversationID]?.messages = []
+        let terminal = ["session.execution.succeeded", "session.execution.failed", "session.execution.interrupted",
+                        "session.step.ended", "session.step.failed", "session.revert.committed"].contains(event["type"].text)
+        eventRefreshDirty.insert(link.conversationID)
+        guard eventRefreshes[link.conversationID] == nil else { return }
+        scheduleEventRefresh(link, generation: generation, delay: !terminal)
+    }
+    func receiveLogEvent(_ event: OpenCodeValue, link: OpenCodeSessionLink) {
+        if generations[link.conversationID] == nil {
+            snapshots[link.conversationID] = (try? database.openCodeSnapshot(conversationID: link.conversationID)) ?? OpenCodeSessionSnapshot()
+            generations[link.conversationID] = UUID()
+        }
+        guard let generation = generations[link.conversationID] else { return }
+        logEvent(event, link: link, generation: generation)
+    }
+    private func scheduleEventRefresh(_ link: OpenCodeSessionLink, generation: UUID, delay: Bool = false) {
+        guard eventRefreshes[link.conversationID] == nil else { return }
+        let token = UUID()
+        eventRefreshTokens[link.conversationID] = token
+        eventRefreshes[link.conversationID] = Task {
+            do {
+                if delay { try await Task.sleep(for: .milliseconds(75)) }
+                while self.eventRefreshDirty.remove(link.conversationID) != nil {
+                    try await self.refresh(link, generation: generation)
+                }
+            } catch is CancellationError {
+            } catch { self.emit(link.conversationID, status: "Reconnecting", error: error.localizedDescription) }
+            guard self.eventRefreshTokens[link.conversationID] == token else { return }
+            self.eventRefreshes[link.conversationID] = nil; self.eventRefreshTokens[link.conversationID] = nil
+            if self.eventRefreshDirty.contains(link.conversationID) { self.scheduleEventRefresh(link, generation: generation) }
         }
     }
     public func refresh(_ link: OpenCodeSessionLink, generation: UUID? = nil, recoverHistory: Bool = false) async throws {

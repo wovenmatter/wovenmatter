@@ -445,10 +445,7 @@ public actor LocalACPSessionCoordinator {
                 runID: run.runID
             )
             if cancellationRequestedRunIDs.contains(run.runID) {
-                try database.completeLocalACPRun(
-                    runID: run.runID,
-                    error: "The local ACP run was cancelled."
-                )
+                try database.cancelLocalACPRun(runID: run.runID)
                 publishChange(
                     conversationID: descriptor.conversationID,
                     runID: run.runID,
@@ -461,11 +458,30 @@ public actor LocalACPSessionCoordinator {
             let streamWriter = LocalACPAssistantStreamWriter(
                 database: database,
                 runID: run.runID,
+                assistantMessageID: run.assistantMessageID,
                 conversationID: descriptor.conversationID,
                 onChange: onChange
             )
             streamWritersByRunID[run.runID] = streamWriter
             resumeStreamWriterWaiters(runID: run.runID, writer: streamWriter)
+            let permissionHandler: LocalACPClient.PermissionHandler?
+            if let onPermission {
+                permissionHandler = { request in
+                    try? await streamWriter.finishSegment()
+                    return await onPermission(request)
+                }
+            } else {
+                permissionHandler = nil
+            }
+            let interactionHandler: LocalACPClient.InteractionHandler?
+            if let onInteraction {
+                interactionHandler = { request in
+                    try? await streamWriter.finishSegment()
+                    return await onInteraction(request)
+                }
+            } else {
+                interactionHandler = nil
+            }
             var stopReason = try await client.prompt(
                 input,
                 { event in
@@ -515,8 +531,8 @@ public actor LocalACPSessionCoordinator {
                         ))
                     }
                 },
-                onPermission,
-                onInteraction
+                permissionHandler,
+                interactionHandler
             )
             stopReason = try await drainActiveInputs(
                 runID: run.runID,
@@ -540,10 +556,7 @@ public actor LocalACPSessionCoordinator {
             case .endTurn, .maxTokens, .maxTurnRequests:
                 try database.completeLocalACPRun(runID: run.runID)
             case .cancelled:
-                try database.completeLocalACPRun(
-                    runID: run.runID,
-                    error: "The local ACP run was cancelled."
-                )
+                try database.cancelLocalACPRun(runID: run.runID)
             case .refusal:
                 try database.completeLocalACPRun(
                     runID: run.runID,
@@ -557,10 +570,19 @@ public actor LocalACPSessionCoordinator {
             )
             await releaseSession(conversationID: descriptor.conversationID)
         } catch {
-            try? database.completeLocalACPRun(
-                runID: run.runID,
-                error: error.localizedDescription
-            )
+            // Terminalize only after the coalesced tail is durable. Once the
+            // run is completed the database correctly rejects later chunks.
+            if let writer = streamWritersByRunID[run.runID] {
+                try? await writer.finish()
+            }
+            if cancellationRequestedRunIDs.contains(run.runID) || error is CancellationError {
+                try? database.cancelLocalACPRun(runID: run.runID)
+            } else {
+                try? database.completeLocalACPRun(
+                    runID: run.runID,
+                    error: error.localizedDescription
+                )
+            }
             publishChange(
                 conversationID: descriptor.conversationID,
                 runID: run.runID,
@@ -750,7 +772,9 @@ public actor LocalACPSessionCoordinator {
             runID: runID,
             phase: .content
         )
-        await streamWriter.resumeAfterSegmentBoundary()
+        await streamWriter.resumeAfterSegmentBoundary(
+            assistantMessageID: identifiers.assistantMessageID
+        )
         return identifiers
     }
 
@@ -1334,10 +1358,11 @@ public actor LocalACPSessionCoordinator {
 
 actor LocalACPAssistantStreamWriter {
     private static let immediateFlushCharacters = 4_096
-    private static let coalescingDelay = Duration.milliseconds(50)
+    private static let coalescingDelay = Duration.milliseconds(75)
 
     private let database: WorkspaceDatabase
     private let runID: String
+    private var assistantMessageID: String
     private let conversationID: String
     private let onChange: LocalACPSessionCoordinator.ChangeHandler?
     private var buffer = ""
@@ -1345,23 +1370,27 @@ actor LocalACPAssistantStreamWriter {
     private var completedSegmentPrefix = ""
     private var flushTask: Task<Void, Never>?
     private var flushError: (any Error)?
+    private var isFinished = false
     private var isPausedAtSegmentBoundary = false
     private var segmentBoundaryWaiters: [CheckedContinuation<Void, Never>] = []
 
     init(
         database: WorkspaceDatabase,
         runID: String,
+        assistantMessageID: String,
         conversationID: String,
         onChange: LocalACPSessionCoordinator.ChangeHandler?
     ) {
         self.database = database
         self.runID = runID
+        self.assistantMessageID = assistantMessageID
         self.conversationID = conversationID
         self.onChange = onChange
     }
 
     func append(_ chunk: String) async throws {
         await waitUntilResumed()
+        guard !isFinished else { return }
         if let flushError { throw flushError }
         guard !chunk.isEmpty else { return }
         buffer += chunk
@@ -1381,6 +1410,7 @@ actor LocalACPAssistantStreamWriter {
 
     func replace(_ content: String) async throws {
         await waitUntilResumed()
+        guard !isFinished else { return }
         flushTask?.cancel(); flushTask = nil
         if let flushError { throw flushError }
         guard content.hasPrefix(completedSegmentPrefix) else {
@@ -1392,8 +1422,14 @@ actor LocalACPAssistantStreamWriter {
         onChange?(DashboardConversationChange(conversationID: conversationID, runID: runID, phase: .content))
     }
 
-    func finish() async throws {
-        try await flushSegment()
+    func finish() throws {
+        guard !isFinished else { return }
+        isFinished = true
+        resumeAfterSegmentBoundary()
+        flushTask?.cancel()
+        flushTask = nil
+        if let flushError { throw flushError }
+        try flush()
     }
 
     private func flushSegment() async throws {
@@ -1406,6 +1442,11 @@ actor LocalACPAssistantStreamWriter {
 
     func finishSegment() async throws {
         try await flushSegment()
+        try database.recordAssistantStreamBoundary(
+            runID: runID,
+            assistantMessageID: assistantMessageID,
+            updatedAt: Date()
+        )
     }
 
     func finishSegmentAndPause() throws {
@@ -1413,11 +1454,19 @@ actor LocalACPAssistantStreamWriter {
         flushTask = nil
         if let flushError { throw flushError }
         try flush()
+        try database.recordAssistantStreamBoundary(
+            runID: runID,
+            assistantMessageID: assistantMessageID,
+            updatedAt: Date()
+        )
         completedSegmentPrefix = accumulatedText
         isPausedAtSegmentBoundary = true
     }
 
-    func resumeAfterSegmentBoundary() {
+    func resumeAfterSegmentBoundary(assistantMessageID: String? = nil) {
+        if let assistantMessageID {
+            self.assistantMessageID = assistantMessageID
+        }
         isPausedAtSegmentBoundary = false
         let waiters = segmentBoundaryWaiters
         segmentBoundaryWaiters.removeAll()

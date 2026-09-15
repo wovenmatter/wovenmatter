@@ -51,6 +51,50 @@ struct PiRPCSettlementTests {
     try await server.value
     await fixture.client.shutdown()
   }
+
+  @Test func streamingKeepsWhitespaceBoundariesAndReasoningPhases() async throws {
+    let fixture = PiPipeFixture()
+    let lines = [
+      #"{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","delta":" first\n"}}"#,
+      #"{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"  answer "}}"#,
+      #"{"type":"message_end","message":{"role":"assistant"}}"#,
+      #"{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","delta":" second "}}"#,
+      #"{"type":"tool_execution_update","toolCallId":"tool-1","toolName":"shell","args":{"command":"pwd"},"partialResult":{"content":[{"text":" /tmp\n"}]}}"#,
+    ]
+    let server = Task { try await fixture.serve(settles: true, streamLines: lines) }
+    try await fixture.initialize()
+    let collector = PiEventCollector()
+    _ = try await fixture.client.prompt("fixture") { event in await collector.record(event) }
+    try await server.value
+    let events = await collector.values()
+    #expect(events.count == 6)
+    #expect(events[1] == .assistantChunk("  answer "))
+    #expect(events[2] == .assistantSnapshot(""))
+    #expect(events[3] == .assistantBoundary)
+    guard case .activity(let first, _) = events[0],
+          case .activity(let second, _) = events[4] else {
+      Issue.record("Expected two reasoning activities")
+      return
+    }
+    #expect(first.content == " first\n")
+    #expect(second.content == " second ")
+    #expect(first.id != second.id)
+    guard case .activity(let tool, _) = events[5] else {
+      Issue.record("Expected tool progress activity")
+      return
+    }
+    #expect(tool.phase == "update")
+    #expect(tool.status == "running")
+    #expect(tool.content == " /tmp\n")
+    #expect(tool.rawInputJSON == #"{"command":"pwd"}"#)
+    await fixture.client.shutdown()
+  }
+}
+
+private actor PiEventCollector {
+  private var events: [LocalACPEvent] = []
+  func record(_ event: LocalACPEvent) { events.append(event) }
+  func values() -> [LocalACPEvent] { events }
 }
 
 private struct PiPipeFixture: Sendable {
@@ -67,7 +111,8 @@ private struct PiPipeFixture: Sendable {
     _ = try await client.initializeSession(workingDirectory: URL(filePath: "/private/tmp"),
       existingSessionID: nil, title: nil, systemPrompt: nil)
   }
-  func serve(settles: Bool, accepts: Bool = true, hold: PiPromptGate? = nil) async throws {
+  func serve(settles: Bool, accepts: Bool = true, hold: PiPromptGate? = nil,
+             streamLines: [String] = []) async throws {
     defer { try? events.fileHandleForWriting.close() }
     let cursor = FixtureCommandReader(handle: commands.fileHandleForReading)
     while let line = try await cursor.next() {
@@ -78,6 +123,9 @@ private struct PiPipeFixture: Sendable {
       if type == "prompt", !accepts { response["success"] = false; response["error"] = "fixture rejection" }
       var output = try JSONSerialization.data(withJSONObject: response)
       output.append(10)
+      if type == "prompt" {
+        for line in streamLines { output.append(Data("\(line)\n".utf8)) }
+      }
       if type == "prompt", settles { output.append(Data("{\"type\":\"agent_settled\"}\n".utf8)) }
       try events.fileHandleForWriting.write(contentsOf: output)
       if type == "prompt" {
