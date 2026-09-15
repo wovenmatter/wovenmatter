@@ -317,7 +317,7 @@ struct DashboardNotePane: View {
     }
 
     private var linkedDataChangedMessage: String {
-        "The artifact changed while data was loading. Refresh again to avoid overwriting your edits."
+        "This note changed while data was loading. Your edits were kept. Refresh again."
     }
 
 }

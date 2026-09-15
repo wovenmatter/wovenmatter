@@ -19,14 +19,12 @@ struct SettingsOpenClawView: View {
     var body: some View {
         SettingsPage(
             title: "OpenClaw",
-            detail: "Independent OpenClaw settings for this Mac and each remote workspace.",
             reservesRailControlSpace: reservesRailControlSpace,
             onBack: onBack
         ) {
             if !isWorkspaceScoped || workspaceID == nil {
                 SettingsCard(
-                    title: "Local agent workspace",
-                    detail: "Open an agent to manage its Woven Matter name and Gateway connection."
+                    title: "Local agent workspace"
                 ) {
                     if openClawAgents.isEmpty {
                         SettingsEmpty("No OpenClaw agents discovered.")
@@ -51,7 +49,7 @@ struct SettingsOpenClawView: View {
                 }
             }
             if !isWorkspaceScoped || workspaceID != nil {
-                SettingsCard(title: "Remote agent workspaces", detail: "Discover agents in each connected workspace.") {
+                SettingsCard(title: "Remote agent workspaces") {
                     let configurations = model.remoteWorkspaces.workspaces.filter { !isWorkspaceScoped || $0.id == workspaceID }
                     if configurations.isEmpty { SettingsEmpty("No remote agent workspaces connected.") }
                     ForEach(configurations) { configuration in
@@ -84,7 +82,6 @@ struct SettingsOpenClawView: View {
                 }
             }
             if let instanceError { SettingsError(instanceError) }
-            SettingsNote("Each agent has its own connection and Gateway controls.")
         }
         .task(id: openClawAgents.map(\.id)) {
             for agent in openClawAgents
@@ -155,7 +152,6 @@ struct SettingsOpenClawAgentView: View {
     var body: some View {
         SettingsPage(
             title: agent?.displayName ?? "OpenClaw",
-            detail: "Woven Matter name and live Gateway connection for this agent.",
             reservesRailControlSpace: reservesRailControlSpace,
             onBack: onBack
         ) {

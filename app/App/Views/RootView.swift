@@ -36,14 +36,10 @@ struct RootView: View {
                     .controlSize(.small)
                     .tint(.white)
             }
-            Text("Opening your local workspace")
+            Text("Opening workspace…")
                 .font(.system(size: 15, weight: .medium))
                 .foregroundStyle(DashboardPalette.foreground)
                 .padding(.top, 16)
-            Text("Opening the native workspace stored on this Mac.")
-                .font(.system(size: 12.5))
-                .foregroundStyle(DashboardPalette.mutedForeground)
-                .padding(.top, 4)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(theme.palette.workspace)

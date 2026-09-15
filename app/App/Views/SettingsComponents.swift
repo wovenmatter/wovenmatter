@@ -79,7 +79,7 @@ struct SettingsWorkspaceSidebarVisibilityControl: View {
             .buttonStyle(SettingsQuietButtonStyle())
             .accessibilityLabel("\(isShown ? "Hide" : "Show") \(workspace.title) in the sidebar")
             .accessibilityValue(isShown ? "Shown" : "Hidden")
-            .help("Changes sidebar visibility only. Workspaces and running conversations stay active.")
+            .help("Hides or shows this section. Workspaces and chats stay active.")
         }
     }
 }
@@ -104,14 +104,14 @@ struct SettingsBackButton: View {
 struct SettingsDestinationRow<Icon: View>: View {
     @Environment(\.dashboardTheme) private var theme
     let title: String
-    let detail: String
+    let detail: String?
     @ViewBuilder var icon: Icon
     let action: () -> Void
     @State private var isHovering = false
 
     init(
         title: String,
-        detail: String,
+        detail: String? = nil,
         @ViewBuilder icon: () -> Icon,
         action: @escaping () -> Void
     ) {
@@ -131,10 +131,12 @@ struct SettingsDestinationRow<Icon: View>: View {
                     Text(title)
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(DashboardPalette.foreground)
-                    Text(detail)
-                        .font(.system(size: 11.5))
-                        .foregroundStyle(DashboardPalette.mutedForeground)
-                        .fixedSize(horizontal: false, vertical: true)
+                    if let detail {
+                        Text(detail)
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(DashboardPalette.mutedForeground)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
                 Spacer(minLength: 12)
                 Image(systemName: "chevron.right")
@@ -549,14 +551,17 @@ struct CredentialAccessDisclosureView: View {
                 )
             }
 
-            Text("macOS controls its password prompt. Choosing Always Allow normally prevents repeat prompts while the app's signing identity remains unchanged.")
-                .font(.system(size: 11.5))
-                .foregroundStyle(DashboardPalette.mutedForeground)
-                .fixedSize(horizontal: false, vertical: true)
+            DisclosureGroup("Keychain prompts") {
+                Text("macOS controls its password prompt. Choosing Always Allow normally prevents repeat prompts while the app's signing identity remains unchanged.")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(DashboardPalette.mutedForeground)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, 6)
+            }
 
             HStack {
                 Spacer()
-                Button("Not Now", role: .cancel, action: onCancel)
+                Button("Not now", role: .cancel, action: onCancel)
                     .buttonStyle(SettingsQuietButtonStyle())
                 Button("Continue", action: onEnable)
                     .buttonStyle(DashboardPrimaryButtonStyle())
