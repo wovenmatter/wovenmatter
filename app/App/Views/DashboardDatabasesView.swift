@@ -458,7 +458,6 @@ private enum DashboardDatabaseFilter: String, CaseIterable, Identifiable {
     case all
     case local
     case remote
-    case buzz
 
     var id: String { rawValue }
 
@@ -467,16 +466,14 @@ private enum DashboardDatabaseFilter: String, CaseIterable, Identifiable {
         case .all: "All"
         case .local: "Local"
         case .remote: "Remote"
-        case .buzz: "Buzz"
         }
     }
 
     func includes(_ kind: DashboardDatabaseSourceKind) -> Bool {
         switch self {
         case .all: true
-        case .local: kind == .local
+        case .local: kind == .local || kind == .buzz
         case .remote: kind == .remote
-        case .buzz: kind == .buzz
         }
     }
 }
