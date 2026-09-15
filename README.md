@@ -163,8 +163,10 @@ transports are checked after installation instead of being assumed present.
 
 ## Remote databases
 
-Databases includes All, Local, Remote, and Buzz locations. The Remote workspace
-menu filters configured workspaces, including unavailable ones. Select a workspace
+Databases includes All, Local, and Remote locations. Local includes the local
+agent workspace and linked local Buzz workspaces, retaining their workspace
+labels. The Remote workspace menu filters configured remote agent workspaces,
+including unavailable ones. Select a workspace
 to create a database folder or change its data preference. Agents use the same
 persistent `Databases/<name>/` folder and `.wovenmatter/database.json` metadata.
 Existing remote services need an explicit service update in Settings before these
