@@ -1116,9 +1116,16 @@ private struct DashboardSegmentButtonStyle: ButtonStyle {
         )
 
         configuration.label
-            .background(
-                shape.fill(backgroundColor(isPressed: configuration.isPressed))
-            )
+            .background {
+                ZStack {
+                    shape.fill(
+                        isSelected
+                            ? DashboardPalette.background.opacity(reduceTransparency ? 1 : 0.96)
+                            : .clear
+                    )
+                    shape.fill(interactionColor(isPressed: configuration.isPressed))
+                }
+            }
             .shadow(
                 color: isSelected && isEnabled
                     ? DashboardPalette.foreground.opacity(0.06)
@@ -1131,10 +1138,7 @@ private struct DashboardSegmentButtonStyle: ButtonStyle {
             .onHover { isHovering = $0 }
     }
 
-    private func backgroundColor(isPressed: Bool) -> Color {
-        if isSelected {
-            return DashboardPalette.background.opacity(reduceTransparency ? 1 : 0.96)
-        }
+    private func interactionColor(isPressed: Bool) -> Color {
         guard isEnabled else { return .clear }
         if isPressed {
             return theme.palette.themeSoft

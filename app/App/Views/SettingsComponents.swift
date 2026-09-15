@@ -302,9 +302,10 @@ struct SettingsMenuPicker: View {
                             }
                             .padding(.horizontal, 10)
                             .padding(.vertical, 6)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                             .contentShape(Rectangle())
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(SettingsMenuOptionButtonStyle())
                         .accessibilityAddTraits(option == selection ? .isSelected : [])
                     }
                 }
@@ -317,6 +318,33 @@ struct SettingsMenuPicker: View {
 
     private func label(for option: String) -> String {
         capitalizeOptions ? option.capitalized : option
+    }
+}
+
+private struct SettingsMenuOptionButtonStyle: ButtonStyle {
+    @Environment(\.dashboardTheme) private var theme
+    @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var isHovering = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background(
+                isEnabled && (configuration.isPressed || isHovering)
+                    ? (configuration.isPressed
+                        ? theme.palette.themeSoft
+                        : theme.palette.themeWhisper)
+                    : .clear
+            )
+            .clipShape(
+                RoundedRectangle(
+                    cornerRadius: DashboardMetrics.controlRadius - 4,
+                    style: .continuous
+                )
+            )
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.99 : 1)
+            .opacity(isEnabled ? 1 : 0.4)
+            .onHover { isHovering = $0 }
     }
 }
 
