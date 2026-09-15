@@ -186,6 +186,7 @@ struct SettingsCard<Content: View>: View {
             content
         }
         .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(theme.palette.workspace)
         .clipShape(DashboardShapes.card)
     }
@@ -221,6 +222,7 @@ struct SettingsInset<Content: View>: View {
     var body: some View {
         content
             .padding(.vertical, 6)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

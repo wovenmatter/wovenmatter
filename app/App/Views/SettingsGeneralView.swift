@@ -207,16 +207,8 @@ struct SettingsGeneralView: View {
                 }
             }
             .padding(12)
-            .background(selected ? theme.palette.themeSoft : theme.palette.themeWhisper)
-            .clipShape(DashboardShapes.card)
-            .overlay {
-                if selected {
-                    DashboardShapes.card
-                        .stroke(theme.palette.themeRing, lineWidth: 1.5)
-                }
-            }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(SettingsThemeChoiceButtonStyle(isSelected: selected))
         .accessibilityLabel("\(option.title) theme")
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
@@ -340,6 +332,33 @@ struct SettingsGeneralView: View {
         .accessibilityLabel(harness.displayName)
     }
 
+}
+
+private struct SettingsThemeChoiceButtonStyle: ButtonStyle {
+    @Environment(\.dashboardTheme) private var theme
+    @State private var isHovering = false
+    let isSelected: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background(
+                configuration.isPressed
+                    ? theme.palette.themeStrong
+                    : isSelected
+                        ? theme.palette.themeSoft
+                        : isHovering
+                            ? theme.palette.themeSoft.opacity(0.72)
+                            : theme.palette.themeWhisper
+            )
+            .clipShape(DashboardShapes.card)
+            .overlay {
+                if isSelected {
+                    DashboardShapes.card
+                        .stroke(theme.palette.themeRing, lineWidth: 1.5)
+                }
+            }
+            .onHover { isHovering = $0 }
+    }
 }
 
 private enum ReleaseUpdateState {
