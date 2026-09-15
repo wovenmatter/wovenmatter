@@ -51,8 +51,7 @@ struct SettingsView: View {
                     model: model,
                     runtimeKind: runtimeKind,
                     reservesRailControlSpace: reservesRailControlSpace,
-                    onBack: { section = .landing },
-                    onOpenLocalWorkspace: { section = .localWorkspace }
+                    onBack: { section = .landing }
                 )
             case .openClaw:
                 SettingsOpenClawView(
@@ -246,16 +245,9 @@ private struct SettingsHarnessView: View {
     let runtimeKind: AgentRuntimeKind
     var reservesRailControlSpace = false
     let onBack: () -> Void
-    let onOpenLocalWorkspace: () -> Void
 
     private var availability: LocalACPRuntimeAvailability? {
         model.localACPRuntimeAvailability.first { $0.runtimeKind == runtimeKind }
-    }
-
-    private var agents: [WorkspaceAgent] {
-        model.localCLIAgents
-            .filter { $0.runtimeKind == runtimeKind }
-            .sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
     }
 
     var body: some View {
@@ -265,10 +257,7 @@ private struct SettingsHarnessView: View {
             reservesRailControlSpace: reservesRailControlSpace,
             onBack: onBack
         ) {
-            SettingsCard(
-                title: "Local agent workspace",
-                detail: "Runtime status and agents on this Mac."
-            ) {
+            SettingsCard(title: "Local agent workspace") {
                 SettingsInset {
                     HStack(alignment: .center, spacing: 12) {
                         DashboardHarnessLogoIcon(
@@ -294,39 +283,6 @@ private struct SettingsHarnessView: View {
                         )
                     }
                 }
-
-                if agents.isEmpty {
-                    SettingsEmpty("No \(runtimeKind.displayName) agents discovered.")
-                } else {
-                    VStack(spacing: 8) {
-                        ForEach(agents) { agent in
-                            SettingsInset {
-                                HStack(alignment: .center, spacing: 12) {
-                                    DashboardHarnessLogoIcon(
-                                        logo: DashboardHarnessLogo(runtimeKind: runtimeKind),
-                                        size: 20
-                                    )
-                                    .frame(width: 28, height: 28)
-                                    VStack(alignment: .leading, spacing: 3) {
-                                        Text(agent.displayName)
-                                            .font(.system(size: 13, weight: .medium))
-                                        Text("Local agent workspace")
-                                            .font(.system(size: 11))
-                                            .foregroundStyle(DashboardPalette.mutedForeground)
-                                    }
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                }
-                            }
-                        }
-                    }
-                }
-
-                SettingsDestinationRow(
-                    title: "Manage local workspace",
-                    detail: "Manage runtimes and workspace folders.",
-                    icon: { DashboardLucideIcon(glyph: .terminal, size: 15) },
-                    action: onOpenLocalWorkspace
-                )
             }
         }
     }
