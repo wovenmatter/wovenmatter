@@ -84,6 +84,7 @@ struct DashboardCalendarSurface: View {
     @State private var selectedDate = Calendar.autoupdatingCurrent.startOfDay(for: Date())
     @State private var eventDraft = DashboardCalendarEventDraft(selectedDate: Date())
     @State private var showingAddEvent = false
+    @State private var hoveredDate: Date?
 
     private let calendar = Calendar.autoupdatingCurrent
     private let columns = Array(
@@ -127,14 +128,9 @@ struct DashboardCalendarSurface: View {
                     cornerRadius: DashboardMetrics.controlRadius,
                     style: .continuous
                 ))
-            VStack(alignment: .leading, spacing: 3) {
-                Text("Calendar")
-                    .font(.system(size: 22, weight: .semibold))
-                    .tracking(-0.3)
-                Text("Events, reminders, and scheduled agent work.")
-                    .font(.system(size: 12.5))
-                    .foregroundStyle(DashboardPalette.mutedForeground)
-            }
+            Text("Calendar")
+                .font(.system(size: 22, weight: .semibold))
+                .tracking(-0.3)
             Spacer()
             Button(action: presentAddEvent) {
                 HStack(spacing: 7) {
@@ -206,7 +202,7 @@ struct DashboardCalendarSurface: View {
                         .buttonStyle(DashboardQuietButtonStyle())
                 }
                 if items.isEmpty {
-                    Text("No events scheduled for this day.")
+                    Text("No events.")
                         .font(.system(size: 12.5))
                         .foregroundStyle(DashboardPalette.mutedForeground)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -274,7 +270,11 @@ struct DashboardCalendarSurface: View {
             .frame(maxWidth: .infinity, minHeight: 76, alignment: .topLeading)
             .padding(8)
             .background(
-                selected ? theme.palette.themeSoft : DashboardPalette.muted.opacity(0.32),
+                selected
+                    ? theme.palette.themeSoft
+                    : hoveredDate == day.date
+                        ? theme.palette.themeWhisper
+                        : DashboardPalette.muted.opacity(0.32),
                 in: RoundedRectangle(cornerRadius: 10, style: .continuous)
             )
             .overlay {
@@ -287,6 +287,9 @@ struct DashboardCalendarSurface: View {
             .opacity(day.isInDisplayedMonth ? 1 : 0.45)
         }
         .buttonStyle(.plain)
+        .onHover { hovering in
+            hoveredDate = hovering ? day.date : (hoveredDate == day.date ? nil : hoveredDate)
+        }
         .accessibilityLabel(day.date.formatted(date: .complete, time: .omitted))
     }
 
@@ -326,13 +329,8 @@ private struct DashboardAddCalendarEventSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Add event")
-                    .font(.system(size: 20, weight: .semibold))
-                Text("Create an event in your Woven Matter calendar.")
-                    .font(.system(size: 12.5))
-                    .foregroundStyle(DashboardPalette.mutedForeground)
-            }
+            Text("Add event")
+                .font(.system(size: 20, weight: .semibold))
 
             VStack(alignment: .leading, spacing: 12) {
                 TextField("Event title", text: $draft.title)

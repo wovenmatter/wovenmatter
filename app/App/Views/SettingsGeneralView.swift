@@ -33,7 +33,6 @@ struct SettingsGeneralView: View {
     var body: some View {
         SettingsPage(
             title: "General",
-            detail: "Appearance, updates, and app-wide behavior.",
             reservesRailControlSpace: reservesRailControlSpace,
             onBack: onBack
         ) {
@@ -52,17 +51,18 @@ struct SettingsGeneralView: View {
 
     private var releaseUpdateCard: some View {
         SettingsCard(
-            title: "Software updates",
-            detail: "Production releases are signed, notarized, and downloaded from GitHub Releases."
+            title: "Software updates"
         ) {
             HStack(alignment: .center, spacing: 16) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(releaseUpdateState.title(currentVersion: currentVersion))
                         .font(.system(size: 13, weight: .medium))
-                    Text(releaseUpdateState.detail)
-                        .font(.system(size: 11))
-                        .foregroundStyle(DashboardPalette.mutedForeground)
-                        .fixedSize(horizontal: false, vertical: true)
+                    if let detail = releaseUpdateState.detail {
+                        Text(detail)
+                            .font(.system(size: 11))
+                            .foregroundStyle(DashboardPalette.mutedForeground)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
                 Spacer(minLength: 12)
                 Button(releaseUpdateState.buttonTitle) {
@@ -149,8 +149,7 @@ struct SettingsGeneralView: View {
 
     private var appearanceCard: some View {
         SettingsCard(
-            title: "Appearance",
-            detail: "Choose the dashboard color treatment and how workspace navigation is arranged."
+            title: "Appearance"
         ) {
             LazyVGrid(
                 columns: [GridItem(.adaptive(minimum: 230), spacing: 12)],
@@ -162,10 +161,6 @@ struct SettingsGeneralView: View {
                 }
             }
 
-            Text("Theme changes apply immediately and stay with this Mac.")
-                .font(.system(size: 11))
-                .foregroundStyle(DashboardPalette.mutedForeground)
-
             Divider()
                 .overlay(theme.palette.border)
                 .padding(.vertical, 2)
@@ -176,14 +171,8 @@ struct SettingsGeneralView: View {
 
     private var sidebarLayoutSelector: some View {
         VStack(alignment: .leading, spacing: 8) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text("Sidebar layout")
-                    .font(.system(size: 13, weight: .medium))
-                Text("Choose how navigation and folder contents share the sidebar area.")
-                    .font(.system(size: 11))
-                    .foregroundStyle(DashboardPalette.mutedForeground)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+            Text("Sidebar layout")
+                .font(.system(size: 13, weight: .medium))
 
             DashboardSegmentedSelector(
                 options: DashboardSidebarStyle.allCases,
@@ -201,26 +190,15 @@ struct SettingsGeneralView: View {
 
     private func themeChoice(_ option: DashboardTheme) -> some View {
         let selected = theme == option
-        let description = option == .green
-            ? "White workspace with British Racing Green glass sidebars and controls."
-            : "Warm cognac surround with white sidebars and restrained green actions."
-
         return Button {
             storedTheme = option.rawValue
         } label: {
             VStack(alignment: .leading, spacing: 11) {
                 SettingsThemePreview(theme: option)
-                HStack(alignment: .top, spacing: 10) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(option.title)
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundStyle(DashboardPalette.foreground)
-                        Text(description)
-                            .font(.system(size: 11))
-                            .foregroundStyle(DashboardPalette.mutedForeground)
-                            .multilineTextAlignment(.leading)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
+                HStack(alignment: .center, spacing: 10) {
+                    Text(option.title)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(DashboardPalette.foreground)
                     Spacer(minLength: 0)
                     Image(systemName: "checkmark")
                         .font(.system(size: 12, weight: .semibold))
@@ -246,7 +224,7 @@ struct SettingsGeneralView: View {
     private var conversationTitlesCard: some View {
         SettingsCard(
             title: "Conversation titles",
-            detail: "Automatically name new conversations using the Codex CLI account signed in on this Mac."
+            detail: "Uses your local Codex account to name new chats."
         ) {
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
@@ -385,14 +363,14 @@ private enum ReleaseUpdateState {
 
     var buttonTitle: String {
         switch self {
-        case .idle, .current, .failed: "Check for Updates"
+        case .idle, .current, .failed: "Check for updates"
         case .checking: "Checking…"
-        case .available: "Download Update"
+        case .available: "Download update"
         case .downloading: "Downloading…"
-        case .ready: "Install Update"
+        case .ready: "Install update"
         case .installing: "Installing…"
-        case .downloadFailed: "Try Download Again"
-        case .installFailed: "Try Install Again"
+        case .downloadFailed: "Retry download"
+        case .installFailed: "Retry installation"
         }
     }
 
@@ -410,15 +388,12 @@ private enum ReleaseUpdateState {
         }
     }
 
-    var detail: String {
+    var detail: String? {
         switch self {
-        case .idle: "Check the latest published Apple Silicon release."
-        case .checking: "Checking the signed production release channel…"
-        case .current: "This Mac has the latest published version."
-        case .available: "Download and verify the signed update inside Woven Matter."
-        case .downloading: "Downloading the signed update…"
-        case .ready: "The update is downloaded and verified. Install it now to relaunch."
-        case .installing: "Preparing the update and relaunching Woven Matter…"
+        case .idle, .checking, .available, .downloading: nil
+        case .current: "You’re up to date."
+        case .ready: "Installing restarts Woven Matter."
+        case .installing: "Woven Matter will restart."
         case .downloadFailed(_, let message), .installFailed(_, let message): message
         case .failed(let message): message
         }

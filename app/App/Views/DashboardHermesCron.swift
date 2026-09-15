@@ -8,10 +8,13 @@ struct DashboardCronSurface: View {
   @State private var provider = "Hermes"
   var body: some View {
     VStack(spacing: 0) {
-      Picker("Agent", selection: $provider) {
-        Text("Hermes").tag("Hermes")
-        Text("OpenClaw").tag("OpenClaw")
-      }.pickerStyle(.segmented).frame(width: 240).padding(.top, 16)
+      DashboardSegmentedSelector(
+        options: ["Hermes", "OpenClaw"],
+        selection: $provider
+      ) { $0 }
+      .frame(width: 240)
+      .padding(.top, 16)
+      .accessibilityLabel("Agent")
       if provider == "Hermes" {
         HermesCronSurface(model: model, onOpenConversation: onOpenConversation)
       } else {
@@ -28,11 +31,7 @@ struct HermesCronSurface: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 16) {
       HStack {
-        VStack(alignment: .leading, spacing: 4) {
-          Text("Cron Jobs").font(.system(size: 22, weight: .semibold))
-          Text("Hermes schedules, results, and conversation delivery")
-            .font(.system(size: 12.5)).foregroundStyle(DashboardPalette.mutedForeground)
-        }
+        Text("Cron Jobs").font(.system(size: 22, weight: .semibold))
         Spacer()
         Picker("Workspace", selection: $selectedAgent) {
           Text("All workspaces").tag(nil as UUID?)
@@ -44,13 +43,13 @@ struct HermesCronSurface: View {
         .buttonStyle(DashboardQuietButtonStyle()).disabled(model.isRefreshingHermesCron)
       }
       Text(
-        "The agent host runs schedules and retains delivered results while this app is closed. Collection marks conversations unread once per run."
+        "Jobs keep running while Woven Matter is closed, as long as Hermes and its host stay running."
       )
       .font(.system(size: 12)).foregroundStyle(DashboardPalette.mutedForeground)
       ScrollView {
         LazyVStack(alignment: .leading, spacing: 16) {
           if model.hermesCronAgents.isEmpty {
-            Text("Connect a local or remote Hermes Gateway in Settings to manage scheduled jobs.")
+            Text("Connect Hermes in Settings to schedule jobs.")
           }
           ForEach(model.hermesCronAgents.filter { selectedAgent == nil || $0.id == selectedAgent })
           { agent in
@@ -63,6 +62,8 @@ struct HermesCronSurface: View {
               .font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
               if let error = model.hermesCronErrors[agent.id] { SettingsError(error) }
               HermesCronJobForm(model: model, agent: agent)
+              Text("If another Hermes Gateway runs these jobs, restart it after first enabling result delivery.")
+                .font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
               if (model.hermesCronJobs[agent.id] ?? []).isEmpty {
                 Text("No scheduled jobs.").font(.callout)
               }
@@ -78,7 +79,7 @@ struct HermesCronSurface: View {
                   ) {
                     VStack(alignment: .leading, spacing: 8) {
                       Text(result.output).font(.system(size: 12)).textSelection(.enabled)
-                      Button("Continue from Output") {
+                      Button("Continue in chat") {
                         Task {
                           if let id = await model.continueHermesResult(agent: agent, result: result)
                           {
@@ -115,7 +116,7 @@ struct HermesCronSurface: View {
         }.buttonStyle(DashboardQuietButtonStyle())
       }
       Picker(
-        "Deliver results to",
+        "Send results to",
         selection: Binding(
           get: { model.hermesResultRoutes[agent.id]?[job["id"].text] ?? "" },
           set: { destination in
@@ -127,7 +128,7 @@ struct HermesCronSurface: View {
         )
       ) {
         Text("Cron Jobs only").tag("")
-        Text("New conversation per result").tag("new")
+        Text("New chat for each result").tag("new")
         ForEach(
           (model.workspaceOverview?.conversations ?? []).filter {
             $0.agentID == agent.id.uuidString.lowercased() && !$0.isArchived
@@ -136,10 +137,6 @@ struct HermesCronSurface: View {
           Text(conversation.title).tag(conversation.id)
         }
       }
-      Text(
-        "Woven Matter retains textual results on the agent host. If another Hermes gateway owns scheduling, restart it once after first enabling this delivery plugin."
-      )
-      .font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
       if let error = job["last_delivery_error"].string, !error.isEmpty { SettingsError(error) }
       DisclosureGroup("Job details") {
         Text(job["prompt"].string ?? job["script"].string ?? "No prompt").font(.callout)
@@ -179,7 +176,7 @@ private struct HermesCronJobForm: View {
         }.disabled(
           creating || schedule.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             || prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-        Text("Choose delivery below, then resume the job when it is ready.").font(
+        Text("Choose where to send results, then resume the job.").font(
           .caption)
       }.textFieldStyle(.roundedBorder)
     }

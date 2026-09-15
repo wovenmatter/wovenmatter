@@ -8,7 +8,7 @@ struct DashboardUnavailableUtility: View {
     @Environment(\.dashboardTheme) private var theme
     let icon: DashboardLucideGlyph
     let title: String
-    let detail: String
+    var detail: String? = nil
 
     var body: some View {
         VStack(spacing: 0) {
@@ -23,9 +23,6 @@ struct DashboardUnavailableUtility: View {
                         Text(title)
                             .font(.system(size: 22, weight: .semibold))
                             .tracking(-0.3)
-                        Text(utilitySubtitle)
-                            .font(.system(size: 12.5))
-                            .foregroundStyle(DashboardPalette.mutedForeground)
                     }
                     Spacer()
                 }
@@ -42,15 +39,7 @@ struct DashboardUnavailableUtility: View {
         switch title {
         case "Calendar": "No calendar items yet"
         case "Cron Jobs": "No scheduled jobs"
-        default: "No library items yet"
-        }
-    }
-
-    private var utilitySubtitle: String {
-        switch title {
-        case "Calendar": "Events, reminders, and scheduled agent work."
-        case "Cron Jobs": "Scheduled jobs and cron deliveries across agents."
-        default: "Files and images shared across conversations."
+        default: "Library is not available yet."
         }
     }
 
@@ -59,7 +48,7 @@ struct DashboardUnavailableUtility: View {
 struct DashboardConversationEmptyState: View {
     let icon: DashboardLucideGlyph
     let title: String
-    let detail: String
+    var detail: String? = nil
     var loading = false
 
     var body: some View {
@@ -81,12 +70,14 @@ struct DashboardConversationEmptyState: View {
                 .foregroundStyle(DashboardPalette.foreground)
                 .multilineTextAlignment(.center)
                 .padding(.top, 16)
-            Text(detail)
-                .font(.system(size: 12.5))
-                .foregroundStyle(DashboardPalette.mutedForeground)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 430)
-                .padding(.top, 4)
+            if let detail {
+                Text(detail)
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(DashboardPalette.mutedForeground)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 430)
+                    .padding(.top, 4)
+            }
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 80)

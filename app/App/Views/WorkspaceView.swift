@@ -646,8 +646,7 @@ struct WorkspaceView: View {
                 case .library:
                     DashboardUnavailableUtility(
                         icon: .libraryBigControl,
-                        title: "Library",
-                        detail: "Attachments are not shown in this view yet."
+                        title: "Library"
                     )
                 case .databases:
                     DashboardDatabasesView(model: model)
