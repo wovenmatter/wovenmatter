@@ -145,7 +145,7 @@ struct DashboardCalendarSurface: View {
 
     private func monthCard(itemsByDay: [Date: [WorkspaceCalendarItemRecord]]) -> some View {
         let layout = DashboardCalendarMonthLayout(displaying: displayedMonth, calendar: calendar)
-        return DashboardCard {
+        return DashboardCard(showsBackground: false) {
             VStack(spacing: 14) {
                 HStack(spacing: 8) {
                     Text(layout.monthStart.formatted(.dateTime.month(.wide).year()))
@@ -188,7 +188,7 @@ struct DashboardCalendarSurface: View {
     }
 
     private func selectedDayCard(items: [WorkspaceCalendarItemRecord]) -> some View {
-        DashboardCard {
+        DashboardCard(showsBackground: false) {
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
                     VStack(alignment: .leading, spacing: 3) {

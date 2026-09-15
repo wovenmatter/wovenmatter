@@ -224,7 +224,6 @@ struct OpenClawCronSurface: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(16)
-            .background(DashboardPalette.background)
             .clipShape(RoundedRectangle(cornerRadius: DashboardMetrics.cardRadius, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: DashboardMetrics.cardRadius, style: .continuous)
@@ -321,7 +320,6 @@ struct OpenClawCronSurface: View {
             }
         }
         .padding(14)
-        .background(DashboardPalette.background)
         .clipShape(RoundedRectangle(cornerRadius: DashboardMetrics.cardRadius, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: DashboardMetrics.cardRadius, style: .continuous)
@@ -464,7 +462,6 @@ struct OpenClawHeartbeatCard: View {
             }
         }
         .padding(16)
-        .background(DashboardPalette.background)
         .clipShape(RoundedRectangle(cornerRadius: DashboardMetrics.cardRadius, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: DashboardMetrics.cardRadius, style: .continuous)

@@ -174,8 +174,9 @@ struct HermesCronSurface: View {
         Text(job["prompt"].string ?? job["script"].string ?? "No prompt").font(.callout)
           .textSelection(.enabled)
       }
-    }.padding(16).background(DashboardPalette.background).clipShape(
-      RoundedRectangle(cornerRadius: DashboardMetrics.cardRadius))
+    }
+    .padding(16)
+    .clipShape(RoundedRectangle(cornerRadius: DashboardMetrics.cardRadius))
   }
 }
 
@@ -189,10 +190,14 @@ private struct HermesCronJobForm: View {
 
   var body: some View {
     DisclosureGroup("New scheduled job") {
-      VStack(alignment: .leading, spacing: 8) {
+      VStack(alignment: .leading, spacing: 10) {
         TextField("Name", text: $name)
+          .frame(maxWidth: 640)
         TextField("Schedule, e.g. every 1h", text: $schedule)
-        TextField("Instructions", text: $prompt, axis: .vertical).lineLimit(3...8)
+          .frame(maxWidth: 640)
+        TextField("Instructions", text: $prompt, axis: .vertical)
+          .lineLimit(3...8)
+          .frame(maxWidth: 640)
         Button("Create paused job") {
           creating = true
           Task {
@@ -210,7 +215,13 @@ private struct HermesCronJobForm: View {
             || prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         Text("Choose where to send results, then resume the job.").font(
           .caption)
-      }.textFieldStyle(.roundedBorder)
+      }
+      .textFieldStyle(.roundedBorder)
+      .controlSize(.regular)
+      .frame(maxWidth: 640, alignment: .leading)
+      .padding(.horizontal, 4)
+      .padding(.top, 10)
+      .padding(.bottom, 4)
     }
   }
 }
