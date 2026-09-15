@@ -25,10 +25,6 @@ struct HermesCronSurface: View {
   @Bindable var model: ApplicationModel
   let onOpenConversation: (String) -> Void
   @State private var selectedAgent: UUID?
-  @State private var name = ""
-  @State private var schedule = ""
-  @State private var prompt = ""
-  @State private var creating = false
   var body: some View {
     VStack(alignment: .leading, spacing: 16) {
       HStack {
@@ -66,35 +62,12 @@ struct HermesCronSurface: View {
               )
               .font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
               if let error = model.hermesCronErrors[agent.id] { SettingsError(error) }
-              DisclosureGroup("New scheduled job") {
-                VStack(alignment: .leading, spacing: 8) {
-                  TextField("Name", text: $name)
-                  TextField("Schedule, e.g. every 1h", text: $schedule)
-                  TextField("Instructions", text: $prompt, axis: .vertical).lineLimit(3...8)
-                  Button("Create paused job") {
-                    creating = true
-                    Task {
-                      if await model.createHermesCron(
-                        agent: agent, name: name, schedule: schedule, prompt: prompt)
-                      {
-                        name = ""
-                        schedule = ""
-                        prompt = ""
-                      }
-                      creating = false
-                    }
-                  }.disabled(
-                    creating || schedule.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                      || prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                  Text("Choose delivery below, then resume the job when it is ready.").font(
-                    .caption)
-                }.textFieldStyle(.roundedBorder)
-              }
+              HermesCronJobForm(model: model, agent: agent)
               if (model.hermesCronJobs[agent.id] ?? []).isEmpty {
                 Text("No scheduled jobs.").font(.callout)
               }
-              ForEach(model.hermesCronJobs[agent.id] ?? [], id: \.self) { job in
-                jobCard(agent: agent, job: job)
+              ForEach((model.hermesCronJobs[agent.id] ?? []).map { (id: $0["id"].text, value: $0) }, id: \.id) { job in
+                jobCard(agent: agent, job: job.value)
               }
               DisclosureGroup("Retained results") {
                 ForEach((model.hermesCronResults[agent.id] ?? []).reversed()) { result in
@@ -174,5 +147,41 @@ struct HermesCronSurface: View {
       }
     }.padding(16).background(DashboardPalette.background).clipShape(
       RoundedRectangle(cornerRadius: DashboardMetrics.cardRadius))
+  }
+}
+
+private struct HermesCronJobForm: View {
+  @Bindable var model: ApplicationModel
+  let agent: WorkspaceAgent
+  @State private var name = ""
+  @State private var schedule = ""
+  @State private var prompt = ""
+  @State private var creating = false
+
+  var body: some View {
+    DisclosureGroup("New scheduled job") {
+      VStack(alignment: .leading, spacing: 8) {
+        TextField("Name", text: $name)
+        TextField("Schedule, e.g. every 1h", text: $schedule)
+        TextField("Instructions", text: $prompt, axis: .vertical).lineLimit(3...8)
+        Button("Create paused job") {
+          creating = true
+          Task {
+            if await model.createHermesCron(
+              agent: agent, name: name, schedule: schedule, prompt: prompt)
+            {
+              name = ""
+              schedule = ""
+              prompt = ""
+            }
+            creating = false
+          }
+        }.disabled(
+          creating || schedule.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        Text("Choose delivery below, then resume the job when it is ready.").font(
+          .caption)
+      }.textFieldStyle(.roundedBorder)
+    }
   }
 }
