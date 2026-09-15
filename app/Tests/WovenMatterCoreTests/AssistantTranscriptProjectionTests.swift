@@ -118,4 +118,49 @@ struct AssistantTranscriptProjectionTests {
     #expect([laterActivity, earlyTrace].sorted(by: WorkspaceRunActivityRecord.precedes).map(\.id) == ["trace", "activity"])
   }
 
+
+  @Test("final-only Gateway history preserves commentary without a full history sync", arguments: [false, true])
+  func finalSegmentHistory(finalBoundary: Bool) throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let database = try WorkspaceDatabase(url: directory.appendingPathComponent("workspace.sqlite"))
+    let conversation = try database.createLocalACPSession(runtimeKind: .codex, title: "History", ownerDeviceID: UUID())
+    let run = try database.beginLocalACPRun(conversationID: conversation, content: "Start")
+    let commentary = "Checking…\n\n"
+    try database.appendLocalACPAssistantChunk(runID: run.runID, chunk: commentary)
+    try database.recordAssistantStreamBoundary(runID: run.runID)
+    try database.upsertDeviceOwnedRunActivity(runID: run.runID,
+      activity: AgentRunActivity(id: "tool", kind: .tool))
+    if finalBoundary {
+      try database.appendLocalACPAssistantChunk(runID: run.runID, chunk: "Draft final")
+      try database.recordAssistantStreamBoundary(runID: run.runID, finalSegment: true)
+      try database.upsertDeviceOwnedRunActivity(runID: run.runID,
+        activity: AgentRunActivity(id: "late-reasoning", kind: .thought, content: "Late reasoning"))
+    }
+    // No full session-history synchronization occurs: this reply is the only
+    // history repair available, and its delivery can be replayed.
+    for _ in 0..<2 {
+      try database.replaceLocalACPAssistantMessage(runID: run.runID,
+        assistantMessageID: run.assistantMessageID, content: "Final answer",
+        preservingStreamCommentary: true)
+      let page = try database.conversationHistoryPage(id: conversation, limit: 20)
+      let reply = try #require(page.messages.first { $0.role == "assistant" })
+      let projection = AssistantTranscriptProjection(messageID: reply.id, content: reply.content,
+        activities: page.activities.map(\.activity))
+      #expect(reply.content == commentary + "Final answer")
+      #expect(projection.body == "Final answer")
+      #expect(projection.commentary.map(\.content) == [commentary])
+    }
+    // Whole-message snapshots retain their authoritative replacement contract.
+    try database.replaceLocalACPAssistantMessage(runID: run.runID,
+      assistantMessageID: run.assistantMessageID, content: "Replacement")
+    let page = try database.conversationHistoryPage(id: conversation, limit: 20)
+    let reply = try #require(page.messages.first { $0.role == "assistant" })
+    let projection = AssistantTranscriptProjection(messageID: reply.id, content: reply.content,
+      activities: page.activities.map(\.activity))
+    #expect(projection.body == "Replacement")
+    #expect(projection.commentary.isEmpty)
+  }
+
 }

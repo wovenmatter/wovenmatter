@@ -3253,10 +3253,32 @@ public final class WorkspaceDatabase: @unchecked Sendable {
     runID: String,
     assistantMessageID: String,
     content: String,
+    preservingStreamCommentary: Bool = false,
     updatedAt: Date = Date()
   ) throws {
     try transaction {
       let authority = try localRunAuthorityUnlocked(runID: runID)
+      var content = content
+      if preservingStreamCommentary {
+        let current = try prepareUnlocked("SELECT content FROM dashboard_messages WHERE id = ? AND run_id = ? AND role = 'assistant'")
+        defer { sqlite3_finalize(current) }
+        try bind(assistantMessageID, at: 1, to: current)
+        try bind(runID, at: 2, to: current)
+        guard sqlite3_step(current) == SQLITE_ROW else { throw LocalACPSessionDatabaseError.runNotFound }
+        let text = try text(current, column: 0)
+        let segments = try runActivityRecordsUnlocked(runIDs: [runID], assistantOnly: true).map(\.activity)
+        if let last = segments.last(where: {
+          $0.assistantMessageID == assistantMessageID
+            && $0.assistantCheckpoint?.followingText(in: text) != nil
+        }), let checkpoint = last.assistantCheckpoint {
+          // History contains the final segment, while live chat snapshots are
+          // cumulative. Only an explicitly final boundary replaces its segment.
+          let prefixBytes = checkpoint.byteCount - (last.phase == "final" ? (last.content ?? "").utf8.count : 0)
+          if prefixBytes >= 0 {
+            content = String(decoding: text.utf8.prefix(prefixBytes), as: UTF8.self) + content
+          }
+        }
+      }
       let timestamp = Self.timestamp(updatedAt)
       let message = try prepareUnlocked("""
         UPDATE dashboard_messages
@@ -3339,6 +3361,7 @@ public final class WorkspaceDatabase: @unchecked Sendable {
   public func recordAssistantStreamBoundary(
     runID: String,
     assistantMessageID requestedMessageID: String? = nil,
+    finalSegment: Bool = false,
     updatedAt: Date = Date()
   ) throws {
     try transaction {
@@ -3367,12 +3390,19 @@ public final class WorkspaceDatabase: @unchecked Sendable {
       } else {
         tail = content.hasPrefix(prefix) ? String(content.dropFirst(prefix.count)) : content
       }
-      guard !tail.isEmpty else { return }
+      guard !tail.isEmpty else {
+        if finalSegment, let last = segments.last {
+          try upsertDeviceOwnedRunActivityUnlocked(runID: runID,
+            activity: AgentRunActivity(id: last.id, kind: .assistant, phase: "final"),
+            appendingContent: false, updatedAt: updatedAt)
+        }
+        return
+      }
       try upsertDeviceOwnedRunActivityUnlocked(
         runID: runID,
         activity: AgentRunActivity(
           id: "assistant:\(messageID):\(String(format: "%08d", segments.count))",
-          kind: .assistant, phase: "boundary", status: "completed",
+          kind: .assistant, phase: finalSegment ? "final" : "boundary", status: "completed",
           content: tail, assistantMessageID: messageID,
           assistantCheckpoint: AssistantTextCheckpoint(content)
         ),

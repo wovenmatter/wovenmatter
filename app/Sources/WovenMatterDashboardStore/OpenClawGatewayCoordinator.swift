@@ -825,6 +825,11 @@ public actor OpenClawGatewayCoordinator {
         }
       }
     }
+    if projection.terminalState != nil, projection.assistantUpdate != nil,
+       let assistantMessageID = active.assistantMessageIDsByRemoteRunID[remoteRunID] {
+      try? database.recordAssistantStreamBoundary(runID: runID,
+        assistantMessageID: assistantMessageID, finalSegment: true)
+    }
     if let activity = projection.activity {
       if let assistantMessageID = active.assistantMessageIDsByRemoteRunID[remoteRunID] {
         try? database.recordAssistantStreamBoundary(
@@ -1120,7 +1125,7 @@ public actor OpenClawGatewayCoordinator {
       try? database.replaceLocalACPAssistantMessage(
         runID: runID,
         assistantMessageID: assistantMessageID,
-        content: response
+        content: response, preservingStreamCommentary: true
       )
     }
   }
@@ -2166,7 +2171,7 @@ public actor OpenClawGatewayCoordinator {
       guard let message = value.objectValue,
             let projected = OpenClawGatewayHistoryMessage(payload: value),
             projected.isAssistantResponse, projected.correlatedRunID(knownInputIDs: knownInputIDs) == idempotencyKey else { continue }
-      if let text = message["text"]?.stringValue { return text }
+      if let text = message["text"]?.stringValue, !text.isEmpty { return text }
       let parts = message["content"]?.arrayValue ?? []
       let text = parts.compactMap { part -> String? in
         let object = part.objectValue

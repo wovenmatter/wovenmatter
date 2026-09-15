@@ -142,7 +142,12 @@ private actor HistoryFixture {
 
   func fetch() -> GatewayJSONValue {
     calls += 1
-    guard calls == 3 else { return .object(["messages": .array([])]) }
+    guard calls == 3 else {
+      return .object(["messages": .array([.object([
+        "role": .string("assistant"), "text": .string(""),
+        "__openclaw": .object(["runId": .string("owned")]),
+      ])])])
+    }
     return .object(["messages": .array([
       .object([
         "role": .string("assistant"), "text": .string("Other"),
