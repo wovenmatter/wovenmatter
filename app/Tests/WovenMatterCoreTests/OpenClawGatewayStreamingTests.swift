@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import WovenMatterClient
 @testable import WovenMatterCore
@@ -116,6 +117,85 @@ struct OpenClawGatewayStreamingTests {
     #expect(resolved?.runID == "owned-run")
   }
 
+  @Test func recoveredCoordinatorDoesNotReapplyDurableGatewayFrames() async throws {
+    let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let url = directory.appending(path: "streaming.sqlite")
+    let database = try WorkspaceDatabase(url: url)
+    _ = try database.createLocalACPSession(
+      runtimeKind: .openclaw, title: "Fixture", ownerDeviceID: UUID()
+    )
+    let agentID = try #require(database.dashboardAgents().first?.id)
+    let endpoint = OpenClawGatewayEndpoint(
+      url: URL(string: "ws://127.0.0.1:1")!, authorization: .localService
+    )
+    try database.saveOpenClawGatewayLink(OpenClawGatewayLink(
+      agentID: agentID, location: .localAgentWorkspace, endpoint: endpoint
+    ))
+    let session = try #require(OpenClawGatewaySession(payload: .object([
+      "key": .string("agent:fixture:durable"),
+    ])))
+    let conversationID = try database.importOpenClawGatewaySession(
+      agentID: agentID, session: session
+    )
+    let run = try database.beginLocalACPRun(conversationID: conversationID, content: "Hello")
+    let steering = try database.beginLocalACPSteeringTurn(
+      runID: run.runID, input: AgentMessageInput(text: "Then"),
+      completesPreviousAssistant: false
+    )
+    let activeHistory = try OpenClawGatewayHistory(payload: .object([
+      "messages": .array([]),
+      "sessionInfo": .object(["hasActiveRun": .bool(true)]),
+    ]))
+
+    let first = OpenClawGatewayCoordinator(database: database, runExecutor: { _, _, _, _ in })
+    try await first.recoverSessionRuns(conversationID: conversationID, history: activeHistory)
+    await first.receiveGatewayEventForTesting(
+      assistantEvent(runID: run.runID, name: "agent", sequence: 1, delta: "one"),
+      agentID: agentID
+    )
+    await first.receiveGatewayEventForTesting(
+      reasoningEvent(runID: run.runID, sequence: 1, delta: "thought"),
+      agentID: agentID
+    )
+    await first.receiveGatewayEventForTesting(
+      assistantEvent(runID: steering.userMessageID, name: "agent", sequence: 1, delta: "steered"),
+      agentID: agentID
+    )
+    #expect(try database.conversationContent(id: conversationID).messages.first {
+      $0.id == run.assistantMessageID
+    }?.content == "one")
+    #expect(try database.conversationContent(id: conversationID).messages.first {
+      $0.id == steering.assistantMessageID
+    }?.content == "steered")
+    #expect(try database.deviceOwnedGatewayTraceEvents(runID: run.runID).count == 3)
+    await first.shutdown()
+
+    let reopened = try WorkspaceDatabase(url: url)
+    let second = OpenClawGatewayCoordinator(database: reopened, runExecutor: { _, _, _, _ in })
+    try await second.recoverSessionRuns(conversationID: conversationID, history: activeHistory)
+    await second.receiveGatewayEventForTesting(
+      assistantEvent(runID: run.runID, name: "agent", sequence: 1, delta: "one"),
+      agentID: agentID
+    )
+    await second.receiveGatewayEventForTesting(
+      assistantEvent(runID: run.runID, name: "chat", sequence: 2, delta: "one"),
+      agentID: agentID
+    )
+    await second.receiveGatewayEventForTesting(
+      assistantEvent(runID: run.runID, name: "agent", sequence: 2, delta: " two"),
+      agentID: agentID
+    )
+    #expect(try reopened.conversationContent(id: conversationID).messages.first {
+      $0.id == run.assistantMessageID
+    }?.content == "one two")
+    #expect(try reopened.conversationContent(id: conversationID).messages.first {
+      $0.id == steering.assistantMessageID
+    }?.content == "steered")
+    await second.shutdown()
+  }
+
   private func project(
     _ name: String,
     _ payload: [String: GatewayJSONValue]
@@ -134,6 +214,40 @@ struct OpenClawGatewayStreamingTests {
     if let stream { payload["stream"] = .string(stream) }
     if let seq { payload["seq"] = .number(Double(seq)) }
     return OpenClawGatewayEvent(name: name, payload: .object(payload), sequence: nil)
+  }
+
+  private func assistantEvent(
+    runID: String,
+    name: String,
+    sequence: Int,
+    delta: String
+  ) -> OpenClawGatewayEvent {
+    let payload: [String: GatewayJSONValue]
+    if name == "chat" {
+      payload = [
+        "runId": .string(runID), "seq": .number(Double(sequence)),
+        "state": .string("delta"), "delta": .string(delta),
+      ]
+    } else {
+      payload = [
+        "runId": .string(runID), "seq": .number(Double(sequence)),
+        "stream": .string("assistant"),
+        "data": .object(["delta": .string(delta)]),
+      ]
+    }
+    return OpenClawGatewayEvent(name: name, payload: .object(payload), sequence: nil)
+  }
+
+  private func reasoningEvent(
+    runID: String,
+    sequence: Int,
+    delta: String
+  ) -> OpenClawGatewayEvent {
+    OpenClawGatewayEvent(name: "agent", payload: .object([
+      "runId": .string(runID), "seq": .number(Double(sequence)),
+      "stream": .string("reasoning"),
+      "data": .object(["delta": .string(delta)]),
+    ]), sequence: nil)
   }
 }
 

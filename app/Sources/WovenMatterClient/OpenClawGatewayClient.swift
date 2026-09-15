@@ -62,6 +62,12 @@ public struct OpenClawGatewayEvent: Equatable, Sendable {
   public let name: String
   public let payload: GatewayJSONValue?
   public let sequence: Int?
+
+  public init(name: String, payload: GatewayJSONValue?, sequence: Int?) {
+    self.name = name
+    self.payload = payload
+    self.sequence = sequence
+  }
 }
 
 public enum OpenClawGatewayClientError: LocalizedError, Equatable, Sendable {

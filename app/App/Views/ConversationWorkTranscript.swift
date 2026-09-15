@@ -19,7 +19,6 @@ struct ConversationWorkTranscript: View {
     let presentation: DashboardRunPresentation?
     let records: [WorkspaceRunActivityRecord]
     let commentaryIDs: Set<String>
-    let hasFinalReply: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var expanded: Bool
 
@@ -34,7 +33,6 @@ struct ConversationWorkTranscript: View {
         self.presentation = presentation
         self.records = records
         self.commentaryIDs = commentaryIDs
-        self.hasFinalReply = hasFinalReply
         _expanded = State(initialValue: run.status != "completed" || !hasFinalReply)
     }
 
@@ -53,7 +51,7 @@ struct ConversationWorkTranscript: View {
                     }
                     .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(ConversationElapsedButtonStyle())
                 .foregroundStyle(DashboardPalette.mutedForeground)
                 .accessibilityValue(expanded ? "Expanded" : "Collapsed")
 
@@ -145,6 +143,25 @@ struct ConversationWorkTranscript: View {
         }
         flushTools()
         return items
+    }
+}
+
+private struct ConversationElapsedButtonStyle: ButtonStyle {
+    @Environment(\.dashboardTheme) private var theme
+    @Environment(\.isEnabled) private var isEnabled
+    @State private var hovered = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background {
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .fill(isEnabled && (configuration.isPressed || hovered)
+                        ? theme.palette.themeSoft.opacity(configuration.isPressed ? 1 : 0.65)
+                        : .clear)
+                    .padding(.horizontal, -4)
+                    .padding(.vertical, -3)
+            }
+            .onHover { hovered = $0 }
     }
 }
 

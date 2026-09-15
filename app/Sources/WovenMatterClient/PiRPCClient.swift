@@ -90,7 +90,6 @@ public actor PiRPCClient {
     private var assistantMessageSequence = 0
     private var assistantMessageOpen = false
     private var completedVisibleText = ""
-    private var currentTextBlocks: [Int: String] = [:]
     private var latestStopReason: LocalACPStopReason?
     private var latestTerminalError: String?
     private var hasQueuedSettlement = false
@@ -249,7 +248,6 @@ public actor PiRPCClient {
         assistantMessageSequence = 0
         assistantMessageOpen = false
         completedVisibleText = ""
-        currentTextBlocks = [:]
         latestStopReason = nil
         latestTerminalError = nil
         promptEvents = onEvent
@@ -693,20 +691,16 @@ public actor PiRPCClient {
             let contentIndex = Self.integer(event?["contentIndex"]) ?? 0
             ensureAssistantMessage()
             if kind == "text_start" {
-                currentTextBlocks[contentIndex] = ""
                 activeReasoningPhaseID = nil
                 return []
             }
             if kind == "text_delta" {
                 guard let delta = event?["delta"] as? String, !delta.isEmpty else { return [] }
-                currentTextBlocks[contentIndex, default: ""] += delta
                 activeReasoningPhaseID = nil
                 return [.assistantChunk(delta)]
             }
             if kind == "text_end" {
-                if let content = event?["content"] as? String {
-                    currentTextBlocks[contentIndex] = content
-                }
+                // Reconcile the complete authoritative text at message_end.
                 activeReasoningPhaseID = nil
                 return []
             }
@@ -781,7 +775,6 @@ public actor PiRPCClient {
             let canonical = Self.assistantText(message)
             let total = completedVisibleText + canonical
             completedVisibleText = total
-            currentTextBlocks = [:]
             assistantMessageOpen = false
             captureTerminalStatus(message)
             return [.assistantSnapshot(total), .assistantBoundary]
@@ -822,7 +815,6 @@ public actor PiRPCClient {
     private func beginAssistantMessage() {
         assistantMessageSequence += 1
         assistantMessageOpen = true
-        currentTextBlocks = [:]
         activeReasoningPhaseID = nil
     }
 
