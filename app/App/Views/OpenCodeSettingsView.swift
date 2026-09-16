@@ -11,11 +11,10 @@ struct OpenCodeSettingsCard: View {
     @State private var loadingModels = false
     @State private var modelsError: String?
     var body: some View {
-        SettingsCard(title: "Server connection", detail: "Live connection state for this OpenCode agent.") {
+        SettingsCard(title: "Server connection") {
             SettingsValueRow(label: "Location", value: model.workspaceName)
             if let configuration = model.remoteConfiguration {
                 SettingsValueRow(label: "Host", value: configuration.hostName)
-                SettingsNote("Authenticated workspace service over SSH, port \(configuration.remotePort). Connection settings belong to this remote workspace.")
             }
             HStack {
                 SettingsPill(model.isConnecting ? "Connecting…" : model.isReady ? "Ready" : "Not connected", tone: model.isReady ? .neutral : .warning)
@@ -56,11 +55,11 @@ struct OpenCodeSettingsCard: View {
                 if model.isControllingServer { ProgressView().controlSize(.small) }
             }
             .buttonStyle(SettingsQuietButtonStyle())
-            Toggle("Start OpenCode server when WovenMatter launches", isOn: $model.startServerOnLaunch)
+            Toggle("Start OpenCode server when Woven Matter launches", isOn: $model.startServerOnLaunch)
                 .toggleStyle(DashboardSwitchToggleStyle())
-            Toggle("Stop OpenCode server when WovenMatter quits", isOn: $model.stopServerOnQuit)
+            Toggle("Stop OpenCode server when Woven Matter quits", isOn: $model.stopServerOnQuit)
                 .toggleStyle(DashboardSwitchToggleStyle())
-            Text("Stopping the server also disconnects the browser and other OpenCode clients.")
+            Text("Stopping the server disconnects all its clients.")
                 .font(.caption).foregroundStyle(.secondary)
             if !model.isRemote {
                 OpenCodeSessionLibrary(model: model)
@@ -111,7 +110,7 @@ struct OpenCodeSettingsCard: View {
                 .padding(.vertical, 2)
             }
             .frame(height: 300)
-            Text("Saved automatically. Existing chats keep their selected model.")
+            Text("Existing chats keep their selected model.")
                 .font(.caption).foregroundStyle(.secondary)
         }
         .padding(16)
@@ -133,10 +132,10 @@ struct SettingsOpenCodeView: View {
     }
 
     var body: some View {
-        SettingsPage(title: "OpenCode", detail: "Independent OpenCode settings for this Mac and each remote workspace.",
+        SettingsPage(title: "OpenCode",
             reservesRailControlSpace: reservesRailControlSpace, onBack: onBack) {
             if !isWorkspaceScoped || workspaceID == nil {
-                SettingsCard(title: "Local agent workspace", detail: "Open an agent to manage its Woven Matter name and server connection.") {
+                SettingsCard(title: "Local agent workspace") {
                     if let instance = model.openCode, instance.isInstalled {
                         agentRow(instance, workspaceID: nil)
                     } else {
@@ -150,7 +149,7 @@ struct SettingsOpenCodeView: View {
                 }
             }
             if !isWorkspaceScoped || workspaceID != nil {
-                SettingsCard(title: "Remote agent workspaces", detail: "Discover agents in each connected workspace.") {
+                SettingsCard(title: "Remote agent workspaces") {
                     if remoteConfigurations.isEmpty { SettingsEmpty("No remote agent workspaces connected.") }
                     ForEach(remoteConfigurations) { configuration in
                         VStack(alignment: .leading, spacing: 8) {
@@ -173,7 +172,6 @@ struct SettingsOpenCodeView: View {
                     }
                 }
             }
-            SettingsNote("Each agent has its own connection and server controls.")
         }
         .task {
             await model.synchronizeRemoteOpenCodeInstances()
@@ -296,13 +294,13 @@ struct SettingsOpenCodeAgentView: View {
         return model.localACPWorkspaceAvailability.rootPath ?? FileManager.default.homeDirectoryForCurrentUser.appending(path: ".woven-matter").path
     }
     var body: some View {
-        SettingsPage(title: name.isEmpty ? "OpenCode" : name, detail: "Woven Matter name and live server connection for this agent.",
+        SettingsPage(title: name.isEmpty ? "OpenCode" : name,
             reservesRailControlSpace: reservesRailControlSpace, onBack: onBack) {
             if let instance {
-                SettingsCard(title: "Woven Matter name", detail: "Changes how this agent appears in Woven Matter. It does not rename or reconfigure OpenCode.") {
+                SettingsCard(title: "Woven Matter name", detail: "This name is shown only in Woven Matter.") {
                     Text("Agent name").font(.system(size: 11, weight: .medium)).foregroundStyle(DashboardPalette.mutedForeground)
                     TextField("Agent name", text: $name).textFieldStyle(.roundedBorder)
-                    Button("Save Woven Matter Name") {
+                    Button("Save name") {
                         guard let agentID else { return }
                         Task {
                             saving = true; error = nil
@@ -347,7 +345,7 @@ private struct OpenCodeSessionLibrary: View {
             ForEach(sessions, id: \.self) { session in
                 HStack {
                     VStack(alignment: .leading, spacing: 3) {
-                        Text(session["title"].string ?? "OpenCode conversation").font(.system(size: 13, weight: .medium))
+                        Text(session["title"].string ?? "OpenCode session").font(.system(size: 13, weight: .medium))
                         Text(session["location"]["directory"].text)
                             .font(.system(size: 11, design: .monospaced))
                             .foregroundStyle(DashboardPalette.mutedForeground).lineLimit(2)
@@ -360,7 +358,7 @@ private struct OpenCodeSessionLibrary: View {
                             do {
                                 try await model.importSession(session)
                                 sessions.removeAll { $0["id"] == session["id"] }
-                                feedback = "Imported into the conversation list."
+                                feedback = "Added to chats."
                             } catch { feedback = error.localizedDescription }
                         }
                     }

@@ -81,7 +81,7 @@ struct SettingsWorkspaceSidebarVisibilityControl: View {
             .buttonStyle(SettingsQuietButtonStyle())
             .accessibilityLabel("\(isShown ? "Hide" : "Show") \(workspace.title) in the sidebar")
             .accessibilityValue(isShown ? "Shown" : "Hidden")
-            .help("Changes sidebar visibility only. Workspaces and running conversations stay active.")
+            .help("Hides or shows this section. Workspaces and chats stay active.")
         }
     }
 }
@@ -106,14 +106,14 @@ struct SettingsBackButton: View {
 struct SettingsDestinationRow<Icon: View>: View {
     @Environment(\.dashboardTheme) private var theme
     let title: String
-    let detail: String
+    let detail: String?
     @ViewBuilder var icon: Icon
     let action: () -> Void
     @State private var isHovering = false
 
     init(
         title: String,
-        detail: String,
+        detail: String? = nil,
         @ViewBuilder icon: () -> Icon,
         action: @escaping () -> Void
     ) {
@@ -133,10 +133,12 @@ struct SettingsDestinationRow<Icon: View>: View {
                     Text(title)
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(DashboardPalette.foreground)
-                    Text(detail)
-                        .font(.system(size: 11.5))
-                        .foregroundStyle(DashboardPalette.mutedForeground)
-                        .fixedSize(horizontal: false, vertical: true)
+                    if let detail {
+                        Text(detail)
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(DashboardPalette.mutedForeground)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
                 Spacer(minLength: 12)
                 Image(systemName: "chevron.right")
@@ -186,6 +188,7 @@ struct SettingsCard<Content: View>: View {
             content
         }
         .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(theme.palette.workspace)
         .clipShape(DashboardShapes.card)
     }
@@ -375,7 +378,7 @@ struct SettingsLocalRuntimeUpdateButton: View {
         let retryCheck = model.checkedRuntimeKinds.contains(runtimeKind)
             && inventory?.latestUnavailable == true
         let label = updating ? "Updating…" : checking ? "Checking…"
-            : hasUpdate ? (retryUpdate ? "Retry Update" : "Update")
+            : hasUpdate ? (retryUpdate ? "Retry update" : "Update")
             : retryCheck ? "Retry check" : "Check for updates"
         Button(label) {
             if hasUpdate { model.updateRuntime(runtimeKind) }
@@ -458,7 +461,7 @@ struct SettingsRemoteRuntimeUpdateButton: View {
         if running, runtime?.operation?.action == "update" { return "Updating…" }
         if checkUnavailable && !running { return "Retry check" }
         if let runtime {
-            if runtime.failureCount > 0, runtime.operation?.action == "update" { return "Retry Update" }
+            if runtime.failureCount > 0, runtime.operation?.action == "update" { return "Retry update" }
             if runtime.updateAvailable { return "Update" }
         }
         return "Check for updates"
@@ -525,6 +528,7 @@ struct SettingsInset<Content: View>: View {
     var body: some View {
         content
             .padding(.vertical, 6)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -551,8 +555,6 @@ struct SettingsNote: View {
 /// popover instead of Menu/Picker: native menu styles add internal padding
 /// that breaks edge alignment and tint the label with the accent color.
 struct SettingsMenuPicker: View {
-    @Environment(\.dashboardTheme) private var theme
-    @State private var isHovering = false
     @State private var isPresented = false
 
     let selection: String
@@ -578,12 +580,11 @@ struct SettingsMenuPicker: View {
             }
             .padding(.horizontal, 12)
             .frame(width: width, height: 36, alignment: .leading)
-            .background(theme.palette.themeSoft.opacity(isHovering ? 0.72 : 0))
-            .clipShape(RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius, style: .continuous))
             .contentShape(RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius, style: .continuous))
-            .onHover { isHovering = $0 }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(SettingsQuietButtonStyle(horizontalPadding: 0, isActive: isPresented))
+        .accessibilityValue(selection.isEmpty ? "No selection" : label(for: selection))
+        .accessibilityHint(isPresented ? "Options are open" : "Shows available options")
         .popover(isPresented: $isPresented, arrowEdge: .bottom) {
             VStack(alignment: .leading, spacing: 2) {
                 if options.isEmpty {
@@ -611,19 +612,49 @@ struct SettingsMenuPicker: View {
                             }
                             .padding(.horizontal, 10)
                             .padding(.vertical, 6)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                             .contentShape(Rectangle())
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(SettingsMenuOptionButtonStyle())
+                        .accessibilityAddTraits(option == selection ? .isSelected : [])
                     }
                 }
             }
             .padding(6)
             .frame(minWidth: width)
+            .onExitCommand { isPresented = false }
         }
     }
 
     private func label(for option: String) -> String {
         capitalizeOptions ? option.capitalized : option
+    }
+}
+
+struct SettingsMenuOptionButtonStyle: ButtonStyle {
+    @Environment(\.dashboardTheme) private var theme
+    @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var isHovering = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background(
+                isEnabled && (configuration.isPressed || isHovering)
+                    ? (configuration.isPressed
+                        ? theme.palette.themeSoft
+                        : theme.palette.themeWhisper)
+                    : .clear
+            )
+            .clipShape(
+                RoundedRectangle(
+                    cornerRadius: DashboardMetrics.controlRadius - 4,
+                    style: .continuous
+                )
+            )
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.99 : 1)
+            .opacity(isEnabled ? 1 : 0.4)
+            .onHover { isHovering = $0 }
     }
 }
 
@@ -797,8 +828,10 @@ extension View {
 struct SettingsQuietButtonStyle: ButtonStyle {
     var horizontalPadding: CGFloat = 12
     var minimumHeight: CGFloat = 36
+    var isActive = false
     @Environment(\.dashboardTheme) private var theme
     @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isHovering = false
 
     func makeBody(configuration: Configuration) -> some View {
@@ -809,10 +842,11 @@ struct SettingsQuietButtonStyle: ButtonStyle {
             .frame(minHeight: minimumHeight)
             .background(
                 theme.palette.themeSoft.opacity(
-                    configuration.isPressed ? 1 : (isHovering ? 0.72 : 0)
+                    configuration.isPressed || isActive ? 1 : (isEnabled && isHovering ? 0.72 : 0)
                 )
             )
             .clipShape(RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius, style: .continuous))
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.985 : 1)
             .opacity(isEnabled ? 1 : 0.4)
             .onHover { isHovering = $0 }
     }
@@ -855,14 +889,17 @@ struct CredentialAccessDisclosureView: View {
                 )
             }
 
-            Text("macOS controls its password prompt. Choosing Always Allow normally prevents repeat prompts while the app's signing identity remains unchanged.")
-                .font(.system(size: 11.5))
-                .foregroundStyle(DashboardPalette.mutedForeground)
-                .fixedSize(horizontal: false, vertical: true)
+            DisclosureGroup("Keychain prompts") {
+                Text("macOS controls its password prompt. Choosing Always Allow normally prevents repeat prompts while the app's signing identity remains unchanged.")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(DashboardPalette.mutedForeground)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, 6)
+            }
 
             HStack {
                 Spacer()
-                Button("Not Now", role: .cancel, action: onCancel)
+                Button("Not now", role: .cancel, action: onCancel)
                     .buttonStyle(SettingsQuietButtonStyle())
                 Button("Continue", action: onEnable)
                     .buttonStyle(DashboardPrimaryButtonStyle())

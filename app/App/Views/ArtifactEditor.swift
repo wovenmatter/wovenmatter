@@ -31,14 +31,14 @@ struct DashboardSpreadsheetEditor: View {
                             .font(.system(size: 10, weight: .medium))
                             .foregroundStyle(.secondary)
                     }
-                    .accessibilityLabel("Add Row")
+                    .accessibilityLabel("Add row")
                     .help("Add row")
                     Button { removeRow() } label: {
                         Image(systemName: "minus")
                             .font(.system(size: 10, weight: .medium))
                             .foregroundStyle(.secondary)
                     }
-                    .accessibilityLabel("Remove Row")
+                    .accessibilityLabel("Remove last row")
                     .help("Remove last row")
                     .disabled(table.rows.count <= 1)
                     Text("Rows")
@@ -51,14 +51,14 @@ struct DashboardSpreadsheetEditor: View {
                             .font(.system(size: 10, weight: .medium))
                             .foregroundStyle(.secondary)
                     }
-                    .accessibilityLabel("Add Column")
+                    .accessibilityLabel("Add column")
                     .help("Add column")
                     Button { removeColumn() } label: {
                         Image(systemName: "minus")
                             .font(.system(size: 10, weight: .medium))
                             .foregroundStyle(.secondary)
                     }
-                    .accessibilityLabel("Remove Column")
+                    .accessibilityLabel("Remove last column")
                     .help("Remove last column")
                     .disabled(table.columns.count <= 1)
                     Text("Columns")
@@ -350,7 +350,7 @@ private struct DashboardDatabaseLinkPopover: View {
                     .lineLimit(2...5)
             }
             HStack {
-                Button("Remove Link", role: .destructive) { removeLink() }
+                Button("Remove link", role: .destructive) { removeLink() }
                     .disabled(existingLink() == nil)
                 Spacer()
                 Button("Cancel", action: onClose)

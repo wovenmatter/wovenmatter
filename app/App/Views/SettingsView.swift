@@ -178,7 +178,6 @@ struct SettingsView: View {
     private var landing: some View {
         SettingsPage(
             title: "Settings",
-            detail: "Appearance, connections, and agent workspaces on this Mac.",
             reservesRailControlSpace: reservesRailControlSpace
         ) {
             VStack(spacing: 2) {
@@ -190,13 +189,13 @@ struct SettingsView: View {
                 )
                 SettingsDestinationRow(
                     title: "Local agent workspace",
-                    detail: "Direct CLI and ACP sessions, runtimes, and workspace folders.",
+                    detail: "Agents and files on this Mac.",
                     icon: { DashboardLucideIcon(glyph: .terminal, size: 15) },
                     action: { section = .localWorkspace }
                 )
                 SettingsDestinationRow(
                     title: "Remote agent workspaces",
-                    detail: "Standalone Linux workspaces deployed through SSH.",
+                    detail: "Agents and files on remote Linux machines.",
                     icon: { DashboardLucideIcon(glyph: .container, size: 15) },
                     action: { section = .remoteWorkspaces }
                 )
@@ -226,19 +225,19 @@ struct SettingsView: View {
                 )
                 SettingsDestinationRow(
                     title: "OpenClaw",
-                    detail: "Gateway connections and Woven Matter names for every OpenClaw agent.",
+                    detail: "Agent names and connections.",
                     icon: { DashboardHarnessLogoIcon(logo: .openClaw, size: 15) },
                     action: { section = .openClaw }
                 )
                 SettingsDestinationRow(
                     title: "Hermes",
-                    detail: "Gateway connections and Woven Matter names for every Hermes agent.",
+                    detail: "Agent names and connections.",
                     icon: { DashboardHarnessLogoIcon(logo: .hermes, size: 15) },
                     action: { section = .hermes }
                 )
                 SettingsDestinationRow(
                     title: "OpenCode",
-                    detail: "Server connections and Woven Matter names for every OpenCode agent.",
+                    detail: "Agent names and connections.",
                     icon: { DashboardHarnessLogoIcon(logo: .openCode, size: 15) },
                     action: { section = .openCode }
                 )
@@ -250,13 +249,13 @@ struct SettingsView: View {
                 )
                 SettingsDestinationRow(
                     title: "Buzz agent workspaces",
-                    detail: "Optional local workspace discovery and agent enrollment.",
+                    detail: "Connect agents from local Buzz workspaces.",
                     icon: { DashboardLucideIcon(glyph: .radioTower, size: 15) },
                     action: { section = .buzzWorkspaces }
                 )
                 SettingsDestinationRow(
                     title: "Usage",
-                    detail: "Usage collection and provider connection settings.",
+                    detail: "Accounts and usage tracking.",
                     icon: { DashboardLucideIcon(glyph: .barChart, size: 15) },
                     action: { section = .usage }
                 )

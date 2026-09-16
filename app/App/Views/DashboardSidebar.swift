@@ -1009,7 +1009,7 @@ struct DashboardNewChatDrawer: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("New Chat")
                         .font(.system(size: 18, weight: .semibold))
-                    Text("Choose a local, remote, or Buzz workspace agent")
+                    Text("Choose an agent.")
                         .font(.system(size: 11.5))
                         .foregroundStyle(DashboardPalette.mutedForeground)
                 }
@@ -1098,8 +1098,8 @@ struct DashboardNewChatDrawer: View {
                         if model.remoteWorkspaces.readyChatTargets.isEmpty {
                             DashboardNewChatEmptyCard(
                                 icon: .container,
-                                title: "No remote harnesses ready",
-                                detail: "Start a remote workspace, install a harness, finish setup, and refresh it in Settings."
+                                title: "No remote agents ready",
+                                detail: "Set up a remote agent in Settings."
                             )
                         } else {
                             ForEach(model.remoteWorkspaces.readyChatTargets) { target in
@@ -1132,8 +1132,8 @@ struct DashboardNewChatDrawer: View {
                         if model.buzzWorkspaceAgentEnrollments.isEmpty {
                             DashboardNewChatEmptyCard(
                                 icon: .bot,
-                                title: "No Buzz workspace agents enrolled",
-                                detail: "Link a Buzz workspace and explicitly enroll an agent in Settings."
+                                title: "No Buzz agents added",
+                                detail: "Add a Buzz agent in Settings."
                             )
                         } else {
                             ForEach(
@@ -1181,7 +1181,7 @@ struct DashboardNewChatDrawer: View {
                 Button("Cancel", action: onClose)
                     .buttonStyle(DashboardQuietButtonStyle())
                 Spacer()
-                Button("Workspace agent settings", action: onOpenSettings)
+                Button("Agent settings", action: onOpenSettings)
                     .buttonStyle(DashboardPrimaryButtonStyle())
             }
             .padding(16)
@@ -1227,9 +1227,6 @@ struct DashboardNewNoteDrawer: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("New Note")
                         .font(.system(size: 18, weight: .semibold))
-                    Text("Choose a note, spreadsheet, or HTML view")
-                        .font(.system(size: 11.5))
-                        .foregroundStyle(DashboardPalette.mutedForeground)
                 }
                 Spacer()
                 Button(action: onClose) {
@@ -1248,19 +1245,17 @@ struct DashboardNewNoteDrawer: View {
                 VStack(alignment: .leading, spacing: 10) {
                     artifactButton(
                         "Note",
-                        detail: "Create a rich text note",
                         icon: .fileText,
                         kind: .note
                     )
                     artifactButton(
                         "Spreadsheet",
-                        detail: "Create an editable spreadsheet",
                         icon: .panelsTopLeft,
                         kind: .spreadsheet
                     )
                     artifactButton(
                         "HTML",
-                        detail: "Create an HTML viewer",
+                        detail: "View HTML",
                         icon: .panelTop,
                         kind: .html
                     )
@@ -1293,7 +1288,7 @@ struct DashboardNewNoteDrawer: View {
 
     private func artifactButton(
         _ title: String,
-        detail: String,
+        detail: String? = nil,
         icon: DashboardLucideGlyph,
         kind: NoteArtifactKind
     ) -> some View {
@@ -1359,7 +1354,7 @@ struct DashboardNewChatOptionCard: View {
     let icon: DashboardLucideGlyph
     var harnessLogo: DashboardHarnessLogo? = nil
     let title: String
-    let detail: String
+    var detail: String? = nil
 
     var body: some View {
         HStack(spacing: 12) {
@@ -1382,10 +1377,12 @@ struct DashboardNewChatOptionCard: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text(title)
                     .font(.system(size: 13, weight: .semibold))
-                Text(detail)
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(DashboardPalette.mutedForeground)
-                    .lineLimit(2)
+                if let detail {
+                    Text(detail)
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(DashboardPalette.mutedForeground)
+                        .lineLimit(2)
+                }
             }
             Spacer()
             DashboardLucideIcon(glyph: .arrowRight, size: 14)

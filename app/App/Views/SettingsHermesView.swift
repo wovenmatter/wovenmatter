@@ -20,10 +20,10 @@ struct SettingsHermesView: View {
     }
 
     var body: some View {
-        SettingsPage(title: "Hermes", detail: "Independent Hermes settings for this Mac and each remote workspace.",
+        SettingsPage(title: "Hermes",
             reservesRailControlSpace: reservesRailControlSpace, onBack: onBack) {
             if !isWorkspaceScoped || workspaceID == nil {
-                SettingsCard(title: "Local agent workspace", detail: "Open an agent to manage its Woven Matter name and Gateway connection.") {
+                SettingsCard(title: "Local agent workspace") {
                     if agents.isEmpty { SettingsEmpty("No Hermes agents discovered.") }
                     ForEach(agents) { agent in
                         SettingsInset {
@@ -53,7 +53,7 @@ struct SettingsHermesView: View {
                 }
             }
             if !isWorkspaceScoped || workspaceID != nil {
-                SettingsCard(title: "Remote agent workspaces", detail: "Discover agents in each connected workspace.") {
+                SettingsCard(title: "Remote agent workspaces") {
                     if remoteConfigurations.isEmpty { SettingsEmpty("No remote agent workspaces connected.") }
                     ForEach(remoteConfigurations) { configuration in
                         remoteWorkspace(configuration)
@@ -61,7 +61,6 @@ struct SettingsHermesView: View {
                 }
             }
             if let error { SettingsError(error) }
-            SettingsNote("Each agent has its own connection and Gateway controls.")
         }
         .task {
             if !isWorkspaceScoped { model.remoteWorkspaces.refreshAll() }
@@ -117,7 +116,7 @@ struct SettingsHermesView: View {
                     Button("Stop Gateway and scheduler") {
                         Task { do { try await model.stopRemoteHermes(configuration) } catch { self.error=error.localizedDescription } }
                     }.buttonStyle(SettingsQuietButtonStyle())
-                    SettingsNote("The container keeps Hermes and its scheduler running when Woven Matter disconnects. Stopping it pauses scheduling until it is connected again.")
+                    SettingsNote("Stopping Hermes pauses scheduled jobs until you reconnect its Gateway.")
                 } else { SettingsEmpty("No Hermes agents discovered.") }
                 SettingsRuntimeMaintenanceErrorView(
                     model: model,
@@ -163,10 +162,10 @@ struct SettingsHermesAgentView: View {
     private var pageCount: Int { max(1, (filtered.count + 24) / 25) }
 
     var body: some View {
-        SettingsPage(title: agent?.displayName ?? "Hermes", detail: "Woven Matter name and live Gateway connection for this agent.",
+        SettingsPage(title: agent?.displayName ?? "Hermes",
             reservesRailControlSpace: reservesRailControlSpace, onBack: onBack) {
             if agent != nil {
-                SettingsCard(title: "Gateway connection", detail: "Live connection state for this Hermes on this Mac.") {
+                SettingsCard(title: "Gateway connection") {
                     HStack {
                         SettingsPill(connection != nil ? "Ready" : "Not connected", tone: .neutral)
                         Spacer()
@@ -181,11 +180,11 @@ struct SettingsHermesAgentView: View {
                         SettingsValueRow(label: "Last checked", value: checked.formatted(date: .omitted, time: .standard))
                     }
                 }
-                SettingsCard(title: "Woven Matter name", detail: "Changes how this agent appears in Woven Matter. It does not rename or reconfigure Hermes.") {
+                SettingsCard(title: "Woven Matter name", detail: "This name is shown only in Woven Matter.") {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Agent name").font(.system(size: 11, weight: .medium)).foregroundStyle(DashboardPalette.mutedForeground)
                         TextField("Agent name", text: $name).textFieldStyle(.roundedBorder)
-                        Button("Save Woven Matter name") {
+                        Button("Save name") {
                             Task {
                                 busy = true; error = nil
                                 defer { busy = false }
@@ -195,7 +194,7 @@ struct SettingsHermesAgentView: View {
                         }.buttonStyle(DashboardPrimaryButtonStyle()).disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     }
                 }
-                SettingsCard(title: "Shared Hermes sessions", detail: "Import an existing conversation with its original working directory. Up to 100 recent sessions, 25 per page.") {
+                SettingsCard(title: "Shared Hermes sessions", detail: "Import a session with its original working folder.") {
                     Button("Refresh sessions") { Task { await refresh() } }
                         .buttonStyle(SettingsQuietButtonStyle(horizontalPadding: 8, minimumHeight: 26)).disabled(connection == nil)
                     if loaded {
@@ -205,7 +204,7 @@ struct SettingsHermesAgentView: View {
                         ForEach(Array(filtered.dropFirst(page * 25).prefix(25)), id: \.self) { row in
                             HStack(spacing: 10) {
                                 VStack(alignment: .leading, spacing: 3) {
-                                    Text(row["title"].text.isEmpty ? "Untitled Hermes conversation" : row["title"].text)
+                                    Text(row["title"].text.isEmpty ? "Untitled Hermes session" : row["title"].text)
                                         .font(.system(size: 12.5, weight: .medium)).lineLimit(1)
                                     Text(row["source"].text).font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
                                 }
@@ -219,9 +218,12 @@ struct SettingsHermesAgentView: View {
                             Text("Page \(page + 1) of \(pageCount)").font(.system(size: 10))
                             Button("Next") { page += 1 }.disabled(page + 1 >= pageCount)
                         }.buttonStyle(SettingsQuietButtonStyle(horizontalPadding: 8, minimumHeight: 22))
+                        Text("Up to 100 recent sessions.")
+                            .font(.system(size: 10))
+                            .foregroundStyle(DashboardPalette.mutedForeground)
                     }
                 }
-                SettingsCard(title: "Gateway", detail: "Restarts this Gateway when idle, reconnects Woven Matter, and confirms that it is healthy.") {
+                SettingsCard(title: "Gateway", detail: "Finish active chats and scheduled jobs before restarting.") {
                     Button("Restart Gateway") { Task { await connect(restart: true) } }
                         .buttonStyle(DashboardPrimaryButtonStyle())
                 }
