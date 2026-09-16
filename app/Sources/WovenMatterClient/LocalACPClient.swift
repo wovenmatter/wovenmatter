@@ -898,7 +898,7 @@ public actor LocalACPClient {
                     params: .object([
                         "sessionId": .string(sessionID),
                         "configId": .string(modelConfigurationID),
-                        "value": configurationValue(model),
+                        "value": .string(model),
                     ])
                 )
                 captureSessionConfiguration(from: response)
@@ -935,16 +935,12 @@ public actor LocalACPClient {
                 params: .object([
                     "sessionId": .string(sessionID),
                     "configId": .string(thinkingConfigurationID),
-                    "value": configurationValue(thinking),
+                    "value": .string(thinking),
                 ])
             )
             captureSessionConfiguration(from: response)
         }
         return configuration
-    }
-
-    private func configurationValue(_ value: String) -> ACPJSONValue {
-        runtimeKind == .grokBuild ? .object(["value": .string(value)]) : .string(value)
     }
 
     private func validateConfigurationValue(

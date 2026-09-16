@@ -39,6 +39,7 @@ struct ACPHarnessStreamingReviewTests {
       extras: ["authenticate": "{}", "cursor/list_available_models": "{}"],
       setConfigShell: """
         case "$request" in
+          *'"value":{'*) printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32602,"message":"Invalid params"}}\\n' "$id" ;;
           *'"value":"no-effort"'*) respond "$id" '\(withoutEffort)' ;;
           *'"value":"high"'*) respond "$id" '\(highEffort)' ;;
           *) respond "$id" '\(withEffort)' ;;
@@ -59,8 +60,10 @@ struct ACPHarnessStreamingReviewTests {
     #expect(restored.thinkingOptions == ["low", "high"])
     await client.shutdown()
     let log = try fixture.log()
-    let wireValue = kind == .grokBuild ? #""value":{"value":"high"}"# : #""value":"high""#
-    #expect(log.contains(wireValue))
+    // Verified against Grok 1.0.24's executable: unlike its installed docs,
+    // the wire schema uses a plain string, as do the other ACP adapters.
+    #expect(log.contains(#""value":"high""#))
+    #expect(!log.contains(#""value":{"#))
   }
 
   @Test func cursorUsesAuthenticationAndNativeModelDiscovery() async throws {
