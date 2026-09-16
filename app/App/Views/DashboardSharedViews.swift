@@ -736,33 +736,45 @@ struct DashboardIconButtonStyle: ButtonStyle {
     @Environment(\.dashboardTheme) private var theme
     @Environment(\.dashboardSidebarForeground) private var sidebarForeground
     @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var hovered = false
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .foregroundStyle(
-                isEnabled
-                    ? (sidebarForeground ?? DashboardPalette.mutedForeground)
-                    : (sidebarForeground ?? DashboardPalette.mutedForeground).opacity(0.68)
-            )
+            .foregroundStyle(sidebarForeground ?? DashboardPalette.mutedForeground)
             .background(
                 isEnabled && (configuration.isPressed || hovered)
-                    ? theme.palette.themeSoft
+                    ? (configuration.isPressed ? theme.palette.themeSoft : theme.palette.themeWhisper)
                     : .clear
             )
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.94 : 1)
+            .opacity(isEnabled ? 1 : 0.4)
             .onHover { hovered = $0 }
     }
 }
 
 struct DashboardPillButtonStyle: ButtonStyle {
     @Environment(\.dashboardTheme) private var theme
+    @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @State private var isHovering = false
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .foregroundStyle(DashboardPalette.mutedForeground)
-            .background(configuration.isPressed ? theme.palette.themeSoft : DashboardPalette.background.opacity(0.7))
+            .background(
+                configuration.isPressed
+                    ? theme.palette.themeSoft
+                    : isEnabled && isHovering
+                        ? theme.palette.themeWhisper
+                        : DashboardPalette.background.opacity(reduceTransparency ? 1 : 0.7)
+            )
             .clipShape(Capsule())
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.97 : 1)
+            .opacity(isEnabled ? 1 : 0.4)
+            .onHover { isHovering = $0 }
     }
 }
 
