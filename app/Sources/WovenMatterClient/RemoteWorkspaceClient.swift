@@ -919,6 +919,27 @@ public struct RemoteWorkspaceServiceClient: Sendable {
         self.session = session
     }
 
+    public func databases() async throws -> [RemoteAgentDatabase] {
+        struct Document: Decodable { let databases: [RemoteAgentDatabase] }
+        let document: Document = try await request(path: "v1/databases", method: "GET", body: nil)
+        return document.databases
+    }
+
+    public func createDatabase(name: String, preference: AgentDatabasePreference) async throws -> RemoteAgentDatabase {
+        try await request(path: "v1/databases", method: "POST", body: JSONEncoder().encode(
+            RemoteDatabaseRequest(databaseID: name, preference: preference)))
+    }
+
+    public func setDatabasePreference(_ preference: AgentDatabasePreference, databaseID: String) async throws -> RemoteAgentDatabase {
+        try await request(path: "v1/databases/preference", method: "PATCH", body: JSONEncoder().encode(
+            RemoteDatabaseRequest(databaseID: databaseID, preference: preference)))
+    }
+
+    public func databaseData(for link: DatabaseArtifactLink) async throws -> RemoteDatabaseData {
+        try await request(path: "v1/databases/data", method: "POST", body: JSONEncoder().encode(
+            RemoteDatabaseRequest(databaseID: link.databaseID, relativePath: link.relativePath, sqliteQuery: link.sqliteQuery)))
+    }
+
     public func health() async throws -> RemoteWorkspaceHealth {
         try await request(path: "v1/health", method: "GET", body: nil)
     }
@@ -1103,6 +1124,7 @@ public struct RemoteWorkspaceServiceClient: Sendable {
         var request = URLRequest(url: url)
         request.httpMethod = method
         request.httpBody = body
+        if path.hasPrefix("v1/databases") { request.timeoutInterval = 15 }
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         if body != nil {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -1111,6 +1133,13 @@ public struct RemoteWorkspaceServiceClient: Sendable {
         guard let http = response as? HTTPURLResponse,
               (200..<300).contains(http.statusCode)
         else {
+            if path.hasPrefix("v1/databases") {
+                if (response as? HTTPURLResponse)?.statusCode == 404 {
+                    throw RemoteWorkspaceClientError.invalidResponse("Update this workspace service in Settings to use remote databases.")
+                }
+                let detail = (try? JSONDecoder().decode(RemoteDatabaseFailure.self, from: data))?.error
+                throw RemoteWorkspaceClientError.invalidResponse(detail ?? "Remote databases are unavailable.")
+            }
             throw RemoteWorkspaceClientError.invalidResponse(
                 String(decoding: data, as: UTF8.self)
             )

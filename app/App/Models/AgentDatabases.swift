@@ -3,11 +3,13 @@ import WovenMatterCore
 
 enum DashboardDatabaseSourceKind: String, CaseIterable, Sendable {
     case local
+    case remote
     case buzz
 
     var displayName: String {
         switch self {
         case .local: "Local workspace"
+        case .remote: "Remote workspaces"
         case .buzz: "Buzz workspaces"
         }
     }
