@@ -1546,6 +1546,17 @@ public actor LocalACPClient {
                 thinkingOptionMetadata: configuration.thinkingOptionMetadata
             )
         }
+        if runtimeKind == .claudeCode {
+            configuration = LocalACPSessionConfiguration(
+                model: configuration.model, thinking: configuration.thinking,
+                modelOptions: configuration.modelOptions, thinkingOptions: configuration.thinkingOptions,
+                slashCommands: configuration.slashCommands,
+                modelOptionMetadata: configuration.modelOptionMetadata.reduce(into: [:]) { result, entry in
+                    result[entry.key] = ClaudeModelPresentation.metadata(id: entry.key, supplied: entry.value)
+                },
+                thinkingOptionMetadata: configuration.thinkingOptionMetadata
+            )
+        }
     }
 
     private struct ParsedConfigurationOption {

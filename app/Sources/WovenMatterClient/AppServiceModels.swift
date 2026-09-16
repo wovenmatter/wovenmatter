@@ -4,10 +4,12 @@ import Foundation
 public struct SessionOptionMetadata: Codable, Equatable, Sendable {
     public let name: String?
     public let description: String?
+    public let modelGroup: String?
 
-    public init(name: String? = nil, description: String? = nil) {
+    public init(name: String? = nil, description: String? = nil, modelGroup: String? = nil) {
         self.name = Self.nonempty(name)
         self.description = Self.nonempty(description)
+        self.modelGroup = modelGroup
     }
 
     public static func modelLabel(id: String, metadata: Self?) -> String {
@@ -63,7 +65,28 @@ public struct LocalACPSessionMetadata: Codable, Equatable, Sendable {
     }
 
     public var selectableModels: [String] {
-        Self.unique((modelOptions ?? allowedModels ?? []) + [model].compactMap { $0 }).filter { !(excludedModels ?? []).contains($0) }
+        let options = Self.unique((modelOptions ?? allowedModels ?? []) + [model].compactMap { $0 })
+            .filter { !(excludedModels ?? []).contains($0) }
+        var result: [String] = []
+        var groupIndices: [String: Int] = [:]
+        for id in options {
+            guard let group = modelOptionMetadata?[id]?.modelGroup else {
+                result.append(id)
+                continue
+            }
+            if let index = groupIndices[group] {
+                let existing = result[index]
+                // Keep the exact selected context variant. Otherwise prefer
+                // a native plain option without changing the group's order.
+                if id == model || (existing != model && existing.hasSuffix("[1m]") && !id.hasSuffix("[1m]")) {
+                    result[index] = id
+                }
+            } else {
+                groupIndices[group] = result.count
+                result.append(id)
+            }
+        }
+        return result
     }
 
     public var selectableThinkingLevels: [String] {
