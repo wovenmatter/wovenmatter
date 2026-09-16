@@ -292,10 +292,8 @@ final class DashboardComposerScrollView: NSScrollView {
     private func configure() {
         drawsBackground = false
         borderType = .noBorder
-        hasVerticalScroller = true
+        hasVerticalScroller = false
         hasHorizontalScroller = false
-        autohidesScrollers = true
-        scrollerStyle = .overlay
         automaticallyAdjustsContentInsets = false
         contentInsets = NSEdgeInsets(top: 0, left: 0, bottom: 0, right: 0)
         documentView = composerTextView

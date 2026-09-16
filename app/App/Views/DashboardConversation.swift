@@ -828,7 +828,7 @@ struct DashboardLocalPlanCard: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .textSelection(.enabled)
             }
-            .scrollIndicators(.automatic)
+            .scrollIndicators(.never)
             .frame(maxHeight: 260)
 
             HStack(spacing: 8) {

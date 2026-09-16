@@ -116,6 +116,7 @@ struct OpenClawCronSurface: View {
                     .padding(.horizontal, 32)
                     .padding(.bottom, 32)
                 }
+                .scrollIndicators(.never)
             }
         }
         .background(theme.palette.workspace)
@@ -539,7 +540,9 @@ private struct OpenClawCronEditor: View {
             if hasAgentPrompt {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Instructions").font(.system(size: 12, weight: .medium))
-                    TextEditor(text: $message).frame(height: 120)
+                    TextEditor(text: $message)
+                        .scrollIndicators(.never)
+                        .frame(height: 120)
                         .font(.system(size: 13))
                 }
             }

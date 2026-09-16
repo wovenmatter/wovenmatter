@@ -119,6 +119,7 @@ struct HermesCronSurface: View {
         .padding(.horizontal, 32)
         .padding(.bottom, 32)
       }
+      .scrollIndicators(.never)
     }
     .task { await model.refreshHermesCron() }
   }

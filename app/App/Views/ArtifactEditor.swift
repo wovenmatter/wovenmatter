@@ -111,6 +111,7 @@ struct DashboardSpreadsheetEditor: View {
                 }
                 .padding(1)
             }
+            .scrollIndicators(.never)
         }
         .onAppear { ensureTable() }
     }
