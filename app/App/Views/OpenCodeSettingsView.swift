@@ -135,6 +135,11 @@ struct SettingsOpenCodeView: View {
     var body: some View {
         SettingsPage(title: "OpenCode", detail: "Independent OpenCode settings for this Mac and each remote workspace.",
             reservesRailControlSpace: reservesRailControlSpace, onBack: onBack) {
+            SettingsHarnessRuntimeMaintenanceView(
+                model: model,
+                runtimeKind: .opencode,
+                workspaceID: workspaceID
+            )
             if !isWorkspaceScoped || workspaceID == nil {
                 SettingsCard(title: "Local agent workspace", detail: "Open an agent to manage its Woven Matter name and server connection.") {
                     if let instance = model.openCode, instance.isInstalled {

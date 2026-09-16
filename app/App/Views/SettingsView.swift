@@ -285,26 +285,8 @@ private struct SettingsHarnessView: View {
     var reservesRailControlSpace = false
     let onBack: () -> Void
 
-    private var availability: LocalACPRuntimeAvailability? {
-        model.localACPRuntimeAvailability.first { $0.runtimeKind == runtimeKind }
-    }
-
     private var remoteWorkspace: RemoteWorkspaceConfiguration? {
         workspaceID.flatMap { model.remoteWorkspaces.configuration(id: $0) }
-    }
-
-    private var remoteRuntime: RemoteRuntimeMaintenance? {
-        guard let workspaceID else { return nil }
-        return model.remoteWorkspaces.runtimeMaintenance[workspaceID]?.first {
-            $0.id == runtimeKind
-        }
-    }
-
-    private var remoteHarness: RemoteHarnessStatus? {
-        guard let remoteWorkspace else { return nil }
-        return model.remoteWorkspaces.currentHarnesses(for: remoteWorkspace).first {
-            $0.id == runtimeKind
-        }
     }
 
     var body: some View {
@@ -316,112 +298,12 @@ private struct SettingsHarnessView: View {
             reservesRailControlSpace: reservesRailControlSpace,
             onBack: onBack
         ) {
-            SettingsCard(
-                title: workspaceID == nil
-                    ? "Local agent workspace"
-                    : remoteWorkspace?.name ?? "Remote agent workspace"
-            ) {
-                SettingsInset {
-                    HStack(alignment: .center, spacing: 12) {
-                        DashboardHarnessLogoIcon(
-                            logo: DashboardHarnessLogo(runtimeKind: runtimeKind),
-                            size: 24
-                        )
-                        .frame(width: 28, height: 28)
-
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(runtimeKind.displayName)
-                                .font(.system(size: 13, weight: .medium))
-                            Text(runtimeDetail)
-                                .font(.system(size: 11))
-                                .foregroundStyle(DashboardPalette.mutedForeground)
-                                .textSelection(.enabled)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-
-                        SettingsPill(
-                            runtimeStatus,
-                            tone: runtimeIsReady ? .neutral : .warning
-                        )
-                    }
-                }
-            }
+            SettingsHarnessRuntimeMaintenanceView(
+                model: model,
+                runtimeKind: runtimeKind,
+                workspaceID: workspaceID,
+                usesWorkspaceTitle: true
+            )
         }
-    }
-
-    private var runtimeIsReady: Bool {
-        if workspaceID != nil {
-            guard let remoteWorkspace else { return false }
-            return model.remoteWorkspaces.isHarnessReady(runtimeKind, in: remoteWorkspace)
-        }
-        return !model.checkingLocalACPRuntimeKinds.contains(runtimeKind)
-            && availability?.isReady == true
-            && model.isLocalACPAgentReady(runtimeKind)
-    }
-
-    private var runtimeStatus: String {
-        if let workspaceID {
-            if model.remoteWorkspaces.checkingRuntimeIDs[workspaceID]?.contains(runtimeKind) == true {
-                return "Checking"
-            }
-            guard let remoteWorkspace, let remoteRuntime else {
-                return "Not checked"
-            }
-            if model.remoteWorkspaces.isHarnessReady(runtimeKind, in: remoteWorkspace) {
-                return "Ready"
-            }
-            if !remoteRuntime.installed
-                || model.remoteWorkspaces.isRuntimeInventoryUnavailable(
-                    runtimeKind,
-                    configuration: remoteWorkspace
-                )
-                || remoteRuntime.operation?.status == "running" {
-                return "Unavailable"
-            }
-            if !remoteRuntime.enabled {
-                return "Not enabled"
-            }
-            let state = remoteHarness?.state
-                .replacingOccurrences(of: "_", with: " ")
-                .capitalized
-            return state == "Ready" ? "Unavailable" : state ?? "Not checked"
-        }
-        if model.checkingLocalACPRuntimeKinds.contains(runtimeKind) {
-            return "Checking"
-        }
-        if !model.isLocalACPRuntimeCredentialAccessEnabled(runtimeKind),
-           availability?.executablePath != nil {
-            return "Not enabled"
-        }
-        if availability?.isReady == true, !model.isLocalACPAgentReady(runtimeKind) {
-            return "Workspace unavailable"
-        }
-        guard let availability else { return "Checking" }
-        return switch availability.state {
-        case .ready: "Ready"
-        case .cliMissing: "CLI required"
-        case .adapterMissing: "Adapter required"
-        case .adapterOutdated: "Update required"
-        case .authenticationRequired: "Sign in required"
-        case .executableUnavailable: "Setup required"
-        }
-    }
-
-    private var runtimeDetail: String {
-        if workspaceID != nil {
-            guard let remoteRuntime else { return "Runtime inventory unavailable." }
-            return remoteRuntime.components.map { component in
-                let installed = component.installed
-                    ? component.installedVersion ?? "version unavailable"
-                    : "missing"
-                let newer = component.availableUpdateVersion.map { " → \($0)" } ?? ""
-                return "\(component.displayName) \(installed)\(newer)"
-            }.joined(separator: " · ")
-        }
-        if let inventory = model.runtimeInventories[runtimeKind] {
-            return inventory.summary
-        }
-        return availability?.detail ?? "Checking the local runtime…"
     }
 }

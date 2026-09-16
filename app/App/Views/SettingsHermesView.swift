@@ -22,6 +22,11 @@ struct SettingsHermesView: View {
     var body: some View {
         SettingsPage(title: "Hermes", detail: "Independent Hermes settings for this Mac and each remote workspace.",
             reservesRailControlSpace: reservesRailControlSpace, onBack: onBack) {
+            SettingsHarnessRuntimeMaintenanceView(
+                model: model,
+                runtimeKind: .hermes,
+                workspaceID: workspaceID
+            )
             if !isWorkspaceScoped || workspaceID == nil {
                 SettingsCard(title: "Local agent workspace", detail: "Open an agent to manage its Woven Matter name and Gateway connection.") {
                     if agents.isEmpty { SettingsEmpty("No Hermes agents discovered.") }
