@@ -45,6 +45,11 @@ struct SettingsHermesView: View {
                             }
                         }
                     }
+                    SettingsRuntimeMaintenanceErrorView(
+                        model: model,
+                        runtimeKind: .hermes,
+                        workspaceID: nil
+                    )
                 }
             }
             if !isWorkspaceScoped || workspaceID != nil {
@@ -114,6 +119,11 @@ struct SettingsHermesView: View {
                     }.buttonStyle(SettingsQuietButtonStyle())
                     SettingsNote("The container keeps Hermes and its scheduler running when Woven Matter disconnects. Stopping it pauses scheduling until it is connected again.")
                 } else { SettingsEmpty("No Hermes agents discovered.") }
+                SettingsRuntimeMaintenanceErrorView(
+                    model: model,
+                    runtimeKind: .hermes,
+                    workspaceID: configuration.id
+                )
                 Button("Scan workspace") { model.remoteWorkspaces.refresh(configuration) }
                     .buttonStyle(SettingsQuietButtonStyle())
             }

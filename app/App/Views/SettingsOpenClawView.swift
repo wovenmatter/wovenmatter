@@ -38,6 +38,11 @@ struct SettingsOpenClawView: View {
                             }
                         }
                     }
+                    SettingsRuntimeMaintenanceErrorView(
+                        model: model,
+                        runtimeKind: .openclaw,
+                        workspaceID: nil
+                    )
                 }
             }
             if !isWorkspaceScoped {
@@ -87,6 +92,11 @@ struct SettingsOpenClawView: View {
                                     }
                                 }
                             } else { SettingsEmpty("No OpenClaw agents discovered.") }
+                            SettingsRuntimeMaintenanceErrorView(
+                                model: model,
+                                runtimeKind: .openclaw,
+                                workspaceID: configuration.id
+                            )
                             Button("Scan workspace") { model.remoteWorkspaces.refresh(configuration) }
                                 .buttonStyle(SettingsQuietButtonStyle())
                                 .disabled(model.remoteWorkspaces.busyWorkspaceIDs.contains(configuration.id))
@@ -145,7 +155,7 @@ struct SettingsOpenClawView: View {
 
     @ViewBuilder
     private func runtimeUpdateButton(for agent: WorkspaceAgent) -> some View {
-        if agent.governingPlane == .remoteWorkspace {
+        if model.remoteWorkspaceAgents.contains(where: { $0.id == agent.id }) {
             if let workspaceID = agent.runtimeDeviceID,
                let configuration = model.remoteWorkspaces.configuration(id: workspaceID),
                let harness = model.remoteWorkspaces.currentHarnesses(for: configuration).first(where: { $0.id == .openclaw }) {
@@ -155,18 +165,20 @@ struct SettingsOpenClawView: View {
                     configuration: configuration
                 )
             }
-        } else if model.openClawGatewayLink(agentID: agent.id)?.location != .buzzLocal {
+        } else if model.localCLIAgents.contains(where: { $0.id == agent.id }) {
             SettingsLocalRuntimeUpdateButton(model: model, runtimeKind: .openclaw)
         }
     }
 
     private func runtimeDetail(for agent: WorkspaceAgent) -> String? {
-        if agent.governingPlane == .remoteWorkspace {
+        if model.remoteWorkspaceAgents.contains(where: { $0.id == agent.id }) {
             return agent.runtimeDeviceID.flatMap { model.remoteWorkspaces.configuration(id: $0) }
                 .map(remoteRuntimeDetail)
         }
-        guard model.openClawGatewayLink(agentID: agent.id)?.location != .buzzLocal else { return nil }
-        return model.runtimeInventories[.openclaw]?.summary ?? "Checking installed components…"
+        if model.localCLIAgents.contains(where: { $0.id == agent.id }) {
+            return model.runtimeInventories[.openclaw]?.summary ?? "Checking installed components…"
+        }
+        return nil
     }
 
     private func remoteRuntimeDetail(_ configuration: RemoteWorkspaceConfiguration) -> String {

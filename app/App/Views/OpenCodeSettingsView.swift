@@ -142,6 +142,11 @@ struct SettingsOpenCodeView: View {
                     } else {
                         localRuntimeRow
                     }
+                    SettingsRuntimeMaintenanceErrorView(
+                        model: model,
+                        runtimeKind: .opencode,
+                        workspaceID: nil
+                    )
                 }
             }
             if !isWorkspaceScoped || workspaceID != nil {
@@ -156,6 +161,11 @@ struct SettingsOpenCodeView: View {
                             } else if let harness = model.remoteWorkspaces.currentHarnesses(for: configuration).first(where: { $0.id == .opencode }) {
                                 remoteRuntimeRow(harness, configuration: configuration)
                             } else { SettingsEmpty("No OpenCode agents discovered.") }
+                            SettingsRuntimeMaintenanceErrorView(
+                                model: model,
+                                runtimeKind: .opencode,
+                                workspaceID: configuration.id
+                            )
                             Button("Scan workspace") { model.remoteWorkspaces.refresh(configuration) }
                                 .buttonStyle(SettingsQuietButtonStyle())
                                 .disabled(model.remoteWorkspaces.busyWorkspaceIDs.contains(configuration.id))
