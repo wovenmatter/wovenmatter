@@ -2,6 +2,51 @@ import AppKit
 import SwiftUI
 import WovenMatterCore
 
+private struct DashboardDatabaseSourceButtonStyle: ButtonStyle {
+    @Environment(\.dashboardTheme) private var theme
+    @State private var isHovering = false
+    let isSelected: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background(
+                configuration.isPressed
+                    ? theme.palette.themeStrong
+                    : isSelected
+                        ? (isHovering ? theme.palette.themeStrong : theme.palette.themeSoft)
+                        : isHovering ? theme.palette.themeWhisper : .clear,
+                in: RoundedRectangle(
+                    cornerRadius: DashboardMetrics.controlRadius,
+                    style: .continuous
+                )
+            )
+            .onHover { isHovering = $0 }
+    }
+}
+
+private struct DashboardDatabaseRowButtonStyle: ButtonStyle {
+    @Environment(\.dashboardTheme) private var theme
+    @State private var isHovering = false
+    let isSelected: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background(
+                configuration.isPressed
+                    ? theme.palette.themeStrong
+                    : isSelected
+                        ? (isHovering ? theme.palette.themeStrong : theme.palette.themeSoft)
+                        : isHovering ? theme.palette.themeWhisper : theme.palette.input,
+                in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(theme.palette.border, lineWidth: 1)
+            }
+            .onHover { isHovering = $0 }
+    }
+}
+
 struct DashboardDatabasesView: View {
     @Environment(\.dashboardTheme) private var theme
     @Bindable var model: ApplicationModel
@@ -98,19 +143,16 @@ struct DashboardDatabasesView: View {
                     cornerRadius: DashboardMetrics.controlRadius,
                     style: .continuous
                 ))
-            VStack(alignment: .leading, spacing: 3) {
-                Text("Databases")
-                    .font(.system(size: 22, weight: .semibold))
-                    .tracking(-0.3)
-                Text("Agent-accessible data folders across your workspaces.")
-                    .font(.system(size: 12.5))
-                    .foregroundStyle(DashboardPalette.mutedForeground)
-            }
+            Text("Databases")
+                .font(.system(size: 22, weight: .semibold))
+                .tracking(-0.3)
             Spacer(minLength: 16)
             DashboardSegmentedSelector(
-                options: DashboardDatabaseFilter.allCases, selection: $filter,
-                label: { $0.displayName }
-            )
+                options: DashboardDatabaseFilter.allCases,
+                selection: $filter
+            ) { value in
+                value.displayName
+            }
             .frame(maxWidth: 360)
             Button {
                 Task { await model.refreshDatabases() }
@@ -122,16 +164,16 @@ struct DashboardDatabasesView: View {
                         .frame(width: 32, height: 32)
                 }
             }
-            .buttonStyle(.plain)
+            .buttonStyle(DashboardIconButtonStyle())
             .disabled(model.isRefreshingDatabases)
             .help("Refresh databases")
             Menu {
-                Button("New Database") {
+                Button("New database") {
                     beginCreatingDatabase()
                 }
                 .disabled(selectedSource?.allowsCreation != true)
                 if selectedSource?.allowsExternalLinks == true {
-                    Button("Link Existing Folder…") { chooseExternalDatabase() }
+                    Button("Link existing folder…") { chooseExternalDatabase() }
                 }
             } label: {
                 Label("Add", systemImage: "plus")
@@ -172,19 +214,14 @@ struct DashboardDatabasesView: View {
                         }
                         .padding(.horizontal, 12)
                         .frame(minHeight: 48)
-                        .background(
-                            selectedSourceID == source.id
-                                ? theme.palette.themeStrong
-                                : .clear,
-                            in: RoundedRectangle(
-                                cornerRadius: DashboardMetrics.controlRadius,
-                                style: .continuous
-                            )
-                        )
                         .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityAddTraits(selectedSourceID == source.id ? .isSelected : [])
+                    .buttonStyle(DashboardDatabaseSourceButtonStyle(
+                        isSelected: selectedSourceID == source.id
+                    ))
+                    .accessibilityAddTraits(
+                        selectedSourceID == source.id ? .isSelected : []
+                    )
                 }
             }
             .padding(12)
@@ -288,20 +325,14 @@ struct DashboardDatabasesView: View {
             }
             .padding(.horizontal, 14)
             .frame(minHeight: 62)
-            .background(
-                database.id == selectedDatabaseID
-                    ? theme.palette.themeStrong
-                    : theme.palette.input,
-                in: RoundedRectangle(cornerRadius: 10, style: .continuous)
-            )
-            .overlay {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .stroke(theme.palette.border, lineWidth: 1)
-            }
             .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         }
-        .buttonStyle(.plain)
-        .accessibilityAddTraits(database.id == selectedDatabaseID ? .isSelected : [])
+        .buttonStyle(DashboardDatabaseRowButtonStyle(
+            isSelected: database.id == selectedDatabaseID
+        ))
+        .accessibilityAddTraits(
+            database.id == selectedDatabaseID ? .isSelected : []
+        )
     }
 
     private func databaseDetail(_ database: DashboardAgentDatabase) -> some View {
@@ -349,11 +380,11 @@ struct DashboardDatabasesView: View {
             Label("No databases yet", systemImage: "cylinder")
         } description: {
             Text(source.allowsCreation
-                ? (source.kind == .remote ? "Create a database folder for this workspace’s agents." : "Create a database or link a folder on this Mac.")
-                : "This workspace has not created any database folders yet.")
+                ? (source.kind == .remote ? "Create a database for this workspace." : "Create a database or link a folder.")
+                : "No database folders in this workspace.")
         } actions: {
             if source.allowsCreation {
-                Button("New Database") {
+                Button("New database") {
                     beginCreatingDatabase()
                 }
                     .buttonStyle(DashboardPrimaryButtonStyle())
@@ -397,9 +428,9 @@ struct DashboardDatabasesView: View {
 
     private func chooseExternalDatabase() {
         let panel = NSOpenPanel()
-        panel.title = "Link an Existing Database Folder"
+        panel.title = "Link a database folder"
         panel.message = "The folder stays in place. Woven Matter adds an alias in the local Databases folder."
-        panel.prompt = "Link Folder"
+        panel.prompt = "Link folder"
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
@@ -457,7 +488,7 @@ private struct DashboardCreateDatabaseSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("New Database")
+            Text("New database")
                 .font(.system(size: 18, weight: .semibold))
             Text("Create in \(workspaceName).")
                 .font(.system(size: 12))
@@ -470,7 +501,7 @@ private struct DashboardCreateDatabaseSheet: View {
                     Text($0.displayName).tag($0)
                 }
             }
-            Text("No preference lets the agent choose. JSON and SQLite are guidance, not enforced schemas.")
+            Text("The agent can choose a format. JSON and SQLite are preferences, not requirements.")
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
             if let error {
