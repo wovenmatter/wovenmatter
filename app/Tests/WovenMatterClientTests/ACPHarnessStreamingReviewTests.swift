@@ -4,6 +4,65 @@ import WovenMatterCore
 @testable import WovenMatterClient
 
 struct ACPHarnessStreamingReviewTests {
+  @Test func configurationNotificationsCarrySnapshotsWithoutAnotherPreparation() async throws {
+    let fixture = try ACPHarnessFixture(kind: .codex,
+      initialize: #"{"protocolVersion":2}"#,
+      session: #"{"sessionId":"configuration-session","models":{"currentModelId":"fixture-model","availableModels":[{"modelId":"fixture-model"}]}}"#,
+      extras: [:])
+    defer { fixture.remove() }
+    let client = try fixture.client()
+    _ = try await client.initializeSession(workingDirectory: fixture.root, existingSessionID: nil, title: nil)
+    let snapshots = ACPReviewConfigurations()
+    await client.setConfigurationHandler { snapshots.record($0) }
+    #expect(snapshots.values().map(\.model) == ["fixture-model"])
+    // The fake adapter publishes model and command updates plus a duplicate during
+    // its prompt. The subscriber can update the UI directly from these values.
+    #expect(try await client.prompt("fixture") == .endTurn)
+    await client.shutdown()
+    let values = snapshots.values()
+    #expect(values.count == 3)
+    #expect(values.last?.model == "changed-model")
+    #expect(values.first?.slashCommands.isEmpty == true)
+    #expect(values.last?.slashCommands.map(\.name) == ["review"])
+    let log = try fixture.log()
+    #expect(log.components(separatedBy: #""method":"initialize""#).count - 1 == 1)
+    #expect(log.components(separatedBy: #""method":"session/new""#).count - 1 == 1)
+  }
+
+  @Test(arguments: [AgentRuntimeKind.codex, .claudeCode, .grokBuild, .cursor])
+  func modelAndThinkingSelectionFollowsAdvertisedOptions(kind: AgentRuntimeKind) async throws {
+    let withEffort = #"{"configOptions":[{"id":"model","category":"model","currentValue":"with-effort","options":[{"value":"with-effort"},{"value":"no-effort"}]},{"id":"effort","category":"thought_level","currentValue":"low","options":[{"value":"low"},{"value":"high"}]}]}"#
+    let withoutEffort = #"{"configOptions":[{"id":"model","category":"model","currentValue":"no-effort","options":[{"value":"with-effort"},{"value":"no-effort"}]}]}"#
+    let highEffort = withEffort.replacingOccurrences(of: #""currentValue":"low""#, with: #""currentValue":"high""#)
+    let fixture = try ACPHarnessFixture(kind: kind, initialize: #"{"protocolVersion":2}"#,
+      session: #"{"sessionId":"selection","configOptions":[]}"#,
+      extras: ["authenticate": "{}", "cursor/list_available_models": "{}"],
+      setConfigShell: """
+        case "$request" in
+          *'"value":"no-effort"'*) respond "$id" '\(withoutEffort)' ;;
+          *'"value":"high"'*) respond "$id" '\(highEffort)' ;;
+          *) respond "$id" '\(withEffort)' ;;
+        esac
+        """, initialConfiguration: withEffort)
+    defer { fixture.remove() }
+    let client = try fixture.client()
+    _ = try await client.initializeSession(workingDirectory: fixture.root, existingSessionID: nil, title: nil)
+    let noEffort = try await client.setSessionConfiguration(model: "no-effort")
+    #expect(noEffort.model == "no-effort")
+    #expect(noEffort.thinking == nil && noEffort.thinkingOptions.isEmpty)
+    do {
+      _ = try await client.setSessionConfiguration(thinking: "high")
+      Issue.record("A removed thinking option remained writable")
+    } catch LocalACPClientError.unsupportedConfiguration { }
+    let restored = try await client.setSessionConfiguration(model: "with-effort", thinking: "high")
+    #expect(restored.model == "with-effort" && restored.thinking == "high")
+    #expect(restored.thinkingOptions == ["low", "high"])
+    await client.shutdown()
+    let log = try fixture.log()
+    let wireValue = kind == .grokBuild ? #""value":{"value":"high"}"# : #""value":"high""#
+    #expect(log.contains(wireValue))
+  }
+
   @Test func cursorUsesAuthenticationAndNativeModelDiscovery() async throws {
     try await review(
       .cursor,
@@ -15,7 +74,7 @@ struct ACPHarnessStreamingReviewTests {
       ],
       expected: ["authenticate", "cursor/list_available_models"]
     ) { configuration in
-      #expect(configuration.model == "cursor-model")
+      #expect(configuration.model == nil)
       #expect(configuration.modelOptions == ["cursor-model"])
     }
   }
@@ -110,6 +169,13 @@ struct ACPHarnessStreamingReviewTests {
   }
 }
 
+private final class ACPReviewConfigurations: @unchecked Sendable {
+  private let lock = NSLock()
+  private var snapshots: [LocalACPSessionConfiguration] = []
+  func record(_ value: LocalACPSessionConfiguration) { lock.withLock { snapshots.append(value) } }
+  func values() -> [LocalACPSessionConfiguration] { lock.withLock { snapshots } }
+}
+
 private actor ACPReviewEvents {
   private var events: [LocalACPEvent] = []
   func record(_ event: LocalACPEvent) { events.append(event) }
@@ -123,7 +189,8 @@ private struct ACPHarnessFixture {
   let kind: AgentRuntimeKind
 
   init(kind: AgentRuntimeKind, initialize: String, session: String,
-       extras: [String: String], holdPromptForInterjection: Bool = false) throws {
+       extras: [String: String], holdPromptForInterjection: Bool = false,
+       setConfigShell: String? = nil, initialConfiguration: String? = nil) throws {
     self.kind = kind
     root = FileManager.default.temporaryDirectory.appending(path: "acp-harness-\(UUID())")
     executable = root.appending(path: "adapter")
@@ -133,6 +200,11 @@ private struct ACPHarnessFixture {
       "*'\"method\":\"\(method)\"'*) respond \"$id\" '\(response)' ;;"
     }.joined(separator: "\n")
     let promptFinish = holdPromptForInterjection ? "" : "respond \"$id\" '{\"stopReason\":\"end_turn\"}'"
+    let sessionResponse = initialConfiguration.map {
+      $0.replacingOccurrences(of: "{", with: #"{"sessionId":"selection","#,
+        options: [.anchored])
+    } ?? session
+    let configCase = setConfigShell.map { "*'\"method\":\"session/set_config_option\"'*) " + $0 + " ;;" } ?? ""
     let script = """
       #!/bin/sh
       respond() { printf '{"jsonrpc":"2.0","id":%s,"result":%s}\\n' "$1" "$2"; }
@@ -142,8 +214,11 @@ private struct ACPHarnessFixture {
         id=$(printf '%s' "$request" | sed -n 's/.*"id":\\([0-9][0-9]*\\).*/\\1/p')
         case "$request" in
           *'"method":"initialize"'*) respond "$id" '\(initialize)' ;;
-          *'"method":"session/new"'*|*'"method":"session/load"'*) respond "$id" '\(session)' ;;
+          *'"method":"session/new"'*|*'"method":"session/load"'*) respond "$id" '\(sessionResponse)' ;;
           *'"method":"session/prompt"'*)
+            printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"config_option_update","configOptions":[{"id":"model","category":"model","currentValue":"changed-model","options":[{"value":"changed-model"}]}]}}}'
+            printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"available_commands_update","availableCommands":[{"name":"review","description":"Review changes"}]}}}'
+            printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"available_commands_update","availableCommands":[{"name":"review","description":"Review changes"}]}}}'
             printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"agent_thought_chunk","content":{"text":"first "}}}}'
             printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"tool_call","toolCallId":"tool","kind":"shell","title":"Shell"}}}'
             printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"tool_call_update","toolCallId":"tool","kind":"shell","status":"completed","content":[{"type":"content","content":{"text":" result "}}]}}}'
@@ -151,6 +226,7 @@ private struct ACPHarnessFixture {
             printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"plan","entries":[{"content":"Inspect","status":"pending"}]}}}'
             printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"plan","entries":[]}}}'
             \(promptFinish) ;;
+          \(configCase)
           \(extraCases)
           *'"method":"_x.ai/interject"'*) respond "$id" '{}'; respond "$((id-1))" '{"stopReason":"end_turn"}' ;;
         esac

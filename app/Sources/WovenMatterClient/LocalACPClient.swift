@@ -487,7 +487,7 @@ public actor LocalACPClient {
     private var steeringSupported = false
     private var sessionID: String?
     private var configuration = LocalACPSessionConfiguration.empty
-    private var configurationHandler: (@Sendable () -> Void)?
+    private var configurationHandler: (@Sendable (LocalACPSessionConfiguration) async -> Void)?
     private var modelConfigurationID: String?
     private var modelUsesSessionModelMethod = false
     private var thinkingConfigurationID: String?
@@ -804,7 +804,7 @@ public actor LocalACPClient {
             } ?? []
             guard !models.isEmpty else { return }
             configuration = LocalACPSessionConfiguration(
-                model: configuration.model ?? models.first,
+                model: configuration.model,
                 thinking: configuration.thinking,
                 modelOptions: models,
                 thinkingOptions: configuration.thinkingOptions,
@@ -871,9 +871,9 @@ public actor LocalACPClient {
         configuration
     }
 
-    public func setConfigurationHandler(_ handler: @escaping @Sendable () -> Void) {
+    public func setConfigurationHandler(_ handler: @escaping @Sendable (LocalACPSessionConfiguration) async -> Void) async {
         configurationHandler = handler
-        handler()
+        await handler(configuration)
     }
 
     public func setSessionConfiguration(
@@ -898,7 +898,7 @@ public actor LocalACPClient {
                     params: .object([
                         "sessionId": .string(sessionID),
                         "configId": .string(modelConfigurationID),
-                        "value": .string(model),
+                        "value": configurationValue(model),
                     ])
                 )
                 captureSessionConfiguration(from: response)
@@ -935,12 +935,16 @@ public actor LocalACPClient {
                 params: .object([
                     "sessionId": .string(sessionID),
                     "configId": .string(thinkingConfigurationID),
-                    "value": .string(thinking),
+                    "value": configurationValue(thinking),
                 ])
             )
             captureSessionConfiguration(from: response)
         }
         return configuration
+    }
+
+    private func configurationValue(_ value: String) -> ACPJSONValue {
+        runtimeKind == .grokBuild ? .object(["value": .string(value)]) : .string(value)
     }
 
     private func validateConfigurationValue(
@@ -1410,7 +1414,7 @@ public actor LocalACPClient {
             case "config_option_update", "available_commands_update":
                 let previousConfiguration = configuration
                 captureSessionConfiguration(from: update)
-                if previousConfiguration != configuration { configurationHandler?() }
+                if previousConfiguration != configuration { await configurationHandler?(configuration) }
             default:
                 break
             }
@@ -1486,25 +1490,20 @@ public actor LocalACPClient {
         }
         if let configOptions = value["configOptions"]?.arrayValue {
             let parsed = Self.configuration(from: configOptions)
-            if let model = parsed.model {
-                modelConfigurationID = model.id
-            }
-            if let thinking = parsed.thinking {
-                thinkingConfigurationID = thinking.id
-            }
-            if parsed.model != nil || parsed.thinking != nil {
-                configuration = LocalACPSessionConfiguration(
-                    model: parsed.model?.currentValue ?? configuration.model,
-                    thinking: parsed.thinking?.currentValue
-                        ?? configuration.thinking,
-                    modelOptions: parsed.model?.options
-                        ?? configuration.modelOptions,
-                    thinkingOptions: parsed.thinking?.options
-                        ?? configuration.thinkingOptions,
-                    slashCommands: configuration.slashCommands
-                )
-            }
+            let hadModelOption = modelConfigurationID != nil
+            modelConfigurationID = parsed.model?.id
+            thinkingConfigurationID = parsed.thinking?.id
+            // ACP publishes the complete current option list. A model switch
+            // may remove effort support; do not retain its old menu or setter.
+            configuration = LocalACPSessionConfiguration(
+                model: parsed.model?.currentValue ?? (hadModelOption ? nil : configuration.model),
+                thinking: parsed.thinking?.currentValue,
+                modelOptions: parsed.model?.options ?? (hadModelOption ? [] : configuration.modelOptions),
+                thinkingOptions: parsed.thinking?.options ?? [],
+                slashCommands: configuration.slashCommands
+            )
         }
+
         // Some adapters publish both the writable `configOptions` contract and
         // a legacy `models` catalog. Codex ACP's legacy catalog expands every
         // base model into model[reasoning-effort] variants, while its model and
