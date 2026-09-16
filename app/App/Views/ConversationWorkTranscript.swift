@@ -276,37 +276,39 @@ private struct ConversationActivityRow: View {
         }
     }
 
+    @ViewBuilder
     private var activityLabel: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 9) {
-            activityIcon
-            VStack(alignment: .leading, spacing: 2) {
-                Text(primaryLabel)
-                    .font(.system(
-                        size: 13.5,
-                        weight: activity.kind == .thought ? .regular : .medium
-                    ))
-                    .foregroundStyle(DashboardPalette.foreground.opacity(
-                        activity.kind == .thought ? 0.58 : 0.72
-                    ))
-                    .fixedSize(horizontal: false, vertical: true)
-                if let secondaryLabel {
-                    Text(secondaryLabel)
-                        .font(.system(size: 12.5))
-                        .foregroundStyle(DashboardPalette.mutedForeground)
-                        .lineLimit(activity.kind == .thought ? 2 : 1)
-                        .truncationMode(.tail)
-                }
-                if activity.kind == .activity, let content = activity.content?.nonempty {
-                    Text(content)
-                        .font(.system(size: 13))
-                        .foregroundStyle(DashboardPalette.foreground.opacity(0.72))
-                        .textSelection(.enabled)
+        if activity.kind == .activity, let content = activity.content?.nonempty {
+            Text(content)
+                .font(.system(size: 13))
+                .foregroundStyle(isFailure ? .red.opacity(0.8) : DashboardPalette.foreground.opacity(0.72))
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+        } else {
+            HStack(alignment: .firstTextBaseline, spacing: 9) {
+                activityIcon
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(primaryLabel)
+                        .font(.system(
+                            size: 13.5,
+                            weight: activity.kind == .thought ? .regular : .medium
+                        ))
+                        .foregroundStyle(DashboardPalette.foreground.opacity(
+                            activity.kind == .thought ? 0.58 : 0.72
+                        ))
                         .fixedSize(horizontal: false, vertical: true)
+                    if let secondaryLabel {
+                        Text(secondaryLabel)
+                            .font(.system(size: 12.5))
+                            .foregroundStyle(DashboardPalette.mutedForeground)
+                            .lineLimit(activity.kind == .thought ? 2 : 1)
+                            .truncationMode(.tail)
+                    }
                 }
+                Spacer(minLength: 0)
             }
-            Spacer(minLength: 0)
+            .contentShape(Rectangle())
         }
-        .contentShape(Rectangle())
     }
 
     private var activityDetails: some View {
