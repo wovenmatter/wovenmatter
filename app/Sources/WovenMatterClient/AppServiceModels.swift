@@ -10,6 +10,16 @@ public struct SessionOptionMetadata: Codable, Equatable, Sendable {
         self.description = Self.nonempty(description)
     }
 
+    public static func modelLabel(id: String, metadata: Self?) -> String {
+        guard let name = metadata?.name else { return id }
+        // Some ACP catalogs omit the family from otherwise useful GPT names.
+        // Restore only the family proven by the exact ID; keep versions intact.
+        if id.hasPrefix("gpt-"), name.range(of: "GPT", options: .caseInsensitive) == nil {
+            return "GPT " + name
+        }
+        return name
+    }
+
     private static func nonempty(_ value: String?) -> String? {
         guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else { return nil }
         return value
