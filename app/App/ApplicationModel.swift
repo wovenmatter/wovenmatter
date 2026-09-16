@@ -2602,6 +2602,17 @@ final class ApplicationModel {
         cancelLocalACPInteractions(conversationID: conversationID)
     }
 
+    func isLocalACPSessionLaunchAvailable(_ conversation: WorkspaceConversationRecord) -> Bool {
+        guard let runtimeKind = conversation.localRuntimeKind else { return false }
+        if buzzBoundLocalACPConversationIDs.contains(conversation.id) { return true }
+        if let workspaceID = conversation.remoteWorkspaceID {
+            guard let configuration = remoteWorkspaces.configuration(id: workspaceID) else { return false }
+            return remoteWorkspaces.isHarnessReady(runtimeKind, in: configuration)
+        }
+        return localACPLaunchConfigurations[runtimeKind] != nil
+            && localACPWorkspaceLaunchConfiguration != nil
+    }
+
     func refreshLocalACPSession(
         conversation: WorkspaceConversationRecord
     ) async {
