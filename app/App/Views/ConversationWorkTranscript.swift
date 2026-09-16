@@ -14,12 +14,41 @@ func conversationActivityShowsProgress(
     )
 }
 
+private struct ConversationTranscriptInteractionKey: EnvironmentKey {
+    static let defaultValue: @MainActor () -> Void = {}
+}
+
+extension EnvironmentValues {
+    var conversationTranscriptInteraction: @MainActor () -> Void {
+        get { self[ConversationTranscriptInteractionKey.self] }
+        set { self[ConversationTranscriptInteractionKey.self] = newValue }
+    }
+}
+
+/// Expanded work has its own scroll owner. Short transcripts retain their
+/// intrinsic height; long histories are capped at 420 points.
+private struct ConversationBoundedTranscript<Content: View>: View {
+    @State private var contentHeight: CGFloat = 420
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        ScrollView(.vertical) {
+            content()
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
+        }
+        .frame(height: min(420, max(1, contentHeight)))
+        .defaultScrollAnchor(.top)
+    }
+}
+
 struct ConversationWorkTranscript: View {
     let run: WorkspaceRunRecord
     let presentation: DashboardRunPresentation?
     let records: [WorkspaceRunActivityRecord]
     let commentaryIDs: Set<String>
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.conversationTranscriptInteraction) private var transcriptInteraction
     @State private var expanded: Bool
 
     init(
@@ -40,7 +69,8 @@ struct ConversationWorkTranscript: View {
         if activities.contains(where: { $0.kind != .fileChange }) {
             VStack(alignment: .leading, spacing: 0) {
                 Button {
-                    withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.16)) { expanded.toggle() }
+                    transcriptInteraction()
+                    expanded.toggle()
                 } label: {
                     HStack(spacing: 7) {
                         elapsedLabel
@@ -62,24 +92,26 @@ struct ConversationWorkTranscript: View {
                 if expanded {
                     let activities = self.activities
                     let timelineItems = timelineItems(for: activities)
-                    VStack(alignment: .leading, spacing: 10) {
-                        ForEach(timelineItems) { item in
-                            if item.activities.count == 1,
-                               let activity = item.activities.first {
-                                if activity.kind == .assistant {
-                                    ConversationMarkdown(
-                                        document: ConversationMarkdownDocument(RemoteNoteEditEnvelope.redactingEnvelopes(in: activity.content ?? "")),
-                                        isStreaming: false
-                                    )
-                                    .textSelection(.enabled)
+                    ConversationBoundedTranscript {
+                        VStack(alignment: .leading, spacing: 10) {
+                            ForEach(timelineItems) { item in
+                                if item.activities.count == 1,
+                                   let activity = item.activities.first {
+                                    if activity.kind == .assistant {
+                                        ConversationMarkdown(
+                                            document: ConversationMarkdownDocument(RemoteNoteEditEnvelope.redactingEnvelopes(in: activity.content ?? "")),
+                                            isStreaming: false
+                                        )
+                                        .textSelection(.enabled)
+                                    } else {
+                                        ConversationActivityRow(activity: activity, runStatus: run.status)
+                                    }
                                 } else {
-                                    ConversationActivityRow(activity: activity, runStatus: run.status)
+                                    ConversationToolGroup(
+                                        activities: item.activities,
+                                        runStatus: run.status
+                                    )
                                 }
-                            } else {
-                                ConversationToolGroup(
-                                    activities: item.activities,
-                                    runStatus: run.status
-                                )
                             }
                         }
                     }
@@ -173,6 +205,7 @@ private struct ConversationTimelineItem: Identifiable {
 private struct ConversationToolGroup: View {
     let activities: [AgentRunActivity]
     let runStatus: String
+    @Environment(\.conversationTranscriptInteraction) private var transcriptInteraction
     @State private var expanded = false
 
     var body: some View {
@@ -182,7 +215,7 @@ private struct ConversationToolGroup: View {
                     ConversationActivityRow(activity: activity, runStatus: runStatus)
                 }
                 if !priorActivities.isEmpty {
-                    DisclosureGroup(isExpanded: $expanded) {
+                    DisclosureGroup(isExpanded: Binding(get: { expanded }, set: { transcriptInteraction(); expanded = $0 })) {
                         VStack(alignment: .leading, spacing: 8) {
                             ForEach(priorActivities) { activity in
                                 ConversationActivityRow(
@@ -201,7 +234,7 @@ private struct ConversationToolGroup: View {
                 }
             }
         } else {
-            DisclosureGroup(isExpanded: $expanded) {
+            DisclosureGroup(isExpanded: Binding(get: { expanded }, set: { transcriptInteraction(); expanded = $0 })) {
                 VStack(alignment: .leading, spacing: 8) {
                     ForEach(activities) { activity in
                         ConversationActivityRow(
@@ -260,6 +293,7 @@ private struct ConversationToolGroup: View {
 private struct ConversationActivityRow: View {
     let activity: AgentRunActivity
     let runStatus: String
+    @Environment(\.conversationTranscriptInteraction) private var transcriptInteraction
     @State private var rawExpanded = false
 
     var body: some View {
@@ -267,7 +301,7 @@ private struct ConversationActivityRow: View {
             ConversationPlanProgress(activity: activity)
         } else if activity.kind != .fileChange {
             if isExpandable {
-                DisclosureGroup(isExpanded: $rawExpanded) {
+                DisclosureGroup(isExpanded: Binding(get: { rawExpanded }, set: { transcriptInteraction(); rawExpanded = $0 })) {
                     activityDetails
                 } label: {
                     activityLabel
@@ -383,7 +417,8 @@ private struct ConversationActivityRow: View {
         case .tool: ConversationToolCategory(activity).systemImage
         case .plan: "list.bullet.clipboard"
         case .fileChange: "pencil.and.outline"
-        case .progress: "arrow.trianglehead.2.clockwise.rotate.90"
+        case .progress: activity.status?.lowercased() == "completed"
+            ? "flag.checkered" : "arrow.trianglehead.2.clockwise.rotate.90"
         case .activity: "waveform.path.ecg"
         }
     }

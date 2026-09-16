@@ -40,20 +40,20 @@ struct OpenClawGatewayStreamingTests {
     ])
   }
 
-  @Test func gatewayFenceDropsReplayReportsGapsAndKeepsLateMetadata() {
+  @Test func gatewayFenceDropsReplayAllowsSparseSequencesAndKeepsLateMetadata() {
     var fence = GatewayStreamEventFence()
     #expect(fence.evaluate(event("agent", stream: "assistant", seq: 1),
       remoteRunID: "run") == .accept)
     #expect(fence.evaluate(event("agent", stream: "assistant", seq: 1),
       remoteRunID: "run") == .duplicate)
     #expect(fence.evaluate(event("agent", stream: "assistant", seq: 3),
-      remoteRunID: "run") == .gap)
+      remoteRunID: "run") == .accept)
     #expect(fence.evaluate(event("agent", stream: "reasoning", seq: 4),
       remoteRunID: "run") == .accept)
     #expect(fence.evaluate(event("agent", stream: "tool", seq: 3),
       remoteRunID: "run") == .accept)
     #expect(fence.evaluate(event("session.tool", seq: 5),
-      remoteRunID: "run") == .gap)
+      remoteRunID: "run") == .accept)
   }
 
   @Test func assistantMirrorDedupKeepsRepeatedTextOnOwningSource() {

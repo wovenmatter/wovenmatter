@@ -1,13 +1,13 @@
 import WovenMatterClient
 
 /// Fences replayed and mirrored Gateway frames within one remote run. Sequence
-/// numbers are source-local: `agent` and `chat` may both start at one, while
-/// `session.tool` mirrors the `agent/tool` source.
+/// numbers advance across agent streams; chat snapshots intentionally skip
+/// intermediate values. Keep per-source replay watermarks, but do not infer
+/// packet loss from their spacing. `session.tool` mirrors `agent/tool`.
 struct GatewayStreamEventFence: Sendable {
   enum Decision: Equatable, Sendable {
     case accept
     case duplicate
-    case gap
   }
 
   private var sequences: [String: Int] = [:]
@@ -21,15 +21,13 @@ struct GatewayStreamEventFence: Sendable {
     let stream = payload?["stream"]?.stringValue
       ?? (event.name == "session.tool" ? "tool" : "")
     let key = "\(remoteRunID):\(name):\(stream)"
-    var decision = Decision.accept
     if let sequence = payload?["seq"]?.intValue {
       if let previous = sequences[key] {
         if sequence <= previous { return .duplicate }
-        if sequence > previous + 1 { decision = .gap }
       }
       sequences[key] = sequence
     }
-    return decision
+    return .accept
   }
 }
 

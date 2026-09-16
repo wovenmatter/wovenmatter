@@ -58,14 +58,19 @@ struct HermesIntegrationTests {
         let identity = HermesGatewayClient.identity(home: firstHome, storedID: "shared-id", imported: true)
         let rows: [HermesValue] = [
             ["id": .number(1), "role": "user", "content": "Question", "timestamp": .number(100)],
-            ["id": .number(2), "role": "assistant", "content": "Answer", "timestamp": .number(101)],
-            ["id": .number(3), "role": "tool", "content": "Full tool output", "timestamp": .number(102)]
+            ["id": .number(2), "role": "assistant", "content": "Answer", "timestamp": .number(101),
+             "tool_calls": .array([["id": "call-1", "type": "function", "function": ["name": "read", "arguments": "fixture"]]])],
+            ["id": .number(3), "role": "tool", "tool_call_id": "call-1", "content": "Full tool output", "timestamp": .number(102)]
         ]
         let imported = HermesSessionImport(identity: identity, title: "Imported", createdAt: Date(timeIntervalSince1970: 100), messages: rows)
         let id = try database.createLocalACPSession(runtimeKind: .hermes, title: imported.title, ownerDeviceID: owner, createdAt: imported.createdAt, hermesImport: imported)
         let repeated = try database.createLocalACPSession(runtimeKind: .hermes, title: "Repeated", ownerDeviceID: owner, hermesImport: imported)
         #expect(id == repeated)
-        #expect(try database.conversationContent(id: id).messages.map(\.content) == ["Question", "Answer", "Full tool output"])
+        #expect(try database.conversationContent(id: id).messages.map(\.content) == ["Question", "Answer"])
+        #expect(try database.conversationHistoryPage(id: id, limit: 100).activities.first { $0.activity.kind == .tool }?.activity.content == "Full tool output")
+        let tools = try database.conversationHistoryPage(id: id, limit: 100).activities.filter { $0.activity.kind == .tool }
+        #expect(tools.count == 1)
+        #expect(tools.first?.activity.rawInputJSON?.contains("fixture") == true)
         #expect(try database.localACPSession(conversationID: id).acpSessionID == identity)
         #expect(try database.knownHermesSessionIDs(home: firstHome) == ["shared-id"])
         #expect(try database.knownHermesSessionIDs(home: secondHome).isEmpty)
@@ -77,7 +82,7 @@ struct HermesIntegrationTests {
             try database.createLocalACPSession(runtimeKind: .hermes, title: broken.title, ownerDeviceID: owner, hermesImport: broken)
         }
         #expect(try !database.knownHermesSessionIDs(home: firstHome).contains("invalid"))
-        #expect(try database.conversationContent(id: id).messages.count == 3)
+        #expect(try database.conversationContent(id: id).messages.count == 2)
         let record = try #require(database.workspaceOverview().conversations.first { $0.id == id })
         let importedAt = try #require(record.importedAt)
         #expect(record.lastMessageAt == importedAt)

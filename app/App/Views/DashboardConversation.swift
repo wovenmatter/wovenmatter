@@ -79,6 +79,7 @@ struct DashboardCloudConversation: View {
         conversation.flatMap { model.openCodeModel(for: $0.id) }
     }
     @State private var scrollState = DashboardConversationScrollState()
+    @State private var transcriptOwnsScroll = false
     @State private var isPrependingHistory = false
     @State private var pendingBottomConversationID: String?
     @State private var bottomPositionRevision = 0
@@ -170,11 +171,21 @@ struct DashboardCloudConversation: View {
                     .scrollTargetLayout()
                 }
                 .scrollIndicators(.never)
-                .defaultScrollAnchor(.bottom)
+                .environment(\.conversationTranscriptInteraction) {
+                    transcriptOwnsScroll = true
+                    scrollInteractionRevision += 1
+                    bottomPositionRevision += 1
+                    pendingBottomConversationID = nil
+                    scrollPositionID = nil
+                    scrollState.setNearBottom(false)
+                }
+                .defaultScrollAnchor(.bottom, for: .initialOffset)
+                .defaultScrollAnchor(.top, for: .sizeChanges)
                 .scrollPosition(id: $scrollPositionID, anchor: .bottom)
                 .onScrollPhaseChange { _, phase in
                     isUserScrolling = phase == .interacting || phase == .tracking || phase == .decelerating
                     if isUserScrolling {
+                        transcriptOwnsScroll = false
                         scrollInteractionRevision += 1
                         pendingBottomConversationID = nil
                         bottomPositionRevision += 1
@@ -190,7 +201,7 @@ struct DashboardCloudConversation: View {
                         && scrollState.isNearBottom && !isUserScrolling && !isPrependingHistory
                     let isPositioningConversation = pendingBottomConversationID == conversation?.id
                         && newestPresentedMessageIdentity != nil
-                    scrollState.setNearBottom(newGeometry.isNearBottom)
+                    scrollState.setNearBottom(newGeometry.isNearBottom && !transcriptOwnsScroll)
 
                     if isPositioningConversation {
                         bottomPositionRevision += 1
@@ -221,6 +232,7 @@ struct DashboardCloudConversation: View {
                 }
                 .onChange(of: conversation?.id, initial: true) { _, conversationID in
                     isUserScrolling = false
+                    transcriptOwnsScroll = false
                     scrollInteractionRevision += 1
                     scrollState.conversationChanged(to: conversationID)
                     pendingBottomConversationID = conversationID
@@ -255,6 +267,7 @@ struct DashboardCloudConversation: View {
                     if !scrollState.isNearBottom, conversation != nil {
                         Button("Latest reply", systemImage: "arrow.down") {
                             scrollInteractionRevision += 1
+                            transcriptOwnsScroll = false
                             scrollState.setNearBottom(true)
                             scrollToConversationBottom(using: proxy)
                         }

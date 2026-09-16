@@ -260,3 +260,145 @@ private struct FixtureCommandReader: Sendable {
 
   private enum FixtureReadError: Error { case timedOut, lineTooLarge }
 }
+
+struct PiHandledCommandTests {
+  @Test(arguments: ["/search", "/search on", "enable search"])
+  func handledInputPublishesNotificationAndAllowsNextPrompt(_ text: String) async throws {
+    let fixture = PiPipeFixture()
+    let server = Task {
+      try await serveCommands(fixture, firstPrompt: text)
+    }
+    try await fixture.initialize()
+    let collector = PiEventCollector()
+    #expect(try await fixture.client.prompt(text) { await collector.record($0) } == .endTurn)
+    let events = await collector.values()
+    #expect(events.contains { event in
+      guard case .activity(let activity, _) = event else { return false }
+      return activity.kind == .activity && activity.content == "Search is on."
+    })
+    #expect(!events.contains { event in
+      if case .assistantChunk = event { return true }
+      if case .assistantSnapshot = event { return true }
+      return false
+    })
+    #expect(try await fixture.client.prompt("ordinary message") == .endTurn)
+    await fixture.client.shutdown()
+    try await server.value
+  }
+
+  @Test(arguments: ["warning", "error"])
+  func notificationSeverityIsVisible(_ severity: String) async throws {
+    let fixture = PiPipeFixture()
+    let server = Task { try await serveCommands(fixture, firstPrompt: "/search", severity: severity) }
+    try await fixture.initialize()
+    let collector = PiEventCollector()
+    _ = try await fixture.client.prompt("/search") { await collector.record($0) }
+    #expect(await collector.values().contains { event in
+      guard case .activity(let activity, _) = event else { return false }
+      return activity.status == (severity == "error" ? "failed" : "completed")
+        && activity.detail == severity
+    })
+    await fixture.client.shutdown()
+    try await server.value
+  }
+
+  @Test func stopAcknowledgedCommandThenOrdinaryMessageUsesSameTransport() async throws {
+    let fixture = PiPipeFixture()
+    let gate = PiPromptGate()
+    let server = Task { try await serveCommands(fixture, firstPrompt: "/search", stopAfterACK: gate) }
+    try await fixture.initialize()
+    let command = Task { try await fixture.client.prompt("/search") }
+    await gate.waitForPrompt()
+    await fixture.client.cancel()
+    #expect(try await command.value == .cancelled)
+    #expect(try await fixture.client.prompt("ordinary message") == .endTurn)
+    await fixture.client.shutdown()
+    await gate.release()
+    try await server.value
+  }
+
+  @Test func normalStartupBeforeAgentStartStillWaitsForSettlement() async throws {
+    let fixture = PiPipeFixture()
+    let server = Task { try await serveCommands(fixture, firstPrompt: "ordinary message", normalStartup: true) }
+    try await fixture.initialize()
+    let collector = PiEventCollector()
+    #expect(try await fixture.client.prompt("ordinary message") { await collector.record($0) } == .endTurn)
+    #expect(await collector.values().contains(.assistantSnapshot("finished")))
+    await fixture.client.shutdown()
+    try await server.value
+  }
+
+  @Test func stopBeforeCommandAcknowledgementRetiresTransportAndResumeWorks() async throws {
+    let fixture = PiPipeFixture()
+    let gate = PiPromptGate()
+    let server = Task { try await serveCommands(fixture, firstPrompt: "/search", pending: gate) }
+    try await fixture.initialize()
+    let command = Task { try await fixture.client.prompt("/search") }
+    await gate.waitForPrompt()
+    await fixture.client.cancel()
+    do {
+      _ = try await command.value
+      Issue.record("Pending command should be cancelled")
+    } catch is CancellationError { }
+    // A late extension completion must not be reusable by a new run.
+    do {
+      _ = try await fixture.client.prompt("ordinary message")
+      Issue.record("Cancelled transport should be retired")
+    } catch { }
+    await gate.release()
+    try await server.value
+
+    let resumed = PiPipeFixture()
+    let resumedServer = Task { try await serveCommands(resumed, firstPrompt: "ordinary message", normalStartup: true) }
+    let session = try await resumed.client.initializeSession(
+      workingDirectory: URL(filePath: "/private/tmp"), existingSessionID: "fixture-session",
+      title: nil, systemPrompt: nil)
+    #expect(session.loadedExistingSession)
+    #expect(session.sessionID == "fixture-session")
+    #expect(try await resumed.client.prompt("ordinary message") == .endTurn)
+    await resumed.client.shutdown()
+    try await resumedServer.value
+  }
+
+  private func serveCommands(_ fixture: PiPipeFixture, firstPrompt: String,
+                             normalStartup: Bool = false, pending: PiPromptGate? = nil,
+                             severity: String = "info", stopAfterACK: PiPromptGate? = nil) async throws {
+    defer { try? fixture.events.fileHandleForWriting.close() }
+    let reader = FixtureCommandReader(handle: fixture.commands.fileHandleForReading)
+    var prompts = 0
+    while let line = try await reader.next() {
+      let command = try JSONSerialization.jsonObject(with: line) as! [String: Any]
+      let type = command["type"] as! String
+      var data: [String: Any] = [:]
+      if type == "prompt" {
+        prompts += 1
+        #expect(command["message"] as? String == (prompts == 1 ? firstPrompt : "ordinary message"))
+        if let pending { await pending.pause(); return }
+        if prompts == 1 && !normalStartup {
+          try write(["type": "extension_ui_request", "id": "notice", "method": "notify",
+                     "message": "Search is on.", "notifyType": severity], to: fixture)
+        }
+      }
+      if type == "get_state" {
+        data = ["sessionId": "fixture-session", "isStreaming": (normalStartup || stopAfterACK != nil) && prompts > 0,
+                "isCompacting": false, "pendingMessageCount": 0]
+      }
+      try write(["type": "response", "id": command["id"]!, "success": true, "data": data], to: fixture)
+      if type == "get_state", prompts == 1, let stopAfterACK {
+        Task { await stopAfterACK.pause() }
+      }
+      if (normalStartup && type == "get_state" && prompts > 0) || (type == "prompt" && prompts == 2) {
+        // State reports active before the first agent_start reaches the client.
+        try write(["type": "agent_start"], to: fixture)
+        try write(["type": "message_end", "message": ["role": "assistant", "content": "finished"]], to: fixture)
+        try write(["type": "agent_settled"], to: fixture)
+      }
+    }
+  }
+
+  private func write(_ object: [String: Any], to fixture: PiPipeFixture) throws {
+    var bytes = try JSONSerialization.data(withJSONObject: object)
+    bytes.append(10)
+    try fixture.events.fileHandleForWriting.write(contentsOf: bytes)
+  }
+}

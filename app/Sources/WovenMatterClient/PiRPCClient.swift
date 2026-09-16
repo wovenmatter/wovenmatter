@@ -92,11 +92,14 @@ public actor PiRPCClient {
     private var completedVisibleText = ""
     private var latestStopReason: LocalACPStopReason?
     private var latestTerminalError: String?
+    private var promptAcknowledged = false
+    private var sawAgentStart = false
     private var hasQueuedSettlement = false
     private var settlement: Result<Void, any Error>?
     private var transportError: (any Error)?
     private var settledWaiters: [CheckedContinuation<Void, any Error>] = []
     private var cancelled = false
+    private var abortTask: Task<Void, Never>?
     private var readerTask: Task<Void, Never>?
     private var eventTask: Task<Void, Never>?
     private struct ExtensionUIRequest: Sendable {
@@ -241,8 +244,11 @@ public actor PiRPCClient {
         let generation = UUID()
         promptGeneration = generation
         hasQueuedSettlement = false
+        sawAgentStart = false
+        promptAcknowledged = false
         settlement = nil
         cancelled = false
+        abortTask = nil
         reasoningPhaseSequence = 0
         activeReasoningPhaseID = nil
         assistantMessageSequence = 0
@@ -268,8 +274,11 @@ public actor PiRPCClient {
                         string(response["error"]) ?? "Pi rejected the prompt."
                     )
                 }
+                promptAcknowledged = true
                 try Task.checkCancellation()
+                try await settleHandledInputIfIdle()
                 try await waitUntilSettled()
+                await abortTask?.value
                 if let latestTerminalError {
                     throw PiRPCClientError.commandFailed(latestTerminalError)
                 }
@@ -298,8 +307,31 @@ public actor PiRPCClient {
 
     public func cancel() async {
         cancelled = true
-        finishSettledWaiters()
-        _ = try? await sendCommand(["type": "abort"])
+        guard promptAcknowledged else {
+            // Abort only stops native agent work, not an extension command that
+            // is still awaiting a UI decision. Retire that transport so its late
+            // ACK/output cannot leak into a subsequent run. The coordinator
+            // recreates the same durable session after this cancellation error.
+            failPending(CancellationError())
+            await shutdown()
+            return
+        }
+        if let abortTask {
+            await abortTask.value
+            return
+        }
+        let task = Task {
+            do {
+                _ = try await self.sendCommand(["type": "abort"])
+                // Drain prior output before the session can accept another run.
+                await self.eventTask?.value
+                if !self.sawAgentStart { self.finishSettledWaiters() }
+            } catch {
+                self.failPending(error)
+            }
+        }
+        abortTask = task
+        await task.value
     }
 
     private func cancelPromptTask(generation: UUID) async {
@@ -570,6 +602,35 @@ public actor PiRPCClient {
         }
     }
 
+    private func settleHandledInputIfIdle() async throws {
+        guard !sawAgentStart, !hasQueuedSettlement, settlement == nil else { return }
+        // Pi acknowledges extension commands and handled input without an agent
+        // turn. Ask native state after the ACK; an ACK alone is not completion.
+        // Native prompt() sets _isAgentRunActive synchronously after preflight
+        // ACK, before another stdin command can run. get_state therefore sees
+        // normal startup as streaming even if agent_start has not arrived.
+        let response: [String: Any]
+        do {
+            response = try await sendCommand(["type": "get_state"])
+        } catch {
+            // A short-lived transport may settle and close while the probe is
+            // in flight. Preserve that authoritative, ordered terminal event.
+            if hasQueuedSettlement {
+                await eventTask?.value
+                return
+            }
+            throw error
+        }
+        guard response["success"] as? Bool == true,
+              let state = dictionary(response["data"]),
+              state["isStreaming"] as? Bool == false,
+              state["isCompacting"] as? Bool == false,
+              Self.integer(state["pendingMessageCount"]) == 0 else { return }
+        await eventTask?.value
+        guard !sawAgentStart, !hasQueuedSettlement else { return }
+        finishSettledWaiters()
+    }
+
     private func waitUntilSettled() async throws {
         if let settlement { return try settlement.get() }
         try await withCheckedThrowingContinuation { continuation in
@@ -700,6 +761,19 @@ public actor PiRPCClient {
         from object: [String: Any]
     ) -> [LocalACPEvent] {
         switch string(object["type"]) {
+        case "agent_start":
+            sawAgentStart = true
+            return []
+        case "extension_ui_request":
+            guard string(object["method"]) == "notify",
+                  let message = object["message"] as? String else { return [] }
+            return [.activity(AgentRunActivity(
+                id: string(object["id"]) ?? UUID().uuidString,
+                kind: .activity, phase: "end", title: "Pi",
+                detail: string(object["notifyType"]),
+                status: string(object["notifyType"]) == "error" ? "failed" : "completed",
+                content: message, contentIsDelta: false
+            ), appendsContent: false)]
         case "message_start":
             guard string(dictionary(object["message"])?["role"]) == "assistant" else {
                 return []
