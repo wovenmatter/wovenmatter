@@ -267,11 +267,12 @@ public actor HermesGatewayClient {
                 }
                 try await onEvent?(.composerPrefill(message))
                 try await publishCommandFeedback(result)
-                return .endTurn
+                return stopped ? .cancelled : .endTurn
             case "", "exec", "plugin":
                 try await publishCommandFeedback(result)
+                if stopped { return .cancelled }
                 try? await refreshConfiguration()
-                return .endTurn
+                return stopped ? .cancelled : .endTurn
             default:
                 throw HermesGatewayError.message("Hermes returned an unsupported command outcome.")
             }

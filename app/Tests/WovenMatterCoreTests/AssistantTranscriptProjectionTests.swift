@@ -140,6 +140,25 @@ struct AssistantTranscriptProjectionTests {
     #expect([laterActivity, earlyTrace].sorted(by: WorkspaceRunActivityRecord.precedes).map(\.id) == ["trace", "activity"])
   }
 
+  @Test("mixed native and legacy activity ordering is transitive")
+  func mixedActivityOrdering() {
+    let records = [
+      WorkspaceRunActivityRecord(id: "first-native", runID: "run", conversationID: "chat",
+        activity: AgentRunActivity(id: "first-native", kind: .tool, position: 0), createdAt: "3"),
+      WorkspaceRunActivityRecord(id: "second-native", runID: "run", conversationID: "chat",
+        activity: AgentRunActivity(id: "second-native", kind: .tool, position: 1), createdAt: "1"),
+      WorkspaceRunActivityRecord(id: "legacy", runID: "run", conversationID: "chat",
+        activity: AgentRunActivity(id: "legacy", kind: .thought), createdAt: "2")
+    ]
+    for a in records {
+      for b in records where WorkspaceRunActivityRecord.precedes(a, b) {
+        for c in records where WorkspaceRunActivityRecord.precedes(b, c) {
+          #expect(WorkspaceRunActivityRecord.precedes(a, c))
+        }
+      }
+    }
+  }
+
 
   @Test("final-only Gateway history preserves commentary without a full history sync", arguments: [false, true])
   func finalSegmentHistory(finalBoundary: Bool) throws {

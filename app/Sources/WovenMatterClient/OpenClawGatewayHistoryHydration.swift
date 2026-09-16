@@ -24,7 +24,8 @@ public enum OpenClawGatewayHistoryHydration {
       guard let value = response.objectValue?["message"],
             let full = OpenClawGatewayHistoryMessage(payload: value),
             !full.isTruncated, full.transcriptIdentity == preview.transcriptIdentity,
-            full.gatewayRunID == preview.gatewayRunID else { continue }
+            full.gatewayRunID == preview.gatewayRunID,
+            full.runID == preview.runID else { continue }
       messages[index] = value
     }
     row["messages"] = .array(messages)

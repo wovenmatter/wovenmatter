@@ -7,6 +7,33 @@ import WovenMatterClient
 /// Sanitized shapes from a recorded Gateway run: commentary, mirrored tool
 /// call/result, display-cap preview, then a complete native final record.
 struct OpenClawTranscriptRepairTests {
+  @Test func partiallySequencedHistoryUsesConsistentChronologicalOrder() throws {
+    let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let db = try WorkspaceDatabase(url: directory.appending(path: "test.sqlite"))
+    let conversation = try db.createLocalACPSession(runtimeKind: .openclaw, title: "Ordering", ownerDeviceID: UUID())
+    func commentary(_ id: String, seq: Int?, time: Int) throws -> GatewayJSONValue {
+      var row = try #require(record(id, run: "r", kind: "commentary", text: id, seq: seq ?? 0).objectValue)
+      var metadata = try #require(row["__openclaw"]?.objectValue)
+      if seq == nil { metadata.removeValue(forKey: "seq") }
+      row["__openclaw"] = .object(metadata)
+      row["timestamp"] = .number(1_700_000_000_000 + Double(time))
+      return .object(row)
+    }
+    let values = try [commentary("A", seq: 1, time: 3), commentary("B", seq: 2, time: 1),
+      commentary("C", seq: nil, time: 2), record("final", run: "r", kind: "assistant", text: "Answer", seq: 4)]
+    try db.synchronizeOpenClawHistory(conversationID: conversation,
+      history: OpenClawGatewayHistory(payload: .object(["messages": .array(values)])))
+    let page = try db.conversationHistoryPage(id: conversation, limit: 20)
+    let reply = try #require(page.messages.first)
+    #expect(reply.content == "BCAAnswer")
+    let projection = AssistantTranscriptProjection(messageID: reply.id, content: reply.content,
+      activities: page.activities.map(\.activity))
+    #expect(projection.body == "Answer")
+    #expect(projection.commentary.map(\.content) == ["B", "C", "A"])
+  }
+
   private func record(_ id: String, run: String, kind: String, text: String = "", truncated: Bool = false, seq: Int) -> GatewayJSONValue {
     var metadata: [String: GatewayJSONValue] = [
       "id": .string(id), "runId": .string(run), "seq": .number(Double(seq)),
@@ -39,6 +66,15 @@ struct OpenClawTranscriptRepairTests {
       .object(["message": record("different", run: "r", kind: "assistant", text: "wrong", seq: 44)])
     }
     #expect(try OpenClawGatewayHistory(payload: wrong).messages.first?.isTruncated == true)
+    var differentInput = try #require(full.objectValue)
+    var metadata = try #require(differentInput["__openclaw"]?.objectValue)
+    metadata["idempotencyKey"] = .string("another-input:assistant")
+    differentInput["__openclaw"] = .object(metadata)
+    let mismatchedInput = GatewayJSONValue.object(differentInput)
+    let wrongInput = try await OpenClawGatewayHistoryHydration.hydrate(payload) { _ in
+      .object(["message": mismatchedInput])
+    }
+    #expect(try OpenClawGatewayHistory(payload: wrongInput).messages.first?.isTruncated == true)
   }
 
   @Test func completeResponseSurvivesPreviewAndHistoryReopen() throws {
