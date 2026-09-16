@@ -11,14 +11,8 @@ struct SettingsGeneralView: View {
     @Environment(\.dashboardTheme) private var theme
     @AppStorage(DashboardTheme.storageKey) private var storedTheme = DashboardTheme.green.rawValue
     @AppStorage(DashboardSidebarStyle.storageKey) private var storedSidebarStyle = DashboardSidebarStyle.defaultStyle.rawValue
-    @AppStorage(DashboardCodexLogoStyle.storageKey) private var storedCodexLogoStyle =
-        DashboardCodexLogoStyle.defaultStyle.rawValue
     @State private var releaseUpdateState: ReleaseUpdateState = .idle
     private let releaseUpdateInstaller = WovenMatterReleaseUpdateInstaller()
-
-    private var codexLogoStyle: DashboardCodexLogoStyle {
-        DashboardCodexLogoStyle(rawValue: storedCodexLogoStyle) ?? .defaultStyle
-    }
 
     private var sidebarStyleBinding: Binding<DashboardSidebarStyle> {
         Binding(
@@ -39,7 +33,6 @@ struct SettingsGeneralView: View {
             appearanceCard
             releaseUpdateCard
             conversationTitlesCard
-            supportedHarnessesCard
         }
         .onChange(of: storedTheme) { _, _ in
             model.persistMacSurfaceProfileFromUserDefaults()
@@ -276,63 +269,6 @@ struct SettingsGeneralView: View {
                 }
             }
         }
-    }
-
-    private var supportedHarnessesCard: some View {
-        SettingsCard(
-            title: "Supported harnesses"
-        ) {
-            LazyVGrid(
-                columns: [GridItem(.adaptive(minimum: 112), spacing: 10)],
-                alignment: .leading,
-                spacing: 10
-            ) {
-                ForEach(DashboardHarnessLogo.displayCases, id: \.self) { harness in
-                    if harness == .codex {
-                        Button {
-                            storedCodexLogoStyle = codexLogoStyle.next.rawValue
-                        } label: {
-                            supportedHarnessTile(harness, showsBackground: false)
-                                .overlay(alignment: .topTrailing) {
-                                    Image(systemName: "arrow.triangle.2.circlepath")
-                                        .font(.system(size: 10, weight: .semibold))
-                                        .foregroundStyle(DashboardPalette.mutedForeground)
-                                        .padding(10)
-                                        .accessibilityHidden(true)
-                                }
-                        }
-                        .buttonStyle(SettingsThemeChoiceButtonStyle(isSelected: false))
-                        .help("Switch Codex to the \(codexLogoStyle.next.displayName) logo")
-                        .accessibilityLabel("Codex harness logo")
-                        .accessibilityValue(codexLogoStyle.displayName)
-                        .accessibilityHint("Switches to the \(codexLogoStyle.next.displayName) logo")
-                    } else {
-                        supportedHarnessTile(harness)
-                    }
-                }
-            }
-        }
-    }
-
-    private func supportedHarnessTile(
-        _ harness: DashboardHarnessLogo,
-        showsBackground: Bool = true
-    ) -> some View {
-        VStack(spacing: 9) {
-            DashboardHarnessLogoIcon(logo: harness, size: 34)
-                .frame(height: 38)
-
-            Text(harness.displayName)
-                .font(.system(size: 12.5, weight: .medium))
-                .lineLimit(1)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 13)
-        .padding(.horizontal, 8)
-        .background(showsBackground ? theme.palette.themeWhisper : .clear)
-        .clipShape(DashboardShapes.card)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(harness.displayName)
     }
 
 }
