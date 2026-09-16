@@ -22,11 +22,6 @@ struct SettingsHermesView: View {
     var body: some View {
         SettingsPage(title: "Hermes",
             reservesRailControlSpace: reservesRailControlSpace, onBack: onBack) {
-            SettingsHarnessRuntimeMaintenanceView(
-                model: model,
-                runtimeKind: .hermes,
-                workspaceID: workspaceID
-            )
             if !isWorkspaceScoped || workspaceID == nil {
                 SettingsCard(title: "Local agent workspace") {
                     if agents.isEmpty { SettingsEmpty("No Hermes agents discovered.") }
@@ -37,15 +32,24 @@ struct SettingsHermesView: View {
                                 VStack(alignment: .leading, spacing: 3) {
                                     Text(agent.displayName).font(.system(size: 13, weight: .medium))
                                     Text("Local agent workspace").font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
+                                    Text(model.runtimeInventories[.hermes]?.summary ?? "Checking installed components…")
+                                        .font(.system(size: 11))
+                                        .foregroundStyle(DashboardPalette.mutedForeground)
                                 }.frame(maxWidth: .infinity, alignment: .leading)
                                 let linked = model.isHermesGatewayLinked(agentID: agent.id)
                                 let ready = linked && !checking && model.hermesGatewayConnections[agent.id] != nil
                                 SettingsPill(checking && linked ? "Checking…" : ready ? "Ready" : "Not connected",
                                     tone: ready ? .neutral : .warning)
+                                SettingsLocalRuntimeUpdateButton(model: model, runtimeKind: .hermes)
                                 Button("Settings") { onOpenAgent(agent.id) }.buttonStyle(SettingsQuietButtonStyle())
                             }
                         }
                     }
+                    SettingsRuntimeMaintenanceErrorView(
+                        model: model,
+                        runtimeKind: .hermes,
+                        workspaceID: nil
+                    )
                 }
             }
             if !isWorkspaceScoped || workspaceID != nil {
@@ -92,8 +96,16 @@ struct SettingsHermesView: View {
                             Text(model.remoteWorkspaceAgents.first { $0.runtimeKind == .hermes && $0.runtimeDeviceID == configuration.id }?.displayName ?? found.displayName)
                                 .font(.system(size: 13, weight: .medium))
                             Text(configuration.name).font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
+                            Text(remoteRuntimeDetail(configuration))
+                                .font(.system(size: 11))
+                                .foregroundStyle(DashboardPalette.mutedForeground)
                         }.frame(maxWidth: .infinity, alignment: .leading)
                         SettingsPill(model.remoteHermesConnections[configuration.id] == nil ? "Not connected" : "Ready", tone: .neutral)
+                        SettingsRemoteRuntimeUpdateButton(
+                            model: model.remoteWorkspaces,
+                            harness: found,
+                            configuration: configuration
+                        )
                     }
                     Button("Connect Gateway") {
                         Task {
@@ -106,11 +118,25 @@ struct SettingsHermesView: View {
                     }.buttonStyle(SettingsQuietButtonStyle())
                     SettingsNote("Stopping Hermes pauses scheduled jobs until you reconnect its Gateway.")
                 } else { SettingsEmpty("No Hermes agents discovered.") }
+                SettingsRuntimeMaintenanceErrorView(
+                    model: model,
+                    runtimeKind: .hermes,
+                    workspaceID: configuration.id
+                )
                 Button("Scan workspace") { model.remoteWorkspaces.refresh(configuration) }
                     .buttonStyle(SettingsQuietButtonStyle())
             }
             .disabled(model.remoteWorkspaces.busyWorkspaceIDs.contains(configuration.id))
         }
+    }
+
+    private func remoteRuntimeDetail(_ configuration: RemoteWorkspaceConfiguration) -> String {
+        guard let runtime = model.remoteWorkspaces.runtimeMaintenance[configuration.id]?.first(where: { $0.id == .hermes }) else {
+            return "Runtime inventory unavailable."
+        }
+        return runtime.components.map {
+            "\($0.displayName) \($0.installed ? $0.installedVersion ?? "version unavailable" : "missing")"
+        }.joined(separator: " · ")
     }
 }
 

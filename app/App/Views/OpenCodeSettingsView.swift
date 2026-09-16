@@ -134,16 +134,18 @@ struct SettingsOpenCodeView: View {
     var body: some View {
         SettingsPage(title: "OpenCode",
             reservesRailControlSpace: reservesRailControlSpace, onBack: onBack) {
-            SettingsHarnessRuntimeMaintenanceView(
-                model: model,
-                runtimeKind: .opencode,
-                workspaceID: workspaceID
-            )
             if !isWorkspaceScoped || workspaceID == nil {
                 SettingsCard(title: "Local agent workspace") {
                     if let instance = model.openCode, instance.isInstalled {
                         agentRow(instance, workspaceID: nil)
-                    } else { SettingsEmpty("No OpenCode agents discovered.") }
+                    } else {
+                        localRuntimeRow
+                    }
+                    SettingsRuntimeMaintenanceErrorView(
+                        model: model,
+                        runtimeKind: .opencode,
+                        workspaceID: nil
+                    )
                 }
             }
             if !isWorkspaceScoped || workspaceID != nil {
@@ -155,7 +157,14 @@ struct SettingsOpenCodeView: View {
                             Text(configuration.hostName).font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
                             if let instance = model.remoteOpenCodes[configuration.id], instance.isInstalled {
                                 agentRow(instance, workspaceID: configuration.id)
+                            } else if let harness = model.remoteWorkspaces.currentHarnesses(for: configuration).first(where: { $0.id == .opencode }) {
+                                remoteRuntimeRow(harness, configuration: configuration)
                             } else { SettingsEmpty("No OpenCode agents discovered.") }
+                            SettingsRuntimeMaintenanceErrorView(
+                                model: model,
+                                runtimeKind: .opencode,
+                                workspaceID: configuration.id
+                            )
                             Button("Scan workspace") { model.remoteWorkspaces.refresh(configuration) }
                                 .buttonStyle(SettingsQuietButtonStyle())
                                 .disabled(model.remoteWorkspaces.busyWorkspaceIDs.contains(configuration.id))
@@ -182,11 +191,90 @@ struct SettingsOpenCodeView: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(agent?.displayName ?? "OpenCode").font(.system(size: 13, weight: .medium))
                     Text(instance.workspaceName).font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
+                    Text(runtimeDetail(workspaceID: workspaceID))
+                        .font(.system(size: 11))
+                        .foregroundStyle(DashboardPalette.mutedForeground)
                 }.frame(maxWidth: .infinity, alignment: .leading)
                 SettingsPill(instance.isReady ? "Ready" : "Not connected", tone: instance.isReady ? .neutral : .warning)
+                updateButton(workspaceID: workspaceID)
                 Button("Settings") { onOpenAgent(workspaceID) }.buttonStyle(SettingsQuietButtonStyle())
             }
         }
+    }
+
+    private var localRuntimeRow: some View {
+        SettingsInset {
+            HStack(spacing: 12) {
+                DashboardHarnessLogoIcon(logo: .openCode, size: 20).frame(width: 28, height: 28)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("OpenCode").font(.system(size: 13, weight: .medium))
+                    Text(model.runtimeInventories[.opencode]?.summary ?? "Checking installed components…")
+                        .font(.system(size: 11))
+                        .foregroundStyle(DashboardPalette.mutedForeground)
+                }.frame(maxWidth: .infinity, alignment: .leading)
+                SettingsPill(localRuntimeStatus, tone: .warning)
+                SettingsLocalRuntimeUpdateButton(model: model, runtimeKind: .opencode)
+            }
+        }
+    }
+
+    private func remoteRuntimeRow(
+        _ harness: RemoteHarnessStatus,
+        configuration: RemoteWorkspaceConfiguration
+    ) -> some View {
+        SettingsInset {
+            HStack(spacing: 12) {
+                DashboardHarnessLogoIcon(logo: .openCode, size: 20).frame(width: 28, height: 28)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(harness.displayName).font(.system(size: 13, weight: .medium))
+                    Text(runtimeDetail(workspaceID: configuration.id))
+                        .font(.system(size: 11))
+                        .foregroundStyle(DashboardPalette.mutedForeground)
+                }.frame(maxWidth: .infinity, alignment: .leading)
+                SettingsPill(remoteRuntimeInstalled(configuration.id) ? "Not connected" : "Not installed", tone: .warning)
+                SettingsRemoteRuntimeUpdateButton(
+                    model: model.remoteWorkspaces,
+                    harness: harness,
+                    configuration: configuration
+                )
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func updateButton(workspaceID: UUID?) -> some View {
+        if let workspaceID,
+           let configuration = model.remoteWorkspaces.configuration(id: workspaceID),
+           let harness = model.remoteWorkspaces.currentHarnesses(for: configuration).first(where: { $0.id == .opencode }) {
+            SettingsRemoteRuntimeUpdateButton(
+                model: model.remoteWorkspaces,
+                harness: harness,
+                configuration: configuration
+            )
+        } else if workspaceID == nil {
+            SettingsLocalRuntimeUpdateButton(model: model, runtimeKind: .opencode)
+        }
+    }
+
+    private func runtimeDetail(workspaceID: UUID?) -> String {
+        guard let workspaceID else {
+            return model.runtimeInventories[.opencode]?.summary ?? "Checking installed components…"
+        }
+        guard let runtime = model.remoteWorkspaces.runtimeMaintenance[workspaceID]?.first(where: { $0.id == .opencode }) else {
+            return "Runtime inventory unavailable."
+        }
+        return runtime.components.map {
+            "\($0.displayName) \($0.installed ? $0.installedVersion ?? "version unavailable" : "missing")"
+        }.joined(separator: " · ")
+    }
+
+    private var localRuntimeStatus: String {
+        guard let inventory = model.runtimeInventories[.opencode] else { return "Checking" }
+        return inventory.isInstalled ? "Not connected" : "Not installed"
+    }
+
+    private func remoteRuntimeInstalled(_ workspaceID: UUID) -> Bool {
+        model.remoteWorkspaces.runtimeMaintenance[workspaceID]?.first(where: { $0.id == .opencode })?.installed == true
     }
 }
 

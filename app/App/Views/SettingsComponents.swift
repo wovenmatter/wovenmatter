@@ -474,6 +474,30 @@ struct SettingsRemoteRuntimeUpdateButton: View {
     }
 }
 
+struct SettingsRuntimeMaintenanceErrorView: View {
+    @Bindable var model: ApplicationModel
+    let runtimeKind: AgentRuntimeKind
+    var workspaceID: UUID?
+
+    private var message: String? {
+        guard let workspaceID else { return model.runtimeFailureDetails[runtimeKind] }
+        let runtime = model.remoteWorkspaces.runtimeMaintenance[workspaceID]?.first {
+            $0.id == runtimeKind
+        }
+        return runtime?.operation?.error
+            ?? model.remoteWorkspaces.runtimeCheckErrors[workspaceID]?[runtimeKind]
+            ?? model.remoteWorkspaces.actionErrors[workspaceID]?[runtimeKind]
+            ?? model.remoteWorkspaces.runtimeErrors[workspaceID]
+    }
+
+    @ViewBuilder
+    var body: some View {
+        if let message, !message.isEmpty {
+            SettingsError(message)
+        }
+    }
+}
+
 struct SettingsField<Content: View>: View {
     let label: String
     @ViewBuilder var content: Content

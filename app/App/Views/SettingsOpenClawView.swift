@@ -1,4 +1,5 @@
 import SwiftUI
+import WovenMatterClient
 import WovenMatterCore
 
 struct SettingsOpenClawView: View {
@@ -22,11 +23,6 @@ struct SettingsOpenClawView: View {
             reservesRailControlSpace: reservesRailControlSpace,
             onBack: onBack
         ) {
-            SettingsHarnessRuntimeMaintenanceView(
-                model: model,
-                runtimeKind: .openclaw,
-                workspaceID: workspaceID
-            )
             if !isWorkspaceScoped || workspaceID == nil {
                 SettingsCard(
                     title: "Local agent workspace"
@@ -40,6 +36,11 @@ struct SettingsOpenClawView: View {
                             }
                         }
                     }
+                    SettingsRuntimeMaintenanceErrorView(
+                        model: model,
+                        runtimeKind: .openclaw,
+                        workspaceID: nil
+                    )
                 }
             }
             if !isWorkspaceScoped {
@@ -64,12 +65,22 @@ struct SettingsOpenClawView: View {
                             let agents = model.remoteWorkspaceAgents.filter { $0.runtimeKind == .openclaw && $0.runtimeDeviceID == configuration.id }
                             if !agents.isEmpty {
                                 ForEach(agents) { agent in agentRow(agent) }
-                            } else if model.remoteWorkspaces.currentHarnesses(for: configuration).contains(where: { $0.id == .openclaw && $0.installationStatus == "installed" }) {
+                            } else if let harness = model.remoteWorkspaces.currentHarnesses(for: configuration).first(where: { $0.id == .openclaw && $0.installationStatus == "installed" }) {
                                 SettingsInset {
                                     HStack {
-                                        Text("OpenClaw").font(.system(size: 13, weight: .medium))
+                                        VStack(alignment: .leading, spacing: 3) {
+                                            Text("OpenClaw").font(.system(size: 13, weight: .medium))
+                                            Text(remoteRuntimeDetail(configuration))
+                                                .font(.system(size: 11))
+                                                .foregroundStyle(DashboardPalette.mutedForeground)
+                                        }
                                         Spacer()
                                         SettingsPill("Not connected", tone: .warning)
+                                        SettingsRemoteRuntimeUpdateButton(
+                                            model: model.remoteWorkspaces,
+                                            harness: harness,
+                                            configuration: configuration
+                                        )
                                         Button("Settings") {
                                             Task {
                                                 do { onOpenAgent(try await model.remoteOpenClawAgentID(for: configuration)) }
@@ -79,6 +90,11 @@ struct SettingsOpenClawView: View {
                                     }
                                 }
                             } else { SettingsEmpty("No OpenClaw agents discovered.") }
+                            SettingsRuntimeMaintenanceErrorView(
+                                model: model,
+                                runtimeKind: .openclaw,
+                                workspaceID: configuration.id
+                            )
                             Button("Scan workspace") { model.remoteWorkspaces.refresh(configuration) }
                                 .buttonStyle(SettingsQuietButtonStyle())
                                 .disabled(model.remoteWorkspaces.busyWorkspaceIDs.contains(configuration.id))
@@ -108,6 +124,12 @@ struct SettingsOpenClawView: View {
                     Text(locationLabel(for: agent))
                         .font(.system(size: 11))
                         .foregroundStyle(DashboardPalette.mutedForeground)
+                    if let detail = runtimeDetail(for: agent) {
+                        Text(detail)
+                            .font(.system(size: 11))
+                            .foregroundStyle(DashboardPalette.mutedForeground)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -118,12 +140,51 @@ struct SettingsOpenClawView: View {
                         : .warning
                 )
 
+                runtimeUpdateButton(for: agent)
+
                 Button("Settings") {
                     onOpenAgent(agent.id)
                 }
                 .buttonStyle(SettingsQuietButtonStyle())
             }
         }
+    }
+
+    @ViewBuilder
+    private func runtimeUpdateButton(for agent: WorkspaceAgent) -> some View {
+        if model.remoteWorkspaceAgents.contains(where: { $0.id == agent.id }) {
+            if let workspaceID = agent.runtimeDeviceID,
+               let configuration = model.remoteWorkspaces.configuration(id: workspaceID),
+               let harness = model.remoteWorkspaces.currentHarnesses(for: configuration).first(where: { $0.id == .openclaw }) {
+                SettingsRemoteRuntimeUpdateButton(
+                    model: model.remoteWorkspaces,
+                    harness: harness,
+                    configuration: configuration
+                )
+            }
+        } else if model.localCLIAgents.contains(where: { $0.id == agent.id }) {
+            SettingsLocalRuntimeUpdateButton(model: model, runtimeKind: .openclaw)
+        }
+    }
+
+    private func runtimeDetail(for agent: WorkspaceAgent) -> String? {
+        if model.remoteWorkspaceAgents.contains(where: { $0.id == agent.id }) {
+            return agent.runtimeDeviceID.flatMap { model.remoteWorkspaces.configuration(id: $0) }
+                .map(remoteRuntimeDetail)
+        }
+        if model.localCLIAgents.contains(where: { $0.id == agent.id }) {
+            return model.runtimeInventories[.openclaw]?.summary ?? "Checking installed components…"
+        }
+        return nil
+    }
+
+    private func remoteRuntimeDetail(_ configuration: RemoteWorkspaceConfiguration) -> String {
+        guard let runtime = model.remoteWorkspaces.runtimeMaintenance[configuration.id]?.first(where: { $0.id == .openclaw }) else {
+            return "Runtime inventory unavailable."
+        }
+        return runtime.components.map {
+            "\($0.displayName) \($0.installed ? $0.installedVersion ?? "version unavailable" : "missing")"
+        }.joined(separator: " · ")
     }
 
     private func statusLabel(for agent: WorkspaceAgent) -> String {
