@@ -134,6 +134,11 @@ struct SettingsOpenCodeView: View {
     var body: some View {
         SettingsPage(title: "OpenCode",
             reservesRailControlSpace: reservesRailControlSpace, onBack: onBack) {
+            SettingsHarnessRuntimeMaintenanceView(
+                model: model,
+                runtimeKind: .opencode,
+                workspaceID: workspaceID
+            )
             if !isWorkspaceScoped || workspaceID == nil {
                 SettingsCard(title: "Local agent workspace") {
                     if let instance = model.openCode, instance.isInstalled {

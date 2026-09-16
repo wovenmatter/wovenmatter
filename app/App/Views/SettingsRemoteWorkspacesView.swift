@@ -136,16 +136,39 @@ struct SettingsRemoteWorkspacesView: View {
         .confirmationDialog(
             "Confirm harness \(model.preparedHarnessAction?.action ?? "change")?",
             isPresented: Binding(
-                get: { model.preparedHarnessAction != nil },
-                set: { if !$0 { model.cancelPreparedHarnessAction() } }
+                get: { model.preparedHarnessAction?.action != nil && model.preparedHarnessAction?.action != "update" },
+                set: {
+                    if !$0, let prepared = model.preparedHarnessAction,
+                       prepared.action != "update" {
+                        model.cancelPreparedHarnessAction(
+                            workspaceID: prepared.configuration.id,
+                            harnessID: prepared.harness.id,
+                            action: prepared.action
+                        )
+                    }
+                }
             ),
             titleVisibility: .visible
         ) {
             Button("Confirm \(model.preparedHarnessAction?.action.capitalized ?? "Change")") {
-                model.confirmPreparedHarnessAction()
+                if let prepared = model.preparedHarnessAction,
+                   prepared.action != "update" {
+                    model.confirmPreparedHarnessAction(
+                        workspaceID: prepared.configuration.id,
+                        harnessID: prepared.harness.id,
+                        action: prepared.action
+                    )
+                }
             }
             Button("Cancel", role: .cancel) {
-                model.cancelPreparedHarnessAction()
+                if let prepared = model.preparedHarnessAction,
+                   prepared.action != "update" {
+                    model.cancelPreparedHarnessAction(
+                        workspaceID: prepared.configuration.id,
+                        harnessID: prepared.harness.id,
+                        action: prepared.action
+                    )
+                }
             }
         } message: {
             if let prepared = model.preparedHarnessAction {
@@ -525,7 +548,6 @@ struct SettingsRemoteWorkspacesView: View {
         let checking = model.checkingRuntimeIDs[workspace.id]?.contains(harness.id) == true
         let running = runtime?.operation?.status == "running"
         let unavailable = model.isRuntimeInventoryUnavailable(harness.id, configuration: workspace)
-        let checkUnavailable = unavailable || model.runtimeCheckErrors[workspace.id]?[harness.id] != nil || runtime?.versionCheckAvailable == false
         let busy = model.busyWorkspaceIDs.contains(workspace.id) || running || checking
         VStack(alignment: .trailing, spacing: 8) {
             HStack(spacing: 8) {
@@ -534,17 +556,11 @@ struct SettingsRemoteWorkspacesView: View {
                 }
                 .buttonStyle(SettingsQuietButtonStyle())
                 .accessibilityLabel("Open \(harness.displayName) settings")
-                Button(checkUnavailable && !checking && !running ? "Retry check" : updateButtonTitle(runtime, checking: checking)) {
-                    if let runtime, runtime.installed,
-                       runtime.updateAvailable || (runtime.failureCount > 0 && runtime.operation?.action == "update"),
-                       !checkUnavailable {
-                        model.prepareHarnessAction("update", harness: harness, configuration: workspace)
-                    } else {
-                        model.checkRuntimeUpdates(harness.id, configuration: workspace)
-                    }
-                }
-                .buttonStyle(SettingsQuietButtonStyle())
-                .disabled(busy)
+                SettingsRemoteRuntimeUpdateButton(
+                    model: model,
+                    harness: harness,
+                    configuration: workspace
+                )
                 if let runtime {
                     Button(runtime.visible ? "Hide" : "Show") {
                         model.setRuntimePreferences(runtime, configuration: workspace, visible: !runtime.visible)
@@ -569,16 +585,6 @@ struct SettingsRemoteWorkspacesView: View {
                 harnessButtons(harness, workspace: workspace).disabled(busy || unavailable)
             }
         }
-    }
-
-    private func updateButtonTitle(_ runtime: RemoteRuntimeMaintenance?, checking: Bool) -> String {
-        if checking { return "Checking…" }
-        if runtime?.operation?.status == "running", runtime?.operation?.action == "update" { return "Updating…" }
-        if let runtime, runtime.installed {
-            if runtime.failureCount > 0 && runtime.operation?.action == "update" { return "Retry update" }
-            if runtime.updateAvailable { return "Update" }
-        }
-        return "Check for updates"
     }
 
     private func runtimeInventory(_ runtime: RemoteRuntimeMaintenance, workspace: RemoteWorkspaceConfiguration) -> some View {

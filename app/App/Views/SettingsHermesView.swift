@@ -22,6 +22,11 @@ struct SettingsHermesView: View {
     var body: some View {
         SettingsPage(title: "Hermes",
             reservesRailControlSpace: reservesRailControlSpace, onBack: onBack) {
+            SettingsHarnessRuntimeMaintenanceView(
+                model: model,
+                runtimeKind: .hermes,
+                workspaceID: workspaceID
+            )
             if !isWorkspaceScoped || workspaceID == nil {
                 SettingsCard(title: "Local agent workspace") {
                     if agents.isEmpty { SettingsEmpty("No Hermes agents discovered.") }

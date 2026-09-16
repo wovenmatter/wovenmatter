@@ -22,6 +22,11 @@ struct SettingsOpenClawView: View {
             reservesRailControlSpace: reservesRailControlSpace,
             onBack: onBack
         ) {
+            SettingsHarnessRuntimeMaintenanceView(
+                model: model,
+                runtimeKind: .openclaw,
+                workspaceID: workspaceID
+            )
             if !isWorkspaceScoped || workspaceID == nil {
                 SettingsCard(
                     title: "Local agent workspace"
