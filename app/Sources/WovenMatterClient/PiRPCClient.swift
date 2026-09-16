@@ -489,15 +489,35 @@ public actor PiRPCClient {
                 id: id
             )
         }
-        let modelOptions = array(dictionary(models["data"])?["models"])?.compactMap { value -> String? in
-            guard let model = value as? [String: Any], let id = string(model["id"]) else {
-                return nil
-            }
-            return PiRPCSupport.modelReference(
-                provider: string(model["provider"]),
-                id: id
-            )
+        let availableModels = array(dictionary(models["data"])?["models"])?.compactMap {
+            $0 as? [String: Any]
         } ?? []
+        let modelOptions = availableModels.compactMap { model -> String? in
+            guard let id = string(model["id"]) else { return nil }
+            return PiRPCSupport.modelReference(provider: string(model["provider"]), id: id)
+        }
+        let suppliedNames = availableModels.compactMap { string($0["name"]) }
+        let duplicateNames = Set(suppliedNames.filter { name in
+            suppliedNames.lazy.filter { $0 == name }.prefix(2).count > 1
+        })
+        var modelOptionMetadata: [String: SessionOptionMetadata] = [:]
+        for model in availableModels {
+            guard let id = string(model["id"]) else { continue }
+            let provider = string(model["provider"])
+            let reference = PiRPCSupport.modelReference(provider: provider, id: id)
+            var name = string(model["name"])
+            if let suppliedName = name, duplicateNames.contains(suppliedName),
+               let provider, !provider.isEmpty {
+                name = "\(suppliedName) (\(provider))"
+            }
+            let description = string(model["description"])
+            if name != nil || description != nil {
+                modelOptionMetadata[reference] = SessionOptionMetadata(
+                    name: name,
+                    description: description
+                )
+            }
+        }
         let thinkingLevel = string(data?["thinkingLevel"])
         let thinkingOptions = array(dictionary(thinking["data"])?["levels"])?.compactMap {
             $0 as? String
@@ -518,7 +538,8 @@ public actor PiRPCClient {
             thinking: thinkingLevel,
             modelOptions: modelOptions,
             thinkingOptions: thinkingOptions,
-            slashCommands: slashCommands
+            slashCommands: slashCommands,
+            modelOptionMetadata: modelOptionMetadata
         )
         if sessionID == nil {
             throw PiRPCClientError.invalidResponse("missing session id")

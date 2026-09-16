@@ -31,8 +31,8 @@ struct ACPHarnessStreamingReviewTests {
 
   @Test(arguments: [AgentRuntimeKind.codex, .claudeCode, .grokBuild, .cursor])
   func modelAndThinkingSelectionFollowsAdvertisedOptions(kind: AgentRuntimeKind) async throws {
-    let withEffort = #"{"configOptions":[{"id":"model","category":"model","currentValue":"with-effort","options":[{"value":"with-effort"},{"value":"no-effort"}]},{"id":"effort","category":"thought_level","currentValue":"low","options":[{"value":"low"},{"value":"high"}]}]}"#
-    let withoutEffort = #"{"configOptions":[{"id":"model","category":"model","currentValue":"no-effort","options":[{"value":"with-effort"},{"value":"no-effort"}]}]}"#
+    let withEffort = #"{"configOptions":[{"id":"model","category":"model","currentValue":"with-effort","options":[{"value":"with-effort","name":"Same supplied label"},{"value":"no-effort","name":"Same supplied label"}]},{"id":"effort","category":"thought_level","currentValue":"low","options":[{"value":"low","name":"Low effort"},{"value":"high","name":"High effort"}]}]}"#
+    let withoutEffort = #"{"configOptions":[{"id":"model","category":"model","currentValue":"no-effort","options":[{"value":"with-effort","name":"Same supplied label"},{"value":"no-effort","name":"Same supplied label"}]}]}"#
     let highEffort = withEffort.replacingOccurrences(of: #""currentValue":"low""#, with: #""currentValue":"high""#)
     let fixture = try ACPHarnessFixture(kind: kind, initialize: #"{"protocolVersion":2}"#,
       session: #"{"sessionId":"selection","configOptions":[]}"#,
@@ -51,6 +51,8 @@ struct ACPHarnessStreamingReviewTests {
     let noEffort = try await client.setSessionConfiguration(model: "no-effort")
     #expect(noEffort.model == "no-effort")
     #expect(noEffort.thinking == nil && noEffort.thinkingOptions.isEmpty)
+    #expect(noEffort.thinkingOptionMetadata.isEmpty)
+    #expect(noEffort.modelOptionMetadata["no-effort"]?.name == "Same supplied label")
     do {
       _ = try await client.setSessionConfiguration(thinking: "high")
       Issue.record("A removed thinking option remained writable")
@@ -58,12 +60,37 @@ struct ACPHarnessStreamingReviewTests {
     let restored = try await client.setSessionConfiguration(model: "with-effort", thinking: "high")
     #expect(restored.model == "with-effort" && restored.thinking == "high")
     #expect(restored.thinkingOptions == ["low", "high"])
+    #expect(restored.thinkingOptionMetadata["high"]?.name == "High effort")
+    #expect(restored.modelOptionMetadata.keys.sorted() == ["no-effort", "with-effort"])
     await client.shutdown()
     let log = try fixture.log()
     // Verified against Grok 1.0.24's executable: unlike its installed docs,
     // the wire schema uses a plain string, as do the other ACP adapters.
     #expect(log.contains(#""value":"high""#))
     #expect(!log.contains(#""value":{"#))
+  }
+
+  @Test func claudeSuppliedNamesDescribeAliasesWithoutChangingTheirIDs() async throws {
+    try await review(.claudeCode, initialize: #"{"protocolVersion":2}"#,
+      session: #"{"sessionId":"labels","configOptions":[{"id":"model","category":"model","currentValue":"opus[1m]","options":[{"group":"aliases","options":[{"value":"sonnet","name":"Sonnet","description":"Provider-selected Sonnet alias"},{"value":"opus[1m]","name":"Opus with 1M context","description":"Provider-selected Opus alias"}]},{"value":"claude-opus-4-8","name":"Claude Opus 4.8","description":"Pinned model"}]},{"id":"effort","category":"thought_level","currentValue":"high","options":[{"value":"high","name":"High","description":"More reasoning"}]}]}"#,
+      extras: [:], expected: []) { configuration in
+        #expect(configuration.model == "opus[1m]")
+        #expect(configuration.modelOptions == ["sonnet", "opus[1m]", "claude-opus-4-8"])
+        #expect(configuration.modelOptionMetadata["opus[1m]"]?.name == "Opus with 1M context")
+        #expect(configuration.modelOptionMetadata["sonnet"]?.description == "Provider-selected Sonnet alias")
+        #expect(configuration.modelOptionMetadata["claude-opus-4-8"]?.name == "Claude Opus 4.8")
+        #expect(configuration.thinkingOptionMetadata["high"]?.description == "More reasoning")
+        #expect(configuration.selecting(model: "sonnet").modelOptionMetadata == configuration.modelOptionMetadata)
+      }
+  }
+
+  @Test func oldMetadataDecodesAndCurrentThinkingDoesNotInventSupportedOptions() throws {
+    let old = Data(#"{"sessionKey":"old","model":"alias","thinking":"stale","thinkingLevels":["low"],"slashCommands":[]}"#.utf8)
+    let metadata = try JSONDecoder().decode(LocalACPSessionMetadata.self, from: old)
+    #expect(metadata.modelOptionMetadata == nil)
+    #expect(metadata.thinking == "stale")
+    #expect(metadata.selectableThinkingLevels == ["low"])
+    #expect(LocalACPSessionConfiguration(thinking: "stale", thinkingOptions: []).thinkingOptions.isEmpty)
   }
 
   @Test func cursorUsesAuthenticationAndNativeModelDiscovery() async throws {
@@ -73,12 +100,13 @@ struct ACPHarnessStreamingReviewTests {
       session: #"{"sessionId":"cursor-session"}"#,
       extras: [
         "authenticate": #"{}"#,
-        "cursor/list_available_models": #"{"models":[{"value":"cursor-model"}]}"#,
+        "cursor/list_available_models": #"{"models":[{"value":"cursor-model","name":"Cursor supplied name","description":"Native model"}]}"#,
       ],
       expected: ["authenticate", "cursor/list_available_models"]
     ) { configuration in
       #expect(configuration.model == nil)
       #expect(configuration.modelOptions == ["cursor-model"])
+      #expect(configuration.modelOptionMetadata["cursor-model"]?.name == "Cursor supplied name")
     }
   }
 

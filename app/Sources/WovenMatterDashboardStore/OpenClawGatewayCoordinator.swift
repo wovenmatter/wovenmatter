@@ -46,7 +46,6 @@ public actor OpenClawGatewayCoordinator {
     "view": .string("configured"),
     "preparedOnly": .bool(true),
   ])
-  private static let agentsListParameters: GatewayJSONValue = .object([:])
   private var cronSyncAgents: Set<UUID> = []
 
   typealias ConnectClient = @Sendable (OpenClawGatewayClient) async throws -> OpenClawGatewayCapabilities
@@ -1355,7 +1354,15 @@ public actor OpenClawGatewayCoordinator {
   public func sessionMetadata(conversationID: String) async throws -> LocalACPSessionMetadata {
     let descriptor = try database.openClawGatewaySession(conversationID: conversationID)
     let client = try await client(agentID: descriptor.agentID)
-    let preferences = try await client.sessionPreferences(key: descriptor.sessionKey)
+    let description = try await client.request(
+      "sessions.describe", params: .object(["key": .string(descriptor.sessionKey)])
+    )
+    let session = description.objectValue?["session"]?.objectValue ?? [:]
+    let rawModel = session["model"]?.stringValue
+    let provider = session["modelProvider"]?.stringValue
+    let selectedModel = rawModel.map { model in
+      model.contains("/") || provider?.isEmpty != false ? model : provider! + "/" + model
+    }
     let agentID = OpenClawGatewaySession.agentID(for: descriptor.sessionKey)
     var modelParams = Self.modelsListParameters.objectValue ?? [:]
     modelParams["sessionKey"] = .string(descriptor.sessionKey)
@@ -1363,21 +1370,55 @@ public actor OpenClawGatewayCoordinator {
     if let agentID { modelParams["agentId"] = .string(agentID) }
     let catalog = try await client.request("models.list", params: .object(modelParams))
     let choices = catalog.objectValue?["models"]?.arrayValue ?? []
-    let configuredModels = choices.compactMap(Self.modelReference)
-    let selected = choices.first { Self.modelReference($0) == preferences.model }?.objectValue
-    let modelThinking = selected?["thinkingLevels"]?.arrayValue?.compactMap {
-      $0.stringValue ?? $0.objectValue?["id"]?.stringValue
-    } ?? []
-    let thinking = modelThinking.isEmpty
-      ? await Self.thinkingLevels(client: client, agentID: agentID ?? "main") : modelThinking
+    var configuredModels: [String] = []
+    var seenModels: Set<String> = []
+    var modelOptionMetadata: [String: SessionOptionMetadata] = [:]
+    for choice in choices {
+      guard let reference = Self.modelReference(choice),
+            seenModels.insert(reference).inserted else { continue }
+      configuredModels.append(reference)
+      let object = choice.objectValue ?? [:]
+      let name = object["name"]?.stringValue ?? object["alias"]?.stringValue
+      let description = object["description"]?.stringValue
+      if name != nil || description != nil {
+        modelOptionMetadata[reference] = SessionOptionMetadata(
+          name: name, description: description
+        )
+      }
+    }
+    let selected = choices.first { Self.modelReference($0) == selectedModel }?.objectValue
+    // A present empty array is authoritative: the selected model has no selectable
+    // levels. Older/prepared catalog rows can omit the field, while the session row
+    // still carries the exact session-model projection.
+    let levelValues = selected?["thinkingLevels"] != nil
+      ? selected?["thinkingLevels"]?.arrayValue ?? []
+      : session["thinkingLevels"]?.arrayValue ?? []
+    var thinking: [String] = []
+    var seenThinking: Set<String> = []
+    var thinkingOptionMetadata: [String: SessionOptionMetadata] = [:]
+    for level in levelValues {
+      let object = level.objectValue
+      guard let id = level.stringValue ?? object?["id"]?.stringValue,
+            !id.isEmpty, seenThinking.insert(id).inserted else { continue }
+      thinking.append(id)
+      let name = object?["label"]?.stringValue ?? object?["name"]?.stringValue
+      let description = object?["description"]?.stringValue
+      if name != nil || description != nil {
+        thinkingOptionMetadata[id] = SessionOptionMetadata(
+          name: name, description: description
+        )
+      }
+    }
     let commands = await Self.slashCommands(client: client, agentID: agentID, sessionKey: descriptor.sessionKey)
     return LocalACPSessionMetadata(
       sessionKey: descriptor.sessionKey,
-      model: preferences.model,
-      thinking: preferences.thinkingLevel,
+      model: selectedModel,
+      thinking: session["thinkingLevel"]?.stringValue,
       modelOptions: configuredModels,
-      thinkingLevels: Array(Set(thinking)).sorted(),
-      slashCommands: commands
+      thinkingLevels: thinking,
+      slashCommands: commands,
+      modelOptionMetadata: modelOptionMetadata,
+      thinkingOptionMetadata: thinkingOptionMetadata
     )
   }
 
@@ -1484,31 +1525,6 @@ public actor OpenClawGatewayCoordinator {
       return id
     }
     return "\(provider)/\(id)"
-  }
-
-  private static func thinkingLevels(
-    from agentsResult: GatewayJSONValue,
-    agentID: String
-  ) -> [String] {
-    let agents = agentsResult.objectValue?["agents"]?.arrayValue ?? []
-    guard let agent = agents.first(where: {
-      $0.objectValue?["id"]?.stringValue == agentID
-    })?.objectValue else { return [] }
-    let levels = agent["thinkingLevels"]?.arrayValue?.compactMap {
-      $0.objectValue?["id"]?.stringValue
-    } ?? []
-    let options = agent["thinkingOptions"]?.arrayValue?.compactMap(\.stringValue) ?? []
-    return Array(Set(levels + options)).sorted()
-  }
-
-  private static func thinkingLevels(
-    client: OpenClawGatewayClient,
-    agentID: String
-  ) async -> [String] {
-    guard let agents = try? await client.request(
-      "agents.list", params: agentsListParameters, timeout: .seconds(5)
-    ) else { return [] }
-    return thinkingLevels(from: agents, agentID: agentID)
   }
 
   static func slashCommands(from result: GatewayJSONValue) -> [LocalACPSlashCommand] {

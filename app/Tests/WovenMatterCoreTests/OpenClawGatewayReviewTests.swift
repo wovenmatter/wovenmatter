@@ -287,14 +287,47 @@ struct OpenClawGatewayReviewTests {
     let fixture = try ReviewGatewayFixture()
     defer { fixture.remove() }
     let id = try fixture.database.importOpenClawGatewaySession(agentID: fixture.agentID, session: fixture.session)
-    _ = try await fixture.coordinator.sessionMetadata(conversationID: id)
+    let metadata = try await fixture.coordinator.sessionMetadata(conversationID: id)
     let params = try #require(await fixture.socket.modelParameters?.objectValue)
     #expect(params["sessionKey"] == .string("agent:eddie:shared"))
     #expect(params["agentId"] == .string("eddie"))
     #expect(params["preparedOnly"] == .bool(true))
     #expect(params["includeDetails"] == .bool(true))
     #expect(params["refresh"] == nil)
+    #expect(metadata.model == "xai/grok-4.6")
+    #expect(metadata.modelOptions == ["xai/grok-4.6", "anthropic/claude-sonnet-4-6"])
+    #expect(metadata.modelOptionMetadata?["xai/grok-4.6"] == SessionOptionMetadata(
+      name: "Grok 4.6", description: "Native model description"
+    ))
+    #expect(metadata.thinkingLevels == ["high", "low"])
+    #expect(metadata.thinkingOptionMetadata?["high"] == SessionOptionMetadata(
+      name: "High effort", description: "Thorough reasoning"
+    ))
+    #expect(metadata.thinkingOptionMetadata?["low"]?.name == "Low effort")
+    #expect(!(await fixture.socket.requestMethods).contains("agents.list"))
     await fixture.coordinator.shutdown()
+  }
+
+  @Test func modelDiscoveryFallsBackToSessionLevelsOnlyWhenCatalogFieldIsAbsent() async throws {
+    let absent = try ReviewGatewayFixture(modelThinkingLevels: nil)
+    defer { absent.remove() }
+    let absentID = try absent.database.importOpenClawGatewaySession(
+      agentID: absent.agentID, session: absent.session
+    )
+    let fallback = try await absent.coordinator.sessionMetadata(conversationID: absentID)
+    #expect(fallback.thinkingLevels == ["medium"])
+    #expect(fallback.thinkingOptionMetadata?["medium"]?.name == "Session medium")
+    await absent.coordinator.shutdown()
+
+    let empty = try ReviewGatewayFixture(modelThinkingLevels: .array([]))
+    defer { empty.remove() }
+    let emptyID = try empty.database.importOpenClawGatewaySession(
+      agentID: empty.agentID, session: empty.session
+    )
+    let authoritativeEmpty = try await empty.coordinator.sessionMetadata(conversationID: emptyID)
+    #expect(authoritativeEmpty.thinkingLevels == [])
+    #expect(authoritativeEmpty.thinkingOptionMetadata == [:])
+    await empty.coordinator.shutdown()
   }
 
   @Test func concurrentImportsKeepOneNativeSession() async throws {
@@ -321,7 +354,11 @@ private struct ReviewGatewayFixture {
   let session: OpenClawGatewaySession
   let socket: ReviewGatewaySocket
 
-  init(denyHistory: Bool = false) throws {
+  init(denyHistory: Bool = false, modelThinkingLevels: GatewayJSONValue? = .array([
+    .object(["id": .string("high"), "label": .string("High effort"),
+      "description": .string("Thorough reasoning")]),
+    .object(["id": .string("low"), "label": .string("Low effort")]),
+  ])) throws {
     directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     database = try WorkspaceDatabase(url: directory.appending(path: "review.sqlite"))
@@ -330,7 +367,9 @@ private struct ReviewGatewayFixture {
     let endpoint = OpenClawGatewayEndpoint(url: URL(string: "ws://127.0.0.1:1")!, authorization: .localService)
     try database.saveOpenClawGatewayLink(OpenClawGatewayLink(agentID: agentID, location: .localAgentWorkspace, endpoint: endpoint))
     session = try #require(OpenClawGatewaySession(payload: .object(["key": .string("agent:eddie:shared") ])))
-    socket = ReviewGatewaySocket(denyHistory: denyHistory)
+    socket = ReviewGatewaySocket(
+      denyHistory: denyHistory, modelThinkingLevels: modelThinkingLevels
+    )
     let socket = socket
     let client = OpenClawGatewayClient(endpoint: endpoint, credentialStore: ReviewCredentials(), socketFactory: { _ in socket })
     coordinator = OpenClawGatewayCoordinator(database: database, client: client, connectClient: { try await $0.connect() })
@@ -345,16 +384,19 @@ private struct ReviewCredentials: OpenClawGatewayCredentialStore {
 
 private actor ReviewGatewaySocket: OpenClawGatewaySocket {
   let denyHistory: Bool
+  let modelThinkingLevels: GatewayJSONValue?
   var modelParameters: GatewayJSONValue?
   var creationParameters: GatewayJSONValue?
   var historyCalls = 0
+  var requestMethods: [String] = []
   private var historyPayload: GatewayJSONValue?
   func setHistory(_ payload: GatewayJSONValue) { historyPayload = payload }
   private var frames: [Data] = []
   private var waiter: CheckedContinuation<Data, any Error>?
   private var closed = false
-  init(denyHistory: Bool) {
+  init(denyHistory: Bool, modelThinkingLevels: GatewayJSONValue?) {
     self.denyHistory = denyHistory
+    self.modelThinkingLevels = modelThinkingLevels
   }
   func start() async {
     try? push(.object(["type": .string("event"), "event": .string("connect.challenge"),
@@ -363,6 +405,7 @@ private actor ReviewGatewaySocket: OpenClawGatewaySocket {
   func send(_ data: Data) async throws {
     let row = try JSONDecoder().decode(GatewayJSONValue.self, from: data).objectValue ?? [:]
     let method = row["method"]?.stringValue ?? ""
+    requestMethods.append(method)
     let rejected = (method == "chat.history" && denyHistory)
       || (row["params"]?.objectValue?["includeApprovals"] == .bool(true))
     if method == "chat.history" { historyCalls += 1 }
@@ -371,6 +414,35 @@ private actor ReviewGatewaySocket: OpenClawGatewaySocket {
     let payload: GatewayJSONValue
     switch method {
     case "connect": payload = .object(["protocol": .number(4)])
+    case "sessions.describe": payload = .object(["session": .object([
+      "model": .string("grok-4.6"), "modelProvider": .string("xai"),
+      "thinkingLevel": .string("high"),
+      "thinkingLevels": .array([.object([
+        "id": .string("medium"), "label": .string("Session medium"),
+      ])]),
+    ])])
+    case "models.list":
+      var selected: [String: GatewayJSONValue] = [
+        "id": .string("grok-4.6"), "provider": .string("xai"),
+        "name": .string("Grok 4.6"),
+        "description": .string("Native model description"),
+        "available": .bool(true),
+      ]
+      if let modelThinkingLevels { selected["thinkingLevels"] = modelThinkingLevels }
+      payload = .object(["models": .array([
+      .object(selected),
+      .object([
+        "id": .string("claude-sonnet-4-6"), "provider": .string("anthropic"),
+        "name": .string("Claude Sonnet 4.6"), "available": .bool(true),
+        "thinkingLevels": .array([.object([
+          "id": .string("medium"), "label": .string("Medium effort"),
+        ])]),
+      ]),
+      .object([
+        "id": .string("hidden"), "provider": .string("xai"),
+        "name": .string("Unavailable"), "available": .bool(false),
+      ]),
+    ])])
     case "chat.history": payload = historyPayload ?? .object(["messages": .array([]), "sessionInfo": .object(["hasActiveRun": .bool(false)])])
     case "sessions.create": payload = .object(["key": row["params"]?.objectValue?["key"] ?? .null, "entry": .object(["spawnedCwd": row["params"]?.objectValue?["cwd"] ?? .null])])
     default: payload = .object(["messages": .array([]), "sessionInfo": .object(["hasActiveRun": .bool(false)])])

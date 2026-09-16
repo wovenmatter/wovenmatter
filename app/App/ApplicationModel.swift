@@ -797,7 +797,9 @@ final class ApplicationModel {
                 thinking: configuration.thinking,
                 modelOptions: configuration.modelOptions,
                 thinkingLevels: configuration.thinkingOptions,
-                slashCommands: configuration.slashCommands
+                slashCommands: configuration.slashCommands,
+                modelOptionMetadata: configuration.modelOptionMetadata,
+                thinkingOptionMetadata: configuration.thinkingOptionMetadata
             )
             return
         }
@@ -2662,7 +2664,9 @@ final class ApplicationModel {
                 thinking: configuration.thinking,
                 modelOptions: configuration.modelOptions,
                 thinkingLevels: configuration.thinkingOptions,
-                slashCommands: configuration.slashCommands
+                slashCommands: configuration.slashCommands,
+                modelOptionMetadata: configuration.modelOptionMetadata,
+                thinkingOptionMetadata: configuration.thinkingOptionMetadata
             )
             ensureConversationState(id: conversation.id).setError(nil)
         } catch {
@@ -2724,7 +2728,9 @@ final class ApplicationModel {
                         thinking: configuration.thinking,
                         modelOptions: configuration.modelOptions,
                         thinkingLevels: configuration.thinkingOptions,
-                        slashCommands: configuration.slashCommands
+                        slashCommands: configuration.slashCommands,
+                        modelOptionMetadata: configuration.modelOptionMetadata,
+                        thinkingOptionMetadata: configuration.thinkingOptionMetadata
                     )
             } catch {
                 ensureConversationState(id: conversation.id).setError(
