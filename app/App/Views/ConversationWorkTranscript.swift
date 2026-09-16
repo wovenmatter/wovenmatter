@@ -383,7 +383,8 @@ private struct ConversationActivityRow: View {
         case .tool: ConversationToolCategory(activity).systemImage
         case .plan: "list.bullet.clipboard"
         case .fileChange: "pencil.and.outline"
-        case .progress: "arrow.trianglehead.2.clockwise.rotate.90"
+        case .progress: activity.status?.lowercased() == "completed"
+            ? "flag.checkered" : "arrow.trianglehead.2.clockwise.rotate.90"
         case .activity: "waveform.path.ecg"
         }
     }
