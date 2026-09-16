@@ -364,6 +364,35 @@ struct SettingsHarnessRuntimeMaintenanceView: View {
     }
 }
 
+struct SettingsLocalRuntimeInventoryRow: View {
+    @Bindable var model: ApplicationModel
+    let runtimeKind: AgentRuntimeKind
+
+    private var status: String {
+        if model.checkingRuntimeKinds.contains(runtimeKind) { return "Checking" }
+        guard let inventory = model.runtimeInventories[runtimeKind] else { return "Checking" }
+        return inventory.isInstalled ? "Installed" : "Not installed"
+    }
+
+    var body: some View {
+        SettingsInset {
+            HStack(spacing: 12) {
+                DashboardHarnessLogoIcon(
+                    logo: DashboardHarnessLogo(runtimeKind: runtimeKind), size: 20
+                ).frame(width: 28, height: 28)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(runtimeKind.displayName).font(.system(size: 13, weight: .medium))
+                    Text(model.runtimeInventories[runtimeKind]?.summary ?? "Checking installed components…")
+                        .font(.system(size: 11))
+                        .foregroundStyle(DashboardPalette.mutedForeground)
+                }.frame(maxWidth: .infinity, alignment: .leading)
+                SettingsPill(status, tone: model.runtimeInventories[runtimeKind]?.isInstalled == true ? .neutral : .warning)
+                SettingsLocalRuntimeUpdateButton(model: model, runtimeKind: runtimeKind)
+            }
+        }
+    }
+}
+
 struct SettingsLocalRuntimeUpdateButton: View {
     @Bindable var model: ApplicationModel
     let runtimeKind: AgentRuntimeKind
@@ -378,7 +407,7 @@ struct SettingsLocalRuntimeUpdateButton: View {
         let retryCheck = model.checkedRuntimeKinds.contains(runtimeKind)
             && inventory?.latestUnavailable == true
         let label = updating ? "Updating…" : checking ? "Checking…"
-            : hasUpdate ? (retryUpdate ? "Retry Update" : "Update")
+            : hasUpdate ? (retryUpdate ? "Retry update" : "Update")
             : retryCheck ? "Retry check" : "Check for updates"
         Button(label) {
             if hasUpdate { model.updateRuntime(runtimeKind) }
@@ -461,7 +490,7 @@ struct SettingsRemoteRuntimeUpdateButton: View {
         if running, runtime?.operation?.action == "update" { return "Updating…" }
         if checkUnavailable && !running { return "Retry check" }
         if let runtime {
-            if runtime.failureCount > 0, runtime.operation?.action == "update" { return "Retry Update" }
+            if runtime.failureCount > 0, runtime.operation?.action == "update" { return "Retry update" }
             if runtime.updateAvailable { return "Update" }
         }
         return "Check for updates"

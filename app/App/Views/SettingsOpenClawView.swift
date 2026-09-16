@@ -28,7 +28,7 @@ struct SettingsOpenClawView: View {
                     title: "Local agent workspace"
                 ) {
                     if openClawAgents.isEmpty {
-                        SettingsEmpty("No OpenClaw agents discovered.")
+                        SettingsLocalRuntimeInventoryRow(model: model, runtimeKind: .openclaw)
                     } else {
                         VStack(spacing: 8) {
                             ForEach(openClawAgents) { agent in

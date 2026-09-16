@@ -24,7 +24,9 @@ struct SettingsHermesView: View {
             reservesRailControlSpace: reservesRailControlSpace, onBack: onBack) {
             if !isWorkspaceScoped || workspaceID == nil {
                 SettingsCard(title: "Local agent workspace") {
-                    if agents.isEmpty { SettingsEmpty("No Hermes agents discovered.") }
+                    if agents.isEmpty {
+                        SettingsLocalRuntimeInventoryRow(model: model, runtimeKind: .hermes)
+                    }
                     ForEach(agents) { agent in
                         SettingsInset {
                             HStack(spacing: 12) {
