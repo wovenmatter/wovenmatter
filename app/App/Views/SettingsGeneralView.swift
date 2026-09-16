@@ -270,7 +270,6 @@ struct SettingsGeneralView: View {
             }
         }
     }
-
 }
 
 private struct SettingsThemeChoiceButtonStyle: ButtonStyle {
