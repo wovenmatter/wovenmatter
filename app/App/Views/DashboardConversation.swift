@@ -467,7 +467,12 @@ struct DashboardCloudConversation: View {
 
     private var sessionIdentity: String? {
         guard let conversation else { return nil }
-        if conversation.localRuntimeKind != nil {
+        if let runtimeKind = conversation.localRuntimeKind {
+            // A restored chat can appear before CLI discovery finishes. Retry
+            // its metadata task when the launch context becomes available.
+            if [.codex, .claudeCode, .grokBuild, .cursor].contains(runtimeKind) {
+                return "local:\(conversation.id):\(model.isLocalACPSessionLaunchAvailable(conversation))"
+            }
             return "local:\(conversation.id)"
         }
         return nil
