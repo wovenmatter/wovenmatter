@@ -1,5 +1,21 @@
 import Foundation
 
+/// Provider-supplied presentation kept separate from the exact selection ID.
+public struct SessionOptionMetadata: Codable, Equatable, Sendable {
+    public let name: String?
+    public let description: String?
+
+    public init(name: String? = nil, description: String? = nil) {
+        self.name = Self.nonempty(name)
+        self.description = Self.nonempty(description)
+    }
+
+    private static func nonempty(_ value: String?) -> String? {
+        guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else { return nil }
+        return value
+    }
+}
+
 public struct LocalACPSessionMetadata: Codable, Equatable, Sendable {
     public let sessionKey: String
     public let model: String?
@@ -8,6 +24,8 @@ public struct LocalACPSessionMetadata: Codable, Equatable, Sendable {
     public let excludedModels: [String]?
     public let allowedModels: [String]?
     public let thinkingLevels: [String]?
+    public let modelOptionMetadata: [String: SessionOptionMetadata]?
+    public let thinkingOptionMetadata: [String: SessionOptionMetadata]?
     public let slashCommands: [LocalACPSlashCommand]
 
     public init(
@@ -18,7 +36,9 @@ public struct LocalACPSessionMetadata: Codable, Equatable, Sendable {
         allowedModels: [String]? = nil,
         excludedModels: [String]? = nil,
         thinkingLevels: [String]? = nil,
-        slashCommands: [LocalACPSlashCommand] = []
+        slashCommands: [LocalACPSlashCommand] = [],
+        modelOptionMetadata: [String: SessionOptionMetadata]? = nil,
+        thinkingOptionMetadata: [String: SessionOptionMetadata]? = nil
     ) {
         self.sessionKey = sessionKey
         self.model = model
@@ -28,6 +48,8 @@ public struct LocalACPSessionMetadata: Codable, Equatable, Sendable {
         self.excludedModels = excludedModels
         self.thinkingLevels = thinkingLevels
         self.slashCommands = slashCommands
+        self.modelOptionMetadata = modelOptionMetadata
+        self.thinkingOptionMetadata = thinkingOptionMetadata
     }
 
     public var selectableModels: [String] {
@@ -35,7 +57,7 @@ public struct LocalACPSessionMetadata: Codable, Equatable, Sendable {
     }
 
     public var selectableThinkingLevels: [String] {
-        Self.unique((thinkingLevels ?? []) + [thinking].compactMap { $0 })
+        Self.unique(thinkingLevels ?? [])
     }
 
     private static func unique(_ values: [String]) -> [String] {

@@ -89,6 +89,41 @@ struct PiRPCSettlementTests {
     #expect(tool.rawInputJSON == #"{"command":"pwd"}"#)
     await fixture.client.shutdown()
   }
+
+  @Test func configurationKeepsQualifiedModelsAndCurrentModelThinkingLevels() async throws {
+    let fixture = PiPipeFixture()
+    let server = Task { try await fixture.serve(settles: false, advertisesConfiguration: true) }
+    let initialized = try await fixture.client.initializeSession(
+      workingDirectory: URL(filePath: "/private/tmp"),
+      existingSessionID: nil,
+      title: nil,
+      systemPrompt: nil
+    )
+    #expect(initialized.configuration.model == "anthropic/shared-model")
+    #expect(initialized.configuration.modelOptions == [
+      "anthropic/shared-model",
+      "copilot/shared-model",
+      "custom/plain-model",
+    ])
+    #expect(initialized.configuration.modelOptionMetadata == [
+      "anthropic/shared-model": SessionOptionMetadata(
+        name: "Shared Model (anthropic)",
+        description: "Direct provider"
+      ),
+      "copilot/shared-model": SessionOptionMetadata(
+        name: "Shared Model (copilot)",
+        description: "Subscription route"
+      ),
+      "custom/plain-model": SessionOptionMetadata(
+        description: "No supplied display name"
+      ),
+    ])
+    #expect(initialized.configuration.thinking == "high")
+    #expect(initialized.configuration.thinkingOptions == ["off", "high", "max"])
+    #expect(initialized.configuration.thinkingOptionMetadata.isEmpty)
+    await fixture.client.shutdown()
+    try await server.value
+  }
 }
 
 private actor PiEventCollector {
@@ -112,13 +147,41 @@ private struct PiPipeFixture: Sendable {
       existingSessionID: nil, title: nil, systemPrompt: nil)
   }
   func serve(settles: Bool, accepts: Bool = true, hold: PiPromptGate? = nil,
-             streamLines: [String] = []) async throws {
+             streamLines: [String] = [], advertisesConfiguration: Bool = false) async throws {
     defer { try? events.fileHandleForWriting.close() }
     let cursor = FixtureCommandReader(handle: commands.fileHandleForReading)
     while let line = try await cursor.next() {
       let command = try JSONSerialization.jsonObject(with: line) as! [String: Any]
       let type = command["type"] as! String
-      let data: [String: Any] = type == "get_state" ? ["sessionId": "fixture-session"] : [:]
+      let data: [String: Any]
+      switch type {
+      case "get_state":
+        data = advertisesConfiguration ? [
+          "sessionId": "fixture-session",
+          "model": ["provider": "anthropic", "id": "shared-model"],
+          "thinkingLevel": "high",
+        ] : ["sessionId": "fixture-session"]
+      case "get_available_models" where advertisesConfiguration:
+        data = ["models": [
+          [
+            "provider": "anthropic", "id": "shared-model",
+            "name": "Shared Model", "description": "Direct provider",
+          ],
+          [
+            "provider": "copilot", "id": "shared-model",
+            "name": "Shared Model", "description": "Subscription route",
+          ],
+          [
+            "provider": "custom", "id": "plain-model",
+            "description": "No supplied display name",
+          ],
+        ]]
+      case "get_available_thinking_levels" where advertisesConfiguration:
+        // Pi returns only the levels supported by the currently selected model.
+        data = ["levels": ["off", "high", "max"]]
+      default:
+        data = [:]
+      }
       var response: [String: Any] = ["type": "response", "id": command["id"]!, "success": true, "data": data]
       if type == "prompt", !accepts { response["success"] = false; response["error"] = "fixture rejection" }
       var output = try JSONSerialization.data(withJSONObject: response)

@@ -14,13 +14,30 @@ public enum OpenCodeComposerMetadata {
         let key = modelKey(selected)
         let option = models.first { modelKey($0) == key }
         let variants = option?["variants"].array.compactMap { $0["id"].string } ?? []
+        var modelMetadata: [String: SessionOptionMetadata] = [:]
+        for model in models {
+            modelMetadata[modelKey(model)] = SessionOptionMetadata(
+                name: model["name"].string,
+                description: model["description"].string
+            )
+        }
+        var thinkingMetadata: [String: SessionOptionMetadata] = [:]
+        for variant in option?["variants"].array ?? [] {
+            guard let id = variant["id"].string else { continue }
+            thinkingMetadata[id] = SessionOptionMetadata(
+                name: variant["name"].string,
+                description: variant["description"].string
+            )
+        }
         return LocalACPSessionMetadata(sessionKey: session["id"].text,
             model: key.isEmpty ? nil : key,
             thinking: selected["variant"].string ?? (variants.isEmpty ? nil : "default"),
             modelOptions: models.map(modelKey),
             excludedModels: hiddenModels.sorted(),
             thinkingLevels: variants.isEmpty ? [] : ["default"] + variants,
-            slashCommands: slashCommands(commands))
+            slashCommands: slashCommands(commands),
+            modelOptionMetadata: modelMetadata,
+            thinkingOptionMetadata: thinkingMetadata)
     }
 
     public static func slashCommands(_ commands: [OpenCodeValue]) -> [LocalACPSlashCommand] {

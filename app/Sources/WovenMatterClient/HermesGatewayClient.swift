@@ -142,7 +142,10 @@ public actor HermesGatewayClient {
         let info = snapshot["info"]
         if !info["usage"].isNull { latestUsage = info["usage"] }
         configuration = LocalACPSessionConfiguration(model: info["model"].string, thinking: info["reasoning_effort"].string,
-            modelOptions: configuration.modelOptions, thinkingOptions: configuration.thinkingOptions, slashCommands: configuration.slashCommands)
+            modelOptions: configuration.modelOptions, thinkingOptions: configuration.thinkingOptions,
+            slashCommands: configuration.slashCommands,
+            modelOptionMetadata: configuration.modelOptionMetadata,
+            thinkingOptionMetadata: configuration.thinkingOptionMetadata)
     }
 
     public func sessionConfiguration() -> LocalACPSessionConfiguration { configuration }
@@ -157,7 +160,10 @@ public actor HermesGatewayClient {
             }
             configuration = LocalACPSessionConfiguration(model: key == "model" ? value : configuration.model,
                 thinking: key == "reasoning" ? value : configuration.thinking,
-                modelOptions: configuration.modelOptions, thinkingOptions: configuration.thinkingOptions, slashCommands: configuration.slashCommands)
+                modelOptions: configuration.modelOptions, thinkingOptions: configuration.thinkingOptions,
+                slashCommands: configuration.slashCommands,
+                modelOptionMetadata: configuration.modelOptionMetadata,
+                thinkingOptionMetadata: configuration.thinkingOptionMetadata)
         }
         try await refreshConfiguration()
         return configuration
@@ -167,22 +173,59 @@ public actor HermesGatewayClient {
         guard let rpc else { return }
         let reasoning = try await rpc.call("config.get", ["session_id": .string(sessionID), "key": "reasoning"])
         let options = try await rpc.call("model.options", ["session_id": .string(sessionID), "explicit_only": .bool(true)])
-        let models = options["providers"].array.flatMap { provider in
-            provider["models"].array.compactMap(\.string).map { model in
-                let providerID = provider["slug"].text
-                return providerID.isEmpty ? model : model + " --provider " + providerID
+        let catalog = try? await rpc.call("commands.catalog", ["session_id": .string(sessionID)])
+        configuration = Self.configuration(
+            options: options,
+            reasoning: reasoning,
+            slashCommands: catalog.map(HermesSlashCommands.catalog) ?? configuration.slashCommands
+        )
+    }
+
+    /// The Gateway accepts this native session vocabulary and normalizes it at
+    /// each provider transport. `model.options` deliberately omits narrower
+    /// wire effort sets because they under-report values Hermes can normalize.
+    static func configuration(
+        options: HermesValue,
+        reasoning: HermesValue,
+        slashCommands: [LocalACPSlashCommand] = []
+    ) -> LocalACPSessionConfiguration {
+        var models: [String] = []
+        var metadata: [String: SessionOptionMetadata] = [:]
+        for provider in options["providers"].array {
+            let providerID = provider["slug"].text
+            let providerName = provider["name"].string
+            for model in provider["models"].array.compactMap(\.string) {
+                let key = providerID.isEmpty ? model : model + " --provider " + providerID
+                models.append(key)
+                metadata[key] = SessionOptionMetadata(
+                    name: model,
+                    description: providerName
+                )
             }
         }
-        let currentModel = options["model"].string ?? configuration.model ?? ""
+        let currentModel = options["model"].string ?? ""
         let provider = options["provider"].text
-        let capabilities = options["providers"].array.first { $0["slug"].text == provider }?["capabilities"][currentModel] ?? .null
-        var efforts = ["minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
-        if capabilities["reasoning"] == .bool(false) { efforts = [] }
-        else if capabilities["can_disable_reasoning"] != .bool(false) { efforts.insert("none", at: 0) }
-        let catalog = try? await rpc.call("commands.catalog", ["session_id": .string(sessionID)])
-        configuration = LocalACPSessionConfiguration(model: provider.isEmpty ? currentModel : currentModel + " --provider " + provider,
-            thinking: reasoning["value"].string, modelOptions: models, thinkingOptions: efforts,
-            slashCommands: catalog.map(HermesSlashCommands.catalog) ?? configuration.slashCommands)
+        let selectedKey = provider.isEmpty ? currentModel : currentModel + " --provider " + provider
+        let capabilities = options["providers"].array.first {
+            $0["slug"].text == provider
+        }?["capabilities"][currentModel] ?? .null
+        let supportsReasoning = capabilities["reasoning"] != .bool(false)
+        let currentReasoning = supportsReasoning ? reasoning["value"].string : nil
+        var efforts: [String] = []
+        if supportsReasoning {
+            if capabilities["can_disable_reasoning"] != .bool(false) {
+                efforts.append("none")
+            }
+            efforts += ["minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
+        }
+        return LocalACPSessionConfiguration(
+            model: selectedKey.isEmpty ? nil : selectedKey,
+            thinking: currentReasoning,
+            modelOptions: models,
+            thinkingOptions: efforts,
+            slashCommands: slashCommands,
+            modelOptionMetadata: metadata
+        )
     }
 
     public func prompt(_ input: AgentMessageInput, onEvent: LocalACPClient.EventHandler?,

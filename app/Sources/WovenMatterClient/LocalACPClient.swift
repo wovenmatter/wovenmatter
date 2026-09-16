@@ -146,6 +146,8 @@ public struct LocalACPSessionConfiguration: Equatable, Sendable {
     public let modelOptions: [String]
     public let thinkingOptions: [String]
     public let slashCommands: [LocalACPSlashCommand]
+    public let modelOptionMetadata: [String: SessionOptionMetadata]
+    public let thinkingOptionMetadata: [String: SessionOptionMetadata]
 
     public static let empty = LocalACPSessionConfiguration()
 
@@ -154,15 +156,17 @@ public struct LocalACPSessionConfiguration: Equatable, Sendable {
         thinking: String? = nil,
         modelOptions: [String] = [],
         thinkingOptions: [String] = [],
-        slashCommands: [LocalACPSlashCommand] = []
+        slashCommands: [LocalACPSlashCommand] = [],
+        modelOptionMetadata: [String: SessionOptionMetadata] = [:],
+        thinkingOptionMetadata: [String: SessionOptionMetadata] = [:]
     ) {
         self.model = model
         self.thinking = thinking
         self.modelOptions = Self.unique(modelOptions + [model].compactMap { $0 })
-        self.thinkingOptions = Self.unique(
-            thinkingOptions + [thinking].compactMap { $0 }
-        )
+        self.thinkingOptions = Self.unique(thinkingOptions)
         self.slashCommands = slashCommands
+        self.modelOptionMetadata = modelOptionMetadata
+        self.thinkingOptionMetadata = thinkingOptionMetadata
     }
 
     public func selecting(
@@ -174,7 +178,9 @@ public struct LocalACPSessionConfiguration: Equatable, Sendable {
             thinking: thinking ?? self.thinking,
             modelOptions: modelOptions,
             thinkingOptions: thinkingOptions,
-            slashCommands: slashCommands
+            slashCommands: slashCommands,
+            modelOptionMetadata: modelOptionMetadata,
+            thinkingOptionMetadata: thinkingOptionMetadata
         )
     }
 
@@ -803,12 +809,15 @@ public actor LocalACPClient {
                 return trimmed?.isEmpty == false ? trimmed : nil
             } ?? []
             guard !models.isEmpty else { return }
+            let catalogMetadata = Self.modelMetadata(response?["models"]?.arrayValue ?? [], idKeys: ["value", "modelId"])
             configuration = LocalACPSessionConfiguration(
                 model: configuration.model,
                 thinking: configuration.thinking,
                 modelOptions: models,
                 thinkingOptions: configuration.thinkingOptions,
-                slashCommands: configuration.slashCommands
+                slashCommands: configuration.slashCommands,
+                modelOptionMetadata: catalogMetadata.merging(configuration.modelOptionMetadata) { _, session in session },
+                thinkingOptionMetadata: configuration.thinkingOptionMetadata
             )
         } catch {
             // session/new already advertised a catalog; keep that if the
@@ -1481,7 +1490,9 @@ public actor LocalACPClient {
                 thinking: configuration.thinking,
                 modelOptions: configuration.modelOptions,
                 thinkingOptions: configuration.thinkingOptions,
-                slashCommands: slashCommands
+                slashCommands: slashCommands,
+                modelOptionMetadata: configuration.modelOptionMetadata,
+                thinkingOptionMetadata: configuration.thinkingOptionMetadata
             )
         }
         if let configOptions = value["configOptions"]?.arrayValue {
@@ -1496,7 +1507,9 @@ public actor LocalACPClient {
                 thinking: parsed.thinking?.currentValue,
                 modelOptions: parsed.model?.options ?? (hadModelOption ? [] : configuration.modelOptions),
                 thinkingOptions: parsed.thinking?.options ?? [],
-                slashCommands: configuration.slashCommands
+                slashCommands: configuration.slashCommands,
+                modelOptionMetadata: parsed.model?.metadata ?? (hadModelOption ? [:] : configuration.modelOptionMetadata),
+                thinkingOptionMetadata: parsed.thinking?.metadata ?? [:]
             )
         }
 
@@ -1514,7 +1527,9 @@ public actor LocalACPClient {
                 thinking: configuration.thinking,
                 modelOptions: modelState.options,
                 thinkingOptions: configuration.thinkingOptions,
-                slashCommands: configuration.slashCommands
+                slashCommands: configuration.slashCommands,
+                modelOptionMetadata: modelState.metadata,
+                thinkingOptionMetadata: configuration.thinkingOptionMetadata
             )
         }
         if let grokConfiguration = Self.grokConfiguration(from: value) {
@@ -1526,7 +1541,9 @@ public actor LocalACPClient {
                 // independently advertised by standard `configOptions`.
                 modelOptions: configuration.modelOptions,
                 thinkingOptions: configuration.thinkingOptions,
-                slashCommands: configuration.slashCommands
+                slashCommands: configuration.slashCommands,
+                modelOptionMetadata: grokConfiguration.modelOptionMetadata.merging(configuration.modelOptionMetadata) { _, standard in standard },
+                thinkingOptionMetadata: configuration.thinkingOptionMetadata
             )
         }
     }
@@ -1535,6 +1552,7 @@ public actor LocalACPClient {
         let id: String
         let currentValue: String?
         let options: [String]
+        let metadata: [String: SessionOptionMetadata]
     }
 
     private static func configuration(
@@ -1553,7 +1571,8 @@ public actor LocalACPClient {
                 currentValue: option["currentValue"]?.stringValue,
                 options: configurationOptionValues(
                     option["options"]?.arrayValue ?? []
-                )
+                ),
+                metadata: configurationOptionMetadata(option["options"]?.arrayValue ?? [])
             )
             if id == "model" || category == "model" {
                 model = parsed
@@ -1578,16 +1597,39 @@ public actor LocalACPClient {
         }
     }
 
+    private static func configurationOptionMetadata(_ options: [ACPJSONValue]) -> [String: SessionOptionMetadata] {
+        var result: [String: SessionOptionMetadata] = [:]
+        for option in options {
+            if let id = option["value"]?.stringValue {
+                result[id] = SessionOptionMetadata(name: option["name"]?.stringValue,
+                    description: option["description"]?.stringValue)
+            } else {
+                result.merge(configurationOptionMetadata(option["options"]?.arrayValue ?? [])) { _, latest in latest }
+            }
+        }
+        return result
+    }
+
+    private static func modelMetadata(_ models: [ACPJSONValue], idKeys: [String]) -> [String: SessionOptionMetadata] {
+        var result: [String: SessionOptionMetadata] = [:]
+        for model in models {
+            guard let id = idKeys.compactMap({ model[$0]?.stringValue }).first else { continue }
+            result[id] = SessionOptionMetadata(name: model["name"]?.stringValue,
+                description: model["description"]?.stringValue)
+        }
+        return result
+    }
+
     private static func standardModelConfiguration(
         from value: ACPJSONValue
-    ) -> (model: String?, options: [String])? {
+    ) -> (model: String?, options: [String], metadata: [String: SessionOptionMetadata])? {
         guard let modelState = value["models"],
               let models = modelState["availableModels"]?.arrayValue else {
             return nil
         }
         let options = models.compactMap { $0["modelId"]?.stringValue }
         guard !options.isEmpty else { return nil }
-        return (modelState["currentModelId"]?.stringValue, options)
+        return (modelState["currentModelId"]?.stringValue, options, modelMetadata(models, idKeys: ["modelId"]))
     }
 
     private static func grokConfiguration(
@@ -1609,13 +1651,11 @@ public actor LocalACPClient {
         return LocalACPSessionConfiguration(
             model: currentModel,
             thinking: thinking,
-            // Grok exposes these values as read-only vendor metadata. Its ACP
-            // transport does not advertise config option IDs, so presenting
-            // the other values as selectable would promise a write contract
-            // that the runtime does not provide. Standard `configOptions`, if
-            // Grok adds them later, are captured independently above.
+            // Vendor state alone does not advertise writable options. Prefer
+            // standard configOptions when the adapter supplies that contract.
             modelOptions: [],
-            thinkingOptions: []
+            thinkingOptions: [],
+            modelOptionMetadata: modelMetadata(models, idKeys: ["modelId"])
         )
     }
 
