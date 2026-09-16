@@ -26,6 +26,10 @@ public actor HermesGatewayClient {
     private var recoveryInvalidated = false
     private var text = ""
     private var completedText = ""
+    private var reasoningPhase = 0
+    private var activeReasoningID: String?
+    private var lastReasoningID: String?
+    private var lastReasoningText = ""
     private var workingDirectory: URL?
     private var latestUsage: HermesValue = [:]
     private var usageBaseline: HermesValue = [:]
@@ -138,7 +142,10 @@ public actor HermesGatewayClient {
         let info = snapshot["info"]
         if !info["usage"].isNull { latestUsage = info["usage"] }
         configuration = LocalACPSessionConfiguration(model: info["model"].string, thinking: info["reasoning_effort"].string,
-            modelOptions: configuration.modelOptions, thinkingOptions: configuration.thinkingOptions, slashCommands: configuration.slashCommands)
+            modelOptions: configuration.modelOptions, thinkingOptions: configuration.thinkingOptions,
+            slashCommands: configuration.slashCommands,
+            modelOptionMetadata: configuration.modelOptionMetadata,
+            thinkingOptionMetadata: configuration.thinkingOptionMetadata)
     }
 
     public func sessionConfiguration() -> LocalACPSessionConfiguration { configuration }
@@ -153,7 +160,10 @@ public actor HermesGatewayClient {
             }
             configuration = LocalACPSessionConfiguration(model: key == "model" ? value : configuration.model,
                 thinking: key == "reasoning" ? value : configuration.thinking,
-                modelOptions: configuration.modelOptions, thinkingOptions: configuration.thinkingOptions, slashCommands: configuration.slashCommands)
+                modelOptions: configuration.modelOptions, thinkingOptions: configuration.thinkingOptions,
+                slashCommands: configuration.slashCommands,
+                modelOptionMetadata: configuration.modelOptionMetadata,
+                thinkingOptionMetadata: configuration.thinkingOptionMetadata)
         }
         try await refreshConfiguration()
         return configuration
@@ -163,22 +173,59 @@ public actor HermesGatewayClient {
         guard let rpc else { return }
         let reasoning = try await rpc.call("config.get", ["session_id": .string(sessionID), "key": "reasoning"])
         let options = try await rpc.call("model.options", ["session_id": .string(sessionID), "explicit_only": .bool(true)])
-        let models = options["providers"].array.flatMap { provider in
-            provider["models"].array.compactMap(\.string).map { model in
-                let providerID = provider["slug"].text
-                return providerID.isEmpty ? model : model + " --provider " + providerID
+        let catalog = try? await rpc.call("commands.catalog", ["session_id": .string(sessionID)])
+        configuration = Self.configuration(
+            options: options,
+            reasoning: reasoning,
+            slashCommands: catalog.map(HermesSlashCommands.catalog) ?? configuration.slashCommands
+        )
+    }
+
+    /// The Gateway accepts this native session vocabulary and normalizes it at
+    /// each provider transport. `model.options` deliberately omits narrower
+    /// wire effort sets because they under-report values Hermes can normalize.
+    static func configuration(
+        options: HermesValue,
+        reasoning: HermesValue,
+        slashCommands: [LocalACPSlashCommand] = []
+    ) -> LocalACPSessionConfiguration {
+        var models: [String] = []
+        var metadata: [String: SessionOptionMetadata] = [:]
+        for provider in options["providers"].array {
+            let providerID = provider["slug"].text
+            let providerName = provider["name"].string
+            for model in provider["models"].array.compactMap(\.string) {
+                let key = providerID.isEmpty ? model : model + " --provider " + providerID
+                models.append(key)
+                metadata[key] = SessionOptionMetadata(
+                    name: model,
+                    description: providerName
+                )
             }
         }
-        let currentModel = options["model"].string ?? configuration.model ?? ""
+        let currentModel = options["model"].string ?? ""
         let provider = options["provider"].text
-        let capabilities = options["providers"].array.first { $0["slug"].text == provider }?["capabilities"][currentModel] ?? .null
-        var efforts = ["minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
-        if capabilities["reasoning"] == .bool(false) { efforts = [] }
-        else if capabilities["can_disable_reasoning"] != .bool(false) { efforts.insert("none", at: 0) }
-        let catalog = try? await rpc.call("commands.catalog", ["session_id": .string(sessionID)])
-        configuration = LocalACPSessionConfiguration(model: provider.isEmpty ? currentModel : currentModel + " --provider " + provider,
-            thinking: reasoning["value"].string, modelOptions: models, thinkingOptions: efforts,
-            slashCommands: catalog.map(HermesSlashCommands.catalog) ?? configuration.slashCommands)
+        let selectedKey = provider.isEmpty ? currentModel : currentModel + " --provider " + provider
+        let capabilities = options["providers"].array.first {
+            $0["slug"].text == provider
+        }?["capabilities"][currentModel] ?? .null
+        let supportsReasoning = capabilities["reasoning"] != .bool(false)
+        let currentReasoning = supportsReasoning ? reasoning["value"].string : nil
+        var efforts: [String] = []
+        if supportsReasoning {
+            if capabilities["can_disable_reasoning"] != .bool(false) {
+                efforts.append("none")
+            }
+            efforts += ["minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
+        }
+        return LocalACPSessionConfiguration(
+            model: selectedKey.isEmpty ? nil : selectedKey,
+            thinking: currentReasoning,
+            modelOptions: models,
+            thinkingOptions: efforts,
+            slashCommands: slashCommands,
+            modelOptionMetadata: metadata
+        )
     }
 
     public func prompt(_ input: AgentMessageInput, onEvent: LocalACPClient.EventHandler?,
@@ -191,7 +238,8 @@ public actor HermesGatewayClient {
         }
         guard let rpc else { throw HermesGatewayError.message("Hermes is disconnected.") }
         self.onEvent = onEvent; self.onPermission = onPermission; self.onInteraction = onInteraction
-        busy = true; terminal = nil; text = ""; completedText = ""; stopped = false
+        busy = true; terminal = nil; text = ""; completedText = ""; stopped = false; activeReasoningID = nil
+        lastReasoningID = nil; lastReasoningText = ""
         usageBaseline = latestUsage
         defer { busy = false; self.onEvent = nil; self.onPermission = nil; self.onInteraction = nil }
         var content = input.transportText()
@@ -204,27 +252,27 @@ public actor HermesGatewayClient {
             let result = try await HermesSlashCommands.dispatch(input.text, sessionID: sessionID) { method, params in
                 try await rpc.call(method, params)
             }
+            if stopped { return .cancelled }
             switch result["type"].text {
             case "send", "skill":
                 guard let message = result["message"].string else {
                     throw HermesGatewayError.message("Hermes returned a command without its message.")
                 }
                 content = message
+                try await publishCommandFeedback(result)
+                if stopped { return .cancelled }
             case "prefill":
                 guard let message = result["message"].string else {
                     throw HermesGatewayError.message("Hermes returned a command without its draft.")
                 }
                 try await onEvent?(.composerPrefill(message))
-                if let notice = result["notice"].string, !notice.isEmpty {
-                    try await onEvent?(.assistantSnapshot(notice))
-                }
-                return .endTurn
+                try await publishCommandFeedback(result)
+                return stopped ? .cancelled : .endTurn
             case "", "exec", "plugin":
-                let output = [result["output"].string, result["warning"].string, result["notice"].string]
-                    .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "\n\n")
-                if !output.isEmpty { try await onEvent?(.assistantSnapshot(output)) }
+                try await publishCommandFeedback(result)
+                if stopped { return .cancelled }
                 try? await refreshConfiguration()
-                return .endTurn
+                return stopped ? .cancelled : .endTurn
             default:
                 throw HermesGatewayError.message("Hermes returned an unsupported command outcome.")
             }
@@ -283,6 +331,16 @@ public actor HermesGatewayClient {
             await rpc.disconnect()
             throw error
         }
+    }
+
+    private func publishCommandFeedback(_ result: HermesValue) async throws {
+        let output = [result["output"].string, result["warning"].string, result["notice"].string]
+            .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "\n\n")
+        guard !output.isEmpty else { return }
+        try await onEvent?(.activity(AgentRunActivity(
+            id: UUID().uuidString, kind: .activity, phase: "end", title: "Hermes",
+            status: "completed", content: output, contentIsDelta: false
+        ), appendsContent: false))
     }
 
     public func steer(_ input: AgentMessageInput) async throws {
@@ -371,22 +429,34 @@ public actor HermesGatewayClient {
             switch event["type"].text {
             case "message.delta":
                 guard busy else { return }
+                activeReasoningID = nil
                 let delta = payload["text"].text; text += delta
                 try await onEvent?(.assistantChunk(delta))
             case "message.interim":
                 guard busy else { return }
+                activeReasoningID = nil
                 let interim = payload["text"].text
                 completedText += interim + "\n\n"
                 try await onEvent?(.assistantSnapshot(completedText))
+                try await onEvent?(.assistantBoundary)
                 text = ""
             case "message.complete":
                 guard busy else { return }
+                activeReasoningID = nil
                 let final = payload["text"].text
                 if !payload["response_previewed"].bool, !final.isEmpty || text.isEmpty {
                     try await onEvent?(.assistantSnapshot(completedText + final))
                 }
-                if let reasoning = payload["reasoning"].string, !reasoning.isEmpty {
-                    try await onEvent?(.activity(AgentRunActivity(id: "hermes-thinking", kind: .thought, content: reasoning, contentIsDelta: false), appendsContent: false))
+                try await onEvent?(.assistantBoundary)
+                if let reasoning = payload["reasoning"].string, !reasoning.isEmpty, reasoning != lastReasoningText {
+                    if let id = lastReasoningID, reasoning.hasPrefix(lastReasoningText) {
+                        let suffix = String(reasoning.dropFirst(lastReasoningText.count))
+                        try await onEvent?(.activity(AgentRunActivity(id: id, kind: .thought, content: suffix, contentIsDelta: true), appendsContent: true))
+                    } else {
+                        activeReasoningID = nil
+                        let id = reasoningID()
+                        try await onEvent?(.activity(AgentRunActivity(id: id, kind: .thought, content: reasoning, contentIsDelta: false), appendsContent: false))
+                    }
                 }
                 if !payload["usage"].isNull {
                     let usage = payload["usage"]
@@ -403,8 +473,12 @@ public actor HermesGatewayClient {
             case "session.info":
                 if !payload["usage"].isNull { latestUsage = payload["usage"] }
             case "reasoning.delta", "thinking.delta":
-                try await onEvent?(.activity(AgentRunActivity(id: "hermes-thinking", kind: .thought, content: payload["text"].text, contentIsDelta: true), appendsContent: true))
+                let id = reasoningID()
+                let delta = payload["text"].text
+                lastReasoningText += delta
+                try await onEvent?(.activity(AgentRunActivity(id: id, kind: .thought, content: delta, contentIsDelta: true), appendsContent: true))
             case "tool.start", "tool.complete":
+                activeReasoningID = nil
                 let complete = event["type"].text == "tool.complete"
                 try await onEvent?(.activity(AgentRunActivity(id: payload["tool_id"].text, kind: .tool,
                     title: payload["name"].string, status: complete ? "completed" : "running", toolName: payload["name"].string,
@@ -419,6 +493,16 @@ public actor HermesGatewayClient {
             default: break
             }
         } catch { finish(.failure(error)) }
+    }
+
+    private func reasoningID() -> String {
+        if let activeReasoningID { return activeReasoningID }
+        reasoningPhase += 1
+        let id = "hermes-thinking-\(reasoningPhase)"
+        activeReasoningID = id
+        lastReasoningID = id
+        lastReasoningText = ""
+        return id
     }
 
     private func finish(_ result: Result<LocalACPStopReason, any Error>) {

@@ -14,13 +14,30 @@ public enum OpenCodeComposerMetadata {
         let key = modelKey(selected)
         let option = models.first { modelKey($0) == key }
         let variants = option?["variants"].array.compactMap { $0["id"].string } ?? []
+        var modelMetadata: [String: SessionOptionMetadata] = [:]
+        for model in models {
+            modelMetadata[modelKey(model)] = SessionOptionMetadata(
+                name: model["name"].string,
+                description: model["description"].string
+            )
+        }
+        var thinkingMetadata: [String: SessionOptionMetadata] = [:]
+        for variant in option?["variants"].array ?? [] {
+            guard let id = variant["id"].string else { continue }
+            thinkingMetadata[id] = SessionOptionMetadata(
+                name: variant["name"].string,
+                description: variant["description"].string
+            )
+        }
         return LocalACPSessionMetadata(sessionKey: session["id"].text,
             model: key.isEmpty ? nil : key,
             thinking: selected["variant"].string ?? (variants.isEmpty ? nil : "default"),
             modelOptions: models.map(modelKey),
             excludedModels: hiddenModels.sorted(),
             thinkingLevels: variants.isEmpty ? [] : ["default"] + variants,
-            slashCommands: slashCommands(commands))
+            slashCommands: slashCommands(commands),
+            modelOptionMetadata: modelMetadata,
+            thinkingOptionMetadata: thinkingMetadata)
     }
 
     public static func slashCommands(_ commands: [OpenCodeValue]) -> [LocalACPSlashCommand] {
@@ -97,6 +114,7 @@ public struct OpenCodeSessionSnapshot: Codable, Equatable, Sendable {
     public func containsInput(_ id: String) -> Bool {
         messages.contains { $0["id"].text == id } || inbox.contains { $0["id"].text == id }
     }
+
     public static func presentsMessage(_ message: OpenCodeValue) -> Bool {
         // Configuration events remain in the recovery snapshot, but are not
         // empty system bubbles in the conversation. Assistant placeholders
@@ -119,11 +137,23 @@ public struct OpenCodeSessionSnapshot: Codable, Equatable, Sendable {
         default: return ""
         }
     }
-    public static func activities(_ message: OpenCodeValue) -> [AgentRunActivity] {
-        message["content"].array.enumerated().compactMap { index, part in
+    public static func activities(_ message: OpenCodeValue, assistantMessageID: String? = nil) -> [AgentRunActivity] {
+        let parts = message["content"].array
+        let finalTextIndex = parts.lastIndex { $0["type"].text == "text" }
+        var cumulativeText = ""
+        return parts.enumerated().compactMap { index, part in
             let id = message["id"].text + ":" + (part["id"].string ?? String(index))
+            if part["type"].text == "text" {
+                let separator = index == finalTextIndex ? "" : "\n\n"
+                let segment = part["text"].text + separator
+                cumulativeText += segment
+                return AgentRunActivity(id: id, kind: .assistant, phase: "boundary", title: "Assistant",
+                                        status: "completed", content: segment, contentIsDelta: false,
+                                        assistantMessageID: assistantMessageID,
+                                        assistantCheckpoint: AssistantTextCheckpoint(cumulativeText), position: index)
+            }
             if part["type"].text == "reasoning" {
-                return AgentRunActivity(id: id, kind: .thought, title: "Reasoning", content: part["text"].text)
+                return AgentRunActivity(id: id, kind: .thought, title: "Reasoning", content: part["text"].text, position: index)
             }
             guard part["type"].text == "tool" else { return nil }
             let state = part["state"]
@@ -131,6 +161,7 @@ public struct OpenCodeSessionSnapshot: Codable, Equatable, Sendable {
             return AgentRunActivity(id: id, kind: .tool, title: state["title"].string ?? part["name"].text,
                                     status: state["status"].string ?? state["type"].string,
                                     toolName: part["name"].text, content: output,
+                                    position: index,
                                     rawInputJSON: state["input"].isNull ? nil : state["input"].json,
                                     rawOutputJSON: state.json, rawPayloadJSON: part.json)
         }

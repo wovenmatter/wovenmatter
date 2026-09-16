@@ -14,86 +14,112 @@ func conversationActivityShowsProgress(
     )
 }
 
+private struct ConversationTranscriptInteractionKey: EnvironmentKey {
+    static let defaultValue: @MainActor () -> Void = {}
+}
+
+extension EnvironmentValues {
+    var conversationTranscriptInteraction: @MainActor () -> Void {
+        get { self[ConversationTranscriptInteractionKey.self] }
+        set { self[ConversationTranscriptInteractionKey.self] = newValue }
+    }
+}
+
+/// Expanded work has its own scroll owner. Short transcripts retain their
+/// intrinsic height; long histories are capped at 420 points.
+private struct ConversationBoundedTranscript<Content: View>: View {
+    @State private var contentHeight: CGFloat = 420
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        ScrollView(.vertical) {
+            content()
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
+        }
+        .scrollIndicators(.never)
+        .frame(height: min(420, max(1, contentHeight)))
+        .defaultScrollAnchor(.top)
+    }
+}
+
 struct ConversationWorkTranscript: View {
     let run: WorkspaceRunRecord
     let presentation: DashboardRunPresentation?
     let records: [WorkspaceRunActivityRecord]
+    let commentaryIDs: Set<String>
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.conversationTranscriptInteraction) private var transcriptInteraction
     @State private var expanded: Bool
 
     init(
         run: WorkspaceRunRecord,
         presentation: DashboardRunPresentation?,
-        records: [WorkspaceRunActivityRecord]
+        records: [WorkspaceRunActivityRecord],
+        commentaryIDs: Set<String> = [],
+        hasFinalReply: Bool = false
     ) {
         self.run = run
         self.presentation = presentation
         self.records = records
-        _expanded = State(initialValue: run.status == "running")
+        self.commentaryIDs = commentaryIDs
+        _expanded = State(initialValue: run.status != "completed" || !hasFinalReply)
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Button {
-                withAnimation(.easeInOut(duration: 0.16)) { expanded.toggle() }
-            } label: {
-                HStack(spacing: 7) {
-                    elapsedLabel
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 11, weight: .semibold))
-                        .rotationEffect(.degrees(expanded ? 90 : 0))
-                    Spacer(minLength: 0)
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(DashboardPalette.mutedForeground)
-
-            Divider()
-                .overlay(DashboardPalette.foreground.opacity(0.10))
-                .padding(.top, 12)
-
-            if expanded {
-                let activities = self.activities
-                let timelineItems = timelineItems(for: activities)
-                VStack(alignment: .leading, spacing: 10) {
-                    ForEach(timelineItems) { item in
-                        if item.activities.count == 1,
-                           let activity = item.activities.first {
-                            ConversationActivityRow(
-                                activity: activity,
-                                runStatus: run.status
-                            )
-                        } else {
-                            ConversationToolGroup(
-                                activities: item.activities,
-                                runStatus: run.status
-                            )
-                        }
+        if activities.contains(where: { $0.kind != .fileChange }) {
+            VStack(alignment: .leading, spacing: 0) {
+                Button {
+                    transcriptInteraction()
+                    expanded.toggle()
+                } label: {
+                    HStack(spacing: 7) {
+                        elapsedLabel
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 11, weight: .semibold))
+                            .rotationEffect(.degrees(expanded ? 90 : 0))
+                        Spacer(minLength: 0)
                     }
-                    if activities.isEmpty {
-                        HStack(spacing: 8) {
-                            if run.status == "running" {
-                                Image(systemName: "ellipsis")
-                                    .frame(width: 16)
-                            } else {
-                                Image(systemName: "minus")
-                                    .frame(width: 16)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(ConversationElapsedButtonStyle())
+                .foregroundStyle(DashboardPalette.mutedForeground)
+                .accessibilityValue(expanded ? "Expanded" : "Collapsed")
+
+                Divider()
+                    .overlay(DashboardPalette.foreground.opacity(0.10))
+                    .padding(.top, 12)
+
+                if expanded {
+                    let activities = self.activities
+                    let timelineItems = timelineItems(for: activities)
+                    ConversationBoundedTranscript {
+                        VStack(alignment: .leading, spacing: 10) {
+                            ForEach(timelineItems) { item in
+                                if item.activities.first?.kind == .tool {
+                                    ConversationToolGroup(
+                                        activities: item.activities,
+                                        runStatus: run.status
+                                    )
+                                } else if let activity = item.activities.first {
+                                    if activity.kind == .assistant {
+                                        ConversationMarkdown(
+                                            document: ConversationMarkdownDocument(RemoteNoteEditEnvelope.redactingEnvelopes(in: activity.content ?? "")),
+                                            isStreaming: false
+                                        )
+                                        .textSelection(.enabled)
+                                    } else {
+                                        ConversationActivityRow(activity: activity, runStatus: run.status)
+                                    }
+                                }
                             }
-                            Text(run.status == "running"
-                                ? "Waiting for agent activity…"
-                                : "This turn completed without tool or thinking activity.")
                         }
-                        .font(.system(size: 13))
-                        .foregroundStyle(DashboardPalette.mutedForeground)
                     }
+                    .padding(.top, 14)
+                    .padding(.leading, 18)
+                    .transition(reduceMotion ? .identity : .opacity)
                 }
-                .padding(.top, 14)
-                .padding(.leading, 18)
-                .transition(.opacity.combined(with: .move(edge: .top)))
             }
-        }
-        .onChange(of: run.status) { _, status in
-            if status == "running" { expanded = true }
         }
     }
 
@@ -117,9 +143,9 @@ struct ConversationWorkTranscript: View {
     private var activities: [AgentRunActivity] {
         var order: [String] = []
         var values: [String: AgentRunActivity] = [:]
-        for record in records.sorted(by: {
-            $0.createdAt == $1.createdAt ? $0.id < $1.id : $0.createdAt < $1.createdAt
-        }) {
+        for record in records.filter({
+            $0.activity.phase != "clear" && ($0.activity.kind != .assistant || commentaryIDs.contains($0.activity.id))
+        }).sorted(by: WorkspaceRunActivityRecord.precedes) {
             let update = record.activity
             if let prior = values[update.id] {
                 values[update.id] = prior.merging(update)
@@ -152,87 +178,70 @@ struct ConversationWorkTranscript: View {
     }
 }
 
+private struct ConversationElapsedButtonStyle: ButtonStyle {
+    @Environment(\.dashboardTheme) private var theme
+    @Environment(\.isEnabled) private var isEnabled
+    @State private var hovered = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background {
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .fill(isEnabled && (configuration.isPressed || hovered)
+                        ? theme.palette.themeSoft.opacity(configuration.isPressed ? 1 : 0.65)
+                        : .clear)
+                    .padding(.horizontal, -4)
+                    .padding(.vertical, -3)
+            }
+            .onHover { hovered = $0 }
+    }
+}
+
 private struct ConversationTimelineItem: Identifiable {
     let activities: [AgentRunActivity]
-    var id: String { activities.map(\.id).joined(separator: ":") }
+    var id: String { activities.first?.id ?? "empty" }
 }
 
 private struct ConversationToolGroup: View {
     let activities: [AgentRunActivity]
     let runStatus: String
+    @Environment(\.conversationTranscriptInteraction) private var transcriptInteraction
     @State private var expanded = false
 
     var body: some View {
-        if let activeActivity {
+        // Keep the disclosure and each tool row in place across start/result
+        // updates and the arrival of additional calls.
+        DisclosureGroup(isExpanded: Binding(get: { expanded }, set: { transcriptInteraction(); expanded = $0 })) {
             VStack(alignment: .leading, spacing: 8) {
-                ConversationActivityRow(
-                    activity: activeActivity,
-                    runStatus: runStatus
-                )
-                if !priorActivities.isEmpty {
-                    DisclosureGroup(isExpanded: $expanded) {
-                        VStack(alignment: .leading, spacing: 8) {
-                            ForEach(priorActivities) { activity in
-                                ConversationActivityRow(
-                                    activity: activity,
-                                    runStatus: "completed"
-                                )
-                            }
-                        }
-                        .padding(.top, 7)
-                    } label: {
-                        Text("+\(priorActivities.count) previous \(priorActivities.count == 1 ? "tool call" : "tool calls")")
-                            .font(.system(size: 11.5, weight: .medium))
-                    }
-                    .foregroundStyle(DashboardPalette.mutedForeground)
-                    .padding(.leading, 26)
+                ForEach(activities) { activity in
+                    ConversationActivityRow(activity: activity, runStatus: runStatus)
                 }
             }
-        } else {
-            DisclosureGroup(isExpanded: $expanded) {
-                VStack(alignment: .leading, spacing: 8) {
-                    ForEach(activities) { activity in
-                        ConversationActivityRow(
-                            activity: activity,
-                            runStatus: runStatus
-                        )
-                    }
-                }
-                .padding(.top, 8)
-            } label: {
-                HStack(spacing: 9) {
-                    Image(systemName: summaryIcon)
-                        .font(.system(size: 12, weight: .medium))
-                        .frame(width: 17)
-                    Text(summaryLabel)
-                        .font(.system(size: 13.5, weight: .medium))
-                }
-                .foregroundStyle(DashboardPalette.foreground.opacity(0.72))
+            .padding(.top, 8)
+        } label: {
+            HStack(spacing: 9) {
+                Image(systemName: summaryIcon)
+                    .font(.system(size: 12, weight: .medium))
+                    .frame(width: 17)
+                Text(summaryLabel)
+                    .font(.system(size: 13.5, weight: .medium))
             }
+            .foregroundStyle(DashboardPalette.foreground.opacity(0.72))
         }
     }
 
-    private var activeActivity: AgentRunActivity? {
-        guard runStatus.lowercased() == "running" else { return nil }
-        return activities.last(where: {
+    private var hasActiveTools: Bool {
+        activities.contains {
             conversationActivityShowsProgress(
                 runStatus: runStatus,
                 activityStatus: $0.status,
                 activityPhase: $0.phase
             )
-        })
-    }
-
-    private var priorActivities: [AgentRunActivity] {
-        guard let activeActivity else { return activities }
-        return activities.filter { $0.id != activeActivity.id }
+        }
     }
 
     private var summaryLabel: String {
-        guard let singleCategory else {
-            return "Used \(activities.count) tools"
-        }
-        return singleCategory.summary(count: activities.count)
+        (singleCategory ?? .generic).summary(count: activities.count, isRunning: hasActiveTools)
     }
 
     private var summaryIcon: String {
@@ -248,6 +257,7 @@ private struct ConversationToolGroup: View {
 private struct ConversationActivityRow: View {
     let activity: AgentRunActivity
     let runStatus: String
+    @Environment(\.conversationTranscriptInteraction) private var transcriptInteraction
     @State private var rawExpanded = false
 
     var body: some View {
@@ -255,7 +265,7 @@ private struct ConversationActivityRow: View {
             ConversationPlanProgress(activity: activity)
         } else if activity.kind != .fileChange {
             if isExpandable {
-                DisclosureGroup(isExpanded: $rawExpanded) {
+                DisclosureGroup(isExpanded: Binding(get: { rawExpanded }, set: { transcriptInteraction(); rawExpanded = $0 })) {
                     activityDetails
                 } label: {
                     activityLabel
@@ -266,36 +276,45 @@ private struct ConversationActivityRow: View {
         }
     }
 
+    @ViewBuilder
     private var activityLabel: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 9) {
-            activityIcon
-            VStack(alignment: .leading, spacing: 2) {
-                Text(primaryLabel)
-                    .font(.system(
-                        size: 13.5,
-                        weight: activity.kind == .thought ? .regular : .medium
-                    ))
-                    .foregroundStyle(DashboardPalette.foreground.opacity(
-                        activity.kind == .thought ? 0.58 : 0.72
-                    ))
-                    .fixedSize(horizontal: false, vertical: true)
-                if let secondaryLabel {
-                    Text(secondaryLabel)
-                        .font(.system(size: 12.5))
-                        .foregroundStyle(DashboardPalette.mutedForeground)
-                        .lineLimit(activity.kind == .thought ? 2 : 1)
-                        .truncationMode(.tail)
+        if activity.kind == .activity, let content = activity.content?.nonempty {
+            Text(content)
+                .font(.system(size: 13))
+                .foregroundStyle(isFailure ? .red.opacity(0.8) : DashboardPalette.foreground.opacity(0.72))
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+        } else {
+            HStack(alignment: .firstTextBaseline, spacing: 9) {
+                activityIcon
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(primaryLabel)
+                        .font(.system(
+                            size: 13.5,
+                            weight: activity.kind == .thought ? .regular : .medium
+                        ))
+                        .foregroundStyle(DashboardPalette.foreground.opacity(
+                            activity.kind == .thought ? 0.58 : 0.72
+                        ))
+                        .fixedSize(horizontal: false, vertical: true)
+                    if let secondaryLabel {
+                        Text(secondaryLabel)
+                            .font(.system(size: 12.5))
+                            .foregroundStyle(DashboardPalette.mutedForeground)
+                            .lineLimit(activity.kind == .thought ? 2 : 1)
+                            .truncationMode(.tail)
+                    }
                 }
+                Spacer(minLength: 0)
             }
-            Spacer(minLength: 0)
+            .contentShape(Rectangle())
         }
-        .contentShape(Rectangle())
     }
 
     private var activityDetails: some View {
         VStack(alignment: .leading, spacing: 8) {
             if let expandedContent {
-                Text(expandedContent)
+                Text(String(expandedContent.prefix(120_000)) + (expandedContent.count > 120_000 ? "\n… (display truncated)" : ""))
                     .font(activity.kind == .thought
                         ? .system(size: 12.5)
                         : .system(size: 11.5, design: .monospaced))
@@ -327,6 +346,7 @@ private struct ConversationActivityRow: View {
 
     private var primaryLabel: String {
         let fallback: String = switch activity.kind {
+            case .assistant: "Commentary"
             case .thought: "Thinking"
             case .tool: "Used a tool"
             case .plan: "Updated the plan"
@@ -339,12 +359,13 @@ private struct ConversationActivityRow: View {
 
     private var secondaryLabel: String? {
         if let detail = activity.detail?.nonempty { return detail }
-        guard let content = activity.content?.nonempty else { return nil }
+        guard activity.kind != .activity,
+              let content = activity.content?.nonempty else { return nil }
         return Self.preview(content)
     }
 
     private var expandedContent: String? {
-        guard rawExpanded else { return nil }
+        guard rawExpanded, activity.kind != .activity else { return nil }
         let content = activity.content?.nonempty
         return content == secondaryLabel ? nil : content
     }
@@ -360,16 +381,18 @@ private struct ConversationActivityRow: View {
     }
 
     private var isExpandable: Bool {
-        hasRawDetails || (activity.content?.nonempty?.count ?? 0) > 140
+        hasRawDetails || (activity.kind != .activity && (activity.content?.nonempty?.count ?? 0) > 140)
     }
 
     private var systemImage: String {
         switch activity.kind {
+        case .assistant: "text.bubble"
         case .thought: "sparkles"
         case .tool: ConversationToolCategory(activity).systemImage
         case .plan: "list.bullet.clipboard"
         case .fileChange: "pencil.and.outline"
-        case .progress: "arrow.trianglehead.2.clockwise.rotate.90"
+        case .progress: activity.status?.lowercased() == "completed"
+            ? "flag.checkered" : "arrow.trianglehead.2.clockwise.rotate.90"
         case .activity: "waveform.path.ecg"
         }
     }
@@ -390,12 +413,13 @@ private struct ConversationActivityRow: View {
                     .textCase(.uppercase)
                     .tracking(0.6)
                 ScrollView(.horizontal) {
-                    Text(value)
+                    Text(String(value.prefix(120_000)) + (value.count > 120_000 ? "\n… (display truncated)" : ""))
                         .font(.system(size: 11.5, design: .monospaced))
                         .textSelection(.enabled)
                         .fixedSize(horizontal: true, vertical: true)
                         .padding(9)
                 }
+                .scrollIndicators(.never)
                 .background(DashboardPalette.muted.opacity(0.65))
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             }
@@ -446,15 +470,16 @@ private enum ConversationToolCategory: Hashable {
         }
     }
 
-    func summary(count: Int) -> String {
+    func summary(count: Int, isRunning: Bool) -> String {
+        let plural = count == 1 ? "" : "s"
         switch self {
-        case .command: "Ran \(count) commands"
-        case .read: "Read \(count) files"
-        case .write: "Changed \(count) files"
-        case .search: "Ran \(count) searches"
-        case .web: "Used the web \(count) times"
-        case .delegated: "Delegated \(count) tasks"
-        case .generic: "Used \(count) tools"
+        case .command: return "\(isRunning ? "Running" : "Ran") \(count) command\(plural)"
+        case .read: return "\(isRunning ? "Reading" : "Read") \(count) file\(plural)"
+        case .write: return "\(isRunning ? "Updating" : "Changed") \(count) file\(plural)"
+        case .search: return "\(isRunning ? "Running" : "Ran") \(count) search\(count == 1 ? "" : "es")"
+        case .web: return isRunning ? "Using the web · \(count) call\(plural)" : "Used the web \(count) time\(plural)"
+        case .delegated: return "\(isRunning ? "Delegating" : "Delegated") \(count) task\(plural)"
+        case .generic: return "\(isRunning ? "Using" : "Used") \(count) tool\(plural)"
         }
     }
 }
@@ -499,6 +524,9 @@ private struct ConversationPlanProgress: View {
                 }
             }
             .padding(.leading, 4)
+            if let content = activity.content, !content.isEmpty {
+                ConversationMarkdown(document: ConversationMarkdownDocument(content), isStreaming: false)
+            }
         }
     }
 
@@ -758,6 +786,7 @@ private struct ConversationDiffSheet: View {
                     .padding(12)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .scrollIndicators(.never)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -771,12 +800,13 @@ private struct ConversationDiffSheet: View {
                 .padding(16)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .scrollIndicators(.never)
     }
 }
 
 private extension String {
     var nonempty: String? {
         let value = trimmingCharacters(in: .whitespacesAndNewlines)
-        return value.isEmpty ? nil : value
+        return value.isEmpty ? nil : self
     }
 }

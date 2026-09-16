@@ -146,6 +146,8 @@ public struct LocalACPSessionConfiguration: Equatable, Sendable {
     public let modelOptions: [String]
     public let thinkingOptions: [String]
     public let slashCommands: [LocalACPSlashCommand]
+    public let modelOptionMetadata: [String: SessionOptionMetadata]
+    public let thinkingOptionMetadata: [String: SessionOptionMetadata]
 
     public static let empty = LocalACPSessionConfiguration()
 
@@ -154,15 +156,17 @@ public struct LocalACPSessionConfiguration: Equatable, Sendable {
         thinking: String? = nil,
         modelOptions: [String] = [],
         thinkingOptions: [String] = [],
-        slashCommands: [LocalACPSlashCommand] = []
+        slashCommands: [LocalACPSlashCommand] = [],
+        modelOptionMetadata: [String: SessionOptionMetadata] = [:],
+        thinkingOptionMetadata: [String: SessionOptionMetadata] = [:]
     ) {
         self.model = model
         self.thinking = thinking
         self.modelOptions = Self.unique(modelOptions + [model].compactMap { $0 })
-        self.thinkingOptions = Self.unique(
-            thinkingOptions + [thinking].compactMap { $0 }
-        )
+        self.thinkingOptions = Self.unique(thinkingOptions)
         self.slashCommands = slashCommands
+        self.modelOptionMetadata = modelOptionMetadata
+        self.thinkingOptionMetadata = thinkingOptionMetadata
     }
 
     public func selecting(
@@ -174,7 +178,9 @@ public struct LocalACPSessionConfiguration: Equatable, Sendable {
             thinking: thinking ?? self.thinking,
             modelOptions: modelOptions,
             thinkingOptions: thinkingOptions,
-            slashCommands: slashCommands
+            slashCommands: slashCommands,
+            modelOptionMetadata: modelOptionMetadata,
+            thinkingOptionMetadata: thinkingOptionMetadata
         )
     }
 
@@ -487,7 +493,7 @@ public actor LocalACPClient {
     private var steeringSupported = false
     private var sessionID: String?
     private var configuration = LocalACPSessionConfiguration.empty
-    private var configurationHandler: (@Sendable () -> Void)?
+    private var configurationHandler: (@Sendable (LocalACPSessionConfiguration) async -> Void)?
     private var modelConfigurationID: String?
     private var modelUsesSessionModelMethod = false
     private var thinkingConfigurationID: String?
@@ -512,6 +518,11 @@ public actor LocalACPClient {
     private var activePermissionHandler: PermissionHandler?
     private var activeInteractionHandler: InteractionHandler?
     private var activePromptRequestCount = 0
+    // ACP does not provide an identifier for thought chunks. Keep one stable
+    // identity for adjacent deltas, then advance it when another stream kind
+    // separates reasoning phases so distinct commentary is not merged.
+    private var reasoningPhaseSequence = 0
+    private var activeReasoningPhaseID: String?
     private var closed = false
     private var shutdownTask: Task<Void, Never>?
 
@@ -798,12 +809,15 @@ public actor LocalACPClient {
                 return trimmed?.isEmpty == false ? trimmed : nil
             } ?? []
             guard !models.isEmpty else { return }
+            let catalogMetadata = Self.modelMetadata(response?["models"]?.arrayValue ?? [], idKeys: ["value", "modelId"])
             configuration = LocalACPSessionConfiguration(
-                model: configuration.model ?? models.first,
+                model: configuration.model,
                 thinking: configuration.thinking,
                 modelOptions: models,
                 thinkingOptions: configuration.thinkingOptions,
-                slashCommands: configuration.slashCommands
+                slashCommands: configuration.slashCommands,
+                modelOptionMetadata: catalogMetadata.merging(configuration.modelOptionMetadata) { _, session in session },
+                thinkingOptionMetadata: configuration.thinkingOptionMetadata
             )
         } catch {
             // session/new already advertised a catalog; keep that if the
@@ -866,9 +880,9 @@ public actor LocalACPClient {
         configuration
     }
 
-    public func setConfigurationHandler(_ handler: @escaping @Sendable () -> Void) {
+    public func setConfigurationHandler(_ handler: @escaping @Sendable (LocalACPSessionConfiguration) async -> Void) async {
         configurationHandler = handler
-        handler()
+        await handler(configuration)
     }
 
     public func setSessionConfiguration(
@@ -1092,10 +1106,12 @@ public actor LocalACPClient {
         guard let sessionID else {
             throw LocalACPClientError.sessionNotInitialized
         }
-        let initialSystemPrompt = initialSystemPromptInFlight
+        let outboundText = input.transportText().trimmingCharacters(in: .whitespacesAndNewlines)
+        // Native commands must stay at the start of the message. Defer ACP v1's
+        // instruction prefix until an ordinary prompt instead of consuming it here.
+        let initialSystemPrompt = initialSystemPromptInFlight || outboundText.hasPrefix("/")
             ? nil
             : pendingInitialSystemPrompt
-        let outboundText = input.transportText().trimmingCharacters(in: .whitespacesAndNewlines)
         let prefixedText = initialSystemPrompt.map {
             "[System]\n\($0)\n\n\(outboundText)"
         } ?? outboundText
@@ -1405,11 +1421,11 @@ public actor LocalACPClient {
             case "config_option_update", "available_commands_update":
                 let previousConfiguration = configuration
                 captureSessionConfiguration(from: update)
-                if previousConfiguration != configuration { configurationHandler?() }
+                if previousConfiguration != configuration { await configurationHandler?(configuration) }
             default:
                 break
             }
-            if let event = Self.event(
+            if let event = projectedEvent(
                 from: envelope,
                 workingDirectory: workingDirectory
             ) {
@@ -1476,30 +1492,29 @@ public actor LocalACPClient {
                 thinking: configuration.thinking,
                 modelOptions: configuration.modelOptions,
                 thinkingOptions: configuration.thinkingOptions,
-                slashCommands: slashCommands
+                slashCommands: slashCommands,
+                modelOptionMetadata: configuration.modelOptionMetadata,
+                thinkingOptionMetadata: configuration.thinkingOptionMetadata
             )
         }
         if let configOptions = value["configOptions"]?.arrayValue {
             let parsed = Self.configuration(from: configOptions)
-            if let model = parsed.model {
-                modelConfigurationID = model.id
-            }
-            if let thinking = parsed.thinking {
-                thinkingConfigurationID = thinking.id
-            }
-            if parsed.model != nil || parsed.thinking != nil {
-                configuration = LocalACPSessionConfiguration(
-                    model: parsed.model?.currentValue ?? configuration.model,
-                    thinking: parsed.thinking?.currentValue
-                        ?? configuration.thinking,
-                    modelOptions: parsed.model?.options
-                        ?? configuration.modelOptions,
-                    thinkingOptions: parsed.thinking?.options
-                        ?? configuration.thinkingOptions,
-                    slashCommands: configuration.slashCommands
-                )
-            }
+            let hadModelOption = modelConfigurationID != nil
+            modelConfigurationID = parsed.model?.id
+            thinkingConfigurationID = parsed.thinking?.id
+            // ACP publishes the complete current option list. A model switch
+            // may remove effort support; do not retain its old menu or setter.
+            configuration = LocalACPSessionConfiguration(
+                model: parsed.model?.currentValue ?? (hadModelOption ? nil : configuration.model),
+                thinking: parsed.thinking?.currentValue,
+                modelOptions: parsed.model?.options ?? (hadModelOption ? [] : configuration.modelOptions),
+                thinkingOptions: parsed.thinking?.options ?? [],
+                slashCommands: configuration.slashCommands,
+                modelOptionMetadata: parsed.model?.metadata ?? (hadModelOption ? [:] : configuration.modelOptionMetadata),
+                thinkingOptionMetadata: parsed.thinking?.metadata ?? [:]
+            )
         }
+
         // Some adapters publish both the writable `configOptions` contract and
         // a legacy `models` catalog. Codex ACP's legacy catalog expands every
         // base model into model[reasoning-effort] variants, while its model and
@@ -1514,7 +1529,9 @@ public actor LocalACPClient {
                 thinking: configuration.thinking,
                 modelOptions: modelState.options,
                 thinkingOptions: configuration.thinkingOptions,
-                slashCommands: configuration.slashCommands
+                slashCommands: configuration.slashCommands,
+                modelOptionMetadata: modelState.metadata,
+                thinkingOptionMetadata: configuration.thinkingOptionMetadata
             )
         }
         if let grokConfiguration = Self.grokConfiguration(from: value) {
@@ -1526,7 +1543,20 @@ public actor LocalACPClient {
                 // independently advertised by standard `configOptions`.
                 modelOptions: configuration.modelOptions,
                 thinkingOptions: configuration.thinkingOptions,
-                slashCommands: configuration.slashCommands
+                slashCommands: configuration.slashCommands,
+                modelOptionMetadata: grokConfiguration.modelOptionMetadata.merging(configuration.modelOptionMetadata) { _, standard in standard },
+                thinkingOptionMetadata: configuration.thinkingOptionMetadata
+            )
+        }
+        if runtimeKind == .claudeCode {
+            configuration = LocalACPSessionConfiguration(
+                model: configuration.model, thinking: configuration.thinking,
+                modelOptions: configuration.modelOptions, thinkingOptions: configuration.thinkingOptions,
+                slashCommands: configuration.slashCommands,
+                modelOptionMetadata: configuration.modelOptionMetadata.reduce(into: [:]) { result, entry in
+                    result[entry.key] = ClaudeModelPresentation.metadata(id: entry.key, supplied: entry.value)
+                },
+                thinkingOptionMetadata: configuration.thinkingOptionMetadata
             )
         }
     }
@@ -1535,6 +1565,7 @@ public actor LocalACPClient {
         let id: String
         let currentValue: String?
         let options: [String]
+        let metadata: [String: SessionOptionMetadata]
     }
 
     private static func configuration(
@@ -1553,7 +1584,8 @@ public actor LocalACPClient {
                 currentValue: option["currentValue"]?.stringValue,
                 options: configurationOptionValues(
                     option["options"]?.arrayValue ?? []
-                )
+                ),
+                metadata: configurationOptionMetadata(option["options"]?.arrayValue ?? [])
             )
             if id == "model" || category == "model" {
                 model = parsed
@@ -1578,16 +1610,39 @@ public actor LocalACPClient {
         }
     }
 
+    private static func configurationOptionMetadata(_ options: [ACPJSONValue]) -> [String: SessionOptionMetadata] {
+        var result: [String: SessionOptionMetadata] = [:]
+        for option in options {
+            if let id = option["value"]?.stringValue {
+                result[id] = SessionOptionMetadata(name: option["name"]?.stringValue,
+                    description: option["description"]?.stringValue)
+            } else {
+                result.merge(configurationOptionMetadata(option["options"]?.arrayValue ?? [])) { _, latest in latest }
+            }
+        }
+        return result
+    }
+
+    private static func modelMetadata(_ models: [ACPJSONValue], idKeys: [String]) -> [String: SessionOptionMetadata] {
+        var result: [String: SessionOptionMetadata] = [:]
+        for model in models {
+            guard let id = idKeys.compactMap({ model[$0]?.stringValue }).first else { continue }
+            result[id] = SessionOptionMetadata(name: model["name"]?.stringValue,
+                description: model["description"]?.stringValue)
+        }
+        return result
+    }
+
     private static func standardModelConfiguration(
         from value: ACPJSONValue
-    ) -> (model: String?, options: [String])? {
+    ) -> (model: String?, options: [String], metadata: [String: SessionOptionMetadata])? {
         guard let modelState = value["models"],
               let models = modelState["availableModels"]?.arrayValue else {
             return nil
         }
         let options = models.compactMap { $0["modelId"]?.stringValue }
         guard !options.isEmpty else { return nil }
-        return (modelState["currentModelId"]?.stringValue, options)
+        return (modelState["currentModelId"]?.stringValue, options, modelMetadata(models, idKeys: ["modelId"]))
     }
 
     private static func grokConfiguration(
@@ -1609,13 +1664,11 @@ public actor LocalACPClient {
         return LocalACPSessionConfiguration(
             model: currentModel,
             thinking: thinking,
-            // Grok exposes these values as read-only vendor metadata. Its ACP
-            // transport does not advertise config option IDs, so presenting
-            // the other values as selectable would promise a write contract
-            // that the runtime does not provide. Standard `configOptions`, if
-            // Grok adds them later, are captured independently above.
+            // Vendor state alone does not advertise writable options. Prefer
+            // standard configOptions when the adapter supplies that contract.
             modelOptions: [],
-            thinkingOptions: []
+            thinkingOptions: [],
+            modelOptionMetadata: modelMetadata(models, idKeys: ["modelId"])
         )
     }
 
@@ -1849,7 +1902,7 @@ public actor LocalACPClient {
             )
     }
 
-    private static func event(
+    private func projectedEvent(
         from envelope: ACPEnvelope,
         workingDirectory: URL
     ) -> LocalACPEvent? {
@@ -1857,33 +1910,45 @@ public actor LocalACPClient {
               let kind = update["sessionUpdate"]?.stringValue else { return nil }
         switch kind {
         case "agent_message_chunk":
+            activeReasoningPhaseID = nil
             return update["content"]?["text"]?.stringValue.map(LocalACPEvent.assistantChunk)
         case "agent_thought_chunk":
             guard let text = update["content"]?["text"]?.stringValue else { return nil }
+            let reasoningID: String
+            if let activeReasoningPhaseID {
+                reasoningID = activeReasoningPhaseID
+            } else {
+                reasoningPhaseSequence += 1
+                reasoningID = "thought-\(reasoningPhaseSequence)"
+                activeReasoningPhaseID = reasoningID
+            }
             return .activity(
                 AgentRunActivity(
-                    id: "thought",
+                    id: reasoningID,
                     kind: .thought,
                     phase: "update",
                     title: "Thinking",
                     status: "running",
                     content: text,
                     contentIsDelta: true,
-                    rawPayloadJSON: jsonString(update)
+                    rawPayloadJSON: Self.jsonString(update)
                 ),
                 appendsContent: true
             )
         case "tool_call":
+            activeReasoningPhaseID = nil
             return .activity(
-                toolActivity(update, phase: "start", workingDirectory: workingDirectory),
+                Self.toolActivity(update, phase: "start", workingDirectory: workingDirectory),
                 appendsContent: false
             )
         case "tool_call_update":
+            activeReasoningPhaseID = nil
             return .activity(
-                toolActivity(update, phase: "update", workingDirectory: workingDirectory),
+                Self.toolActivity(update, phase: "update", workingDirectory: workingDirectory),
                 appendsContent: false
             )
         case "plan":
+            activeReasoningPhaseID = nil
             let entries = update["entries"]?.arrayValue?.compactMap { value -> AgentRunPlanEntry? in
                 guard let content = value["content"]?.stringValue,
                       let status = value["status"]?.stringValue else { return nil }
@@ -1897,11 +1962,11 @@ public actor LocalACPClient {
                 AgentRunActivity(
                     id: "plan",
                     kind: .plan,
-                    phase: "update",
+                    phase: entries.isEmpty ? "clear" : "update",
                     title: "Plan",
                     status: entries.allSatisfy { $0.status == "completed" } ? "completed" : "running",
                     planEntries: entries,
-                    rawPayloadJSON: jsonString(update)
+                    rawPayloadJSON: Self.jsonString(update)
                 ),
                 appendsContent: false
             )

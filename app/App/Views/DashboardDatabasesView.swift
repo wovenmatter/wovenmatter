@@ -226,6 +226,7 @@ struct DashboardDatabasesView: View {
             }
             .padding(12)
         }
+        .scrollIndicators(.never)
         .background(theme.palette.workspace)
     }
 
@@ -247,6 +248,7 @@ struct DashboardDatabasesView: View {
                         }
                         .padding(20)
                     }
+                    .scrollIndicators(.never)
                 }
                 if let selectedDatabase,
                    selectedDatabase.sourceID == source.id {

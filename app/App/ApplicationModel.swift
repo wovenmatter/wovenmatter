@@ -787,14 +787,20 @@ final class ApplicationModel {
         }
         // Metadata changes are independent of run content and must not replace
         // or be suppressed by a pending terminal notification.
-        if change.phase == .configuration {
-            Task { [weak self] in
-                guard let self,
-                      let conversation = self.workspaceOverview?.conversations.first(where: {
-                          $0.id == change.conversationID
-                      }) else { return }
-                await self.refreshLocalACPSession(conversation: conversation)
-            }
+        if case .configuration(let configuration) = change.phase {
+            // The running adapter already supplied this snapshot. Preparing a
+            // session here would turn its initial notification into a refresh
+            // loop, keeping the composer loading while idle sessions restart.
+            localACPSessionMetadata[change.conversationID] = LocalACPSessionMetadata(
+                sessionKey: change.conversationID,
+                model: configuration.model,
+                thinking: configuration.thinking,
+                modelOptions: configuration.modelOptions,
+                thinkingLevels: configuration.thinkingOptions,
+                slashCommands: configuration.slashCommands,
+                modelOptionMetadata: configuration.modelOptionMetadata,
+                thinkingOptionMetadata: configuration.thinkingOptionMetadata
+            )
             return
         }
         if change.phase == .content,
@@ -987,6 +993,8 @@ final class ApplicationModel {
                     var nextMessages = previous.messagesByID
                     for (messageID, presentation) in Self.renderMessagePresentations(
                         page.messages,
+                        activities: page.activities,
+                        runs: page.runs,
                         reusing: previous.messagesByID
                     ) {
                         nextMessages[messageID] = presentation
@@ -1003,6 +1011,8 @@ final class ApplicationModel {
                 } else {
                     messagesByID = Self.renderMessagePresentations(
                         page.messages,
+                        activities: page.activities,
+                        runs: page.runs,
                         reusing: previous?.messagesByID ?? [:]
                     )
                     runsByID = Self.renderRunPresentations(
@@ -1066,6 +1076,8 @@ final class ApplicationModel {
             let renderTask = Task.detached(priority: .userInitiated) {
                 let messagesByID = Self.renderMessagePresentations(
                     page.messages,
+                    activities: page.activities,
+                    runs: page.runs,
                     reusing: current.messagesByID
                 )
                 let runsByID = Self.renderRunPresentations(
@@ -1150,14 +1162,27 @@ final class ApplicationModel {
 
     private nonisolated static func renderMessagePresentations(
         _ messages: [WorkspaceMessageRecord],
+        activities: [WorkspaceRunActivityRecord],
+        runs: [WorkspaceRunRecord],
         reusing previous: [String: DashboardMessagePresentation]
     ) -> [String: DashboardMessagePresentation] {
         var result: [String: DashboardMessagePresentation] = [:]
+        let workRunsByReply = Dictionary(runs.compactMap { run in
+            run.assistantMessageID.map { ($0, run.id) }
+        }, uniquingKeysWith: { _, latest in latest })
+        let activitiesByRun = Dictionary(grouping: activities.sorted(by: WorkspaceRunActivityRecord.precedes), by: \.runID)
         result.reserveCapacity(messages.count)
         for message in messages {
             guard !Task.isCancelled else { return result }
+            // Older steering replies have no work disclosure of their own;
+            // retain their complete canonical text instead of hiding commentary.
+            let displayedBody = workRunsByReply[message.id].map { runID in
+                AssistantTranscriptProjection(messageID: message.id,
+                    content: message.content, activities: (activitiesByRun[runID] ?? []).map(\.activity)).body
+            } ?? message.content
             if let existing = previous[message.id],
                existing.source == message.content,
+               existing.displayedBody == displayedBody,
                existing.status == message.status,
                existing.createdAt == message.createdAt {
                 result[message.id] = existing
@@ -1165,11 +1190,12 @@ final class ApplicationModel {
             }
             result[message.id] = DashboardMessagePresentation(
                 source: message.content,
+                displayedBody: displayedBody,
                 status: message.status,
                 createdAt: message.createdAt,
                 document: message.role == "assistant"
                     ? ConversationMarkdownDocument(
-                        RemoteNoteEditEnvelope.redactingEnvelopes(in: message.content)
+                        RemoteNoteEditEnvelope.redactingEnvelopes(in: displayedBody)
                     )
                     : nil
             )
@@ -2578,6 +2604,17 @@ final class ApplicationModel {
         cancelLocalACPInteractions(conversationID: conversationID)
     }
 
+    func isLocalACPSessionLaunchAvailable(_ conversation: WorkspaceConversationRecord) -> Bool {
+        guard let runtimeKind = conversation.localRuntimeKind else { return false }
+        if buzzBoundLocalACPConversationIDs.contains(conversation.id) { return true }
+        if let workspaceID = conversation.remoteWorkspaceID {
+            guard let configuration = remoteWorkspaces.configuration(id: workspaceID) else { return false }
+            return remoteWorkspaces.isHarnessReady(runtimeKind, in: configuration)
+        }
+        return localACPLaunchConfigurations[runtimeKind] != nil
+            && localACPWorkspaceLaunchConfiguration != nil
+    }
+
     func refreshLocalACPSession(
         conversation: WorkspaceConversationRecord
     ) async {
@@ -2627,7 +2664,9 @@ final class ApplicationModel {
                 thinking: configuration.thinking,
                 modelOptions: configuration.modelOptions,
                 thinkingLevels: configuration.thinkingOptions,
-                slashCommands: configuration.slashCommands
+                slashCommands: configuration.slashCommands,
+                modelOptionMetadata: configuration.modelOptionMetadata,
+                thinkingOptionMetadata: configuration.thinkingOptionMetadata
             )
             ensureConversationState(id: conversation.id).setError(nil)
         } catch {
@@ -2689,7 +2728,9 @@ final class ApplicationModel {
                         thinking: configuration.thinking,
                         modelOptions: configuration.modelOptions,
                         thinkingLevels: configuration.thinkingOptions,
-                        slashCommands: configuration.slashCommands
+                        slashCommands: configuration.slashCommands,
+                        modelOptionMetadata: configuration.modelOptionMetadata,
+                        thinkingOptionMetadata: configuration.thinkingOptionMetadata
                     )
             } catch {
                 ensureConversationState(id: conversation.id).setError(

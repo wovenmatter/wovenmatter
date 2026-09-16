@@ -29,7 +29,9 @@ struct OpenCodeInteractions: View {
                         }.id(form["id"].text)
                     }
                 }
-            }.frame(maxHeight: 240)
+            }
+            .scrollIndicators(.never)
+            .frame(maxHeight: 240)
         }
     }
     private func permissionButton(_ title: String, reply: String, permission: OpenCodeValue) -> some View {

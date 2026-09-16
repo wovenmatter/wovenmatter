@@ -109,6 +109,7 @@ struct OpenCodeSettingsCard: View {
                 .padding(.horizontal, 4)
                 .padding(.vertical, 2)
             }
+            .scrollIndicators(.never)
             .frame(height: 300)
             Text("Existing chats keep their selected model.")
                 .font(.caption).foregroundStyle(.secondary)

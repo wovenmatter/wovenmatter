@@ -79,11 +79,14 @@ struct DashboardCloudConversation: View {
         conversation.flatMap { model.openCodeModel(for: $0.id) }
     }
     @State private var scrollState = DashboardConversationScrollState()
+    @State private var transcriptOwnsScroll = false
     @State private var isPrependingHistory = false
     @State private var pendingBottomConversationID: String?
     @State private var bottomPositionRevision = 0
     @State private var scrollPositionID: String?
     @State private var bottomStackHeight: CGFloat = 0
+    @State private var scrollInteractionRevision = 0
+    @State private var isUserScrolling = false
 
     var body: some View {
         let runsByAssistantMessageID = self.runsByAssistantMessageID
@@ -168,8 +171,26 @@ struct DashboardCloudConversation: View {
                     .scrollTargetLayout()
                 }
                 .scrollIndicators(.never)
-                .defaultScrollAnchor(.bottom)
+                .environment(\.conversationTranscriptInteraction) {
+                    transcriptOwnsScroll = true
+                    scrollInteractionRevision += 1
+                    bottomPositionRevision += 1
+                    pendingBottomConversationID = nil
+                    scrollPositionID = nil
+                    scrollState.setNearBottom(false)
+                }
+                .defaultScrollAnchor(.bottom, for: .initialOffset)
+                .defaultScrollAnchor(.top, for: .sizeChanges)
                 .scrollPosition(id: $scrollPositionID, anchor: .bottom)
+                .onScrollPhaseChange { _, phase in
+                    isUserScrolling = phase == .interacting || phase == .tracking || phase == .decelerating
+                    if isUserScrolling {
+                        transcriptOwnsScroll = false
+                        scrollInteractionRevision += 1
+                        pendingBottomConversationID = nil
+                        bottomPositionRevision += 1
+                    }
+                }
                 .onScrollGeometryChange(for: DashboardConversationGeometry.self) { geometry in
                     DashboardConversationGeometry(
                         contentHeight: geometry.contentSize.height,
@@ -177,10 +198,10 @@ struct DashboardCloudConversation: View {
                     )
                 } action: { oldGeometry, newGeometry in
                     let followedBottomBeforeGrowth = oldGeometry.contentHeight != newGeometry.contentHeight
-                        && scrollState.isNearBottom
+                        && scrollState.isNearBottom && !isUserScrolling && !isPrependingHistory
                     let isPositioningConversation = pendingBottomConversationID == conversation?.id
                         && newestPresentedMessageIdentity != nil
-                    scrollState.setNearBottom(newGeometry.isNearBottom)
+                    scrollState.setNearBottom(newGeometry.isNearBottom && !transcriptOwnsScroll)
 
                     if isPositioningConversation {
                         bottomPositionRevision += 1
@@ -193,8 +214,12 @@ struct DashboardCloudConversation: View {
                             pendingBottomConversationID = nil
                         }
                     } else if followedBottomBeforeGrowth {
+                        let interactionRevision = scrollInteractionRevision
+                        let owner = conversation?.id
                         Task { @MainActor in
                             await Task.yield()
+                            guard interactionRevision == scrollInteractionRevision,
+                                  owner == conversation?.id, !isPrependingHistory else { return }
                             scrollToConversationBottom(using: proxy)
                         }
                     }
@@ -206,6 +231,9 @@ struct DashboardCloudConversation: View {
                     draft = draft.isEmpty ? text : draft + "\n" + text
                 }
                 .onChange(of: conversation?.id, initial: true) { _, conversationID in
+                    isUserScrolling = false
+                    transcriptOwnsScroll = false
+                    scrollInteractionRevision += 1
                     scrollState.conversationChanged(to: conversationID)
                     pendingBottomConversationID = conversationID
                     bottomPositionRevision += 1
@@ -222,12 +250,30 @@ struct DashboardCloudConversation: View {
                     case .none:
                         break
                     case .jumpToBottom, .followBottom:
+                        let interactionRevision = scrollInteractionRevision
+                        let owner = conversation?.id
                         Task { @MainActor in
                             await Task.yield()
                             try? await Task.sleep(for: .milliseconds(50))
-                            guard identity == newestPresentedMessageIdentity else { return }
+                            guard identity == newestPresentedMessageIdentity,
+                                  owner == conversation?.id,
+                                  interactionRevision == scrollInteractionRevision,
+                                  !isPrependingHistory else { return }
                             scrollToConversationBottom(using: proxy)
                         }
+                    }
+                }
+                .overlay(alignment: .bottomTrailing) {
+                    if !scrollState.isNearBottom, conversation != nil {
+                        Button("Latest reply", systemImage: "arrow.down") {
+                            scrollInteractionRevision += 1
+                            transcriptOwnsScroll = false
+                            scrollState.setNearBottom(true)
+                            scrollToConversationBottom(using: proxy)
+                        }
+                        .buttonStyle(DashboardQuietButtonStyle())
+                        .padding(.trailing, 32)
+                        .padding(.bottom, bottomScrollClearance)
                     }
                 }
             }
@@ -277,7 +323,8 @@ struct DashboardCloudConversation: View {
                     HStack(spacing: 9) {
                         Image(systemName: "bolt")
                             .foregroundStyle(DashboardPalette.primary)
-                        Text("Agent is working")
+                        Text(localPermission != nil ? "Waiting for approval"
+                            : localInteraction != nil ? "Waiting for your answer" : "Agent is working")
                             .font(.system(size: 12.5, weight: .medium))
                         Spacer()
                         Button("Stop") {
@@ -433,7 +480,12 @@ struct DashboardCloudConversation: View {
 
     private var sessionIdentity: String? {
         guard let conversation else { return nil }
-        if conversation.localRuntimeKind != nil {
+        if let runtimeKind = conversation.localRuntimeKind {
+            // A restored chat can appear before CLI discovery finishes. Retry
+            // its metadata task when the launch context becomes available.
+            if [.codex, .claudeCode, .grokBuild, .cursor].contains(runtimeKind) {
+                return "local:\(conversation.id):\(model.isLocalACPSessionLaunchAvailable(conversation))"
+            }
             return "local:\(conversation.id)"
         }
         return nil
@@ -776,7 +828,7 @@ struct DashboardLocalPlanCard: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .textSelection(.enabled)
             }
-            .scrollIndicators(.automatic)
+            .scrollIndicators(.never)
             .frame(maxHeight: 260)
 
             HStack(spacing: 8) {
@@ -811,6 +863,11 @@ struct DashboardMessageRow: View {
     let runPresentation: DashboardRunPresentation?
     let activities: [WorkspaceRunActivityRecord]
 
+    private var transcript: AssistantTranscriptProjection {
+        AssistantTranscriptProjection(messageID: message.id, content: message.content,
+            activities: activities.map(\.activity))
+    }
+
     var body: some View {
         if message.role == "system" {
             HStack(spacing: 7) {
@@ -829,7 +886,9 @@ struct DashboardMessageRow: View {
                         ConversationWorkTranscript(
                             run: run,
                             presentation: runPresentation,
-                            records: activities
+                            records: activities,
+                            commentaryIDs: Set(transcript.commentary.map(\.id)),
+                            hasFinalReply: !transcript.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                         )
                     }
                     if isUser {
@@ -849,7 +908,7 @@ struct DashboardMessageRow: View {
                             .textSelection(.enabled)
                         } else {
                             Text(RemoteNoteEditEnvelope.redactingEnvelopes(
-                                in: message.content
+                                in: transcript.body
                             ))
                                 .font(.system(size: 15))
                                 .lineSpacing(4)
@@ -875,7 +934,7 @@ struct DashboardMessageRow: View {
     }
 
     private var showsAssistantBody: Bool {
-        guard message.content.isEmpty == false else { return false }
+        guard !transcript.body.isEmpty else { return false }
         guard run?.status == "failed", let error = run?.error else { return true }
         return message.content.trimmingCharacters(in: .whitespacesAndNewlines)
             != error.trimmingCharacters(in: .whitespacesAndNewlines)

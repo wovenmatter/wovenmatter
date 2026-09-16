@@ -223,12 +223,8 @@ struct DashboardComposer: View {
     }
 
     private var slashQuery: String? {
-        let line = draft.split(
-            separator: "\n",
-            omittingEmptySubsequences: false
-        ).last.map(String.init) ?? draft
-        guard line.hasPrefix("/"), !line.contains(where: \.isWhitespace) else { return nil }
-        return String(line.dropFirst())
+        guard draft.hasPrefix("/"), !draft.contains(where: \.isWhitespace) else { return nil }
+        return String(draft.dropFirst())
     }
 
     private var matchingSlashCommands: [LocalACPSlashCommand] {
@@ -296,6 +292,7 @@ struct DashboardComposer: View {
                     }
                 }
             }
+            .scrollIndicators(.never)
             .frame(height: min(CGFloat(matchingSlashCommands.count) * 32, 224))
             .onChange(of: slashNavigationRequest) { _, _ in
                 if let command = selectedSlashCommand {
@@ -333,17 +330,7 @@ struct DashboardComposer: View {
     }
 
     private func applySlashCommand(_ command: LocalACPSlashCommand) {
-        let lines = draft.split(
-            separator: "\n",
-            omittingEmptySubsequences: false
-        ).map(String.init)
-        var next = lines
-        if next.isEmpty {
-            next = ["/\(command.name) "]
-        } else {
-            next[next.count - 1] = "/\(command.name) "
-        }
-        draft = next.joined(separator: "\n")
+        draft = "/\(command.name) "
         completionRequest += 1
         focused = true
         openMenu = nil
@@ -377,21 +364,23 @@ struct DashboardComposer: View {
                 sessionMenu(
                     kind: .model,
                     icon: .cpu,
-                    title: sessionMetadata?.model ?? "Model",
+                    title: sessionMetadata?.model.map { SessionOptionMetadata.modelLabel(id: $0, metadata: sessionMetadata?.modelOptionMetadata?[$0]) } ?? "Model",
                     menuTitle: "Model",
                     accessibilityLabel: "Choose session model",
                     options: sessionMetadata?.selectableModels ?? [],
                     selection: sessionMetadata?.model,
+                    optionMetadata: sessionMetadata?.modelOptionMetadata ?? [:],
                     action: onSelectModel
                 )
                 sessionMenu(
                     kind: .thinking,
                     icon: .brain,
-                    title: sessionMetadata?.thinking.map(dashboardSessionThinkingLabel) ?? "Thinking",
+                    title: sessionMetadata?.thinking.map { sessionMetadata?.thinkingOptionMetadata?[$0]?.name ?? dashboardSessionThinkingLabel($0) } ?? "Thinking",
                     menuTitle: "Thinking",
                     accessibilityLabel: "Choose thinking level",
                     options: sessionMetadata?.selectableThinkingLevels ?? [],
                     selection: sessionMetadata?.thinking,
+                    optionMetadata: sessionMetadata?.thinkingOptionMetadata ?? [:],
                     capitalizeOptions: true,
                     action: onSelectThinking
                 )
@@ -412,21 +401,23 @@ struct DashboardComposer: View {
                     compactSessionMenu(
                         kind: .model,
                         icon: .cpu,
-                        title: sessionMetadata?.model ?? "Model",
+                        title: sessionMetadata?.model.map { SessionOptionMetadata.modelLabel(id: $0, metadata: sessionMetadata?.modelOptionMetadata?[$0]) } ?? "Model",
                         menuTitle: "Model",
                         accessibilityLabel: "Choose session model",
                         options: sessionMetadata?.selectableModels ?? [],
                         selection: sessionMetadata?.model,
+                        optionMetadata: sessionMetadata?.modelOptionMetadata ?? [:],
                         action: onSelectModel
                     )
                     compactSessionMenu(
                         kind: .thinking,
                         icon: .brain,
-                        title: sessionMetadata?.thinking.map(dashboardSessionThinkingLabel) ?? "Thinking",
+                        title: sessionMetadata?.thinking.map { sessionMetadata?.thinkingOptionMetadata?[$0]?.name ?? dashboardSessionThinkingLabel($0) } ?? "Thinking",
                         menuTitle: "Thinking",
                         accessibilityLabel: "Choose thinking level",
                         options: sessionMetadata?.selectableThinkingLevels ?? [],
                         selection: sessionMetadata?.thinking,
+                        optionMetadata: sessionMetadata?.thinkingOptionMetadata ?? [:],
                         capitalizeOptions: true,
                         action: onSelectThinking
                     )
@@ -534,6 +525,7 @@ struct DashboardComposer: View {
         accessibilityLabel: String,
         options: [String],
         selection: String?,
+        optionMetadata: [String: SessionOptionMetadata] = [:],
         capitalizeOptions: Bool = false,
         action: ((String) -> Void)?
     ) -> some View {
@@ -553,7 +545,8 @@ struct DashboardComposer: View {
         .opacity(unavailable ? 0.4 : 1)
         .accessibilityLabel(accessibilityLabel)
         .accessibilityValue("\(title), \(openMenu == kind ? "Expanded" : "Collapsed")")
-        .help(accessibilityLabel)
+        .help([title, selection, selection.flatMap { optionMetadata[$0]?.description }]
+            .compactMap { $0 }.joined(separator: "\n"))
         .popover(isPresented: Binding(
             get: { openMenu == kind },
             set: { if !$0, openMenu == kind { openMenu = nil } }
@@ -562,7 +555,8 @@ struct DashboardComposer: View {
                 title: menuTitle,
                 options: options,
                 selection: selection,
-                capitalizeOptions: capitalizeOptions
+                capitalizeOptions: capitalizeOptions,
+                optionMetadata: optionMetadata
             ) { option in
                 openMenu = nil
                 action?(option)
@@ -579,6 +573,7 @@ struct DashboardComposer: View {
         accessibilityLabel: String,
         options: [String],
         selection: String?,
+        optionMetadata: [String: SessionOptionMetadata] = [:],
         capitalizeOptions: Bool = false,
         action: ((String) -> Void)?
     ) -> some View {
@@ -597,7 +592,8 @@ struct DashboardComposer: View {
         .fixedSize(horizontal: true, vertical: false)
         .accessibilityLabel(accessibilityLabel)
         .accessibilityValue("\(title), \(openMenu == kind ? "Expanded" : "Collapsed")")
-        .help(accessibilityLabel)
+        .help([title, selection, selection.flatMap { optionMetadata[$0]?.description }]
+            .compactMap { $0 }.joined(separator: "\n"))
         .popover(isPresented: Binding(
             get: { openMenu == kind },
             set: { if !$0, openMenu == kind { openMenu = nil } }
@@ -606,7 +602,8 @@ struct DashboardComposer: View {
                 title: menuTitle,
                 options: options,
                 selection: selection,
-                capitalizeOptions: capitalizeOptions
+                capitalizeOptions: capitalizeOptions,
+                optionMetadata: optionMetadata
             ) { option in
                 openMenu = nil
                 action?(option)
@@ -900,6 +897,7 @@ struct DashboardComposerOptionMenu: View {
     let options: [String]
     let selection: String?
     let capitalizeOptions: Bool
+    var optionMetadata: [String: SessionOptionMetadata] = [:]
     let onSelect: (String) -> Void
 
     var body: some View {
@@ -916,8 +914,15 @@ struct DashboardComposerOptionMenu: View {
                     ForEach(options, id: \.self) { option in
                         DashboardComposerPopoverRow(action: { onSelect(option) }) {
                             HStack(spacing: 12) {
-                                Text(optionLabel(option))
-                                    .lineLimit(1)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(optionLabel(option)).lineLimit(1)
+                                    if needsDisambiguation(option) {
+                                        Text(option)
+                                            .font(.system(size: 10, design: .monospaced))
+                                            .foregroundStyle(DashboardPalette.mutedForeground)
+                                            .lineLimit(1)
+                                    }
+                                }
                                 Spacer(minLength: 0)
                                 if option == selection {
                                     DashboardLucideIcon(glyph: .check, size: 14)
@@ -927,7 +932,9 @@ struct DashboardComposerOptionMenu: View {
                             .font(.system(size: 13))
                             .foregroundStyle(DashboardPalette.foreground)
                             .padding(.horizontal, 10)
-                            .frame(height: 38)
+                            .frame(height: rowHeight(option))
+                            .help(optionHelp(option))
+                            .accessibilityLabel(optionHelp(option))
                             .background(
                                 option == selection ? DashboardPalette.muted.opacity(0.55) : .clear,
                                 in: RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -937,7 +944,7 @@ struct DashboardComposerOptionMenu: View {
                 }
             }
             .scrollIndicators(.never)
-            .frame(height: min(CGFloat(options.count) * 40, 248))
+            .frame(height: min(options.reduce(CGFloat(0)) { $0 + rowHeight($1) + 2 }, 248))
         }
         .padding(6)
         .frame(width: 288)
@@ -945,7 +952,23 @@ struct DashboardComposerOptionMenu: View {
     }
 
     private func optionLabel(_ option: String) -> String {
-        capitalizeOptions ? dashboardSessionThinkingLabel(option) : option
+        if capitalizeOptions {
+            return optionMetadata[option]?.name ?? dashboardSessionThinkingLabel(option)
+        }
+        return SessionOptionMetadata.modelLabel(id: option, metadata: optionMetadata[option])
+    }
+
+    private func needsDisambiguation(_ option: String) -> Bool {
+        options.contains { $0 != option && optionLabel($0) == optionLabel(option) }
+    }
+
+    private func optionHelp(_ option: String) -> String {
+        [optionLabel(option), optionLabel(option) == option ? nil : option,
+         optionMetadata[option]?.description].compactMap { $0 }.joined(separator: "\n")
+    }
+
+    private func rowHeight(_ option: String) -> CGFloat {
+        needsDisambiguation(option) ? 52 : 38
     }
 }
 
