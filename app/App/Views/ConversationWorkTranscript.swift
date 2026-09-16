@@ -296,6 +296,13 @@ private struct ConversationActivityRow: View {
                         .lineLimit(activity.kind == .thought ? 2 : 1)
                         .truncationMode(.tail)
                 }
+                if activity.kind == .activity, let content = activity.content?.nonempty {
+                    Text(content)
+                        .font(.system(size: 13))
+                        .foregroundStyle(DashboardPalette.foreground.opacity(0.72))
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
             Spacer(minLength: 0)
         }
@@ -350,12 +357,13 @@ private struct ConversationActivityRow: View {
 
     private var secondaryLabel: String? {
         if let detail = activity.detail?.nonempty { return detail }
-        guard let content = activity.content?.nonempty else { return nil }
+        guard activity.kind != .activity,
+              let content = activity.content?.nonempty else { return nil }
         return Self.preview(content)
     }
 
     private var expandedContent: String? {
-        guard rawExpanded else { return nil }
+        guard rawExpanded, activity.kind != .activity else { return nil }
         let content = activity.content?.nonempty
         return content == secondaryLabel ? nil : content
     }
@@ -371,7 +379,7 @@ private struct ConversationActivityRow: View {
     }
 
     private var isExpandable: Bool {
-        hasRawDetails || (activity.content?.nonempty?.count ?? 0) > 140
+        hasRawDetails || (activity.kind != .activity && (activity.content?.nonempty?.count ?? 0) > 140)
     }
 
     private var systemImage: String {
