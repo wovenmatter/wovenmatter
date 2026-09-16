@@ -364,6 +364,35 @@ struct SettingsHarnessRuntimeMaintenanceView: View {
     }
 }
 
+struct SettingsLocalRuntimeInventoryRow: View {
+    @Bindable var model: ApplicationModel
+    let runtimeKind: AgentRuntimeKind
+
+    private var status: String {
+        if model.checkingRuntimeKinds.contains(runtimeKind) { return "Checking" }
+        guard let inventory = model.runtimeInventories[runtimeKind] else { return "Checking" }
+        return inventory.isInstalled ? "Installed" : "Not installed"
+    }
+
+    var body: some View {
+        SettingsInset {
+            HStack(spacing: 12) {
+                DashboardHarnessLogoIcon(
+                    logo: DashboardHarnessLogo(runtimeKind: runtimeKind), size: 20
+                ).frame(width: 28, height: 28)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(runtimeKind.displayName).font(.system(size: 13, weight: .medium))
+                    Text(model.runtimeInventories[runtimeKind]?.summary ?? "Checking installed components…")
+                        .font(.system(size: 11))
+                        .foregroundStyle(DashboardPalette.mutedForeground)
+                }.frame(maxWidth: .infinity, alignment: .leading)
+                SettingsPill(status, tone: model.runtimeInventories[runtimeKind]?.isInstalled == true ? .neutral : .warning)
+                SettingsLocalRuntimeUpdateButton(model: model, runtimeKind: runtimeKind)
+            }
+        }
+    }
+}
+
 struct SettingsLocalRuntimeUpdateButton: View {
     @Bindable var model: ApplicationModel
     let runtimeKind: AgentRuntimeKind

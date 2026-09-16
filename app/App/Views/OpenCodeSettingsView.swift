@@ -139,7 +139,7 @@ struct SettingsOpenCodeView: View {
                     if let instance = model.openCode, instance.isInstalled {
                         agentRow(instance, workspaceID: nil)
                     } else {
-                        localRuntimeRow
+                        SettingsLocalRuntimeInventoryRow(model: model, runtimeKind: .opencode)
                     }
                     SettingsRuntimeMaintenanceErrorView(
                         model: model,
@@ -202,22 +202,6 @@ struct SettingsOpenCodeView: View {
         }
     }
 
-    private var localRuntimeRow: some View {
-        SettingsInset {
-            HStack(spacing: 12) {
-                DashboardHarnessLogoIcon(logo: .openCode, size: 20).frame(width: 28, height: 28)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("OpenCode").font(.system(size: 13, weight: .medium))
-                    Text(model.runtimeInventories[.opencode]?.summary ?? "Checking installed components…")
-                        .font(.system(size: 11))
-                        .foregroundStyle(DashboardPalette.mutedForeground)
-                }.frame(maxWidth: .infinity, alignment: .leading)
-                SettingsPill(localRuntimeStatus, tone: .warning)
-                SettingsLocalRuntimeUpdateButton(model: model, runtimeKind: .opencode)
-            }
-        }
-    }
-
     private func remoteRuntimeRow(
         _ harness: RemoteHarnessStatus,
         configuration: RemoteWorkspaceConfiguration
@@ -266,11 +250,6 @@ struct SettingsOpenCodeView: View {
         return runtime.components.map {
             "\($0.displayName) \($0.installed ? $0.installedVersion ?? "version unavailable" : "missing")"
         }.joined(separator: " · ")
-    }
-
-    private var localRuntimeStatus: String {
-        guard let inventory = model.runtimeInventories[.opencode] else { return "Checking" }
-        return inventory.isInstalled ? "Not connected" : "Not installed"
     }
 
     private func remoteRuntimeInstalled(_ workspaceID: UUID) -> Bool {
