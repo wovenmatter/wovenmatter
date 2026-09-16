@@ -1136,7 +1136,16 @@ struct DashboardNewChatDrawer: View {
                                 detail: "Add a Buzz agent in Settings."
                             )
                         } else {
-                            ForEach(model.buzzWorkspaceAgentEnrollments) { enrollment in
+                            ForEach(
+                                model.buzzWorkspaceAgentEnrollments.sorted {
+                                    let lhsRank = $0.runtimeKind?.presentationRank ?? Int.max
+                                    let rhsRank = $1.runtimeKind?.presentationRank ?? Int.max
+                                    if lhsRank != rhsRank { return lhsRank < rhsRank }
+                                    return $0.displayNameSnapshot.localizedCaseInsensitiveCompare(
+                                        $1.displayNameSnapshot
+                                    ) == .orderedAscending
+                                }
+                            ) { enrollment in
                                 let context = DashboardBuzzWorkspaceAgentContext.resolve(
                                     enrollment: enrollment,
                                     snapshot: model.buzzWorkspaceSnapshot

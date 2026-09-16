@@ -715,21 +715,17 @@ final class ApplicationModel {
             )
         }
         return definitions.sorted { lhs, rhs in
-            let lhsRank = preferredRankByRuntime[lhs.runtimeKind]
-            let rhsRank = preferredRankByRuntime[rhs.runtimeKind]
-            switch (lhsRank, rhsRank) {
-            case let (lhsRank?, rhsRank?) where lhsRank != rhsRank:
-                return lhsRank < rhsRank
+            let lhsPreferred = preferredRankByRuntime[lhs.runtimeKind]
+            let rhsPreferred = preferredRankByRuntime[rhs.runtimeKind]
+            switch (lhsPreferred, rhsPreferred) {
+            case let (lhsPreferred?, rhsPreferred?) where lhsPreferred != rhsPreferred:
+                return lhsPreferred < rhsPreferred
             case (_?, nil):
                 return true
             case (nil, _?):
                 return false
             default:
-                let comparison = lhs.displayName.localizedCaseInsensitiveCompare(
-                    rhs.displayName
-                )
-                if comparison != .orderedSame { return comparison == .orderedAscending }
-                return lhs.runtimeKind.rawValue < rhs.runtimeKind.rawValue
+                return lhs.runtimeKind.presentationRank < rhs.runtimeKind.presentationRank
             }
         }
     }
@@ -750,6 +746,9 @@ final class ApplicationModel {
             case (nil, _?):
                 return false
             default:
+                if lhs.runtimeKind != rhs.runtimeKind {
+                    return lhs.runtimeKind.presentationRank < rhs.runtimeKind.presentationRank
+                }
                 let comparison = lhs.displayName.localizedCaseInsensitiveCompare(
                     rhs.displayName
                 )
