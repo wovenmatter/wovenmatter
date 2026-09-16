@@ -620,6 +620,31 @@ async function temporaryFixture(context, prefix) {
   return directory
 }
 
+test('database routes require authentication and ignore client-supplied workspace roots', async context => {
+  const root = await temporaryFixture(context, 'wovenmatter-database-api-')
+  const home = resolve(root, 'home')
+  await mkdir(home)
+  await mkdir(resolve(root, 'Databases'))
+  const service = await startService({ workspace: root, home, catalog: catalogPath, token: 'database-token' })
+  context.after(() => service.child.kill('SIGTERM'))
+  const request = (path, method = 'GET', body, token = 'database-token') => fetch(service.url + path, {
+    method, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  })
+  assert.equal((await request('/v1/databases', 'GET', undefined, 'wrong')).status, 401)
+  assert.equal((await request('/v1/databases', 'POST', { databaseID: 'Denied', preference: 'none' }, 'wrong')).status, 401)
+  const created = await request('/v1/databases', 'POST', { databaseID: 'Sales', preference: 'json', root: '/tmp/ignored', action: 'list' })
+  assert.equal(created.status, 200)
+  assert.equal((await created.json()).id, 'Sales')
+  await writeFile(resolve(root, 'Databases/Sales/data.json'), '[1,2,3]')
+  const read = await request('/v1/databases/data', 'POST', { databaseID: 'Sales', relativePath: 'data.json' })
+  assert.equal(Buffer.from((await read.json()).jsonBase64, 'base64').toString(), '[1,2,3]')
+  assert.equal((await request('/v1/databases/preference', 'PATCH', { databaseID: 'Sales', preference: 'sqlite' })).status, 200)
+  const listed = await (await request('/v1/databases')).json()
+  assert.deepEqual(listed.databases, [{ id: 'Sales', name: 'Sales', preference: 'sqlite' }])
+  assert.equal((await request('/v1/databases/data', 'POST', { databaseID: '../Sales', relativePath: 'data.json' })).status, 400)
+})
+
 async function startService({ workspace, home, catalog, token, gatewayPort }) {
   const port = await unusedPort()
   const environment = await fixtureEnvironment(home)

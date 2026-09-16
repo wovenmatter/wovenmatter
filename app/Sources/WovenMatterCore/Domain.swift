@@ -38,6 +38,21 @@ public enum AgentRuntimeKind: String, Codable, CaseIterable, Hashable, Sendable 
   case cursor
   case opencode
 
+  public static let presentationOrder: [Self] = [
+    .codex,
+    .claudeCode,
+    .grokBuild,
+    .cursor,
+    .openclaw,
+    .hermes,
+    .opencode,
+    .pi,
+  ]
+
+  public var presentationRank: Int {
+    Self.presentationOrder.firstIndex(of: self) ?? Self.presentationOrder.count
+  }
+
   public var displayName: String {
     switch self {
     case .openclaw: "OpenClaw"

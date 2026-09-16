@@ -72,10 +72,9 @@ enum DashboardAgentSidebarGroup: String, CaseIterable, Identifiable, Hashable, S
             let defaultOrder = agents
                 .filter { contains($0, in: group, pinnedIDs: pinnedIDs) }
                 .sorted { lhs, rhs in
-                    let lhsHarness = DashboardHarnessLogo(runtimeKind: lhs.runtimeKind)
-                    let rhsHarness = DashboardHarnessLogo(runtimeKind: rhs.runtimeKind)
-                    if lhsHarness != rhsHarness {
-                        return lhsHarness.sortsBefore(rhsHarness)
+                    if lhs.runtimeKind != rhs.runtimeKind {
+                        return lhs.runtimeKind.presentationRank
+                            < rhs.runtimeKind.presentationRank
                     }
                     let comparison = lhs.displayName.localizedCaseInsensitiveCompare(
                         rhs.displayName
@@ -87,13 +86,17 @@ enum DashboardAgentSidebarGroup: String, CaseIterable, Identifiable, Hashable, S
         case .remoteWorkspaces:
             let defaultOrder = agents
                 .filter { contains($0, in: group, pinnedIDs: pinnedIDs) }
-                .sorted {
-                    if $0.displayName != $1.displayName {
-                        return $0.displayName.localizedCaseInsensitiveCompare(
-                            $1.displayName
+                .sorted { lhs, rhs in
+                    if lhs.runtimeKind != rhs.runtimeKind {
+                        return lhs.runtimeKind.presentationRank
+                            < rhs.runtimeKind.presentationRank
+                    }
+                    if lhs.displayName != rhs.displayName {
+                        return lhs.displayName.localizedCaseInsensitiveCompare(
+                            rhs.displayName
                         ) == .orderedAscending
                     }
-                    return $0.id.uuidString < $1.id.uuidString
+                    return lhs.id.uuidString < rhs.id.uuidString
                 }
             return applyPreferredOrder(defaultOrder, preferred: customOrder)
         }
@@ -168,12 +171,8 @@ enum DashboardRemoteWorkspaceSidebarModel {
                     configuration: configuration,
                     readyTargets: (targetsByWorkspaceID[configuration.id] ?? [])
                         .sorted { lhs, rhs in
-                            let comparison = lhs.harness.displayName
-                                .localizedCaseInsensitiveCompare(rhs.harness.displayName)
-                            if comparison != .orderedSame {
-                                return comparison == .orderedAscending
-                            }
-                            return lhs.harness.id.rawValue < rhs.harness.id.rawValue
+                            lhs.harness.id.presentationRank
+                                < rhs.harness.id.presentationRank
                         }
                 )
             }
@@ -238,6 +237,9 @@ enum DashboardBuzzWorkspaceSidebarModel {
     }
 
     private static func agentSort(_ lhs: WorkspaceAgent, _ rhs: WorkspaceAgent) -> Bool {
+        if lhs.runtimeKind != rhs.runtimeKind {
+            return lhs.runtimeKind.presentationRank < rhs.runtimeKind.presentationRank
+        }
         let result = lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName)
         if result == .orderedSame {
             return lhs.id.uuidString < rhs.id.uuidString
@@ -541,15 +543,7 @@ enum DashboardHarnessLogo: String, CaseIterable, Sendable {
     case openCode
 
     static var displayCases: [DashboardHarnessLogo] {
-        allCases.sorted(by: { $0.sortsBefore($1) })
-    }
-
-    func sortsBefore(_ other: DashboardHarnessLogo) -> Bool {
-        if self == .codex { return other != .codex }
-        if other == .codex { return false }
-        let comparison = displayName.localizedCaseInsensitiveCompare(other.displayName)
-        if comparison != .orderedSame { return comparison == .orderedAscending }
-        return rawValue < other.rawValue
+        AgentRuntimeKind.presentationOrder.map(Self.init(runtimeKind:))
     }
 
     init(runtimeKind: AgentRuntimeKind) {
@@ -1036,17 +1030,23 @@ struct DashboardActiveConversationRowBackground: View {
 struct DashboardCard<Content: View>: View {
     @Environment(\.dashboardTheme) private var theme
     let showsBorder: Bool
+    let showsBackground: Bool
     let content: Content
 
-    init(showsBorder: Bool = true, @ViewBuilder content: () -> Content) {
+    init(
+        showsBorder: Bool = true,
+        showsBackground: Bool = true,
+        @ViewBuilder content: () -> Content
+    ) {
         self.showsBorder = showsBorder
+        self.showsBackground = showsBackground
         self.content = content()
     }
 
     var body: some View {
         content
             .padding(16)
-            .background(DashboardPalette.background.opacity(0.72))
+            .background(showsBackground ? DashboardPalette.background.opacity(0.72) : .clear)
             .clipShape(RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius, style: .continuous))
             .overlay {
                 if showsBorder {
@@ -1081,26 +1081,8 @@ struct DashboardSegmentedSelector<Option: Hashable>: View {
                         .frame(maxWidth: .infinity)
                         .frame(height: 27)
                         .contentShape(Rectangle())
-                        .background(
-                            isSelected
-                                ? DashboardPalette.background
-                                : Color.clear
-                        )
-                        .clipShape(
-                            RoundedRectangle(
-                                cornerRadius: DashboardMetrics.controlRadius - 4,
-                                style: .continuous
-                            )
-                        )
-                        .shadow(
-                            color: isSelected
-                                ? DashboardPalette.foreground.opacity(0.06)
-                                : .clear,
-                            radius: 2,
-                            y: 1
-                        )
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(DashboardSegmentButtonStyle(isSelected: isSelected))
                 .accessibilityAddTraits(isSelected ? .isSelected : [])
             }
         }
@@ -1115,6 +1097,53 @@ struct DashboardSegmentedSelector<Option: Hashable>: View {
         .transaction { transaction in
             transaction.animation = nil
         }
+    }
+}
+
+private struct DashboardSegmentButtonStyle: ButtonStyle {
+    @Environment(\.dashboardTheme) private var theme
+    @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @State private var isHovering = false
+
+    let isSelected: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        let shape = RoundedRectangle(
+            cornerRadius: DashboardMetrics.controlRadius - 4,
+            style: .continuous
+        )
+
+        configuration.label
+            .background {
+                ZStack {
+                    shape.fill(
+                        isSelected
+                            ? DashboardPalette.background.opacity(reduceTransparency ? 1 : 0.96)
+                            : .clear
+                    )
+                    shape.fill(interactionColor(isPressed: configuration.isPressed))
+                }
+            }
+            .shadow(
+                color: isSelected && isEnabled
+                    ? DashboardPalette.foreground.opacity(0.06)
+                    : .clear,
+                radius: 2,
+                y: 1
+            )
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.98 : 1)
+            .opacity(isEnabled ? 1 : 0.42)
+            .onHover { isHovering = $0 }
+    }
+
+    private func interactionColor(isPressed: Bool) -> Color {
+        guard isEnabled else { return .clear }
+        if isPressed {
+            return theme.palette.themeSoft
+        }
+        return isHovering ? theme.palette.themeWhisper : .clear
     }
 }
 
@@ -1182,6 +1211,8 @@ struct DashboardSwitchToggleStyle: ToggleStyle {
 
 struct DashboardPrimaryButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var isHovering = false
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
@@ -1189,15 +1220,23 @@ struct DashboardPrimaryButtonStyle: ButtonStyle {
             .foregroundStyle(DashboardPalette.primaryForeground)
             .padding(.horizontal, 14)
             .frame(minHeight: 36)
-            .background(DashboardPalette.primary.opacity(configuration.isPressed ? 0.82 : 1))
+            .background(
+                DashboardPalette.primary.opacity(
+                    configuration.isPressed ? 0.78 : (isEnabled && isHovering ? 0.9 : 1)
+                )
+            )
             .clipShape(RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius, style: .continuous))
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.985 : 1)
             .opacity(isEnabled ? 1 : 0.4)
+            .onHover { isHovering = $0 }
     }
 }
 
 struct DashboardQuietButtonStyle: ButtonStyle {
     @Environment(\.dashboardTheme) private var theme
     @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var isHovering = false
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
@@ -1205,8 +1244,14 @@ struct DashboardQuietButtonStyle: ButtonStyle {
             .foregroundStyle(DashboardPalette.foreground)
             .padding(.horizontal, 12)
             .frame(minHeight: 36)
-            .background(theme.palette.themeSoft.opacity(configuration.isPressed ? 1 : 0.72))
+            .background(
+                theme.palette.themeSoft.opacity(
+                    configuration.isPressed ? 1 : (isEnabled && isHovering ? 0.72 : 0.5)
+                )
+            )
             .clipShape(RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius, style: .continuous))
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.985 : 1)
             .opacity(isEnabled ? 1 : 0.4)
+            .onHover { isHovering = $0 }
     }
 }

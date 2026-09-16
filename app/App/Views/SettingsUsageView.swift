@@ -17,11 +17,18 @@ private enum SettingsUsageCredentialAction: Identifiable {
     var purpose: String {
         switch self {
         case .enableProvider(let provider):
-            "Enable \(provider.displayName) so Woven Matter can check its local sign-in and usage when Usage refreshes."
+            switch provider {
+            case .cursor:
+                "Allow Woven Matter to read Cursor’s local account session and check usage."
+            case .openRouter:
+                "Allow Woven Matter to use your saved OpenRouter key to check usage."
+            default:
+                "Allow Woven Matter to check \(provider.displayName) usage using its local sign-in."
+            }
         case .saveOpenRouter:
-            "Save and use the OpenRouter API key you enter in this Mac's Keychain."
+            "Save your OpenRouter key in this Mac’s Keychain and use it to check usage."
         case .deleteOpenRouter:
-            "Access the saved OpenRouter item so it can be removed from this Mac's Keychain."
+            "Remove your saved OpenRouter key from this Mac’s Keychain."
         }
     }
 }
@@ -43,7 +50,6 @@ struct SettingsUsageView: View {
     var body: some View {
         SettingsPage(
             title: "Usage",
-            detail: "Usage collection and provider connection settings.",
             reservesRailControlSpace: reservesRailControlSpace,
             onBack: onBack
         ) {
@@ -53,7 +59,7 @@ struct SettingsUsageView: View {
 
             SettingsCard(
                 title: "Providers",
-                detail: "Choose which providers Woven Matter may collect and display. Disabled providers are not scanned, checked, or shown in Usage Analytics or Usage Limits."
+                detail: "Track usage for the accounts you enable."
             ) {
                 ForEach(ProviderKind.supportedAccounts) { provider in
                     SettingsInset {
@@ -65,7 +71,6 @@ struct SettingsUsageView: View {
                 }
             }
 
-            SettingsNote("Provider settings are stored on this Mac. Subscription providers use their existing CLI sign-in; OpenRouter uses only the API key you enter here.")
         }
         .task {
             await model.refreshLocalUsage(
@@ -99,7 +104,7 @@ struct SettingsUsageView: View {
                 .toggleStyle(DashboardSwitchToggleStyle(showsLabel: false))
                 .accessibilityLabel("Enable \(provider.displayName) usage")
                 .help(
-                    "Controls whether Woven Matter may scan, collect, and display \(provider.displayName) usage and account limits."
+                    "Allow usage tracking for \(provider.displayName)."
                 )
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 8) {
@@ -112,10 +117,12 @@ struct SettingsUsageView: View {
                                 : .warning
                         )
                     }
-                    Text(providerDetail(provider))
-                        .font(.system(size: 11.5))
-                        .foregroundStyle(DashboardPalette.mutedForeground)
-                        .fixedSize(horizontal: false, vertical: true)
+                    if let detail = providerDetail(provider) {
+                        Text(detail)
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(DashboardPalette.mutedForeground)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
                 Spacer(minLength: 16)
             }
@@ -154,7 +161,7 @@ struct SettingsUsageView: View {
                 .settingsInput()
                 .disabled(!model.isUsageProviderEnabled(.openRouter))
                 .accessibilityLabel("OpenRouter API key")
-                .help("The key is stored using Woven Matter's existing macOS Keychain credential boundary.")
+                .help("Stored in this Mac’s Keychain.")
 
                 Button(
                     model.isOpenRouterCredentialConfigured
@@ -171,7 +178,7 @@ struct SettingsUsageView: View {
                             .isEmpty
                         || model.isRefreshingLocalUsage
                 )
-                .help("Save this key in the existing Woven Matter Keychain item.")
+                .help("Save the key in Keychain.")
             }
 
             if model.isOpenRouterCredentialConfigured {
@@ -218,26 +225,19 @@ struct SettingsUsageView: View {
         }
     }
 
-    private func providerDetail(_ provider: ProviderKind) -> String {
+    private func providerDetail(_ provider: ProviderKind) -> String? {
         guard model.isUsageProviderEnabled(provider) else {
-            return "Not collected or shown in Usage."
+            return nil
         }
         if provider == .openRouter {
             return model.isOpenRouterCredentialConfigured
-                ? "Uses the saved API key for OpenRouter activity and limits. OAuth is not used."
-                : "Add an API or management key to collect OpenRouter activity and limits. OAuth is not used."
+                ? nil
+                : "Add an API or management key to track usage."
         }
         if let detail = account(for: provider)?.detail {
             return detail
         }
-        return switch provider {
-        case .codex: "Collects Codex usage and checks the locally signed-in OpenAI account."
-        case .claude: "Collects Claude usage and checks the locally signed-in Claude account."
-        case .grok: "Collects Grok usage and checks the locally signed-in xAI account."
-        case .cursor: "Collects Cursor usage and checks Cursor's local account session."
-        case .openCodeGo: "Collects OpenCode Go cost history and checks its provider sign-in."
-        case .openRouter, .unknown: ""
-        }
+        return nil
     }
 
     private func account(for provider: ProviderKind) -> UsageLimitAccount? {

@@ -7,50 +7,69 @@ struct DashboardCronSurface: View {
   let onOpenConversation: (String) -> Void
   @State private var provider = "Hermes"
   var body: some View {
-    VStack(spacing: 0) {
-      Picker("Agent", selection: $provider) {
-        Text("Hermes").tag("Hermes")
-        Text("OpenClaw").tag("OpenClaw")
-      }.pickerStyle(.segmented).frame(width: 240).padding(.top, 16)
-      if provider == "Hermes" {
-        HermesCronSurface(model: model, onOpenConversation: onOpenConversation)
-      } else {
-        OpenClawCronSurface(model: model, onOpenConversation: onOpenConversation)
-      }
+    if provider == "Hermes" {
+      HermesCronSurface(
+        model: model,
+        provider: $provider,
+        onOpenConversation: onOpenConversation
+      )
+    } else {
+      OpenClawCronSurface(
+        model: model,
+        provider: $provider,
+        onOpenConversation: onOpenConversation
+      )
     }
   }
 }
 
 struct HermesCronSurface: View {
   @Bindable var model: ApplicationModel
+  @Binding var provider: String
   let onOpenConversation: (String) -> Void
   @State private var selectedAgent: UUID?
   var body: some View {
-    VStack(alignment: .leading, spacing: 16) {
-      HStack {
-        VStack(alignment: .leading, spacing: 4) {
+    VStack(spacing: 0) {
+      VStack(alignment: .leading, spacing: 12) {
+        HStack(spacing: 12) {
+          DashboardLucideIcon(glyph: .calendarClockControl, size: 18)
+            .foregroundStyle(DashboardPalette.primary)
+            .frame(width: 36, height: 36)
+            .background(DashboardPalette.muted)
+            .clipShape(RoundedRectangle(
+              cornerRadius: DashboardMetrics.controlRadius,
+              style: .continuous
+            ))
           Text("Cron Jobs").font(.system(size: 22, weight: .semibold))
-          Text("Hermes schedules, results, and conversation delivery")
-            .font(.system(size: 12.5)).foregroundStyle(DashboardPalette.mutedForeground)
+          Spacer(minLength: 16)
+          cronProviderSelector
         }
-        Spacer()
-        Picker("Workspace", selection: $selectedAgent) {
-          Text("All workspaces").tag(nil as UUID?)
-          ForEach(model.hermesCronAgents) { Text($0.displayName).tag(Optional($0.id)) }
-        }.frame(maxWidth: 200)
-        Button(model.isRefreshingHermesCron ? "Refreshing…" : "Refresh") {
-          Task { await model.refreshHermesCron() }
+        HStack(spacing: 8) {
+          Spacer(minLength: 0)
+          Picker("Workspace", selection: $selectedAgent) {
+            Text("All workspaces").tag(nil as UUID?)
+            ForEach(model.hermesCronAgents) { Text($0.displayName).tag(Optional($0.id)) }
+          }
+          .frame(maxWidth: 200)
+          Button(model.isRefreshingHermesCron ? "Refreshing…" : "Refresh") {
+            Task { await model.refreshHermesCron() }
+          }
+          .buttonStyle(DashboardQuietButtonStyle())
+          .disabled(model.isRefreshingHermesCron)
         }
-        .buttonStyle(DashboardQuietButtonStyle()).disabled(model.isRefreshingHermesCron)
+        Text(
+          "Jobs keep running while Woven Matter is closed, as long as Hermes and its host stay running."
+        )
+        .font(.system(size: 12)).foregroundStyle(DashboardPalette.mutedForeground)
       }
-      Text(
-        "The agent host runs schedules and retains delivered results while this app is closed. Collection marks conversations unread once per run."
-      )
-      .font(.system(size: 12)).foregroundStyle(DashboardPalette.mutedForeground)
+      .padding(.horizontal, 32)
+      .padding(.top, 48)
+      .padding(.bottom, 20)
+
       ScrollView {
         LazyVStack(alignment: .leading, spacing: 16) {
           if model.hermesCronAgents.isEmpty {
-            Text("Connect a local or remote Hermes Gateway in Settings to manage scheduled jobs.")
+            Text("Connect Hermes in Settings to schedule jobs.")
           }
           ForEach(model.hermesCronAgents.filter { selectedAgent == nil || $0.id == selectedAgent })
           { agent in
@@ -63,6 +82,8 @@ struct HermesCronSurface: View {
               .font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
               if let error = model.hermesCronErrors[agent.id] { SettingsError(error) }
               HermesCronJobForm(model: model, agent: agent)
+              Text("If another Hermes Gateway runs these jobs, restart it after first enabling result delivery.")
+                .font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
               if (model.hermesCronJobs[agent.id] ?? []).isEmpty {
                 Text("No scheduled jobs.").font(.callout)
               }
@@ -78,7 +99,7 @@ struct HermesCronSurface: View {
                   ) {
                     VStack(alignment: .leading, spacing: 8) {
                       Text(result.output).font(.system(size: 12)).textSelection(.enabled)
-                      Button("Continue from Output") {
+                      Button("Continue in chat") {
                         Task {
                           if let id = await model.continueHermesResult(agent: agent, result: result)
                           {
@@ -93,9 +114,21 @@ struct HermesCronSurface: View {
               }
             }
           }
-        }.frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 32)
+        .padding(.bottom, 32)
       }
-    }.padding(32).task { await model.refreshHermesCron() }
+    }
+    .task { await model.refreshHermesCron() }
+  }
+
+  private var cronProviderSelector: some View {
+    DashboardSegmentedSelector(
+      options: ["Hermes", "OpenClaw"],
+      selection: $provider
+    ) { $0 }
+    .frame(width: 220)
   }
 
   private func jobCard(agent: WorkspaceAgent, job: HermesValue) -> some View {
@@ -115,7 +148,7 @@ struct HermesCronSurface: View {
         }.buttonStyle(DashboardQuietButtonStyle())
       }
       Picker(
-        "Deliver results to",
+        "Send results to",
         selection: Binding(
           get: { model.hermesResultRoutes[agent.id]?[job["id"].text] ?? "" },
           set: { destination in
@@ -127,7 +160,7 @@ struct HermesCronSurface: View {
         )
       ) {
         Text("Cron Jobs only").tag("")
-        Text("New conversation per result").tag("new")
+        Text("New chat for each result").tag("new")
         ForEach(
           (model.workspaceOverview?.conversations ?? []).filter {
             $0.agentID == agent.id.uuidString.lowercased() && !$0.isArchived
@@ -136,17 +169,14 @@ struct HermesCronSurface: View {
           Text(conversation.title).tag(conversation.id)
         }
       }
-      Text(
-        "Woven Matter retains textual results on the agent host. If another Hermes gateway owns scheduling, restart it once after first enabling this delivery plugin."
-      )
-      .font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
       if let error = job["last_delivery_error"].string, !error.isEmpty { SettingsError(error) }
       DisclosureGroup("Job details") {
         Text(job["prompt"].string ?? job["script"].string ?? "No prompt").font(.callout)
           .textSelection(.enabled)
       }
-    }.padding(16).background(DashboardPalette.background).clipShape(
-      RoundedRectangle(cornerRadius: DashboardMetrics.cardRadius))
+    }
+    .padding(16)
+    .clipShape(RoundedRectangle(cornerRadius: DashboardMetrics.cardRadius))
   }
 }
 
@@ -160,10 +190,14 @@ private struct HermesCronJobForm: View {
 
   var body: some View {
     DisclosureGroup("New scheduled job") {
-      VStack(alignment: .leading, spacing: 8) {
+      VStack(alignment: .leading, spacing: 10) {
         TextField("Name", text: $name)
+          .frame(maxWidth: 640)
         TextField("Schedule, e.g. every 1h", text: $schedule)
-        TextField("Instructions", text: $prompt, axis: .vertical).lineLimit(3...8)
+          .frame(maxWidth: 640)
+        TextField("Instructions", text: $prompt, axis: .vertical)
+          .lineLimit(3...8)
+          .frame(maxWidth: 640)
         Button("Create paused job") {
           creating = true
           Task {
@@ -179,9 +213,16 @@ private struct HermesCronJobForm: View {
         }.disabled(
           creating || schedule.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             || prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-        Text("Choose delivery below, then resume the job when it is ready.").font(
+        Text("Choose where to send results, then resume the job.").font(
           .caption)
-      }.textFieldStyle(.roundedBorder)
+      }
+      .textFieldStyle(.roundedBorder)
+      .controlSize(.regular)
+      .frame(maxWidth: 640, alignment: .leading)
+      .padding(.horizontal, 4)
+      .padding(.top, 10)
+      .padding(.bottom, 4)
+      .frame(maxWidth: .infinity, alignment: .leading)
     }
   }
 }

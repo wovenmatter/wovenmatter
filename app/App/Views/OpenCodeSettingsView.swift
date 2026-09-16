@@ -11,11 +11,10 @@ struct OpenCodeSettingsCard: View {
     @State private var loadingModels = false
     @State private var modelsError: String?
     var body: some View {
-        SettingsCard(title: "Server connection", detail: "Live connection state for this OpenCode agent.") {
+        SettingsCard(title: "Server connection") {
             SettingsValueRow(label: "Location", value: model.workspaceName)
             if let configuration = model.remoteConfiguration {
                 SettingsValueRow(label: "Host", value: configuration.hostName)
-                SettingsNote("Authenticated workspace service over SSH, port \(configuration.remotePort). Connection settings belong to this remote workspace.")
             }
             HStack {
                 SettingsPill(model.isConnecting ? "Connecting…" : model.isReady ? "Ready" : "Not connected", tone: model.isReady ? .neutral : .warning)
@@ -56,11 +55,11 @@ struct OpenCodeSettingsCard: View {
                 if model.isControllingServer { ProgressView().controlSize(.small) }
             }
             .buttonStyle(SettingsQuietButtonStyle())
-            Toggle("Start OpenCode server when WovenMatter launches", isOn: $model.startServerOnLaunch)
+            Toggle("Start OpenCode server when Woven Matter launches", isOn: $model.startServerOnLaunch)
                 .toggleStyle(DashboardSwitchToggleStyle())
-            Toggle("Stop OpenCode server when WovenMatter quits", isOn: $model.stopServerOnQuit)
+            Toggle("Stop OpenCode server when Woven Matter quits", isOn: $model.stopServerOnQuit)
                 .toggleStyle(DashboardSwitchToggleStyle())
-            Text("Stopping the server also disconnects the browser and other OpenCode clients.")
+            Text("Stopping the server disconnects all its clients.")
                 .font(.caption).foregroundStyle(.secondary)
             if !model.isRemote {
                 OpenCodeSessionLibrary(model: model)
@@ -111,7 +110,7 @@ struct OpenCodeSettingsCard: View {
                 .padding(.vertical, 2)
             }
             .frame(height: 300)
-            Text("Saved automatically. Existing chats keep their selected model.")
+            Text("Existing chats keep their selected model.")
                 .font(.caption).foregroundStyle(.secondary)
         }
         .padding(16)
@@ -133,17 +132,24 @@ struct SettingsOpenCodeView: View {
     }
 
     var body: some View {
-        SettingsPage(title: "OpenCode", detail: "Independent OpenCode settings for this Mac and each remote workspace.",
+        SettingsPage(title: "OpenCode",
             reservesRailControlSpace: reservesRailControlSpace, onBack: onBack) {
             if !isWorkspaceScoped || workspaceID == nil {
-                SettingsCard(title: "Local agent workspace", detail: "Open an agent to manage its Woven Matter name and server connection.") {
+                SettingsCard(title: "Local agent workspace") {
                     if let instance = model.openCode, instance.isInstalled {
                         agentRow(instance, workspaceID: nil)
-                    } else { SettingsEmpty("No OpenCode agents discovered.") }
+                    } else {
+                        SettingsLocalRuntimeInventoryRow(model: model, runtimeKind: .opencode)
+                    }
+                    SettingsRuntimeMaintenanceErrorView(
+                        model: model,
+                        runtimeKind: .opencode,
+                        workspaceID: nil
+                    )
                 }
             }
             if !isWorkspaceScoped || workspaceID != nil {
-                SettingsCard(title: "Remote agent workspaces", detail: "Discover agents in each connected workspace.") {
+                SettingsCard(title: "Remote agent workspaces") {
                     if remoteConfigurations.isEmpty { SettingsEmpty("No remote agent workspaces connected.") }
                     ForEach(remoteConfigurations) { configuration in
                         VStack(alignment: .leading, spacing: 8) {
@@ -151,7 +157,14 @@ struct SettingsOpenCodeView: View {
                             Text(configuration.hostName).font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
                             if let instance = model.remoteOpenCodes[configuration.id], instance.isInstalled {
                                 agentRow(instance, workspaceID: configuration.id)
+                            } else if let harness = model.remoteWorkspaces.currentHarnesses(for: configuration).first(where: { $0.id == .opencode }) {
+                                remoteRuntimeRow(harness, configuration: configuration)
                             } else { SettingsEmpty("No OpenCode agents discovered.") }
+                            SettingsRuntimeMaintenanceErrorView(
+                                model: model,
+                                runtimeKind: .opencode,
+                                workspaceID: configuration.id
+                            )
                             Button("Scan workspace") { model.remoteWorkspaces.refresh(configuration) }
                                 .buttonStyle(SettingsQuietButtonStyle())
                                 .disabled(model.remoteWorkspaces.busyWorkspaceIDs.contains(configuration.id))
@@ -159,7 +172,6 @@ struct SettingsOpenCodeView: View {
                     }
                 }
             }
-            SettingsNote("Each agent has its own connection and server controls.")
         }
         .task {
             await model.synchronizeRemoteOpenCodeInstances()
@@ -179,11 +191,69 @@ struct SettingsOpenCodeView: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(agent?.displayName ?? "OpenCode").font(.system(size: 13, weight: .medium))
                     Text(instance.workspaceName).font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
+                    Text(runtimeDetail(workspaceID: workspaceID))
+                        .font(.system(size: 11))
+                        .foregroundStyle(DashboardPalette.mutedForeground)
                 }.frame(maxWidth: .infinity, alignment: .leading)
                 SettingsPill(instance.isReady ? "Ready" : "Not connected", tone: instance.isReady ? .neutral : .warning)
+                updateButton(workspaceID: workspaceID)
                 Button("Settings") { onOpenAgent(workspaceID) }.buttonStyle(SettingsQuietButtonStyle())
             }
         }
+    }
+
+    private func remoteRuntimeRow(
+        _ harness: RemoteHarnessStatus,
+        configuration: RemoteWorkspaceConfiguration
+    ) -> some View {
+        SettingsInset {
+            HStack(spacing: 12) {
+                DashboardHarnessLogoIcon(logo: .openCode, size: 20).frame(width: 28, height: 28)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(harness.displayName).font(.system(size: 13, weight: .medium))
+                    Text(runtimeDetail(workspaceID: configuration.id))
+                        .font(.system(size: 11))
+                        .foregroundStyle(DashboardPalette.mutedForeground)
+                }.frame(maxWidth: .infinity, alignment: .leading)
+                SettingsPill(remoteRuntimeInstalled(configuration.id) ? "Not connected" : "Not installed", tone: .warning)
+                SettingsRemoteRuntimeUpdateButton(
+                    model: model.remoteWorkspaces,
+                    harness: harness,
+                    configuration: configuration
+                )
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func updateButton(workspaceID: UUID?) -> some View {
+        if let workspaceID,
+           let configuration = model.remoteWorkspaces.configuration(id: workspaceID),
+           let harness = model.remoteWorkspaces.currentHarnesses(for: configuration).first(where: { $0.id == .opencode }) {
+            SettingsRemoteRuntimeUpdateButton(
+                model: model.remoteWorkspaces,
+                harness: harness,
+                configuration: configuration
+            )
+        } else if workspaceID == nil {
+            SettingsLocalRuntimeUpdateButton(model: model, runtimeKind: .opencode)
+        }
+    }
+
+    private func runtimeDetail(workspaceID: UUID?) -> String {
+        guard let workspaceID else {
+            return model.runtimeInventories[.opencode]?.summary ?? "Checking installed components…"
+        }
+        guard let runtime = model.remoteWorkspaces.runtimeMaintenance[workspaceID]?.first(where: { $0.id == .opencode }) else {
+            return "Runtime inventory unavailable."
+        }
+        return runtime.components.map {
+            "\($0.displayName) \($0.installed ? $0.installedVersion ?? "version unavailable" : "missing")"
+        }.joined(separator: " · ")
+    }
+
+    private func remoteRuntimeInstalled(_ workspaceID: UUID) -> Bool {
+        model.remoteWorkspaces.runtimeMaintenance[workspaceID]?.first(where: { $0.id == .opencode })?.installed == true
     }
 }
 
@@ -203,13 +273,13 @@ struct SettingsOpenCodeAgentView: View {
         return model.localACPWorkspaceAvailability.rootPath ?? FileManager.default.homeDirectoryForCurrentUser.appending(path: ".woven-matter").path
     }
     var body: some View {
-        SettingsPage(title: name.isEmpty ? "OpenCode" : name, detail: "Woven Matter name and live server connection for this agent.",
+        SettingsPage(title: name.isEmpty ? "OpenCode" : name,
             reservesRailControlSpace: reservesRailControlSpace, onBack: onBack) {
             if let instance {
-                SettingsCard(title: "Woven Matter name", detail: "Changes how this agent appears in Woven Matter. It does not rename or reconfigure OpenCode.") {
+                SettingsCard(title: "Woven Matter name", detail: "This name is shown only in Woven Matter.") {
                     Text("Agent name").font(.system(size: 11, weight: .medium)).foregroundStyle(DashboardPalette.mutedForeground)
                     TextField("Agent name", text: $name).textFieldStyle(.roundedBorder)
-                    Button("Save Woven Matter Name") {
+                    Button("Save name") {
                         guard let agentID else { return }
                         Task {
                             saving = true; error = nil
@@ -254,7 +324,7 @@ private struct OpenCodeSessionLibrary: View {
             ForEach(sessions, id: \.self) { session in
                 HStack {
                     VStack(alignment: .leading, spacing: 3) {
-                        Text(session["title"].string ?? "OpenCode conversation").font(.system(size: 13, weight: .medium))
+                        Text(session["title"].string ?? "OpenCode session").font(.system(size: 13, weight: .medium))
                         Text(session["location"]["directory"].text)
                             .font(.system(size: 11, design: .monospaced))
                             .foregroundStyle(DashboardPalette.mutedForeground).lineLimit(2)
@@ -267,7 +337,7 @@ private struct OpenCodeSessionLibrary: View {
                             do {
                                 try await model.importSession(session)
                                 sessions.removeAll { $0["id"] == session["id"] }
-                                feedback = "Imported into the conversation list."
+                                feedback = "Added to chats."
                             } catch { feedback = error.localizedDescription }
                         }
                     }

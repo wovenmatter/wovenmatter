@@ -1,3 +1,4 @@
+import { databaseOperation } from './database-catalog.mjs'
 import { createHermesInstance } from './hermes-instance.mjs'
 import { createRuntimeMaintenance, acquireHostLock } from './runtime-maintenance.mjs'
 import { createWorkspaceInstances } from './workspace-instances.mjs'
@@ -68,6 +69,16 @@ const server = createServer(async (request, response) => {
   try {
     if (!authorized(request)) return json(response, 401, { error: 'unauthorized' })
     const url = new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`)
+
+    if (request.method === 'GET' && url.pathname === '/v1/databases') {
+      return json(response, 200, await databaseOperation(workspaceRoot, { action: 'list' }))
+    }
+    const databaseActions = { 'POST /v1/databases': 'create', 'PATCH /v1/databases/preference': 'preference', 'POST /v1/databases/data': 'data' }
+    const databaseAction = databaseActions[`${request.method} ${url.pathname}`]
+    if (databaseAction) {
+      const body = await readJSON(request)
+      return json(response, 200, await databaseOperation(workspaceRoot, { ...body, action: databaseAction }))
+    }
 
     if (await hermes.handle(request, response, url)) return
     if (await instances.handle(request, response, url)) return

@@ -225,6 +225,7 @@ final class ApplicationModel {
     private(set) var databasesSnapshot = DashboardDatabasesSnapshot.empty
     private(set) var isRefreshingDatabases = false
     private(set) var databaseError: String?
+    private(set) var updatingDatabasePreferenceIDs: Set<String> = []
     @ObservationIgnored
     private var databaseRefreshWaiters: [CheckedContinuation<Void, Never>] = []
     @ObservationIgnored
@@ -714,21 +715,17 @@ final class ApplicationModel {
             )
         }
         return definitions.sorted { lhs, rhs in
-            let lhsRank = preferredRankByRuntime[lhs.runtimeKind]
-            let rhsRank = preferredRankByRuntime[rhs.runtimeKind]
-            switch (lhsRank, rhsRank) {
-            case let (lhsRank?, rhsRank?) where lhsRank != rhsRank:
-                return lhsRank < rhsRank
+            let lhsPreferred = preferredRankByRuntime[lhs.runtimeKind]
+            let rhsPreferred = preferredRankByRuntime[rhs.runtimeKind]
+            switch (lhsPreferred, rhsPreferred) {
+            case let (lhsPreferred?, rhsPreferred?) where lhsPreferred != rhsPreferred:
+                return lhsPreferred < rhsPreferred
             case (_?, nil):
                 return true
             case (nil, _?):
                 return false
             default:
-                let comparison = lhs.displayName.localizedCaseInsensitiveCompare(
-                    rhs.displayName
-                )
-                if comparison != .orderedSame { return comparison == .orderedAscending }
-                return lhs.runtimeKind.rawValue < rhs.runtimeKind.rawValue
+                return lhs.runtimeKind.presentationRank < rhs.runtimeKind.presentationRank
             }
         }
     }
@@ -749,6 +746,9 @@ final class ApplicationModel {
             case (nil, _?):
                 return false
             default:
+                if lhs.runtimeKind != rhs.runtimeKind {
+                    return lhs.runtimeKind.presentationRank < rhs.runtimeKind.presentationRank
+                }
                 let comparison = lhs.displayName.localizedCaseInsensitiveCompare(
                     rhs.displayName
                 )
@@ -3732,78 +3732,132 @@ final class ApplicationModel {
         repeat {
             databaseRefreshRequestedWhileRunning = false
             var sources: [DashboardDatabaseSource] = []
-        if let root = localACPWorkspaceLaunchConfiguration?.databasesURL {
-            do {
-                let rows = try await Task.detached(priority: .utility) {
-                    try AgentDatabaseCatalog.list(at: root)
-                }.value
-                sources.append(Self.databaseSource(
-                    id: "local",
-                    name: "Local workspace",
-                    kind: .local,
-                    detail: root.path,
-                    rows: rows,
-                    allowsCreation: true,
-                    allowsExternalLinks: true
-                ))
-            } catch {
+            if let root = localACPWorkspaceLaunchConfiguration?.databasesURL {
+                do {
+                    let rows = try await Task.detached(priority: .utility) {
+                        try AgentDatabaseCatalog.list(at: root)
+                    }.value
+                    sources.append(Self.databaseSource(
+                        id: "local",
+                        name: "Local workspace",
+                        kind: .local,
+                        detail: root.path,
+                        rows: rows,
+                        allowsCreation: true,
+                        allowsExternalLinks: true
+                    ))
+                } catch {
+                    sources.append(DashboardDatabaseSource(
+                        id: "local",
+                        name: "Local workspace",
+                        kind: .local,
+                        detail: root.path,
+                        databases: [],
+                        error: error.localizedDescription,
+                        allowsCreation: true,
+                        allowsExternalLinks: true
+                    ))
+                }
+            } else {
                 sources.append(DashboardDatabaseSource(
                     id: "local",
                     name: "Local workspace",
                     kind: .local,
-                    detail: root.path,
+                    detail: "Set up the local agent workspace in Settings.",
                     databases: [],
-                    error: error.localizedDescription,
-                    allowsCreation: true,
-                    allowsExternalLinks: true
-                ))
-            }
-        } else {
-            sources.append(DashboardDatabaseSource(
-                id: "local",
-                name: "Local workspace",
-                kind: .local,
-                detail: "Set up the local agent workspace in Settings.",
-                databases: [],
-                error: localACPWorkspaceAvailability.detail,
-                allowsCreation: false,
-                allowsExternalLinks: false
-            ))
-        }
-
-        for link in buzzWorkspaceSnapshot.links where link.isEnabled {
-            let sourceID = "buzz:\(link.id.uuidString.lowercased())"
-            let root = link.localWorkspaceURL.appending(
-                path: LocalACPWorkspaceProvisioner.databasesDirectoryName,
-                directoryHint: .isDirectory
-            )
-            do {
-                let rows = try await Task.detached(priority: .utility) {
-                    try AgentDatabaseCatalog.list(at: root)
-                }.value
-                sources.append(Self.databaseSource(
-                    id: sourceID,
-                    name: link.displayName,
-                    kind: .buzz,
-                    detail: root.path,
-                    rows: rows
-                ))
-            } catch {
-                sources.append(DashboardDatabaseSource(
-                    id: sourceID,
-                    name: link.displayName,
-                    kind: .buzz,
-                    detail: root.path,
-                    databases: [],
-                    error: error.localizedDescription,
+                    error: localACPWorkspaceAvailability.detail,
                     allowsCreation: false,
                     allowsExternalLinks: false
                 ))
             }
-        }
 
+            let remoteCatalogIdentity = remoteWorkspaces.databaseCatalogIdentity
+            let configurations = remoteCatalogIdentity.configurations
+            for configuration in configurations {
+                let sourceID = Self.remoteDatabaseSourceID(configuration.id)
+                do {
+                    let rows = try await remoteWorkspaces.databases(for: configuration)
+                    sources.append(DashboardDatabaseSource(
+                        id: sourceID, name: configuration.name, kind: .remote,
+                        detail: "\(configuration.hostName) · Databases",
+                        databases: rows.map { DashboardAgentDatabase(
+                            sourceID: sourceID, databaseID: $0.id, name: $0.name,
+                            preference: $0.preference, localURL: nil, isExternal: false
+                        ) }, error: nil, allowsCreation: true, allowsExternalLinks: false
+                    ))
+                } catch {
+                    sources.append(DashboardDatabaseSource(
+                        id: sourceID, name: configuration.name, kind: .remote,
+                        detail: configuration.hostName, databases: [],
+                        error: error is CancellationError ? "Workspace connection changed. Refresh to reconnect." : error.localizedDescription,
+                        allowsCreation: false, allowsExternalLinks: false
+                    ))
+                }
+            }
+            for link in buzzWorkspaceSnapshot.links where link.isEnabled {
+                let sourceID = "buzz:\(link.id.uuidString.lowercased())"
+                let root = link.localWorkspaceURL.appending(
+                    path: LocalACPWorkspaceProvisioner.databasesDirectoryName,
+                    directoryHint: .isDirectory
+                )
+                do {
+                    let rows = try await Task.detached(priority: .utility) {
+                        try AgentDatabaseCatalog.list(at: root)
+                    }.value
+                    sources.append(Self.databaseSource(
+                        id: sourceID,
+                        name: link.displayName,
+                        kind: .buzz,
+                        detail: root.path,
+                        rows: rows
+                    ))
+                } catch {
+                    sources.append(DashboardDatabaseSource(
+                        id: sourceID,
+                        name: link.displayName,
+                        kind: .buzz,
+                        detail: root.path,
+                        databases: [],
+                        error: error.localizedDescription,
+                        allowsCreation: false,
+                        allowsExternalLinks: false
+                    ))
+                }
+            }
+
+            guard remoteCatalogIdentity == remoteWorkspaces.databaseCatalogIdentity else {
+                databaseRefreshRequestedWhileRunning = true
+                continue
+            }
             databasesSnapshot = DashboardDatabasesSnapshot(sources: sources)
         } while databaseRefreshRequestedWhileRunning
+    }
+
+    static func remoteDatabaseSourceID(_ id: UUID) -> String {
+        "remote:\(id.uuidString.lowercased())"
+    }
+
+    private func remoteDatabaseConfiguration(sourceID: String) -> RemoteWorkspaceConfiguration? {
+        remoteWorkspaces.workspaces.first { Self.remoteDatabaseSourceID($0.id) == sourceID }
+    }
+
+    @discardableResult
+    func createDatabase(sourceID: String, name: String, preference: AgentDatabasePreference) async -> String? {
+        if sourceID == "local" { return await createLocalDatabase(name: name, preference: preference) }
+        guard let configuration = remoteDatabaseConfiguration(sourceID: sourceID) else {
+            databaseError = "Choose an available workspace."
+            return nil
+        }
+        do {
+            let row = try await remoteWorkspaces.createDatabase(
+                name: name.trimmingCharacters(in: .whitespacesAndNewlines), preference: preference, in: configuration)
+            databaseError = nil
+            await refreshDatabases()
+            return "\(sourceID):\(row.id)"
+        } catch {
+            databaseError = error.localizedDescription
+            return nil
+        }
     }
 
     @discardableResult
@@ -3855,14 +3909,18 @@ final class ApplicationModel {
         _ preference: AgentDatabasePreference,
         database: DashboardAgentDatabase
     ) async {
-        guard let url = database.localURL else {
-            databaseError = "Remote database preferences are managed by their agent."
-            return
-        }
+        guard updatingDatabasePreferenceIDs.insert(database.id).inserted else { return }
+        defer { updatingDatabasePreferenceIDs.remove(database.id) }
         do {
-            try await Task.detached(priority: .userInitiated) {
-                try AgentDatabaseCatalog.setPreference(preference, for: url)
-            }.value
+            if let configuration = remoteDatabaseConfiguration(sourceID: database.sourceID) {
+                try await remoteWorkspaces.setDatabasePreference(preference, databaseID: database.databaseID, in: configuration)
+            } else if let url = database.localURL {
+                try await Task.detached(priority: .userInitiated) {
+                    try AgentDatabaseCatalog.setPreference(preference, for: url)
+                }.value
+            } else {
+                throw DashboardDatabaseLinkError.databaseUnavailable
+            }
             databaseError = nil
             await refreshDatabases()
         } catch {
@@ -3875,6 +3933,20 @@ final class ApplicationModel {
     }
 
     func linkedData(for link: DatabaseArtifactLink) async throws -> DatabaseTabularData {
+        if let configuration = remoteDatabaseConfiguration(sourceID: link.sourceID) {
+            let result = try await remoteWorkspaces.databaseData(for: link, in: configuration)
+            let identity = remoteWorkspaces.databaseCatalogIdentity
+            let data = try await Task.detached(priority: .utility) {
+                if let query = result.query { return try DatabaseLinkedData.load(queryResponse: query) }
+                guard let encoded = result.jsonBase64, let data = Data(base64Encoded: encoded) else {
+                    throw DashboardDatabaseLinkError.remoteDataUnavailable
+                }
+                return try DatabaseLinkedData.load(data: data, fileExtension: "json", preference: .json, sqliteQuery: nil)
+            }.value
+            guard identity == remoteWorkspaces.databaseCatalogIdentity else { throw CancellationError() }
+            try Task.checkCancellation()
+            return data
+        }
         var database = databasesSnapshot.database(
             sourceID: link.sourceID,
             databaseID: link.databaseID

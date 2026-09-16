@@ -4,6 +4,13 @@ import Security
 import WovenMatterClient
 import WovenMatterCore
 
+struct RemoteDatabaseCatalogIdentity: Equatable {
+    let configurations: [RemoteWorkspaceConfiguration]
+    let credentialEpoch: UUID
+    let workspaceEpochs: [UUID: UUID]
+    let credentialsEnabled: Bool
+}
+
 struct RemoteHarnessChatTarget: Equatable, Identifiable {
     let configuration: RemoteWorkspaceConfiguration
     let harness: RemoteHarnessStatus
@@ -46,6 +53,7 @@ final class RemoteWorkspacesModel {
     private(set) var checkingRuntimeIDs: [UUID: Set<AgentRuntimeKind>] = [:]
     private(set) var runtimeCheckErrors: [UUID: [AgentRuntimeKind: String]] = [:]
     private(set) var runtimeErrors: [UUID: String] = [:]
+    private(set) var actionErrors: [UUID: [AgentRuntimeKind: String]] = [:]
     private(set) var workspaceInstances: [UUID: [AgentRuntimeKind: RemoteWorkspaceInstanceStatus]] = [:]
     private(set) var operations: [UUID: RemoteHarnessOperation] = [:]
     private(set) var authenticationSessions: [UUID: RemoteHarnessAuthenticationSession] = [:]
@@ -93,6 +101,7 @@ final class RemoteWorkspacesModel {
         preparedHarnessAction = nil
         runtimeErrors.removeAll()
         runtimeCheckErrors.removeAll()
+        actionErrors.removeAll()
         runtimeChecksVerifiedAfterError.removeAll()
         checkingRuntimeIDs.removeAll()
         workspaceRoots.removeAll()
@@ -130,9 +139,7 @@ final class RemoteWorkspacesModel {
                     $1.configuration.name
                 ) == .orderedAscending
             }
-            return $0.harness.displayName.localizedCaseInsensitiveCompare(
-                $1.harness.displayName
-            ) == .orderedAscending
+            return $0.harness.id.presentationRank < $1.harness.id.presentationRank
         }
     }
 
@@ -142,7 +149,7 @@ final class RemoteWorkspacesModel {
                 instance: workspaceInstances[configuration.id]?[.opencode],
                 installed: runtimeMaintenance[configuration.id]?.first(where: { $0.id == .opencode })?.installed
             )
-        }
+        }.sorted { $0.id.presentationRank < $1.id.presentationRank }
     }
 
     func configuration(id: UUID) -> RemoteWorkspaceConfiguration? {
@@ -357,6 +364,47 @@ final class RemoteWorkspacesModel {
             runtimeChecksVerifiedAfterError.removeValue(forKey: configuration.id)
             runtimeErrors[configuration.id] = "Runtime inventory unavailable. Update this workspace service if it predates runtime management. " + error.localizedDescription
         }
+    }
+
+    var databaseCatalogIdentity: RemoteDatabaseCatalogIdentity {
+        RemoteDatabaseCatalogIdentity(configurations: workspaces, credentialEpoch: credentialEpoch,
+                                      workspaceEpochs: workspaceEpochs, credentialsEnabled: isCredentialAccessEnabled)
+    }
+
+    // Validate both sides of every suspension so credentials or destination changes
+    // cannot publish a result belonging to an obsolete workspace connection.
+    func databases(for configuration: RemoteWorkspaceConfiguration) async throws -> [RemoteAgentDatabase] {
+        try await databaseRequest(configuration) { try await $0.databases() }
+    }
+
+    func createDatabase(name: String, preference: AgentDatabasePreference,
+                        in configuration: RemoteWorkspaceConfiguration) async throws -> RemoteAgentDatabase {
+        try await databaseRequest(configuration) { try await $0.createDatabase(name: name, preference: preference) }
+    }
+
+    func setDatabasePreference(_ preference: AgentDatabasePreference, databaseID: String,
+                               in configuration: RemoteWorkspaceConfiguration) async throws {
+        _ = try await databaseRequest(configuration) { try await $0.setDatabasePreference(preference, databaseID: databaseID) }
+    }
+
+    func databaseData(for link: DatabaseArtifactLink,
+                      in configuration: RemoteWorkspaceConfiguration) async throws -> RemoteDatabaseData {
+        try await databaseRequest(configuration) { try await $0.databaseData(for: link) }
+    }
+
+    private func databaseRequest<Value: Sendable>(
+        _ configuration: RemoteWorkspaceConfiguration,
+        operation: (RemoteWorkspaceServiceClient) async throws -> Value
+    ) async throws -> Value {
+        guard isCredentialAccessEnabled else {
+            throw RemoteWorkspaceClientError.invalidResponse("Enable credential access in Settings to connect.")
+        }
+        let identity = try requestIdentity(configuration)
+        let client = try await serviceClient(for: configuration)
+        try requireCurrent(identity)
+        let value = try await operation(client)
+        try requireCurrent(identity)
+        return value
     }
 
     private func requestIdentity(_ configuration: RemoteWorkspaceConfiguration) throws -> RemoteWorkspaceRequestIdentity {
@@ -702,6 +750,7 @@ final class RemoteWorkspacesModel {
             .trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
         performBusy(configuration) {
             self.checkingRuntimeIDs.removeValue(forKey: configuration.id)
+            self.actionErrors.removeValue(forKey: configuration.id)
             self.workspaceEpochs[configuration.id] = UUID()
             self.invalidatingWorkspaceIDs.insert(configuration.id)
             defer { self.invalidatingWorkspaceIDs.remove(configuration.id) }
@@ -735,6 +784,7 @@ final class RemoteWorkspacesModel {
         }
         performBusy(configuration) {
             self.checkingRuntimeIDs.removeValue(forKey: configuration.id)
+            self.actionErrors.removeValue(forKey: configuration.id)
             self.workspaceEpochs[configuration.id] = UUID()
             self.invalidatingWorkspaceIDs.insert(configuration.id)
             defer { self.invalidatingWorkspaceIDs.remove(configuration.id) }
@@ -788,12 +838,12 @@ final class RemoteWorkspacesModel {
               checkingRuntimeIDs[configuration.id]?.contains(harness.id) != true else { return }
         if action == "update", harness.id == .hermes,
            runtimeMaintenance[configuration.id]?.first(where: { $0.id == .hermes })?.installed == true {
-            performBusy(configuration) {
+            performBusy(configuration, actionErrorRuntimeKind: harness.id) {
                 try await self.runRuntimeMaintenance(.hermes, action: "update", configuration: configuration)
             }
             return
         }
-        performBusy(configuration) {
+        performBusy(configuration, actionErrorRuntimeKind: harness.id) {
             let identity = try self.requestIdentity(configuration)
             let client = try await self.serviceClient(for: configuration)
             try self.requireCurrent(identity)
@@ -814,10 +864,20 @@ final class RemoteWorkspacesModel {
         }
     }
 
-    func confirmPreparedHarnessAction() {
-        guard let preparedHarnessAction else { return }
+    func confirmPreparedHarnessAction(
+        workspaceID: UUID? = nil,
+        harnessID: AgentRuntimeKind? = nil,
+        action: String? = nil
+    ) {
+        guard let preparedHarnessAction,
+              workspaceID == nil || preparedHarnessAction.configuration.id == workspaceID,
+              harnessID == nil || preparedHarnessAction.harness.id == harnessID,
+              action == nil || preparedHarnessAction.action == action else { return }
         self.preparedHarnessAction = nil
-        performBusy(preparedHarnessAction.configuration) {
+        performBusy(
+            preparedHarnessAction.configuration,
+            actionErrorRuntimeKind: preparedHarnessAction.harness.id
+        ) {
             try await self.runRuntimeMaintenance(
                 preparedHarnessAction.harness.id, action: preparedHarnessAction.action,
                 configuration: preparedHarnessAction.configuration,
@@ -854,8 +914,16 @@ final class RemoteWorkspacesModel {
         harnesses[configuration.id] = updatedHarnesses
     }
 
-    func cancelPreparedHarnessAction() {
-        preparedHarnessAction = nil
+    func cancelPreparedHarnessAction(
+        workspaceID: UUID? = nil,
+        harnessID: AgentRuntimeKind? = nil,
+        action: String? = nil
+    ) {
+        guard let preparedHarnessAction,
+              workspaceID == nil || preparedHarnessAction.configuration.id == workspaceID,
+              harnessID == nil || preparedHarnessAction.harness.id == harnessID,
+              action == nil || preparedHarnessAction.action == action else { return }
+        self.preparedHarnessAction = nil
     }
 
     func startHarnessSignIn(
@@ -916,11 +984,15 @@ final class RemoteWorkspacesModel {
 
     private func performBusy(
         _ configuration: RemoteWorkspaceConfiguration,
+        actionErrorRuntimeKind: AgentRuntimeKind? = nil,
         operation: @escaping @MainActor () async throws -> Void
     ) {
         guard let identity = try? requestIdentity(configuration),
               busyWorkspaceIDs.insert(configuration.id).inserted else { return }
         errorMessage = nil
+        if let actionErrorRuntimeKind {
+            actionErrors[configuration.id]?.removeValue(forKey: actionErrorRuntimeKind)
+        }
         Task {
             defer { busyWorkspaceIDs.remove(configuration.id) }
             do {
@@ -932,6 +1004,9 @@ final class RemoteWorkspacesModel {
                 guard isCredentialAccessEnabled, credentialEpoch == identity.credentialEpoch,
                       self.configuration(id: configuration.id) == configuration else { return }
                 errorMessage = error.localizedDescription
+                if let actionErrorRuntimeKind {
+                    actionErrors[configuration.id, default: [:]][actionErrorRuntimeKind] = error.localizedDescription
+                }
             }
         }
     }

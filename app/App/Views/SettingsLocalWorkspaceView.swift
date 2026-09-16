@@ -13,7 +13,6 @@ struct SettingsLocalWorkspaceView: View {
     var body: some View {
         SettingsPage(
             title: "Local agent workspace",
-            detail: "Run Codex, Claude Code, Cursor, Grok Build, Hermes, OpenClaw, OpenCode, or Pi as direct sessions on this Mac.",
             reservesRailControlSpace: reservesRailControlSpace,
             onBack: onBack
         ) {
@@ -32,7 +31,7 @@ struct SettingsLocalWorkspaceView: View {
             ),
             titleVisibility: .visible
         ) {
-            Button("Confirm and Install") {
+            Button("Confirm and install") {
                 model.confirmPreparedLocalACPRuntimeInstall()
             }
             Button("Cancel", role: .cancel) {
@@ -65,7 +64,7 @@ struct SettingsLocalWorkspaceView: View {
         ) {
             if let runtimeKind = pendingCredentialRuntime {
                 CredentialAccessDisclosureView(
-                    purpose: "Enable \(runtimeKind.displayName) as a local harness. Woven Matter can then start its CLI and check the account credentials that CLI manages.",
+                    purpose: "Allow Woven Matter to start \(runtimeKind.displayName) and check credentials managed by its CLI.",
                     onEnable: {
                         model.acknowledgeCredentialAccessDisclosure()
                         pendingCredentialRuntime = nil
@@ -80,7 +79,7 @@ struct SettingsLocalWorkspaceView: View {
     private var workspaceCard: some View {
         SettingsCard(
             title: "Workspace",
-            detail: "The home folder direct sessions share, and where their repositories and databases live."
+            detail: "Local agents share this folder."
         ) {
             SettingsInset {
                 VStack(alignment: .leading, spacing: 10) {
@@ -120,14 +119,14 @@ struct SettingsLocalWorkspaceView: View {
                     if model.localACPWorkspaceAvailability.isReady {
                         VStack(alignment: .leading, spacing: 8) {
                             HStack(spacing: 8) {
-                                Button("Choose Repositories Folder") {
+                                Button("Choose repositories folder") {
                                     chooseLocalACPRepositories()
                                 }
                                 .buttonStyle(SettingsQuietButtonStyle())
 
                                 if model.localACPWorkspaceAvailability
                                     .usesExternalRepositories {
-                                    Button("Use Default REPOS") {
+                                    Button("Use default REPOS") {
                                         model.configureLocalACPRepositories(nil)
                                     }
                                     .buttonStyle(SettingsQuietButtonStyle())
@@ -135,27 +134,27 @@ struct SettingsLocalWorkspaceView: View {
                             }
 
                             HStack(spacing: 8) {
-                                Button("Choose Databases Folder") {
+                                Button("Choose databases folder") {
                                     chooseLocalACPDatabases()
                                 }
                                 .buttonStyle(SettingsQuietButtonStyle())
 
                                 if model.localACPWorkspaceAvailability
                                     .usesExternalDatabases {
-                                    Button("Use Default Databases") {
+                                    Button("Use default Databases") {
                                         model.configureLocalACPDatabases(nil)
                                     }
                                     .buttonStyle(SettingsQuietButtonStyle())
                                 }
 
-                                Button("Open Workspace") {
+                                Button("Open workspace") {
                                     openLocalACPWorkspace()
                                 }
                                 .buttonStyle(SettingsQuietButtonStyle())
                             }
                         }
                     } else {
-                        Button("Retry Setup") {
+                        Button("Retry setup") {
                             model.setUpLocalACPWorkspace(
                                 homeDirectory: FileManager.default
                                     .homeDirectoryForCurrentUser
@@ -166,16 +165,16 @@ struct SettingsLocalWorkspaceView: View {
                 }
             }
 
-            SettingsNote("Direct chats start in ~/.woven-matter and share its workspace files. Conversation transcripts stay in Woven Matter’s local database.")
         }
     }
 
     private var runtimesCard: some View {
-        SettingsCard(
-            title: "Runtimes",
-            detail: "Woven Matter discovers installed CLIs and adapters automatically and can install what’s missing."
-        ) {
-            ForEach(LocalACPRuntimeCatalog.definitions) { definition in
+        SettingsCard(title: "Runtimes") {
+            ForEach(
+                LocalACPRuntimeCatalog.definitions.sorted {
+                    $0.runtimeKind.presentationRank < $1.runtimeKind.presentationRank
+                }
+            ) { definition in
                 if definition.runtimeKind == .opencode {
                     openCodeRuntimeRow
                 } else {
@@ -226,7 +225,7 @@ struct SettingsLocalWorkspaceView: View {
                                     .textSelection(.enabled)
                                     .fixedSize(horizontal: false, vertical: true)
                                 if model.checkedRuntimeKinds.contains(definition.runtimeKind), inventory.latestUnavailable {
-                                    Text("Latest unavailable").font(.system(size: 11))
+                                    Text("Couldn’t check for updates.").font(.system(size: 11))
                                         .foregroundStyle(DashboardPalette.mutedForeground)
                                 }
                             }
@@ -240,12 +239,13 @@ struct SettingsLocalWorkspaceView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
 
                         RuntimeMaintenanceActions {
-                            if definition.runtimeKind == .openclaw || definition.runtimeKind == .hermes {
-                                Button("More") { onMore(definition.runtimeKind) }
-                                    .buttonStyle(SettingsQuietButtonStyle())
-                                    .accessibilityLabel("More \(definition.displayName) settings")
-                            }
-                            runtimeUpdateButton(definition.runtimeKind)
+                            Button("Settings") { onMore(definition.runtimeKind) }
+                                .buttonStyle(SettingsQuietButtonStyle())
+                                .accessibilityLabel("Open \(definition.displayName) settings")
+                            SettingsLocalRuntimeUpdateButton(
+                                model: model,
+                                runtimeKind: definition.runtimeKind
+                            )
                             let isShown = model.isLocalACPRuntimeShown(
                                 definition.runtimeKind
                             )
@@ -270,7 +270,7 @@ struct SettingsLocalWorkspaceView: View {
                                     Button("Disable") { model.disableLocalACPRuntimeCredentialAccess(definition.runtimeKind) }
                                         .buttonStyle(SettingsQuietButtonStyle())
                                 }
-                                Button(installing ? "Installing…" : inventory == nil ? "Checking…" : model.runtimeFailures[definition.runtimeKind, default: 0] > 0 ? "Retry Install" : "Install") {
+                                Button(installing ? "Installing…" : inventory == nil ? "Checking…" : model.runtimeFailures[definition.runtimeKind, default: 0] > 0 ? "Retry install" : "Install") {
                                     model.installLocalACPRuntimeComponent(definition.runtimeKind)
                                 }
                                 .buttonStyle(DashboardPrimaryButtonStyle())
@@ -323,7 +323,7 @@ struct SettingsLocalWorkspaceView: View {
                         .foregroundStyle(DashboardPalette.mutedForeground)
                         .fixedSize(horizontal: false, vertical: true)
                     if model.checkedRuntimeKinds.contains(.opencode), model.runtimeInventories[.opencode]?.latestUnavailable == true {
-                        Text("Latest unavailable").font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
+                        Text("Couldn’t check for updates.").font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
                     }
                     if model.openCode?.installationFailures ?? 0 >= 2 {
                         Button("Copy diagnostic") {
@@ -334,9 +334,9 @@ struct SettingsLocalWorkspaceView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 RuntimeMaintenanceActions {
-                    Button("More") { onMore(.opencode) }
-                        .accessibilityLabel("More OpenCode settings")
-                    runtimeUpdateButton(.opencode)
+                    Button("Settings") { onMore(.opencode) }
+                        .accessibilityLabel("Open OpenCode settings")
+                    SettingsLocalRuntimeUpdateButton(model: model, runtimeKind: .opencode)
                     let shown = model.isLocalACPRuntimeShown(.opencode)
                     Button(shown ? "Hide" : "Show") { model.setLocalACPRuntimeShown(!shown, runtimeKind: .opencode) }
                         .accessibilityLabel("\(shown ? "Hide" : "Show") OpenCode in the left sidebar")
@@ -353,26 +353,6 @@ struct SettingsLocalWorkspaceView: View {
                 .buttonStyle(SettingsQuietButtonStyle())
             }
         }
-    }
-
-    private func runtimeUpdateButton(_ kind: AgentRuntimeKind) -> some View {
-        let inventory = model.runtimeInventories[kind]
-        let updating = model.updatingRuntimeKinds.contains(kind)
-        let checking = model.checkingRuntimeKinds.contains(kind)
-        let retryUpdate = model.failedRuntimeUpdateKinds.contains(kind)
-        let hasUpdate = inventory?.isInstalled == true && (inventory?.updateAvailable == true || retryUpdate)
-        let retryCheck = model.checkedRuntimeKinds.contains(kind) && inventory?.latestUnavailable == true
-        let label = updating ? "Updating…" : checking ? "Checking…"
-            : hasUpdate ? (retryUpdate ? "Retry Update" : "Update")
-            : retryCheck ? "Retry check" : "Check for updates"
-        return Button(label) {
-            if hasUpdate { model.updateRuntime(kind) }
-            else { model.checkRuntimeUpdate(kind) }
-        }
-        .buttonStyle(SettingsQuietButtonStyle())
-        .disabled(checking || model.checkingRuntimeInventory || !model.installingLocalACPRuntimeKinds.isEmpty
-            || model.openCode?.isInstalling == true || (hasUpdate && model.localRuntimeMaintenanceHasActiveConversation))
-        .accessibilityLabel(label + " for " + kind.displayName)
     }
 
     private func localACPRuntimeStatusLabel(
