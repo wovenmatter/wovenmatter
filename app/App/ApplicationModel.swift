@@ -787,14 +787,18 @@ final class ApplicationModel {
         }
         // Metadata changes are independent of run content and must not replace
         // or be suppressed by a pending terminal notification.
-        if change.phase == .configuration {
-            Task { [weak self] in
-                guard let self,
-                      let conversation = self.workspaceOverview?.conversations.first(where: {
-                          $0.id == change.conversationID
-                      }) else { return }
-                await self.refreshLocalACPSession(conversation: conversation)
-            }
+        if case .configuration(let configuration) = change.phase {
+            // The running adapter already supplied this snapshot. Preparing a
+            // session here would turn its initial notification into a refresh
+            // loop, keeping the composer loading while idle sessions restart.
+            localACPSessionMetadata[change.conversationID] = LocalACPSessionMetadata(
+                sessionKey: change.conversationID,
+                model: configuration.model,
+                thinking: configuration.thinking,
+                modelOptions: configuration.modelOptions,
+                thinkingLevels: configuration.thinkingOptions,
+                slashCommands: configuration.slashCommands
+            )
             return
         }
         if change.phase == .content,

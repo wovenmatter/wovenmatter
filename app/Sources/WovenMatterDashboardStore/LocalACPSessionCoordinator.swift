@@ -16,7 +16,7 @@ struct LocalACPSessionDriver: Sendable {
         _ onInteraction: LocalACPClient.InteractionHandler?
     ) async throws -> LocalACPStopReason
     let configuration: @Sendable () async -> LocalACPSessionConfiguration
-    let observeConfiguration: (@Sendable (@escaping @Sendable () -> Void) async -> Void)?
+    let observeConfiguration: (@Sendable (@escaping @Sendable (LocalACPSessionConfiguration) async -> Void) async -> Void)?
     let setConfiguration: @Sendable (
         _ model: String?,
         _ thinking: String?
@@ -41,7 +41,7 @@ struct LocalACPSessionDriver: Sendable {
             _ onInteraction: LocalACPClient.InteractionHandler?
         ) async throws -> LocalACPStopReason,
         configuration: @escaping @Sendable () async -> LocalACPSessionConfiguration,
-        observeConfiguration: (@Sendable (@escaping @Sendable () -> Void) async -> Void)? = nil,
+        observeConfiguration: (@Sendable (@escaping @Sendable (LocalACPSessionConfiguration) async -> Void) async -> Void)? = nil,
         setConfiguration: @escaping @Sendable (
             _ model: String?,
             _ thinking: String?
@@ -197,6 +197,7 @@ public actor LocalACPSessionCoordinator {
 
     private struct ActiveSession {
         let client: LocalACPSessionDriver
+        let configurationObservationID: UUID
         let runtimeKind: AgentRuntimeKind
         // Cursor returns a session ID before it has created the durable
         // store.db needed by session/load. Keep a newly created Cursor ID
@@ -1202,8 +1203,10 @@ public actor LocalACPSessionCoordinator {
                 configuration,
                 conversationID: descriptor.conversationID
             )
+            let observationID = UUID()
             activeSessions[descriptor.conversationID] = ActiveSession(
                 client: started,
+                configurationObservationID: observationID,
                 runtimeKind: descriptor.runtimeKind,
                 pendingDurableSessionID:
                     Self.defersNewSessionPersistence(descriptor.runtimeKind)
@@ -1214,20 +1217,30 @@ public actor LocalACPSessionCoordinator {
                 lastUsedSequence: useSequence
             )
             if let observeConfiguration = started.observeConfiguration {
-                let onChange = self.onChange
-                await observeConfiguration {
-                    onChange?(DashboardConversationChange(
+                await observeConfiguration { [weak self] configuration in
+                    await self?.receiveConfiguration(configuration,
                         conversationID: descriptor.conversationID,
-                        runID: runID ?? "",
-                        phase: .configuration
-                    ))
+                        runID: runID ?? "", observationID: observationID)
                 }
             }
+
             return started
         } catch {
             await started.shutdown()
             throw error
         }
+    }
+
+    private func receiveConfiguration(
+        _ configuration: LocalACPSessionConfiguration,
+        conversationID: String, runID: String, observationID: UUID
+    ) {
+        guard activeSessions[conversationID]?.configurationObservationID == observationID else { return }
+        // Keep native model/effort changes for session recreation, without
+        // letting an evicted adapter overwrite its replacement's preferences.
+        try? persistConfiguration(configuration, conversationID: conversationID)
+        onChange?(DashboardConversationChange(conversationID: conversationID,
+            runID: runID, phase: .configuration(configuration)))
     }
 
     private func startInitializedSession(
