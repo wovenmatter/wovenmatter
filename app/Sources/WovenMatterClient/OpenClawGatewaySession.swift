@@ -46,6 +46,11 @@ public struct OpenClawGatewayHistoryMessage: Codable, Equatable, Sendable {
       || (metadata?["idempotencyKey"]?.stringValue ?? row["idempotencyKey"]?.stringValue ?? "").contains(":commentary:")
   }
 
+  public var commentaryItemID: String? {
+    guard isCommentary else { return nil }
+    return (try? JSONDecoder().decode(GatewayJSONValue.self, from: raw))?.objectValue?["openclawStreamFallback"]?.objectValue?["itemId"]?.stringValue
+  }
+
   public var transcriptSequence: Int? {
     metadata?["transcriptPosition"]?.objectValue?["rawSeq"]?.intValue ?? metadata?["seq"]?.intValue
   }

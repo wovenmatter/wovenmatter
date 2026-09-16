@@ -148,4 +148,72 @@ struct OpenClawTranscriptRepairTests {
     #expect(page.activities.first { $0.activity.kind == .tool }?.activity.status == "failed")
   }
 
+  @Test func auditHashesAndPreambleMirrorsReconcileOnlyProvenNativeIdentities() throws {
+    let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let url = directory.appending(path: "test.sqlite")
+    let db = try WorkspaceDatabase(url: url)
+    let conversation = try db.createLocalACPSession(runtimeKind: .openclaw, title: "Legacy audit", ownerDeviceID: UUID())
+    let run = try db.beginLocalACPRun(conversationID: conversation, content: "Check")
+    let nativeID = run.runID + ":tool-1"
+    let hashID = GatewayAuditToolIdentity.ledgerID(nativeCallID: "tool-1")
+    #expect(GatewayAuditToolIdentity.matches(hashID, scopedID: nativeID, remoteRunID: run.runID))
+    #expect(!GatewayAuditToolIdentity.matches(hashID, scopedID: nativeID, remoteRunID: "another-run"))
+    try db.upsertDeviceOwnedRunActivity(runID: run.runID, activity: AgentRunActivity(
+      id: nativeID, kind: .tool, phase: "result", detail: "Keep this detail", status: "completed", toolName: "exec"))
+    try db.upsertDeviceOwnedRunActivity(runID: run.runID, activity: AgentRunActivity(
+      id: hashID, kind: .tool, phase: "result", status: "failed", toolName: "exec"))
+    let unmatched = GatewayAuditToolIdentity.ledgerID(nativeCallID: "unmatched")
+    try db.upsertDeviceOwnedRunActivity(runID: run.runID, activity: AgentRunActivity(
+      id: unmatched, kind: .tool, phase: "result", status: "completed", toolName: "exec"))
+    let preambleRaw = "{\"data\":{\"kind\":\"preamble\",\"itemId\":\"preamble-1\"}}"
+    try db.upsertDeviceOwnedRunActivity(runID: run.runID, activity: AgentRunActivity(
+      id: run.runID + ":preamble-1", kind: .thought, title: "Preamble", content: "Checking.\n", rawPayloadJSON: preambleRaw))
+    try db.upsertDeviceOwnedRunActivity(runID: run.runID, activity: AgentRunActivity(
+      id: run.runID + ":unrelated-thought", kind: .thought, title: "Preamble", content: "Checking.\n", rawPayloadJSON: preambleRaw))
+    var commentary = try #require(record("commentary", run: run.runID, kind: "commentary", text: "Checking.\n", seq: 1).objectValue)
+    commentary["openclawStreamFallback"] = .object(["itemId": .string("preamble-1"), "source": .string("segment")])
+    var result = try #require(record("result", run: run.runID, kind: "result", seq: 3).objectValue)
+    result["isError"] = .bool(false)
+    let history = try OpenClawGatewayHistory(payload: .object(["messages": .array([
+      .object(commentary), record("call", run: run.runID, kind: "call", seq: 2), .object(result),
+      record("final", run: run.runID, kind: "assistant", text: "Done.", seq: 4)
+    ])]))
+    try db.synchronizeOpenClawHistory(conversationID: conversation, history: history)
+    let reopened = try WorkspaceDatabase(url: url)
+    try reopened.synchronizeOpenClawHistory(conversationID: conversation, history: history)
+    let page = try reopened.conversationHistoryPage(id: conversation, limit: 100)
+    let tools = page.activities.filter { $0.activity.kind == .tool }
+    #expect(Set(tools.map { $0.activity.id }) == [nativeID, unmatched])
+    let native = try #require(tools.first { $0.activity.id == nativeID })
+    #expect(native.activity.status == "failed")
+    #expect(native.activity.detail == "Keep this detail")
+    #expect(native.activity.rawInputJSON?.contains("echo fixture") == true)
+    #expect(native.activity.rawOutputJSON?.contains("fixture output") == true)
+    #expect(page.activities.filter { $0.activity.kind == .thought }.map { $0.activity.id } == [run.runID + ":unrelated-thought"])
+    #expect(page.activities.first { $0.activity.kind == .assistant }?.activity.rawPayloadJSON == preambleRaw)
+  }
+
+  @Test func auditFailureSettlesCanonicalLiveStartWithoutDiscardingInput() throws {
+    let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let db = try WorkspaceDatabase(url: directory.appending(path: "test.sqlite"))
+    let conversation = try db.createLocalACPSession(runtimeKind: .openclaw, title: "Audit", ownerDeviceID: UUID())
+    let run = try db.beginLocalACPRun(conversationID: conversation, content: "Check")
+    let id = run.runID + ":native-call"
+    try db.upsertDeviceOwnedRunActivity(runID: run.runID,
+      activity: AgentRunActivity(id: id, kind: .tool, phase: "start", status: "running", rawInputJSON: "fixture input"))
+    #expect(try db.openClawToolActivityIDs(runID: run.runID) == [id])
+    try db.reconcileOpenClawAuditTool(runID: run.runID,
+      activity: AgentRunActivity(id: id, kind: .tool, phase: "result", status: "failed"))
+    try db.reconcileOpenClawAuditTool(runID: run.runID,
+      activity: AgentRunActivity(id: id, kind: .tool, phase: "result", status: "completed"))
+    let activities = try db.conversationHistoryPage(id: conversation, limit: 100).activities
+    #expect(activities.count == 1)
+    #expect(activities.first?.activity.status == "failed")
+    #expect(activities.first?.activity.rawInputJSON == "fixture input")
+  }
+
 }

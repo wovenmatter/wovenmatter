@@ -81,3 +81,20 @@ text and cancellation paths remain intact.
   previews, reopen, cold history and activity-only completion.
 - Final source changes were checked again with the OpenClaw/Hermes suites and
   incremental isolated app compilation. No shared Dev build or launch occurred.
+
+## Follow-up: audit and preamble mirrors
+
+The manager's Dev smoke exposed audit fallback duplicates after the original
+repair. Upstream `src/audit/agent-event-audit.ts` hashes the native call ID with
+SHA-256; Woven had compared that digest against its run-scoped live ID. Read-only
+comparison proved all 18 saved audit digests matched native calls in the recorded
+run. Audit ingestion now resolves that bridge using both live and persisted tool
+IDs and merges results into the canonical activity, including failed results for
+unfinished calls. History refresh removes only proven digest equivalents,
+retaining native payloads/state and unmatched audit records.
+
+Preamble thought rows are reconciled only when their scoped item ID matches an
+explicit native commentary item ID, their text matches, and their raw event says
+`kind=preamble`. The commentary retains raw provenance across subsequent refresh.
+Unmatched thoughts remain. Provider-free tests cover both mirrors, richer native
+payload retention, failure settlement, unmatched records, and database reopen.

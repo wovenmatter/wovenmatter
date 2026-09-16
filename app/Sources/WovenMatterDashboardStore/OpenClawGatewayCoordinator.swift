@@ -1171,7 +1171,8 @@ public actor OpenClawGatewayCoordinator {
       ($0.objectValue?["sequence"]?.intValue ?? 0)
         < ($1.objectValue?["sequence"]?.intValue ?? 0)
     }
-    let liveToolCallIDs = activeRuns[runID]?.liveToolCallIDs ?? []
+    let liveToolCallIDs = (activeRuns[runID]?.liveToolCallIDs ?? [])
+      .union((try? database.openClawToolActivityIDs(runID: runID)) ?? [])
     var recoveredActivity = false
     for value in events {
       guard let event = value.objectValue,
@@ -1187,11 +1188,13 @@ public actor OpenClawGatewayCoordinator {
       default: status
       }
       let toolName = event["toolName"]?.stringValue ?? "tool"
-      guard !liveToolCallIDs.contains(toolCallID) else { continue }
-      try? database.upsertDeviceOwnedRunActivity(
+      let canonicalID = liveToolCallIDs.first {
+        GatewayAuditToolIdentity.matches(toolCallID, scopedID: $0, remoteRunID: remoteRunID)
+      }
+      try? database.reconcileOpenClawAuditTool(
         runID: runID,
         activity: AgentRunActivity(
-          id: toolCallID,
+          id: canonicalID ?? toolCallID,
           kind: .tool,
           phase: phase,
           title: OpenClawGatewayEventProjection.toolTitle(

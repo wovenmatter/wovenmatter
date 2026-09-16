@@ -1,3 +1,5 @@
+import CryptoKit
+import Foundation
 import WovenMatterClient
 
 /// Fences replayed and mirrored Gateway frames within one remote run. Sequence
@@ -67,5 +69,20 @@ struct GatewayAssistantStreamSource: Sendable {
 
   mutating func finish(runID: String) {
     terminalRuns.insert(runID)
+  }
+}
+
+/// The native audit ledger hashes provider call IDs, not Woven's run-scoped IDs.
+/// A digest match proves equivalence; tool names and text never do.
+enum GatewayAuditToolIdentity {
+  static func ledgerID(nativeCallID: String) -> String {
+    "sha256:" + SHA256.hash(data: Data(nativeCallID.utf8)).map { String(format: "%02x", $0) }.joined()
+  }
+
+  static func matches(_ auditID: String, scopedID: String, remoteRunID: String) -> Bool {
+    let prefix = remoteRunID + ":"
+    guard scopedID.hasPrefix(prefix) else { return false }
+    let nativeID = String(scopedID.dropFirst(prefix.count))
+    return auditID == nativeID || auditID == ledgerID(nativeCallID: nativeID)
   }
 }
