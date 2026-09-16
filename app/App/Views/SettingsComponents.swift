@@ -355,10 +355,7 @@ struct SettingsHarnessRuntimeMaintenanceView: View {
 
     private var runtimeError: String? {
         if let workspaceID {
-            if let error = remoteRuntime?.operation?.error { return error }
-            return model.remoteWorkspaces.runtimeCheckErrors[workspaceID]?[runtimeKind]
-                ?? model.remoteWorkspaces.actionErrors[workspaceID]?[runtimeKind]
-                ?? model.remoteWorkspaces.runtimeErrors[workspaceID]
+            return model.remoteWorkspaces.runtimeMaintenanceError(runtimeKind, workspaceID: workspaceID)
         }
         return model.runtimeFailureDetails[runtimeKind]
     }
@@ -510,13 +507,7 @@ struct SettingsRuntimeMaintenanceErrorView: View {
 
     private var message: String? {
         guard let workspaceID else { return model.runtimeFailureDetails[runtimeKind] }
-        let runtime = model.remoteWorkspaces.runtimeMaintenance[workspaceID]?.first {
-            $0.id == runtimeKind
-        }
-        return runtime?.operation?.error
-            ?? model.remoteWorkspaces.runtimeCheckErrors[workspaceID]?[runtimeKind]
-            ?? model.remoteWorkspaces.actionErrors[workspaceID]?[runtimeKind]
-            ?? model.remoteWorkspaces.runtimeErrors[workspaceID]
+        return model.remoteWorkspaces.runtimeMaintenanceError(runtimeKind, workspaceID: workspaceID)
     }
 
     @ViewBuilder
