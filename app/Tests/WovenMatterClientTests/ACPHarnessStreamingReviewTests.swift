@@ -78,7 +78,7 @@ struct ACPHarnessStreamingReviewTests {
         #expect(configuration.modelOptions == ["sonnet", "opus[1m]", "claude-opus-4-8"])
         #expect(configuration.modelOptionMetadata["opus[1m]"]?.name == "Opus with 1M context")
         #expect(configuration.modelOptionMetadata["sonnet"]?.description == "Provider-selected Sonnet alias")
-        #expect(configuration.modelOptionMetadata["claude-opus-4-8"]?.name == "Claude Opus 4.8")
+        #expect(configuration.modelOptionMetadata["claude-opus-4-8"]?.name == "Opus 4.8")
         #expect(configuration.thinkingOptionMetadata["high"]?.description == "More reasoning")
         #expect(configuration.selecting(model: "sonnet").modelOptionMetadata == configuration.modelOptionMetadata)
       }
@@ -91,6 +91,54 @@ struct ACPHarnessStreamingReviewTests {
     #expect(metadata.thinking == "stale")
     #expect(metadata.selectableThinkingLevels == ["low"])
     #expect(LocalACPSessionConfiguration(thinking: "stale", thinkingOptions: []).thinkingOptions.isEmpty)
+  }
+
+  @Test(arguments: [false, true])
+  func claudeContextVariantsSharePresentationButKeepExactSelections(legacy: Bool) async throws {
+    let rows: [(String, String, String)] = [
+      ("default", "Default (recommended)", "Sonnet"),
+      ("sonnet", "Sonnet 5", "Sonnet 5"),
+      ("claude-fable-5-1[1m]", "Fable 5.1", "Fable 5.1"),
+      ("opus[1m]", "Opus (1M context)", "Opus 5 with 1M context"),
+      ("haiku", "Haiku 4.5", "Haiku 4.5"),
+      ("opus", "Opus", "Opus 5"),
+      ("claude-opus-4-8", "Opus 4.8", "Opus 4.8"),
+      ("claude-opus-4-8-20260101", "Opus 4.8", "Pinned Opus 4.8 snapshot")
+    ]
+    let options = rows.map { [legacy ? "modelId" : "value": $0.0, "name": $0.1, "description": $0.2] }
+    let state: [String: Any] = legacy
+      ? ["models": ["currentModelId": "opus[1m]", "availableModels": options]]
+      : ["configOptions": [["id": "model", "category": "model", "currentValue": "opus[1m]", "options": options]]]
+    var payload = state
+    payload["sessionId"] = "context-selection"
+    let session = String(decoding: try JSONSerialization.data(withJSONObject: payload), as: UTF8.self)
+    for runtime in [AgentRuntimeKind.claudeCode, .codex] {
+      let fixture = try ACPHarnessFixture(kind: runtime, initialize: #"{"protocolVersion":2}"#,
+        session: session, extras: [:])
+      defer { fixture.remove() }
+      let client = try fixture.client()
+      let initialized = try await client.initializeSession(workingDirectory: fixture.root, existingSessionID: nil, title: nil)
+      let config = initialized.configuration
+      #expect(config.model == "opus[1m]")
+      #expect(config.modelOptions == rows.map(\.0))
+      func metadata(selected: String) -> LocalACPSessionMetadata {
+        LocalACPSessionMetadata(sessionKey: "fixture", model: selected, thinking: nil,
+          modelOptions: config.modelOptions, modelOptionMetadata: config.modelOptionMetadata)
+      }
+      if runtime == .claudeCode {
+        let current = metadata(selected: "opus[1m]")
+        #expect(current.selectableModels == ["default", "sonnet", "claude-fable-5-1[1m]", "opus[1m]", "haiku", "claude-opus-4-8", "claude-opus-4-8-20260101"])
+        #expect(current.selectableModels.map { config.modelOptionMetadata[$0]?.name } ==
+          ["default", "Sonnet 5", "Fable 5.1", "Opus 5", "Haiku 4.5", "Opus 4.8", "Opus 4.8"])
+        #expect(metadata(selected: "sonnet").selectableModels[3] == "opus")
+        #expect(config.modelOptionMetadata["opus"]?.modelGroup != config.modelOptionMetadata["claude-opus-4-8"]?.modelGroup)
+      } else {
+        #expect(metadata(selected: "opus[1m]").selectableModels == rows.map(\.0))
+        #expect(config.modelOptionMetadata["opus[1m]"]?.name == "Opus (1M context)")
+      }
+      await client.shutdown()
+      #expect(!(try fixture.log()).contains("session/set_"))
+    }
   }
 
   @Test func cursorUsesAuthenticationAndNativeModelDiscovery() async throws {
