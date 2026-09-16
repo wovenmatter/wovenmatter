@@ -296,6 +296,7 @@ struct DashboardComposer: View {
                     }
                 }
             }
+            .scrollIndicators(.never)
             .frame(height: min(CGFloat(matchingSlashCommands.count) * 32, 224))
             .onChange(of: slashNavigationRequest) { _, _ in
                 if let command = selectedSlashCommand {

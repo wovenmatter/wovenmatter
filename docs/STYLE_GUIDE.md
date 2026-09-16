@@ -24,6 +24,9 @@ when an intentional design change is accepted.
   and disabled states without making quiet or icon actions look primary. Do not
   add persistent colored focus rings. Preserve keyboard navigation and accessible
   labels and states, and respect Reduce Motion and Reduce Transparency.
+- **Scrolling:** hide scrollbars throughout the app while preserving scrolling. Set
+  `.scrollIndicators(.never)` on SwiftUI scroll views and editors, including
+  sheets and popovers. Disable both scrollers on AppKit `NSScrollView` editors.
 - **Layout:** use the existing sidebar, chat-panel, and compact/expanded composer
   patterns. Check affected views at narrow and wide widths and respect Reduce
   Motion and Reduce Transparency.

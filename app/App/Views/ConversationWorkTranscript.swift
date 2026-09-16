@@ -37,6 +37,7 @@ private struct ConversationBoundedTranscript<Content: View>: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
         }
+        .scrollIndicators(.never)
         .frame(height: min(420, max(1, contentHeight)))
         .defaultScrollAnchor(.top)
     }
@@ -445,6 +446,7 @@ private struct ConversationActivityRow: View {
                         .fixedSize(horizontal: true, vertical: true)
                         .padding(9)
                 }
+                .scrollIndicators(.never)
                 .background(DashboardPalette.muted.opacity(0.65))
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             }
@@ -810,6 +812,7 @@ private struct ConversationDiffSheet: View {
                     .padding(12)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .scrollIndicators(.never)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -823,6 +826,7 @@ private struct ConversationDiffSheet: View {
                 .padding(16)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .scrollIndicators(.never)
     }
 }
 
