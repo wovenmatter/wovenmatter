@@ -13,8 +13,12 @@ September 16, 2026.
 Run `python3 docs/app-icons/export.py` with Pillow installed (tested with 11.3).
 It samples a background-only patch in both originals and transfers the RGB color
 difference to the green master outside the shared cube-and-shadow mask. This
-preserves the master's subtle background texture. The same antialiased rounded
-tile mask removes the neutral exterior from both variants. All existing asset
+preserves the master's subtle background texture. The original neutral exterior
+is filled with the sampled background color,
+producing fully opaque square artwork. The source tile mask is used only to
+replace that exterior; it is not exported as transparency. macOS applies the
+final outer icon shape. The full canvas and foreground coordinates are retained
+without cropping, scaling up, or repositioning. All existing asset
 catalog sizes from 16 to 1024 pixels are exported with Lanczos resampling.
 Antialiased boundary pixels naturally blend with their respective backgrounds;
 the foreground artwork itself is shared, not regenerated.

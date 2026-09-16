@@ -34,18 +34,21 @@ def render_masters():
     # difference, retaining the green master's background texture and geometry.
     patch = (120, 500, 200, 750)
     means = [ImageStat.Stat(im.crop(patch)).mean for im in (green, reference)]
+    # Replace only the source's neutral exterior with the sampled sage color.
+    # Keep the full canvas and all foreground coordinates unchanged: no crop,
+    # zoom, or repositioning. macOS supplies the final outer icon shape.
+    source_tile = mask_for(lambda draw: draw.rounded_rectangle(
+        tuple(v * SCALE for v in (84, 84, 1170, 1170)),
+        radius=194 * SCALE, fill=255,
+    ))
+    background = Image.new('RGB', MASTER_SIZE, tuple(round(v) for v in means[0]))
+    green = Image.composite(green, background, source_tile)
     delta = [round(b - a) for a, b in zip(*means)]
     tinted = Image.merge('RGB', [
         channel.point([max(0, min(255, value + offset)) for value in range(256)])
         for channel, offset in zip(green.split(), delta)
     ])
     cognac = Image.composite(green, tinted, foreground)
-    tile = mask_for(lambda draw: draw.rounded_rectangle(
-        tuple(v * SCALE for v in (84, 84, 1170, 1170)),
-        radius=194 * SCALE, fill=255,
-    ))
-    for image in (green, cognac):
-        image.putalpha(tile)
     return green, cognac, foreground
 
 
