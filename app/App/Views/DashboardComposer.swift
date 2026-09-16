@@ -377,7 +377,7 @@ struct DashboardComposer: View {
                 sessionMenu(
                     kind: .model,
                     icon: .cpu,
-                    title: sessionMetadata?.model.map { sessionMetadata?.modelOptionMetadata?[$0]?.name ?? $0 } ?? "Model",
+                    title: sessionMetadata?.model.map { SessionOptionMetadata.modelLabel(id: $0, metadata: sessionMetadata?.modelOptionMetadata?[$0]) } ?? "Model",
                     menuTitle: "Model",
                     accessibilityLabel: "Choose session model",
                     options: sessionMetadata?.selectableModels ?? [],
@@ -414,7 +414,7 @@ struct DashboardComposer: View {
                     compactSessionMenu(
                         kind: .model,
                         icon: .cpu,
-                        title: sessionMetadata?.model.map { sessionMetadata?.modelOptionMetadata?[$0]?.name ?? $0 } ?? "Model",
+                        title: sessionMetadata?.model.map { SessionOptionMetadata.modelLabel(id: $0, metadata: sessionMetadata?.modelOptionMetadata?[$0]) } ?? "Model",
                         menuTitle: "Model",
                         accessibilityLabel: "Choose session model",
                         options: sessionMetadata?.selectableModels ?? [],
@@ -965,7 +965,10 @@ struct DashboardComposerOptionMenu: View {
     }
 
     private func optionLabel(_ option: String) -> String {
-        optionMetadata[option]?.name ?? (capitalizeOptions ? dashboardSessionThinkingLabel(option) : option)
+        if capitalizeOptions {
+            return optionMetadata[option]?.name ?? dashboardSessionThinkingLabel(option)
+        }
+        return SessionOptionMetadata.modelLabel(id: option, metadata: optionMetadata[option])
     }
 
     private func needsDisambiguation(_ option: String) -> Bool {

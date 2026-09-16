@@ -2,6 +2,24 @@ import Testing
 @testable import WovenMatterClient
 
 struct NativeOptionMetadataTests {
+    @Test func gptPresentationRetainsFamilyWithoutChangingOtherNamesOrIDs() {
+        for (id, name, expected) in [
+            ("gpt-6-astra", "6 Astra", "GPT 6 Astra"),
+            ("gpt-5.6-sol", "5.6 Sol", "GPT 5.6 Sol"),
+            ("gpt-daybreak-blue-latest", "Daybreak Blue", "GPT Daybreak Blue"),
+            ("gpt-5.5", "GPT 5.5", "GPT 5.5"),
+            ("gpt-5.5", "gpt-5.5", "gpt-5.5"),
+            ("sonnet", "Sonnet", "Sonnet"),
+            ("claude-opus-4-8", "Opus 4.8", "Opus 4.8"),
+            ("default", "Default", "Default")
+        ] {
+            let metadata = SessionOptionMetadata(name: name)
+            #expect(SessionOptionMetadata.modelLabel(id: id, metadata: metadata) == expected)
+            #expect(metadata.name == name)
+        }
+        #expect(SessionOptionMetadata.modelLabel(id: "gpt-6-astra", metadata: nil) == "gpt-6-astra")
+    }
+
     @Test func hermesPreservesWireIDsAndUsesOnlyNativeReasoningCapabilities() {
         let options: HermesValue = [
             "model": "shared",
