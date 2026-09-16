@@ -219,6 +219,11 @@ public struct WorkspaceRunActivityRecord: Codable, Equatable, Identifiable, Send
 public extension WorkspaceRunActivityRecord {
   static func precedes(_ lhs: Self, _ rhs: Self) -> Bool {
     if lhs.runID != rhs.runID { return lhs.runID < rhs.runID }
+    // Keep native snapshot parts together. Falling back to timestamps only
+    // when one side lacks a position can create a nontransitive comparison.
+    if (lhs.activity.position != nil) != (rhs.activity.position != nil) {
+      return lhs.activity.position != nil
+    }
     if let left = lhs.activity.position, let right = rhs.activity.position, left != right {
       return left < right
     }

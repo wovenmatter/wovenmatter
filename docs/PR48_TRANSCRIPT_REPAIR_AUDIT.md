@@ -1,4 +1,39 @@
-# PR 48 transcript repair audit
+# PR 48 review and transcript repair audit
+
+## Final review fixes
+
+The full PR diff was reviewed from `ed2777a` in a fresh worktree, including
+stream projection, cancellation, configuration, database reconciliation,
+transcript rendering, and the accompanying provider-free tests.
+
+- Activity sorting now keeps native positioned records in a consistent group.
+  Mixing native positions with pairwise timestamp fallback could form a sorting
+  cycle and scramble the transcript.
+- OpenClaw history uses native sequence order when the entire group supplies it;
+  otherwise it consistently uses timestamps. A regression demonstrated that
+  mixing those rules could leave commentary in the visible final reply.
+- Hydration requires the persisted input identity to match as well as the native
+  message and Gateway run. A complete record for another input cannot replace a
+  marked preview, including when both inputs share a Gateway execution.
+- Hermes prefill, exec, and plugin commands report cancellation when Stop occurs
+  during feedback or configuration refresh. They no longer report success after
+  a cancelled command.
+
+Each defect was reproduced by a failing provider-free regression before its fix.
+The cancellation case covers all five command outcomes during dispatch and
+feedback. The original repair evidence below remains useful context; its test
+counts describe earlier checkpoints, not this final review.
+
+Final validation: `scripts/test-changes.sh --all` passed with 266 Swift tests
+(161 core/store and 105 client), 50 remote passes and one environment-dependent
+skip, static/editor checks, macOS compilation, and native bundle validation.
+An isolated `PR48Audit` variant with fabricated data passed native inspection of
+empty and populated views, nested tool expansion and scrolling, visible final
+answers, and Latest reply at standard and maximized window sizes. Shared Dev was
+not restarted. Live provider acceptance remains for user testing; these checks
+do not establish eight real provider integrations end to end.
+
+## Earlier transcript repair evidence
 
 September 16, 2026. Source audit and provider-free validation; no provider prompts,
 shared Dev restarts, or modifications to user runtime data.

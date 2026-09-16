@@ -45,10 +45,10 @@ struct HermesStreamingReviewTests {
     await client.shutdown()
   }
 
-  @Test(arguments: [false, true])
-  func cancelledCommandCannotSubmitItsReturnedPrompt(duringFeedback: Bool) async throws {
+  @Test(arguments: [false, true], ["send", "skill", "prefill", "exec", "plugin"])
+  func cancelledCommandCannotSubmitItsReturnedPrompt(duringFeedback: Bool, outcome: String) async throws {
     let transport = HermesStreamingTransport(
-      commandResult: ["type": "send", "message": "Must not be submitted", "notice": "Command notice"],
+      commandResult: ["type": .string(outcome), "message": "Must not be submitted", "notice": "Command notice"],
       holdCommand: !duringFeedback)
     let client = HermesGatewayClient(
       launch: .init(runtimeKind: .hermes, executableURL: URL(filePath: "/fixture/hermes"), arguments: []),

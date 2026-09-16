@@ -839,8 +839,11 @@ public final class WorkspaceDatabase: @unchecked Sendable {
         isFinal: value.isFinalOnlyAssistantTranscript, sequence: value.transcriptSequence))
     }
     for (remoteID, unsorted) in groups where !liveRunIDs.contains(remoteID) {
+      // Choose one ordering for the whole group. Pairwise fallback between
+      // sequence and date can form a cycle when older records lack a sequence.
+      let hasCompleteSequence = unsorted.allSatisfy { $0.sequence != nil }
       let entries = unsorted.sorted {
-        if let left = $0.sequence, let right = $1.sequence, left != right { return left < right }
+        if hasCompleteSequence, let left = $0.sequence, let right = $1.sequence, left != right { return left < right }
         if $0.value.date != $1.value.date { return $0.value.date < $1.value.date }
         return $0.value.id < $1.value.id
       }
