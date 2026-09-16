@@ -283,6 +283,14 @@ private struct SettingsHarnessView: View {
     var workspaceID: UUID?
     var reservesRailControlSpace = false
     let onBack: () -> Void
+    @Environment(\.dashboardTheme) private var theme
+
+    @AppStorage(DashboardCodexLogoStyle.storageKey) private var storedCodexLogoStyle =
+        DashboardCodexLogoStyle.defaultStyle.rawValue
+
+    private var codexLogoStyle: DashboardCodexLogoStyle {
+        DashboardCodexLogoStyle(rawValue: storedCodexLogoStyle) ?? .defaultStyle
+    }
 
     private var remoteWorkspace: RemoteWorkspaceConfiguration? {
         workspaceID.flatMap { model.remoteWorkspaces.configuration(id: $0) }
@@ -297,11 +305,40 @@ private struct SettingsHarnessView: View {
             reservesRailControlSpace: reservesRailControlSpace,
             onBack: onBack
         ) {
+            if runtimeKind == .codex {
+                codexIconCard
+            }
             SettingsHarnessRuntimeMaintenanceView(
                 model: model,
                 runtimeKind: runtimeKind,
                 workspaceID: workspaceID
             )
         }
+    }
+
+    private var codexIconCard: some View {
+        HStack(alignment: .center, spacing: 16) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Codex icon")
+                    .font(.system(size: 14, weight: .semibold))
+                Text("Choose the icon used for Codex throughout the app.")
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(DashboardPalette.mutedForeground)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 12)
+            Button("Change icon") {
+                storedCodexLogoStyle = codexLogoStyle.next.rawValue
+            }
+            .buttonStyle(SettingsQuietButtonStyle())
+            .help("Switch Codex to the \(codexLogoStyle.next.displayName) icon")
+            .accessibilityLabel("Change Codex icon")
+            .accessibilityValue(codexLogoStyle.displayName)
+            .accessibilityHint("Switches to the \(codexLogoStyle.next.displayName) icon")
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(theme.palette.workspace)
+        .clipShape(DashboardShapes.card)
     }
 }
