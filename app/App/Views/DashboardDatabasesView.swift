@@ -380,7 +380,7 @@ struct DashboardDatabasesView: View {
             Label("No databases yet", systemImage: "cylinder")
         } description: {
             Text(source.allowsCreation
-                ? (source.kind == .remote ? "Create a database folder for this workspace’s agents." : "Create a database or link a folder.")
+                ? (source.kind == .remote ? "Create a database for this workspace." : "Create a database or link a folder.")
                 : "No database folders in this workspace.")
         } actions: {
             if source.allowsCreation {
