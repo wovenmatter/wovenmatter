@@ -284,6 +284,13 @@ private struct SettingsHarnessView: View {
     var reservesRailControlSpace = false
     let onBack: () -> Void
 
+    @AppStorage(DashboardCodexLogoStyle.storageKey) private var storedCodexLogoStyle =
+        DashboardCodexLogoStyle.defaultStyle.rawValue
+
+    private var codexLogoStyle: DashboardCodexLogoStyle {
+        DashboardCodexLogoStyle(rawValue: storedCodexLogoStyle) ?? .defaultStyle
+    }
+
     private var remoteWorkspace: RemoteWorkspaceConfiguration? {
         workspaceID.flatMap { model.remoteWorkspaces.configuration(id: $0) }
     }
@@ -297,11 +304,37 @@ private struct SettingsHarnessView: View {
             reservesRailControlSpace: reservesRailControlSpace,
             onBack: onBack
         ) {
+            if runtimeKind == .codex {
+                codexIconCard
+            }
             SettingsHarnessRuntimeMaintenanceView(
                 model: model,
                 runtimeKind: runtimeKind,
                 workspaceID: workspaceID
             )
+        }
+    }
+
+    private var codexIconCard: some View {
+        SettingsCard(
+            title: "Codex icon",
+            detail: "Choose the icon used for Codex throughout the app."
+        ) {
+            SettingsInset {
+                HStack(spacing: 12) {
+                    DashboardHarnessLogoIcon(logo: .codex, size: 28)
+                        .frame(width: 32, height: 32)
+                    Spacer(minLength: 12)
+                    Button("Change icon") {
+                        storedCodexLogoStyle = codexLogoStyle.next.rawValue
+                    }
+                    .buttonStyle(SettingsQuietButtonStyle())
+                    .help("Switch Codex to the \(codexLogoStyle.next.displayName) icon")
+                    .accessibilityLabel("Change Codex icon")
+                    .accessibilityValue(codexLogoStyle.displayName)
+                    .accessibilityHint("Switches to the \(codexLogoStyle.next.displayName) icon")
+                }
+            }
         }
     }
 }
