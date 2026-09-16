@@ -96,8 +96,12 @@ struct ConversationWorkTranscript: View {
                     ConversationBoundedTranscript {
                         VStack(alignment: .leading, spacing: 10) {
                             ForEach(timelineItems) { item in
-                                if item.activities.count == 1,
-                                   let activity = item.activities.first {
+                                if item.activities.first?.kind == .tool {
+                                    ConversationToolGroup(
+                                        activities: item.activities,
+                                        runStatus: run.status
+                                    )
+                                } else if let activity = item.activities.first {
                                     if activity.kind == .assistant {
                                         ConversationMarkdown(
                                             document: ConversationMarkdownDocument(RemoteNoteEditEnvelope.redactingEnvelopes(in: activity.content ?? "")),
@@ -107,11 +111,6 @@ struct ConversationWorkTranscript: View {
                                     } else {
                                         ConversationActivityRow(activity: activity, runStatus: run.status)
                                     }
-                                } else {
-                                    ConversationToolGroup(
-                                        activities: item.activities,
-                                        runStatus: run.status
-                                    )
                                 }
                             }
                         }
@@ -210,57 +209,29 @@ private struct ConversationToolGroup: View {
     @State private var expanded = false
 
     var body: some View {
-        if !activeActivities.isEmpty {
+        // Keep the disclosure and each tool row in place across start/result
+        // updates and the arrival of additional calls.
+        DisclosureGroup(isExpanded: Binding(get: { expanded }, set: { transcriptInteraction(); expanded = $0 })) {
             VStack(alignment: .leading, spacing: 8) {
-                ForEach(activeActivities) { activity in
+                ForEach(activities) { activity in
                     ConversationActivityRow(activity: activity, runStatus: runStatus)
                 }
-                if !priorActivities.isEmpty {
-                    DisclosureGroup(isExpanded: Binding(get: { expanded }, set: { transcriptInteraction(); expanded = $0 })) {
-                        VStack(alignment: .leading, spacing: 8) {
-                            ForEach(priorActivities) { activity in
-                                ConversationActivityRow(
-                                    activity: activity,
-                                    runStatus: "completed"
-                                )
-                            }
-                        }
-                        .padding(.top, 7)
-                    } label: {
-                        Text("+\(priorActivities.count) previous \(priorActivities.count == 1 ? "tool call" : "tool calls")")
-                            .font(.system(size: 11.5, weight: .medium))
-                    }
-                    .foregroundStyle(DashboardPalette.mutedForeground)
-                    .padding(.leading, 26)
-                }
             }
-        } else {
-            DisclosureGroup(isExpanded: Binding(get: { expanded }, set: { transcriptInteraction(); expanded = $0 })) {
-                VStack(alignment: .leading, spacing: 8) {
-                    ForEach(activities) { activity in
-                        ConversationActivityRow(
-                            activity: activity,
-                            runStatus: runStatus
-                        )
-                    }
-                }
-                .padding(.top, 8)
-            } label: {
-                HStack(spacing: 9) {
-                    Image(systemName: summaryIcon)
-                        .font(.system(size: 12, weight: .medium))
-                        .frame(width: 17)
-                    Text(summaryLabel)
-                        .font(.system(size: 13.5, weight: .medium))
-                }
-                .foregroundStyle(DashboardPalette.foreground.opacity(0.72))
+            .padding(.top, 8)
+        } label: {
+            HStack(spacing: 9) {
+                Image(systemName: summaryIcon)
+                    .font(.system(size: 12, weight: .medium))
+                    .frame(width: 17)
+                Text(summaryLabel)
+                    .font(.system(size: 13.5, weight: .medium))
             }
+            .foregroundStyle(DashboardPalette.foreground.opacity(0.72))
         }
     }
 
-    private var activeActivities: [AgentRunActivity] {
-        guard runStatus.lowercased() == "running" else { return [] }
-        return activities.filter {
+    private var hasActiveTools: Bool {
+        activities.contains {
             conversationActivityShowsProgress(
                 runStatus: runStatus,
                 activityStatus: $0.status,
@@ -269,16 +240,8 @@ private struct ConversationToolGroup: View {
         }
     }
 
-    private var priorActivities: [AgentRunActivity] {
-        let activeIDs = Set(activeActivities.map(\.id))
-        return activities.filter { !activeIDs.contains($0.id) }
-    }
-
     private var summaryLabel: String {
-        guard let singleCategory else {
-            return "Used \(activities.count) tools"
-        }
-        return singleCategory.summary(count: activities.count)
+        (singleCategory ?? .generic).summary(count: activities.count, isRunning: hasActiveTools)
     }
 
     private var summaryIcon: String {
@@ -497,15 +460,16 @@ private enum ConversationToolCategory: Hashable {
         }
     }
 
-    func summary(count: Int) -> String {
+    func summary(count: Int, isRunning: Bool) -> String {
+        let plural = count == 1 ? "" : "s"
         switch self {
-        case .command: "Ran \(count) commands"
-        case .read: "Read \(count) files"
-        case .write: "Changed \(count) files"
-        case .search: "Ran \(count) searches"
-        case .web: "Used the web \(count) times"
-        case .delegated: "Delegated \(count) tasks"
-        case .generic: "Used \(count) tools"
+        case .command: return "\(isRunning ? "Running" : "Ran") \(count) command\(plural)"
+        case .read: return "\(isRunning ? "Reading" : "Read") \(count) file\(plural)"
+        case .write: return "\(isRunning ? "Updating" : "Changed") \(count) file\(plural)"
+        case .search: return "\(isRunning ? "Running" : "Ran") \(count) search\(count == 1 ? "" : "es")"
+        case .web: return isRunning ? "Using the web · \(count) call\(plural)" : "Used the web \(count) time\(plural)"
+        case .delegated: return "\(isRunning ? "Delegating" : "Delegated") \(count) task\(plural)"
+        case .generic: return "\(isRunning ? "Using" : "Used") \(count) tool\(plural)"
         }
     }
 }
