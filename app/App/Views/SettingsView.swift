@@ -317,26 +317,24 @@ private struct SettingsHarnessView: View {
     }
 
     private var codexIconCard: some View {
-        VStack(alignment: .leading, spacing: 13) {
-            HStack(alignment: .center, spacing: 16) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Codex icon")
-                        .font(.system(size: 14, weight: .semibold))
-                    Text("Choose the icon used for Codex throughout the app.")
-                        .font(.system(size: 12.5))
-                        .foregroundStyle(DashboardPalette.mutedForeground)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Spacer(minLength: 12)
-                Button("Change icon") {
-                    storedCodexLogoStyle = codexLogoStyle.next.rawValue
-                }
-                .buttonStyle(SettingsQuietButtonStyle())
-                .help("Switch Codex to the \(codexLogoStyle.next.displayName) icon")
-                .accessibilityLabel("Change Codex icon")
-                .accessibilityValue(codexLogoStyle.displayName)
-                .accessibilityHint("Switches to the \(codexLogoStyle.next.displayName) icon")
+        HStack(alignment: .center, spacing: 16) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Codex icon")
+                    .font(.system(size: 14, weight: .semibold))
+                Text("Choose the icon used for Codex throughout the app.")
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(DashboardPalette.mutedForeground)
+                    .fixedSize(horizontal: false, vertical: true)
             }
+            Spacer(minLength: 12)
+            Button("Change icon") {
+                storedCodexLogoStyle = codexLogoStyle.next.rawValue
+            }
+            .buttonStyle(SettingsQuietButtonStyle())
+            .help("Switch Codex to the \(codexLogoStyle.next.displayName) icon")
+            .accessibilityLabel("Change Codex icon")
+            .accessibilityValue(codexLogoStyle.displayName)
+            .accessibilityHint("Switches to the \(codexLogoStyle.next.displayName) icon")
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
