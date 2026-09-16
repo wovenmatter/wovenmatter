@@ -702,6 +702,7 @@ final class RemoteWorkspacesModel {
             .trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
         performBusy(configuration) {
             self.checkingRuntimeIDs.removeValue(forKey: configuration.id)
+            self.actionErrors.removeValue(forKey: configuration.id)
             self.workspaceEpochs[configuration.id] = UUID()
             self.invalidatingWorkspaceIDs.insert(configuration.id)
             defer { self.invalidatingWorkspaceIDs.remove(configuration.id) }
@@ -735,6 +736,7 @@ final class RemoteWorkspacesModel {
         }
         performBusy(configuration) {
             self.checkingRuntimeIDs.removeValue(forKey: configuration.id)
+            self.actionErrors.removeValue(forKey: configuration.id)
             self.workspaceEpochs[configuration.id] = UUID()
             self.invalidatingWorkspaceIDs.insert(configuration.id)
             defer { self.invalidatingWorkspaceIDs.remove(configuration.id) }
@@ -824,7 +826,10 @@ final class RemoteWorkspacesModel {
               harnessID == nil || preparedHarnessAction.harness.id == harnessID,
               action == nil || preparedHarnessAction.action == action else { return }
         self.preparedHarnessAction = nil
-        performBusy(preparedHarnessAction.configuration) {
+        performBusy(
+            preparedHarnessAction.configuration,
+            actionErrorRuntimeKind: preparedHarnessAction.harness.id
+        ) {
             try await self.runRuntimeMaintenance(
                 preparedHarnessAction.harness.id, action: preparedHarnessAction.action,
                 configuration: preparedHarnessAction.configuration,
