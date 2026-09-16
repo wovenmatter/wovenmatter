@@ -301,8 +301,7 @@ private struct SettingsHarnessView: View {
             SettingsHarnessRuntimeMaintenanceView(
                 model: model,
                 runtimeKind: runtimeKind,
-                workspaceID: workspaceID,
-                usesWorkspaceTitle: true
+                workspaceID: workspaceID
             )
         }
     }

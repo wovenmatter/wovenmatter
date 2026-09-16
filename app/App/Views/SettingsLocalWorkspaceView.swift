@@ -247,7 +247,10 @@ struct SettingsLocalWorkspaceView: View {
                             Button("Settings") { onMore(definition.runtimeKind) }
                                 .buttonStyle(SettingsQuietButtonStyle())
                                 .accessibilityLabel("Open \(definition.displayName) settings")
-                            runtimeUpdateButton(definition.runtimeKind)
+                            SettingsLocalRuntimeUpdateButton(
+                                model: model,
+                                runtimeKind: definition.runtimeKind
+                            )
                             let isShown = model.isLocalACPRuntimeShown(
                                 definition.runtimeKind
                             )
@@ -338,7 +341,7 @@ struct SettingsLocalWorkspaceView: View {
                 RuntimeMaintenanceActions {
                     Button("Settings") { onMore(.opencode) }
                         .accessibilityLabel("Open OpenCode settings")
-                    runtimeUpdateButton(.opencode)
+                    SettingsLocalRuntimeUpdateButton(model: model, runtimeKind: .opencode)
                     let shown = model.isLocalACPRuntimeShown(.opencode)
                     Button(shown ? "Hide" : "Show") { model.setLocalACPRuntimeShown(!shown, runtimeKind: .opencode) }
                         .accessibilityLabel("\(shown ? "Hide" : "Show") OpenCode in the left sidebar")
@@ -355,26 +358,6 @@ struct SettingsLocalWorkspaceView: View {
                 .buttonStyle(SettingsQuietButtonStyle())
             }
         }
-    }
-
-    private func runtimeUpdateButton(_ kind: AgentRuntimeKind) -> some View {
-        let inventory = model.runtimeInventories[kind]
-        let updating = model.updatingRuntimeKinds.contains(kind)
-        let checking = model.checkingRuntimeKinds.contains(kind)
-        let retryUpdate = model.failedRuntimeUpdateKinds.contains(kind)
-        let hasUpdate = inventory?.isInstalled == true && (inventory?.updateAvailable == true || retryUpdate)
-        let retryCheck = model.checkedRuntimeKinds.contains(kind) && inventory?.latestUnavailable == true
-        let label = updating ? "Updating…" : checking ? "Checking…"
-            : hasUpdate ? (retryUpdate ? "Retry Update" : "Update")
-            : retryCheck ? "Retry check" : "Check for updates"
-        return Button(label) {
-            if hasUpdate { model.updateRuntime(kind) }
-            else { model.checkRuntimeUpdate(kind) }
-        }
-        .buttonStyle(SettingsQuietButtonStyle())
-        .disabled(checking || model.checkingRuntimeInventory || !model.installingLocalACPRuntimeKinds.isEmpty
-            || model.openCode?.isInstalling == true || (hasUpdate && model.localRuntimeMaintenanceHasActiveConversation))
-        .accessibilityLabel(label + " for " + kind.displayName)
     }
 
     private func localACPRuntimeStatusLabel(
