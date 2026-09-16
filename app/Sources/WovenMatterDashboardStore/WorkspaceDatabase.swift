@@ -707,6 +707,102 @@ public final class WorkspaceDatabase: @unchecked Sendable {
     return id
   }
 
+  public func openClawToolActivityIDs(runID: String) throws -> Set<String> {
+    try lock.withLock {
+      let query = try prepareUnlocked("SELECT json_extract(content, '$.id') FROM dashboard_run_events WHERE run_id = ? AND event_type = 'tool' AND json_valid(content)")
+      defer { sqlite3_finalize(query) }
+      try bind(runID, at: 1, to: query)
+      var ids: Set<String> = []
+      while true {
+        let code = sqlite3_step(query)
+        if code == SQLITE_DONE { return ids }
+        guard code == SQLITE_ROW else { throw stepError() }
+        if let id = optionalText(query, column: 0) { ids.insert(id) }
+      }
+    }
+  }
+
+  /// Audit results can settle live starts, but must not discard richer native
+  /// payloads or turn a known failure into success.
+  public func reconcileOpenClawAuditTool(runID: String, activity: AgentRunActivity) throws {
+    try transaction {
+      let query = try prepareUnlocked("SELECT content FROM dashboard_run_events WHERE id = ? AND run_id = ?")
+      defer { sqlite3_finalize(query) }
+      try bind("\(runID):activity:\(activity.id)", at: 1, to: query)
+      try bind(runID, at: 2, to: query)
+      let code = sqlite3_step(query)
+      let merged: AgentRunActivity
+      if code == SQLITE_ROW {
+        let content = try text(query, column: 0)
+        let native = try JSONDecoder().decode(AgentRunActivity.self, from: Data(content.utf8))
+        if native.status == "failed" || (native.status == "completed" && activity.status != "failed") {
+          merged = activity.merging(native)
+        } else { merged = native.merging(activity) }
+      } else if code == SQLITE_DONE { merged = activity }
+      else { throw stepError() }
+      try upsertDeviceOwnedRunActivityUnlocked(runID: runID, activity: merged,
+        appendingContent: false, updatedAt: Date(), replacingActivity: true)
+    }
+  }
+
+  /// Remove legacy mirrors only with a native call digest or commentary item ID
+  /// match. Raw trace rows remain available for inspection.
+  private func reconcileOpenClawActivityMirrorsUnlocked(
+    runID: String, toolAliases: [String: Set<String>], commentaryAliases: [String: String]
+  ) throws {
+    let query = try prepareUnlocked("SELECT id, content FROM dashboard_run_events WHERE run_id = ?")
+    defer { sqlite3_finalize(query) }
+    try bind(runID, at: 1, to: query)
+    var records: [String: (rowID: String, activity: AgentRunActivity)] = [:]
+    while true {
+      let code = sqlite3_step(query)
+      if code == SQLITE_DONE { break }
+      guard code == SQLITE_ROW else { throw stepError() }
+      let content = try text(query, column: 1)
+      guard let activity = try? JSONDecoder().decode(AgentRunActivity.self, from: Data(content.utf8)) else { continue }
+      records[activity.id] = (try text(query, column: 0), activity)
+    }
+    var aliases = toolAliases.compactMapValues { $0.count == 1 ? $0.first : nil }
+    for (legacy, canonical) in commentaryAliases { aliases[legacy] = canonical }
+    for (legacyID, canonicalID) in aliases {
+      guard legacyID != canonicalID, let legacy = records[legacyID], let canonical = records[canonicalID] else { continue }
+      if commentaryAliases[legacyID] != nil {
+        guard legacy.activity.kind == .thought, canonical.activity.kind == .assistant,
+              legacy.activity.content == canonical.activity.content,
+              let raw = legacy.activity.rawPayloadJSON,
+              let payload = try? JSONDecoder().decode(GatewayJSONValue.self, from: Data(raw.utf8)),
+              payload.objectValue?["data"]?.objectValue?["kind"]?.stringValue == "preamble" else { continue }
+      } else {
+        guard legacy.activity.kind == .tool, canonical.activity.kind == .tool else { continue }
+      }
+      // Fill absent detail from the mirror, preserving canonical identity,
+      // checkpoints, ordering and rich native payloads. Terminal native state
+      // wins; a result can settle a canonical call whose outcome is unknown.
+      var value = try JSONDecoder().decode(GatewayJSONValue.self, from: JSONEncoder().encode(canonical.activity)).objectValue ?? [:]
+      let fallback = try JSONDecoder().decode(GatewayJSONValue.self, from: JSONEncoder().encode(legacy.activity)).objectValue ?? [:]
+      for key in ["title", "detail", "content", "rawInputJSON", "rawOutputJSON", "rawPayloadJSON"] where value[key] == nil || value[key] == .null {
+        value[key] = fallback[key]
+      }
+      if canonical.activity.kind == .tool,
+         (legacy.activity.status == "failed" || !["completed", "failed", "cancelled", "canceled"].contains(canonical.activity.status ?? "")),
+         ["completed", "failed", "cancelled", "canceled"].contains(legacy.activity.status ?? "") {
+        value["status"] = fallback["status"]
+        value["phase"] = fallback["phase"]
+      }
+      for key in ["locations", "changes", "planEntries"] where value[key]?.arrayValue?.isEmpty == true {
+        if fallback[key]?.arrayValue?.isEmpty == false { value[key] = fallback[key] }
+      }
+      let content = String(decoding: try JSONEncoder().encode(GatewayJSONValue.object(value)), as: UTF8.self)
+      let update = try prepareUnlocked("UPDATE dashboard_run_events SET content = ? WHERE id = ? AND run_id = ?")
+      defer { sqlite3_finalize(update) }
+      try bind(content, at: 1, to: update); try bind(canonical.rowID, at: 2, to: update); try bind(runID, at: 3, to: update)
+      try stepDone(update)
+      let remove = try prepareUnlocked("DELETE FROM dashboard_run_events WHERE id = ? AND run_id = ?")
+      defer { sqlite3_finalize(remove) }
+      try bind(legacy.rowID, at: 1, to: remove); try bind(runID, at: 2, to: remove); try stepDone(remove)
+    }
+  }
+
   /// Native commentary and tool records share a reply owner, while their raw
   /// transcript anchors remain distinct. Never infer ownership from text alone.
   private func reconcileOpenClawActivitiesUnlocked(conversationID: String, changed: [OpenClawGatewayHistoryMessage], liveRunIDs: Set<String>) throws {
@@ -818,7 +914,9 @@ public final class WorkspaceDatabase: @unchecked Sendable {
       // Replace only the assistant segments owned by this reply. Other queued
       // inputs in the same local run keep their checkpoints and references.
       let oldSegments = try runActivityRecordsUnlocked(runIDs: [runID], assistantOnly: true)
-      for segment in oldSegments where hasFinal && segment.activity.assistantMessageID == ownerID {
+      let retainedSegmentIDs = Set(activities.filter { $0.kind == .assistant }.map(\.id))
+      for segment in oldSegments where hasFinal && segment.activity.assistantMessageID == ownerID
+        && !retainedSegmentIDs.contains(segment.activity.id) {
         let remove = try prepareUnlocked("DELETE FROM dashboard_run_events WHERE id = ?")
         defer { sqlite3_finalize(remove) }
         try bind(segment.id, at: 1, to: remove); try stepDone(remove)
@@ -846,13 +944,33 @@ public final class WorkspaceDatabase: @unchecked Sendable {
         if let prior, activity.phase == "start", ["result", "end"].contains(prior.phase ?? "") {
           merged = activity.merging(prior)
         } else { merged = prior?.merging(activity) ?? activity }
-        let content = String(decoding: try JSONEncoder().encode(merged), as: UTF8.self)
+        var storedValue = try JSONDecoder().decode(GatewayJSONValue.self, from: JSONEncoder().encode(merged))
+        if activity.kind == .tool, prior?.status == "failed", var object = storedValue.objectValue {
+          object["status"] = .string("failed")
+          object["phase"] = .string(prior?.phase ?? "result")
+          storedValue = .object(object)
+        }
+        let content = String(decoding: try JSONEncoder().encode(storedValue), as: UTF8.self)
         let date = activityDates[activity.id] ?? final.value.date
         for (index, value) in [eventID, activity.kind.rawValue, content, Self.timestamp(date), runID].enumerated() {
           try bind(value, at: Int32(index + 1), to: event)
         }
         try stepDone(event)
       }
+      var toolAliases: [String: Set<String>] = [:]
+      var commentaryAliases: [String: String] = [:]
+      for member in members {
+        let nativeRunID = member.value.gatewayRunID ?? member.value.runID ?? member.value.id
+        let prefix = nativeRunID + ":"
+        for tool in member.tools where tool.id.hasPrefix(prefix) {
+          let callID = String(tool.id.dropFirst(prefix.count))
+          toolAliases[GatewayAuditToolIdentity.ledgerID(nativeCallID: callID), default: []].insert(tool.id)
+        }
+        if let itemID = member.value.commentaryItemID {
+          commentaryAliases[nativeRunID + ":" + itemID] = "history:\(member.value.transcriptIdentity ?? member.value.id)"
+        }
+      }
+      try reconcileOpenClawActivityMirrorsUnlocked(runID: runID, toolAliases: toolAliases, commentaryAliases: commentaryAliases)
       let update = try prepareUnlocked("UPDATE dashboard_messages SET content = ?, run_id = ? WHERE id = ? AND conversation_id = ?")
       defer { sqlite3_finalize(update) }
       for (index, value) in [body, runID, ownerID, conversationID].enumerated() { try bind(value, at: Int32(index + 1), to: update) }
