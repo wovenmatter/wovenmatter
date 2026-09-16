@@ -337,7 +337,7 @@ struct WorkspaceView: View {
                 model.dismissPendingOpenClawGatewayLink()
             }
         } message: {
-            Text("ACP is ready. Connect this remote OpenClaw Gateway for durable sessions, events, models, attachments, cron, and heartbeat features.")
+            Text("You can chat now with ACP. Connect the Gateway to also use shared sessions and scheduled jobs.")
         }
     }
 
@@ -646,8 +646,7 @@ struct WorkspaceView: View {
                 case .library:
                     DashboardUnavailableUtility(
                         icon: .libraryBigControl,
-                        title: "Library",
-                        detail: "Attachments are not shown in this view yet."
+                        title: "Library"
                     )
                 case .databases:
                     DashboardDatabasesView(model: model)

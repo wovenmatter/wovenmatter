@@ -35,13 +35,20 @@ private enum PendingUsageCredentialAction: Identifiable {
     var purpose: String {
         switch self {
         case .enableProvider(let provider):
-            "Enable \(provider.displayName) so Woven Matter can check its local sign-in and usage when you open or refresh Usage."
+            switch provider {
+            case .cursor:
+                "Allow Woven Matter to read Cursor’s local account session and check usage."
+            case .openRouter:
+                "Allow Woven Matter to use your saved OpenRouter key to check usage."
+            default:
+                "Allow Woven Matter to check \(provider.displayName) usage using its local sign-in."
+            }
         case .retryProvider(let provider):
             "Retry \(provider.displayName) credential access once. macOS may ask for permission now; future automatic refreshes remain noninteractive."
         case .saveOpenRouter:
-            "Save and use the OpenRouter API key you enter in this Mac's Keychain."
+            "Save your OpenRouter key in this Mac’s Keychain and use it to check usage."
         case .deleteOpenRouter:
-            "Access the saved OpenRouter item so it can be removed from this Mac's Keychain."
+            "Remove your saved OpenRouter key from this Mac’s Keychain."
         }
     }
 }
@@ -218,7 +225,7 @@ struct DashboardUsageView: View {
         HStack(spacing: 7) {
             Image(systemName: "externaldrive.badge.checkmark")
                 .foregroundStyle(theme.palette.themeAccent)
-            Text("Normalized usage metadata is persisted in Woven Matter; prompts and transcript contents remain in their provider-owned stores.")
+            Text("Usage tracking saves totals and metadata, not prompts or chat contents.")
                 .foregroundStyle(DashboardPalette.mutedForeground)
             Spacer()
         }
@@ -786,7 +793,7 @@ struct DashboardUsageView: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Connect only the accounts you choose")
                         .font(.system(size: 12.5, weight: .semibold))
-                    Text("Nothing on this page checks credentials until you enable that account. Enabled subscription accounts use their provider CLI sign-in; OpenRouter uses only the API key you enter below.")
+                    Text("Enable an account to allow credential checks. Cursor uses its local account session; OpenRouter uses your saved key. Other accounts use their CLI sign-in.")
                         .font(.system(size: 11.5))
                         .foregroundStyle(DashboardPalette.mutedForeground)
                         .fixedSize(horizontal: false, vertical: true)

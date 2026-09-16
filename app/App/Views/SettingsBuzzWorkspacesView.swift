@@ -15,18 +15,16 @@ struct SettingsBuzzWorkspacesView: View {
     var body: some View {
         SettingsPage(
             title: "Buzz agent workspaces",
-            detail: "Optionally discover agents from Buzz data already stored on this Mac.",
             reservesRailControlSpace: reservesRailControlSpace,
             onBack: onBack
         ) {
             SettingsWorkspaceSidebarVisibilityControl(.buzzWorkspaces)
             SettingsCard(
                 title: "Local discovery",
-                detail: "Disabled by default. Woven Matter reads only the workspace and agent catalog paths you add below."
+                detail: "Reads only the local folders and catalogs you add."
             ) {
                 Toggle("Enable local Buzz discovery", isOn: $discoveryEnabled)
                     .toggleStyle(DashboardSwitchToggleStyle())
-                SettingsNote("No cloud service or relay is contacted by this feature.")
             }
 
             if discoveryEnabled {
@@ -48,7 +46,7 @@ struct SettingsBuzzWorkspacesView: View {
     private var linkedWorkspaces: some View {
         SettingsCard(
             title: "Linked local workspaces",
-            detail: "Discovery is explicit. Candidates are not enrolled until you choose Add."
+            detail: "Choose which agents to add."
         ) {
             if model.buzzWorkspaceLinks.isEmpty {
                 SettingsEmpty("No local Buzz workspaces are linked yet.")
@@ -104,7 +102,7 @@ struct SettingsBuzzWorkspacesView: View {
                         Text(enrollment.displayNameSnapshot)
                             .font(.system(size: 12, weight: .medium))
                         Spacer()
-                        SettingsPill("Enrolled", tone: .neutral)
+                        SettingsPill("Added", tone: .neutral)
                         Button("Remove") {
                             model.removeBuzzWorkspaceAgentEnrollment(enrollment)
                         }
@@ -148,10 +146,7 @@ struct SettingsBuzzWorkspacesView: View {
     }
 
     private var addWorkspace: some View {
-        SettingsCard(
-            title: "Add a local workspace",
-            detail: "Choose the local workspace folder and Buzz agent catalog. Both remain on this Mac."
-        ) {
+        SettingsCard(title: "Add a local workspace") {
             SettingsField("Name") {
                 TextField("Local Buzz workspace", text: $workspaceName)
                     .settingsInput()
@@ -164,7 +159,7 @@ struct SettingsBuzzWorkspacesView: View {
                 TextField("/path/to/agents.json", text: $agentCatalogPath)
                     .settingsInput()
             }
-            Button("Add Local Workspace") {
+            Button("Add workspace") {
                 Task {
                     if await model.addLocalBuzzWorkspace(
                         displayName: workspaceName,

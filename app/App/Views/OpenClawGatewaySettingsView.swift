@@ -35,17 +35,18 @@ struct OpenClawGatewayAgentSettingsView: View {
 
     private var connectionCard: some View {
         SettingsCard(
-            title: "Gateway connection",
-            detail: "Live connection state for this OpenClaw on this Mac."
+            title: "Gateway connection"
         ) {
             HStack(spacing: 10) {
                 connectionIndicator
                 VStack(alignment: .leading, spacing: 2) {
                     Text(status.label)
                         .font(.system(size: 13, weight: .semibold))
-                    Text(statusDetail)
-                        .font(.system(size: 11.5))
-                        .foregroundStyle(DashboardPalette.mutedForeground)
+                    if let statusDetail {
+                        Text(statusDetail)
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(DashboardPalette.mutedForeground)
+                    }
                 }
                 Spacer(minLength: 12)
                 connectionActions
@@ -66,13 +67,13 @@ struct OpenClawGatewayAgentSettingsView: View {
     private var nameCard: some View {
         SettingsCard(
             title: "Woven Matter name",
-            detail: "Changes how this agent appears in Woven Matter. It does not rename or reconfigure OpenClaw."
+            detail: "This name is shown only in Woven Matter."
         ) {
             SettingsField("Agent name") {
                 TextField("Agent name", text: $agentName)
                     .settingsInput()
             }
-            Button("Save Woven Matter Name") {
+            Button("Save name") {
                 model.renameOpenClawAgent(agentID: agent.id, displayName: agentName)
             }
             .buttonStyle(DashboardPrimaryButtonStyle())
@@ -81,10 +82,7 @@ struct OpenClawGatewayAgentSettingsView: View {
     }
 
     private var restartCard: some View {
-        SettingsCard(
-            title: "Gateway",
-            detail: "Restarts the Gateway, reconnects Woven Matter, and confirms that it is healthy before returning to Ready."
-        ) {
+        SettingsCard(title: "Gateway") {
             Button(status == .restarting ? "Restarting…" : "Restart Gateway") {
                 model.restartOpenClawGateway(agentID: agent.id)
             }
@@ -148,15 +146,11 @@ struct OpenClawGatewayAgentSettingsView: View {
             ?? .notConnected
     }
 
-    private var statusDetail: String {
+    private var statusDetail: String? {
         switch status {
-        case .ready: "Connected and health checked"
-        case .connecting: "Establishing the Gateway link"
-        case .reconnecting: "Re-establishing the Gateway connection"
+        case .ready, .connecting, .reconnecting, .restarting, .notConnected: nil
         case .unlinking: "Removing the Gateway link from this Mac"
-        case .restarting: "Restarting and waiting for health"
-        case .unavailable: "The linked Gateway is not reachable"
-        case .notConnected: "No Gateway link is stored on this Mac"
+        case .unavailable: "Check that the Gateway is running, then reconnect."
         }
     }
 
