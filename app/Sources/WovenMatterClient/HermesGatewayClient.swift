@@ -252,25 +252,24 @@ public actor HermesGatewayClient {
             let result = try await HermesSlashCommands.dispatch(input.text, sessionID: sessionID) { method, params in
                 try await rpc.call(method, params)
             }
+            if stopped { return .cancelled }
             switch result["type"].text {
             case "send", "skill":
                 guard let message = result["message"].string else {
                     throw HermesGatewayError.message("Hermes returned a command without its message.")
                 }
                 content = message
+                try await publishCommandFeedback(result)
+                if stopped { return .cancelled }
             case "prefill":
                 guard let message = result["message"].string else {
                     throw HermesGatewayError.message("Hermes returned a command without its draft.")
                 }
                 try await onEvent?(.composerPrefill(message))
-                if let notice = result["notice"].string, !notice.isEmpty {
-                    try await onEvent?(.assistantSnapshot(notice))
-                }
+                try await publishCommandFeedback(result)
                 return .endTurn
             case "", "exec", "plugin":
-                let output = [result["output"].string, result["warning"].string, result["notice"].string]
-                    .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "\n\n")
-                if !output.isEmpty { try await onEvent?(.assistantSnapshot(output)) }
+                try await publishCommandFeedback(result)
                 try? await refreshConfiguration()
                 return .endTurn
             default:
@@ -331,6 +330,16 @@ public actor HermesGatewayClient {
             await rpc.disconnect()
             throw error
         }
+    }
+
+    private func publishCommandFeedback(_ result: HermesValue) async throws {
+        let output = [result["output"].string, result["warning"].string, result["notice"].string]
+            .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "\n\n")
+        guard !output.isEmpty else { return }
+        try await onEvent?(.activity(AgentRunActivity(
+            id: UUID().uuidString, kind: .activity, phase: "end", title: "Hermes",
+            status: "completed", content: output, contentIsDelta: false
+        ), appendsContent: false))
     }
 
     public func steer(_ input: AgentMessageInput) async throws {

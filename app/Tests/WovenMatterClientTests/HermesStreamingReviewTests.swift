@@ -4,6 +4,72 @@ import WovenMatterCore
 @testable import WovenMatterClient
 
 struct HermesStreamingReviewTests {
+
+  @Test(arguments: ["send", "skill", "prefill", "exec", "plugin"])
+  func commandFeedbackIsPreservedWithoutBecomingAnAssistantReply(_ outcome: String) async throws {
+    let transport = HermesStreamingTransport(commandResult: [
+      "type": .string(outcome), "message": "Command prompt or draft",
+      "notice": "Native command notice", "warning": "Native command warning"
+    ])
+    let client = HermesGatewayClient(
+      launch: .init(runtimeKind: .hermes, executableURL: URL(filePath: "/fixture/hermes"), arguments: []),
+      transport: transport, home: "/tmp/hermes-command-review"
+    )
+    _ = try await client.initializeSession(workingDirectory: URL(filePath: "/tmp"),
+      existingSessionID: nil, title: nil, systemPrompt: nil)
+    let output = HermesStreamingEvents()
+    let turn = Task {
+      try await client.prompt(.init(text: "/review"), onEvent: { await output.record($0) },
+        onPermission: nil, onInteraction: nil)
+    }
+    if outcome == "send" || outcome == "skill" {
+      try await transport.waitForSubmit()
+      await transport.event("message.complete", ["text": "Actual model response"])
+    }
+    #expect(try await turn.value == .endTurn)
+    let events = await output.allEvents()
+    let feedback = events.compactMap { event -> AgentRunActivity? in
+      guard case .activity(let activity, _) = event, activity.kind == .activity else { return nil }
+      return activity
+    }
+    #expect(feedback.map(\.content) == ["Native command warning\n\nNative command notice"])
+    #expect(!events.contains(.assistantSnapshot("Native command notice")))
+    #expect(events.contains(.composerPrefill("Command prompt or draft")) == (outcome == "prefill"))
+    #expect(await transport.didSubmit() == (outcome == "send" || outcome == "skill"))
+    await transport.resetSubmission()
+    let next = Task { try await client.prompt(.init(text: "ordinary message"),
+      onEvent: nil, onPermission: nil, onInteraction: nil) }
+    try await transport.waitForSubmit()
+    await transport.event("message.complete", ["text": "Follow-up"])
+    #expect(try await next.value == .endTurn)
+    await client.shutdown()
+  }
+
+  @Test(arguments: [false, true])
+  func cancelledCommandCannotSubmitItsReturnedPrompt(duringFeedback: Bool) async throws {
+    let transport = HermesStreamingTransport(
+      commandResult: ["type": "send", "message": "Must not be submitted", "notice": "Command notice"],
+      holdCommand: !duringFeedback)
+    let client = HermesGatewayClient(
+      launch: .init(runtimeKind: .hermes, executableURL: URL(filePath: "/fixture/hermes"), arguments: []),
+      transport: transport, home: "/tmp/hermes-command-review"
+    )
+    _ = try await client.initializeSession(workingDirectory: URL(filePath: "/tmp"),
+      existingSessionID: nil, title: nil, systemPrompt: nil)
+    let turn = Task { try await client.prompt(.init(text: "/review"),
+      onEvent: { event in
+        if duringFeedback, case .activity = event { try await client.cancel() }
+      }, onPermission: nil, onInteraction: nil) }
+    if !duringFeedback {
+      try await transport.waitForCommand()
+      try await client.cancel()
+      await transport.releaseCommand()
+    }
+    #expect(try await turn.value == .cancelled)
+    #expect(await !transport.didSubmit())
+    await client.shutdown()
+  }
+
   @Test func streamedReasoningPhasesDoNotDuplicateCanonicalCompletion() async throws {
     let transport = HermesStreamingTransport()
     let client = HermesGatewayClient(
@@ -66,6 +132,7 @@ struct HermesStreamingReviewTests {
 private actor HermesStreamingEvents {
   private var values: [LocalACPEvent] = []
   func record(_ event: LocalACPEvent) { values.append(event) }
+  func allEvents() -> [LocalACPEvent] { values }
   func thoughts() -> [AgentRunActivity] {
     values.compactMap {
       guard case .activity(let activity, _) = $0, activity.kind == .thought else { return nil }
@@ -85,6 +152,25 @@ private actor HermesStreamingTransport: HermesGatewayTransport {
   private var handler: HermesGatewayRPC.EventHandler?
   private var submitted = false
   private var sequence = 0
+  private let commandResult: HermesValue?
+  private let holdCommand: Bool
+  private var commandWaiter: CheckedContinuation<Void, Never>?
+  private var commandRequested = false
+
+  init(commandResult: HermesValue? = nil, holdCommand: Bool = false) {
+    self.commandResult = commandResult
+    self.holdCommand = holdCommand
+  }
+  func didSubmit() -> Bool { submitted }
+  func resetSubmission() { submitted = false }
+  func releaseCommand() { commandWaiter?.resume(); commandWaiter = nil }
+  func waitForCommand() async throws {
+    for _ in 0..<200 {
+      if commandRequested { return }
+      try await Task.sleep(for: .milliseconds(5))
+    }
+    throw HermesGatewayError.message("fixture command timeout")
+  }
 
   func setHandlers(event: HermesGatewayRPC.EventHandler?,
                    disconnected: (@Sendable () async -> Void)?,
@@ -92,10 +178,16 @@ private actor HermesStreamingTransport: HermesGatewayTransport {
   func connect() { isConnected = true }
   func disconnect() { isConnected = false }
   func respond(id: String, result: HermesValue) {}
-  func call(_ method: String, _ params: HermesValue) -> HermesValue {
+  func call(_ method: String, _ params: HermesValue) async -> HermesValue {
     switch method {
     case "session.create": return ["session_id": "live", "stored_session_id": "stored", "running": .bool(false)]
     case "session.events.since": return ["latest_seq": .number(Double(sequence)), "epoch": "fixture-epoch"]
+    case "commands.catalog":
+      return commandResult == nil ? [:] : ["pairs": .array([.array(["/review", "Review"])])]
+    case "command.dispatch":
+      commandRequested = true
+      if holdCommand { await withCheckedContinuation { commandWaiter = $0 } }
+      return commandResult ?? [:]
     case "prompt.submit": submitted = true; return [:]
     default: return [:]
     }

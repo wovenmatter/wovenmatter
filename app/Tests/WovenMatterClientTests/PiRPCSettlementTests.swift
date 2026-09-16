@@ -118,6 +118,10 @@ struct PiRPCSettlementTests {
         description: "No supplied display name"
       ),
     ])
+    #expect(initialized.configuration.slashCommands == [
+      LocalACPSlashCommand(name: "search", detail: "Extension command"),
+      LocalACPSlashCommand(name: "skill:review", detail: "Review skill")
+    ])
     #expect(initialized.configuration.thinking == "high")
     #expect(initialized.configuration.thinkingOptions == ["off", "high", "max"])
     #expect(initialized.configuration.thinkingOptionMetadata.isEmpty)
@@ -175,6 +179,13 @@ private struct PiPipeFixture: Sendable {
             "provider": "custom", "id": "plain-model",
             "description": "No supplied display name",
           ],
+        ]]
+      case "get_commands" where advertisesConfiguration:
+        data = ["commands": [
+          ["name": "search", "description": "Extension command", "source": "extension"],
+          ["name": "search", "description": "Shadowed prompt template", "source": "prompt"],
+          ["name": "skill:review", "description": "Review skill", "source": "skill"],
+          ["name": ""], ["name": "invalid command"]
         ]]
       case "get_available_thinking_levels" where advertisesConfiguration:
         // Pi returns only the levels supported by the currently selected model.

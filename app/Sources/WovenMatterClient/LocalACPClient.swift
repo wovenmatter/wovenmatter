@@ -1106,10 +1106,12 @@ public actor LocalACPClient {
         guard let sessionID else {
             throw LocalACPClientError.sessionNotInitialized
         }
-        let initialSystemPrompt = initialSystemPromptInFlight
+        let outboundText = input.transportText().trimmingCharacters(in: .whitespacesAndNewlines)
+        // Native commands must stay at the start of the message. Defer ACP v1's
+        // instruction prefix until an ordinary prompt instead of consuming it here.
+        let initialSystemPrompt = initialSystemPromptInFlight || outboundText.hasPrefix("/")
             ? nil
             : pendingInitialSystemPrompt
-        let outboundText = input.transportText().trimmingCharacters(in: .whitespacesAndNewlines)
         let prefixedText = initialSystemPrompt.map {
             "[System]\n\($0)\n\n\(outboundText)"
         } ?? outboundText
