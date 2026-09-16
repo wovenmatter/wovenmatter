@@ -554,10 +554,12 @@ public actor PiRPCClient {
         let thinkingOptions = array(dictionary(thinking["data"])?["levels"])?.compactMap {
             $0 as? String
         } ?? []
+        var seenCommands: Set<String> = []
         let slashCommands = array(dictionary(commands["data"])?["commands"])?.compactMap { value -> LocalACPSlashCommand? in
             guard let command = value as? [String: Any],
                   let name = string(command["name"]),
-                  !name.isEmpty else {
+                  !name.isEmpty, !name.contains(where: \.isWhitespace),
+                  seenCommands.insert(name).inserted else {
                 return nil
             }
             return LocalACPSlashCommand(

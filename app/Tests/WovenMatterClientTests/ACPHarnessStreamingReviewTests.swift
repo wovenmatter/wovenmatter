@@ -4,6 +4,55 @@ import WovenMatterCore
 @testable import WovenMatterClient
 
 struct ACPHarnessStreamingReviewTests {
+
+  @Test(arguments: [AgentRuntimeKind.codex, .claudeCode, .grokBuild, .cursor], [1, 2])
+  func slashCommandsPreserveArgumentsAndReuseSessionAfterEmptyOrRejectedResults(kind: AgentRuntimeKind, protocolVersion: Int) async throws {
+    let fixture = try ACPHarnessFixture(kind: kind, initialize: "{\"protocolVersion\":\(protocolVersion)}",
+      session: #"{"sessionId":"commands","availableCommands":[{"name":"native"}]}"#,
+      extras: ["authenticate": "{}", "cursor/list_available_models": "{}"],
+      promptOverride: """
+        case "$request" in
+          *'/native '* ) respond "$id" '{"stopReason":"end_turn"}'; continue ;;
+          *'/denied'* ) printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32602,"message":"Command rejected"}}\\n' "$id"; continue ;;
+        esac
+        """)
+    defer { fixture.remove() }
+    let client = try fixture.client()
+    _ = try await client.initializeSession(workingDirectory: fixture.root, existingSessionID: nil,
+      title: nil, systemPrompt: "Agent instructions")
+    let input = "/native keep  spacing\nand this line"
+    let events = ACPReviewEvents()
+    #expect(try await client.prompt(input) { await events.record($0) } == .endTurn)
+    #expect(await events.values().isEmpty)
+    do {
+      _ = try await client.prompt("/denied")
+      Issue.record("Rejected command must report its native error")
+    } catch LocalACPClientError.agent(let code, let message) {
+      #expect(code == -32602 && message == "Command rejected")
+    }
+    #expect(try await client.prompt("ordinary message") == .endTurn)
+    await client.shutdown()
+    let requests = try fixture.log().split(separator: "\n").map {
+      try #require(JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any])
+    }
+    let prompts = requests.filter { $0["method"] as? String == "session/prompt" }
+    let params = prompts.first?["params"] as? [String: Any]
+    let blocks = params?["prompt"] as? [[String: Any]]
+    #expect(blocks?.first?["text"] as? String == input)
+    #expect(prompts.count == 3)
+    let lastParams = prompts.last?["params"] as? [String: Any]
+    let lastBlocks = lastParams?["prompt"] as? [[String: Any]]
+    let expectedText = protocolVersion == 1
+      ? "[System]\nAgent instructions\n\nordinary message" : "ordinary message"
+    #expect(lastBlocks?.first?["text"] as? String == expectedText)
+    let sessions = requests.filter { $0["method"] as? String == "session/new" }
+    #expect(sessions.count == 1)
+    if protocolVersion == 2 {
+      let sessionParams = sessions.first?["params"] as? [String: Any]
+      #expect(sessionParams?["systemPrompt"] as? String == "Agent instructions")
+    }
+  }
+
   @Test func configurationNotificationsCarrySnapshotsWithoutAnotherPreparation() async throws {
     let fixture = try ACPHarnessFixture(kind: .codex,
       initialize: #"{"protocolVersion":2}"#,
@@ -269,7 +318,8 @@ private struct ACPHarnessFixture {
 
   init(kind: AgentRuntimeKind, initialize: String, session: String,
        extras: [String: String], holdPromptForInterjection: Bool = false,
-       setConfigShell: String? = nil, initialConfiguration: String? = nil) throws {
+       setConfigShell: String? = nil, initialConfiguration: String? = nil,
+       promptOverride: String? = nil) throws {
     self.kind = kind
     root = FileManager.default.temporaryDirectory.appending(path: "acp-harness-\(UUID())")
     executable = root.appending(path: "adapter")
@@ -295,6 +345,7 @@ private struct ACPHarnessFixture {
           *'"method":"initialize"'*) respond "$id" '\(initialize)' ;;
           *'"method":"session/new"'*|*'"method":"session/load"'*) respond "$id" '\(sessionResponse)' ;;
           *'"method":"session/prompt"'*)
+            \(promptOverride ?? "")
             printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"config_option_update","configOptions":[{"id":"model","category":"model","currentValue":"changed-model","options":[{"value":"changed-model"}]}]}}}'
             printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"available_commands_update","availableCommands":[{"name":"review","description":"Review changes"}]}}}'
             printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"available_commands_update","availableCommands":[{"name":"review","description":"Review changes"}]}}}'

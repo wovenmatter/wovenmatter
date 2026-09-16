@@ -223,12 +223,8 @@ struct DashboardComposer: View {
     }
 
     private var slashQuery: String? {
-        let line = draft.split(
-            separator: "\n",
-            omittingEmptySubsequences: false
-        ).last.map(String.init) ?? draft
-        guard line.hasPrefix("/"), !line.contains(where: \.isWhitespace) else { return nil }
-        return String(line.dropFirst())
+        guard draft.hasPrefix("/"), !draft.contains(where: \.isWhitespace) else { return nil }
+        return String(draft.dropFirst())
     }
 
     private var matchingSlashCommands: [LocalACPSlashCommand] {
@@ -334,17 +330,7 @@ struct DashboardComposer: View {
     }
 
     private func applySlashCommand(_ command: LocalACPSlashCommand) {
-        let lines = draft.split(
-            separator: "\n",
-            omittingEmptySubsequences: false
-        ).map(String.init)
-        var next = lines
-        if next.isEmpty {
-            next = ["/\(command.name) "]
-        } else {
-            next[next.count - 1] = "/\(command.name) "
-        }
-        draft = next.joined(separator: "\n")
+        draft = "/\(command.name) "
         completionRequest += 1
         focused = true
         openMenu = nil
