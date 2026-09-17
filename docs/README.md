@@ -33,10 +33,10 @@ for changes in your version.
 
 ## Documentation work in progress
 
-This is the first pass of the documentation overhaul. The
+This draft incorporates the product interview and README direction. The
 [editorial plan and source map](planning/documentation-overhaul.md) track the
 scope and a possible website structure; [12 interview questions](planning/interview.md)
-will guide the next pass.
+record the starting questions for that discussion.
 
 Historical engineering records remain available as evidence, rather than setup
 guides: [OpenClaw upgrade](OPENCLAW_2026_9_2_UPGRADE.md) and

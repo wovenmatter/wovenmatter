@@ -4,6 +4,11 @@ Woven Matter runs on Apple silicon Macs with macOS 26 or later. Download the
 DMG from [GitHub Releases](https://github.com/wovenmatter/wovenmatter/releases/latest),
 open it, and move the app into Applications.
 
+No Woven Matter account is required. Start with a harness you already use and
+have provider access for. If you already use Codex, for example, choose it for
+your first task; the app can discover an existing installation. Otherwise,
+choose a harness supported by an account or API key you have.
+
 ## Set up your first agent
 
 1. Open **Settings → Local agent workspace** and check that the workspace is
@@ -23,8 +28,8 @@ runtime is not necessarily signed in or ready to send a message. See
 
 ## Try a small task
 
-Ask your agent to explain a repository under `REPOS`, draft a plan, or summarize
-a file you choose. Check the selected agent and workspace before sending.
+Ask your agent to research a question, draft a plan, or summarize a file you
+choose. Check the selected agent and workspace before sending.
 Agent actions use that runtime's permissions and your provider account.
 
 You can also create a note without connecting an agent. Organize notes and

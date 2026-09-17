@@ -4,6 +4,14 @@ Keep a note beside a conversation, organize results in folders, or work with a
 spreadsheet or HTML artifact. The **New Note** picker offers **Note**,
 **Spreadsheet**, and **HTML**. These app records live in the local store.
 
+## Work with an agent beside a note
+
+Keep a longer research summary or plan open while continuing the conversation.
+Woven Matter's note tools let agents read and edit the note associated with that
+work. Agent-driven editing, tables, and HTML workflows are experimental; review
+the result. Ordinary note-taking and folder organization are available without
+an agent.
+
 ## Database folders
 
 **Databases** lets you browse **All**, **Local**, or **Remote** locations. Choose

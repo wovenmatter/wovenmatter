@@ -13,7 +13,7 @@ These are separate kinds of data.
 
 ## Shared folder layout
 
-The [README's workspace tree](../../README.md#your-workspace) matches the shared
+The [README's workspace tree](../../README.md#workspace-layout) matches the shared
 initializer. `REPOS` holds repository checkouts; `Databases` holds named data
 folders. `GUIDES`, `PLANS`, `RESEARCH`, and `WORK_LOGS` give durable work a home;
 `OUTBOX` is for deliverables, and `.scratch` is disposable working space.
