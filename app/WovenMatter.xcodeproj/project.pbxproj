@@ -20,6 +20,15 @@
 		5E7A0000000000000000000B /* SettingsBuzzWorkspacesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E7A0000000000000000000C /* SettingsBuzzWorkspacesView.swift */; };
 		5E7A0000000000000000000D /* SettingsUsageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E7A0000000000000000000E /* SettingsUsageView.swift */; };
 		49BB9C77C988D34AA1B69E70 /* ApplicationModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0B27571F91CCF38534BB90 /* ApplicationModel.swift */; };
+		52851A5196694401B6E3C42E /* ApplicationModel+OpenCode.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49B11830295245399F956BD2 /* ApplicationModel+OpenCode.swift */; };
+		9ECB7D050F104DF481B55056 /* ApplicationModel+ConversationChanges.swift in Sources */ = {isa = PBXBuildFile; fileRef = BFDBB086F6E94B1DA7ED6B3D /* ApplicationModel+ConversationChanges.swift */; };
+		5CBB164AA40E41368B67B605 /* ApplicationModel+Workspace.swift in Sources */ = {isa = PBXBuildFile; fileRef = B540377E50CF4DA581A9C9D6 /* ApplicationModel+Workspace.swift */; };
+		EB7B051CDCCE45A0ACD4BB8C /* ApplicationModel+Usage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02D44845FCD2498B9BD67E62 /* ApplicationModel+Usage.swift */; };
+		36698AEA7E3442788623E3E1 /* ApplicationModel+Messaging.swift in Sources */ = {isa = PBXBuildFile; fileRef = 41A865A90D72430D92FB356F /* ApplicationModel+Messaging.swift */; };
+		A76DFD7233294DE3A18E0DD4 /* ApplicationModel+LocalACP.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12E39945DC604B16AD37F77F /* ApplicationModel+LocalACP.swift */; };
+		D0AA380F1DA84C00A8ED8910 /* ApplicationModel+Hermes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4373C2B166EF4708A16CA865 /* ApplicationModel+Hermes.swift */; };
+		65F6A0F53029428F95CE3C03 /* ApplicationModel+Buzz.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7AA716B4064445CBAAE617A /* ApplicationModel+Buzz.swift */; };
+		A1AF2B9E59824E0ABE39E62D /* ApplicationModel+OpenClaw.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45F0E1F5BED04315A8AAFBF6 /* ApplicationModel+OpenClaw.swift */; };
 		5AECF7B494583F056FBE596C /* WovenMatterApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 624CEC46A7441DADEBBCE79E /* WovenMatterApp.swift */; };
 		5E64711B441F5A188A2862AC /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 489A29D04369BF898400D045 /* RootView.swift */; };
 		A11C00000000000000000003 /* WorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11C00000000000000000004 /* WorkspaceView.swift */; };
@@ -67,6 +76,15 @@
 		37C9459F43D4462FD229B6B1 /* WovenMatter.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = WovenMatter.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		489A29D04369BF898400D045 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
 		5A0B27571F91CCF38534BB90 /* ApplicationModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApplicationModel.swift; sourceTree = "<group>"; };
+		49B11830295245399F956BD2 /* ApplicationModel+OpenCode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ApplicationModel+OpenCode.swift"; sourceTree = "<group>"; };
+		BFDBB086F6E94B1DA7ED6B3D /* ApplicationModel+ConversationChanges.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ApplicationModel+ConversationChanges.swift"; sourceTree = "<group>"; };
+		B540377E50CF4DA581A9C9D6 /* ApplicationModel+Workspace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ApplicationModel+Workspace.swift"; sourceTree = "<group>"; };
+		02D44845FCD2498B9BD67E62 /* ApplicationModel+Usage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ApplicationModel+Usage.swift"; sourceTree = "<group>"; };
+		41A865A90D72430D92FB356F /* ApplicationModel+Messaging.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ApplicationModel+Messaging.swift"; sourceTree = "<group>"; };
+		12E39945DC604B16AD37F77F /* ApplicationModel+LocalACP.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ApplicationModel+LocalACP.swift"; sourceTree = "<group>"; };
+		4373C2B166EF4708A16CA865 /* ApplicationModel+Hermes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ApplicationModel+Hermes.swift"; sourceTree = "<group>"; };
+		D7AA716B4064445CBAAE617A /* ApplicationModel+Buzz.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ApplicationModel+Buzz.swift"; sourceTree = "<group>"; };
+		45F0E1F5BED04315A8AAFBF6 /* ApplicationModel+OpenClaw.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ApplicationModel+OpenClaw.swift"; sourceTree = "<group>"; };
 		624CEC46A7441DADEBBCE79E /* WovenMatterApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WovenMatterApp.swift; sourceTree = "<group>"; };
 		C49C2130B0B0B01A795C7504 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		0C1A00000000000000000002 /* OpenClawGatewaySettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenClawGatewaySettingsView.swift; sourceTree = "<group>"; };
@@ -158,6 +176,15 @@
 			children = (
 				A11C00000000000000000002 /* Assets.xcassets */,
 				5A0B27571F91CCF38534BB90 /* ApplicationModel.swift */,
+				49B11830295245399F956BD2 /* ApplicationModel+OpenCode.swift */,
+				BFDBB086F6E94B1DA7ED6B3D /* ApplicationModel+ConversationChanges.swift */,
+				B540377E50CF4DA581A9C9D6 /* ApplicationModel+Workspace.swift */,
+				02D44845FCD2498B9BD67E62 /* ApplicationModel+Usage.swift */,
+				41A865A90D72430D92FB356F /* ApplicationModel+Messaging.swift */,
+				12E39945DC604B16AD37F77F /* ApplicationModel+LocalACP.swift */,
+				4373C2B166EF4708A16CA865 /* ApplicationModel+Hermes.swift */,
+				D7AA716B4064445CBAAE617A /* ApplicationModel+Buzz.swift */,
+				45F0E1F5BED04315A8AAFBF6 /* ApplicationModel+OpenClaw.swift */,
 				D50000000000000000000009 /* Info.plist */,
 				624CEC46A7441DADEBBCE79E /* WovenMatterApp.swift */,
 				D49100000000000000000004 /* Models */,
@@ -374,6 +401,15 @@
 				E10100000000000000000001 /* WovenNoteService.swift in Sources */,
 				E10000000000000000000001 /* NoteEditor.swift in Sources */,
 				49BB9C77C988D34AA1B69E70 /* ApplicationModel.swift in Sources */,
+				52851A5196694401B6E3C42E /* ApplicationModel+OpenCode.swift in Sources */,
+				9ECB7D050F104DF481B55056 /* ApplicationModel+ConversationChanges.swift in Sources */,
+				5CBB164AA40E41368B67B605 /* ApplicationModel+Workspace.swift in Sources */,
+				EB7B051CDCCE45A0ACD4BB8C /* ApplicationModel+Usage.swift in Sources */,
+				36698AEA7E3442788623E3E1 /* ApplicationModel+Messaging.swift in Sources */,
+				A76DFD7233294DE3A18E0DD4 /* ApplicationModel+LocalACP.swift in Sources */,
+				D0AA380F1DA84C00A8ED8910 /* ApplicationModel+Hermes.swift in Sources */,
+				65F6A0F53029428F95CE3C03 /* ApplicationModel+Buzz.swift in Sources */,
+				A1AF2B9E59824E0ABE39E62D /* ApplicationModel+OpenClaw.swift in Sources */,
 				D49000000000000000000001 /* ConversationMarkdown.swift in Sources */,
 				D49100000000000000000001 /* ConversationMarkdownDocument.swift in Sources */,
 				D49200000000000000000001 /* ConversationWorkTranscript.swift in Sources */,
