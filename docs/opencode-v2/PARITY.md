@@ -20,7 +20,11 @@ Discovery uses `$XDG_STATE_HOME/opencode/service.json`, defaulting to `~/.local/
 
 Startup runs the installed `opencode2 serve --service` with the normal environment. It accepts the official version banner and lets the service handle a registration whose process has exited. A live incompatible or unhealthy service is never killed or replaced. Disabling the runtime leaves the shared backend running. Quitting also leaves it running by default; the optional stop-on-quit preference changes that behavior. This does not install a login daemon; Woven Matter starts the service again when needed.
 
-Earlier experimental custom/remote connections are no longer opened by this local flow. Their cached transcripts remain in SQLite; session identifiers are not transplanted into the standard service. Remote OpenCode integration is out of scope.
+Earlier experimental custom/remote connections are no longer opened by this local flow. Their cached transcripts remain in SQLite; session identifiers are not transplanted into the standard service.
+
+Remote workspaces now use a separate v2 service through the authenticated workspace
+proxy; see [Runtime maintenance](../RUNTIME_MAINTENANCE.md). The local service
+contract above does not describe that remote lifecycle.
 
 ## Persistence and recovery
 

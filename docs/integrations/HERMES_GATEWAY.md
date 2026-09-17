@@ -113,24 +113,13 @@ including filenames containing spaces.
 No provider prompts were submitted; actual model execution remains a separate
 acceptance check. The user's Hermes Desktop process was left running.
 
-## Integration with PR38
+## Historical integration with PR38
 
-Merge PR38 before PR45. This branch includes reviewed PR38 head
-`0187e88387c86d01350a758b823399683bc58983` through an explicit compatibility
-merge. Until PR38 merges, its changes also appear in PR45's main-based diff.
-Both optional payloads are preserved in `WorkspaceDatabase.createLocalACPSession`:
-`importedOpenCodeSnapshot` from PR38 and `hermesImport` here. Both branches contain
-the same `desktop_session_imports` schema, `markSessionImportedUnlocked` helper,
-and `WorkspaceConversationRecord.importedAt` / shared hover definition. Hermes
-imports already call the marker inside their transaction and preserve import
-recency through later transcript updates. Keep one copy of those common hunks;
-PR38 additionally supplies its legacy OpenClaw provenance fallback.
-
-The combined branch retains both cron refreshers, both remote startup
-restorations, one native-test queue-drain helper, Hermes composer-prefill
-delivery, and the imported OpenCode snapshot forwarded through the extracted
-session helper. PR38's OpenClaw per-session cwd and OpenCode import behavior
-remain intact.
+PR38 and PR45 have merged. Both session-import paths and both scheduled-result
+refreshers are present on main. Their original merge-order instructions are no
+longer an action for contributors. Preserve profile/workspace-scoped import
+provenance and the shared `desktop_session_imports` records when changing either
+integration.
 
 ## Scheduled results and remote containers
 

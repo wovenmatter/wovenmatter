@@ -1,5 +1,7 @@
 # Runtime installation and updates
 
+Technical reference. For everyday setup, start with [Agent setup](guide/agents.md).
+
 Local Workspace runtime rows inventory the selected executable and required
 components. Install replaces Enable until those requirements are verified. Enabled
 runtimes fetch release information once at startup/reopen; opening settings also
@@ -8,9 +10,8 @@ installs anything. Network failures leave latest versions unknown.
 The per-runtime action remains visible after completion: Update for an observed
 update, otherwise Check for updates. Checking, updating and retry states use that
 same control. Rows retain component versions and upgrade arrows, with controls
-ordered More, Update/Check for updates, Hide/Show, then Enable/Disable or Install.
-Failed operations remain
-retryable; after two failures in this app session the row offers a copyable,
+for runtime settings, Update/Check for updates, Hide/Show, and Enable/Disable
+or Install. Failed operations remain retryable; after two failures in this app session the row offers a copyable,
 allowlisted diagnostic with component versions and an error category. Raw command
 output, account data, paths and credentials are not copied.
 
@@ -23,7 +24,7 @@ output, account data, paths and credentials are not copied.
 | OpenClaw | Local `openclaw` CLI and separately linked gateways | Official npm `openclaw` release, managed CLI update. Does not update/restart gateways or install their provider runtimes. |
 | Cursor | Native `cursor-agent acp` | Version embedded in official Cursor installer; `cursor-agent update`. Same-date release hashes cannot be ordered and are not asserted to be newer. |
 | Grok Build | `grok … agent stdio` | Official stable release endpoint used by installer; `grok update`. |
-| Hermes | `hermes acp`, native ACP version, and the owning environment's ACP SDK when discoverable | Official installer for missing CLI. `hermes update --check` reports current/available/unknown. Update verifies a clean source checkout, requires an idle plan and no active Hermes processes, then runs `hermes update --yes` with a 600-second limit. Completion requires a current update check and successful native ACP validation. |
+| Hermes | `hermes serve --isolated`, native server version, and verified `serve --help` support | Official installer for missing CLI. `hermes update --check` reports current/available/unknown. Update verifies a clean source checkout, requires an idle plan and no active Hermes processes, then runs `hermes update --yes` with a 600-second limit. Completion requires a current update check and successful native Gateway validation. |
 
 Managed npm installs are staged in `Node Tools/Installations/<UUID>` and verified
 before an atomic launcher symlink replacement in `Node Tools/bin`. Old generations
@@ -59,7 +60,7 @@ update cannot replace their runtime while they are using it. A busy host require
 the user to finish conversations or stop its server before retrying maintenance.
 Installer timeouts terminate the process group before permitting another attempt.
 
-OpenCode More opens the selected workspace's server and model settings. Each
+OpenCode settings open the selected workspace's server and model settings. Each
 remote workspace owns a distinct v2 service state directory and conversation
 association; the app routes requests and event streams to its authenticated
 workspace proxy. The service's Basic credential stays on the remote host. The
@@ -67,7 +68,7 @@ native client uses the workspace bearer credential over a loopback SSH tunnel;
 no public OpenCode listener or remote browser credential URL is created. Local
 OpenCode retains its existing registered service and explicit lifecycle controls.
 
-OpenClaw More opens workspace-specific gateway controls and the actual agent
+OpenClaw settings open workspace-specific gateway controls and the actual agent
 name/gateway settings. The remote service proxies only a gateway process it owns,
 and rejects an unrelated listener on the configured port. Starting, stopping and
 configuration belong to the selected workspace; local controls do not operate on
