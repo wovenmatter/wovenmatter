@@ -56,4 +56,3 @@ an explicit migration.
 [remote/compose.yaml](../../remote/compose.yaml) is a reviewable single-workspace example. The app uses
 [scripts/remote-workspace.sh](../../scripts/remote-workspace.sh) for lifecycle operations so several independently
 named workspaces can coexist.
-
