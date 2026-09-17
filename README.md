@@ -2,7 +2,7 @@
 
 [![Download Woven Matter for Apple silicon](https://img.shields.io/badge/Download-Woven_Matter_for_Apple_silicon-000000?logo=apple&logoColor=white)](https://github.com/wovenmatter/wovenmatter/releases/latest)
 
-**The workspace for all your harnesses.**
+**The workspace for all of your harnesses.**
 
 Woven Matter brings **Codex, Claude Code, Grok Build, Cursor, Hermes, OpenClaw,
 OpenCode, and Pi** together in one simple, welcoming Mac app. Work with the
