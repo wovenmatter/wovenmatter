@@ -20,6 +20,7 @@ run_static_checks() {
     bash -n "$file"
   done
   scripts/test-release.sh
+  scripts/test-app-termination.sh
   scripts/test-composer-text-editor.sh
   scripts/test-note-editor.sh
   scripts/test-note-socket.sh
