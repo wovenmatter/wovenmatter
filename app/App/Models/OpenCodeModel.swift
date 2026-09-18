@@ -432,6 +432,11 @@ final class OpenCodeModel {
         if !isReady { try await connectLocal() }
         // A failed selection remains a send barrier until the user selects again.
         if let selection = selectionTasks[id] { try await selection.value }
+        var input = input
+        if let configuration = remoteConfiguration, !input.files.isEmpty {
+            guard let remoteWorkspaces else { throw OpenCodeError.message("This remote workspace is unavailable.") }
+            input = try await remoteWorkspaces.stagingFiles(of: input, in: configuration.id)
+        }
         if let command = OpenCodeComposerMetadata.invocation(input.text, commands: commands[id] ?? []) {
             try await coordinator.command(link, name: command.name,
                 input: AgentMessageInput(text: command.arguments, attachments: input.attachments))
