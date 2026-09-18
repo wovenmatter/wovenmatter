@@ -4,7 +4,6 @@ import SQLite3
 import WovenMatterClient
 import WovenMatterCore
 
-
 // MARK: - OpenCode v2 canonical projections (legacy ACP rows are never migrated)
 extension WorkspaceDatabase {
   public func openCodeLinks() throws -> [OpenCodeSessionLink] {

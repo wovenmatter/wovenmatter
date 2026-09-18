@@ -4,7 +4,6 @@ import SQLite3
 import WovenMatterClient
 import WovenMatterCore
 
-
 extension WorkspaceDatabase {
   @discardableResult
   public func createFolder(

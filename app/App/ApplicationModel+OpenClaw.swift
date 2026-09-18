@@ -4,7 +4,6 @@ import WovenMatterClient
 import WovenMatterCore
 import WovenMatterDashboardStore
 
-
 extension ApplicationModel {
     func isOpenClawGatewayLinked(agentID: UUID) -> Bool {
         openClawGatewayLinks.contains { $0.agentID == agentID }

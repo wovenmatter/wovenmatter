@@ -821,4 +821,3 @@ enum ApplicationModelError: LocalizedError {
         }
     }
 }
-

@@ -4,7 +4,6 @@ import WovenMatterClient
 import WovenMatterCore
 import WovenMatterDashboardStore
 
-
 extension ApplicationModel {
     func isLocalACPSessionLaunchAvailable(_ conversation: WorkspaceConversationRecord) -> Bool {
         guard let runtimeKind = conversation.localRuntimeKind else { return false }

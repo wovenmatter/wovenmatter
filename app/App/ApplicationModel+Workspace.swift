@@ -4,7 +4,6 @@ import WovenMatterClient
 import WovenMatterCore
 import WovenMatterDashboardStore
 
-
 extension ApplicationModel {
     func createFolder(name: String) async -> String? {
         folderMutationError = nil

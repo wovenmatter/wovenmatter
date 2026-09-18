@@ -4,7 +4,6 @@ import SQLite3
 import WovenMatterClient
 import WovenMatterCore
 
-
 extension WorkspaceDatabase {
   public func dashboardRevision() throws -> Int64 {
     try lock.withLock {

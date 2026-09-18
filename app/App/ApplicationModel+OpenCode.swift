@@ -4,7 +4,6 @@ import WovenMatterClient
 import WovenMatterCore
 import WovenMatterDashboardStore
 
-
 extension ApplicationModel {
     func openCodeModel(for conversationID: String) -> OpenCodeModel? {
         openCodeInstances.first { $0.links[conversationID] != nil }

@@ -4,7 +4,6 @@ import SQLite3
 import WovenMatterClient
 import WovenMatterCore
 
-
 extension WorkspaceDatabase {
   // MARK: - Buzz workspace links
 

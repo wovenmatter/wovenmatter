@@ -4,7 +4,6 @@ import SQLite3
 import WovenMatterClient
 import WovenMatterCore
 
-
 extension WorkspaceDatabase {
   private func createWorkspaceCacheTablesUnlocked() throws {
     try executeUnlocked("""
