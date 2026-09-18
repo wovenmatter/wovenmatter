@@ -142,6 +142,9 @@ test('service authentication exposes the reviewed harness catalog', async (conte
   context.after(() => service.child.kill('SIGTERM'))
 
   assert.equal((await fetch(`${service.url}/v1/health`)).status, 401)
+  for (const wrong of ['Bearer service-toke', 'Bearer service-token-longer', 'Bearer Service-Token', 'Basic service-token']) {
+    assert.equal((await fetch(`${service.url}/v1/health`, { headers: { authorization: wrong } })).status, 401)
+  }
   const headers = { authorization: 'Bearer service-token' }
   const health = await fetch(`${service.url}/v1/health`, { headers })
   assert.equal((await health.json()).status, 'ready')
