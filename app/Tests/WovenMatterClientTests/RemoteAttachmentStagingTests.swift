@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Testing
 import WovenMatterCore
@@ -20,7 +21,7 @@ struct RemoteAttachmentStagingTests {
     }
   }
 
-  private static let hash = String(repeating: "ab", count: 32)
+  private static let hash = SHA256.hash(data: Data("x".utf8)).map { String(format: "%02x", $0) }.joined()
   private let configuration = RemoteWorkspaceConfiguration(
     name: "Work", workspaceID: "work-1", hostName: "linux-box", userName: "woven"
   )
@@ -44,18 +45,18 @@ struct RemoteAttachmentStagingTests {
     let recorder = Recorder(response: expected)
     let stager = RemoteAttachmentStager(runner: recorder.record)
 
-    let path = try await withDraft(named: "Q3 report.pdf", bytes: Data([0x25, 0x50, 0x44, 0x46])) { draft in
+    let path = try await withDraft(named: "Q3 report.pdf", bytes: Data("x".utf8)) { draft in
       #expect(try RemoteAttachmentStager.containerPath(for: draft) == expected)
       return try await stager.stage(draft, in: configuration)
     }
 
     #expect(path == expected)
     #expect(recorder.destination == "woven@linux-box")
-    #expect(recorder.input == Data([0x25, 0x50, 0x44, 0x46]))
+    #expect(recorder.input == Data("x".utf8))
     let command = try #require(recorder.command)
     #expect(command.hasPrefix("'docker' 'exec' '--interactive' 'wovenmatter-work-1' 'bash' '-c' "))
-    #expect(command.contains("n=4"))
-    #expect(command.contains("[ -f \"$p\" ] && [ \"$(wc -c <\"$p\")\" -eq \"$n\" ]; then cat >/dev/null"))
+    #expect(command.contains("n=1"))
+    #expect(command.contains("if matches \"$p\"; then cat >/dev/null"))
     #expect(command.contains("cat >\"$t\""))
     #expect(command.contains("mv -f \"$t\" \"$p\""))
   }
@@ -109,6 +110,72 @@ struct RemoteAttachmentStagingTests {
     await #expect(throws: AgentMessageAttachmentError.unreadableFile("gone.pdf")) {
       try await stager.stage(draft, in: configuration)
     }
+  }
+
+  @Test("attachment subprocess deadline terminates a stuck transfer")
+  func transferDeadline() throws {
+    let start = ProcessInfo.processInfo.systemUptime
+    #expect(throws: RemoteWorkspaceClientError.self) {
+      try RemoteWorkspaceProcess.run(executable: "/bin/sleep", arguments: ["30"], timeLimit: 0.05)
+    }
+    #expect(ProcessInfo.processInfo.systemUptime - start < 5)
+  }
+
+  @Test("cancelling an attachment subprocess terminates it promptly")
+  func transferCancellation() async throws {
+    let task = Task.detached {
+      try RemoteWorkspaceProcess.run(executable: "/bin/sleep", arguments: ["30"], timeLimit: 60)
+    }
+    task.cancel()
+    let start = ProcessInfo.processInfo.systemUptime
+    await #expect(throws: CancellationError.self) { try await task.value }
+    #expect(ProcessInfo.processInfo.systemUptime - start < 5)
+  }
+
+  @Test("changed local bytes are rejected before SSH")
+  func rejectsChangedBlob() async throws {
+    let recorder = Recorder(response: "")
+    let stager = RemoteAttachmentStager(runner: recorder.record)
+    await #expect(throws: AgentMessageAttachmentError.self) {
+      try await withDraft(named: "notes.pdf", bytes: Data("y".utf8)) {
+        try await stager.stage($0, in: configuration)
+      }
+    }
+    #expect(recorder.command == nil)
+  }
+
+  @Test("staging repairs same-size corruption and cleans up truncated transfers")
+  func executesAtomicStaging() throws {
+    let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let path = root.appending(path: "it's $(not-a-command).pdf")
+    let stdin = root.appending(path: "stdin")
+    // macOS uses shasum; the container supplies coreutils sha256sum.
+    let shim = "sha256sum() { /usr/bin/shasum -a 256; }; "
+    func run(_ bytes: String, expectedBytes: Int = 1) throws -> Int32 {
+      try Data(bytes.utf8).write(to: stdin)
+      let input = try FileHandle(forReadingFrom: stdin)
+      defer { try? input.close() }
+      let process = Process()
+      process.executableURL = URL(fileURLWithPath: "/bin/bash")
+      process.arguments = ["-c", shim + RemoteAttachmentStager.stagingScript(
+        path: path.path, byteCount: expectedBytes, hash: Self.hash)]
+      process.standardInput = input
+      process.standardOutput = FileHandle.nullDevice
+      process.standardError = FileHandle.nullDevice
+      try process.run(); process.waitUntilExit()
+      return process.terminationStatus
+    }
+    #expect(try run("x") == 0)
+    #expect(try Data(contentsOf: path) == Data("x".utf8))
+    try Data("y".utf8).write(to: path)
+    #expect(try run("x") == 0)
+    #expect(try Data(contentsOf: path) == Data("x".utf8))
+    try Data("y".utf8).write(to: path)
+    #expect(try run("") != 0)
+    #expect(try Data(contentsOf: path) == Data("y".utf8))
+    #expect(try FileManager.default.contentsOfDirectory(atPath: root.path).allSatisfy { !$0.contains(".part.") })
   }
 
   @Test("file names cannot escape the attachment directory or hide their extension")

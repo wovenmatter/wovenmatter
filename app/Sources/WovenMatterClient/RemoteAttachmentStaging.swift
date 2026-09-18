@@ -1,9 +1,10 @@
+import CryptoKit
 import Foundation
 import WovenMatterCore
 
-/// Copies message attachments into a remote workspace container so every
-/// harness running there can open them by path. Files are content-addressed
-/// under `directory`, so a blob is written once however often it is attached.
+/// Copies message attachments into a remote workspace container for harnesses
+/// with a file attachment contract. Files are content-addressed under `directory`;
+/// unchanged bytes are reused and modified copies are repaired.
 public struct RemoteAttachmentStager: Sendable {
     /// Under the container workspace root the harnesses launch in, so agents
     /// whose ACP adapters reduce a link to an `@name` mention can still find
@@ -13,7 +14,7 @@ public struct RemoteAttachmentStager: Sendable {
     private let runner: RemoteWorkspaceSSHClient.Runner
 
     public init() {
-        runner = RemoteWorkspaceSSHClient.runSSH
+        runner = RemoteWorkspaceSSHClient.runAttachmentSSH
     }
 
     public init(runner: @escaping RemoteWorkspaceSSHClient.Runner) {
@@ -34,42 +35,45 @@ public struct RemoteAttachmentStager: Sendable {
         _ draft: AgentFileAttachmentDraft,
         in configuration: RemoteWorkspaceConfiguration
     ) async throws -> String {
+        try Task.checkCancellation()
         let destination = try RemoteWorkspaceSSHClient.validatedDestination(
             hostName: configuration.hostName,
             userName: configuration.userName
         )
         let path = try Self.containerPath(for: draft)
-        let data: Data
-        do {
-            data = try Data(contentsOf: draft.localURL, options: [.mappedIfSafe])
-        } catch {
-            throw AgentMessageAttachmentError.unreadableFile(draft.fileName)
-        }
-        // An existing file only counts if it is complete; otherwise it is
-        // rewritten. stdin is always drained so ssh never sees a closed pipe,
-        // and the size is checked before the rename so a short read cannot
-        // leave a truncated blob under a content-addressed name.
-        let script = """
-        set -e
-        p=\(Self.quoted(path)); n=\(data.count)
-        if [ -f "$p" ] && [ "$(wc -c <"$p")" -eq "$n" ]; then cat >/dev/null; else
-          mkdir -p "$(dirname "$p")"
-          t="$p.part.$$"
-          cat >"$t"
-          [ "$(wc -c <"$t")" -eq "$n" ] || { rm -f "$t"; echo "short write" >&2; exit 1; }
-          mv -f "$t" "$p"
-        fi
-        printf %s "$p"
-        """
-        let command = [
-            "docker", "exec", "--interactive",
-            "wovenmatter-\(configuration.workspaceID)",
-            "bash", "-c", script,
-        ].map(Self.quoted).joined(separator: " ")
         let runner = runner
-        let output = try await Task.detached(priority: .userInitiated) {
-            try runner(destination, command, data)
-        }.value
+        let transfer = Task.detached(priority: .userInitiated) {
+            // Bound the read even if the local blob changed since it was imported.
+            let data: Data
+            do {
+                let handle = try FileHandle(forReadingFrom: draft.localURL)
+                defer { try? handle.close() }
+                data = try handle.read(upToCount: Int(AgentMessageAttachmentLimits.maximumFileBytes) + 1) ?? Data()
+            } catch {
+                throw AgentMessageAttachmentError.unreadableFile(draft.fileName)
+            }
+            guard data.count <= AgentMessageAttachmentLimits.maximumFileBytes else {
+                throw AgentMessageAttachmentError.fileTooLarge(name: draft.fileName,
+                    maximumBytes: AgentMessageAttachmentLimits.maximumFileBytes)
+            }
+            let hash = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+            guard hash == draft.contentHash, data.count == draft.sizeBytes else {
+                throw AgentMessageAttachmentError.unreadableFile(draft.fileName)
+            }
+            let script = Self.stagingScript(path: path, byteCount: data.count, hash: hash)
+            let command = [
+                "docker", "exec", "--interactive",
+                "wovenmatter-\(configuration.workspaceID)",
+                "bash", "-c", script,
+            ].map(Self.quoted).joined(separator: " ")
+            return try runner(destination, command, data)
+        }
+        let output = try await withTaskCancellationHandler {
+            try await transfer.value
+        } onCancel: {
+            transfer.cancel()
+        }
+        try Task.checkCancellation()
         let reported = String(decoding: output, as: UTF8.self)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard reported == path else {
@@ -78,6 +82,26 @@ public struct RemoteAttachmentStager: Sendable {
             )
         }
         return path
+    }
+
+    /// Validate content, not just size: agents can edit an already staged file.
+    /// A unique temporary file and EXIT trap keep failed transfers unpublished.
+    static func stagingScript(path: String, byteCount: Int, hash: String) -> String {
+        """
+        set -e
+        umask 077
+        p=\(quoted(path)); n=\(byteCount); h=\(quoted(hash))
+        matches() { [ -f "$1" ] && [ "$(wc -c <"$1")" -eq "$n" ] && [ "$(sha256sum <"$1" | cut -d ' ' -f 1)" = "$h" ]; }
+        if matches "$p"; then cat >/dev/null; else
+          mkdir -p "$(dirname "$p")"
+          t=$(mktemp "$p.part.XXXXXX")
+          trap 'rm -f "$t"' EXIT
+          cat >"$t"
+          matches "$t" || { echo "attachment integrity check failed" >&2; exit 1; }
+          mv -f "$t" "$p"
+        fi
+        printf %s "$p"
+        """
     }
 
     /// The original name with path separators and control characters removed,
