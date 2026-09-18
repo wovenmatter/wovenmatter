@@ -29,6 +29,16 @@ accepted commit. Release, installation, deployment, and publication require an
 explicit request; they are separate from deterministic validation.
 
 Use `.agents/skills/cut-release-wovenmatter/SKILL.md` for the release procedure.
+Before tagging, run `scripts/check-release-access.sh` to verify existing GitHub
+API access matching the configured SSH account. SSH and GitHub CLI API
+credentials are separate. A sandbox can make a valid macOS Keychain credential
+appear unavailable or invalid; retry this read-only check through the approved
+execution permission path before diagnosing an authentication failure. Use the
+working permission path for subsequent authorized release commands. If access
+still fails, stop and report it. Never initiate login, device authorization,
+browser authentication, account switching, or credential recovery. Publication
+authorization does not authorize those actions.
+
 A supplied or confirmed version authorizes completion through publication unless
 the request explicitly limits the work to a private draft. A tag push only
 stages a draft. For version `X.Y.Z`, the identities are:
