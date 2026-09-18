@@ -8,6 +8,7 @@ extension WorkspaceDatabase {
     try transaction {
       try executeUnlocked("""
         CREATE TABLE IF NOT EXISTS workspace_tool_settings(id INTEGER PRIMARY KEY CHECK(id=1), value TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS workspace_tool_schema(version INTEGER PRIMARY KEY);
         CREATE TABLE IF NOT EXISTS workspace_session_tools(
           session_id TEXT PRIMARY KEY REFERENCES dashboard_conversations(id), enabled_json TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS workspace_session_grants(
@@ -27,6 +28,10 @@ extension WorkspaceDatabase {
           instruction TEXT NOT NULL, next_fire_at REAL NOT NULL, interval_seconds REAL,
           is_paused INTEGER NOT NULL DEFAULT 0, pending_delivery_id TEXT);
         CREATE INDEX IF NOT EXISTS workspace_timer_due ON workspace_session_timers(is_paused,next_fire_at);
+        CREATE TABLE IF NOT EXISTS workspace_session_creations(
+          id TEXT PRIMARY KEY, source_id TEXT NOT NULL REFERENCES dashboard_conversations(id),
+          target_id TEXT NOT NULL UNIQUE, arguments_json TEXT NOT NULL,
+          purpose TEXT NOT NULL, managed INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'planned');
         """)
       try toolsExecuteUnlocked("INSERT OR IGNORE INTO workspace_tool_settings(id,value) VALUES(1,?)",
                                [try toolsJSON(WorkspaceToolSettings())])
@@ -36,6 +41,17 @@ extension WorkspaceDatabase {
         try executeUnlocked("ALTER TABLE workspace_session_deliveries ADD COLUMN \(name) \(type)")
       }
       try executeUnlocked("CREATE UNIQUE INDEX IF NOT EXISTS workspace_delivery_event ON workspace_session_deliveries(event_key) WHERE event_key IS NOT NULL")
+      if try historyRowsUnlocked("SELECT 1 FROM workspace_tool_schema WHERE version=1", values: []).isEmpty {
+        try executeUnlocked("""
+          INSERT OR IGNORE INTO workspace_session_grants(source_id,target_id,kind)
+            SELECT r.conversation_id,r.resource_id,'attachment' FROM dashboard_message_references r
+            JOIN dashboard_conversations source ON source.id=r.conversation_id
+            JOIN dashboard_conversations target ON target.id=r.resource_id
+            WHERE r.resource_type='conversation' AND r.source='attached'
+              AND source.deleted_at IS NULL AND target.deleted_at IS NULL;
+          INSERT INTO workspace_tool_schema(version) VALUES(1);
+          """)
+      }
       // Existing and newly imported sessions take a snapshot of the defaults.
       try executeUnlocked("""
         INSERT OR IGNORE INTO workspace_session_tools(session_id,enabled_json)
@@ -207,14 +223,24 @@ extension WorkspaceDatabase {
     if let existing, existing != sourceID { throw WorkspaceToolError.coordinationConflict(existing) }
     if existing == sourceID { return }
     let limit = try toolSettingsUnlocked().maximumManagedSessions
-    let rows = try historyRowsUnlocked("SELECT count(*) AS n FROM workspace_session_relationships r JOIN dashboard_conversations c ON c.id=r.session_id WHERE r.coordinator_id=? AND c.deleted_at IS NULL", values: [sourceID])
-    guard (rows.first?.objectValue?["n"]?.intValue ?? 0) < limit else { throw WorkspaceToolError.managedLimit(limit) }
+    guard try managedSessionCountUnlocked(sourceID, excluding: targetID) < limit else { throw WorkspaceToolError.managedLimit(limit) }
     var cursor: String? = sourceID
     var visited = Set<String>()
     while let id = cursor {
       guard id != targetID, visited.insert(id).inserted else { throw WorkspaceToolError.invalid("Coordination cannot form a cycle.") }
       cursor = try relationshipUnlocked(id).coordinatorID
     }
+  }
+
+  func managedSessionCountUnlocked(_ sourceID: String, excluding targetID: String? = nil) throws -> Int {
+    let rows = try historyRowsUnlocked("""
+      SELECT count(*) AS n FROM (
+        SELECT r.session_id AS id FROM workspace_session_relationships r
+          JOIN dashboard_conversations c ON c.id=r.session_id WHERE r.coordinator_id=? AND c.deleted_at IS NULL
+        UNION SELECT target_id AS id FROM workspace_session_creations WHERE source_id=? AND managed=1 AND status='planned'
+      ) WHERE id != coalesce(?,'')
+      """, values: [sourceID, sourceID, targetID])
+    return rows.first?.objectValue?["n"]?.intValue ?? 0
   }
 
   private func beginCoordinationUnlocked(sourceID: String, targetID: String, purpose: String, notifications: Bool) throws {

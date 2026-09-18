@@ -8,6 +8,20 @@ import WovenMatterCore
 
 @Suite("Workspace history and bounded versions")
 struct WorkspaceHistoryTests {
+  @Test func sessionEndpointCapabilitiesAreRedactedWithoutChangingOtherProtocolContent() throws {
+    let a = String(repeating: "a", count: 32), b = String(repeating: "b", count: 32)
+    let socket = "/private/tmp/wmtools-\(a)/\(b).sock"
+    let cli = "/home/.wmt/\(a)/\(b)/wovenmatter"
+    for path in [socket, cli, socket.replacingOccurrences(of: "/", with: "\\/")] {
+      let raw = "{\"prompt\":\"Use \(path)\",\"future_field\":true}"
+      let redacted = WorkspaceHistoryPrivacy.redactingToolEndpoints(raw)
+      #expect(!redacted.contains(a))
+      #expect(redacted.contains("future_field"))
+      #expect(try JSONSerialization.jsonObject(with: Data(redacted.utf8)) is [String: Any])
+    }
+    let ordinary = #"{"path":"/Users/example/a.swift","text":"preserved"}"#
+    #expect(WorkspaceHistoryPrivacy.redactingToolEndpoints(ordinary) == ordinary)
+  }
   private func database() throws -> (WorkspaceDatabase, URL) {
     let url = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
     try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)

@@ -241,4 +241,31 @@ struct WorkspaceAgentToolTests {
     #expect(try reopened.claimToolDelivery(id: id) == nil)
     #expect(throws: (any Error).self) { try db.reserveToolDelivery(sourceID: b, targetID: a, text: "Do the work", requestID: id) }
   }
+
+  @Test func creationReservationsSurviveReopenAndCountTowardFanout() throws {
+    let (db, dir, a, _) = try fixture()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    var settings = try db.toolSettings(); settings.maximumManagedSessions = 1
+    try db.saveToolSettings(settings)
+    try db.setSessionTools(.init(enabled: [.sessions, .notes]), sessionID: a)
+    let requestID = UUID().uuidString.lowercased()
+    let args = ["sessions", "create", "--title", "Research"]
+    let reservation = try db.reserveToolSessionCreation(sourceID: a, requestID: requestID, arguments: args, purpose: "Research", managed: true)
+    let target = try #require(reservation.objectValue?["target_id"]?.stringValue)
+    #expect(throws: WorkspaceToolError.managedLimit(1)) {
+      try db.reserveToolSessionCreation(sourceID: a, requestID: UUID().uuidString, arguments: args, purpose: "Extra", managed: true)
+    }
+    let reopened = try WorkspaceDatabase(url: dir.appending(path: "workspace.sqlite"))
+    let retry = try reopened.reserveToolSessionCreation(sourceID: a, requestID: requestID, arguments: args, purpose: "Research", managed: true)
+    #expect(retry.objectValue?["target_id"]?.stringValue == target)
+    let created = try reopened.createLocalACPSession(runtimeKind: .pi, title: "Research", ownerDeviceID: UUID(), requestedConversationID: UUID(uuidString: target))
+    #expect(created == target)
+    #expect(try reopened.sessionRelationship(target).createdBy == a)
+    #expect(try reopened.sessionTools(target).enabled == [.sessions, .notes])
+    try reopened.beginCoordination(sourceID: a, targetID: target, purpose: "Research", userApprovedAccess: true)
+    try reopened.finishToolSessionCreation(requestID: requestID, status: "ready")
+    try reopened.endCoordination(targetID: target, sourceID: a)
+    #expect(try reopened.sessionRelationship(target).createdBy == a)
+    _ = try reopened.reserveToolSessionCreation(sourceID: a, requestID: UUID().uuidString, arguments: args, purpose: "Next", managed: true)
+  }
 }

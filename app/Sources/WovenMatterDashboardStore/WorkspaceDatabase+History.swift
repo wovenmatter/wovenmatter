@@ -101,6 +101,7 @@ extension WorkspaceDatabase {
 
   func recordHistoryUnlocked(_ incoming: WorkspaceHistoryEvent) throws {
     var event = incoming
+    event.payload = WorkspaceHistoryPrivacy.redactingToolEndpoints(event.payload)
     if event.conversationID == nil, event.harness == "openclaw",
       let object = try? JSONSerialization.jsonObject(with: Data(event.payload.utf8))
         as? [String: Any]

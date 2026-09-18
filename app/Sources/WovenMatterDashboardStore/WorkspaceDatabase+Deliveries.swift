@@ -82,7 +82,8 @@ extension WorkspaceDatabase {
       var values: [String?] = []
       if let sessionID { sql += " AND (source_id=? OR target_id=?)"; values += [sessionID, sessionID] }
       if queuedOnly { sql += " AND status='queued'" }
-      sql += " ORDER BY created_at DESC,id DESC LIMIT ?"; values.append(String(min(max(limit, 1), 500)))
+      sql += queuedOnly ? " ORDER BY created_at,id LIMIT ?" : " ORDER BY created_at DESC,id DESC LIMIT ?"
+      values.append(String(min(max(limit, 1), 500)))
       return try historyRowsUnlocked(sql, values: values).map(deliveryFromRow)
     }
   }

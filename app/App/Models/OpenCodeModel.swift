@@ -289,19 +289,19 @@ final class OpenCodeModel {
         return try OpenCodeConnection.discover(file: registration).browserURL
     }
 
-    func create(workspace: URL) async throws -> String {
+    func create(workspace: URL, requestedConversationID: UUID? = nil) async throws -> String {
         guard isEnabled else { throw OpenCodeError.message("Enable OpenCode for this workspace before creating a chat.") }
         guard !serverStopped else { throw OpenCodeError.message("Start OpenCode from its settings page before creating a chat.") }
         guard !busy else { throw OpenCodeError.message("A session is already being created.") }
         busy = true; defer { busy = false }
         try await connectLocal()
-        let pendingKey = "wovenmatter.opencode.pending-create." + connectionID
+        let pendingKey = "wovenmatter.opencode.pending-create." + connectionID + (requestedConversationID.map { "." + $0.uuidString.lowercased() } ?? "")
         let pending = defaults.string(forKey: pendingKey)
-        let id = pending ?? "ses_" + UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
+        let id = pending ?? "ses_" + (requestedConversationID ?? UUID()).uuidString.replacingOccurrences(of: "-", with: "").lowercased()
         defaults.set(id, forKey: pendingKey)
         do {
-            let response = try await coordinator.createSession(connectionID: connectionID, id: id, workspace: workspace, recover: pending != nil)
-            let localID = try await open(response["data"])
+            let response = try await coordinator.createSession(connectionID: connectionID, id: id, workspace: workspace, recover: pending != nil || requestedConversationID != nil)
+            let localID = try await open(response["data"], requestedConversationID: requestedConversationID)
             defaults.removeObject(forKey: pendingKey)
             return localID
         } catch {
@@ -327,7 +327,7 @@ final class OpenCodeModel {
         _ = try await open(snapshot.info, importedSnapshot: snapshot)
     }
 
-    private func open(_ session: OpenCodeValue, importedSnapshot: OpenCodeSessionSnapshot? = nil) async throws -> String {
+    private func open(_ session: OpenCodeValue, importedSnapshot: OpenCodeSessionSnapshot? = nil, requestedConversationID: UUID? = nil) async throws -> String {
         let sessionID = session["id"].text
         guard sessionID.hasPrefix("ses") else { throw OpenCodeError.message("OpenCode did not return a session ID.") }
         let conversationID: String
@@ -335,11 +335,11 @@ final class OpenCodeModel {
             conversationID = try store.database.createRemoteACPSession(runtimeKind: .opencode,
                 remoteWorkspaceID: configuration.id, remoteWorkspaceName: configuration.name,
                 title: session["title"].string ?? "New OpenCode chat", ownerDeviceID: ownerDeviceID,
-                openCodeAssociation: (connectionID, sessionID))
+                openCodeAssociation: (connectionID, sessionID), requestedConversationID: requestedConversationID)
         } else {
             conversationID = try store.database.createLocalACPSession(runtimeKind: .opencode,
                 title: session["title"].string ?? "New OpenCode chat", ownerDeviceID: ownerDeviceID,
-                openCodeAssociation: (connectionID, sessionID), importedOpenCodeSnapshot: importedSnapshot)
+                openCodeAssociation: (connectionID, sessionID), importedOpenCodeSnapshot: importedSnapshot, requestedConversationID: requestedConversationID)
         }
         let link = OpenCodeSessionLink(conversationID: conversationID, connectionID: connectionID, sessionID: sessionID)
         links[conversationID] = link

@@ -2541,9 +2541,10 @@ public final class WorkspaceDatabase: @unchecked Sendable {
     createdAt: Date = Date(),
     openCodeAssociation: (connectionID: String, sessionID: String)? = nil,
     importedOpenCodeSnapshot: OpenCodeSessionSnapshot? = nil,
-    hermesImport: HermesSessionImport? = nil
+    hermesImport: HermesSessionImport? = nil,
+    requestedConversationID: UUID? = nil
   ) throws -> String {
-    try transaction { try createLocalACPSessionUnlocked(runtimeKind: runtimeKind, title: title, ownerDeviceID: ownerDeviceID, createdAt: createdAt, openCodeAssociation: openCodeAssociation, importedOpenCodeSnapshot: importedOpenCodeSnapshot, hermesImport: hermesImport) }
+    try transaction { try createLocalACPSessionUnlocked(runtimeKind: runtimeKind, title: title, ownerDeviceID: ownerDeviceID, createdAt: createdAt, openCodeAssociation: openCodeAssociation, importedOpenCodeSnapshot: importedOpenCodeSnapshot, hermesImport: hermesImport, requestedConversationID: requestedConversationID) }
   }
 
   @discardableResult
@@ -2554,7 +2555,8 @@ public final class WorkspaceDatabase: @unchecked Sendable {
     createdAt: Date = Date(),
     openCodeAssociation: (connectionID: String, sessionID: String)? = nil,
     importedOpenCodeSnapshot: OpenCodeSessionSnapshot? = nil,
-    hermesImport: HermesSessionImport? = nil
+    hermesImport: HermesSessionImport? = nil,
+    requestedConversationID: UUID? = nil
   ) throws -> String {
     guard LocalACPRuntimeCatalog.definition(for: runtimeKind) != nil,
           let codename = LocalACPRuntimeCatalog.conversationCodename(
@@ -2595,7 +2597,7 @@ public final class WorkspaceDatabase: @unchecked Sendable {
         status: .ready,
         updatedAt: createdAt
       )
-      let conversationID = UUID().uuidString.lowercased()
+      let conversationID = (requestedConversationID ?? UUID()).uuidString.lowercased()
       let cleanTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
       let sessionTitle = cleanTitle.isEmpty
         ? "New \(runtimeKind.displayName) chat"
@@ -2623,6 +2625,7 @@ public final class WorkspaceDatabase: @unchecked Sendable {
       try bind(timestamp, at: 9, to: conversation)
       try bind(timestamp, at: 10, to: conversation)
       try stepDone(conversation)
+      try adoptReservedSessionOriginUnlocked(conversationID)
 
       let session = try prepareUnlocked("""
         INSERT INTO desktop_local_acp_sessions (
@@ -2753,9 +2756,10 @@ public final class WorkspaceDatabase: @unchecked Sendable {
     title: String,
     ownerDeviceID: UUID,
     createdAt: Date = Date(),
-    openCodeAssociation: (connectionID: String, sessionID: String)? = nil
+    openCodeAssociation: (connectionID: String, sessionID: String)? = nil,
+    requestedConversationID: UUID? = nil
   ) throws -> String {
-    try transaction { try createRemoteACPSessionUnlocked(runtimeKind: runtimeKind, remoteWorkspaceID: remoteWorkspaceID, remoteWorkspaceName: remoteWorkspaceName, title: title, ownerDeviceID: ownerDeviceID, createdAt: createdAt, openCodeAssociation: openCodeAssociation) }
+    try transaction { try createRemoteACPSessionUnlocked(runtimeKind: runtimeKind, remoteWorkspaceID: remoteWorkspaceID, remoteWorkspaceName: remoteWorkspaceName, title: title, ownerDeviceID: ownerDeviceID, createdAt: createdAt, openCodeAssociation: openCodeAssociation, requestedConversationID: requestedConversationID) }
   }
 
   @discardableResult
@@ -2766,7 +2770,8 @@ public final class WorkspaceDatabase: @unchecked Sendable {
     title: String,
     ownerDeviceID: UUID,
     createdAt: Date = Date(),
-    openCodeAssociation: (connectionID: String, sessionID: String)? = nil
+    openCodeAssociation: (connectionID: String, sessionID: String)? = nil,
+    requestedConversationID: UUID? = nil
   ) throws -> String {
     guard LocalACPRuntimeCatalog.definition(for: runtimeKind) != nil else {
       throw LocalACPSessionDatabaseError.runtimeUnavailable
@@ -2793,7 +2798,7 @@ public final class WorkspaceDatabase: @unchecked Sendable {
         status: .ready,
         updatedAt: createdAt
       )
-      let conversationID = UUID().uuidString.lowercased()
+      let conversationID = (requestedConversationID ?? UUID()).uuidString.lowercased()
       let cleanTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
       let sessionTitle = cleanTitle.isEmpty
         ? "New \(runtimeKind.displayName) chat"
@@ -2822,6 +2827,7 @@ public final class WorkspaceDatabase: @unchecked Sendable {
       try bind(timestamp, at: 9, to: conversation)
       try bind(timestamp, at: 10, to: conversation)
       try stepDone(conversation)
+      try adoptReservedSessionOriginUnlocked(conversationID)
 
       let session = try prepareUnlocked("""
         INSERT INTO desktop_local_acp_sessions (
@@ -3301,6 +3307,9 @@ public final class WorkspaceDatabase: @unchecked Sendable {
         try bind(timestamp, at: 12, to: statement)
         try stepDone(statement)
       case .reference(let reference):
+        if reference.kind == .conversation {
+          try grantSessionReadUnlocked(sourceID: conversationID, targetID: reference.resourceID, kind: "attachment")
+        }
         let statement = try prepareUnlocked("""
           INSERT INTO dashboard_message_references (
             id, conversation_id, message_id, user_id, governing_plane,
@@ -3323,7 +3332,7 @@ public final class WorkspaceDatabase: @unchecked Sendable {
         try bind(reference.kind.rawValue, at: 8, to: statement)
         try bind(reference.resourceID, at: 9, to: statement)
         try bind(reference.titleSnapshot, at: 10, to: statement)
-        try bind(reference.contentSnapshot, at: 11, to: statement)
+        try bind(reference.kind == .conversation ? "" : reference.contentSnapshot, at: 11, to: statement)
         try bindNullable(reference.folderIDSnapshot, at: 12, to: statement)
         try bindNullable(reference.folderTitleSnapshot, at: 13, to: statement)
         try bindNullable(reference.agentCodenameSnapshot, at: 14, to: statement)

@@ -23,6 +23,7 @@ run_static_checks() {
   scripts/test-composer-text-editor.sh
   scripts/test-note-editor.sh
   scripts/test-note-socket.sh
+  python3 scripts/test-support/test_wovenmatter_remote_tools.py
   scripts/test-remote-workspace.sh
   for file in remote/src/*.mjs remote/test/*.test.mjs; do
     node --check "$file"

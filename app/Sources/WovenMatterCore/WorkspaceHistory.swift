@@ -41,6 +41,19 @@ public struct WorkspaceHTTPObservation: Codable, Sendable {
   }
 }
 
+public enum WorkspaceHistoryPrivacy {
+  /// Tool endpoint paths are bearer capabilities. Keep them out of searchable
+  /// protocol history, including JSON-escaped prompt strings.
+  public static func redactingToolEndpoints(_ text: String) -> String {
+    let slash = #"(?:/|\\/)"#
+    let local = slash + "private" + slash + "tmp" + slash + "wmtools-[a-f0-9]{32}" + slash + "[a-f0-9]{32}\\.sock"
+    let remote = slash + "home" + slash + "\\.wmt" + slash + "[a-f0-9]{32}" + slash + "[a-f0-9]{32}" + slash + "(?:wovenmatter|rpc\\.sock)"
+    return [local, remote].reduce(text) { value, pattern in
+      value.replacingOccurrences(of: pattern, with: "[Woven Matter session tool endpoint]", options: .regularExpression)
+    }
+  }
+}
+
 /// Versioned, read-only query contract. No caller-supplied SQL is executed.
 public struct WorkspaceHistoryQuery: Codable, Sendable {
   public var schemaVersion: Int = 1

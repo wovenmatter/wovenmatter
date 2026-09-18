@@ -25,7 +25,9 @@ public struct WovenMatterToolResponse: Codable, Sendable {
     self.success = success; self.result = result; self.error = error; self.silent = silent
   }
   public static func value<T: Encodable>(_ value: T) throws -> Self {
-    Self(result: try JSONDecoder().decode(GatewayJSONValue.self, from: JSONEncoder().encode(value)))
+    let encoder = JSONEncoder()
+    encoder.dateEncodingStrategy = .iso8601
+    return Self(result: try JSONDecoder().decode(GatewayJSONValue.self, from: encoder.encode(value)))
   }
 }
 
@@ -152,7 +154,7 @@ public struct WovenMatterToolCommand: Sendable {
       Timers persist but execute only while Woven Matter runs. Missed recurring firings
       coalesce into one. You may set a timer in this session or a session you coordinate.
       """
-    case .usage: "read [--since ISO8601 --until ISO8601]\nRead recorded usage. This tool cannot change usage or credentials."
+    case .usage: "read [--since ISO8601 --until ISO8601 --offset N --limit 1...200]\nRead recorded usage. This tool cannot change usage or credentials."
     case .calendar: """
       list [--since ISO8601 --until ISO8601]
       create --title TITLE --starts-at ISO8601 [--ends-at ISO8601 --description TEXT --all-day]

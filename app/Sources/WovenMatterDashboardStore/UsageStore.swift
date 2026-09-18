@@ -414,7 +414,7 @@ final class UsageStore: @unchecked Sendable {
     }
   }
 
-  func samples(in interval: DateInterval, sourceID: String? = nil) throws -> [UsageSample] {
+  func samples(in interval: DateInterval, sourceID: String? = nil, limit: Int? = nil, offset: Int = 0) throws -> [UsageSample] {
     let statement = try prepare("""
       SELECT
         event_id, source_id, source_event_id, dedupe_key,
@@ -428,11 +428,17 @@ final class UsageStore: @unchecked Sendable {
       WHERE timestamp >= ? AND timestamp < ?
       \(sourceID == nil ? "" : "AND source_id = ?")
       ORDER BY timestamp, event_id
+      \(limit == nil ? "" : "LIMIT ? OFFSET ?")
       """)
     defer { sqlite3_finalize(statement) }
     sqlite3_bind_double(statement, 1, interval.start.timeIntervalSince1970)
     sqlite3_bind_double(statement, 2, interval.end.timeIntervalSince1970.nextUp)
     if let sourceID { bind(sourceID, to: 3, in: statement) }
+    if let limit {
+      let index: Int32 = sourceID == nil ? 3 : 4
+      sqlite3_bind_int64(statement, index, Int64(limit))
+      sqlite3_bind_int64(statement, index + 1, Int64(offset))
+    }
     var result: [UsageSample] = []
     while true {
       switch sqlite3_step(statement) {

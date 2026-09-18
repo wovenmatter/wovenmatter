@@ -2314,19 +2314,11 @@ final class ApplicationModel {
     func conversationAttachmentDraft(
         _ conversation: WorkspaceConversationRecord
     ) async throws -> AgentMessageAttachmentDraft {
-        guard let dashboardStore else {
-            throw ApplicationModelError.dashboardStoreUnavailable
-        }
-        let content = try await dashboardStore.conversationContent(id: conversation.id)
-        let preview = DashboardConversationReferencePreview.make(
-            messages: content.messages,
-            limit: AgentMessageAttachmentLimits.maximumReferenceCharacters
-        )
         return .reference(AgentMessageReferenceDraft(
             kind: .conversation,
             resourceID: conversation.id,
             titleSnapshot: conversation.title,
-            contentSnapshot: preview,
+            contentSnapshot: "",
             revisionSnapshot: conversation.lastMessageAt ?? "",
             folderIDSnapshot: conversation.folderID,
             folderTitleSnapshot: conversation.folderID.flatMap { folderID in
@@ -2354,7 +2346,8 @@ final class ApplicationModel {
         }
         let normalized = AgentMessageInput(
             text: input.text.trimmingCharacters(in: .whitespacesAndNewlines),
-            attachments: input.attachments
+            attachments: input.attachments,
+            historyDeliveryID: input.historyDeliveryID
         )
         guard normalized.hasContent, let dashboardStore else {
             conversationState.setError(
@@ -2362,6 +2355,11 @@ final class ApplicationModel {
             )
             return false
         }
+        do {
+            for reference in normalized.references where reference.kind == .conversation {
+                try dashboardStore.database.attachConversationReference(sourceID: conversation.id, targetID: reference.resourceID)
+            }
+        } catch { conversationState.setError(error.localizedDescription); return false }
         if conversation.localRuntimeKind == .opencode {
             do {
                 guard let openCode = openCodeModel(for: conversation.id) else { throw OpenCodeError.message("This workspace's OpenCode connection is unavailable.") }
@@ -2741,7 +2739,8 @@ final class ApplicationModel {
     }
 
     func createLocalACPSession(
-        runtimeKind: AgentRuntimeKind
+        runtimeKind: AgentRuntimeKind,
+        requestedConversationID: UUID? = nil
     ) async -> String? {
         if runtimeKind == .hermes {
             do { try requireLocalHermesLink(openSettings: true) }
@@ -2751,7 +2750,7 @@ final class ApplicationModel {
             do {
                 guard let openCode else { throw OpenCodeError.message("OpenCode is still starting.") }
                 guard let workspace = localACPWorkspaceLaunchConfiguration else { throw ApplicationModelError.localACPRuntimeUnavailable }
-                let id = try await openCode.create(workspace: workspace.rootURL)
+                let id = try await openCode.create(workspace: workspace.rootURL, requestedConversationID: requestedConversationID)
                 await refreshWorkspace()
                 return id
             } catch { localRunError = error.localizedDescription; return nil }
@@ -2768,14 +2767,15 @@ final class ApplicationModel {
             }
             let openClawAgent = runtimeKind == .openclaw
                 ? localCLIAgents.first(where: { $0.runtimeKind == .openclaw }) : nil
-            let gatewayKey = Self.openClawSessionKey(conversationID: UUID().uuidString.lowercased())
+            let gatewayKey = Self.openClawSessionKey(conversationID: (requestedConversationID ?? UUID()).uuidString.lowercased())
             if let agent = openClawAgent, isOpenClawGatewayLinked(agentID: agent.id),
                let workspace = localACPWorkspaceLaunchConfiguration {
                 try await dashboardStore.createOpenClawWorkspaceSession(agentID: agent.id, sessionKey: gatewayKey, cwd: workspace.rootURL)
             }
             let conversationID = try await dashboardStore.createLocalACPSession(
                 runtimeKind: runtimeKind,
-                title: "New \(runtimeKind.displayName) chat"
+                title: "New \(runtimeKind.displayName) chat",
+                requestedConversationID: requestedConversationID
             )
             if runtimeKind == .openclaw,
                let agent = localCLIAgents.first(where: { $0.runtimeKind == .openclaw }),
@@ -2804,7 +2804,8 @@ final class ApplicationModel {
     }
 
     func createRemoteACPSession(
-        target: RemoteHarnessChatTarget
+        target: RemoteHarnessChatTarget,
+        requestedConversationID: UUID? = nil
     ) async -> String? {
         guard remoteWorkspaces.isHarnessReady(
             target.harness.id,
@@ -2821,7 +2822,7 @@ final class ApplicationModel {
                 }
                 try await instance.connectLocal()
                 let directory = remoteWorkspaces.remoteWorkspaceRoot(for: target.configuration)
-                let id = try await instance.create(workspace: URL(fileURLWithPath: directory))
+                let id = try await instance.create(workspace: URL(fileURLWithPath: directory), requestedConversationID: requestedConversationID)
                 await refreshWorkspace()
                 return id
             }
@@ -2833,7 +2834,8 @@ final class ApplicationModel {
                 runtimeKind: target.harness.id,
                 remoteWorkspaceID: target.configuration.id,
                 remoteWorkspaceName: target.configuration.name,
-                title: "New \(target.harness.displayName) chat"
+                title: "New \(target.harness.displayName) chat",
+                requestedConversationID: requestedConversationID
             )
             if target.harness.id == .openclaw {
                 let agentID = try await dashboardStore.ensureRemoteHarnessAgent(

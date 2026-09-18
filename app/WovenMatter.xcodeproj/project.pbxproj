@@ -61,6 +61,8 @@
 		A76B232332644C4E91ECB1DC /* WovenMatterToolService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 207BD966B2624D02B49D50FE /* WovenMatterToolService.swift */; };
 		03644CA683A4476385B50640 /* wovenmatter in Resources */ = {isa = PBXBuildFile; fileRef = 8BC14CE3FCC24BF3819737CB /* wovenmatter */; };
 		5C84BF439B9047118002DD70 /* WorkspaceAgentToolsModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20E807F893654CD4A1F24D40 /* WorkspaceAgentToolsModel.swift */; };
+		0D0C4EE8248E4F63A87CF7B4 /* WovenMatterRemoteToolBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = D8761929DCF444669E58A75E /* WovenMatterRemoteToolBridge.swift */; };
+		1A239171AFDF4F0AA55642C4 /* wovenmatter-remote.py in Resources */ = {isa = PBXBuildFile; fileRef = 3C0A700E6F1C4902ACCF3585 /* wovenmatter-remote.py */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -119,6 +121,8 @@
 		207BD966B2624D02B49D50FE /* WovenMatterToolService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WovenMatterToolService.swift"; sourceTree = "<group>"; };
 		8BC14CE3FCC24BF3819737CB /* wovenmatter */ = {isa = PBXFileReference; lastKnownFileType = text.script.sh; path = "wovenmatter"; sourceTree = "<group>"; };
 		20E807F893654CD4A1F24D40 /* WorkspaceAgentToolsModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WorkspaceAgentToolsModel.swift"; sourceTree = "<group>"; };
+		D8761929DCF444669E58A75E /* WovenMatterRemoteToolBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WovenMatterRemoteToolBridge.swift"; sourceTree = "<group>"; };
+		3C0A700E6F1C4902ACCF3585 /* wovenmatter-remote.py */ = {isa = PBXFileReference; lastKnownFileType = text.script.python; path = "wovenmatter-remote.py"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -236,6 +240,7 @@
 				A12000000000000000000008 /* remote */,
 				A1200000000000000000000A /* harnesses */,
 				E10200000000000000000002 /* woven-note */,
+				3C0A700E6F1C4902ACCF3585 /* wovenmatter-remote.py */,
 				8BC14CE3FCC24BF3819737CB /* wovenmatter */,
 			);
 			path = Resources;
@@ -246,6 +251,7 @@
 			children = (
 				879D531AEA3583A537B8BE1B /* DashboardNoteDrafts.swift */,
 				E10100000000000000000002 /* WovenNoteService.swift */,
+				D8761929DCF444669E58A75E /* WovenMatterRemoteToolBridge.swift */,
 				207BD966B2624D02B49D50FE /* WovenMatterToolService.swift */,
 			);
 			path = Services;
@@ -321,6 +327,7 @@
 				A12000000000000000000007 /* remote in Resources */,
 				A12000000000000000000009 /* harnesses in Resources */,
 				E10200000000000000000001 /* woven-note in Resources */,
+				1A239171AFDF4F0AA55642C4 /* wovenmatter-remote.py in Resources */,
 				03644CA683A4476385B50640 /* wovenmatter in Resources */,
 				A11C00000000000000000001 /* Assets.xcassets in Resources */,
 			);
@@ -383,6 +390,7 @@
 				F10200000000000000000001 /* DashboardDatabasesView.swift in Sources */,
 				5C84BF439B9047118002DD70 /* WorkspaceAgentToolsModel.swift in Sources */,
 				E10100000000000000000001 /* WovenNoteService.swift in Sources */,
+				0D0C4EE8248E4F63A87CF7B4 /* WovenMatterRemoteToolBridge.swift in Sources */,
 				A76B232332644C4E91ECB1DC /* WovenMatterToolService.swift in Sources */,
 				E10000000000000000000001 /* NoteEditor.swift in Sources */,
 				49BB9C77C988D34AA1B69E70 /* ApplicationModel.swift in Sources */,

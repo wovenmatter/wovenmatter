@@ -751,12 +751,14 @@ public actor DashboardStore {
   @discardableResult
   public func createLocalACPSession(
     runtimeKind: AgentRuntimeKind,
-    title: String
+    title: String,
+    requestedConversationID: UUID? = nil
   ) async throws -> String {
     try database.createLocalACPSession(
       runtimeKind: runtimeKind,
       title: title,
-      ownerDeviceID: try await deviceIdentity.id()
+      ownerDeviceID: try await deviceIdentity.id(),
+      requestedConversationID: requestedConversationID
     )
   }
 
@@ -765,14 +767,16 @@ public actor DashboardStore {
     runtimeKind: AgentRuntimeKind,
     remoteWorkspaceID: UUID,
     remoteWorkspaceName: String,
-    title: String
+    title: String,
+    requestedConversationID: UUID? = nil
   ) async throws -> String {
     try database.createRemoteACPSession(
       runtimeKind: runtimeKind,
       remoteWorkspaceID: remoteWorkspaceID,
       remoteWorkspaceName: remoteWorkspaceName,
       title: title,
-      ownerDeviceID: try await deviceIdentity.id()
+      ownerDeviceID: try await deviceIdentity.id(),
+      requestedConversationID: requestedConversationID
     )
   }
 

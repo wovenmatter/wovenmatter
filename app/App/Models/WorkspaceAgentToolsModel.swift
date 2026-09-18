@@ -16,6 +16,10 @@ final class WorkspaceAgentToolsModel {
     private(set) var timers: [WorkspaceSessionTimer] = []
     var error: String?
     private var services: [String: WovenMatterToolService] = [:]
+    private var remoteBridges: [String: WovenMatterRemoteToolBridge] = [:]
+    private var pendingBridges: [String: Task<WovenMatterRemoteToolBridge, any Error>] = [:]
+    private let ownerID = UUID()
+    private var stopped = false
     private let endpointDirectory: URL
     private let sessionHandler: SessionHandler
     private let noteHandler: NoteHandler
@@ -46,9 +50,7 @@ final class WorkspaceAgentToolsModel {
     func policy(for sessionID: String) -> WorkspaceSessionTools {
         if let value = sessionPolicies[sessionID] { return value }
         do {
-            let value = try database.sessionTools(sessionID)
-            sessionPolicies[sessionID] = value
-            return value
+            return try database.sessionTools(sessionID)
         } catch {
             return WorkspaceSessionTools(enabled: [])
         }
@@ -68,6 +70,7 @@ final class WorkspaceAgentToolsModel {
     }
 
     func endpoint(for sessionID: String) throws -> String {
+        guard !stopped else { throw CancellationError() }
         _ = try database.sessionTools(sessionID)
         if let service = services[sessionID] { return service.socketURL.path }
         let path = endpointDirectory.appending(path: UUID().uuidString.replacingOccurrences(of: "-", with: "") + ".sock")
@@ -81,10 +84,66 @@ final class WorkspaceAgentToolsModel {
     }
 
     func stop() {
+        stopped = true
+        for pending in pendingBridges.values { pending.cancel() }
+        pendingBridges.removeAll()
+        for bridge in remoteBridges.values { bridge.stop() }
+        remoteBridges.removeAll()
         for service in services.values { try? service.stop() }
         services.removeAll()
         try? FileManager.default.removeItem(at: endpointDirectory)
     }
+
+    func discovery(sessionID: String, remote: RemoteWorkspaceConfiguration? = nil, noteID: String? = nil) async throws -> String {
+        let path = try endpoint(for: sessionID)
+        let cliPath: String
+        var exports: [String]
+        if let remote {
+            if let bridge = remoteBridges[sessionID], bridge.isRunning {
+                cliPath = bridge.remoteCLIPath
+            } else {
+                let pending: Task<WovenMatterRemoteToolBridge, any Error>
+                if let existing = pendingBridges[sessionID] { pending = existing }
+                else {
+                    guard let sourceURL = Bundle.main.resourceURL?.appending(path: "wovenmatter-remote.py") else {
+                        throw WorkspaceToolError.invalid("The bundled remote CLI is missing.")
+                    }
+                    let source = try String(contentsOf: sourceURL, encoding: .utf8)
+                    pending = Task { try await WovenMatterRemoteToolBridge.start(configuration: remote, ownerID: ownerID, localSocket: path, source: source) }
+                    pendingBridges[sessionID] = pending
+                }
+                defer { pendingBridges.removeValue(forKey: sessionID) }
+                let bridge = try await pending.value
+                guard !stopped else { bridge.stop(); throw CancellationError() }
+                remoteBridges[sessionID] = bridge
+                cliPath = bridge.remoteCLIPath
+            }
+            exports = ["unset WOVENMATTER_SOCKET"]
+        } else {
+            guard let resource = Bundle.main.resourceURL?.appending(path: "wovenmatter"), FileManager.default.isExecutableFile(atPath: resource.path) else {
+                throw WorkspaceToolError.invalid("The bundled Woven Matter CLI is missing.")
+            }
+            cliPath = resource.path
+            exports = ["export WOVENMATTER_SOCKET=" + Self.quote(path)]
+        }
+        exports.append("export WOVENMATTER_CLI=" + Self.quote(cliPath))
+        if let noteID { exports.append("export WOVENMATTER_NOTE_ID=" + Self.quote(noteID)) }
+        else { exports.append("unset WOVENMATTER_NOTE_ID") }
+        let enabled = try database.sessionTools(sessionID).enabled
+        let groups = WorkspaceToolGroup.allCases.filter { enabled.contains($0) }.map(\.rawValue).joined(separator: ", ")
+        return """
+        <wovenmatter-tools>
+        This is Woven Matter session \(sessionID). Its enabled app tools are: \(groups.isEmpty ? "none" : groups).
+        Use this session-bound CLI for app data and session actions. Read detailed help only when needed; do not open the app's SQLite files.
+        \(exports.joined(separator: "\n"))
+        "$WOVENMATTER_CLI" help
+        "$WOVENMATTER_CLI" GROUP help
+        Session messages are attributed to you. Read only relevant history. Managing a session is an ongoing assignment; release it when finished. Tool changes take effect immediately.
+        </wovenmatter-tools>
+        """
+    }
+
+    private static func quote(_ value: String) -> String { "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'" }
 
     func handle(_ request: WovenMatterToolRequest, callerID: String) async -> WovenMatterToolResponse {
         do {
