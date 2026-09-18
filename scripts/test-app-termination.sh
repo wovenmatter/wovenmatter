@@ -32,4 +32,4 @@ if [ "$(cat "$test_root/result")" != PASS ]; then
   cat "$test_root/result" >&2
   exit 1
 fi
-printf '%s\n' 'AppKit quit from updater task: passed (cleanup once, app exited).'
+printf '%s\n' 'AppKit quit from updater task: passed (termination deferred, cleanup once, app exited).'

@@ -4,7 +4,17 @@ import AppKit
 final class WovenMatterLifecycleDelegate: NSObject, NSApplicationDelegate {
     weak var model: ApplicationModel?
     private var terminating = false
-    private var terminationApproved = false
+
+    static func requestTerminationAfterUpdate() {
+        // AppKit's deferred termination enters a nested run loop. Leave the
+        // initiating Swift task first so it cannot block main-actor cleanup.
+        // DispatchQueue.main.async would still hold the main dispatch queue.
+        RunLoop.main.perform(inModes: [.common]) {
+            MainActor.assumeIsolated {
+                NSApplication.shared.terminate(nil)
+            }
+        }
+    }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         model?.refreshRuntimeInventory()
@@ -14,15 +24,14 @@ final class WovenMatterLifecycleDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard !terminationApproved, let model else { return .terminateNow }
-        guard !terminating else { return .terminateCancel }
+        guard let model else { return .terminateNow }
+        guard !terminating else { return .terminateLater }
         terminating = true
         model.flushNoteDrafts()
         Task {
             do {
                 try await model.prepareOpenCodeInstancesToQuit()
-                terminationApproved = true
-                sender.terminate(nil)
+                sender.reply(toApplicationShouldTerminate: true)
             } catch {
                 let alert = NSAlert()
                 alert.messageText = "OpenCode could not be stopped"
@@ -30,17 +39,11 @@ final class WovenMatterLifecycleDelegate: NSObject, NSApplicationDelegate {
                 alert.addButton(withTitle: "Cancel quit")
                 alert.addButton(withTitle: "Quit anyway")
                 let quit = alert.runModal() == .alertSecondButtonReturn
-                if quit {
-                    terminationApproved = true
-                    sender.terminate(nil)
-                } else {
-                    await model.restoreOpenCodeInstances()
-                    terminating = false
-                }
+                terminating = false
+                sender.reply(toApplicationShouldTerminate: quit)
+                if !quit { await model.restoreOpenCodeInstances() }
             }
         }
-        // Let the initiating main-actor task return before cleanup runs.
-        // terminateLater spins a nested AppKit loop that can starve this Task.
-        return .terminateCancel
+        return .terminateLater
     }
 }

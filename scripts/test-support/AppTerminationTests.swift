@@ -21,10 +21,11 @@ final class ApplicationModel {
 }
 
 @MainActor
-private final class TerminationProbe: NSObject {
+private final class TerminationProbe: NSObject, NSApplicationDelegate {
     let model = ApplicationModel()
     let delegate = WovenMatterLifecycleDelegate()
     let resultURL: URL
+    var deferredTermination = false
 
     init(resultURL: URL) {
         self.resultURL = resultURL
@@ -38,16 +39,22 @@ private final class TerminationProbe: NSObject {
 
     @objc private func start(_ notification: Notification) {
         Task { @MainActor in
-            // The updater requests termination from a main-actor Task.
-            NSApplication.shared.terminate(nil)
-            // Repeated requests during cleanup must not schedule duplicate work.
-            NSApplication.shared.terminate(nil)
+            WovenMatterLifecycleDelegate.requestTerminationAfterUpdate()
         }
     }
 
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        let reply = delegate.applicationShouldTerminate(sender)
+        // macOS logout/restart requests must be deferred, never cancelled.
+        // A repeated request must also defer without starting duplicate cleanup.
+        deferredTermination = reply == .terminateLater
+            && delegate.applicationShouldTerminate(sender) == .terminateLater
+        return reply
+    }
+
     @objc private func finished(_ notification: Notification) {
-        let passed = model.flushCount == 1 && model.cleanupCount == 1 && model.cleanupFinished
-        try! (passed ? "PASS\n" : "FAIL: quit before cleanup completed, or duplicate cleanup\n")
+        let passed = deferredTermination && model.flushCount == 1 && model.cleanupCount == 1 && model.cleanupFinished
+        try! (passed ? "PASS\n" : "FAIL: termination cancelled, cleanup unfinished, or duplicate cleanup\n")
             .write(to: resultURL, atomically: true, encoding: .utf8)
     }
 }
@@ -63,7 +70,7 @@ private struct AppTerminationTests {
         }
         let application = NSApplication.shared
         let probe = TerminationProbe(resultURL: resultURL)
-        application.delegate = probe.delegate
+        application.delegate = probe
         application.setActivationPolicy(.prohibited)
         withExtendedLifetime(probe) { application.run() }
     }
