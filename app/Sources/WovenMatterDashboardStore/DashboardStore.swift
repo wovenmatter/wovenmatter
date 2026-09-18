@@ -1,4 +1,3 @@
-import Darwin
 import Foundation
 import WovenMatterClient
 import WovenMatterCore
@@ -391,12 +390,6 @@ public actor DashboardStore {
     try await openClawGateway.cancel(conversationID: conversationID)
   }
 
-  public func openClawGatewaySessionPreferences(
-    conversationID: String
-  ) async throws -> OpenClawSessionPreferences {
-    try await openClawGateway.sessionPreferences(conversationID: conversationID)
-  }
-
   public func patchOpenClawGatewaySession(
     conversationID: String,
     preferences: OpenClawSessionPreferences
@@ -640,14 +633,6 @@ public actor DashboardStore {
 
   public func conversationContent(id: String) throws -> WorkspaceConversationContent {
     try database.conversationContent(id: id)
-  }
-
-  public func conversationHistoryPage(
-    id: String,
-    before cursor: WorkspaceConversationHistoryCursor? = nil,
-    limit: Int
-  ) throws -> WorkspaceConversationHistoryPage {
-    try database.conversationHistoryPage(id: id, before: cursor, limit: limit)
   }
 
   @discardableResult
@@ -1057,28 +1042,9 @@ actor DashboardDeviceIdentity {
   }
 
   private func withExclusiveFileLock<T>(_ operation: () throws -> T) throws -> T {
-    let directory = fileURL.deletingLastPathComponent()
-    try FileManager.default.createDirectory(
-      at: directory,
-      withIntermediateDirectories: true
+    try POSIXFileLock.withExclusive(
+      at: fileURL.deletingLastPathComponent().appending(path: ".dashboard-device-id.lock"),
+      operation
     )
-    let lockURL = directory.appending(path: ".dashboard-device-id.lock")
-    let descriptor = lockURL.path.withCString {
-      Darwin.open($0, O_CREAT | O_RDWR | O_CLOEXEC, S_IRUSR | S_IWUSR)
-    }
-    guard descriptor >= 0 else { throw Self.currentPOSIXError() }
-    defer { Darwin.close(descriptor) }
-    guard Darwin.fchmod(descriptor, S_IRUSR | S_IWUSR) == 0 else {
-      throw Self.currentPOSIXError()
-    }
-    guard Darwin.lockf(descriptor, F_LOCK, 0) == 0 else {
-      throw Self.currentPOSIXError()
-    }
-    defer { Darwin.lockf(descriptor, F_ULOCK, 0) }
-    return try operation()
-  }
-
-  private static func currentPOSIXError() -> POSIXError {
-    POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
   }
 }

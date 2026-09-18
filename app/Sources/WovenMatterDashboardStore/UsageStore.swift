@@ -56,6 +56,7 @@ final class UsageStore: @unchecked Sendable {
     connection = database
     do {
       try execute("PRAGMA journal_mode = WAL")
+      try execute("PRAGMA synchronous = NORMAL")
       try execute("PRAGMA foreign_keys = ON")
       try execute("PRAGMA busy_timeout = 5000")
       try migrate()

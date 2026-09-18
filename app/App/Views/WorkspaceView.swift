@@ -1,4 +1,3 @@
-import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 import WovenMatterClient
@@ -72,21 +71,6 @@ struct DashboardSendResult: Equatable {
             draft: accepted && currentDraft == submittedDraft ? "" : currentDraft,
             accepted: accepted
         )
-    }
-}
-
-struct DashboardRunDisplayPolicy {
-    static func presentsStatus(_ run: WorkspaceRunRecord) -> Bool {
-        run.status != "queued" && run.status != "accepted"
-    }
-
-    static func presentsMessage(
-        _ message: WorkspaceMessageRecord,
-        run: WorkspaceRunRecord?
-    ) -> Bool {
-        guard message.role == "assistant", message.content.isEmpty else { return true }
-        guard let run else { return true }
-        return presentsStatus(run)
     }
 }
 
@@ -1292,7 +1276,6 @@ struct DashboardWorkspaceSurface: View {
         showNoteButton: Bool
     ) -> some View {
         let conversation = conversation(for: panelID)
-        let conversationState = conversationState(for: conversation)
         let attachments = conversation.flatMap {
             attachmentDraftsByConversation[$0.id]
         } ?? []
@@ -1301,13 +1284,7 @@ struct DashboardWorkspaceSurface: View {
                 model: model,
                 agent: agent(for: conversation),
                 conversation: conversation,
-                messages: conversationState?.content?.messages ?? [],
-                messageAttachments: conversationState?.content?.attachments ?? [],
-                messageReferences: conversationState?.content?.references ?? [],
-                messagePresentations: conversationState?.messagePresentations ?? [:],
-                activeRuns: conversationState?.content?.runs ?? [],
-                runActivities: conversationState?.runActivities ?? [],
-                runPresentations: conversationState?.runPresentations ?? [:],
+                conversationState: conversationState(for: conversation),
                 attachedNoteTitle: panelID == .primary && model.canAgentEditOpenNote(conversation)
                     ? note.map { model.noteDraft(for: $0).title }
                     : nil,

@@ -5,8 +5,8 @@ import { randomUUID } from 'node:crypto'
 
 const quote = value => `'${String(value).replaceAll("'", "'\\''")}'`
 const failure = message => Object.assign(new Error(message), { statusCode: 409 })
-export const normalizedVersion = value => String(value ?? '').match(/\d+\.\d+\.\d+(?:[-+][a-zA-Z0-9.-]+)?/)?.[0] ?? null
-export function precedes(a, b) {
+const normalizedVersion = value => String(value ?? '').match(/\d+\.\d+\.\d+(?:[-+][a-zA-Z0-9.-]+)?/)?.[0] ?? null
+function precedes(a, b) {
   if (!a || !b || a === b) return false
   const aa = a.split(/[.-]/), bb = b.split(/[.-]/)
   for (let i = 0; i < Math.max(aa.length, bb.length); i++) {
@@ -16,7 +16,7 @@ export function precedes(a, b) {
   }
   return false
 }
-export function validatedPackageSpec(harness, supplied) {
+function validatedPackageSpec(harness, supplied) {
   const pinned = harness.install.package
   const separator = typeof pinned === 'string' ? pinned.lastIndexOf('@') : -1
   if (separator <= 0) throw failure('reviewed_package_spec_required')
@@ -28,18 +28,18 @@ export function validatedPackageSpec(harness, supplied) {
   if (harness.id === 'opencode' && spec !== pinned) throw failure('opencode_version_incompatible')
   return spec
 }
-export function hermesCheck(output) {
+function hermesCheck(output) {
   const available = /Update available:|Update available \(behind /.test(output)
   const current = output.includes('Already up to date.')
   return available === current ? null : available
 }
-export function hermesPlanAllowsUpdate(output) {
+function hermesPlanAllowsUpdate(output) {
   const lines = output.split('\n').map(line => line.trim())
   return lines.includes('Update plan:') && lines.some(line => line === 'Install: git' || line.startsWith('Install: git ('))
     && lines.includes('Running Hermes services: none detected — code swap only.')
     && !output.includes('NOT updatable in place') && !output.includes('Running services to restart')
 }
-export function diagnosticCategory(error) {
+function diagnosticCategory(error) {
   const text = String(error ?? '')
   const allowed = ['runtime_active_stop_conversations_or_server_first', 'active_conversation_check_unavailable', 'runtime_active_or_operation_in_progress', 'runtime_lock_unavailable', 'hermes_checkout_unverified', 'hermes_checkout_dirty_commit_or_stash_then_retry', 'hermes_update_plan_not_idle', 'hermes_update_flags_unavailable', 'hermes_update_verification_failed', 'source_digest_required', 'installer_digest_changed', 'installer_download_failed', 'installer_download_timed_out', 'runtime_preferences_save_failed', 'bundled_dependency_refresh_failed']
   if (allowed.includes(text)) return text
@@ -56,7 +56,7 @@ export function sanitize(value, environment = {}) {
   }
   return result.replace(/https?:\/\/\S+/gi, '[URL redacted]').replace(/(?:Bearer\s+|sk-|sk-ant-)[\w.-]+/gi, '[redacted]').replace(/((?:token|password|secret|api[_-]?key)\s*[=:]\s*)\S+/gi, '$1[redacted]').slice(-4096)
 }
-export function runHost(command, environment, cwd, timeout = 15000) {
+function runHost(command, environment, cwd, timeout = 15000) {
   return new Promise(resolvePromise => {
     let output = '', settled = false, timedOut = false
     const child = spawn('/bin/bash', ['-c', command], { env: environment, cwd, detached: true, stdio: ['ignore', 'pipe', 'pipe'] })

@@ -120,22 +120,11 @@ private struct ConversationMarkdownInline: View {
     let content: ConversationMarkdownDocument.InlineText
 
     var body: some View {
-        Text(styled)
+        Text(content.rendered)
             .lineSpacing(5)
             .lineLimit(nil)
             .fixedSize(horizontal: false, vertical: true)
             .layoutPriority(1)
-    }
-
-    private var styled: AttributedString {
-        var value = content.rendered
-        for run in value.runs {
-            guard run.inlinePresentationIntent?.contains(.code) == true else { continue }
-            value[run.range].font = .system(size: 13.5, design: .monospaced)
-            value[run.range].foregroundColor = DashboardPalette.foreground.opacity(0.92)
-            value[run.range].backgroundColor = DashboardPalette.primary.opacity(0.075)
-        }
-        return value
     }
 }
 
