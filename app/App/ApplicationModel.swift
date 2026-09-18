@@ -277,11 +277,13 @@ final class ApplicationModel {
     private var dashboardStoreStarted = false
     private var dashboardStoreStartDeferredForNoteRecovery = false
     private var startupTask: Task<Void, Never>?
-    private var conversationChangeTask: Task<Void, Never>?
-    private var conversationChangeWorkers: [String: Task<Void, Never>] = [:]
-    private var conversationChangeWorkerTokens: [String: UUID] = [:]
-    private var pendingConversationChanges: [String: [DashboardConversationChange]] = [:]
-    private var terminalRunIDsByConversation: [String: String] = [:]
+    // Change-pipeline bookkeeping is mutated on every stream flush and is
+    // never read by a view, so it must not participate in observation.
+    @ObservationIgnored private var conversationChangeTask: Task<Void, Never>?
+    @ObservationIgnored private var conversationChangeWorkers: [String: Task<Void, Never>] = [:]
+    @ObservationIgnored private var conversationChangeWorkerTokens: [String: UUID] = [:]
+    @ObservationIgnored private var pendingConversationChanges: [String: [DashboardConversationChange]] = [:]
+    @ObservationIgnored private var terminalRunIDsByConversation: [String: String] = [:]
     private var surfaceProfilePersistenceTask: Task<Void, Never>?
     private var surfaceProfilePersistenceGeneration = 0
     @ObservationIgnored
@@ -338,6 +340,11 @@ final class ApplicationModel {
     private static let initialConversationMessageLimit = 40
     private static let olderConversationMessageLimit = 40
     private static let maximumRetainedConversationCount = 50
+    /// Minimum spacing between content refreshes of one conversation. Writers
+    /// already coalesce at ~75ms; this bounds the aggregate across publishers.
+    private static let minimumContentRefreshInterval = Duration.milliseconds(80)
+    @ObservationIgnored
+    private var lastContentRefreshByConversation: [String: ContinuousClock.Instant] = [:]
     static let maximumActiveTurnCount = 120
     private static let titleGenerationEnabledDefaultsKey =
         "wovenmatter.title-generation.enabled"
@@ -430,6 +437,7 @@ final class ApplicationModel {
             conversationChangeWorkerTokens.removeAll()
             pendingConversationChanges.removeAll()
             terminalRunIDsByConversation.removeAll()
+            lastContentRefreshByConversation.removeAll()
             dashboardStoreStarted = false
             dashboardStoreStartDeferredForNoteRecovery = false
             let supportDirectory = try Self.dashboardSupportDirectory()
@@ -839,9 +847,23 @@ final class ApplicationModel {
         conversationID: String,
         token: UUID
     ) async {
+        defer {
+            if conversationChangeWorkerTokens[conversationID] == token {
+                conversationChangeWorkers.removeValue(forKey: conversationID)
+                conversationChangeWorkerTokens.removeValue(forKey: conversationID)
+            }
+        }
         while !Task.isCancelled,
-              var pending = pendingConversationChanges[conversationID],
-              !pending.isEmpty {
+              let next = pendingConversationChanges[conversationID]?.first {
+            if next.phase == .content,
+               let last = lastContentRefreshByConversation[conversationID] {
+                let wait = Self.minimumContentRefreshInterval - last.duration(to: .now)
+                if wait > .zero { try? await Task.sleep(for: wait) }
+                if Task.isCancelled { return }
+            }
+            // Dequeue after the wait so a cancelled worker leaves the change queued.
+            guard var pending = pendingConversationChanges[conversationID],
+                  !pending.isEmpty else { return }
             let change = pending.removeFirst()
             if pending.isEmpty {
                 pendingConversationChanges.removeValue(forKey: conversationID)
@@ -853,15 +875,11 @@ final class ApplicationModel {
                 continue
             }
             await applyConversationChange(change)
+            lastContentRefreshByConversation[conversationID] = .now
             if change.phase == .terminal {
                 terminalRunIDsByConversation[conversationID] = change.runID
             }
         }
-        guard conversationChangeWorkerTokens[conversationID] == token else {
-            return
-        }
-        conversationChangeWorkers.removeValue(forKey: conversationID)
-        conversationChangeWorkerTokens.removeValue(forKey: conversationID)
     }
 
     private func applyConversationChange(
@@ -972,72 +990,31 @@ final class ApplicationModel {
         }
     }
 
+    /// Reloads the visible window for `id`, rendering off the main actor and
+    /// reusing unchanged message presentations from the previous window.
     func refreshConversation(id: String) async {
         let state = ensureConversationState(id: id)
         let generation = state.beginRefresh()
+        guard let database = dashboardStore?.database else { return }
+        let previous = state.presentation
+        let limit = Self.initialConversationMessageLimit
+        let work = Task.detached(priority: .userInitiated) { () throws -> DashboardConversationPresentation? in
+            let page = try database.conversationHistoryPage(id: id, limit: limit)
+            return Self.presentation(refreshing: previous, with: page)
+        }
         do {
-            guard let dashboardStore else { return }
-            let page = try await dashboardStore.conversationHistoryPage(
-                id: id,
-                limit: Self.initialConversationMessageLimit
-            )
-            guard !Task.isCancelled, page.conversationID == id else { return }
-            let previous = state.presentation
-            let renderTask = Task.detached(priority: .userInitiated) { () -> DashboardConversationPresentation? in
-                let window = previous?.window.refreshing(with: page)
-                    ?? DashboardConversationWindow(page: page)
-                guard previous?.window != window else { return nil }
-                let messagesByID: [String: DashboardMessagePresentation]
-                let runsByID: [String: DashboardRunPresentation]
-                if let previous, previous.window.loadedOlderMessages {
-                    var nextMessages = previous.messagesByID
-                    for (messageID, presentation) in Self.renderMessagePresentations(
-                        page.messages,
-                        activities: page.activities,
-                        runs: page.runs,
-                        reusing: previous.messagesByID
-                    ) {
-                        nextMessages[messageID] = presentation
-                    }
-                    messagesByID = nextMessages
-                    var nextRuns = previous.runsByID
-                    for (runID, presentation) in Self.renderRunPresentations(
-                        page.runs,
-                        reusing: previous.runsByID
-                    ) {
-                        nextRuns[runID] = presentation
-                    }
-                    runsByID = nextRuns
-                } else {
-                    messagesByID = Self.renderMessagePresentations(
-                        page.messages,
-                        activities: page.activities,
-                        runs: page.runs,
-                        reusing: previous?.messagesByID ?? [:]
-                    )
-                    runsByID = Self.renderRunPresentations(
-                        page.runs,
-                        reusing: previous?.runsByID ?? [:]
-                    )
-                }
-                return DashboardConversationPresentation(
-                    window: window,
-                    messagesByID: messagesByID,
-                    runsByID: runsByID
-                )
-            }
-            let presentation = await withTaskCancellationHandler {
-                await renderTask.value
+            let presentation = try await withTaskCancellationHandler {
+                try await work.value
             } onCancel: {
-                renderTask.cancel()
+                work.cancel()
             }
-            guard !Task.isCancelled else { return }
-            guard conversationStatesByID[id] === state,
+            guard !Task.isCancelled,
+                  conversationStatesByID[id] === state,
                   state.isCurrentRefresh(generation) else { return }
             if let presentation { state.apply(presentation) }
             touchConversationState(state)
             state.setError(nil)
-            workspaceError = nil
+            if workspaceError != nil { workspaceError = nil }
         } catch is CancellationError {
             return
         } catch {
@@ -1046,6 +1023,31 @@ final class ApplicationModel {
                   state.isCurrentRefresh(generation) else { return }
             state.setError(error.localizedDescription)
         }
+    }
+
+    private nonisolated static func presentation(
+        refreshing previous: DashboardConversationPresentation?,
+        with page: WorkspaceConversationHistoryPage
+    ) -> DashboardConversationPresentation? {
+        let window = previous?.window.refreshing(with: page)
+            ?? DashboardConversationWindow(page: page)
+        guard previous?.window != window else { return nil }
+        // A paged-back window keeps its earlier rows; a fresh one is rebuilt.
+        let base = previous?.window.loadedOlderMessages == true ? previous : nil
+        return DashboardConversationPresentation(
+            window: window,
+            messagesByID: (base?.messagesByID ?? [:]).merging(
+                renderMessagePresentations(
+                    page.messages, activities: page.activities, runs: page.runs,
+                    reusing: previous?.messagesByID ?? [:]
+                ),
+                uniquingKeysWith: { _, new in new }
+            ),
+            runsByID: (base?.runsByID ?? [:]).merging(
+                renderRunPresentations(page.runs, reusing: previous?.runsByID ?? [:]),
+                uniquingKeysWith: { _, new in new }
+            )
+        )
     }
 
     @discardableResult
@@ -1064,61 +1066,48 @@ final class ApplicationModel {
         state.setLoadingOlderMessages(true)
         defer { state.setLoadingOlderMessages(false) }
         do {
-            let page = try await dashboardStore.conversationHistoryPage(
-                id: id,
-                before: cursor,
-                limit: Self.olderConversationMessageLimit
-            )
-            guard !Task.isCancelled,
-                  conversationStatesByID[id] === state else {
-                return false
-            }
-            let renderTask = Task.detached(priority: .userInitiated) {
-                let messagesByID = Self.renderMessagePresentations(
-                    page.messages,
-                    activities: page.activities,
-                    runs: page.runs,
-                    reusing: current.messagesByID
+            let database = dashboardStore.database
+            let limit = Self.olderConversationMessageLimit
+            let work = Task.detached(priority: .userInitiated) {
+                let page = try database.conversationHistoryPage(id: id, before: cursor, limit: limit)
+                return (
+                    page: page,
+                    messages: Self.renderMessagePresentations(
+                        page.messages, activities: page.activities, runs: page.runs,
+                        reusing: current.messagesByID
+                    ),
+                    runs: Self.renderRunPresentations(page.runs, reusing: current.runsByID)
                 )
-                let runsByID = Self.renderRunPresentations(
-                    page.runs,
-                    reusing: current.runsByID
-                )
-                return (messages: messagesByID, runs: runsByID)
             }
-            let renderedPage = await withTaskCancellationHandler {
-                await renderTask.value
+            let rendered = try await withTaskCancellationHandler {
+                try await work.value
             } onCancel: {
-                renderTask.cancel()
+                work.cancel()
             }
             guard !Task.isCancelled,
+                  conversationStatesByID[id] === state,
                   let latest = state.presentation,
                   latest.window.conversationID == id else {
                 return false
             }
-            var messagesByID = renderedPage.messages
-            for (messageID, presentation) in current.messagesByID {
-                messagesByID[messageID] = presentation
-            }
-            for (messageID, presentation) in latest.messagesByID {
-                messagesByID[messageID] = presentation
-            }
-            var runsByID = renderedPage.runs
-            for (runID, presentation) in current.runsByID {
-                runsByID[runID] = presentation
-            }
-            for (runID, presentation) in latest.runsByID {
-                runsByID[runID] = presentation
-            }
-            let expandedWindow = current.window.prepending(page)
+            // Newer presentations win: `latest` may have advanced while paging.
+            // A refresh still in flight captured a window without this prefix
+            // and must not land on top of it. Superseding it also discards
+            // whatever it carried, so read once more afterwards.
+            _ = state.beginRefresh()
             state.apply(DashboardConversationPresentation(
-                window: expandedWindow.mergingNewer(latest.window),
-                messagesByID: messagesByID,
-                runsByID: runsByID
+                window: current.window.prepending(rendered.page).mergingNewer(latest.window),
+                messagesByID: rendered.messages
+                    .merging(current.messagesByID) { _, new in new }
+                    .merging(latest.messagesByID) { _, new in new },
+                runsByID: rendered.runs
+                    .merging(current.runsByID) { _, new in new }
+                    .merging(latest.runsByID) { _, new in new }
             ))
             touchConversationState(state)
-            workspaceError = nil
-            return page.messages.isEmpty == false
+            if workspaceError != nil { workspaceError = nil }
+            await refreshConversation(id: id)
+            return rendered.page.messages.isEmpty == false
         } catch is CancellationError {
             return false
         } catch {
@@ -1157,6 +1146,7 @@ final class ApplicationModel {
             inactive.count - Self.maximumRetainedConversationCount
         ) {
             conversationStatesByID.removeValue(forKey: state.conversationID)
+            lastContentRefreshByConversation.removeValue(forKey: state.conversationID)
         }
     }
 
@@ -1176,15 +1166,23 @@ final class ApplicationModel {
             guard !Task.isCancelled else { return result }
             // Older steering replies have no work disclosure of their own;
             // retain their complete canonical text instead of hiding commentary.
-            let displayedBody = workRunsByReply[message.id].map { runID in
-                AssistantTranscriptProjection(messageID: message.id,
-                    content: message.content, activities: (activitiesByRun[runID] ?? []).map(\.activity)).body
-            } ?? message.content
+            let isAssistant = message.role == "assistant"
+            let projection = isAssistant
+                ? AssistantTranscriptProjection(
+                    messageID: message.id,
+                    content: message.content,
+                    activities: (workRunsByReply[message.id].flatMap { activitiesByRun[$0] } ?? []).map(\.activity)
+                )
+                : nil
+            let displayedBody = projection.map { workRunsByReply[message.id] == nil ? message.content : $0.body }
+                ?? message.content
+            let commentaryIDs = Set(projection?.commentary.map(\.id) ?? [])
             if let existing = previous[message.id],
                existing.source == message.content,
                existing.displayedBody == displayedBody,
                existing.status == message.status,
-               existing.createdAt == message.createdAt {
+               existing.createdAt == message.createdAt,
+               existing.commentaryIDs == commentaryIDs {
                 result[message.id] = existing
                 continue
             }
@@ -1197,7 +1195,11 @@ final class ApplicationModel {
                     ? ConversationMarkdownDocument(
                         RemoteNoteEditEnvelope.redactingEnvelopes(in: displayedBody)
                     )
-                    : nil
+                    : nil,
+                commentaryIDs: commentaryIDs,
+                hasFinalReply: projection.map {
+                    !$0.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                } ?? false
             )
         }
         return result
@@ -2153,7 +2155,7 @@ final class ApplicationModel {
             "WOVEN_DATABASES_DIR",
         ]
             .compactMap { key in
-                environment[key].map { "export \(key)=\(Self.shellQuote($0))" }
+                environment[key].map { "export \(key)=\($0.shellQuoted)" }
             }
             .joined(separator: "\n")
         let editingGuidance: String
@@ -2261,10 +2263,6 @@ final class ApplicationModel {
             options: [.sortedKeys]
         ) else { return "{}" }
         return String(decoding: data, as: UTF8.self)
-    }
-
-    private static func shellQuote(_ value: String) -> String {
-        "'\(value.replacingOccurrences(of: "'", with: "'\\''"))'"
     }
 
     @discardableResult
@@ -4858,6 +4856,7 @@ final class ApplicationModel {
         }
         for conversationID in removedConversationIDs {
             conversationStatesByID.removeValue(forKey: conversationID)
+            lastContentRefreshByConversation.removeValue(forKey: conversationID)
         }
         if workspaceRevision != snapshot.revision {
             workspaceRevision = snapshot.revision

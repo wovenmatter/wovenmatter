@@ -2,7 +2,6 @@ import Foundation
 
 public struct OpenCodeConnection: Equatable, Sendable {
     public static let supportedVersion = "0.0.0-beta-19278"
-    public static let upstreamCommit = "be41bc4e7de76637f4c7a94d6110637270bfff37"
     /// Stable identity follows the registration file or explicitly saved remote
     /// connection, never a port, process ID, or replaceable service instance ID.
     public let identity: String

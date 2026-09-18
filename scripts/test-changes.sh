@@ -53,6 +53,7 @@ run_app_build() {
     build
   scripts/validate-native-app.sh \
     "${derived_data}/Build/Products/Debug/Woven Matter Dev.app"
+  scripts/test-conversation-state.sh
 }
 
 run_all() {

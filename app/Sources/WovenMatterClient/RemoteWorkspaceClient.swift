@@ -124,7 +124,7 @@ public enum RemoteHarnessLaunchResolver {
         ])
         command.append(harness.command)
         command.append(contentsOf: harness.arguments)
-        let remoteCommand = command.map(shellQuote).joined(separator: " ")
+        let remoteCommand = command.map(\.shellQuoted).joined(separator: " ")
         return RemoteHarnessLaunchContext(
             launch: LocalACPRuntimeLaunchConfiguration(
                 runtimeKind: runtimeKind,
@@ -146,10 +146,6 @@ public enum RemoteHarnessLaunchResolver {
                 )
             )
         )
-    }
-
-    private static func shellQuote(_ value: String) -> String {
-        "'\(value.replacingOccurrences(of: "'", with: "'\\''"))'"
     }
 }
 
@@ -685,13 +681,13 @@ public actor RemoteWorkspaceSSHClient {
                 )
             }
             let command = "IFS= read -r WOVENMATTER_API_TOKEN; export WOVENMATTER_API_TOKEN; exec bash -s -- "
-                + arguments.map(Self.shellQuote).joined(separator: " ")
+                + arguments.map(\.shellQuoted).joined(separator: " ")
             var input = Data((secret + "\n").utf8)
             input.append(script)
             return try runner(destination, command, input)
         }
         let command = "exec bash -s -- "
-            + arguments.map(Self.shellQuote).joined(separator: " ")
+            + arguments.map(\.shellQuoted).joined(separator: " ")
         return try runner(destination, command, script)
     }
 
@@ -810,10 +806,6 @@ public actor RemoteWorkspaceSSHClient {
             throw RemoteWorkspaceClientError.commandFailed(result.output)
         }
         return result.data
-    }
-
-    private static func shellQuote(_ value: String) -> String {
-        "'\(value.replacingOccurrences(of: "'", with: "'\\''"))'"
     }
 }
 
