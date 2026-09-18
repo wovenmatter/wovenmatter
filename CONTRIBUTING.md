@@ -2,6 +2,34 @@
 
 Thank you for helping improve WovenMatter.
 
+## Build from source
+
+Development requires macOS 26, Xcode 26, Node.js 24, and `jq` for the validation
+scripts. The Xcode project is `app/WovenMatter.xcodeproj`; the Swift package is
+rooted at `app/`. No provider credentials are needed to build or test.
+
+Build and launch the development app:
+
+```sh
+scripts/build_and_run.sh
+```
+
+The script uses stable caches under `/private/tmp`. Development builds are
+separate from signed production distribution; build and test scripts do not
+publish or notarize a release. Follow the [style guide](docs/STYLE_GUIDE.md)
+for UI changes.
+
+## Documentation changes
+
+Use the [README](README.md) for product priorities and voice, and the
+[documentation index](docs/README.md) to place new material. Keep user guides
+short and organized around tasks; put implementation contracts in technical
+references. Follow the [documentation style](docs/planning/documentation-overhaul.md).
+
+Check UI labels and behavior against the code. Keep release-specific details
+in release notes instead of versioning the README's feature list. Preserve dates
+and evidence in historical audits rather than presenting them as current tests.
+
 ## Before opening a change
 
 - Search existing issues and keep each change focused.
