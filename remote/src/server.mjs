@@ -24,6 +24,7 @@ const listenPort = parsePositiveInteger(process.env.WOVENMATTER_LISTEN_PORT, 733
 const apiToken = runningAsService
   ? requiredEnvironment('WOVENMATTER_API_TOKEN')
   : process.env.WOVENMATTER_API_TOKEN ?? ''
+const apiTokenDigest = createHash('sha256').update(apiToken).digest()
 const gatewayPort = parsePositiveInteger(process.env.WOVENMATTER_GATEWAY_PORT, 18789)
 const gatewayDesiredPath = resolve(workspaceRoot, '.wovenmatter', 'openclaw-desired.json')
 
@@ -39,6 +40,8 @@ const maximumRetainedTerminalRecords = 64
 const maximumInstallerBytes = 5_242_880
 const installerDownloadTimeoutMilliseconds = 30_000
 const maximumInstallerRedirects = 5
+// Bound abandoned sign-in processes even when the desktop disconnects.
+const authenticationSessionTimeoutMilliseconds = 30 * 60_000
 let gateway = {
   process: null,
   desired: false,
@@ -163,6 +166,7 @@ const server = createServer(async (request, response) => {
       const body = await readJSON(request)
       if (typeof body.code !== 'string'
         || body.code.trim().length === 0
+        || /[\r\n]/.test(body.code.trim())
         || Buffer.byteLength(body.code) > 4_096) {
         return json(response, 400, { error: 'invalid_authorization_code' })
       }
@@ -231,7 +235,9 @@ server.on('upgrade', async (request, socket, head) => {
   }
   const upstream = connect({ host: '127.0.0.1', port: gatewayPort }, () => {
     const headers = Object.entries(request.headers)
-      .filter(([name]) => !['authorization', 'host'].includes(name.toLowerCase()))
+      .filter(([name]) => name.toLowerCase() === 'connection'
+        || name.toLowerCase() === 'upgrade'
+        || name.toLowerCase().startsWith('sec-websocket-'))
       .map(([name, value]) => `${name}: ${Array.isArray(value) ? value.join(', ') : value}`)
       .join('\r\n')
     upstream.write(`GET / HTTP/1.1\r\nHost: 127.0.0.1:${gatewayPort}\r\n${headers}\r\n\r\n`)
@@ -277,9 +283,8 @@ function setGatewayDesired(running) {
 function authorized(request) {
   const value = request.headers.authorization ?? ''
   if (!value.startsWith('Bearer ')) return false
-  const presented = Buffer.from(value.slice(7))
-  const expected = Buffer.from(apiToken)
-  return presented.length === expected.length && timingSafeEqual(presented, expected)
+  const presented = createHash('sha256').update(value.slice(7)).digest()
+  return timingSafeEqual(presented, apiTokenDigest)
 }
 
 async function harnessStatus(harness) {
@@ -459,7 +464,9 @@ function startAuthenticationSession(harness, method) {
     output: '',
     error: null,
     cancelRequested: false,
+    timedOut: false,
   }
+  const clearDeadline = authenticationDeadline(session)
   authenticationSessions.set(normalizeIdentifier(id), session)
   captureAuthenticationOutput(child.stdout, session)
   captureAuthenticationOutput(child.stderr, session)
@@ -468,12 +475,14 @@ function startAuthenticationSession(harness, method) {
     session.state = 'failed'
   })
   child.on('close', async (code) => {
+    clearDeadline()
     if (session.cancelRequested) {
       session.state = 'cancelled'
-    } else if (code !== 0) {
+    } else if (session.timedOut || code !== 0) {
       session.state = 'failed'
     } else if (await harnessAuthenticationConfigured(harness)) {
       session.state = 'succeeded'
+      session.error = null
     } else {
       session.state = 'failed'
       session.error = 'Sign-in finished, but the harness could not verify a usable account.'
@@ -488,6 +497,32 @@ function startAuthenticationSession(harness, method) {
     )
   })
   return session
+}
+
+// Keep the timeout outcome even if a CLI handles SIGTERM by exiting successfully.
+// Clear timers on exit, rather than waiting for descendant-held stdio to close.
+export function authenticationDeadline(session) {
+  const child = session.child
+  let escalation
+  const alive = () => child.exitCode === null && child.signalCode === null
+  const deadline = setTimeout(() => {
+    if (!alive()) return
+    session.timedOut = true
+    session.error = 'Sign-in timed out.'
+    child.kill('SIGTERM')
+    escalation = setTimeout(() => {
+      if (alive()) child.kill('SIGKILL')
+    }, 5_000)
+    escalation.unref()
+  }, authenticationSessionTimeoutMilliseconds)
+  deadline.unref()
+  const clear = () => {
+    clearTimeout(deadline)
+    clearTimeout(escalation)
+  }
+  child.once('exit', clear)
+  child.once('error', clear)
+  return clear
 }
 
 function authenticationProcessLaunch(method) {
