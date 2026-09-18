@@ -101,7 +101,10 @@ public struct AgentMessageInput: Equatable, Sendable {
   public let text: String
   public let attachments: [AgentMessageAttachmentDraft]
 
-  public init(text: String, attachments: [AgentMessageAttachmentDraft] = []) {
+  public let historyDeliveryID: String?
+
+  public init(text: String, attachments: [AgentMessageAttachmentDraft] = [], historyDeliveryID: String? = nil) {
+    self.historyDeliveryID = historyDeliveryID
     self.text = text
     self.attachments = attachments
   }

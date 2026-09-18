@@ -58,6 +58,9 @@
 		ECBF462874DF484F9FDD5C91 /* DashboardLocalSecretCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 502EF864DA314DFBB322C973 /* DashboardLocalSecretCard.swift */; };
 		8B47C81B917AA853D87FB56A /* OpenCodeInteractionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17AF06D69A7DE73E3F94E40A /* OpenCodeInteractionView.swift */; };
 		46E81C4CE9571D1C715098CA /* OpenCodeSessionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F6AFCDD4A429E11B0945492 /* OpenCodeSessionView.swift */; };
+		A76B232332644C4E91ECB1DC /* WovenMatterToolService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 207BD966B2624D02B49D50FE /* WovenMatterToolService.swift */; };
+		03644CA683A4476385B50640 /* wovenmatter in Resources */ = {isa = PBXBuildFile; fileRef = 8BC14CE3FCC24BF3819737CB /* wovenmatter */; };
+		5C84BF439B9047118002DD70 /* WorkspaceAgentToolsModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20E807F893654CD4A1F24D40 /* WorkspaceAgentToolsModel.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -113,6 +116,9 @@
 		502EF864DA314DFBB322C973 /* DashboardLocalSecretCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardLocalSecretCard.swift; sourceTree = "<group>"; };
 		17AF06D69A7DE73E3F94E40A /* OpenCodeInteractionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenCodeInteractionView.swift; sourceTree = "<group>"; };
 		6F6AFCDD4A429E11B0945492 /* OpenCodeSessionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenCodeSessionView.swift; sourceTree = "<group>"; };
+		207BD966B2624D02B49D50FE /* WovenMatterToolService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WovenMatterToolService.swift"; sourceTree = "<group>"; };
+		8BC14CE3FCC24BF3819737CB /* wovenmatter */ = {isa = PBXFileReference; lastKnownFileType = text.script.sh; path = "wovenmatter"; sourceTree = "<group>"; };
+		20E807F893654CD4A1F24D40 /* WorkspaceAgentToolsModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WorkspaceAgentToolsModel.swift"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -172,6 +178,7 @@
 			isa = PBXGroup;
 			children = (
 				3CE258FB55B3D55A39972D5B /* OpenCodeModel.swift */,
+				20E807F893654CD4A1F24D40 /* WorkspaceAgentToolsModel.swift */,
 				87BA82494C4524C032235AAF /* DashboardConversationReferencePreview.swift */,
 				FC6A850ACFC17DE4433439A7 /* DashboardConversationState.swift */,
 				F10000000000000000000002 /* AgentDatabases.swift */,
@@ -229,6 +236,7 @@
 				A12000000000000000000008 /* remote */,
 				A1200000000000000000000A /* harnesses */,
 				E10200000000000000000002 /* woven-note */,
+				8BC14CE3FCC24BF3819737CB /* wovenmatter */,
 			);
 			path = Resources;
 			sourceTree = "<group>";
@@ -238,6 +246,7 @@
 			children = (
 				879D531AEA3583A537B8BE1B /* DashboardNoteDrafts.swift */,
 				E10100000000000000000002 /* WovenNoteService.swift */,
+				207BD966B2624D02B49D50FE /* WovenMatterToolService.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -312,6 +321,7 @@
 				A12000000000000000000007 /* remote in Resources */,
 				A12000000000000000000009 /* harnesses in Resources */,
 				E10200000000000000000001 /* woven-note in Resources */,
+				03644CA683A4476385B50640 /* wovenmatter in Resources */,
 				A11C00000000000000000001 /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -371,7 +381,9 @@
 				A13000000000000000000003 /* SettingsRemoteWorkspacesView.swift in Sources */,
 				F10100000000000000000001 /* ArtifactEditor.swift in Sources */,
 				F10200000000000000000001 /* DashboardDatabasesView.swift in Sources */,
+				5C84BF439B9047118002DD70 /* WorkspaceAgentToolsModel.swift in Sources */,
 				E10100000000000000000001 /* WovenNoteService.swift in Sources */,
+				A76B232332644C4E91ECB1DC /* WovenMatterToolService.swift in Sources */,
 				E10000000000000000000001 /* NoteEditor.swift in Sources */,
 				49BB9C77C988D34AA1B69E70 /* ApplicationModel.swift in Sources */,
 				D49000000000000000000001 /* ConversationMarkdown.swift in Sources */,

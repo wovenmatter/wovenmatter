@@ -1,0 +1,10 @@
+#!/bin/sh
+set -eu
+
+resources_dir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+contents_dir="$(dirname -- "$resources_dir")"
+executable="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$contents_dir/Info.plist")"
+case "$executable" in
+  ''|*/*) printf '%s\n' 'wovenmatter: Invalid app executable.' >&2; exit 1 ;;
+esac
+exec "$contents_dir/MacOS/$executable" --wovenmatter-cli "$@"

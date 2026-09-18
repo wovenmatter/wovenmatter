@@ -719,11 +719,19 @@ public actor DashboardStore {
   public func handleNoteEditingRequest(
     _ request: NoteEditingRequest
   ) throws -> NoteEditingResponse {
-    switch request.command {
-    case .read:
-      try database.readNoteForEditing(id: request.noteID)
-    case .apply:
-      try database.applyNoteEdits(request)
+    try database.recordHistory(WorkspaceHistoryEvent(harness:"woven-note",kind:"cli.request",
+      payload:String(decoding:try JSONEncoder().encode(request),as:UTF8.self)))
+    do {
+      let response: NoteEditingResponse = switch request.command {
+      case .read: try database.readNoteForEditing(id:request.noteID)
+      case .apply: try database.applyNoteEdits(request)
+      }
+      try database.recordHistory(WorkspaceHistoryEvent(harness:"woven-note",kind:"cli.response",
+        payload:String(decoding:try JSONEncoder().encode(response),as:UTF8.self)))
+      return response
+    } catch {
+      try database.recordHistory(WorkspaceHistoryEvent(harness:"woven-note",kind:"cli.error",payload:error.localizedDescription))
+      throw error
     }
   }
 

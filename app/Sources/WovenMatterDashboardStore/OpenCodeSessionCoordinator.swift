@@ -34,7 +34,7 @@ public actor OpenCodeSessionCoordinator {
     }
     public func connect(_ connection: OpenCodeConnection) async throws {
         let token = UUID(); connectionTokens[connection.identity] = token
-        let client = clientFactory(connection)
+        let client = clientFactory(connection).recording(database.openCodeHistoryRecorder(connectionID: connection.identity))
         _ = try await client.health()
         try Task.checkCancellation()
         guard connectionTokens[connection.identity] == token else { throw CancellationError() }
