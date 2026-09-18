@@ -29,9 +29,9 @@ allowing you the freedom to work across the harnesses and models of your choice.
 
 WovenMatter is a lightweight macOS app designed to let you work and collaborate
 with all of your different harnesses. Each of the eight harnesses has a
-dedicated first-class integration. Use your existing installations and provider
-accounts, or install harnesses from Settings. Models, authentication, and
-controls depend on the harness you're using.
+dedicated first-class integration. Use your existing installations or install
+harnesses in the settings page. Use your existing provider accounts and/or API keys.
+Models, authentication, and controls depend on the harness you use.
 
 All agents in your **local agent workspace** work from the same root on your
 Mac. They can use the same project files, instructions, research, and plans.
@@ -46,7 +46,7 @@ Matter to work with agents in all of those locations.
 Conversations with different harnesses, on your Mac or in remote agent
 workspaces, are saved in the same local SQLite database as your notes and other
 items created while working in WovenMatter. This gives you a central work
-history alongside the history each harness keeps itself.
+history alongside the histories each harness already independently maintains.
 
 Return to earlier conversations, review what an agent did, and continue
 supported sessions when the agent is connected. Organize a project's
@@ -79,8 +79,9 @@ for the conditions around background jobs.
 ## Work across sessions in parallel
 
 Run multiple sessions in parallel with the same harness or across different
-harnesses. Use panels to view up to five sessions at once, or open a note beside
-your conversation to work on it with your agent. Organize your notes and
+harnesses. Use panels to view up to five sessions at once, while additional
+sessions can continue running in the background. Open a note beside your
+conversation to work on it with your agent. Organize your notes and
 conversations in folders to keep related work together.
 
 Agents can also read and edit a note you're working on through Woven Matter's
