@@ -2,12 +2,13 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { EventEmitter } from 'node:events'
+import { PassThrough, Writable } from 'node:stream'
 import { createHash } from 'node:crypto'
 import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { connect, createServer as createNetServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
-import { authenticationDeadline, downloadInstallerSource } from '../src/server.mjs'
+import { authenticationDeadline, downloadInstallerSource, probeHarnessTransport } from '../src/server.mjs'
 
 const repositoryRoot = resolve(import.meta.dirname, '../..')
 const catalogPath = resolve(repositoryRoot, 'harnesses/catalog.json')
@@ -331,6 +332,29 @@ test('native sign-in reports a real handoff and verifies provider state', async 
   assert.equal((await terminalCancellation.json()).error, 'authentication_session_not_active')
 })
 
+test('readiness returns unavailable when the initialize pipe closes before its write', async () => {
+  const child = new EventEmitter()
+  child.exitCode = null
+  child.killed = false
+  child.kill = () => { child.killed = true }
+  child.stdout = new PassThrough()
+  child.stderr = new PassThrough()
+  child.stdin = new Writable({
+    write(_chunk, _encoding, callback) {
+      callback(Object.assign(new Error('write EPIPE'), { code: 'EPIPE' }))
+    },
+  })
+  const result = await probeHarnessTransport({ id: 'fixture', command: 'fixture' }, 1_000, () => {
+    queueMicrotask(() => child.emit('spawn'))
+    return child
+  })
+  assert.deepEqual(result, { ready: false, error: 'The transport input failed before readiness.' })
+  assert.equal(child.killed, true)
+  assert.equal(child.stdin.destroyed, true)
+  // Late process events must not replace the already settled failure.
+  child.emit('close', 0)
+})
+
 test('harness readiness requires a real bounded transport handshake', async (context) => {
   const fixture = await temporaryFixture(context, 'wovenmatter-transport-ready-')
   const home = resolve(fixture, 'home')
@@ -393,7 +417,7 @@ test('harness readiness requires a real bounded transport handshake', async (con
   assert.equal(statuses[0].transportError, null)
   assert.equal(statuses[1].state, 'transport_unavailable')
   assert.equal(statuses[1].transportStatus, 'unavailable')
-  assert.match(statuses[1].transportError, /exited before readiness/)
+  assert.match(statuses[1].transportError, /before readiness/)
   assert.equal(statuses[2].state, 'ready')
   assert.equal(statuses[2].transportStatus, 'ready')
 })

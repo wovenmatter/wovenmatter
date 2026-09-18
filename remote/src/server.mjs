@@ -352,7 +352,7 @@ async function harnessStatus(harness) {
   }
 }
 
-function probeHarnessTransport(harness, timeoutMilliseconds) {
+export function probeHarnessTransport(harness, timeoutMilliseconds, spawnProcess = spawn) {
   return new Promise((resolvePromise) => {
     const probeID = `woven-matter-readiness-${randomUUID()}`
     const isPiRPC = harness.transport === 'rpc'
@@ -368,7 +368,7 @@ function probeHarnessTransport(harness, timeoutMilliseconds) {
             clientInfo: { name: 'Woven Matter Readiness Probe', version: '1.0' },
           },
         }
-    const child = spawn(harness.command, harness.arguments ?? [], {
+    const child = spawnProcess(harness.command, harness.arguments ?? [], {
       cwd: workspaceRoot,
       env: harnessRuntimeEnvironment(harness),
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -411,6 +411,9 @@ function probeHarnessTransport(harness, timeoutMilliseconds) {
       for (const line of lines) inspectLine(line)
     })
     child.stderr.on('data', () => {})
+    // A CLI can exit before the initialize write reaches its pipe. Stream errors
+    // are separate from ChildProcess errors and must not terminate the service.
+    child.stdin.on('error', () => finish(false, 'The transport input failed before readiness.'))
     child.once('spawn', () => child.stdin.end(`${JSON.stringify(request)}\n`))
     child.once('error', () => finish(false, 'The transport process could not start.'))
     child.once('close', (code) => {
