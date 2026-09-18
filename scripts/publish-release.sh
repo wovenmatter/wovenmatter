@@ -23,17 +23,10 @@ repository="wovenmatter/wovenmatter"
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$repo_root"
 
-fetch_remote="$(git remote get-url origin)"
-push_remote="$(git remote get-url --push origin)"
-[[ "$fetch_remote" =~ ^git@github-([^:]+):wovenmatter/wovenmatter\.git$ ]] \
-  || { printf '%s\n' 'origin must use the repository-specific GitHub SSH identity.' >&2; exit 65; }
-remote_actor="${BASH_REMATCH[1]}"
-test "$push_remote" = "$fetch_remote" \
-  || { printf '%s\n' 'origin push URL must match its fetch URL.' >&2; exit 65; }
-
-actor="$(gh api user --jq .login)"
-test "$actor" = "$remote_actor" \
-  || { printf 'GitHub CLI account %s does not match SSH identity %s.\n' "$actor" "$remote_actor" >&2; exit 77; }
+export GH_HOST=github.com
+export GH_PROMPT_DISABLED=1
+export GH_BROWSER=/usr/bin/false
+scripts/check-release-access.sh
 
 git fetch origin main --tags
 local_tag_sha="$(git rev-parse "${tag}^{commit}")"
