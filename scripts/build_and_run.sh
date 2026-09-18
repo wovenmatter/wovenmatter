@@ -34,7 +34,7 @@ xcodebuild -quiet \
   -derivedDataPath "$derived_data" \
   -clonedSourcePackagesDirPath "$package_cache" \
   CODE_SIGNING_ALLOWED=NO \
-  "${build_overrides[@]}" \
+  ${build_overrides[@]+"${build_overrides[@]}"} \
   build
 test -x "$executable"
 
