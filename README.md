@@ -20,7 +20,6 @@ of your work history in one location, allowing all of your agents to freely
 access this information as you see fit. This, along with our user interface and
 shared workspace design, allows for seamless collaboration between your agents,
 allowing you the freedom to work across the harnesses and models of your choice.
-It gives you true freedom in how you work.
 
 [Download](https://github.com/wovenmatter/wovenmatter/releases/latest) ·
 [Getting started](docs/guide/getting-started.md) · [Documentation](docs/README.md) ·
@@ -28,10 +27,11 @@ It gives you true freedom in how you work.
 
 ## Your agents, working in the same place
 
-Woven Matter is a native macOS app designed to stay lightweight and responsive.
-Each of the eight harnesses has a dedicated integration. Use your existing
-installations and provider accounts, or install a harness from Settings.
-Models, authentication, and controls depend on the harness you're using.
+WovenMatter is a lightweight macOS app designed to let you work and collaborate
+with all of your different harnesses. Each of the eight harnesses has a
+dedicated first-class integration. Use your existing installations and provider
+accounts, or install harnesses from Settings. Models, authentication, and
+controls depend on the harness you're using.
 
 All agents in your **local agent workspace** work from the same root on your
 Mac. They can use the same project files, instructions, research, and plans.
@@ -45,8 +45,8 @@ Matter to work with agents in all of those locations.
 
 Conversations with different harnesses, on your Mac or in remote agent
 workspaces, are saved in the same local SQLite database as your notes and other
-app records. This gives you a central work history alongside the history each
-harness keeps itself.
+items created while working in WovenMatter. This gives you a central work
+history alongside the history each harness keeps itself.
 
 Return to earlier conversations, review what an agent did, and continue
 supported sessions when the agent is connected. Organize a project's
@@ -76,11 +76,12 @@ Whether work continues after you close the app depends on the harness, its
 service, and the machine running it. See [Scheduled work](docs/guide/schedules-and-usage.md)
 for the conditions around background jobs.
 
-## Keep your work beside the conversation
+## Work across sessions in parallel
 
-Open multiple chat panels to follow different agents at once, or keep a note
-beside a conversation. Read a research summary while discussing it, keep a plan
-in view as work progresses, and organize notes and conversations in folders.
+Run multiple sessions in parallel with the same harness or across different
+harnesses. Use panels to view up to five sessions at once, or open a note beside
+your conversation to work on it with your agent. Organize your notes and
+conversations in folders to keep related work together.
 
 Agents can also read and edit a note you're working on through Woven Matter's
 note tools. This gives longer responses and reference material a place beside
