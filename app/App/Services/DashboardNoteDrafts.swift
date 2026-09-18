@@ -249,37 +249,18 @@ final class DashboardNoteDraftJournal: @unchecked Sendable {
     private func synchronizeParentDirectoryUnlocked() throws {
         let directory = fileURL.deletingLastPathComponent().path
         let descriptor = directory.withCString { Darwin.open($0, O_RDONLY) }
-        guard descriptor >= 0 else { throw Self.currentPOSIXError() }
+        guard descriptor >= 0 else { throw POSIXError.current }
         defer { Darwin.close(descriptor) }
         guard Darwin.fsync(descriptor) == 0 else {
-            throw Self.currentPOSIXError()
+            throw POSIXError.current
         }
     }
 
     private func withExclusiveLock<T>(_ operation: () throws -> T) throws -> T {
         try lock.withLock {
-            let directory = lockFileURL.deletingLastPathComponent()
-            try FileManager.default.createDirectory(
-                at: directory,
-                withIntermediateDirectories: true
-            )
-            let descriptor = lockFileURL.path.withCString {
-                Darwin.open($0, O_CREAT | O_RDWR | O_CLOEXEC, S_IRUSR | S_IWUSR)
-            }
-            guard descriptor >= 0 else { throw Self.currentPOSIXError() }
-            defer { Darwin.close(descriptor) }
-            guard Darwin.lockf(descriptor, F_LOCK, 0) == 0 else {
-                throw Self.currentPOSIXError()
-            }
-            defer { Darwin.lockf(descriptor, F_ULOCK, 0) }
-            return try operation()
+            try POSIXFileLock.withExclusive(at: lockFileURL, operation)
         }
     }
-
-    private static func currentPOSIXError() -> POSIXError {
-        POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
-    }
-
 }
 
 enum DashboardNoteJournalError: Error {

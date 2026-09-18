@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import WovenMatterCore
 
 enum LocalACPProcessLeaseAcquisition: Equatable {
     case acquired
@@ -25,7 +26,7 @@ final class LocalACPProcessLease: LocalACPProcessLeasing, @unchecked Sendable {
         descriptor = fileURL.path.withCString {
             Darwin.open($0, O_CREAT | O_RDWR | O_CLOEXEC, S_IRUSR | S_IWUSR)
         }
-        guard descriptor >= 0 else { throw Self.currentPOSIXError() }
+        guard descriptor >= 0 else { throw POSIXError.current }
         guard Darwin.fchmod(descriptor, S_IRUSR | S_IWUSR) == 0 else {
             let chmodError = errno
             Darwin.close(descriptor)
@@ -47,7 +48,7 @@ final class LocalACPProcessLease: LocalACPProcessLeasing, @unchecked Sendable {
                 if errno == EACCES || errno == EAGAIN {
                     return .unavailable
                 }
-                throw Self.currentPOSIXError()
+                throw POSIXError.current
             }
             holdCount = 1
             return .acquired
@@ -62,9 +63,5 @@ final class LocalACPProcessLease: LocalACPProcessLeasing, @unchecked Sendable {
                 _ = Darwin.lockf(descriptor, F_ULOCK, 0)
             }
         }
-    }
-
-    private static func currentPOSIXError() -> POSIXError {
-        POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
     }
 }
