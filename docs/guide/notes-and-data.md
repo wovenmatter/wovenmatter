@@ -1,40 +1,42 @@
 # Notes and data
 
-Keep a note beside a conversation, organize results in folders, or work with a
-spreadsheet or HTML artifact. The **New Note** picker offers **Note**,
-**Spreadsheet**, and **HTML**. These app records live in the local store.
+Open a note beside your conversation to work on it with your agent. Keep a
+research summary in view, develop a plan, or organize reference material without
+scrolling back through the chat. Notes and conversations can share the same folders.
 
-## Work with an agent beside a note
+## Work beside a note
 
-Keep a longer research summary or plan open while continuing the conversation.
-Woven Matter's note tools let agents read and edit the note associated with that
-work. Agent-driven editing, tables, and HTML workflows are experimental; review
-the result. Ordinary note-taking and folder organization are available without
-an agent.
+The **New Note** picker offers **Note**, **Spreadsheet**, and **HTML**. Each is
+saved in WovenMatter's SQLite database. You can take and organize notes without
+connecting an agent.
 
-## Database folders
+When you work with an agent beside a note, WovenMatter supplies that note's
+context and editing tools. Ask the agent to read it, add text, update a table,
+or create an HTML artifact. Changes appear in the editor. This access is tied
+to the note associated with the conversation.
 
-**Databases** lets you browse **All**, **Local**, or **Remote** locations. Choose
-a workspace to create a named database folder and set its data preference.
-A database here is an ordinary folder under `Databases/<name>/`, not a hosted
-database service.
+## Curate data with your agents
 
-A preference of no format, JSON, or SQLite tells agents how you want data stored;
-it does not force them to use that format. The preference is recorded in
-`.wovenmatter/database.json` within the database folder.
+Use **Databases** to browse **All**, **Local**, or **Remote** locations. Select
+a workspace to create a named database folder and choose its data preference.
+Each database is a folder under `Databases/<name>/` where agents can keep data.
+These folders are separate from the app's central SQLite database.
 
-Notes, tables, and HTML artifacts can link to JSON or SQLite data. For remote
-data, the app reads through the existing workspace connection; remote paths are
-never opened as Mac files. Linked SQLite queries are read-only. Agents can
-still work on the underlying files through their normal workspace access.
+Choose no format preference, JSON, or SQLite to guide how agents store the data.
+The preference is saved in `.wovenmatter/database.json` inside the folder.
+Agents still control the files they write.
 
-## When data is unavailable
+For example, have an agent collect research into a database folder, then use a
+spreadsheet or HTML artifact to present it. Notes, tables, and HTML can link to
+JSON or read-only SQLite query results. Remote data is read through the workspace
+connection and stays on its host.
 
-A configured remote workspace can remain listed while offline. Reconnect it
-before reading its data. Older remote services may require an explicit service
-update in Settings before database operations are available.
+## Read linked data
+
+Reconnect an offline remote workspace before reading its data. Older workspace
+services may need an update in Settings before database operations are available.
 
 Remote links must stay inside the workspace's database root and cannot follow
-symlinks or point to external folders. Reads have size and query limits; reduce
-the data or query if it exceeds them. See the
-[remote database reference](../reference/REMOTE_DATABASES.md) for exact limits.
+symlinks or point to external folders. If a read exceeds the service's limits,
+reduce the data or query. See [Remote database limits](../reference/REMOTE_DATABASES.md)
+for sizes, row limits, and supported queries.

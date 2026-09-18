@@ -16,8 +16,8 @@ network, and work with those agents from the same interface.
 WovenMatter is essentially a user interface built on top of a SQLite database.
 This database saves all of your conversations, notes, and any other items
 created within WovenMatter. This gives you control over your data by saving all
-of your work history in one location, allowing all of your agents to freely
-access this information as you see fit. This, along with our user interface and
+of your work history in one location, so you can return to earlier conversations
+and keep related work together. This, along with our user interface and
 shared workspace design, allows for seamless collaboration between your agents,
 allowing you the freedom to work across the harnesses and models of your choice.
 

@@ -1,33 +1,42 @@
 # Conversations
 
-Choose **New chat** and select an agent. Local, remote, and linked Buzz agents
-are grouped by workspace, so check where the work will run before you send it.
-Model and thinking controls appear where the selected integration supports them.
+Choose **New chat** and select an agent. WovenMatter groups agents by their local,
+remote, or linked Buzz workspace. Choose where you want the work to run, then
+select a model and thinking level where the harness offers those controls.
 
-## Work and return later
+## Work across sessions in parallel
 
-Read responses and tool activity in the conversation. Handle permission requests
-and questions as they appear; available choices come from the runtime. Open
-multiple chats side by side when you want to follow separate tasks, or keep a
-note beside a conversation.
+Run multiple sessions with the same harness or across different harnesses. Use
+panels to view up to five sessions at once, while additional sessions can continue
+running in the background. Open a note beside your conversation to work on it
+with your agent.
 
-Use folders to organize work and **Recents** to return to a conversation or note.
-A saved transcript and a live agent connection are different: an unavailable
-agent may need reconnection before you can continue its work.
+Read responses and tool activity as the agent works. Answer questions and
+permission requests in the conversation; the available choices come from the harness.
 
-Some integration settings offer existing-session imports, including local
-OpenCode and Hermes sessions. Import availability and history limits differ by
-runtime; this is not a universal importer for every CLI. Imported sessions can
-retain their original working directory rather than adopting the default workspace.
+## Organize and continue your work
 
-## Attachments and locations
+Use folders to keep related conversations and notes together. **Recents** lets
+you return to work across your harnesses. WovenMatter saves conversation
+transcripts in its local SQLite database alongside your notes and other items.
 
-Attachment support depends on the runtime. A path on your Mac is not a path
-inside a remote workspace. Put files in the target workspace before referring
-to their remote paths; do not assume that entering a Mac path uploads the file.
+Reopen a conversation to review the work or continue a supported session.
+Reconnect an unavailable agent before sending another request. Shared workspace
+files let different harnesses work on the same material; each conversation
+retains its own harness and session connection.
 
-If a connection drops while sending, inspect the conversation status before
-retrying. An uncertain response does not prove that the agent never received
-the request.
+OpenClaw, Hermes, and local OpenCode settings also offer session imports.
+Available history and import limits depend on the integration. Imported sessions
+retain their original working directory where supplied by the harness.
+
+## Attachments and connections
+
+Attachment support depends on the harness. Add files to the workspace where the
+agent is working before referring to their paths. Entering a Mac path does not
+upload that file to a remote workspace.
+
+If a connection drops while sending, review the conversation status before
+retrying. The agent may have accepted the request even if the app did not receive
+a response.
 
 Next: [Notes and data](notes-and-data.md) or [Troubleshooting](troubleshooting.md).

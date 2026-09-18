@@ -1,7 +1,8 @@
-# Documentation interview
+# Original documentation interview
 
-Answer these in whatever order is easiest; short answers are enough for the
-next pass, and follow-up questions can explore the examples that matter most.
+These questions started the product discussion. They are retained as a historical
+record; the approved [README](../../README.md) and
+[documentation style](documentation-overhaul.md) capture the resulting direction.
 
 1. Who is the first person you want Woven Matter to feel built for?
 2. What should that person accomplish in their first ten minutes?

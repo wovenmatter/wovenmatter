@@ -1,41 +1,48 @@
 # Workspaces and storage
 
-A workspace gives agents a place to work and keep files. Woven Matter also has
-its own local store for the app's notes, conversation records, and activity.
-These are separate kinds of data.
+All agents within a workspace work from the same root. They can use the same
+files, instructions, research, and plans, whichever harness you choose.
+WovenMatter saves your conversations, notes, and other items in one local SQLite
+database, including conversations with agents in remote workspaces.
 
-| Location | What belongs there |
+## Where your work lives
+
+| Location | Contents |
 | --- | --- |
 | `~/.woven-matter` on your Mac | Shared local agent files and instructions |
-| `/home/.woven-matter` in each remote container | That remote workspace's files and instructions |
-| The app's local Application Support store | Notes, conversation records, and other app state in SQLite |
-| Runtime homes and services | Provider authentication, configuration, and runtime-owned session history |
+| `/home/.woven-matter` in each remote container | That workspace's shared agent files and instructions |
+| WovenMatter's Application Support folder | The app's SQLite database, including conversations and notes |
+| Each harness's home or service | Its credentials, configuration, and independently maintained history |
+
+The app's central work history and each workspace's files have different roles.
+Remote files stay on their host; saving transcripts centrally does not synchronize
+folders between workspaces. Agents use shared workspace files and the note tools
+provided for their conversation, rather than editing the app's SQLite store directly.
 
 ## Shared folder layout
 
-The [README's workspace tree](../../README.md#workspace-layout) matches the shared
-initializer. `REPOS` holds repository checkouts; `Databases` holds named data
-folders. `GUIDES`, `PLANS`, `RESEARCH`, and `WORK_LOGS` give durable work a home;
-`OUTBOX` is for deliverables, and `.scratch` is disposable working space.
+The [workspace tree](../../README.md#workspace-layout) shows the initial layout.
+`REPOS` holds repository checkouts and `Databases` holds named data folders.
+Use `GUIDES`, `PLANS`, `RESEARCH`, and `WORK_LOGS` for work you want to keep,
+`OUTBOX` for deliverables, and `.scratch` for temporary work.
 
 `AGENTS.md` contains a managed instruction block. Initialization updates that
-block while preserving material outside it. A new workspace gets a `CLAUDE.md`
-symlink to `AGENTS.md`; an existing file or link is left alone.
+block and preserves the text outside it. New workspaces get a `CLAUDE.md` link
+to `AGENTS.md`; an existing file or link is preserved.
 
-On your Mac, Settings can point `REPOS` and `Databases` to existing folders using
-symlinks. The app refuses to replace a nonempty default folder with a link;
-resolve its contents before changing the location.
+In **Settings → Local agent workspace**, use **Choose repositories folder** or
+**Choose databases folder** to link folders you already use. The app will not
+replace a nonempty default folder with a link; resolve its contents first.
 
-## Local and remote are separate
+## Remote storage
 
-A remote workspace is one complete Linux container, with multiple runtimes
-sharing its persistent home. Workspaces can coexist on one host or span several
-hosts. Their files are not automatically synchronized with your Mac.
+Each remote workspace is a complete Linux container with a persistent home.
+Several harnesses share that home, and several workspaces can run on one host.
+Updates and recreation preserve the named home volume. Removing the container
+and removing its data are separate choices.
 
-Container updates and recreation preserve the named home volume. Removing a
-container and removing its persistent data are separate choices. Persistence
-is not a backup: protect both your workspace files and the app's local data.
+Back up both your workspace files and WovenMatter's local data. Keeping a volume
+across container updates does not protect it from loss of the host or disk.
 
-Buzz links are optional connections to existing local Buzz workspaces. Their
-files remain in those workspaces; linking one does not turn it into an
-app-managed remote container.
+Optional Buzz links connect existing local Buzz workspaces. Their files stay in
+those workspaces, and linking them does not create a remote container.

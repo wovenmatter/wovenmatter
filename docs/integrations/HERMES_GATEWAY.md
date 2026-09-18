@@ -1,5 +1,8 @@
 # Native Hermes Gateway
 
+Technical reference for the Hermes integration. For setup and everyday use,
+see [Agent setup](../guide/agents.md) and [Scheduled work](../guide/schedules-and-usage.md).
+
 ## Verified upstream contract
 
 Verified against installed Hermes v0.21.2 at revision
@@ -96,8 +99,9 @@ a failed resume is reported instead of silently replacing the conversation.
 Secure input supports the native secret/sudo requests; Hermes-specific vault,
 terminal-preview, browser-control, voice, and Desktop tour request surfaces are
 not implemented here. Remote/container Hermes uses the same native transport
-through the workspace service. Imported tool output is retained as
-transcript content rather than reconstructed as Woven Matter live-run activity.
+through the workspace service. New imports map native tool calls and results into transcript activities while
+retaining their raw payloads. Previously imported rows are not silently rebuilt;
+see the [transcript repair audit](../PR48_TRANSCRIPT_REPAIR_AUDIT.md) for that change.
 
 Validation is provider-free: a loopback WebSocket peer covers request-frame routing
 and reconnect epoch checks; transport fixtures cover approvals, clarification,
@@ -126,7 +130,7 @@ integration.
 The Cron Jobs page groups Hermes and OpenClaw. Hermes supports creating paused
 jobs, pausing/resuming, viewing retained textual outputs, and routing results to
 a new conversation per run or an existing conversation belonging to that agent.
-“Continue from Output” opens an unsent draft; the user explicitly sends it.
+**Continue in chat** opens an unsent draft; the user explicitly sends it.
 
 The bundled native `wovenmatter-delivery` platform writes each output to the
 profile's `.woven-matter/scheduled-results.sqlite` before acknowledging delivery.

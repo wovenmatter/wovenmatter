@@ -2,18 +2,20 @@
 
 Technical reference. For everyday setup, start with [Agent setup](guide/agents.md).
 
-Local Workspace runtime rows inventory the selected executable and required
-components. Install replaces Enable until those requirements are verified. Enabled
-runtimes fetch release information once at startup/reopen; opening settings also
-refreshes inventory. There is no repeating version timer and checking never
-installs anything. Network failures leave latest versions unknown.
-The per-runtime action remains visible after completion: Update for an observed
-update, otherwise Check for updates. Checking, updating and retry states use that
-same control. Rows retain component versions and upgrade arrows, with controls
-for runtime settings, Update/Check for updates, Hide/Show, and Enable/Disable
-or Install. Failed operations remain retryable; after two failures in this app session the row offers a copyable,
-allowlisted diagnostic with component versions and an error category. Raw command
-output, account data, paths and credentials are not copied.
+## Runtime controls
+
+**Settings → Local agent workspace** shows the executable and components used
+by each harness. Missing components show **Install**; verified installations
+can be enabled. Opening settings refreshes the inventory. Enabled runtimes also
+check versions at startup or reopen, without a repeating timer.
+
+**Check for updates** reports available versions. **Update** installs an observed
+update. Network failures leave the latest version unknown. Both actions remain
+available for retry after a failure. After two failures in an app session,
+**Copy diagnostic** offers component versions and an error category without raw
+command output, account data, paths, or credentials.
+
+## Components and updates
 
 | Runtime | Actual local architecture | Release source and action |
 | --- | --- | --- |
@@ -26,6 +28,8 @@ output, account data, paths and credentials are not copied.
 | Grok Build | `grok … agent stdio` | Official stable release endpoint used by installer; `grok update`. |
 | Hermes | `hermes serve --isolated`, native server version, and verified `serve --help` support | Official installer for missing CLI. `hermes update --check` reports current/available/unknown. Update verifies a clean source checkout, requires an idle plan and no active Hermes processes, then runs `hermes update --yes` with a 600-second limit. Completion requires a current update check and successful native Gateway validation. |
 
+## Local installation
+
 Managed npm installs are staged in `Node Tools/Installations/<UUID>` and verified
 before an atomic launcher symlink replacement in `Node Tools/bin`. Old generations
 are retained so running adapters retain their dependency trees; automatic garbage
@@ -35,7 +39,9 @@ shell's children cannot continue an installation after retry becomes available.
 New local message sends and maintenance actions are mutually gated during a local
 runtime operation. No operation cancels an active turn.
 
-Each Remote Workspace has its own inventory, preferences, latest checks and
+## Remote installation
+
+Each remote agent workspace has its own inventory, preferences, latest checks and
 verified maintenance actions, served by that workspace's authenticated service
 through its SSH tunnel. Installers execute on the selected host. Remote services
 must include these endpoints before the controls are available. Buzz remains
@@ -54,11 +60,13 @@ unknown compatibility does not produce an update claim. Hermes uses the same
 bounded direct updater and verification on the selected host. It preserves
 modified source checkouts by refusing to update until those changes are saved.
 
-Remote maintenance takes an exclusive host lock. Remote conversation processes
+Remote maintenance takes an exclusive lock in the workspace container. Remote conversation processes
 and managed OpenCode/OpenClaw servers hold shared locks for their lifetime, so an
-update cannot replace their runtime while they are using it. A busy host requires
+update cannot replace their runtime while they are using it. A busy workspace requires
 the user to finish conversations or stop its server before retrying maintenance.
 Installer timeouts terminate the process group before permitting another attempt.
+
+## Service controls
 
 OpenCode settings open the selected workspace's server and model settings. Each
 remote workspace owns a distinct v2 service state directory and conversation
@@ -75,7 +83,12 @@ configuration belong to the selected workspace; local controls do not operate on
 remote or Buzz gateways. Installing a CLI does not install provider runtimes or
 upgrade independently linked gateways.
 
-## Authoritative sources checked 2026-09-11
+## Upstream reference snapshot — September 11, 2026
+
+The versions below record the earlier source review. For the app's declared
+packages and checks, use [the harness catalog](../harnesses/catalog.json),
+[local maintenance](../app/Sources/WovenMatterClient/RuntimeMaintenance.swift),
+and [remote maintenance](../remote/src/runtime-maintenance.mjs).
 
 - [Codex adapter](https://github.com/agentclientprotocol/codex-acp) and
   [npm metadata](https://registry.npmjs.org/@agentclientprotocol%2fcodex-acp/latest):

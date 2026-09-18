@@ -12,9 +12,9 @@ paused so you can choose delivery before resuming them. **Continue in chat**
 opens a draft for review; sending it is a separate action.
 
 Scheduling belongs to the agent service. A remote service can continue while
-Woven Matter is closed, but it cannot run on a stopped host or container. Local
+WovenMatter is closed, but it cannot run on a stopped host or container. Local
 work depends on the Mac and the relevant service staying available. Hermes
-result delivery currently supports text; if another Hermes Gateway owns the
+result delivery supports text; if another Hermes Gateway owns the
 scheduler, its operator must restart it after first enabling delivery.
 
 ## Calendar
@@ -32,5 +32,5 @@ Review the credential-access disclosure before enabling account checks. OpenRout
 keys saved through these settings use the Mac's Keychain; Cursor usage can read
 its local account session after you enable that tracking.
 
-Treat this view as an aid to understanding your work; provider records remain
-the place to confirm billing and account limits.
+Use this view to follow usage across your work. Check provider records to
+confirm billing and account limits.

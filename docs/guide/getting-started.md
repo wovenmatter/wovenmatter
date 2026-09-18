@@ -1,10 +1,10 @@
 # Getting started
 
-Woven Matter runs on Apple silicon Macs with macOS 26 or later. Download the
+WovenMatter runs on Apple silicon Macs with macOS 26 or later. Download the
 DMG from [GitHub Releases](https://github.com/wovenmatter/wovenmatter/releases/latest),
 open it, and move the app into Applications.
 
-No Woven Matter account is required. Start with a harness you already use and
+No WovenMatter account is required. Start with a harness you already use and
 have provider access for. If you already use Codex, for example, choose it for
 your first task; the app can discover an existing installation. Otherwise,
 choose a harness supported by an account or API key you have.

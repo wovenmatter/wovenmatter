@@ -22,9 +22,8 @@ Each container runs as a non-root user with a read-only root filesystem,
 dropped capabilities, bounded temporary filesystems, and a dedicated persistent
 Docker named volume mounted at `/home`. The container user's home is `/home`,
 and the Woven Matter workspace is `/home/.woven-matter`; installed harnesses,
-configuration, credentials, and caches also persist under `/home`. Its base
-image is pinned by multi-architecture manifest digest,
-and its local log driver rotates bounded files. Container updates use a rollback
+configuration, credentials, and caches also persist under `/home`. Its base image is pinned by a multi-architecture manifest digest, and its
+local log driver rotates bounded files. Container updates use a rollback
 container and preserve the prior running state if the replacement does not
 become healthy.
 
@@ -53,6 +52,6 @@ data. Legacy workspaces using a different storage layout remain detectable and
 readable; their data is never silently moved or deleted, and recreation requires
 an explicit migration.
 
-[remote/compose.yaml](../../remote/compose.yaml) is a reviewable single-workspace example. The app uses
-[scripts/remote-workspace.sh](../../scripts/remote-workspace.sh) for lifecycle operations so several independently
-named workspaces can coexist.
+[remote/compose.yaml](../../remote/compose.yaml) is a single-workspace example.
+The app uses [remote-workspace.sh](../../scripts/remote-workspace.sh) to manage
+several independently named workspaces.

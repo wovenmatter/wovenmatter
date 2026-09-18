@@ -21,11 +21,14 @@ for UI changes.
 
 ## Documentation changes
 
-Start at the [documentation index](docs/README.md). Keep user guides short and
-organized around tasks; put implementation contracts in technical references.
-Check UI labels and behavior against the code, and distinguish features on
-`main` from a published release or a pending PR. Keep release-specific details
-in release notes instead of versioning the README's feature list.
+Use the [README](README.md) for product priorities and voice, and the
+[documentation index](docs/README.md) to place new material. Keep user guides
+short and organized around tasks; put implementation contracts in technical
+references. Follow the [documentation style](docs/planning/documentation-overhaul.md).
+
+Check UI labels and behavior against the code. Keep release-specific details
+in release notes instead of versioning the README's feature list. Preserve dates
+and evidence in historical audits rather than presenting them as current tests.
 
 ## Before opening a change
 
