@@ -40,7 +40,7 @@ const maximumRetainedTerminalRecords = 64
 const maximumInstallerBytes = 5_242_880
 const installerDownloadTimeoutMilliseconds = 30_000
 const maximumInstallerRedirects = 5
-// Matches the desktop client's polling budget; after this nobody is listening.
+// Bound abandoned sign-in processes even when the desktop disconnects.
 const authenticationSessionTimeoutMilliseconds = 30 * 60_000
 let gateway = {
   process: null,
@@ -455,13 +455,6 @@ function startAuthenticationSession(harness, method) {
     env: harnessEnvironment(),
     stdio: ['pipe', 'pipe', 'pipe'],
   })
-  const deadline = setTimeout(() => {
-    if (child.exitCode !== null) return
-    session.error = 'Sign-in timed out.'
-    child.kill('SIGTERM')
-    setTimeout(() => child.kill('SIGKILL'), 5_000).unref()
-  }, authenticationSessionTimeoutMilliseconds)
-  deadline.unref()
   const session = {
     id,
     harness,
@@ -471,7 +464,9 @@ function startAuthenticationSession(harness, method) {
     output: '',
     error: null,
     cancelRequested: false,
+    timedOut: false,
   }
+  const clearDeadline = authenticationDeadline(session)
   authenticationSessions.set(normalizeIdentifier(id), session)
   captureAuthenticationOutput(child.stdout, session)
   captureAuthenticationOutput(child.stderr, session)
@@ -480,10 +475,10 @@ function startAuthenticationSession(harness, method) {
     session.state = 'failed'
   })
   child.on('close', async (code) => {
-    clearTimeout(deadline)
+    clearDeadline()
     if (session.cancelRequested) {
       session.state = 'cancelled'
-    } else if (code !== 0) {
+    } else if (session.timedOut || code !== 0) {
       session.state = 'failed'
     } else if (await harnessAuthenticationConfigured(harness)) {
       session.state = 'succeeded'
@@ -502,6 +497,32 @@ function startAuthenticationSession(harness, method) {
     )
   })
   return session
+}
+
+// Keep the timeout outcome even if a CLI handles SIGTERM by exiting successfully.
+// Clear timers on exit, rather than waiting for descendant-held stdio to close.
+export function authenticationDeadline(session) {
+  const child = session.child
+  let escalation
+  const alive = () => child.exitCode === null && child.signalCode === null
+  const deadline = setTimeout(() => {
+    if (!alive()) return
+    session.timedOut = true
+    session.error = 'Sign-in timed out.'
+    child.kill('SIGTERM')
+    escalation = setTimeout(() => {
+      if (alive()) child.kill('SIGKILL')
+    }, 5_000)
+    escalation.unref()
+  }, authenticationSessionTimeoutMilliseconds)
+  deadline.unref()
+  const clear = () => {
+    clearTimeout(deadline)
+    clearTimeout(escalation)
+  }
+  child.once('exit', clear)
+  child.once('error', clear)
+  return clear
 }
 
 function authenticationProcessLaunch(method) {
