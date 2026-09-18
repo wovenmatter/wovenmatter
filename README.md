@@ -4,15 +4,23 @@
 
 **The workspace for all of your harnesses.**
 
-Woven Matter brings **Codex, Claude Code, Grok Build, Cursor, Hermes, OpenClaw,
-OpenCode, and Pi** together in one simple, welcoming Mac app. Work with the
-agents you already use, try others, and keep your conversations and notes
-together in an interface designed to feel comfortable from the start.
+WovenMatter brings **Codex, Claude Code, Grok Build, Cursor, Hermes, OpenClaw,
+OpenCode, and Pi** together in one workspace. Work with all of your harnesses
+in a simple, easy-to-use interface that keeps all of your work organized in one
+place. All of your agents within each workspace work out of the same root,
+allowing them to collaborate and work together seamlessly. WovenMatter ships
+with a local agent workspace, which runs locally on your Mac. You can also
+launch remote agent workspaces on other machines on your network or Tailscale
+network, and work with those agents from the same interface.
 
-Whether you're researching a subject, planning a project, working with data,
-or building software, you can choose the agent that fits the task. Woven Matter
-is a native macOS app designed to stay lightweight and responsive while you
-work with multiple agents.
+WovenMatter is essentially a user interface built on top of a SQLite database.
+This database saves all of your conversations, notes, and any other items
+created within WovenMatter. This gives you control over your data by saving all
+of your work history in one location, allowing all of your agents to freely
+access this information as you see fit. This, along with our user interface and
+shared workspace design, allows for seamless collaboration between your agents,
+allowing you the freedom to work across the harnesses and models of your choice.
+It gives you true freedom in how you work.
 
 [Download](https://github.com/wovenmatter/wovenmatter/releases/latest) ·
 [Getting started](docs/guide/getting-started.md) · [Documentation](docs/README.md) ·
@@ -20,10 +28,10 @@ work with multiple agents.
 
 ## Your agents, working in the same place
 
-Each of the eight harnesses has a dedicated integration in Woven Matter. Use
-your existing installations and provider accounts, or install a harness from
-Settings. Models, authentication, and available controls follow the capabilities
-of the harness you're using.
+Woven Matter is a native macOS app designed to stay lightweight and responsive.
+Each of the eight harnesses has a dedicated integration. Use your existing
+installations and provider accounts, or install a harness from Settings.
+Models, authentication, and controls depend on the harness you're using.
 
 All agents in your **local agent workspace** work from the same root on your
 Mac. They can use the same project files, instructions, research, and plans.
@@ -35,26 +43,18 @@ Matter to work with agents in all of those locations.
 
 ## Your conversations, saved together
 
-Woven Matter saves the **agent transcripts from your conversations in a local
-SQLite database** that powers the app. Conversations with different harnesses,
-on your Mac or in remote agent workspaces, are recorded in one place under
-your control, alongside your notes and other app records.
+Conversations with different harnesses, on your Mac or in remote agent
+workspaces, are saved in the same local SQLite database as your notes and other
+app records. This gives you a central work history alongside the history each
+harness keeps itself.
 
-That gives you a central record of the work you do in Woven Matter, in addition
-to the history a harness keeps itself. Return to earlier conversations, review
-what an agent did, and continue supported sessions when the agent is connected.
-You can organize a project's conversations together even when you use several
-different harnesses to work on it.
+Return to earlier conversations, review what an agent did, and continue
+supported sessions when the agent is connected. Organize a project's
+conversations together even when you use several harnesses to work on it.
 
-The shared record is also the foundation for broader collaboration between
-agents. **In development:** a workspace-history CLI that will let agents
-retrieve prior conversations recorded by Woven Matter, so you can bring earlier
-work into a new task with another harness. Transcripts are saved centrally
-today; automatic access to that history across agents is still being built.
-
-Project files stay in their respective workspaces. The central database stores
-the conversation record; it does not automatically copy every file an agent
-creates or synchronize local and remote folders.
+Project files stay in their respective workspaces. Saving transcripts centrally
+does not automatically copy every file an agent creates or synchronize local
+and remote folders.
 
 ## Work on your Mac and other machines
 
@@ -68,9 +68,9 @@ harnesses, and credentials. You can create multiple workspaces, run agents in
 parallel, and work with them from the same Mac interface. Their conversation
 transcripts are saved in Woven Matter's database alongside your local chats.
 
-Remote setup includes host inspection, any authorized preparation, and controls
-for the workspace and its runtimes. A remote host needs compatible Docker
-support. See [Remote workspaces](docs/guide/remote-workspaces.md) for setup.
+Woven Matter inspects the host and asks you to authorize any preparation before
+creating a workspace. Remote hosts need compatible Docker support. See
+[Remote workspaces](docs/guide/remote-workspaces.md) for setup and management.
 
 Whether work continues after you close the app depends on the harness, its
 service, and the machine running it. See [Scheduled work](docs/guide/schedules-and-usage.md)
@@ -85,13 +85,10 @@ in view as work progresses, and organize notes and conversations in folders.
 Agents can also read and edit a note you're working on through Woven Matter's
 note tools. This gives longer responses and reference material a place beside
 the chat, where you can keep reading without scrolling back through messages.
-Agent-driven note editing, tables, and HTML workflows are still experimental.
 
 Database folders give agents a place to curate data that you can revisit or
 present in spreadsheets and HTML artifacts. Usage, Calendar, Library, and Cron
-Jobs add other ways to organize and follow your work. These supporting features
-are evolving; the core of Woven Matter is working with your harnesses, sharing
-workspace files, and keeping your conversations together.
+Jobs add other ways to organize and follow your work.
 
 Read more about [conversations and panels](docs/guide/conversations.md),
 [notes and data](docs/guide/notes-and-data.md), and
