@@ -729,7 +729,7 @@ public actor RemoteWorkspaceSSHClient {
         return cleanHost
     }
 
-    private static func runSSH(
+    static func runSSH(
         destination: String,
         command: String,
         input: Data?
