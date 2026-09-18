@@ -1,5 +1,8 @@
 # OpenClaw 2026.9.4 integration
 
+Technical reference for the pinned integration reviewed below. For user setup,
+see [Agent setup](guide/agents.md) and [Scheduled work](guide/schedules-and-usage.md).
+
 Targets official OpenClaw v2026.9.4, source
 `3a9d69db306cd7f081e06254cb89c4bcc14a7107` (Gateway protocol v4,
 device signature v3). The filename retains the original review target for link
@@ -75,7 +78,7 @@ compatibility.
   summaries are not presented as complete successful results. Host records are
   retained without automatic expiry, so disk capacity must be maintained. Disk
   failures are reported in the page and native logs when possible.
-- Collection does not invoke a provider. “Continue from Output” prepares an unsent
+- Collection does not invoke a provider. **Continue in chat** prepares an unsent
   draft for explicit review; stored results are not silently added to later prompts.
 
 ### Other integration limits

@@ -387,16 +387,6 @@ struct OpenClawGatewayEventProjection: Equatable, Sendable {
       types: ["thinking", "reasoning"],
       fields: ["thinking", "text", "content"]
     )
-    let deltaText = text(payload["deltaText"])
-    let assistantUpdate: AssistantUpdate?
-    if let fullText, !fullText.isEmpty || terminalState(for: state) == nil {
-      assistantUpdate = .replace(fullText)
-    } else if let deltaText, !deltaText.isEmpty {
-      assistantUpdate = payload["replace"]?.boolValue == true
-        ? .replace(deltaText) : .append(deltaText)
-    } else {
-      assistantUpdate = nil
-    }
     let terminal: TerminalState? = switch state {
     case "final": .completed
     case "aborted": .cancelled(string(payload["errorMessage"]))
@@ -404,6 +394,16 @@ struct OpenClawGatewayEventProjection: Equatable, Sendable {
       string(payload["errorMessage"]) ?? "OpenClaw Gateway run failed."
     )
     default: nil
+    }
+    let deltaText = text(payload["deltaText"])
+    let assistantUpdate: AssistantUpdate?
+    if let fullText, !fullText.isEmpty || terminal == nil {
+      assistantUpdate = .replace(fullText)
+    } else if let deltaText, !deltaText.isEmpty {
+      assistantUpdate = payload["replace"]?.boolValue == true
+        ? .replace(deltaText) : .append(deltaText)
+    } else {
+      assistantUpdate = nil
     }
     return Self(
       runID: string(payload["runId"]),
@@ -429,15 +429,6 @@ struct OpenClawGatewayEventProjection: Equatable, Sendable {
       terminalState: terminal,
       approval: nil
     )
-  }
-
-  private static func terminalState(for state: String) -> TerminalState? {
-    switch state {
-    case "final": .completed
-    case "aborted": .cancelled(nil)
-    case "error": .failed("OpenClaw Gateway run failed.")
-    default: nil
-    }
   }
 
   private static func projectApproval(

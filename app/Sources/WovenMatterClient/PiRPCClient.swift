@@ -528,10 +528,13 @@ public actor PiRPCClient {
             guard let id = string(model["id"]) else { return nil }
             return PiRPCSupport.modelReference(provider: string(model["provider"]), id: id)
         }
-        let suppliedNames = availableModels.compactMap { string($0["name"]) }
-        let duplicateNames = Set(suppliedNames.filter { name in
-            suppliedNames.lazy.filter { $0 == name }.prefix(2).count > 1
-        })
+        var seenNames: Set<String> = []
+        var duplicateNames: Set<String> = []
+        for model in availableModels {
+            if let name = string(model["name"]), !seenNames.insert(name).inserted {
+                duplicateNames.insert(name)
+            }
+        }
         var modelOptionMetadata: [String: SessionOptionMetadata] = [:]
         for model in availableModels {
             guard let id = string(model["id"]) else { continue }

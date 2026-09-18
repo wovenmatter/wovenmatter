@@ -1,5 +1,9 @@
 # PR 48 review and transcript repair audit
 
+Historical engineering record for PR48. Test counts, reviewed revisions, and
+acceptance observations describe that review; they are not current setup instructions.
+For user guidance, see [Conversations](guide/conversations.md).
+
 ## Final review fixes
 
 The full PR diff was reviewed from `ed2777a` in a fresh worktree, including

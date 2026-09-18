@@ -196,13 +196,6 @@ final class RemoteWorkspacesModel {
         workspaceInstances[configuration.id, default: [:]][.opencode] = status
     }
 
-    func enabledRuntimeWorkspaces(_ kind: AgentRuntimeKind) -> [RemoteWorkspaceConfiguration] {
-        guard isCredentialAccessEnabled else { return [] }
-        return workspaces.filter { workspace in
-            !invalidatingWorkspaceIDs.contains(workspace.id) && runtimeMaintenance[workspace.id]?.contains { $0.id == kind && $0.enabled } == true
-        }
-    }
-
     /// Called at startup/reopen only; never installs, upgrades, or launches runtimes.
     func checkRuntimeMaintenanceOnActivation() {
         guard isCredentialAccessEnabled else { return }
@@ -211,6 +204,13 @@ final class RemoteWorkspacesModel {
                 await self.refreshRuntimeMaintenance(workspace, checkLatest: true)
             }
         }
+    }
+
+    func runtimeMaintenanceError(_ kind: AgentRuntimeKind, workspaceID: UUID) -> String? {
+        runtimeMaintenance[workspaceID]?.first { $0.id == kind }?.operation?.error
+            ?? runtimeCheckErrors[workspaceID]?[kind]
+            ?? actionErrors[workspaceID]?[kind]
+            ?? runtimeErrors[workspaceID]
     }
 
     func isRuntimeInventoryUnavailable(_ kind: AgentRuntimeKind, configuration: RemoteWorkspaceConfiguration) -> Bool {

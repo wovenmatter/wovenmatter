@@ -1,28 +1,128 @@
-# WovenMatter
+# Woven Matter
 
-[![Download WovenMatter for Apple silicon](https://img.shields.io/badge/Download-WovenMatter_for_Apple_silicon-000000?logo=apple&logoColor=white)](https://github.com/wovenmatter/wovenmatter/releases/latest)
+[![Download Woven Matter for Apple silicon](https://img.shields.io/badge/Download-Woven_Matter_for_Apple_silicon-000000?logo=apple&logoColor=white)](https://github.com/wovenmatter/wovenmatter/releases/latest)
 
-WovenMatter is a native macOS workspace for coding agents. It keeps notes,
-conversations, runs, and agent sessions in a local SQLite store while giving
-supported harnesses one shared workspace rooted at `~/.woven-matter`.
+**The workspace for all of your harnesses.**
 
-The app is useful on its own. Buzz discovery is an optional, disabled-by-default
-local feature. Remote workspaces are optional standalone Linux containers,
-created and controlled over the user's existing SSH configuration.
+WovenMatter brings **Codex, Claude Code, Grok Build, Cursor, Hermes, OpenClaw,
+OpenCode, and Pi** together in one workspace. Work with all of your harnesses
+in a simple, easy-to-use interface that keeps all of your work organized in one
+place. All of your agents within each workspace work out of the same root,
+allowing them to collaborate and work together seamlessly. WovenMatter ships
+with a local agent workspace, which runs locally on your Mac. You can also
+launch remote agent workspaces on other machines on your network or Tailscale
+network, and work with those agents from the same interface.
 
-## What v0.1 includes
+WovenMatter is essentially a user interface built on top of a SQLite database.
+This database saves all of your conversations, notes, and any other items
+created within WovenMatter. This gives you control over your data by saving all
+of your work history in one location, so you can return to earlier conversations
+and keep related work together. This, along with our user interface and
+shared workspace design, allows for seamless collaboration between your agents,
+allowing you the freedom to work across the harnesses and models of your choice.
 
-- Native SwiftUI workspace, notes, databases, usage views, and direct chats.
-- The shared Codex, Claude Code, Grok Build, Hermes, Cursor, OpenCode, Pi, and
-  OpenClaw harness catalog.
-- Optional discovery and conversations for Buzz workspaces already on this Mac.
-- Multiple independent remote workspace containers on one or more Linux hosts.
-- Install, authentication, update, health, lifecycle, and resource controls for
-  remote workspaces.
-- OpenClaw ACP bootstrap plus authenticated Gateway connectivity for sessions,
-  events, models, attachments, cron, and heartbeat behavior.
+[Download](https://github.com/wovenmatter/wovenmatter/releases/latest) ·
+[Getting started](docs/guide/getting-started.md) · [Documentation](docs/README.md) ·
+[Website](https://wovenmatter.com)
 
-Every local or remote workspace begins with the same relative layout:
+## Your agents, working in the same place
+
+WovenMatter is a lightweight macOS app designed to let you work and collaborate
+with all of your different harnesses. Each of the eight harnesses has a
+dedicated first-class integration. Use your existing installations or install
+harnesses in the settings page. Use your existing provider accounts and/or API keys.
+Models, authentication, and controls depend on the harness you use.
+
+All agents in your **local agent workspace** work from the same root on your
+Mac. They can use the same project files, instructions, research, and plans.
+When you work with another harness, that shared material is already there.
+
+Each **remote agent workspace** follows the same pattern: its agents share a
+root within that workspace. You choose where the work happens, and use Woven
+Matter to work with agents in all of those locations.
+
+## Your conversations, saved together
+
+Conversations with different harnesses, on your Mac or in remote agent
+workspaces, are saved in the same local SQLite database as your notes and other
+items created while working in WovenMatter. This gives you a central work
+history alongside the histories each harness already independently maintains.
+
+Return to earlier conversations, review what an agent did, and continue
+supported sessions when the agent is connected. Organize a project's
+conversations together even when you use several harnesses to work on it.
+
+Project files stay in their respective workspaces. Saving transcripts centrally
+does not automatically copy every file an agent creates or synchronize local
+and remote folders.
+
+## Work on your Mac and other machines
+
+Start with the local agent workspace on your Mac. If you have another Linux
+machine on your network or Tailscale network, you can create a remote agent
+workspace on it from Woven Matter. A rented Linux host reachable over SSH works
+too; Tailscale is optional.
+
+Each remote workspace is a container with a persistent home for its files,
+harnesses, and credentials. You can create multiple workspaces, run agents in
+parallel, and work with them from the same Mac interface. Their conversation
+transcripts are saved in Woven Matter's database alongside your local chats.
+
+Woven Matter inspects the host and asks you to authorize any preparation before
+creating a workspace. Remote hosts need compatible Docker support. See
+[Remote workspaces](docs/guide/remote-workspaces.md) for setup and management.
+
+Whether work continues after you close the app depends on the harness, its
+service, and the machine running it. See [Scheduled work](docs/guide/schedules-and-usage.md)
+for the conditions around background jobs.
+
+## Work across sessions in parallel
+
+Run multiple sessions in parallel with the same harness or across different
+harnesses. Use panels to view up to five sessions at once, while additional
+sessions can continue running in the background. Open a note beside your
+conversation to work on it with your agent. Organize your notes and
+conversations in folders to keep related work together.
+
+Agents can also read and edit a note you're working on through Woven Matter's
+note tools. This gives longer responses and reference material a place beside
+the chat, where you can keep reading without scrolling back through messages.
+
+Database folders give agents a place to curate data that you can revisit or
+present in spreadsheets and HTML artifacts. Usage, Calendar, Library, and Cron
+Jobs add other ways to organize and follow your work.
+
+Read more about [conversations and panels](docs/guide/conversations.md),
+[notes and data](docs/guide/notes-and-data.md), and
+[schedules and usage](docs/guide/schedules-and-usage.md).
+
+## Get started
+
+You need an **Apple silicon Mac running macOS 26 or later** for the published
+app. No Woven Matter account is required. You use your own AI subscriptions or
+API keys; model availability and costs depend on your providers.
+
+1. [Download Woven Matter](https://github.com/wovenmatter/wovenmatter/releases/latest)
+   and move it into Applications.
+2. Open **Settings → Local agent workspace** to see the harnesses discovered
+   on your Mac, or install one you want to try.
+3. Enable it and complete its sign-in or connection setup.
+4. Choose **New chat**, select your agent, and give it a task.
+
+Start with a harness you already use and have provider access for. If you're
+looking for an example, the [getting-started guide](docs/guide/getting-started.md)
+can help you choose and set one up. You don't need a remote machine to begin.
+
+Woven Matter and the harnesses you enable need access to the files and accounts
+used for your work. Review the credential-access disclosure and any macOS
+permission prompts during setup. [Agent setup](docs/guide/agents.md) explains
+the installation and connection steps.
+
+## Workspace layout
+
+The local agent workspace starts at `~/.woven-matter`. Each app-created remote
+workspace starts at `/home/.woven-matter` inside its persistent container home.
+Both use this initial layout:
 
 ```text
 .woven-matter/
@@ -38,176 +138,25 @@ Every local or remote workspace begins with the same relative layout:
   .scratch/
 ```
 
-Users and agents can change the contents after initialization.
+Adapt the contents to your work. On your Mac, `REPOS` and `Databases` can link
+to folders you already use. Initialization preserves an existing `CLAUDE.md`
+instead of replacing it. See [Workspaces and storage](docs/guide/workspaces.md)
+for folder setup and the distinction between workspace files and app records.
 
-## Requirements
+## Help and feedback
 
-- macOS 26 and Xcode 26 for the native app.
-- Node.js 24 for remote-service tests.
-- A reachable amd64 or arm64 Linux host for remote workspaces. Docker may
-  already be present; authorized automatic Docker Engine preparation is
-  currently supported on Ubuntu and Debian.
-- OpenSSH configuration and an SSH agent that can reach each remote host.
-- Bash and standard Linux disk-usage tools on the remote host. Normal lifecycle
-  operations do not require host copies of `jq`, Node.js, npm, or the workspace
-  harnesses.
-- Tailscale is optional; when installed, the app can offer reachable Tailnet
-  machines in addition to manual hostname entry.
+Browse the [documentation](docs/README.md), check
+[troubleshooting](docs/guide/troubleshooting.md), or read the
+[release notes](https://github.com/wovenmatter/wovenmatter/releases).
+Report bugs and suggest improvements through [GitHub issues](https://github.com/wovenmatter/wovenmatter/issues).
+For vulnerabilities, follow the [security policy](SECURITY.md).
 
-No provider credentials are needed to build or test the project. Harnesses are
-installed only after a user chooses to install them, and authentication remains
-inside each local or remote user environment.
+## Build and contribute
 
-## Development
+Start with [Contributing](CONTRIBUTING.md) for development requirements, build
+commands, and validation. Xcode is needed to build from source, not to use the
+published app. Integration references and maintainer procedures are listed in
+the [documentation index](docs/README.md).
 
-Build and launch the development app with stable caches under `/private/tmp`:
-
-```sh
-scripts/build_and_run.sh
-```
-
-Run the complete deterministic validation suite:
-
-```sh
-scripts/test-changes.sh --all
-```
-
-Run the container lifecycle smoke test when Docker is available:
-
-```sh
-scripts/test-container.sh
-```
-
-The Xcode project is `app/WovenMatter.xcodeproj`; the dependency-free Swift
-package is rooted at `app/`. Development scripts do not publish, install, or
-notarize an app. Production releases are Apple Silicon builds from reviewed
-and merged source, published as versioned GitHub Release assets named
-`WovenMatter_X.Y.Z_arm64.dmg`.
-
-Validation behavior lives in repository-owned scripts. See
-[docs/MAINTAINER_WORKFLOW.md](docs/MAINTAINER_WORKFLOW.md) for the continuous
-integration policy and the development, staging, and release environment
-boundaries.
-
-## Remote workspaces
-
-In Settings, choose Remote Workspaces, select a discovered Tailnet machine or
-enter a hostname, and create a workspace. Woven Matter uses an explicit
-inspect → explain → authorize → prepare → verify → create workflow. Inspection
-does not install packages or change configuration. If preparation is needed,
-the app lists each supported change and requires confirmation before applying
-it, then repeats inspection before provisioning anything.
-
-Automatic preparation uses Docker's official apt repository on Ubuntu and
-Debian. Woven Matter does not remove conflicting container packages, add the
-SSH account to the root-equivalent `docker` group, or use Docker's convenience
-installer. Existing compatible Docker Engines on other Linux distributions
-remain supported. When direct Docker access is unavailable, Woven Matter can
-use an existing root login or passwordless sudo policy rather than changing
-group membership. OpenSSH continues to resolve hosts, users, agents, and keys;
-the app does not maintain a separate SSH credential store.
-
-The control API is token-authenticated. Docker publishes it only on
-`127.0.0.1` of the Linux host, and the app reaches it through an SSH tunnel.
-Each container runs as a non-root user with a read-only root filesystem,
-dropped capabilities, bounded temporary filesystems, and a dedicated persistent
-Docker named volume mounted at `/home`. The container user's home is `/home`,
-and the Woven Matter workspace is `/home/.woven-matter`; installed harnesses,
-configuration, credentials, and caches also persist under `/home`. Its base
-image is pinned by multi-architecture manifest digest,
-and its local log driver rotates bounded files. Container updates use a rollback
-container and preserve the prior running state if the replacement does not
-become healthy. Deleting a container and deleting its data are separate actions.
-
-Docker enforces the RAM ceiling. The app treats Swap as additional to RAM and
-translates the two values to Docker's combined `--memory-swap` value. For
-example, 8 GiB RAM plus 4 GiB Swap becomes a 12 GiB combined ceiling.
-
-Workspace storage has no fixed size limit and uses the available capacity of
-the remote host filesystem backing Docker's volume. Woven Matter reports each
-workspace's current usage together with host capacity and available space, and
-shows a non-blocking warning when that host filesystem is running low. If those
-values cannot be measured safely with the existing Docker and standard Linux
-tools, the app reports them as unavailable instead of launching helper
-containers or installing measurement packages. In particular, usage for a
-stopped named-volume workspace is unavailable because Woven Matter does not
-start a measurement container or access Docker-managed volume contents directly.
-
-Container removal and data removal remain separate actions. Restarting,
-updating, or recreating a workspace preserves its named volume. Woven Matter
-removes that volume only after the user explicitly chooses to remove persistent
-data. Legacy workspaces using a different storage layout remain detectable and
-readable; their data is never silently moved or deleted, and recreation requires
-an explicit migration.
-
-`remote/compose.yaml` is a reviewable single-workspace example. The app uses
-`scripts/remote-workspace.sh` for lifecycle operations so several independently
-named workspaces can coexist.
-
-## Harness setup
-
-Settings reports installation, transport readiness, and authentication
-separately. Every supported harness follows the same first-class flow: install,
-discover reusable provider access, choose a native account or API-key method,
-and verify the harness's own authentication state. Pi offers Codex, Grok, or
-API-key setup. Hermes and OpenClaw detect provider access they can safely reuse
-and otherwise offer their native provider flows. OpenCode supports the OpenCode
-Go account flow. There is no embedded setup terminal, synthetic readiness
-marker, agent-mediated setup chat, or generic command-input surface. Installs
-and credentials live in the workspace home and survive container recreation.
-
-Third-party CLIs and separate ACP adapters are not bundled in the container
-image. Their commands and sources are declared in `harnesses/catalog.json` and
-run only after explicit user action. Native ACP, agent-stdio, Gateway, and Pi RPC
-transports are checked after installation instead of being assumed present.
-
-## Remote databases
-
-Databases includes All, Local, and Remote locations. Local includes the local
-agent workspace and linked local Buzz workspaces, retaining their workspace
-labels. The workspace list includes configured remote agent workspaces, even
-when unavailable. Select a workspace to create a database folder or change its
-data preference. Agents use the same
-persistent `Databases/<name>/` folder and `.wovenmatter/database.json` metadata.
-Existing remote services need an explicit service update in Settings before these
-operations are available.
-
-Linked notes, tables, and HTML artifacts can read remote JSON and run read-only
-SQLite queries through the existing authenticated SSH tunnel. Remote paths are
-never treated as Mac files. External folder links and symlinks are unavailable;
-all catalog operations stay within that workspace’s database root. Database
-preferences guide agents without enforcing a storage format.
-
-The service bounds JSON reads to 4 MiB and SQLite snapshots to 256 MiB including
-WAL state. Queries return up to 1,000 rows and 128 uniquely named columns with a
-4 MiB result budget. SQLite permits SELECT/CTE queries; mutation, ATTACH, PRAGMA,
-and extension loading are denied. Busy or changing databases return an error
-that can be retried. The Linux service bounds SQLite’s native heap to 32 MiB
-and each helper process to 128 MiB; query memory exhaustion returns a controlled
-error. Output conversion checks the remaining response budget before encoding
-each value. Queries do not start agents or consume provider services.
-
-## Limitations
-
-- Remote workspaces require a reachable Linux Docker host.
-- Remote local-file attachments must first be added to the remote workspace;
-  a Mac path is not silently copied into a container.
-- Workspace storage has no fixed limit. The remote host must retain enough free
-  space for workspace files, installed harnesses, credentials, and caches.
-- Automatic runtime installation is limited to supported Ubuntu and Debian
-  releases with root SSH or passwordless sudo and no conflicting container
-  packages. Other hosts receive an exact manual-preparation blocker.
-- Provider sign-in and real model calls require the user's own accounts and are
-  intentionally excluded from deterministic validation.
-- Harness installers are fetched from their declared upstream URLs only after
-  user approval; their contents are not pinned and may change independently of
-  Woven Matter.
-- Distribution signing and notarization require maintainer-controlled Apple
-  credentials. A `vX.Y.Z` tag runs the release workflow and stages its verified
-  assets in a private draft. After an explicit version-confirmed release
-  request, the release agent verifies that draft and publishes it through the
-  repository-owned guarded publication script.
-
-See [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md), and
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) before contributing or
-redistributing the app.
+Woven Matter is [MIT licensed](LICENSE). See [third-party notices](THIRD_PARTY_NOTICES.md)
+and [trademarks](TRADEMARKS.md) for redistribution details.
