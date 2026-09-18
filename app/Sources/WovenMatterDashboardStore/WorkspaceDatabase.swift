@@ -188,7 +188,6 @@ public enum LocalACPSessionDatabaseError: LocalizedError, Equatable, Sendable {
 public final class WorkspaceDatabase: @unchecked Sendable {
   private let lock = NSLock()
   private var connection: OpaquePointer?
-  private var cachedOperatorID: String?
 
   public init(url: URL) throws {
     var database: OpaquePointer?
@@ -202,9 +201,6 @@ public final class WorkspaceDatabase: @unchecked Sendable {
 
     do {
       try execute("PRAGMA journal_mode = WAL")
-      // WAL keeps NORMAL durable across application crashes; FULL would fsync
-      // every streamed chunk commit.
-      try execute("PRAGMA synchronous = NORMAL")
       try execute("PRAGMA foreign_keys = ON")
       try execute("PRAGMA busy_timeout = 5000")
       try migrate()
@@ -2399,7 +2395,6 @@ public final class WorkspaceDatabase: @unchecked Sendable {
       try bind(rawID, at: 3, to: statement)
       try bind(ownerDeviceID.uuidString.lowercased(), at: 4, to: statement)
       try stepDone(statement)
-      cachedOperatorID = nil
     }
   }
 
@@ -4678,7 +4673,6 @@ public final class WorkspaceDatabase: @unchecked Sendable {
       try bind(id, at: 1, to: delete)
       try bind(operatorID, at: 2, to: delete)
       try stepDone(delete)
-      cachedOperatorID = nil
       guard sqlite3_changes(connection) == 1 else {
         throw WorkspaceFolderMutationError.folderNotFound
       }
@@ -6217,11 +6211,7 @@ public final class WorkspaceDatabase: @unchecked Sendable {
     return statement
   }
 
-  /// The operator identity is a majority vote across every user-scoped table.
-  /// Every insert writes the winning value back, so only a delete can change
-  /// the vote; those paths reset `cachedOperatorID`.
   private func canonicalWorkspaceOperatorIDUnlocked() throws -> String? {
-    if let cachedOperatorID { return cachedOperatorID }
     let inferred = try prepareUnlocked("""
       SELECT user_id
       FROM (
@@ -6243,11 +6233,7 @@ public final class WorkspaceDatabase: @unchecked Sendable {
       """)
     defer { sqlite3_finalize(inferred) }
     let inferredCode = sqlite3_step(inferred)
-    if inferredCode == SQLITE_ROW {
-      let value = try text(inferred, column: 0)
-      cachedOperatorID = value
-      return value
-    }
+    if inferredCode == SQLITE_ROW { return try text(inferred, column: 0) }
     guard inferredCode == SQLITE_DONE else { throw stepError() }
     return nil
   }
