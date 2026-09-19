@@ -147,3 +147,18 @@ The compiler window is released to the integration manager after this checkpoint
 Remaining feature work is source-only: working-location inheritance, trace
 correlation and native command attribution, then remaining native acceptance.
 Release configuration and final exact-head hosted checks still remain.
+
+## Native trace scope
+
+OpenClaw request/response correlation now retains the originating session key
+for keyless RPC responses, scoped to one recorder/connection and bounded to
+1,024 outstanding requests. Raw payload bytes remain unchanged. Native session
+identity and OpenCode connection identity persist with observations made before
+import; insertion of the matching native association adopts those observations
+transactionally. A same-named native session in another workspace cannot adopt
+them. Completed/replaced connection request IDs cannot confer another scope.
+
+Fresh focused history/Gateway/OpenCode validation passed 64 tests, including
+interleaved keyless responses before import, scoped attachment reads with history
+disabled, database reopen, duplicate replies and two OpenCode workspace imports
+sharing one native ID. This delta still needs the next full native build.

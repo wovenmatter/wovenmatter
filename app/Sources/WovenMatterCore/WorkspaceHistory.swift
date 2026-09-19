@@ -11,10 +11,13 @@ public struct WorkspaceHistoryEvent: Sendable {
   public var kind: String
   public var payload: String
   public var completeness: String
+  public var nativeSessionID: String?
+  public var sourceConnectionID: String?
   public init(
     id: String = UUID().uuidString.lowercased(), conversationID: String? = nil,
     runID: String? = nil, agentID: String? = nil, harness: String,
-    kind: String, payload: String, completeness: String = "observed"
+    kind: String, payload: String, completeness: String = "observed",
+    nativeSessionID: String? = nil, sourceConnectionID: String? = nil
   ) {
     self.id = id
     self.conversationID = conversationID
@@ -24,6 +27,8 @@ public struct WorkspaceHistoryEvent: Sendable {
     self.kind = kind
     self.payload = payload
     self.completeness = completeness
+    self.nativeSessionID = nativeSessionID
+    self.sourceConnectionID = sourceConnectionID
   }
 }
 
