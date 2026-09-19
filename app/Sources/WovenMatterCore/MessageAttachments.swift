@@ -15,6 +15,10 @@ public struct AgentFileAttachmentDraft: Equatable, Identifiable, Sendable {
   public let sizeBytes: Int64
   public let contentHash: String
   public let localURL: URL
+  /// Where the same bytes live inside the remote workspace container, once
+  /// staged there. Harnesses running in the container open this instead of
+  /// `localURL`.
+  public let remotePath: String?
 
   public init(
     id: String = UUID().uuidString.lowercased(),
@@ -23,7 +27,8 @@ public struct AgentFileAttachmentDraft: Equatable, Identifiable, Sendable {
     mimeType: String,
     sizeBytes: Int64,
     contentHash: String,
-    localURL: URL
+    localURL: URL,
+    remotePath: String? = nil
   ) {
     precondition(kind == .image || kind == .file)
     self.id = id
@@ -33,6 +38,15 @@ public struct AgentFileAttachmentDraft: Equatable, Identifiable, Sendable {
     self.sizeBytes = sizeBytes
     self.contentHash = contentHash
     self.localURL = localURL
+    self.remotePath = remotePath
+  }
+
+  public func staged(at remotePath: String) -> AgentFileAttachmentDraft {
+    AgentFileAttachmentDraft(
+      id: id, kind: kind, fileName: fileName, mimeType: mimeType,
+      sizeBytes: sizeBytes, contentHash: contentHash, localURL: localURL,
+      remotePath: remotePath
+    )
   }
 }
 
@@ -99,7 +113,7 @@ public enum AgentMessageAttachmentDraft: Equatable, Identifiable, Sendable {
 
 public struct AgentMessageInput: Equatable, Sendable {
   public let text: String
-  public let attachments: [AgentMessageAttachmentDraft]
+  public private(set) var attachments: [AgentMessageAttachmentDraft]
 
   public init(text: String, attachments: [AgentMessageAttachmentDraft] = []) {
     self.text = text
@@ -122,6 +136,25 @@ public struct AgentMessageInput: Equatable, Sendable {
       guard case .reference(let value) = $0 else { return nil }
       return value
     }
+  }
+
+  /// The same input with each file replaced by `transform(file)`; references
+  /// and order are untouched.
+  public func mappingFiles(
+    _ transform: @Sendable (AgentFileAttachmentDraft) async throws -> AgentFileAttachmentDraft
+  ) async rethrows -> AgentMessageInput {
+    var mapped: [AgentMessageAttachmentDraft] = []
+    mapped.reserveCapacity(attachments.count)
+    for attachment in attachments {
+      if case .file(let file) = attachment {
+        mapped.append(.file(try await transform(file)))
+      } else {
+        mapped.append(attachment)
+      }
+    }
+    var result = self
+    result.attachments = mapped
+    return result
   }
 
   /// References are immutable snapshots and are materialized for transports
