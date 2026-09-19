@@ -44,14 +44,16 @@ struct ConversationMessageLayoutTests {
         let document = ConversationMarkdownDocument(rich)
         let layout = rows(rich)
         try require(document.blocks.count == 7, "Rich fixture lost a top-level block")
-        try require(layout.count == document.blocks.count, "Reply is not split into direct block rows")
+        try require(layout.count == document.blocks.count + 1, "Reply is not split into direct block rows and a footer")
         try require(layout.first?.id == "reply", "First block lost the existing message scroll anchor")
         try require(Set(layout.map(\.id)).count == layout.count, "Block IDs are not unique")
         try require(layout.filter(\.isFirstMessagePart).count == 1, "Work header would be repeated")
-        try require(layout.filter(\.isLastMessagePart).count == 1, "Changed-files footer would be repeated")
-        try require(layout.dropFirst().allSatisfy { $0.spacingBefore == 14 }, "Markdown block spacing changed")
+        try require(layout.filter(\.isLastMessagePart).count == 1, "Last body padding would be repeated")
+        try require(layout.dropFirst().dropLast().allSatisfy { $0.spacingBefore == 14 }, "Markdown block spacing changed")
+        try require(layout.last?.content == .fileChanges && layout.last?.id == "reply:files"
+            && layout.last?.spacingBefore == 0, "Empty files footer would add a gap or lose its stable identity")
         try require(layout.first?.spacingBefore == 32, "Message boundary spacing changed")
-        for (index, row) in layout.enumerated() {
+        for (index, row) in layout.dropLast().enumerated() {
             guard case .markdownBlock(let blockIndex, let count) = row.content else {
                 throw Failure(description: "Formatted block fell back to an entire-message row")
             }
@@ -72,13 +74,18 @@ struct ConversationMessageLayoutTests {
         let after = during + "\n\nA new paragraph."
         let initialRows = rows(before)
         try require(rows(during).map(\.id) == initialRows.map(\.id), "Streaming tail changed stable row IDs")
-        try require(Array(rows(after).prefix(initialRows.count).map(\.id)) == initialRows.map(\.id),
+        try require(Array(rows(after).prefix(initialRows.count - 1).map(\.id)) == initialRows.dropLast().map(\.id),
             "Appending a block renumbered already displayed blocks")
         let olderRows = rows("Older reply.", id: "older") + rows(after)
-        try require(Array(olderRows.dropFirst().map(\.id)) == rows(after).map(\.id),
+        try require(Array(olderRows.dropFirst(2).map(\.id)) == rows(after).map(\.id),
             "Prepending history changed the current message's block anchors")
-        try require(rows(after).filter(\.isLastMessagePart).map(\.id) == [rows(after).last!.id],
-            "Streaming append left the footer attached to an earlier block")
+        try require(rows(after).filter(\.isLastMessagePart).map(\.id) == [rows(after).dropLast().last!.id],
+            "Streaming append left bottom padding attached to an earlier block")
+        try require(initialRows.last?.id == rows(after).last?.id
+            && rows("").last?.id == initialRows.last?.id,
+            "Streaming append or initial reply changed the files card identity")
+        try require(rows(after).filter { $0.content == .fileChanges }.count == 1,
+            "Streaming appended a duplicate changed-files card")
 
         for role in ["user", "system"] {
             let unsplit = rows(rich, role: role)
@@ -86,7 +93,7 @@ struct ConversationMessageLayoutTests {
                 "\(role) rendering was unexpectedly fragmented")
         }
         let failed = rows("  Request failed\n", failedRunError: "Request failed")
-        try require(failed.count == 1 && failed[0].content == .message,
+        try require(failed.count == 2 && failed[0].content == .message && failed[1].content == .fileChanges,
             "Duplicate failed reply left empty Markdown rows")
         try require(rows("Partial reply", failedRunError: "Request failed").first?.content != .message,
             "A useful partial reply was hidden after failure")
@@ -94,9 +101,10 @@ struct ConversationMessageLayoutTests {
             "An empty projected reply became visible")
         let fallback = ConversationMessageLayout.rows(messageID: "pending", role: "assistant", content: "Waiting",
             displayedBody: "Waiting", failedRunError: nil, document: nil, mediaCount: 0)
-        try require(fallback.count == 1 && fallback[0].id == "pending" && fallback[0].content == .message,
+        try require(fallback.count == 2 && fallback[0].id == "pending" && fallback[0].content == .message,
             "An unprepared message lost its fallback and anchor")
-        try require(rows("").count == 1, "An empty document lost its message row")
+        try require(rows("").count == 2 && rows("").first?.id == "reply"
+            && rows("").last?.spacingBefore == 0, "An empty document lost its message anchor or acquired a footer gap")
 
         let media = rows(rich, mediaCount: 2)
         try require(media.count == layout.count + 2, "Provider media was omitted or duplicated")
@@ -104,7 +112,7 @@ struct ConversationMessageLayoutTests {
             "Provider media lost stable ordering")
         try require(media.suffix(2).allSatisfy { $0.spacingBefore == 32 }, "Media spacing changed")
         try require(media.filter(\.isFirstMessagePart).count == 1 && media.filter(\.isLastMessagePart).count == 1,
-            "Media duplicated the work header or changed-files footer")
+            "Media duplicated the work header or body padding")
 
         let unsafe = ConversationMarkdownDocument("[unsafe](javascript:alert) [safe](https://example.com)")
         guard case .paragraph(let text) = unsafe.blocks.first else { throw Failure(description: "Missing link fixture") }

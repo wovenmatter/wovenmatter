@@ -920,6 +920,19 @@ struct DashboardMessageRow: View {
             }
             .font(.system(size: 12))
             .foregroundStyle(DashboardPalette.mutedForeground)
+        } else if layout?.content == .fileChanges {
+            HStack {
+                ConversationChangedFilesCard(records: activities, topSpacing: {
+                    if showsAssistantBody { return 18 }
+                    guard run != nil else { return 0 }
+                    return ConversationWorkTranscript.hasVisibleActivities(
+                        in: activities, commentaryIDs: Set(transcript.commentary.map(\.id))
+                    ) ? 18 : 0
+                })
+                .frame(maxWidth: .infinity, alignment: .leading)
+                Spacer(minLength: 0)
+            }
+            .fixedSize(horizontal: false, vertical: true)
         } else {
             let isUser = message.role == "user"
             HStack {
@@ -963,7 +976,7 @@ struct DashboardMessageRow: View {
                                 .textSelection(.enabled)
                         }
                     }
-                    if !isUser, isLastMessagePart {
+                    if !isUser, layout == nil {
                         ConversationChangedFilesCard(records: activities)
                     }
                 }
