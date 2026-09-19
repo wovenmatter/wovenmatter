@@ -76,6 +76,18 @@ not a pinned dependency.
 In particular, keep PR61's `adoptReservedSessionOriginUnlocked` call **after** the
 local/remote ACP session-row insertion when resolving those method edits.
 
+PR61's `handleAgentUsage` also reads the recorded usage index. Keep its parsing,
+range/pagination validation and tool response in `ApplicationModel+AgentTools`.
+Use the narrow application method
+`recordedUsageSamples(from:to:limit:offset:) async throws -> [UsageSample]` instead
+of exposing `localUsageService` to the extension. In the combined implementation,
+that method forwards to the same method on the private `ApplicationUsageModel`,
+which calls its existing `LocalUsageService.recordedSamples(from:to:limit:offset:)`.
+This reads the index only: preserve the service's validation and thrown errors,
+without adding refreshes, credential access or another service instance. The
+entry point belongs to PR61; this organization-only PR does not implement it
+before the feature exists on main.
+
 For the performance PR, apply changes to conversation read/projection methods
 in `+Conversations` and indexes in `+Schema`. ApplicationModel's conversation
 refresh/cache paths retain their names and bodies. This PR carries no rendering,
