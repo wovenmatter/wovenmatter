@@ -7,12 +7,11 @@ struct ConversationMarkdown: View {
     @State private var pendingExternalURL: URL?
 
     init(document: ConversationMarkdownDocument, isStreaming: Bool) {
-        self.blocks = document.blocks
-        self.isStreaming = isStreaming
+        self.init(blocks: document.blocks, isStreaming: isStreaming)
     }
 
-    init(block: ConversationMarkdownDocument.Block, isStreaming: Bool) {
-        self.blocks = [block]
+    init(blocks: [ConversationMarkdownDocument.Block], isStreaming: Bool) {
+        self.blocks = blocks
         self.isStreaming = isStreaming
     }
 

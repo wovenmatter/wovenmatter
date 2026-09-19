@@ -989,9 +989,9 @@ struct DashboardMessageRow: View {
 
     @ViewBuilder
     private func markdown(_ document: ConversationMarkdownDocument) -> some View {
-        if let layout, case .markdownBlock(let index, _) = layout.content,
-           document.blocks.indices.contains(index) {
-            ConversationMarkdown(block: document.blocks[index], isStreaming: message.status == "streaming")
+        if let layout, case .markdownBlocks(let range, _) = layout.content,
+           document.blocks.indices.contains(range.lowerBound), range.upperBound <= document.blocks.count {
+            ConversationMarkdown(blocks: Array(document.blocks[range]), isStreaming: message.status == "streaming")
         } else {
             ConversationMarkdown(document: document, isStreaming: message.status == "streaming")
         }

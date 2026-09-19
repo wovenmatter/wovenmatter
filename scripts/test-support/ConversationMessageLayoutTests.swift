@@ -44,7 +44,7 @@ struct ConversationMessageLayoutTests {
         let document = ConversationMarkdownDocument(rich)
         let layout = rows(rich)
         try require(document.blocks.count == 7, "Rich fixture lost a top-level block")
-        try require(layout.count == document.blocks.count + 1, "Reply is not split into direct block rows and a footer")
+        try require(layout.count == 3, "Seven rich blocks should occupy two bounded lazy rows and a footer")
         try require(layout.first?.id == "reply", "First block lost the existing message scroll anchor")
         try require(Set(layout.map(\.id)).count == layout.count, "Block IDs are not unique")
         try require(layout.filter(\.isFirstMessagePart).count == 1, "Work header would be repeated")
@@ -53,12 +53,17 @@ struct ConversationMessageLayoutTests {
         try require(layout.last?.content == .fileChanges && layout.last?.id == "reply:files"
             && layout.last?.spacingBefore == 0, "Empty files footer would add a gap or lose its stable identity")
         try require(layout.first?.spacingBefore == 32, "Message boundary spacing changed")
-        for (index, row) in layout.dropLast().enumerated() {
-            guard case .markdownBlock(let blockIndex, let count) = row.content else {
-                throw Failure(description: "Formatted block fell back to an entire-message row")
+        try require(layout.map(\.id) == ["reply", "reply:markdown:4", "reply:files"],
+            "Group identity is not anchored to its first block ordinal")
+        var richRanges: [Range<Int>] = []
+        for row in layout.dropLast() {
+            guard case .markdownBlocks(let range, let count) = row.content else {
+                throw Failure(description: "Formatted blocks fell back to an entire-message row")
             }
-            try require(blockIndex == index && count == document.blocks.count, "Block order or extent changed")
+            richRanges.append(range)
+            try require(count == document.blocks.count, "Group lost the document extent")
         }
+        try require(richRanges == [0..<4, 4..<7], "Rich content was not grouped at the chosen boundary")
         // Lists, quotes, code and tables remain complete blocks for the existing
         // renderer. We do not reparse or split their syntax into arbitrary text.
         guard case .list(let items) = document.blocks[2], items.count == 2,
@@ -67,6 +72,42 @@ struct ConversationMessageLayoutTests {
               code.contains("print(value)"),
               case .table(let table) = document.blocks[5], table.rows.count == 1 else {
             throw Failure(description: "Rich block structure was not retained")
+        }
+
+        // Exercise every tail size and multiple group boundaries. Reconstruct
+        // the rendered block ordinals, not just the number of layout rows.
+        var previousBodyIDs: [String] = []
+        for blockCount in 1...(ConversationMessageLayout.maximumMarkdownBlocksPerRow * 8 + 1) {
+            let source = (0..<blockCount).map { "Paragraph \($0)." }.joined(separator: "\n\n")
+            let growing = rows(source)
+            let bodyRows = Array(growing.dropLast())
+            let parsed = ConversationMarkdownDocument(source)
+            try require(parsed.blocks.count == blockCount, "Coverage fixture did not produce separate paragraphs")
+            var renderedOrdinals: [Int] = []
+            for row in bodyRows {
+                guard case .markdownBlocks(let range, let count) = row.content else {
+                    throw Failure(description: "Grouped response unexpectedly contains a fallback row")
+                }
+                try require(!range.isEmpty && range.count <= ConversationMessageLayout.maximumMarkdownBlocksPerRow,
+                    "A lazy row exceeded the bounded block count")
+                try require(count == blockCount && range.lowerBound >= 0 && range.upperBound <= count,
+                    "A group extends beyond the prepared document")
+                try require(row.isLastMessagePart == (range.upperBound == count),
+                    "Body bottom padding is attached to the wrong group")
+                renderedOrdinals.append(contentsOf: range)
+            }
+            try require(renderedOrdinals == Array(parsed.blocks.indices),
+                "Growing response omitted, duplicated, or reordered rendered blocks")
+            try require(Array(bodyRows.prefix(previousBodyIDs.count).map(\.id)) == previousBodyIDs,
+                "Appending within or across a group changed a retained row's identity")
+            try require(rows(source + " continues streaming").map(\.id) == growing.map(\.id),
+                "Extending the current paragraph changed row identity")
+            try require(growing.last?.id == "reply:files" && growing.last?.spacingBefore == 0,
+                "Growing groups displaced the stable files footer or introduced empty spacing")
+            try require(bodyRows.filter(\.isFirstMessagePart).count == 1
+                && bodyRows.filter(\.isLastMessagePart).count == 1,
+                "Growing groups repeated message edge padding or work-header ownership")
+            previousBodyIDs = bodyRows.map(\.id)
         }
 
         let before = "# Heading\n\nFirst paragraph.\n\n## Next\n\nStreaming tail"
@@ -118,6 +159,6 @@ struct ConversationMessageLayoutTests {
         guard case .paragraph(let text) = unsafe.blocks.first else { throw Failure(description: "Missing link fixture") }
         let links = text.rendered.runs.compactMap(\.link)
         try require(links.count == 1 && links[0].scheme == "https", "Prepared-block link safety changed")
-        print("PASS: rich block rows, stable history/streaming anchors, header/footer ownership, failure fallback, media and link safety")
+        print("PASS: bounded rich-block groups, exhaustive growing coverage, stable history/streaming anchors, header/footer ownership, failure fallback, media and link safety")
     }
 }
