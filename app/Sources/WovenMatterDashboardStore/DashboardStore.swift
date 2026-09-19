@@ -333,8 +333,12 @@ public actor DashboardStore {
     try database.openClawGatewayConversationIDs()
   }
 
-  public func createOpenClawWorkspaceSession(agentID: UUID, sessionKey: String, cwd: URL) async throws {
-    try await openClawGateway.createWorkspaceSession(agentID: agentID, sessionKey: sessionKey, cwd: cwd)
+  public func createOpenClawWorkspaceSession(agentID: UUID, sessionKey: String, cwd: URL, recover: Bool = false) async throws {
+    try await openClawGateway.createWorkspaceSession(agentID: agentID, sessionKey: sessionKey, cwd: cwd, recover: recover)
+  }
+
+  public func confirmOpenClawCreationSelection(conversationID: String, model: String?, thinking: String?) async throws {
+    try await openClawGateway.confirmCreationSelection(conversationID: conversationID, model: model, thinking: thinking)
   }
 
   public func openClawNativeSessions(agentID: UUID, offset: Int = 0) async throws -> (sessions: [OpenClawGatewaySession], nextOffset: Int?) {

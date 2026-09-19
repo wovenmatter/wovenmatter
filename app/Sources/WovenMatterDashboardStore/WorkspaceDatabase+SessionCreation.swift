@@ -33,6 +33,34 @@ extension WorkspaceDatabase {
     }
   }
 
+  /// The first resolved configuration wins. Current source capabilities and
+  /// General defaults cannot silently change the meaning of a retry.
+  public func saveToolSessionCreationConfiguration(requestID: String, sourceID: String,
+      configuration: WorkspaceSessionCreationConfiguration) throws -> WorkspaceSessionCreationConfiguration {
+    try transaction {
+      try requireToolUnlocked(.sessions, sessionID: sourceID)
+      guard let row = try historyRowsUnlocked("SELECT configuration_json,status FROM workspace_session_creations WHERE id=? AND source_id=?",
+        values: [requestID, sourceID]).first?.objectValue else { throw WorkspaceToolError.invalid("Creation reservation not found.") }
+      if let json = row["configuration_json"]?.stringValue {
+        return try JSONDecoder().decode(WorkspaceSessionCreationConfiguration.self, from: Data(json.utf8))
+      }
+      guard row["status"]?.stringValue == "planned" else { throw WorkspaceToolError.invalid("This creation request is not being prepared.") }
+      let title = configuration.title.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !title.isEmpty, title.utf8.count <= 4_096,
+            configuration.nativeWorkingDirectory.map({ $0.hasPrefix("/") && $0.utf8.count <= 4_096 }) ?? true else {
+        throw WorkspaceToolError.invalid("A session needs a title and a valid working directory.")
+      }
+      let operatorID = try localMutationOperatorIDUnlocked()
+      try validateFolderUnlocked(id: configuration.folderID, operatorID: operatorID)
+      var saved = configuration
+      saved.title = title
+      saved.tools = try sessionToolsUnlocked(sourceID)
+      try toolsExecuteUnlocked("UPDATE workspace_session_creations SET configuration_json=? WHERE id=?",
+        [try toolsJSON(saved), requestID])
+      return saved
+    }
+  }
+
   /// Failed setup releases its reservation slot while preserving the target ID
   /// for a safe retry. An already completed creation is never downgraded by a
   /// later failure to deliver its first message.
@@ -64,10 +92,21 @@ extension WorkspaceDatabase {
   /// Session insertion and creation provenance commit together, so an interrupted
   /// remote setup cannot leave an apparently user-created conversation behind.
   func adoptReservedSessionOriginUnlocked(_ targetID: String) throws {
-    guard let row = try historyRowsUnlocked("SELECT source_id,purpose FROM workspace_session_creations WHERE target_id=?", values: [targetID]).first?.objectValue,
+    guard let row = try historyRowsUnlocked("SELECT source_id,purpose,configuration_json FROM workspace_session_creations WHERE target_id=?", values: [targetID]).first?.objectValue,
           let source = row["source_id"]?.stringValue else { return }
+    try requireToolUnlocked(.sessions, sessionID: source)
     try toolsExecuteUnlocked("INSERT INTO workspace_session_relationships(session_id,created_by,purpose) VALUES(?,?,?)",
       [targetID, source, row["purpose"]?.stringValue])
-    try toolsExecuteUnlocked("UPDATE workspace_session_tools SET enabled_json=(SELECT enabled_json FROM workspace_session_tools WHERE session_id=?) WHERE session_id=?", [source, targetID])
+    if let json = row["configuration_json"]?.stringValue {
+      let configuration = try JSONDecoder().decode(WorkspaceSessionCreationConfiguration.self, from: Data(json.utf8))
+      try validateFolderUnlocked(id: configuration.folderID, operatorID: localMutationOperatorIDUnlocked())
+      try toolsExecuteUnlocked("UPDATE dashboard_conversations SET title=?,folder_id=? WHERE id=?",
+        [configuration.title, configuration.folderID, targetID])
+      try toolsExecuteUnlocked("UPDATE desktop_local_acp_sessions SET title=? WHERE conversation_id=?", [configuration.title, targetID])
+      try toolsExecuteUnlocked("UPDATE workspace_session_tools SET enabled_json=? WHERE session_id=?", [try toolsJSON(configuration.tools.enabled), targetID])
+    } else {
+      // Reservations from older builds retain the existing inheritance behavior.
+      try toolsExecuteUnlocked("UPDATE workspace_session_tools SET enabled_json=(SELECT enabled_json FROM workspace_session_tools WHERE session_id=?) WHERE session_id=?", [source, targetID])
+    }
   }
 }

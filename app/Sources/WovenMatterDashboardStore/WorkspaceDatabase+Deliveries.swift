@@ -60,7 +60,7 @@ extension WorkspaceDatabase {
   }
 
   public func validateClaimedToolDelivery(id: String) throws {
-    try lock.withLock {
+    try withLock {
       guard let delivery = try deliveryUnlocked(id), delivery.status == "sending",
             try toolDeliveryAuthorizedUnlocked(delivery) else {
         throw WorkspaceToolError.invalid("This delivery was cancelled or its access was revoked.")
@@ -104,11 +104,11 @@ extension WorkspaceDatabase {
   }
 
   public func toolDelivery(id: String) throws -> WorkspaceSessionDelivery? {
-    try lock.withLock { try deliveryUnlocked(id) }
+    try withLock { try deliveryUnlocked(id) }
   }
 
   public func sessionDeliveries(sessionID: String? = nil, queuedOnly: Bool = false, limit: Int = 200, beforeID: String? = nil, outgoingOnly: Bool = false) throws -> [WorkspaceSessionDelivery] {
-    try lock.withLock {
+    try withLock {
       var sql = "SELECT rowid AS sequence,* FROM workspace_session_deliveries WHERE 1=1"
       var values: [String?] = []
       if let sessionID {
@@ -134,7 +134,7 @@ extension WorkspaceDatabase {
   /// Refresh exactly the loaded transcript window, so polling updates receipt
   /// statuses without dropping older pages or skipping bursts of new activity.
   public func outgoingDeliveryWindow(sessionID: String, throughID: String) throws -> [WorkspaceSessionDelivery] {
-    try lock.withLock {
+    try withLock {
       guard let cursor = try deliveryUnlocked(throughID), cursor.sourceID == sessionID, let sequence = cursor.sequence else {
         throw WorkspaceToolError.invalid("The delivery cursor is unavailable for this session.")
       }

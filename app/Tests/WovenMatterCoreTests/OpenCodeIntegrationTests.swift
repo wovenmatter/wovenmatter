@@ -636,10 +636,11 @@ struct OpenCodeIntegrationTests {
         try await coordinator.connect(connection())
         // A previous create did not reach the server. Recovery sees 404 and
         // safely submits that same identity instead of blocking all new chats.
-        let created = try await coordinator.createSession(connectionID: "fixture", id: "ses_fixture", workspace: directory, recover: true)
+        let created = try await coordinator.createSession(connectionID: "fixture", id: "ses_fixture", workspace: directory, recover: true, title: "Requested title")
         #expect(created["data"]["id"].text == "ses_fixture")
         #expect(fixture.createCount == 1)
         #expect(fixture.lastCreate["location"]["directory"].text == directory.path)
+        #expect(fixture.lastCreate["title"].text == "Requested title")
         // If only the response was lost, recovery retrieves the existing session.
         let recovered = try await coordinator.createSession(connectionID: "fixture", id: "ses_fixture", workspace: directory, recover: true)
         #expect(recovered["data"]["id"].text == "ses_fixture")

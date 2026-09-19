@@ -50,6 +50,27 @@ public struct WorkspaceSessionTools: Codable, Equatable, Sendable {
   }
 }
 
+/// Resolved once before creating a session. Retrying a request must not inherit
+/// different choices merely because its source or General defaults changed.
+public struct WorkspaceSessionCreationConfiguration: Codable, Equatable, Sendable {
+  public var runtimeKind: AgentRuntimeKind
+  public var workspaceID: UUID?
+  public var folderID: String?
+  public var title: String
+  public var model: String?
+  public var thinking: String?
+  public var nativeWorkingDirectory: String?
+  public var tools: WorkspaceSessionTools
+
+  public init(runtimeKind: AgentRuntimeKind, workspaceID: UUID? = nil, folderID: String? = nil,
+              title: String, model: String? = nil, thinking: String? = nil,
+              nativeWorkingDirectory: String? = nil, tools: WorkspaceSessionTools = .init()) {
+    self.runtimeKind = runtimeKind; self.workspaceID = workspaceID; self.folderID = folderID
+    self.title = title; self.model = model; self.thinking = thinking
+    self.nativeWorkingDirectory = nativeWorkingDirectory; self.tools = tools
+  }
+}
+
 public struct WorkspaceSessionRelationship: Codable, Equatable, Sendable {
   public var sessionID: String
   public var createdBy: String?

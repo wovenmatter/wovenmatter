@@ -62,7 +62,7 @@ public actor OpenCodeSessionCoordinator {
         guard token == connectionTokens[connectionID] else { throw CancellationError() }
         return result
     }
-    public func createSession(connectionID: String, id: String, workspace: URL, recover: Bool) async throws -> OpenCodeValue {
+    public func createSession(connectionID: String, id: String, workspace: URL, recover: Bool, title: String? = nil) async throws -> OpenCodeValue {
         if recover {
             do { return try await call(connectionID: connectionID, path: "/api/session/" + OpenCodeHTTPClient.segment(id)) }
             catch OpenCodeError.http(404) {
@@ -70,8 +70,9 @@ public actor OpenCodeSessionCoordinator {
                 // Reuse that ID even if the first request is still finishing.
             }
         }
-        return try await call(connectionID: connectionID, method: "POST", path: "/api/session",
-            body: ["id": .string(id), "location": ["directory": .string(workspace.path)], "metadata": ["wovenmatter": ["origin": "created"]]])
+        var body: OpenCodeValue = ["id": .string(id), "location": ["directory": .string(workspace.path)], "metadata": ["wovenmatter": ["origin": "created"]]]
+        if let title { body["title"] = .string(title) }
+        return try await call(connectionID: connectionID, method: "POST", path: "/api/session", body: body)
     }
     /// A successful write is insufficient: the service must report the requested
     /// selection before session creation or its first instruction can continue.

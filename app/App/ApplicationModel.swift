@@ -291,7 +291,7 @@ final class ApplicationModel {
     @ObservationIgnored
     private let localACPRuntimeResolver = LocalACPRuntimeResolver()
     @ObservationIgnored
-    let localUsageService = LocalUsageService()
+    private let localUsageService = LocalUsageService()
     @ObservationIgnored
     private var usageAnalyticsRequestID: UUID?
     @ObservationIgnored
@@ -2486,10 +2486,37 @@ final class ApplicationModel {
         }
     }
 
+    /// Reads the retained usage index without refreshing providers or credentials.
+    func recordedUsageSamples(from start: Date, to end: Date, limit: Int, offset: Int) async throws -> [UsageSample] {
+        try await localUsageService.recordedSamples(from: start, to: end, limit: limit, offset: offset)
+    }
+
+    func prepareCreatedOpenClawSession(_ target: WorkspaceConversationRecord,
+                                       configuration: WorkspaceSessionCreationConfiguration) async throws {
+        guard let store = dashboardStore, let agentID = target.agentID.flatMap(UUID.init(uuidString:)),
+              isOpenClawGatewayLinked(agentID: agentID) else {
+            throw WorkspaceToolError.invalid("Connect OpenClaw in this workspace's settings before creating its sessions.")
+        }
+        let descriptor = try? store.database.openClawGatewaySession(conversationID: target.id)
+        let key = descriptor?.sessionKey ?? "agent:main:wovenmatter:\(target.id)"
+        let directory: URL
+        if let path = configuration.nativeWorkingDirectory { directory = URL(fileURLWithPath: path) }
+        else if let workspaceID = target.remoteWorkspaceID, let workspace = remoteWorkspaces.configuration(id: workspaceID) {
+            directory = URL(fileURLWithPath: remoteWorkspaces.remoteWorkspaceRoot(for: workspace))
+        } else if let workspace = localACPWorkspaceLaunchConfiguration { directory = workspace.rootURL }
+        else { throw ApplicationModelError.localACPRuntimeUnavailable }
+        try await store.createOpenClawWorkspaceSession(agentID: agentID, sessionKey: key, cwd: directory, recover: true)
+        if descriptor == nil {
+            try await store.attachOpenClawGatewaySession(conversationID: target.id, agentID: agentID, sessionKey: key)
+        }
+        openClawGatewayConversationIDs.insert(target.id)
+    }
+
     func createLocalACPSession(
         runtimeKind: AgentRuntimeKind,
         requestedConversationID: UUID? = nil,
-        nativeWorkingDirectory: URL? = nil
+        nativeWorkingDirectory: URL? = nil,
+        initialTitle: String? = nil
     ) async -> String? {
         if runtimeKind == .hermes {
             do { try requireLocalHermesLink(openSettings: true) }
@@ -2499,7 +2526,7 @@ final class ApplicationModel {
             do {
                 guard let openCode else { throw OpenCodeError.message("OpenCode is still starting.") }
                 guard let workspace = localACPWorkspaceLaunchConfiguration else { throw ApplicationModelError.localACPRuntimeUnavailable }
-                let id = try await openCode.create(workspace: nativeWorkingDirectory ?? workspace.rootURL, requestedConversationID: requestedConversationID)
+                let id = try await openCode.create(workspace: nativeWorkingDirectory ?? workspace.rootURL, requestedConversationID: requestedConversationID, title: initialTitle)
                 await refreshWorkspace()
                 return id
             } catch { localRunError = error.localizedDescription; return nil }
@@ -2555,7 +2582,8 @@ final class ApplicationModel {
     func createRemoteACPSession(
         target: RemoteHarnessChatTarget,
         requestedConversationID: UUID? = nil,
-        nativeWorkingDirectory: URL? = nil
+        nativeWorkingDirectory: URL? = nil,
+        initialTitle: String? = nil
     ) async -> String? {
         guard remoteWorkspaces.isHarnessReady(
             target.harness.id,
@@ -2572,7 +2600,7 @@ final class ApplicationModel {
                 }
                 try await instance.connectLocal()
                 let directory = remoteWorkspaces.remoteWorkspaceRoot(for: target.configuration)
-                let id = try await instance.create(workspace: nativeWorkingDirectory ?? URL(fileURLWithPath: directory), requestedConversationID: requestedConversationID)
+                let id = try await instance.create(workspace: nativeWorkingDirectory ?? URL(fileURLWithPath: directory), requestedConversationID: requestedConversationID, title: initialTitle)
                 await refreshWorkspace()
                 return id
             }

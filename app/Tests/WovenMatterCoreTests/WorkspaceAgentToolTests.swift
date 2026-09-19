@@ -423,7 +423,7 @@ extension WorkspaceAgentToolTests {
       callerConversationID: caller, requestID: restoreID)
     #expect(replay.replayed == true && replay.document == nil && replay.revision == restored.revision)
     #expect(try db.readNoteForEditing(id: note) == latest)
-    let receipts = try db.lock.withLock { try db.historyRowsUnlocked("SELECT result_json FROM workspace_tool_mutations", values: []) }
+    let receipts = try db.withLock { try db.historyRowsUnlocked("SELECT result_json FROM workspace_tool_mutations", values: []) }
     #expect(receipts.allSatisfy { $0.objectValue?["result_json"]?.stringValue?.contains("document") == false })
     #expect(throws: (any Error).self) {
       try db.createNote(folderID: nil, title: "Different", callerConversationID: caller, requestID: creationID)
@@ -541,5 +541,84 @@ extension WorkspaceAgentToolTests {
     try reopened.saveToolSettings(settings)
     #expect(throws: (any Error).self) { try save(reopened, title: "Original", creating: true, request: creationID) }
     #expect(throws: (any Error).self) { try reopened.removeAgentCalendar(callerID: caller, id: id, requestID: removeID) }
+  }
+}
+
+extension WorkspaceAgentToolTests {
+  @Test(arguments: [false, true])
+  func creationConfigurationSurvivesReopenAndKeepsOriginalInheritance(remote: Bool) throws {
+    let (db, dir, source, other) = try fixture()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let folder = try db.createFolder(name: "Original folder")
+    let laterFolder = try db.createFolder(name: "Later folder")
+    try db.setSessionTools(.init(enabled: [.sessions, .notes]), sessionID: source)
+    let requestID = UUID().uuidString
+    let args = ["sessions", "create", "--title", "Planned title"]
+    let reservation = try db.reserveToolSessionCreation(sourceID: source, requestID: requestID,
+      arguments: args, purpose: "Implement", managed: true)
+    let target = try #require(reservation.objectValue?["target_id"]?.stringValue)
+    let proposed = WorkspaceSessionCreationConfiguration(runtimeKind: .pi, workspaceID: remote ? UUID() : nil,
+      folderID: folder, title: "Planned title", model: "original-model", thinking: "high",
+      nativeWorkingDirectory: "/workspace/original")
+    let saved = try db.saveToolSessionCreationConfiguration(requestID: requestID, sourceID: source, configuration: proposed)
+    #expect(saved.tools.enabled == [.sessions, .notes])
+    #expect(throws: (any Error).self) {
+      try db.saveToolSessionCreationConfiguration(requestID: requestID, sourceID: other, configuration: proposed)
+    }
+    try db.failToolSessionCreation(requestID: requestID)
+    try db.setSessionTools(.init(enabled: [.sessions, .calendar]), sessionID: source)
+    let reopened = try WorkspaceDatabase(url: dir.appending(path: "workspace.sqlite"))
+    let retry = try reopened.reserveToolSessionCreation(sourceID: source, requestID: requestID,
+      arguments: args, purpose: "Implement", managed: true)
+    let json = try #require(retry.objectValue?["configuration_json"]?.stringValue)
+    #expect(try JSONDecoder().decode(WorkspaceSessionCreationConfiguration.self, from: Data(json.utf8)) == saved)
+    let changed = WorkspaceSessionCreationConfiguration(runtimeKind: .codex, folderID: laterFolder,
+      title: "Different", model: "new-model", thinking: "low", nativeWorkingDirectory: "/workspace/later")
+    #expect(try reopened.saveToolSessionCreationConfiguration(requestID: requestID, sourceID: source, configuration: changed) == saved)
+    if let workspace = saved.workspaceID {
+      _ = try reopened.createRemoteACPSession(runtimeKind: saved.runtimeKind, remoteWorkspaceID: workspace,
+        remoteWorkspaceName: "Fixture remote", title: "Provider default", ownerDeviceID: UUID(), requestedConversationID: UUID(uuidString: target))
+    } else {
+      _ = try reopened.createLocalACPSession(runtimeKind: saved.runtimeKind, title: "Provider default",
+        ownerDeviceID: UUID(), requestedConversationID: UUID(uuidString: target))
+    }
+    let inserted = try #require(reopened.workspaceOverview().conversations.first { $0.id == target })
+    #expect(inserted.title == saved.title && inserted.folderID == folder && inserted.remoteWorkspaceID == saved.workspaceID)
+    #expect(try reopened.sessionTools(target) == saved.tools)
+    #expect(try reopened.sessionRelationship(target).createdBy == source)
+    let localTitle = try reopened.withLock {
+      try reopened.historyRowsUnlocked("SELECT title FROM desktop_local_acp_sessions WHERE conversation_id=?", values: [target])
+        .first?.objectValue?["title"]?.stringValue
+    }
+    #expect(localTitle == saved.title)
+    _ = try reopened.updateConversationTitleIfCurrent(id: target, expectedTitle: saved.title, title: "User renamed")
+    _ = try reopened.moveConversation(id: target, toFolderID: laterFolder)
+    try reopened.setSessionTools(.init(enabled: [.history]), sessionID: target)
+    try reopened.recoverToolSessionCreations()
+    _ = try reopened.reserveToolSessionCreation(sourceID: source, requestID: requestID, arguments: args, purpose: "Implement", managed: true)
+    try reopened.completeToolSessionCreation(requestID: requestID, sourceID: source)
+    let final = try #require(reopened.workspaceOverview().conversations.first { $0.id == target })
+    #expect(final.title == "User renamed" && final.folderID == laterFolder)
+    #expect(try reopened.sessionTools(target).enabled == [.history])
+  }
+
+  @Test func revocationDuringCreationRollsBackSessionAndInitialConfiguration() throws {
+    let (db, dir, source, _) = try fixture()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let requestID = UUID().uuidString
+    let reservation = try db.reserveToolSessionCreation(sourceID: source, requestID: requestID,
+      arguments: ["sessions", "create"], purpose: "Work", managed: true)
+    let target = try #require(reservation.objectValue?["target_id"]?.stringValue)
+    _ = try db.saveToolSessionCreationConfiguration(requestID: requestID, sourceID: source,
+      configuration: .init(runtimeKind: .pi, title: "Planned"))
+    try db.setSessionTools(.init(enabled: []), sessionID: source)
+    #expect(throws: WorkspaceToolError.disabled(.sessions)) {
+      try db.createLocalACPSession(runtimeKind: .pi, title: "Default", ownerDeviceID: UUID(), requestedConversationID: UUID(uuidString: target))
+    }
+    #expect(try !db.workspaceOverview().conversations.contains { $0.id == target })
+    #expect(try db.sessionRelationship(target).createdBy == nil)
+    try db.setSessionTools(.init(enabled: [.sessions]), sessionID: source)
+    _ = try db.createLocalACPSession(runtimeKind: .pi, title: "Default", ownerDeviceID: UUID(), requestedConversationID: UUID(uuidString: target))
+    #expect(try db.workspaceOverview().conversations.first { $0.id == target }?.title == "Planned")
   }
 }

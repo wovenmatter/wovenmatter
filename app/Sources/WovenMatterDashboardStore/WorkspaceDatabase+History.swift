@@ -433,7 +433,7 @@ extension WorkspaceDatabase {
   }
 
   public func noteAssetVersions(id: String) throws -> [NoteAssetVersion] {
-    try lock.withLock {
+    try withLock {
       let rows = try historyRowsUnlocked(
         "SELECT * FROM note_asset_versions WHERE note_id=? ORDER BY sequence DESC", values: [id])
       return rows.compactMap { value -> NoteAssetVersion? in
@@ -520,7 +520,7 @@ extension WorkspaceDatabase {
     try bind(requestID, at: 2, to: statement)
     try bind(messageID, at: 3, to: statement)
     try stepDone(statement)
-    guard sqlite3_changes(connection) == 1 else {
+    guard changedRowCountUnlocked == 1 else {
       throw WorkspaceDatabaseError.open("Unable to attach session attribution")
     }
   }

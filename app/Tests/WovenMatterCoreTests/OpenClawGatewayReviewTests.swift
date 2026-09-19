@@ -101,6 +101,54 @@ struct OpenClawGatewayReviewTests {
     await fixture.coordinator.shutdown()
   }
 
+  @Test func interruptedWorkspaceCreationAdoptsTheExistingSessionWithoutResettingItsDirectory() async throws {
+    let fixture = try ReviewGatewayFixture()
+    defer { fixture.remove() }
+    let key = "agent:main:wovenmatter:recovered"
+    await fixture.socket.setWorkspaceSession(key, row: .object([
+      "key": .string(key), "spawnedCwd": .string("/workspace/user-moved"), "displayName": .string("User renamed")
+    ]))
+    try await fixture.coordinator.createWorkspaceSession(agentID: fixture.agentID, sessionKey: key,
+      cwd: URL(fileURLWithPath: "/workspace/original"), recover: true)
+    #expect(await fixture.socket.creationParameters == nil)
+    #expect(await fixture.socket.requestMethods.filter { $0 == "sessions.describe" }.count == 1)
+    await fixture.coordinator.shutdown()
+  }
+
+  @Test func workspaceCreationRecoveryCreatesOnlyWhenTheSessionIsMissing() async throws {
+    let fixture = try ReviewGatewayFixture()
+    defer { fixture.remove() }
+    let key = "agent:main:wovenmatter:new-retry"
+    for _ in 0..<2 {
+      try await fixture.coordinator.createWorkspaceSession(agentID: fixture.agentID, sessionKey: key,
+        cwd: URL(fileURLWithPath: "/workspace/initial"), recover: true)
+    }
+    #expect(await fixture.socket.requestMethods.filter { $0 == "sessions.create" }.count == 1)
+    await fixture.socket.setWorkspaceSession(key, row: .object(["key": .string("wrong-session")]))
+    await #expect(throws: OpenClawGatewayClientError.malformedFrame) {
+      try await fixture.coordinator.createWorkspaceSession(agentID: fixture.agentID, sessionKey: key,
+        cwd: URL(fileURLWithPath: "/workspace/initial"), recover: true)
+    }
+    #expect(await fixture.socket.requestMethods.filter { $0 == "sessions.create" }.count == 1)
+    await fixture.coordinator.shutdown()
+  }
+
+  @Test func creationSelectionRequiresGatewayConfirmation() async throws {
+    let fixture = try ReviewGatewayFixture()
+    defer { fixture.remove() }
+    let id = try fixture.database.importOpenClawGatewaySession(agentID: fixture.agentID, session: fixture.session)
+    try await fixture.coordinator.confirmCreationSelection(conversationID: id, model: "xai/grok-4.6", thinking: "high")
+    // This gateway fixture acknowledges writes without changing its selection.
+    await #expect(throws: (any Error).self) {
+      try await fixture.coordinator.confirmCreationSelection(conversationID: id, model: "anthropic/claude-sonnet-4-6", thinking: "high")
+    }
+    await #expect(throws: (any Error).self) {
+      try await fixture.coordinator.confirmCreationSelection(conversationID: id, model: nil, thinking: "low")
+    }
+    #expect(await fixture.socket.requestMethods.filter { $0 == "sessions.patch" }.count == 3)
+    await fixture.coordinator.shutdown()
+  }
+
   @Test func providerIdentityRepairsHistoryDuplicateAndContentRevisions() async throws {
     let fixture = try ReviewGatewayFixture()
     defer { fixture.remove() }
@@ -390,7 +438,9 @@ private actor ReviewGatewaySocket: OpenClawGatewaySocket {
   var historyCalls = 0
   var requestMethods: [String] = []
   private var historyPayload: GatewayJSONValue?
+  private var workspaceSessions: [String: GatewayJSONValue] = [:]
   func setHistory(_ payload: GatewayJSONValue) { historyPayload = payload }
+  func setWorkspaceSession(_ key: String, row: GatewayJSONValue) { workspaceSessions[key] = row }
   private var frames: [Data] = []
   private var waiter: CheckedContinuation<Data, any Error>?
   private var closed = false
@@ -414,6 +464,8 @@ private actor ReviewGatewaySocket: OpenClawGatewaySocket {
     let payload: GatewayJSONValue
     switch method {
     case "connect": payload = .object(["protocol": .number(4)])
+    case "sessions.describe" where row["params"]?.objectValue?["key"]?.stringValue?.contains(":wovenmatter:") == true:
+      payload = .object(["session": workspaceSessions[row["params"]?.objectValue?["key"]?.stringValue ?? ""] ?? .null])
     case "sessions.describe": payload = .object(["session": .object([
       "model": .string("grok-4.6"), "modelProvider": .string("xai"),
       "thinkingLevel": .string("high"),
@@ -444,7 +496,11 @@ private actor ReviewGatewaySocket: OpenClawGatewaySocket {
       ]),
     ])])
     case "chat.history": payload = historyPayload ?? .object(["messages": .array([]), "sessionInfo": .object(["hasActiveRun": .bool(false)])])
-    case "sessions.create": payload = .object(["key": row["params"]?.objectValue?["key"] ?? .null, "entry": .object(["spawnedCwd": row["params"]?.objectValue?["cwd"] ?? .null])])
+    case "sessions.create":
+      let key = row["params"]?.objectValue?["key"]?.stringValue ?? ""
+      let entry: GatewayJSONValue = .object(["key": .string(key), "spawnedCwd": row["params"]?.objectValue?["cwd"] ?? .null])
+      workspaceSessions[key] = entry
+      payload = .object(["key": .string(key), "entry": entry])
     default: payload = .object(["messages": .array([]), "sessionInfo": .object(["hasActiveRun": .bool(false)])])
     }
     try push(.object(["type": .string("res"), "id": row["id"] ?? .null,

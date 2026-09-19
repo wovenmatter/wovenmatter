@@ -48,6 +48,10 @@ extension WorkspaceDatabase {
         """)
       try toolsExecuteUnlocked("INSERT OR IGNORE INTO workspace_tool_settings(id,value) VALUES(1,?)",
                                [try toolsJSON(WorkspaceToolSettings())])
+      let creationColumns = Set(try historyRowsUnlocked("PRAGMA table_info(workspace_session_creations)", values: []).compactMap { $0.objectValue?["name"]?.stringValue })
+      if !creationColumns.contains("configuration_json") {
+        try executeUnlocked("ALTER TABLE workspace_session_creations ADD COLUMN configuration_json TEXT")
+      }
       let relationshipColumns = Set(try historyRowsUnlocked("PRAGMA table_info(workspace_session_relationships)", values: []).compactMap { $0.objectValue?["name"]?.stringValue })
       for column in ["coordination_epoch", "coordination_since"] where !relationshipColumns.contains(column) {
         try executeUnlocked("ALTER TABLE workspace_session_relationships ADD COLUMN \(column) TEXT")
@@ -90,7 +94,7 @@ extension WorkspaceDatabase {
   }
 
   public func toolSettings() throws -> WorkspaceToolSettings {
-    try lock.withLock { try toolSettingsUnlocked() }
+    try withLock { try toolSettingsUnlocked() }
   }
 
   public func saveToolSettings(_ settings: WorkspaceToolSettings) throws {
@@ -109,7 +113,7 @@ extension WorkspaceDatabase {
   }
 
   public func sessionTools(_ id: String) throws -> WorkspaceSessionTools {
-    try lock.withLock { try sessionToolsUnlocked(id) }
+    try withLock { try sessionToolsUnlocked(id) }
   }
 
   func sessionToolsUnlocked(_ id: String) throws -> WorkspaceSessionTools {
@@ -141,7 +145,7 @@ extension WorkspaceDatabase {
   }
 
   public func requireTool(_ group: WorkspaceToolGroup, sessionID: String, writesCalendar: Bool = false) throws {
-    try lock.withLock { try requireToolUnlocked(group, sessionID: sessionID, writesCalendar: writesCalendar) }
+    try withLock { try requireToolUnlocked(group, sessionID: sessionID, writesCalendar: writesCalendar) }
   }
 
   func requireToolUnlocked(_ group: WorkspaceToolGroup, sessionID: String, writesCalendar: Bool = false) throws {
@@ -173,7 +177,7 @@ extension WorkspaceDatabase {
   }
 
   public func requireTranscriptAccess(sourceID: String, targetID: String) throws {
-    try lock.withLock { try requireTranscriptAccessUnlocked(sourceID: sourceID, targetID: targetID) }
+    try withLock { try requireTranscriptAccessUnlocked(sourceID: sourceID, targetID: targetID) }
   }
 
   func requireTranscriptAccessUnlocked(sourceID: String, targetID: String) throws {
@@ -187,13 +191,13 @@ extension WorkspaceDatabase {
   }
 
   public func sessionRelationships() throws -> [WorkspaceSessionRelationship] {
-    try lock.withLock {
+    try withLock {
       try historyRowsUnlocked("SELECT * FROM workspace_session_relationships", values: []).map(relationshipFromRow)
     }
   }
 
   public func sessionRelationship(_ id: String) throws -> WorkspaceSessionRelationship {
-    try lock.withLock { try relationshipUnlocked(id) }
+    try withLock { try relationshipUnlocked(id) }
   }
 
   func relationshipUnlocked(_ id: String) throws -> WorkspaceSessionRelationship {

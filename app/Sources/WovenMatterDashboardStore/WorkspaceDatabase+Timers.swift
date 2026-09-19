@@ -5,7 +5,7 @@ import WovenMatterClient
 extension WorkspaceDatabase {
   /// The app is the scheduler. No timer is installed with a provider or operating system.
   public func sessionTimers(sessionID: String? = nil) throws -> [WorkspaceSessionTimer] {
-    try lock.withLock { try timersUnlocked(sessionID: sessionID) }
+    try withLock { try timersUnlocked(sessionID: sessionID) }
   }
 
   private func timersUnlocked(sessionID: String? = nil) throws -> [WorkspaceSessionTimer] {
@@ -117,7 +117,7 @@ extension WorkspaceDatabase {
 
   /// Revalidate after an async wait: a pause, deletion or capability revocation wins.
   public func isTimerOccurrenceActive(id: String, deliveryID: String) throws -> Bool {
-    try lock.withLock {
+    try withLock {
       guard let timer = try timersUnlocked().first(where: { $0.id == id }), !timer.isPaused,
             timer.pendingDeliveryID == deliveryID else { return false }
       return try sessionToolsUnlocked(timer.sessionID).enabled.contains(.timers)
