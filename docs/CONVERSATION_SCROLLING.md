@@ -4,7 +4,7 @@ Rapid scrolling through a retained eight-message conversation (approximately 27,
 
 ## Cause and change
 
-The outer lazy stack treated a complete assistant reply as one child. Realizing a long reply required a large SwiftUI layout and accessibility-focus subtree at once. Native CPU traces showed repeated 119–137 ms main-actor scheduling gaps at the same scroll offsets, including up to 76 ms of internal focus-responder traversal in one gap. There were no incoming accessibility RPC samples, database work, or periodic tool-refresh samples in those stalls.
+The outer lazy stack treated a complete assistant reply as one child. Realizing a long reply required a large SwiftUI layout and accessibility-focus subtree at once. Native CPU traces showed repeated 119–137 ms main-actor scheduling gaps at the same scroll offsets, including up to 76 ms of internal focus-responder traversal in one gap. Those stalls contained no samples attributable to incoming accessibility RPCs, database work, or periodic tool refreshes.
 
 The conversation now exposes groups of at most four existing top-level Markdown blocks as direct lazy children. Lists, quotes, code fences and tables remain intact and use the existing renderer. Group identities derive from the owning message and starting block ordinal. The first group keeps the original message anchor; work appears once, media remains ordered, and a dedicated stable changed-files row retains disclosure/diff state as streaming appends groups. No text is reparsed by the layout planner.
 
