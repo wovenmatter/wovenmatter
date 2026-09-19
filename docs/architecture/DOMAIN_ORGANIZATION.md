@@ -64,10 +64,15 @@ Its ApplicationModel agent-tools operations stay independent of usage. Its
 and `+ToolQueries` filenames do not collide with this map.
 
 During integration, keep PR61's feature additions, then place edits to existing
-methods using the map below. Its calls to the old exposed `lock.withLock` and
-`sqlite3_changes(connection)` should use `withLock` and
-`changedRowCountUnlocked`; helpers that PR61 newly needs must be internal at the
-owning domain, rather than copied. Its schema additions belong in `+Schema`.
+methods using the map below. The shared contract is a private lock/connection
+accessed through `withLock` and `changedRowCountUnlocked`. PR61 is adopting that
+same contract; keep one implementation of each primitive when combining the
+branches. Any calls from older revisions to `lock.withLock` or
+`sqlite3_changes(connection)` must use those entry points. Helpers that PR61
+newly needs must be internal at the owning domain, rather than copied. Its
+schema additions belong in `+Schema`. Verify these adaptations against the final
+PR61 head when integrating; the inspected revision above is a source reference,
+not a pinned dependency.
 In particular, keep PR61's `adoptReservedSessionOriginUnlocked` call **after** the
 local/remote ACP session-row insertion when resolving those method edits.
 
@@ -75,6 +80,9 @@ For the performance PR, apply changes to conversation read/projection methods
 in `+Conversations` and indexes in `+Schema`. ApplicationModel's conversation
 refresh/cache paths retain their names and bodies. This PR carries no rendering,
 refresh policy, indexing, provider or transport optimizations.
+
+Validation commands, results and the real ApplicationModel observation probe
+are recorded in [DOMAIN_ORGANIZATION_VALIDATION.md](DOMAIN_ORGANIZATION_VALIDATION.md).
 
 ## Exact symbol move map
 
