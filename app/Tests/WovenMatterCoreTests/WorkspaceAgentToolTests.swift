@@ -245,6 +245,9 @@ struct WorkspaceAgentToolTests {
       try db.saveSessionTimer(timer, callerID: a)
       let fire = try #require(db.dueSessionTimers(now: now.addingTimeInterval(3_600)).first(where: { $0.id == timer.id }))
       let delivery = try #require(fire.pendingDeliveryID)
+      _ = try db.reserveToolDelivery(sourceID: a, targetID: a, text: timer.instruction, requestID: delivery, kind: .timer)
+      _ = try db.claimToolDelivery(id: delivery)
+      try db.setToolDeliveryStatus(id: delivery, status: "accepted")
       try db.finishTimerOccurrence(id: timer.id, deliveryID: delivery, now: now.addingTimeInterval(3_600))
       let final = try #require(db.sessionTimers(sessionID: a).first(where: { $0.id == timer.id }))
       #expect(final.isPaused == (interval == nil))
@@ -286,11 +289,64 @@ struct WorkspaceAgentToolTests {
       return count
     }
     #expect(claims == 1)
+    try db.markToolDeliveryTransportStarted(id: id)
     let reopened = try WorkspaceDatabase(url: dir.appending(path: "workspace.sqlite"))
     try reopened.recoverToolDeliveries()
     #expect(try reopened.sessionDeliveries(sessionID: a).first?.status == "uncertain")
     #expect(try reopened.claimToolDelivery(id: id) == nil)
     #expect(throws: (any Error).self) { try db.reserveToolDelivery(sourceID: b, targetID: a, text: "Do the work", requestID: id) }
+  }
+
+  @Test func timerPreparationRetriesWithBackoffButUnknownAcceptanceKeepsTheOccurrence() throws {
+    let (db, dir, a, _) = try fixture()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let now = Date(timeIntervalSince1970: 1_000)
+    let timer = WorkspaceSessionTimer(sessionID: a, instruction: "Check", nextFireAt: now)
+    try db.saveSessionTimer(timer, callerID: a)
+    let occurrence = try #require(try db.dueSessionTimers(now: now).first)
+    let id = try #require(occurrence.pendingDeliveryID)
+    _ = try db.reserveToolDelivery(sourceID: a, targetID: a, text: timer.instruction, requestID: id, kind: .timer)
+    _ = try #require(try db.claimToolDelivery(id: id, now: now))
+    try db.failToolDeliveryAttempt(id: id, now: now) // offline before input acceptance
+    #expect(try db.toolDelivery(id: id)?.status == "queued")
+    #expect(try db.claimToolDelivery(id: id, now: now.addingTimeInterval(29)) == nil)
+    try db.finishTimerOccurrence(id: timer.id, deliveryID: id, now: now)
+    #expect(try db.sessionTimers().first == occurrence)
+
+    let reopened = try WorkspaceDatabase(url: dir.appending(path: "workspace.sqlite"))
+    _ = try #require(try reopened.claimToolDelivery(id: id, now: now.addingTimeInterval(30)))
+    try reopened.recoverToolDeliveries() // exit during safe preparation
+    #expect(try reopened.toolDelivery(id: id)?.status == "queued")
+    _ = try #require(try reopened.claimToolDelivery(id: id, now: now.addingTimeInterval(31)))
+    try reopened.markToolDeliveryTransportStarted(id: id)
+    try reopened.failToolDeliveryAttempt(id: id, now: now.addingTimeInterval(31))
+    #expect(try reopened.toolDelivery(id: id)?.status == "uncertain")
+    try reopened.recoverToolDeliveries()
+    #expect(try reopened.claimToolDelivery(id: id, now: now.addingTimeInterval(100)) == nil)
+    try reopened.finishTimerOccurrence(id: timer.id, deliveryID: id, now: now)
+    #expect(try reopened.sessionTimers().first == occurrence)
+    try reopened.setToolDeliveryStatus(id: id, status: "accepted") // confirmed by native reconciliation
+    try reopened.finishTimerOccurrence(id: timer.id, deliveryID: id, now: now)
+    #expect(try reopened.sessionTimers().first?.isPaused == true)
+    #expect(try reopened.sessionTimers().first?.pendingDeliveryID == nil)
+  }
+
+  @Test func acceptanceWinsLateFailureAndRevocationCannotEraseAnUncertainSend() throws {
+    let (db, dir, a, b) = try fixture()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let accepted = UUID().uuidString.lowercased(), submitted = UUID().uuidString.lowercased()
+    for id in [accepted, submitted] {
+      _ = try db.reserveToolDelivery(sourceID: a, targetID: b, text: "Check", requestID: id)
+      _ = try db.claimToolDelivery(id: id)
+    }
+    try db.setToolDeliveryStatus(id: accepted, status: "accepted")
+    try db.markToolDeliveryTransportStarted(id: submitted)
+    try db.setSessionTools(.init(enabled: []), sessionID: a)
+    try db.failToolDeliveryAttempt(id: accepted)
+    try db.failToolDeliveryAttempt(id: submitted)
+    #expect(try db.toolDelivery(id: accepted)?.status == "accepted")
+    #expect(try db.toolDelivery(id: submitted)?.status == "uncertain")
+    #expect(try db.claimToolDelivery(id: submitted) == nil)
   }
 
   @Test func revocationAfterClaimPreventsDispatchAndDisabledQueuedWorkIsCancelled() throws {

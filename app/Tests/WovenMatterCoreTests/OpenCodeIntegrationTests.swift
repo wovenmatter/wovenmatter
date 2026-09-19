@@ -125,9 +125,16 @@ struct OpenCodeIntegrationTests {
         #expect(fixture.lastCommand["text"].text == "current changes")
         #expect(fixture.lastCommand["id"].isNull)
         #expect(fixture.lastCommand["delivery"].text == "steer")
+        #expect(try database.toolDelivery(id: deliveryID)?.status == "accepted")
         #expect(try database.openCodeUncertainSubmissions(conversationID: id).isEmpty)
         fixture.loseCommandResponse = true
-        await #expect(throws: OpenCodeError.self) { try await coordinator.command(link, name: "review", input: .init(text: "again")) }
+        let uncertainID = UUID().uuidString.lowercased()
+        _ = try database.reserveToolDelivery(sourceID: source, targetID: id, text: "again", requestID: uncertainID)
+        _ = try database.claimToolDelivery(id: uncertainID)
+        await #expect(throws: OpenCodeError.self) { try await coordinator.command(link, name: "review", input: .init(text: "again", historyDeliveryID: uncertainID)) }
+        try database.failToolDeliveryAttempt(id: uncertainID)
+        #expect(try database.toolDelivery(id: uncertainID)?.status == "uncertain")
+        #expect(try database.claimToolDelivery(id: uncertainID) == nil)
         #expect(fixture.commandCount == 2)
         #expect(fixture.promptCount == 0)
         #expect(try database.openCodeUncertainSubmissions(conversationID: id).isEmpty)
@@ -409,8 +416,28 @@ struct OpenCodeIntegrationTests {
         try database.attachOpenCodeSession(link)
         let session = fixtureSession()
         let coordinator = OpenCodeSessionCoordinator(database: database, clientFactory: { OpenCodeHTTPClient(connection: $0, session: session) })
+        let timer = WorkspaceSessionTimer(sessionID: id, instruction: "unknown", nextFireAt: .distantPast)
+        try database.saveSessionTimer(timer, callerID: id)
+        let pending = try #require(try database.dueSessionTimers().first?.pendingDeliveryID)
+        _ = try database.reserveToolDelivery(sourceID: id, targetID: id, text: timer.instruction, requestID: pending, kind: .timer)
+        _ = try database.claimToolDelivery(id: pending)
+        let now = Date()
+        // A disconnected native client fails before HTTP and keeps the one-shot.
+        await #expect(throws: OpenCodeError.self) { try await coordinator.prompt(link, input: .init(text: timer.instruction, historyDeliveryID: pending)) }
+        try database.failToolDeliveryAttempt(id: pending, now: now)
+        try database.finishTimerOccurrence(id: timer.id, deliveryID: pending)
+        #expect(try database.toolDelivery(id: pending)?.status == "queued")
+        #expect(try database.sessionTimers().first?.pendingDeliveryID == pending)
+        #expect(fixture.promptCount == 0)
         try await coordinator.connect(connection())
-        await #expect(throws: OpenCodeError.self) { try await coordinator.prompt(link, input: .init(text: "unknown")) }
+        _ = try #require(try database.claimToolDelivery(id: pending, now: now.addingTimeInterval(30)))
+        await #expect(throws: OpenCodeError.self) { try await coordinator.prompt(link, input: .init(text: timer.instruction, historyDeliveryID: pending)) }
+        try database.failToolDeliveryAttempt(id: pending)
+        try database.finishTimerOccurrence(id: timer.id, deliveryID: pending)
+        #expect(try database.toolDelivery(id: pending)?.status == "uncertain")
+        #expect(try database.sessionTimers().first?.pendingDeliveryID == pending)
+        #expect(try database.sessionTimers().first?.isPaused == false)
+        #expect(try database.claimToolDelivery(id: pending) == nil)
         await #expect(throws: OpenCodeError.self) { try await coordinator.prompt(link, input: .init(text: "do not duplicate")) }
         #expect(fixture.promptCount == 1)
         #expect(try database.openCodeUncertainSubmissions(conversationID: id).count == 1)

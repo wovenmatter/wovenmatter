@@ -373,18 +373,22 @@ public actor OpenCodeSessionCoordinator {
         if let command {
             // Native commands return 204 and do not accept a caller message ID.
             // Never journal or retry them as idempotent prompt submissions.
-            if let deliveryID = input.historyDeliveryID { try database.validateClaimedToolDelivery(id: deliveryID) }
             var commandPayload: [String: OpenCodeValue] = ["command": .string(command),
                 "text": .string(deliveryText), "files": .array(files)]
             if input.historyDeliveryID != nil { commandPayload["delivery"] = .string("steer") }
             let payload = OpenCodeValue.object(commandPayload)
+            if let deliveryID = input.historyDeliveryID { try database.markToolDeliveryTransportStarted(id: deliveryID) }
             do {
                 _ = try await client.call("POST", "/api/session/\(OpenCodeHTTPClient.segment(link.sessionID))/command", body: payload)
             } catch {
-                if case OpenCodeError.http(let code) = error, [400, 401, 403, 404, 422].contains(code) { throw error }
+                if case OpenCodeError.http(let code) = error, [400, 401, 403, 404, 422].contains(code) {
+                    if let deliveryID = input.historyDeliveryID { try database.setToolDeliveryStatus(id: deliveryID, status: "failed") }
+                    throw error
+                }
                 try? await refresh(link)
                 throw OpenCodeError.message("OpenCode did not confirm the command outcome. Check the session before running it again; Woven Matter has not retried it.")
             }
+            if let deliveryID = input.historyDeliveryID { try database.setToolDeliveryStatus(id: deliveryID, status: "accepted") }
             try? await refresh(link)
             return
         }
@@ -399,6 +403,7 @@ public actor OpenCodeSessionCoordinator {
         } catch {
             if case OpenCodeError.http(let code) = error, [400, 401, 403, 404, 422].contains(code) {
                 try database.saveOpenCodeSubmission(conversationID: link.conversationID, id: id, payload: payload, status: "rejected")
+                if let deliveryID = input.historyDeliveryID { try database.setToolDeliveryStatus(id: deliveryID, status: "failed") }
                 throw error
             }
             try database.saveOpenCodeSubmission(conversationID: link.conversationID, id: id, payload: payload, status: "uncertain")

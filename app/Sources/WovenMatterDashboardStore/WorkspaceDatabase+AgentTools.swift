@@ -68,7 +68,8 @@ extension WorkspaceDatabase {
         """)
       let columns = Set(try historyRowsUnlocked("PRAGMA table_info(workspace_session_deliveries)", values: []).compactMap { $0.objectValue?["name"]?.stringValue })
       for (name, type) in [("kind", "TEXT NOT NULL DEFAULT 'message'"), ("purpose", "TEXT"),
-                           ("target_title", "TEXT"), ("target_harness", "TEXT"), ("target_model", "TEXT"), ("event_key", "TEXT")] where !columns.contains(name) {
+                           ("target_title", "TEXT"), ("target_harness", "TEXT"), ("target_model", "TEXT"), ("event_key", "TEXT"),
+                           ("transport_started", "INTEGER NOT NULL DEFAULT 1"), ("retry_after", "REAL")] where !columns.contains(name) {
         try executeUnlocked("ALTER TABLE workspace_session_deliveries ADD COLUMN \(name) \(type)")
       }
       try executeUnlocked("CREATE UNIQUE INDEX IF NOT EXISTS workspace_delivery_event ON workspace_session_deliveries(event_key) WHERE event_key IS NOT NULL")
