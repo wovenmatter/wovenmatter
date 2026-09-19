@@ -710,7 +710,68 @@ struct OpenCodeIntegrationTests {
         await coordinator.shutdown()
     }
 
+    @Test func stagedRemoteFilePromptUsesWorkspaceFileURI() async throws {
+        let remote = try await remoteFixture(title: "Staged")
+        defer { remote.cleanup() }
+        let remotePath = "/home/.woven-matter/.wovenmatter/attachments/h/notes.txt"
+        try await remote.coordinator.prompt(remote.link,
+            input: .init(text: "Read notes", attachments: [.file(remote.draft(remotePath: remotePath))]))
+        #expect(remote.fixture.promptCount == 1)
+        let files = remote.fixture.lastPrompt["files"].array
+        #expect(files.count == 1)
+        #expect(files.first?["uri"].text == "file://" + remotePath)
+        #expect(files.first?["name"].text == "notes.txt")
+        await remote.coordinator.shutdown()
+    }
+
+    @Test func unstagedRemoteFilePromptThrowsBeforeSubmit() async throws {
+        let remote = try await remoteFixture(title: "Unstaged")
+        defer { remote.cleanup() }
+        await #expect(throws: OpenCodeError.self) {
+            try await remote.coordinator.prompt(remote.link,
+                input: .init(text: "Read notes", attachments: [.file(remote.draft(remotePath: nil))]))
+        }
+        #expect(remote.fixture.promptCount == 0)
+        #expect(remote.fixture.lastPrompt.isNull)
+        await remote.coordinator.shutdown()
+    }
+
+    /// A connected coordinator whose link belongs to a remote workspace.
+    private struct RemoteFixture {
+        let fixture: OpenCodeFixture
+        let coordinator: OpenCodeSessionCoordinator
+        let link: OpenCodeSessionLink
+        let directory: URL
+        func draft(remotePath: String?) -> AgentFileAttachmentDraft {
+            AgentFileAttachmentDraft(kind: .file, fileName: "notes.txt", mimeType: "text/plain",
+                sizeBytes: 5, contentHash: "h", localURL: directory.appending(path: "notes.txt"), remotePath: remotePath)
+        }
+        func cleanup() { try? FileManager.default.removeItem(at: directory) }
+    }
+
+    private func remoteFixture(title: String) async throws -> RemoteFixture {
+        let fixture = OpenCodeFixture(); FixtureProtocol.fixture = fixture
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try Data("notes".utf8).write(to: directory.appending(path: "notes.txt"))
+        let workspaceID = UUID()
+        let identity = "remote-workspace:" + workspaceID.uuidString.lowercased()
+        let database = try WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+        let id = try database.createRemoteACPSession(runtimeKind: .opencode, remoteWorkspaceID: workspaceID,
+            remoteWorkspaceName: "Remote", title: title, ownerDeviceID: UUID(),
+            openCodeAssociation: (identity, "ses_fixture"))
+        let session = fixtureSession()
+        let coordinator = OpenCodeSessionCoordinator(database: database, clientFactory: { OpenCodeHTTPClient(connection: $0, session: session) })
+        try await coordinator.connect(try remoteConnection(identity: identity))
+        return RemoteFixture(fixture: fixture, coordinator: coordinator,
+            link: OpenCodeSessionLink(conversationID: id, connectionID: identity, sessionID: "ses_fixture"), directory: directory)
+    }
+
     private func connection() throws -> OpenCodeConnection { try .init(identity: "fixture", url: URL(string: "http://fixture.invalid")!, password: "fixture") }
+    private func remoteConnection(identity: String) throws -> OpenCodeConnection {
+        try .init(identity: identity, url: URL(string: "http://127.0.0.1")!, password: "",
+            servicePathPrefix: "/v1/workspace-instances/opencode", bearerToken: "fixture-token")
+    }
     private func fixtureSession() -> URLSession {
         let config = URLSessionConfiguration.ephemeral; config.protocolClasses = [FixtureProtocol.self]
         return URLSession(configuration: config)
@@ -765,7 +826,9 @@ private final class OpenCodeFixture: @unchecked Sendable {
     }
     func respond(_ request: URLRequest) throws -> (Int, OpenCodeValue) {
         try lock.withLock {
-            let path = request.url!.path
+            var path = request.url!.path
+            let prefix = "/v1/workspace-instances/opencode"
+            if path.hasPrefix(prefix) { path.removeFirst(prefix.count) }
             if path.hasSuffix("/log") { streamTimeout = request.timeoutInterval; return (200, [:]) }
             if path == "/api/health" { return (200, ["healthy": .bool(true), "version": .string(version), "pid": .number(Double(ProcessInfo.processInfo.processIdentifier))]) }
             if path == "/api/session/active" { return (200, ["data": [:]]) }

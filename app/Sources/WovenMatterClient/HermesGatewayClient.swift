@@ -41,9 +41,7 @@ public actor HermesGatewayClient {
 
     public init(launch: LocalACPRuntimeLaunchConfiguration) {
         self.launch = launch
-        if let encoded=launch.environment["WOVENMATTER_HERMES_CONNECTION"], let bytes=Data(base64Encoded:encoded) {
-            self.remoteConnection = try? JSONDecoder().decode(HermesGatewayConnection.self,from:bytes)
-        }
+        self.remoteConnection = Self.remoteConnection(in: launch)
         self.connectTransport = { scoped in
             let connection = try await HermesGatewayService.shared.ensure(launch: scoped)
             return (connection.identityHome, HermesGatewayRPC(connection: connection, historyRecorder: scoped.historyRecorder))
@@ -52,7 +50,14 @@ public actor HermesGatewayClient {
 
     init(launch: LocalACPRuntimeLaunchConfiguration, transport: any HermesGatewayTransport, home: String) {
         self.launch = launch
+        self.remoteConnection = Self.remoteConnection(in: launch)
         self.connectTransport = { _ in (home, transport) }
+    }
+
+    private static func remoteConnection(in launch: LocalACPRuntimeLaunchConfiguration) -> HermesGatewayConnection? {
+        guard let encoded = launch.environment["WOVENMATTER_HERMES_CONNECTION"],
+              let bytes = Data(base64Encoded: encoded) else { return nil }
+        return try? JSONDecoder().decode(HermesGatewayConnection.self, from: bytes)
     }
 
     public static func identity(home: String, storedID: String, imported: Bool = false) -> String {
@@ -282,22 +287,12 @@ public actor HermesGatewayClient {
         var stagedImages: [String] = []
         do {
             for file in input.files {
-                var path = file.localURL.resolvingSymlinksInPath().path
-                if let connection=remoteConnection {
-                    let bytes=try Data(contentsOf:file.localURL)
-                    guard bytes.count <= 16 * 1024 * 1024 else { throw HermesGatewayError.message("Remote Hermes attachments must be 16 MB or smaller.") }
-                    let dataURL="data:" + file.mimeType + ";base64," + bytes.base64EncodedString()
-                    if file.kind == .image {
-                        let uploaded=try await HermesSessionHistory.fetch(connection:connection,path:"/api/chat/image-upload",method:"POST",body:["filename":.string(file.fileName),"data_url":.string(dataURL)])
-                        guard let uploadedPath=uploaded["path"].string,uploadedPath.hasPrefix(connection.home + "/images/") else { throw HermesGatewayError.message("Hermes did not confirm the uploaded image path.") }
-                        path=uploadedPath
-                    } else {
-                        let basename=URL(fileURLWithPath:file.fileName).lastPathComponent
-                        path=connection.home + "/wovenmatter-attachments/" + UUID().uuidString + "-" + basename
-                        let uploaded=try await HermesSessionHistory.fetch(connection:connection,path:"/api/files/upload",method:"POST",body:["path":.string(path),"data_url":.string(dataURL),"overwrite":.bool(false)])
-                        guard uploaded["ok"].bool else { throw HermesGatewayError.message("Hermes could not upload the attachment.") }
-                    }
+                // Hermes opens the path itself, so it must be where Hermes runs:
+                // the staged container path for a remote workspace.
+                if remoteConnection != nil, file.remotePath == nil {
+                    throw HermesGatewayError.message("\(file.fileName) was not staged in the remote workspace.")
                 }
+                let path = file.remotePath ?? file.localURL.resolvingSymlinksInPath().path
                 let method = file.kind == .image ? "image.attach" : "file.attach"
                 var params: HermesValue = ["session_id": .string(sessionID), "path": .string(path)]
                 if file.kind == .image { stagedImages.append(path) }

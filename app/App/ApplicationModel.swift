@@ -2188,7 +2188,8 @@ final class ApplicationModel {
                 if isOpenClawGatewayConversation(conversation.id) {
                     _ = try await dashboardStore.sendActiveOpenClawGatewayPrompt(conversationID: conversation.id, input: normalized, deliveryContent: deliveryContent)
                 } else {
-                    _ = try await dashboardStore.sendActiveLocalACPPrompt(conversationID: conversation.id, input: normalized, deliveryContent: deliveryContent)
+                    let staged = try await remoteWorkspaces.stagingFiles(of: normalized, in: conversation.remoteWorkspaceID)
+                    _ = try await dashboardStore.sendActiveLocalACPPrompt(conversationID: conversation.id, input: staged, deliveryContent: deliveryContent)
                 }
             } else if isOpenClawGatewayConversation(conversation.id) {
                 _ = try await acceptOpenClawGatewayMessage(conversation: conversation, input: normalized,
@@ -2308,16 +2309,12 @@ final class ApplicationModel {
         guard isBuzzWorkspaceSession || (launch != nil && workspace != nil) else {
             throw ApplicationModelError.localACPRuntimeUnavailable
         }
-        if conversation.remoteWorkspaceID != nil, !input.files.isEmpty {
-            throw AgentMessageAttachmentError.unsupportedForAgent(
-                "Remote workspace file upload is not available yet. Add the file to the remote workspace first."
-            )
-        }
         if runtimeKind == .pi, !input.files.isEmpty {
             throw AgentMessageAttachmentError.unsupportedForAgent(
                 "Pi RPC does not expose a file attachment contract yet."
             )
         }
+        let input = try await remoteWorkspaces.stagingFiles(of: input, in: conversation.remoteWorkspaceID)
         return try await store.acceptLocalACPPrompt(
             conversationID: conversation.id,
             input: input,
