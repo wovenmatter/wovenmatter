@@ -1,12 +1,14 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
+import { EventEmitter } from 'node:events'
+import { PassThrough, Writable } from 'node:stream'
 import { createHash } from 'node:crypto'
 import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { connect, createServer as createNetServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
-import { downloadInstallerSource } from '../src/server.mjs'
+import { authenticationInput, authenticationDeadline, downloadInstallerSource, probeHarnessTransport } from '../src/server.mjs'
 
 const repositoryRoot = resolve(import.meta.dirname, '../..')
 const catalogPath = resolve(repositoryRoot, 'harnesses/catalog.json')
@@ -131,6 +133,45 @@ test('installer download aborts a stalled request at its deadline', async () => 
   assert.equal(signal.aborted, true)
 })
 
+test('authentication deadline escalates only a live process and preserves timeout outcome', context => {
+  context.mock.timers.enable({ apis: ['setTimeout'] })
+  const child = new EventEmitter()
+  child.exitCode = null
+  child.signalCode = null
+  const signals = []
+  child.kill = signal => signals.push(signal)
+  const session = { child, timedOut: false, error: null }
+  authenticationDeadline(session)
+  context.mock.timers.tick(30 * 60_000 - 1)
+  assert.deepEqual(signals, [])
+  context.mock.timers.tick(1)
+  assert.equal(session.timedOut, true)
+  assert.equal(session.error, 'Sign-in timed out.')
+  assert.deepEqual(signals, ['SIGTERM'])
+  context.mock.timers.tick(5_000)
+  assert.deepEqual(signals, ['SIGTERM', 'SIGKILL'])
+})
+
+for (const outcome of ['success', 'signal', 'error', 'timeout-then-success']) {
+  test(`authentication deadline clears after ${outcome}`, context => {
+    context.mock.timers.enable({ apis: ['setTimeout'] })
+    const child = new EventEmitter()
+    child.exitCode = null
+    child.signalCode = null
+    const signals = []
+    child.kill = signal => signals.push(signal)
+    const session = { child, timedOut: false, error: null }
+    authenticationDeadline(session)
+    if (outcome === 'timeout-then-success') context.mock.timers.tick(30 * 60_000)
+    if (outcome === 'signal') child.signalCode = 'SIGTERM'
+    else if (outcome !== 'error') child.exitCode = 0
+    child.emit(outcome === 'error' ? 'error' : 'exit')
+    context.mock.timers.tick(31 * 60_000)
+    assert.deepEqual(signals, outcome === 'timeout-then-success' ? ['SIGTERM'] : [])
+    assert.equal(session.timedOut, outcome === 'timeout-then-success')
+  })
+}
+
 test('service authentication exposes the reviewed harness catalog', async (context) => {
   const fixture = await temporaryFixture(context, 'wovenmatter-service-')
   const service = await startService({
@@ -142,6 +183,9 @@ test('service authentication exposes the reviewed harness catalog', async (conte
   context.after(() => service.child.kill('SIGTERM'))
 
   assert.equal((await fetch(`${service.url}/v1/health`)).status, 401)
+  for (const wrong of ['Bearer service-toke', 'Bearer service-token-longer', 'Bearer Service-Token', 'Basic service-token']) {
+    assert.equal((await fetch(`${service.url}/v1/health`, { headers: { authorization: wrong } })).status, 401)
+  }
   const headers = { authorization: 'Bearer service-token' }
   const health = await fetch(`${service.url}/v1/health`, { headers })
   assert.equal((await health.json()).status, 'ready')
@@ -167,6 +211,87 @@ test('service authentication exposes the reviewed harness catalog', async (conte
     !['adapterInstalled', 'cliInstalled', 'installCommand', 'installSource', 'operation']
       .some((field) => Object.hasOwn(value, field))
   ))
+})
+
+test('authorization input contains asynchronous pipe failures and observes later stream errors', async () => {
+  const failure = Object.assign(new Error('write EPIPE'), { code: 'EPIPE' })
+  const input = new Writable({ write(_chunk, _encoding, callback) { callback(failure) } })
+  const session = { child: { stdin: input }, method: { acceptsInput: true }, state: 'waiting_for_user' }
+  const submit = authenticationInput(session)
+  await assert.rejects(submit(async () => ({ code: 'fixture-code' })), { statusCode: 409, message: 'authentication_session_not_active' })
+  // Writable emits its error after the write callback. Neither event may crash
+  // the service, and the actual failure remains recorded for session settlement.
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(session.inputError, failure)
+  assert.equal(session.error, 'Sign-in input is unavailable.')
+  input.emit('error', failure)
+  await assert.rejects(submit(async () => ({ code: 'again' })), { statusCode: 409 })
+})
+
+for (const outcome of ['exit', 'cancel', 'timeout']) {
+  test(`authorization input rechecks ${outcome} after the request body arrives`, async () => {
+    let writes = 0
+    const input = new Writable({ write(_chunk, _encoding, callback) { writes++; callback() } })
+    const session = { child: { stdin: input }, method: { acceptsInput: true }, state: 'waiting_for_user' }
+    const submit = authenticationInput(session)
+    let finishBody
+    const pending = submit(() => new Promise(resolve => { finishBody = resolve }))
+    if (outcome === 'exit') { session.child = null; session.state = 'failed' }
+    if (outcome === 'cancel') session.cancelRequested = true
+    if (outcome === 'timeout') { session.timedOut = true; session.error = 'Sign-in timed out.' }
+    finishBody({ code: 'fixture-code' })
+    await assert.rejects(pending, { statusCode: 409, message: 'authentication_session_not_active' })
+    assert.equal(writes, 0)
+    input.destroy()
+  })
+}
+
+test('authorization input reports acceptance only after the write completes', async () => {
+  let finishWrite, written, accepted = false
+  const input = new Writable({ write(chunk, _encoding, callback) { written = chunk.toString(); finishWrite = callback } })
+  const session = { child: { stdin: input }, method: { acceptsInput: true }, state: 'waiting_for_user' }
+  const submit = authenticationInput(session)
+  const pending = submit(async () => ({ code: '  fixture-code\n' })).then(() => { accepted = true })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(written, 'fixture-code\n')
+  assert.equal(accepted, false)
+  finishWrite()
+  await pending
+  assert.equal(accepted, true)
+  input.destroy()
+})
+
+test('authorization input rejects additional lines and accepts a single trimmed credential', async context => {
+  const fixture = await temporaryFixture(context, 'wovenmatter-input-')
+  const inputPath = resolve(fixture, 'input')
+  const catalog = JSON.parse(await readFile(catalogPath, 'utf8'))
+  const harness = catalog.harnesses[0]
+  harness.authentication.statusCommands = [`test -f '${inputPath}'`]
+  harness.authentication.methods = [{ id: 'fixture', displayName: 'Fixture', acceptsInput: true,
+    command: `IFS= read -r code; printf '%s' "$code" > '${inputPath}'` }]
+  const path = resolve(fixture, 'catalog.json')
+  await writeFile(path, JSON.stringify({ schemaVersion: 4, harnesses: [harness] }))
+  const service = await startService({ workspace: fixture, home: fixture, catalog: path, token: 'input-token' })
+  context.after(() => service.child.kill('SIGTERM'))
+  const headers = { authorization: 'Bearer input-token', 'content-type': 'application/json' }
+  const started = await fetch(`${service.url}/v1/harnesses/${harness.id}/sign-in`, {
+    method: 'POST', headers, body: JSON.stringify({ methodID: 'fixture' }),
+  })
+  assert.equal(started.status, 201)
+  const sessionURL = `${service.url}/v1/authentication-sessions/${(await started.json()).id}`
+  for (const code of ['first\nsecond', 'first\rsecond', '  ', 'x'.repeat(4097), 123]) {
+    const response = await fetch(`${sessionURL}/authorization-code`, {
+      method: 'POST', headers, body: JSON.stringify({ code }),
+    })
+    assert.equal(response.status, 400)
+    assert.equal((await response.json()).error, 'invalid_authorization_code')
+  }
+  const accepted = await fetch(`${sessionURL}/authorization-code`, {
+    method: 'POST', headers, body: JSON.stringify({ code: '  safe-code\n' }),
+  })
+  assert.equal(accepted.status, 202)
+  assert.equal((await waitFor(sessionURL, headers, value => value.state !== 'waiting_for_user')).state, 'succeeded')
+  assert.equal(await readFile(inputPath, 'utf8'), 'safe-code')
 })
 
 test('native sign-in reports a real handoff and verifies provider state', async (context) => {
@@ -255,6 +380,29 @@ test('native sign-in reports a real handoff and verifies provider state', async 
   assert.equal((await terminalCancellation.json()).error, 'authentication_session_not_active')
 })
 
+test('readiness returns unavailable when the initialize pipe closes before its write', async () => {
+  const child = new EventEmitter()
+  child.exitCode = null
+  child.killed = false
+  child.kill = () => { child.killed = true }
+  child.stdout = new PassThrough()
+  child.stderr = new PassThrough()
+  child.stdin = new Writable({
+    write(_chunk, _encoding, callback) {
+      callback(Object.assign(new Error('write EPIPE'), { code: 'EPIPE' }))
+    },
+  })
+  const result = await probeHarnessTransport({ id: 'fixture', command: 'fixture' }, 1_000, () => {
+    queueMicrotask(() => child.emit('spawn'))
+    return child
+  })
+  assert.deepEqual(result, { ready: false, error: 'The transport input failed before readiness.' })
+  assert.equal(child.killed, true)
+  assert.equal(child.stdin.destroyed, true)
+  // Late process events must not replace the already settled failure.
+  child.emit('close', 0)
+})
+
 test('harness readiness requires a real bounded transport handshake', async (context) => {
   const fixture = await temporaryFixture(context, 'wovenmatter-transport-ready-')
   const home = resolve(fixture, 'home')
@@ -317,7 +465,7 @@ test('harness readiness requires a real bounded transport handshake', async (con
   assert.equal(statuses[0].transportError, null)
   assert.equal(statuses[1].state, 'transport_unavailable')
   assert.equal(statuses[1].transportStatus, 'unavailable')
-  assert.match(statuses[1].transportError, /exited before readiness/)
+  assert.match(statuses[1].transportError, /before readiness/)
   assert.equal(statuses[2].state, 'ready')
   assert.equal(statuses[2].transportStatus, 'ready')
 })
@@ -503,7 +651,15 @@ test('Gateway start reports running only after its listener accepts connections'
 if (process.argv[2] === 'config') { console.log('{}'); process.exit(0) }
 const { createServer } = require('node:net')
 const port = Number(process.argv[process.argv.indexOf('--port') + 1])
-const server = createServer((socket) => socket.destroy())
+const server = createServer((socket) => {
+  let request = ''
+  socket.on('data', data => {
+    request += data.toString()
+    if (!request.includes('\\r\\n\\r\\n')) return
+    socket.end('HTTP/1.1 101 Switching Protocols\\r\\nConnection: Upgrade\\r\\nUpgrade: websocket\\r\\nX-Request: '
+      + Buffer.from(request).toString('base64') + '\\r\\n\\r\\n')
+  })
+})
 setTimeout(() => server.listen(port, '127.0.0.1'), 200)
 process.on('SIGTERM', () => server.close(() => process.exit(0)))
 `)
@@ -528,6 +684,25 @@ process.on('SIGTERM', () => server.close(() => process.exit(0)))
   })
   assert.equal(status.state, 'running')
   assert.equal(await canConnect(gatewayPort), true)
+  const socket = connect({ host: '127.0.0.1', port: service.port })
+  context.after(() => socket.destroy())
+  socket.write('GET /v1/openclaw/gateway/socket HTTP/1.1\r\n'
+    + `Host: 127.0.0.1:${service.port}\r\n`
+    + 'Connection: Upgrade\r\nUpgrade: websocket\r\n'
+    + 'Sec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n'
+    + 'Sec-WebSocket-Protocol: fixture\r\n'
+    + 'Authorization: Bearer gateway-ready-token\r\nCookie: secret=cookie\r\n'
+    + 'Origin: https://untrusted.example\r\nX-Forwarded-For: 127.0.0.1\r\n\r\n')
+  const handshake = await socketText(socket)
+  assert.match(handshake, /^HTTP\/1\.1 101/)
+  const forwarded = Buffer.from(handshake.match(/X-Request: ([^\r]+)/)[1], 'base64').toString()
+  assert.match(forwarded, /^GET \/ HTTP\/1\.1/)
+  assert.match(forwarded, new RegExp(`Host: 127.0.0.1:${gatewayPort}`))
+  assert.match(forwarded, /sec-websocket-key: dGhlIHNhbXBsZSBub25jZQ==/i)
+  assert.match(forwarded, /sec-websocket-version: 13/i)
+  assert.match(forwarded, /sec-websocket-protocol: fixture/i)
+  assert.doesNotMatch(forwarded, /authorization:|gateway-ready-token|cookie:|origin:|x-forwarded-for:/i)
+
   assert.equal(JSON.parse(await readFile(resolve(fixture, '.wovenmatter/openclaw-desired.json'))).running, true)
   service.child.kill('SIGTERM')
   await new Promise(done => service.child.once('exit', done))
