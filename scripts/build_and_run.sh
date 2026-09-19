@@ -26,6 +26,8 @@ app="${derived_data}/Build/Products/Debug/${product_name}.app"
 executable="${app}/Contents/MacOS/${product_name}"
 
 mkdir -p "$derived_data" "$package_cache"
+# Bash 3.2 treats an empty array as unset under nounset; preserve each override
+# as one argument while expanding to no arguments for the default dev build.
 xcodebuild -quiet \
   -project "${app_root}/WovenMatter.xcodeproj" \
   -scheme WovenMatter \
@@ -34,7 +36,7 @@ xcodebuild -quiet \
   -derivedDataPath "$derived_data" \
   -clonedSourcePackagesDirPath "$package_cache" \
   CODE_SIGNING_ALLOWED=NO \
-  "${build_overrides[@]}" \
+  ${build_overrides[@]+"${build_overrides[@]}"} \
   build
 test -x "$executable"
 

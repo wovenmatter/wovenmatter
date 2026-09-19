@@ -59,6 +59,7 @@
 		ECBF462874DF484F9FDD5C91 /* DashboardLocalSecretCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 502EF864DA314DFBB322C973 /* DashboardLocalSecretCard.swift */; };
 		8B47C81B917AA853D87FB56A /* OpenCodeInteractionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17AF06D69A7DE73E3F94E40A /* OpenCodeInteractionView.swift */; };
 		46E81C4CE9571D1C715098CA /* OpenCodeSessionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F6AFCDD4A429E11B0945492 /* OpenCodeSessionView.swift */; };
+		F19000000000000000000001 /* DashboardNoteDocumentCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = F19000000000000000000002 /* DashboardNoteDocumentCache.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -115,6 +116,7 @@
 		502EF864DA314DFBB322C973 /* DashboardLocalSecretCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardLocalSecretCard.swift; sourceTree = "<group>"; };
 		17AF06D69A7DE73E3F94E40A /* OpenCodeInteractionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenCodeInteractionView.swift; sourceTree = "<group>"; };
 		6F6AFCDD4A429E11B0945492 /* OpenCodeSessionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenCodeSessionView.swift; sourceTree = "<group>"; };
+		F19000000000000000000002 /* DashboardNoteDocumentCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardNoteDocumentCache.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -240,6 +242,7 @@
 			isa = PBXGroup;
 			children = (
 				879D531AEA3583A537B8BE1B /* DashboardNoteDrafts.swift */,
+				F19000000000000000000002 /* DashboardNoteDocumentCache.swift */,
 				E10100000000000000000002 /* WovenNoteService.swift */,
 			);
 			path = Services;
@@ -366,6 +369,7 @@
 				E8E4FA74C6587F81C8999942 /* DashboardConversation.swift in Sources */,
 				97B76EB8D620C6E620196AC8 /* DashboardSidebar.swift in Sources */,
 				8443106E4E46FD4C315E128F /* DashboardNoteDrafts.swift in Sources */,
+				F19000000000000000000001 /* DashboardNoteDocumentCache.swift in Sources */,
 				2A71A302AFFA410CB30E65F3 /* DashboardConversationReferencePreview.swift in Sources */,
 				ADB35226B01C45F520411F2C /* DashboardConversationState.swift in Sources */,
 				DC0A00000000000000000001 /* DashboardComposerTextEditor.swift in Sources */,
