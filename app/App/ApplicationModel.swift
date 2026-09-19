@@ -2488,7 +2488,8 @@ final class ApplicationModel {
 
     func createLocalACPSession(
         runtimeKind: AgentRuntimeKind,
-        requestedConversationID: UUID? = nil
+        requestedConversationID: UUID? = nil,
+        nativeWorkingDirectory: URL? = nil
     ) async -> String? {
         if runtimeKind == .hermes {
             do { try requireLocalHermesLink(openSettings: true) }
@@ -2498,7 +2499,7 @@ final class ApplicationModel {
             do {
                 guard let openCode else { throw OpenCodeError.message("OpenCode is still starting.") }
                 guard let workspace = localACPWorkspaceLaunchConfiguration else { throw ApplicationModelError.localACPRuntimeUnavailable }
-                let id = try await openCode.create(workspace: workspace.rootURL, requestedConversationID: requestedConversationID)
+                let id = try await openCode.create(workspace: nativeWorkingDirectory ?? workspace.rootURL, requestedConversationID: requestedConversationID)
                 await refreshWorkspace()
                 return id
             } catch { localRunError = error.localizedDescription; return nil }
@@ -2553,7 +2554,8 @@ final class ApplicationModel {
 
     func createRemoteACPSession(
         target: RemoteHarnessChatTarget,
-        requestedConversationID: UUID? = nil
+        requestedConversationID: UUID? = nil,
+        nativeWorkingDirectory: URL? = nil
     ) async -> String? {
         guard remoteWorkspaces.isHarnessReady(
             target.harness.id,
@@ -2570,7 +2572,7 @@ final class ApplicationModel {
                 }
                 try await instance.connectLocal()
                 let directory = remoteWorkspaces.remoteWorkspaceRoot(for: target.configuration)
-                let id = try await instance.create(workspace: URL(fileURLWithPath: directory), requestedConversationID: requestedConversationID)
+                let id = try await instance.create(workspace: nativeWorkingDirectory ?? URL(fileURLWithPath: directory), requestedConversationID: requestedConversationID)
                 await refreshWorkspace()
                 return id
             }

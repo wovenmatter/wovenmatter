@@ -400,20 +400,21 @@ final class OpenCodeModel {
         return OpenCodeComposerMetadata.metadata(session: snapshot.info, models: models[id] ?? [], defaultModel: defaultModels[id] ?? .null, hiddenModels: hiddenModels, commands: commands[id] ?? [])
     }
 
-    func updateSelection(_ id: String, model: String? = nil, thinking: String? = nil) {
-        guard updatingSessions.insert(id).inserted else { return }
+    @discardableResult
+    func updateSelection(_ id: String, model: String? = nil, thinking: String? = nil) -> Task<Void, Error>? {
+        guard updatingSessions.insert(id).inserted else { return nil }
         error = nil
         let task = Task { @MainActor in
             guard let key = model ?? self.metadata(id)?.model else {
                 throw OpenCodeError.message("OpenCode has no default model. Choose an available model.")
             }
             let selection = try OpenCodeComposerMetadata.selection(model: key, thinking: thinking, models: self.models[id] ?? [])
-            _ = try await self.sessionCall(id, "/model", method: "POST", body: selection)
-            let confirmed = try await self.sessionCall(id)
-            guard OpenCodeComposerMetadata.matchesSelection(confirmed["data"]["model"], selection["model"]) else {
-                throw OpenCodeError.message("OpenCode has not confirmed the selected model. Select it again before sending.")
+            guard let link = self.links[id], self.isLocalSession(id) else {
+                throw OpenCodeError.message("This saved transcript cannot change its model.")
             }
-            self.snapshots[id]?.info = confirmed["data"]
+            let confirmed = try await self.coordinator.configureSelection(link, selection: selection)
+            self.snapshots[id]?.info = confirmed
+            try? await self.coordinator.refresh(link)
         }
         selectionTasks[id] = task
         Task {
@@ -421,6 +422,17 @@ final class OpenCodeModel {
             do { try await task.value }
             catch { self.error = error.localizedDescription }
         }
+        return task
+    }
+
+    func confirmCreationSelection(_ id: String, model: String?, thinking: String?) async throws {
+        // Opening a native session can succeed before its model catalog arrives.
+        // Creation retries must retry that discovery instead of accepting defaults.
+        try await refreshCatalog(id)
+        guard let task = updateSelection(id, model: model, thinking: thinking) else {
+            throw OpenCodeError.message("A model selection is already in progress. Retry session creation after it completes.")
+        }
+        try await task.value
     }
 
     func send(_ id: String, input: AgentMessageInput, discovery: String? = nil) async throws {

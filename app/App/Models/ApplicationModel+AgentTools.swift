@@ -189,9 +189,13 @@ extension ApplicationModel {
             do {
                 if reservation.objectValue?["status"]?.stringValue != "ready" {
                     if (try? self.toolConversation(id)) == nil {
+                        let sourceWorkspace = source.remoteWorkspaceID?.uuidString.lowercased() ?? "local"
+                        let sourceDirectory = self.openCodeModel(for: source.id)?.snapshots[source.id]?.info["location"]["directory"].string
+                        let directory: URL? = runtime == .opencode && workspace == sourceWorkspace
+                            ? sourceDirectory.flatMap { $0.hasPrefix("/") ? URL(fileURLWithPath: $0) : nil } : nil
                         let created: String?
-                        if let remoteTarget { created = await self.createRemoteACPSession(target: remoteTarget, requestedConversationID: uuid) }
-                        else { created = await self.createLocalACPSession(runtimeKind: runtime, requestedConversationID: uuid) }
+                        if let remoteTarget { created = await self.createRemoteACPSession(target: remoteTarget, requestedConversationID: uuid, nativeWorkingDirectory: directory) }
+                        else { created = await self.createLocalACPSession(runtimeKind: runtime, requestedConversationID: uuid, nativeWorkingDirectory: directory) }
                         guard created == id else { throw WorkspaceToolError.invalid(self.localRunError ?? "Unable to create the session.") }
                     }
                     let target = try self.toolConversation(id)
@@ -206,8 +210,12 @@ extension ApplicationModel {
                     let model = command.options["model"] ?? (sameRuntime ? metadata?.model : nil)
                     let thinking = command.options["thinking"] ?? (sameRuntime ? metadata?.thinking : nil)
                     if model != nil || thinking != nil {
-                        if runtime == .opencode { self.openCodeModel(for: id)?.updateSelection(id, model: model, thinking: thinking) }
-                        else {
+                        if runtime == .opencode {
+                            guard let native = self.openCodeModel(for: id) else {
+                                throw WorkspaceToolError.invalid("The native OpenCode session is unavailable.")
+                            }
+                            try await native.confirmCreationSelection(id, model: model, thinking: thinking)
+                        } else {
                             let context = try self.directACPLaunchContext(conversation: target, runtimeKind: runtime, isBuzzWorkspaceSession: false)
                             _ = try await store.updateLocalACPSessionConfiguration(conversationID: id, model: model, thinking: thinking,
                                 launch: context?.launch, workspace: context?.workspace)

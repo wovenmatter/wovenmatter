@@ -73,6 +73,18 @@ public actor OpenCodeSessionCoordinator {
         return try await call(connectionID: connectionID, method: "POST", path: "/api/session",
             body: ["id": .string(id), "location": ["directory": .string(workspace.path)], "metadata": ["wovenmatter": ["origin": "created"]]])
     }
+    /// A successful write is insufficient: the service must report the requested
+    /// selection before session creation or its first instruction can continue.
+    public func configureSelection(_ link: OpenCodeSessionLink, selection: OpenCodeValue) async throws -> OpenCodeValue {
+        let path = "/api/session/" + OpenCodeHTTPClient.segment(link.sessionID)
+        _ = try await call(connectionID: link.connectionID, method: "POST", path: path + "/model", body: selection)
+        let confirmed = try await call(connectionID: link.connectionID, path: path)
+        guard OpenCodeComposerMetadata.matchesSelection(confirmed["data"]["model"], selection["model"]) else {
+            throw OpenCodeError.message("OpenCode has not confirmed the selected model. Select it again before sending.")
+        }
+        return confirmed["data"]
+    }
+
     public func importableSessions(connectionID: String, cursor: String? = nil) async throws -> (sessions: [OpenCodeValue], next: String?) {
         guard let client = clients[connectionID] else { throw OpenCodeError.message("Connect to OpenCode first.") }
         let token = connectionTokens[connectionID]
