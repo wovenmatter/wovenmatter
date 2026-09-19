@@ -47,13 +47,19 @@ final class WorkspaceAgentToolsModel {
     }
 
     func reload() throws {
-        settings = try database.toolSettings()
-        relationships = Dictionary(uniqueKeysWithValues: try database.sessionRelationships().map { ($0.sessionID, $0) })
-        timers = try database.sessionTimers()
-        for id in sessionPolicies.keys { sessionPolicies[id] = try? database.sessionTools(id) }
+        let nextSettings = try database.toolSettings()
+        if settings != nextSettings { settings = nextSettings }
+        let nextRelationships = Dictionary(uniqueKeysWithValues: try database.sessionRelationships().map { ($0.sessionID, $0) })
+        if relationships != nextRelationships { relationships = nextRelationships }
+        let nextTimers = try database.sessionTimers()
+        if timers != nextTimers { timers = nextTimers }
+        var nextPolicies = sessionPolicies
+        for id in sessionPolicies.keys { nextPolicies[id] = try? database.sessionTools(id) }
+        if sessionPolicies != nextPolicies { sessionPolicies = nextPolicies }
         for id in Set(observedSessions.values) {
             if let oldest = receipts[id]?.last {
-                receipts[id] = try database.sessionActivityWindow(sessionID: id, throughID: oldest.id)
+                let window = try database.sessionActivityWindow(sessionID: id, throughID: oldest.id)
+                publishReceipts(window, for: id)
             } else { try loadInitialReceipts(id) }
         }
     }
@@ -65,22 +71,37 @@ final class WorkspaceAgentToolsModel {
             catch { self.error = error.localizedDescription }
         }
         let active = Set(observedSessions.values)
-        receipts = receipts.filter { active.contains($0.key) }
-        hasOlderReceipts.formIntersection(active)
+        let retainedReceipts = receipts.filter { active.contains($0.key) }
+        if receipts != retainedReceipts { receipts = retainedReceipts }
+        let retainedOlderReceipts = hasOlderReceipts.intersection(active)
+        if hasOlderReceipts != retainedOlderReceipts { hasOlderReceipts = retainedOlderReceipts }
     }
 
     private func loadInitialReceipts(_ id: String) throws {
         let page = try database.sessionDeliveries(sessionID: id, limit: 201, activityOnly: true)
-        receipts[id] = Array(page.prefix(200))
-        if page.count > 200 { hasOlderReceipts.insert(id) } else { hasOlderReceipts.remove(id) }
+        publishReceipts(Array(page.prefix(200)), for: id)
+        setHasOlderReceipts(page.count > 200, for: id)
+    }
+
+    private func publishReceipts(_ value: [WorkspaceSessionDelivery], for id: String) {
+        // Polling must not invalidate the conversation on an unchanged snapshot.
+        // Compare the complete payload, including status and native command,
+        // rather than just receipt IDs or count.
+        guard receipts[id] != value else { return }
+        receipts[id] = value
+    }
+
+    private func setHasOlderReceipts(_ value: Bool, for id: String) {
+        guard hasOlderReceipts.contains(id) != value else { return }
+        if value { hasOlderReceipts.insert(id) } else { hasOlderReceipts.remove(id) }
     }
 
     func loadOlderReceipts(sessionID: String) {
         guard let oldest = receipts[sessionID]?.last else { return }
         do {
             let page = try database.sessionDeliveries(sessionID: sessionID, limit: 201, beforeID: oldest.id, activityOnly: true)
-            receipts[sessionID, default: []].append(contentsOf: page.prefix(200))
-            if page.count > 200 { hasOlderReceipts.insert(sessionID) } else { hasOlderReceipts.remove(sessionID) }
+            publishReceipts((receipts[sessionID] ?? []) + page.prefix(200), for: sessionID)
+            setHasOlderReceipts(page.count > 200, for: sessionID)
         } catch { self.error = error.localizedDescription }
     }
 
