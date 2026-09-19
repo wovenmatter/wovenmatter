@@ -12,6 +12,7 @@ final class WovenMatterRemoteToolBridge: @unchecked Sendable {
     private let gate = WovenToolBridgeReady()
     private let lock = NSLock()
     private var stopped = false
+    private var forwarder: WovenMatterRelayForwarder?
 
     private init(configuration: RemoteWorkspaceConfiguration, ownerID: UUID, source: String) throws {
         guard configuration.workspaceID.wholeMatch(of: /^[a-z0-9][a-z0-9-]{0,47}$/) != nil else {
@@ -61,6 +62,14 @@ final class WovenMatterRemoteToolBridge: @unchecked Sendable {
 
     private func read(localSocket: String) {
         let input = input, output = output
+        let forwarder = WovenMatterRelayForwarder(localSocket: localSocket,
+            write: { try input.write(contentsOf: $0) }, onFailure: { [weak self] _ in self?.stop() })
+        let started = lock.withLock {
+            guard !stopped else { return false }
+            self.forwarder = forwarder
+            return true
+        }
+        guard started else { forwarder.stop(); return }
         DispatchQueue.global(qos: .utility).async { [weak self] in
             defer { self?.stop() }
             do {
@@ -76,13 +85,7 @@ final class WovenMatterRemoteToolBridge: @unchecked Sendable {
                         guard let id = packet.objectValue?["id"]?.stringValue, UUID(uuidString: id) != nil,
                               let payload = packet.objectValue?["payload"]?.stringValue,
                               let request = Data(base64Encoded: payload) else { throw WorkspaceToolError.invalid("Invalid tool relay packet.") }
-                        let response: Data
-                        do { response = try WovenMatterCommandLine.forward(request, to: localSocket) }
-                        catch { response = try JSONEncoder().encode(WovenMatterToolResponse(success: false, error: error.localizedDescription)) }
-                        let result = ["id": id, "payload": response.base64EncodedString()]
-                        var data = try JSONEncoder().encode(result)
-                        data.append(10)
-                        try input.write(contentsOf: data)
+                        try forwarder.submit(id: id, request: request)
                     }
                 }
             } catch { self?.gate.finish(.failure(error)) }
@@ -90,12 +93,15 @@ final class WovenMatterRemoteToolBridge: @unchecked Sendable {
     }
 
     func stop() {
-        let shouldStop = lock.withLock {
-            if stopped { return false }
+        let (shouldStop, forwarder) = lock.withLock {
+            if stopped { return (false, nil as WovenMatterRelayForwarder?) }
             stopped = true
-            return true
+            let value = self.forwarder
+            self.forwarder = nil
+            return (true, value)
         }
         guard shouldStop else { return }
+        forwarder?.stop()
         gate.finish(.failure(WorkspaceToolError.invalid("The remote tools connection closed.")))
         try? input.close()
         try? output.close()
@@ -134,5 +140,89 @@ private final class WovenToolBridgeReady: @unchecked Sendable {
         }
         waiter?.resume(with: result)
         return won
+    }
+}
+
+/// One slow local call cannot block the relay reader or another request. Admission
+/// is bounded like the remote listener; replies remain complete serialized lines.
+final class WovenMatterRelayForwarder: @unchecked Sendable {
+    private let lock = NSLock()
+    private let writeLock = NSLock()
+    private let localSocket: String
+    private let timeout: TimeInterval
+    private let maximumConnections: Int
+    private let write: @Sendable (Data) throws -> Void
+    private let onFailure: @Sendable (any Error) -> Void
+    private var stopped = false
+    private var active: [String: WovenToolForwardCancellation] = [:]
+    private var idleWaiters: [CheckedContinuation<Void, Never>] = []
+
+    init(localSocket: String, timeout: TimeInterval = 55, maximumConnections: Int = 4,
+         write: @escaping @Sendable (Data) throws -> Void,
+         onFailure: @escaping @Sendable (any Error) -> Void) {
+        precondition(maximumConnections > 0 && timeout.isFinite && timeout > 0)
+        self.localSocket = localSocket; self.timeout = timeout
+        self.maximumConnections = maximumConnections; self.write = write; self.onFailure = onFailure
+    }
+
+    func submit(id: String, request: Data) throws {
+        guard UUID(uuidString: id) != nil, request.count <= 4 * 1_024 * 1_024 else {
+            throw WorkspaceToolError.invalid("Invalid tool relay packet.")
+        }
+        let cancellation = WovenToolForwardCancellation()
+        try lock.withLock {
+            guard !stopped else { throw CancellationError() }
+            guard active[id] == nil, active.count < maximumConnections else {
+                throw WorkspaceToolError.invalid("The tool relay already has its maximum in-flight requests.")
+            }
+            active[id] = cancellation
+        }
+        DispatchQueue.global(qos: .utility).async { [self] in
+            defer { finished(id: id) }
+            do {
+                let response: Data
+                do {
+                    response = try WovenMatterCommandLine.forward(request, to: localSocket,
+                        timeout: timeout, cancellation: cancellation)
+                } catch {
+                    let requestID = (try? JSONDecoder().decode(WovenMatterToolRequest.self, from: request))?.requestID
+                    response = try JSONEncoder().encode(WovenMatterToolResponse(success: false,
+                        error: error.localizedDescription, requestID: requestID))
+                }
+                var packet = try JSONEncoder().encode(["id": id, "payload": response.base64EncodedString()])
+                packet.append(10)
+                try writeLock.withLock {
+                    guard lock.withLock({ !stopped }) else { return }
+                    try write(packet)
+                }
+            } catch { onFailure(error); stop() }
+        }
+    }
+
+    private func finished(id: String) {
+        let waiters = lock.withLock {
+            active.removeValue(forKey: id)
+            guard active.isEmpty else { return [CheckedContinuation<Void, Never>]() }
+            let values = idleWaiters; idleWaiters.removeAll(); return values
+        }
+        waiters.forEach { $0.resume() }
+    }
+
+    func waitUntilIdle() async {
+        await withCheckedContinuation { continuation in
+            let ready = lock.withLock {
+                guard !active.isEmpty else { return true }
+                idleWaiters.append(continuation); return false
+            }
+            if ready { continuation.resume() }
+        }
+    }
+
+    func stop() {
+        let calls = lock.withLock {
+            stopped = true
+            return Array(active.values)
+        }
+        calls.forEach { $0.cancel() }
     }
 }

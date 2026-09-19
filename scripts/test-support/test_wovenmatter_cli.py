@@ -13,6 +13,16 @@ CLI = Path(sys.argv.pop(1)).resolve()
 
 
 class BundledCLITests(unittest.TestCase):
+    def test_transport_failure_preserves_generated_request_identity(self):
+        with tempfile.TemporaryDirectory(prefix="wmcli-", dir="/tmp") as directory:
+            result = subprocess.run([str(CLI), "sessions", "send", "destination", "--text", "Retry"],
+                env={**os.environ, "WOVENMATTER_SOCKET": str(Path(directory) / "missing.sock")},
+                capture_output=True, text=True, timeout=10)
+            response = json.loads(result.stdout)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertFalse(response["success"])
+            self.assertEqual(len(response["requestID"]), 36)
+
     def invoke(self, arguments, response, environment=None):
         with tempfile.TemporaryDirectory(prefix="wmcli-", dir="/tmp") as directory:
             endpoint = str(Path(directory) / "rpc.sock")

@@ -61,6 +61,20 @@ extension WorkspaceDatabase {
     }
   }
 
+  /// A later coordination failure must not cause a confirmed native selection
+  /// to be applied again over a user's subsequent model choice on retry.
+  public func markToolSessionCreationConfigured(requestID: String, sourceID: String) throws {
+    try transaction {
+      try requireToolUnlocked(.sessions, sessionID: sourceID)
+      guard let target = try historyRowsUnlocked("SELECT target_id FROM workspace_session_creations WHERE id=? AND source_id=? AND status='planned'",
+        values: [requestID, sourceID]).first?.objectValue?["target_id"]?.stringValue else {
+        throw WorkspaceToolError.invalid("This creation request is not being prepared.")
+      }
+      try requireToolSessionUnlocked(target)
+      try toolsExecuteUnlocked("UPDATE workspace_session_creations SET configuration_applied=1 WHERE id=?", [requestID])
+    }
+  }
+
   /// Failed setup releases its reservation slot while preserving the target ID
   /// for a safe retry. An already completed creation is never downgraded by a
   /// later failure to deliver its first message.

@@ -156,7 +156,7 @@ extension WorkspaceCoordinationEventTests {
     try db.completeLocalACPRun(runID: stale.runID)
     try db.completeLocalACPRun(runID: live.runID)
     let timer = WorkspaceSessionTimer(sessionID: liveWorker, instruction: "Due", nextFireAt: .distantPast)
-    try db.saveSessionTimer(timer)
+    try db.saveSessionTimer(timer, callerID: liveWorker)
     try db.transaction {
       try db.toolsExecuteUnlocked("UPDATE dashboard_conversations SET deleted_at=? WHERE id=?", ["2026-09-19T00:00:00Z", deletedCoordinator])
     }

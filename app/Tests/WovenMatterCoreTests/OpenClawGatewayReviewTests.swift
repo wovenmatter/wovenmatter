@@ -162,7 +162,7 @@ struct OpenClawGatewayReviewTests {
     var timerID: String?
     if revocation.hasPrefix("timer-") {
       let timer = WorkspaceSessionTimer(sessionID: target, instruction: "Follow up", nextFireAt: .distantPast)
-      try database.saveSessionTimer(timer)
+      try database.saveSessionTimer(timer, callerID: target)
       timerID = timer.id
       requestID = try #require(database.dueSessionTimers().first?.pendingDeliveryID)
       source = target; kind = .timer
@@ -171,7 +171,7 @@ struct OpenClawGatewayReviewTests {
       kind = .notification
     }
     _ = try database.reserveToolDelivery(sourceID: source, targetID: target, text: "Follow up", requestID: requestID, kind: kind)
-    _ = try #require(database.claimToolDelivery(id: requestID))
+    _ = try #require(try database.claimToolDelivery(id: requestID))
     try database.validateClaimedToolDelivery(id: requestID)
     let coordinator = fixture.coordinator
     let input = AgentMessageInput(text: "Follow up", historyDeliveryID: requestID)

@@ -13,6 +13,9 @@ import uuid
 
 REQUEST_LIMIT = 4 * 1024 * 1024
 RESPONSE_LIMIT = 32 * 1024 * 1024
+# The Swift forwarder has a 55s total deadline; leave time for SSH replies.
+RELAY_TIMEOUT = 75
+CLI_TIMEOUT = 90
 
 
 def receive_all(connection, maximum):
@@ -77,16 +80,22 @@ def build_request(arguments, environment):
 def run_cli(arguments):
     endpoint = os.environ.get("WOVENMATTER_SOCKET") or str(Path(__file__).with_name("rpc.sock"))
     request = build_request(arguments, os.environ)
-    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
-        connection.settimeout(60)
-        connection.connect(endpoint)
-        connection.sendall(request)
-        connection.shutdown(socket.SHUT_WR)
-        response = receive_all(connection, RESPONSE_LIMIT)
-    result = json.loads(response)
-    if not result.get("silent", False):
-        sys.stdout.buffer.write(response + b"\n")
-    return 0 if result.get("success", False) else 1
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+            connection.settimeout(CLI_TIMEOUT)
+            connection.connect(endpoint)
+            connection.sendall(request)
+            connection.shutdown(socket.SHUT_WR)
+            response = receive_all(connection, RESPONSE_LIMIT)
+        result = json.loads(response)
+        if not result.get("silent", False):
+            sys.stdout.buffer.write(response + b"\n")
+        return 0 if result.get("success", False) else 1
+    except (OSError, ValueError) as error:
+        # A lost reply is not permission to create a new mutation identity.
+        print(json.dumps({"success": False, "error": str(error), "silent": False,
+                          "requestID": json.loads(request)["requestID"]}))
+        return 1
 
 
 def run_relay(directory):
@@ -138,18 +147,23 @@ def run_relay(directory):
 
     def forward(connection):
         identity = str(uuid.uuid4())
+        request_id = None
         try:
-            connection.settimeout(60)
+            connection.settimeout(RELAY_TIMEOUT)
             data = receive_all(connection, REQUEST_LIMIT)
+            request = json.loads(data)
+            if not isinstance(request, dict):
+                raise ValueError("A tool request must be a JSON object.")
+            request_id = request.get("requestID")
             waiter = queue.Queue(maxsize=1)
             with lock:
                 pending[identity] = waiter
             write_packet({"id": identity, "payload": base64.b64encode(data).decode("ascii")})
-            response = waiter.get(timeout=60)
+            response = waiter.get(timeout=RELAY_TIMEOUT)
             connection.sendall(response)
         except (OSError, ValueError, queue.Empty) as error:
             try:
-                connection.sendall(json.dumps({"success": False, "error": str(error), "silent": False}).encode())
+                connection.sendall(json.dumps({"success": False, "error": str(error) or "The tool relay timed out.", "silent": False, "requestID": request_id}).encode())
             except OSError:
                 pass
         finally:

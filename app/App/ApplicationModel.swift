@@ -2546,7 +2546,8 @@ final class ApplicationModel {
             let gatewayKey = Self.openClawSessionKey(conversationID: (requestedConversationID ?? UUID()).uuidString.lowercased())
             if let agent = openClawAgent, isOpenClawGatewayLinked(agentID: agent.id),
                let workspace = localACPWorkspaceLaunchConfiguration {
-                try await dashboardStore.createOpenClawWorkspaceSession(agentID: agent.id, sessionKey: gatewayKey, cwd: workspace.rootURL)
+                try await dashboardStore.createOpenClawWorkspaceSession(agentID: agent.id, sessionKey: gatewayKey,
+                    cwd: workspace.rootURL, recover: requestedConversationID != nil)
             }
             let conversationID = try await dashboardStore.createLocalACPSession(
                 runtimeKind: runtimeKind,
