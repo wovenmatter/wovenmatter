@@ -131,3 +131,19 @@ HTTP response and absent reconciliation. One-shot identity persists throughout;
 native command 204 acceptance and lost-response no-retry are also covered.
 Performance has returned the compiler window. Full `--all` and native builds are
 next; the desktop is locked, so foreground native review awaits manual unlock.
+
+## Full validation after delivery recovery
+
+`scripts/test-changes.sh --all` passed on the acceptance batch plus relay turnover
+fix: 218 Core, 112 Client, 5 actual app-service tests, 5 built-CLI tests, remote
+and static checks, unsigned native Debug build and bundle validation. The relay
+fixture submits a replacement request while the preceding response write is
+still returning. Completed socket admission is retired before publishing the
+response, with serialized bounded writer ownership and single cleanup.
+The full history fixture now expects the actual message, excluding its own audit
+query. Logs are `/private/tmp/wovenmatter-tools-relay-full.log` (temporary).
+
+The compiler window is released to the integration manager after this checkpoint.
+Remaining feature work is source-only: working-location inheritance, trace
+correlation and native command attribution, then remaining native acceptance.
+Release configuration and final exact-head hosted checks still remain.
