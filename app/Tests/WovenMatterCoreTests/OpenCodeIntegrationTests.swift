@@ -321,6 +321,38 @@ struct OpenCodeIntegrationTests {
         await #expect(throws: OpenCodeError.incompatible("2.99.0")) { try await client.health() }
     }
 
+    @Test func unifiedDiscoveryPreservesVisibleInputAndDurableAgentAttribution() async throws {
+        let fixture = OpenCodeFixture(); FixtureProtocol.fixture = fixture
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let database = try WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+        let source = try database.createLocalACPSession(runtimeKind: .codex, title: "Coordinator", ownerDeviceID: UUID())
+        let target = try database.createLocalACPSession(runtimeKind: .opencode, title: "Work", ownerDeviceID: UUID())
+        let link = OpenCodeSessionLink(conversationID: target, connectionID: "fixture", sessionID: "ses_fixture")
+        try database.attachOpenCodeSession(link)
+        let deliveryID = UUID().uuidString.lowercased()
+        _ = try database.reserveToolDelivery(sourceID: source, targetID: target, text: "Build this", requestID: deliveryID)
+        _ = try database.claimToolDelivery(id: deliveryID)
+        let session = fixtureSession()
+        let coordinator = OpenCodeSessionCoordinator(database: database, clientFactory: { OpenCodeHTTPClient(connection: $0, session: session) })
+        try await coordinator.connect(connection())
+        try await coordinator.prompt(link, input: .init(text: "Build this", historyDeliveryID: deliveryID), discovery: "<wovenmatter-tools>session discovery</wovenmatter-tools>")
+        let raw = try #require(try database.openCodeSnapshot(conversationID: target))
+        #expect(raw.messages.last?["text"].text.contains("session discovery") == true)
+        let display = try database.openCodeDisplaySnapshot(raw, conversationID: target)
+        #expect(display.messages.last?["text"].text == "Build this")
+        let content = try database.conversationContent(id: target)
+        let input = try #require(content.messages.first(where: { $0.role == "user" }))
+        #expect(input.content == "Build this")
+        #expect(input.senderSessionID == source)
+        #expect(input.senderSessionTitle == "Coordinator")
+        #expect(try database.toolDelivery(id: deliveryID)?.messageID == input.id)
+        let reopened = try WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+        #expect(try reopened.openCodeDisplaySnapshot(raw, conversationID: target).messages.last?["text"].text == "Build this")
+        await coordinator.disconnect(connectionID: "fixture")
+    }
+
     @Test func missedPagesPendingInteractionsAndLostPromptResponseRecoverWithoutResend() async throws {
         let fixture = OpenCodeFixture(); FixtureProtocol.fixture = fixture
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)

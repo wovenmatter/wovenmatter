@@ -100,13 +100,15 @@ final class OpenCodeModel {
             ?? "local:" + registration.standardizedFileURL.path
         for link in (try? store.database.openCodeLinks()) ?? [] where link.connectionID == identity {
             links[link.conversationID] = link
-            snapshots[link.conversationID] = try? store.database.openCodeSnapshot(conversationID: link.conversationID)
+            if let snapshot = try? store.database.openCodeSnapshot(conversationID: link.conversationID) {
+                snapshots[link.conversationID] = try? store.database.openCodeDisplaySnapshot(snapshot, conversationID: link.conversationID)
+            }
         }
         updateTask = Task { [weak self, coordinator] in
             for await update in coordinator.updates {
                 guard let self, !Task.isCancelled else { return }
                 guard update.status == "Disconnected" || (self.isEnabled && !self.serverStopped && !self.quitting) else { continue }
-                if let snapshot = update.snapshot { self.snapshots[update.conversationID] = snapshot }
+                if let snapshot = update.snapshot { self.snapshots[update.conversationID] = try? store.database.openCodeDisplaySnapshot(snapshot, conversationID: update.conversationID) }
                 self.statuses[update.conversationID] = update.status
                 self.errors[update.conversationID] = update.error
                 if self.isEnabled, !self.serverStopped, !self.isControllingServer, self.isLocalSession(update.conversationID) {
@@ -421,7 +423,7 @@ final class OpenCodeModel {
         }
     }
 
-    func send(_ id: String, input: AgentMessageInput) async throws {
+    func send(_ id: String, input: AgentMessageInput, discovery: String? = nil) async throws {
         guard let link = links[id], isLocalSession(id) else { throw OpenCodeError.message("This saved transcript is read-only. Create a new OpenCode chat.") }
         guard isEnabled else { throw OpenCodeError.message("Enable OpenCode for this workspace before sending.") }
         if let configuration = remoteConfiguration,
@@ -434,9 +436,9 @@ final class OpenCodeModel {
         if let selection = selectionTasks[id] { try await selection.value }
         if let command = OpenCodeComposerMetadata.invocation(input.text, commands: commands[id] ?? []) {
             try await coordinator.command(link, name: command.name,
-                input: AgentMessageInput(text: command.arguments, attachments: input.attachments))
+                input: AgentMessageInput(text: command.arguments, attachments: input.attachments, historyDeliveryID: input.historyDeliveryID), discovery: discovery)
         } else {
-            try await coordinator.prompt(link, input: input)
+            try await coordinator.prompt(link, input: input, discovery: discovery)
         }
     }
 

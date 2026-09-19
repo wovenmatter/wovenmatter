@@ -336,19 +336,20 @@ public actor OpenCodeSessionCoordinator {
         try database.saveOpenCodeSnapshot(snapshot, conversationID: link.conversationID)
         snapshots[link.conversationID] = snapshot; emit(link.conversationID, status: "Connected")
     }
-    public func prompt(_ link: OpenCodeSessionLink, input: AgentMessageInput) async throws {
-        try await submit(link, input: input, command: nil)
+    public func prompt(_ link: OpenCodeSessionLink, input: AgentMessageInput, discovery: String? = nil) async throws {
+        try await submit(link, input: input, command: nil, discovery: discovery)
     }
-    public func command(_ link: OpenCodeSessionLink, name: String, input: AgentMessageInput) async throws {
-        try await submit(link, input: input, command: name)
+    public func command(_ link: OpenCodeSessionLink, name: String, input: AgentMessageInput, discovery: String? = nil) async throws {
+        try await submit(link, input: input, command: name, discovery: discovery)
     }
-    private func submit(_ link: OpenCodeSessionLink, input: AgentMessageInput, command: String?) async throws {
+    private func submit(_ link: OpenCodeSessionLink, input: AgentMessageInput, command: String?, discovery: String?) async throws {
         guard sending.insert(link.conversationID).inserted else { throw OpenCodeError.message("The previous input is still being submitted.") }
         defer { sending.remove(link.conversationID) }
         guard let client = clients[link.connectionID] else { throw OpenCodeError.message("Connect to OpenCode before sending input.") }
         guard try database.openCodeUncertainSubmissions(conversationID: link.conversationID).isEmpty else {
             throw OpenCodeError.message("Resolve the uncertain input in session controls before sending another message.")
         }
+        let deliveryText = (discovery.map { $0 + "\n\n" } ?? "") + input.textWithReferenceContext
         let id = "msg_" + UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
         var files: [OpenCodeValue] = []
         for file in input.files {
@@ -360,7 +361,7 @@ public actor OpenCodeSessionCoordinator {
             // Native commands return 204 and do not accept a caller message ID.
             // Never journal or retry them as idempotent prompt submissions.
             let payload: OpenCodeValue = ["command": .string(command),
-                "text": .string(input.textWithReferenceContext), "files": .array(files)]
+                "text": .string(deliveryText), "files": .array(files)]
             do {
                 _ = try await client.call("POST", "/api/session/\(OpenCodeHTTPClient.segment(link.sessionID))/command", body: payload)
             } catch {
@@ -371,8 +372,8 @@ public actor OpenCodeSessionCoordinator {
             try? await refresh(link)
             return
         }
-        let payload: OpenCodeValue = ["id": .string(id), "text": .string(input.textWithReferenceContext), "files": .array(files)]
-        try database.saveOpenCodeSubmission(conversationID: link.conversationID, id: id, payload: payload, status: "sending")
+        let payload: OpenCodeValue = ["id": .string(id), "text": .string(deliveryText), "files": .array(files)]
+        try database.saveOpenCodeSubmission(conversationID: link.conversationID, id: id, payload: payload, status: "sending", visibleText: input.text, deliveryID: input.historyDeliveryID)
         do {
             let result = try await client.call("POST", "/api/session/\(OpenCodeHTTPClient.segment(link.sessionID))/prompt", body: payload)
             guard result["data"]["id"].text == id else { throw OpenCodeError.uncertain(id) }

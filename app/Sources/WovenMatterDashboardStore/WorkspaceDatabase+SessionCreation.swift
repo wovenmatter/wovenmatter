@@ -13,6 +13,13 @@ extension WorkspaceDatabase {
         guard row["source_id"]?.stringValue == sourceID, row["arguments_json"]?.stringValue == encoded else {
           throw WorkspaceToolError.invalid("Session creation request ID collision.")
         }
+        if row["status"]?.stringValue == "failed" {
+          if managed {
+            let limit = try toolSettingsUnlocked().maximumManagedSessions
+            guard try managedSessionCountUnlocked(sourceID, excluding: row["target_id"]?.stringValue) < limit else { throw WorkspaceToolError.managedLimit(limit) }
+          }
+          try toolsExecuteUnlocked("UPDATE workspace_session_creations SET status='planned' WHERE id=?", [requestID])
+        }
         return value
       }
       if managed {
@@ -29,6 +36,21 @@ extension WorkspaceDatabase {
   public func finishToolSessionCreation(requestID: String, status: String) throws {
     guard ["ready", "failed"].contains(status) else { throw WorkspaceToolError.invalid("Invalid creation status.") }
     try transaction { try toolsExecuteUnlocked("UPDATE workspace_session_creations SET status=? WHERE id=?", [status, requestID]) }
+  }
+
+  public func completeToolSessionCreation(requestID: String, sourceID: String) throws {
+    try transaction {
+      try requireToolUnlocked(.sessions, sessionID: sourceID)
+      guard let row = try historyRowsUnlocked("SELECT * FROM workspace_session_creations WHERE id=? AND source_id=?", values: [requestID, sourceID]).first?.objectValue,
+            let target = row["target_id"]?.stringValue else { throw WorkspaceToolError.invalid("Creation reservation not found.") }
+      if row["status"]?.stringValue == "ready" { return }
+      try requireToolSessionUnlocked(target)
+      if row["managed"]?.intValue == 1 {
+        try validateCoordinationUnlocked(sourceID: sourceID, targetID: target)
+        try beginCoordinationUnlocked(sourceID: sourceID, targetID: target, purpose: row["purpose"]?.stringValue ?? "", notifications: true)
+      }
+      try toolsExecuteUnlocked("UPDATE workspace_session_creations SET status='ready' WHERE id=?", [requestID])
+    }
   }
 
   /// Session insertion and creation provenance commit together, so an interrupted

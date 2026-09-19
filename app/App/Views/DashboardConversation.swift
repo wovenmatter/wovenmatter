@@ -364,6 +364,8 @@ struct DashboardCloudConversation: View {
                         draft: $draft,
                         attachedNoteTitle: attachedNoteTitle,
                         attachments: attachments,
+                        agentTools: model.agentTools,
+                        sessionID: conversation?.id,
                         showsSessionControls: conversation.map {
                             model.isOpenClawGatewayConversation($0.id) || $0.localRuntimeKind != nil
                         } ?? false,

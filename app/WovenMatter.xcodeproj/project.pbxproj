@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		D472AB9160464F1FAB826C22 /* WorkspaceToolControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = D472AB9160464F1FAB826C21 /* WorkspaceToolControls.swift */; };
+		D472AB9160464F1FAB826C12 /* ApplicationModel+AgentTools.swift in Sources */ = {isa = PBXBuildFile; fileRef = D472AB9160464F1FAB826C11 /* ApplicationModel+AgentTools.swift */; };
 		0C11E0000000000000000001 /* WovenMatterClient in Frameworks */ = {isa = PBXBuildFile; productRef = 0C11E0000000000000000004 /* WovenMatterClient */; };
 		D46000000000000000000002 /* WovenMatterDashboardStore in Frameworks */ = {isa = PBXBuildFile; productRef = D46000000000000000000001 /* WovenMatterDashboardStore */; };
 		A11C00000000000000000001 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A11C00000000000000000002 /* Assets.xcassets */; };
@@ -35,7 +37,6 @@
 		A12000000000000000000009 /* harnesses in Resources */ = {isa = PBXBuildFile; fileRef = A1200000000000000000000A /* harnesses */; };
 		E10000000000000000000001 /* NoteEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = E10000000000000000000002 /* NoteEditor.swift */; };
 		E10100000000000000000001 /* WovenNoteService.swift in Sources */ = {isa = PBXBuildFile; fileRef = E10100000000000000000002 /* WovenNoteService.swift */; };
-		E10200000000000000000001 /* woven-note in Resources */ = {isa = PBXBuildFile; fileRef = E10200000000000000000002 /* woven-note */; };
 		F10000000000000000000001 /* AgentDatabases.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000002 /* AgentDatabases.swift */; };
 		A13000000000000000000001 /* RemoteWorkspacesModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A13000000000000000000002 /* RemoteWorkspacesModel.swift */; };
 		A13000000000000000000003 /* SettingsRemoteWorkspacesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A13000000000000000000004 /* SettingsRemoteWorkspacesView.swift */; };
@@ -66,6 +67,8 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		D472AB9160464F1FAB826C21 /* WorkspaceToolControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WorkspaceToolControls.swift"; sourceTree = "<group>"; };
+		D472AB9160464F1FAB826C11 /* ApplicationModel+AgentTools.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ApplicationModel+AgentTools.swift"; sourceTree = "<group>"; };
 		A11C00000000000000000002 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A11C00000000000000000004 /* WorkspaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceView.swift; sourceTree = "<group>"; };
 		DC0A00000000000000000002 /* DashboardComposerTextEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardComposerTextEditor.swift; sourceTree = "<group>"; };
@@ -95,7 +98,6 @@
 		D50000000000000000000009 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		E10000000000000000000002 /* NoteEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteEditor.swift; sourceTree = "<group>"; };
 		E10100000000000000000002 /* WovenNoteService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WovenNoteService.swift; sourceTree = "<group>"; };
-		E10200000000000000000002 /* woven-note */ = {isa = PBXFileReference; lastKnownFileType = text.script.sh; path = "woven-note"; sourceTree = "<group>"; };
 		F10000000000000000000002 /* AgentDatabases.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentDatabases.swift; sourceTree = "<group>"; };
 		A13000000000000000000002 /* RemoteWorkspacesModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteWorkspacesModel.swift; sourceTree = "<group>"; };
 		A13000000000000000000004 /* SettingsRemoteWorkspacesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsRemoteWorkspacesView.swift; sourceTree = "<group>"; };
@@ -182,6 +184,7 @@
 			isa = PBXGroup;
 			children = (
 				3CE258FB55B3D55A39972D5B /* OpenCodeModel.swift */,
+				D472AB9160464F1FAB826C11 /* ApplicationModel+AgentTools.swift */,
 				20E807F893654CD4A1F24D40 /* WorkspaceAgentToolsModel.swift */,
 				87BA82494C4524C032235AAF /* DashboardConversationReferencePreview.swift */,
 				FC6A850ACFC17DE4433439A7 /* DashboardConversationState.swift */,
@@ -223,6 +226,7 @@
 				0C1A00000000000000000004 /* OpenClawSessionView.swift */,
 				C49C2130B0B0B01A795C7504 /* SettingsView.swift */,
 				5E7A00000000000000000002 /* SettingsComponents.swift */,
+				D472AB9160464F1FAB826C21 /* WorkspaceToolControls.swift */,
 				5E7A00000000000000000004 /* SettingsGeneralView.swift */,
 				5E7A00000000000000000006 /* SettingsOpenClawView.swift */,
 				5E7A00000000000000000008 /* SettingsLocalWorkspaceView.swift */,
@@ -239,7 +243,6 @@
 				A12000000000000000000006 /* remote-workspace.sh */,
 				A12000000000000000000008 /* remote */,
 				A1200000000000000000000A /* harnesses */,
-				E10200000000000000000002 /* woven-note */,
 				3C0A700E6F1C4902ACCF3585 /* wovenmatter-remote.py */,
 				8BC14CE3FCC24BF3819737CB /* wovenmatter */,
 			);
@@ -326,7 +329,6 @@
 				A12000000000000000000005 /* remote-workspace.sh in Resources */,
 				A12000000000000000000007 /* remote in Resources */,
 				A12000000000000000000009 /* harnesses in Resources */,
-				E10200000000000000000001 /* woven-note in Resources */,
 				1A239171AFDF4F0AA55642C4 /* wovenmatter-remote.py in Resources */,
 				03644CA683A4476385B50640 /* wovenmatter in Resources */,
 				A11C00000000000000000001 /* Assets.xcassets in Resources */,
@@ -388,6 +390,7 @@
 				A13000000000000000000003 /* SettingsRemoteWorkspacesView.swift in Sources */,
 				F10100000000000000000001 /* ArtifactEditor.swift in Sources */,
 				F10200000000000000000001 /* DashboardDatabasesView.swift in Sources */,
+				D472AB9160464F1FAB826C12 /* ApplicationModel+AgentTools.swift in Sources */,
 				5C84BF439B9047118002DD70 /* WorkspaceAgentToolsModel.swift in Sources */,
 				E10100000000000000000001 /* WovenNoteService.swift in Sources */,
 				0D0C4EE8248E4F63A87CF7B4 /* WovenMatterRemoteToolBridge.swift in Sources */,
@@ -406,6 +409,7 @@
 				0C1A00000000000000000001 /* OpenClawGatewaySettingsView.swift in Sources */,
 				0C1A00000000000000000003 /* OpenClawSessionView.swift in Sources */,
 				5E7A00000000000000000001 /* SettingsComponents.swift in Sources */,
+				D472AB9160464F1FAB826C22 /* WorkspaceToolControls.swift in Sources */,
 				5E7A00000000000000000003 /* SettingsGeneralView.swift in Sources */,
 				5E7A00000000000000000005 /* SettingsOpenClawView.swift in Sources */,
 				5E7A00000000000000000007 /* SettingsLocalWorkspaceView.swift in Sources */,

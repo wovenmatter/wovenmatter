@@ -485,85 +485,6 @@ extension WorkspaceDatabase {
 }
 
 extension WorkspaceDatabase {
-  /// Reserve before dispatch so retries cannot accidentally enqueue a second turn.
-  public func reserveSessionMessage(
-    sourceID: String, targetID: String, text: String, requestID: String
-  ) throws -> GatewayJSONValue? {
-    try transaction {
-      guard sourceID != targetID, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-        text.utf8.count <= 65536, UUID(uuidString: requestID) != nil
-      else {
-        throw WorkspaceDatabaseError.open(
-          "Send requires another session, nonempty text (up to 64 KiB), and a UUID request ID")
-      }
-      let previous = try historyRowsUnlocked(
-        "SELECT * FROM workspace_session_deliveries WHERE id=?", values: [requestID])
-      if let row = previous.first?.objectValue {
-        guard row["source_id"]?.stringValue == sourceID, row["target_id"]?.stringValue == targetID,
-          row["content"]?.stringValue == text
-        else { throw WorkspaceDatabaseError.open("Message request ID collision") }
-        return .object([
-          "requestID": .string(requestID), "status": row["status"] ?? .string("pending"),
-          "duplicate": .bool(true),
-        ])
-      }
-      let count = try historyRowsUnlocked(
-        "SELECT count(*) AS count FROM workspace_session_deliveries WHERE source_id=? AND created_at >= strftime('%Y-%m-%dT%H:%M:%fZ','now','-1 minute')",
-        values: [sourceID])
-      guard (count.first?.objectValue?["count"]?.intValue ?? 0) < 20 else {
-        throw WorkspaceDatabaseError.open(
-          "Session message limit reached (20 per minute); wait before sending again")
-      }
-      let valid = try historyRowsUnlocked(
-        "SELECT id FROM dashboard_conversations WHERE id IN (?,?) AND deleted_at IS NULL AND desktop_owned=1",
-        values: [sourceID, targetID])
-      guard valid.count == 2 else {
-        throw WorkspaceDatabaseError.open("Source or target session is unavailable")
-      }
-      let statement = try prepareUnlocked(
-        """
-        INSERT INTO workspace_session_deliveries(id,source_id,target_id,content,status,source_agent,source_title)
-        SELECT ?,?,?,?,'pending',agent_codename,title FROM dashboard_conversations WHERE id=?
-        """)
-      defer { sqlite3_finalize(statement) }
-      for (i, value) in [requestID, sourceID, targetID, text, sourceID].enumerated() {
-        try bind(value, at: Int32(i + 1), to: statement)
-      }
-      try stepDone(statement)
-      try recordHistoryUnlocked(
-        WorkspaceHistoryEvent(
-          id: "send:" + requestID, conversationID: sourceID,
-          harness: "woven-history", kind: "session.send",
-          payload: String(
-            decoding: try JSONEncoder().encode(
-              [
-                "requestID": requestID, "sourceSession": sourceID, "targetSession": targetID,
-                "text": text,
-              ]), as: UTF8.self)))
-      return nil
-    }
-  }
-
-  public func finishSessionMessage(requestID: String, accepted: Bool) throws {
-    try transaction {
-      let statement = try prepareUnlocked(
-        "UPDATE workspace_session_deliveries SET status=? WHERE id=?")
-      defer { sqlite3_finalize(statement) }
-      try bind(accepted ? "accepted" : "failed", at: 1, to: statement)
-      try bind(requestID, at: 2, to: statement)
-      try stepDone(statement)
-      try recordHistoryUnlocked(
-        WorkspaceHistoryEvent(
-          harness: "woven-history", kind: "session.send.result",
-          payload: String(
-            decoding: try JSONEncoder().encode([
-              "requestID": requestID, "status": accepted ? "accepted" : "failed",
-            ]), as: UTF8.self)))
-    }
-  }
-}
-
-extension WorkspaceDatabase {
   public func checkpointNote(id: String) throws {
     try transaction { try checkpointNoteUnlocked(id: id, source: "editor-checkpoint", force: true) }
   }
@@ -589,7 +510,7 @@ extension WorkspaceDatabase {
       """
       UPDATE workspace_session_deliveries SET message_id=?,status='accepted' WHERE id=?
         AND target_id=(SELECT conversation_id FROM dashboard_messages WHERE id=?)
-        AND message_id IS NULL
+        AND message_id IS NULL AND status='sending'
       """)
     defer { sqlite3_finalize(statement) }
     try bind(messageID, at: 1, to: statement)

@@ -8,6 +8,7 @@ import WovenMatterDashboardStore
 final class WorkspaceAgentToolsModel {
     typealias SessionHandler = @MainActor (String, WovenMatterToolCommand, WovenMatterToolRequest) async throws -> WovenMatterToolResponse
     typealias NoteHandler = @MainActor (String, NoteEditingRequest) async throws -> NoteEditingResponse
+    typealias NoteRestoreHandler = @MainActor (String, String, String, String) async throws -> NoteEditingResponse
     typealias UsageHandler = @MainActor (WovenMatterToolCommand) async throws -> WovenMatterToolResponse
     let database: WorkspaceDatabase
     private(set) var settings: WorkspaceToolSettings
@@ -23,16 +24,18 @@ final class WorkspaceAgentToolsModel {
     private let endpointDirectory: URL
     private let sessionHandler: SessionHandler
     private let noteHandler: NoteHandler
+    private let noteRestoreHandler: NoteRestoreHandler
     private let usageHandler: UsageHandler
     private let onMutation: @MainActor () async -> Void
 
     init(database: WorkspaceDatabase, sessionHandler: @escaping SessionHandler,
-         noteHandler: @escaping NoteHandler, usageHandler: @escaping UsageHandler,
+         noteHandler: @escaping NoteHandler, noteRestoreHandler: @escaping NoteRestoreHandler, usageHandler: @escaping UsageHandler,
          onMutation: @escaping @MainActor () async -> Void) throws {
         self.database = database
         self.settings = try database.toolSettings()
         self.sessionHandler = sessionHandler
         self.noteHandler = noteHandler
+        self.noteRestoreHandler = noteRestoreHandler
         self.usageHandler = usageHandler
         self.onMutation = onMutation
         endpointDirectory = URL(fileURLWithPath: "/private/tmp/wmtools-" + UUID().uuidString.replacingOccurrences(of: "-", with: ""))
@@ -158,6 +161,8 @@ final class WorkspaceAgentToolsModel {
             // Scoped history reads have their own independent attachment/management
             // checks. All other commands require the group's current capability.
             if group != .history { try database.requireTool(group, sessionID: callerID) }
+            try database.recordHistory(.init(conversationID: callerID, harness: "wovenmatter", kind: "cli.request",
+                payload: String(decoding: try JSONEncoder().encode(request), as: UTF8.self)))
             let result: WovenMatterToolResponse
             switch group {
             case .history:
@@ -184,10 +189,19 @@ final class WorkspaceAgentToolsModel {
                 result = .init(result: .object(["items": .array([]), "available": .bool(false),
                     "detail": .string("The Library does not store items yet.")]))
             }
+            // History queries persist reference IDs in the database's query
+            // path. Re-journaling their full response recursively copies history.
+            if group != .history {
+                try database.recordHistory(.init(conversationID: callerID, harness: "wovenmatter", kind: "cli.response",
+                    payload: String(decoding: try JSONEncoder().encode(result), as: UTF8.self)))
+            }
             try reload()
             await onMutation()
             return result
-        } catch { return .init(success: false, error: error.localizedDescription) }
+        } catch {
+            try? database.recordHistory(.init(conversationID: callerID, harness: "wovenmatter", kind: "cli.error", payload: error.localizedDescription))
+            return .init(success: false, error: error.localizedDescription)
+        }
     }
 
     private func historyQuery(_ command: WovenMatterToolCommand) throws -> WorkspaceHistoryQuery {
@@ -220,8 +234,8 @@ final class WorkspaceAgentToolsModel {
         case "versions", "version":
             return .init(result: try database.queryAgentHistory(historyQuery(command), callerID: callerID))
         case "restore":
-            return try .value(database.restoreNoteAssetVersion(noteID: command.required("note-id", allowPositional: true), versionID: command.required("version"),
-                expectedRevision: command.required("revision"), callerConversationID: callerID))
+            return try .value(await noteRestoreHandler(callerID, command.required("note-id", allowPositional: true),
+                command.required("version"), command.required("revision")))
         default:
             guard command.options["file"] == nil else { throw WorkspaceToolError.invalid("Read input files on the CLI host before sending the request.") }
             var args = Array(request.arguments.dropFirst())

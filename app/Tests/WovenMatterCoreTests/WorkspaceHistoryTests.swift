@@ -170,8 +170,9 @@ struct WorkspaceHistoryTests {
       runtimeKind: .hermes, title: "Writer", ownerDeviceID: UUID())
     let id = UUID().uuidString
     #expect(
-      try db.reserveSessionMessage(sourceID: a, targetID: b, text: "Findings", requestID: id) == nil
+      try db.reserveToolDelivery(sourceID: a, targetID: b, text: "Findings", requestID: id).status == "queued"
     )
+    _ = try db.claimToolDelivery(id: id)
     let run = try db.beginLocalACPRun(
       conversationID: b, input: AgentMessageInput(text: "Findings", historyDeliveryID: id))
     let message = try #require(
@@ -179,19 +180,18 @@ struct WorkspaceHistoryTests {
     #expect(message.senderSessionID == a)
     #expect(message.senderSessionTitle == "Research")
     #expect(message.content == "Findings")
-    try db.finishSessionMessage(requestID: id, accepted: true)
+    try db.setToolDeliveryStatus(id: id, status: "accepted")
     #expect(
-      try db.reserveSessionMessage(sourceID: a, targetID: b, text: "Findings", requestID: id)?
-        .objectValue?["status"]?.stringValue == "accepted")
+      try db.reserveToolDelivery(sourceID: a, targetID: b, text: "Findings", requestID: id).status == "accepted")
     #expect(throws: (any Error).self) {
-      try db.reserveSessionMessage(sourceID: b, targetID: a, text: "Findings", requestID: id)
+      try db.reserveToolDelivery(sourceID: b, targetID: a, text: "Findings", requestID: id)
     }
     #expect(throws: (any Error).self) {
-      try db.reserveSessionMessage(
+      try db.reserveToolDelivery(
         sourceID: a, targetID: a, text: "Loop", requestID: UUID().uuidString)
     }
     #expect(throws: (any Error).self) {
-      try db.reserveSessionMessage(
+      try db.reserveToolDelivery(
         sourceID: a, targetID: "missing", text: "Test", requestID: UUID().uuidString)
     }
     #expect(rows(try db.queryHistory(.init(command: "search", search: "Findings"))).count >= 2)

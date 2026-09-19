@@ -393,12 +393,6 @@ struct WovenMatterApp: App {
                 environment: ProcessInfo.processInfo.environment
             ))
         }
-        if let commandIndex = CommandLine.arguments.firstIndex(of: "--woven-note-cli") {
-            Darwin.exit(WovenNoteCommandLine.run(
-                arguments: Array(CommandLine.arguments.dropFirst(commandIndex + 1)),
-                environment: ProcessInfo.processInfo.environment
-            ))
-        }
         let environment = ProcessInfo.processInfo.environment
         let isRunningUnitTests = environment["XCTestBundlePath"] != nil
             || environment["XCTestSessionIdentifier"] != nil

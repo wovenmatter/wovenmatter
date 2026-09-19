@@ -8,6 +8,8 @@ extension WorkspaceDatabase {
     try transaction {
       try executeUnlocked("""
         CREATE TABLE IF NOT EXISTS workspace_tool_settings(id INTEGER PRIMARY KEY CHECK(id=1), value TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS workspace_opencode_input_context(
+          id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, visible_text TEXT NOT NULL, delivery_id TEXT);
         CREATE TABLE IF NOT EXISTS workspace_tool_schema(version INTEGER PRIMARY KEY);
         CREATE TABLE IF NOT EXISTS workspace_session_tools(
           session_id TEXT PRIMARY KEY REFERENCES dashboard_conversations(id), enabled_json TEXT NOT NULL);
@@ -243,11 +245,21 @@ extension WorkspaceDatabase {
     return rows.first?.objectValue?["n"]?.intValue ?? 0
   }
 
-  private func beginCoordinationUnlocked(sourceID: String, targetID: String, purpose: String, notifications: Bool) throws {
+  func beginCoordinationUnlocked(sourceID: String, targetID: String, purpose: String, notifications: Bool) throws {
     try toolsExecuteUnlocked("""
       INSERT INTO workspace_session_relationships(session_id,coordinator_id,purpose,notifications_enabled) VALUES(?,?,?,?)
       ON CONFLICT(session_id) DO UPDATE SET coordinator_id=excluded.coordinator_id,purpose=excluded.purpose,notifications_enabled=excluded.notifications_enabled
       """, [targetID, sourceID, purpose, notifications ? "1" : "0"])
+  }
+
+  public func setCoordinationNotifications(sourceID: String, targetID: String, enabled: Bool) throws {
+    try transaction {
+      try requireToolUnlocked(.sessions, sessionID: sourceID)
+      guard try relationshipUnlocked(targetID).coordinatorID == sourceID else {
+        throw WorkspaceToolError.invalid("Only this session's coordinator may change its notifications.")
+      }
+      try toolsExecuteUnlocked("UPDATE workspace_session_relationships SET notifications_enabled=? WHERE session_id=?", [enabled ? "1" : "0", targetID])
+    }
   }
 
   /// sourceID is bound by the endpoint. The user may stop any assignment through the UI.

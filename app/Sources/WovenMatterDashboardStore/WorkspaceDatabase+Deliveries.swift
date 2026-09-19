@@ -45,20 +45,37 @@ extension WorkspaceDatabase {
   public func claimToolDelivery(id: String) throws -> WorkspaceSessionDelivery? {
     try transaction {
       guard let delivery = try deliveryUnlocked(id), delivery.status == "queued" else { return nil }
-      try requireToolSessionUnlocked(delivery.sourceID)
-      try requireToolSessionUnlocked(delivery.targetID)
-      switch delivery.kind {
-      case .message, .created: try requireToolUnlocked(.sessions, sessionID: delivery.sourceID)
-      case .timer: try requireToolUnlocked(.timers, sessionID: delivery.targetID)
-      case .notification:
-        let relation = try relationshipUnlocked(delivery.sourceID)
-        guard relation.coordinatorID == delivery.targetID, relation.notificationsEnabled else {
-          try toolsExecuteUnlocked("UPDATE workspace_session_deliveries SET status='cancelled' WHERE id=?", [id])
-          return nil
-        }
+      guard try toolDeliveryAuthorizedUnlocked(delivery) else {
+        try toolsExecuteUnlocked("UPDATE workspace_session_deliveries SET status='cancelled' WHERE id=?", [id])
+        return nil
       }
       try toolsExecuteUnlocked("UPDATE workspace_session_deliveries SET status='sending' WHERE id=? AND status='queued'", [id])
       return try deliveryUnlocked(id)
+    }
+  }
+
+  public func validateClaimedToolDelivery(id: String) throws {
+    try lock.withLock {
+      guard let delivery = try deliveryUnlocked(id), delivery.status == "sending",
+            try toolDeliveryAuthorizedUnlocked(delivery) else {
+        throw WorkspaceToolError.invalid("This delivery was cancelled or its access was revoked.")
+      }
+    }
+  }
+
+  private func toolDeliveryAuthorizedUnlocked(_ delivery: WorkspaceSessionDelivery) throws -> Bool {
+    guard let source = try? sessionToolsUnlocked(delivery.sourceID),
+          let target = try? sessionToolsUnlocked(delivery.targetID) else { return false }
+    switch delivery.kind {
+    case .message, .created: return source.enabled.contains(.sessions)
+    case .timer:
+      guard target.enabled.contains(.timers) else { return false }
+      return !(try historyRowsUnlocked(
+        "SELECT 1 FROM workspace_session_timers WHERE session_id=? AND pending_delivery_id=? AND is_paused=0",
+        values: [delivery.targetID, delivery.id])).isEmpty
+    case .notification:
+      let relation = try relationshipUnlocked(delivery.sourceID)
+      return target.enabled.contains(.sessions) && relation.coordinatorID == delivery.targetID && relation.notificationsEnabled
     }
   }
 
@@ -74,6 +91,10 @@ extension WorkspaceDatabase {
 
   public func recoverToolDeliveries() throws {
     try transaction { try executeUnlocked("UPDATE workspace_session_deliveries SET status='uncertain' WHERE status='sending' AND message_id IS NULL") }
+  }
+
+  public func toolDelivery(id: String) throws -> WorkspaceSessionDelivery? {
+    try lock.withLock { try deliveryUnlocked(id) }
   }
 
   public func sessionDeliveries(sessionID: String? = nil, queuedOnly: Bool = false, limit: Int = 200) throws -> [WorkspaceSessionDelivery] {

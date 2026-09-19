@@ -15,6 +15,57 @@ struct WorkspaceAgentToolTests {
     return (db, dir, a, b)
   }
 
+  @Test func asynchronousPreparationHoldsCapacityAndSteeringNeedsNoNewSlot() {
+    var gate = WorkspaceSessionAdmission()
+    #expect(gate.begin("a", running: [], limit: 1) == .start)
+    #expect(gate.begin("b", running: [], limit: 1) == .atCapacity)
+    #expect(gate.begin("a", running: ["a"], limit: 1) == .preparing)
+    gate.finish("a")
+    #expect(gate.begin("a", running: ["a"], limit: 1) == .steer)
+    #expect(gate.begin("b", running: ["a"], limit: 2) == .start)
+    #expect(gate.begin("c", running: ["a"], limit: 2) == .atCapacity)
+    gate.finish("b") // failed preparation releases its reservation
+    #expect(gate.begin("c", running: ["a"], limit: 2) == .start)
+    var maximum = WorkspaceSessionAdmission()
+    for n in 0..<48 { #expect(maximum.begin(String(n), running: [], limit: 48) == .start) }
+    #expect(maximum.begin("49", running: [], limit: 48) == .atCapacity)
+  }
+
+  @Test func creationCommitGrantsManagedReadOnceAndRetryDoesNotReacquireReleasedSession() throws {
+    let (db, dir, a, b) = try fixture()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    try db.setSessionTools(.init(enabled: [.sessions]), sessionID: a)
+    let request = UUID().uuidString.lowercased()
+    let reserved = try db.reserveToolSessionCreation(sourceID: a, requestID: request, arguments: ["sessions", "create"], purpose: "Build", managed: true)
+    let target = try #require(reserved.objectValue?["target_id"]?.stringValue)
+    _ = try db.createLocalACPSession(runtimeKind: .pi, title: "Created", ownerDeviceID: UUID(), requestedConversationID: UUID(uuidString: target))
+    #expect(throws: WorkspaceToolError.accessRequired(target)) { try db.requireTranscriptAccess(sourceID: a, targetID: target) }
+    #expect(throws: (any Error).self) { try db.completeToolSessionCreation(requestID: request, sourceID: b) }
+    try db.completeToolSessionCreation(requestID: request, sourceID: a)
+    try db.requireTranscriptAccess(sourceID: a, targetID: target)
+    try db.setCoordinationNotifications(sourceID: a, targetID: target, enabled: false)
+    #expect(try !db.sessionRelationship(target).notificationsEnabled)
+    #expect(throws: (any Error).self) { try db.setCoordinationNotifications(sourceID: b, targetID: target, enabled: true) }
+    try db.endCoordination(targetID: target, sourceID: a)
+    try db.completeToolSessionCreation(requestID: request, sourceID: a)
+    #expect(try db.sessionRelationship(target).coordinatorID == nil)
+    #expect(try db.sessionRelationship(target).createdBy == a)
+    #expect(throws: WorkspaceToolError.accessRequired(target)) { try db.requireTranscriptAccess(sourceID: a, targetID: target) }
+  }
+
+  @Test func pausingTimerAfterQueuePreventsItsDeferredDelivery() throws {
+    let (db, dir, a, _) = try fixture()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let timer = WorkspaceSessionTimer(sessionID: a, instruction: "Follow up", nextFireAt: .distantPast)
+    try db.saveSessionTimer(timer, callerID: a)
+    let due = try #require(db.dueSessionTimers().first)
+    let id = try #require(due.pendingDeliveryID)
+    _ = try db.reserveToolDelivery(sourceID: a, targetID: a, text: due.instruction, requestID: id, kind: .timer)
+    try db.pauseSessionTimer(id: timer.id, paused: true)
+    #expect(try db.claimToolDelivery(id: id) == nil)
+    #expect(try db.toolDelivery(id: id)?.status == "cancelled")
+  }
+
   @Test func defaultsAreSnapshotsAndCalendarModeIsGlobal() throws {
     let (db, dir, a, _) = try fixture()
     defer { try? FileManager.default.removeItem(at: dir) }
@@ -240,6 +291,21 @@ struct WorkspaceAgentToolTests {
     #expect(try reopened.sessionDeliveries(sessionID: a).first?.status == "uncertain")
     #expect(try reopened.claimToolDelivery(id: id) == nil)
     #expect(throws: (any Error).self) { try db.reserveToolDelivery(sourceID: b, targetID: a, text: "Do the work", requestID: id) }
+  }
+
+  @Test func revocationAfterClaimPreventsDispatchAndDisabledQueuedWorkIsCancelled() throws {
+    let (db, dir, a, b) = try fixture()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let id = UUID().uuidString.lowercased()
+    _ = try db.reserveToolDelivery(sourceID: a, targetID: b, text: "Review", requestID: id)
+    _ = try db.claimToolDelivery(id: id)
+    try db.validateClaimedToolDelivery(id: id)
+    let queued = UUID().uuidString.lowercased()
+    _ = try db.reserveToolDelivery(sourceID: a, targetID: b, text: "More", requestID: queued)
+    try db.setSessionTools(.init(enabled: []), sessionID: a)
+    #expect(throws: (any Error).self) { try db.validateClaimedToolDelivery(id: id) }
+    #expect(try db.claimToolDelivery(id: queued) == nil)
+    #expect(try db.toolDelivery(id: queued)?.status == "cancelled")
   }
 
   @Test func creationReservationsSurviveReopenAndCountTowardFanout() throws {

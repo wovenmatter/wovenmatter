@@ -138,3 +138,25 @@ PR #40 is reference material, not the final architecture. T3 Orchestrator V2
 (`1affc9a`) informs durable receipts, explicit context and app-owned scheduling;
 Herdr informs concise CLI discovery/control; Codex informs same-session wakeups
 and distinct read/start/steer operations. No source from those projects is copied.
+
+## Integration checkpoint
+
+The unified service is now connected to app startup/shutdown and shared message
+admission, including native OpenCode. Session creation, management access approval,
+message receipts in storage, persistent timer dispatch, scoped notes/usage reads,
+General defaults and composer toggles are wired. The old exposed `woven-note`
+entry point and resource have been removed. Native OpenCode prompt projection
+retains original visible input and agent attribution separately from discovery.
+
+This remains a draft. Automatic coordinator notifications, receipt rendering,
+hover/sidebar indicators, user timer/coordination management and note recovery UI
+still need completion. All harness dispatch semantics, creation recovery and
+location inheritance still require end-to-end fixture review; native slash-command
+attribution needs special handling because that API returns no input ID. Full
+repository checks, rendered native UI proof and exact-head hosted checks remain
+release-readiness gates.
+
+At this checkpoint the unsigned Debug app build and 58 provider-free Core tests
+passed, covering admission reservations, scoped access, creation completion,
+notification controls, timer revocation, retention, and native OpenCode prompt
+projection/recovery. This is focused verification, not production acceptance.

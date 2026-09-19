@@ -146,3 +146,19 @@ public struct WorkspaceSessionDelivery: Codable, Identifiable, Sendable {
     self.targetModel = targetModel; self.purpose = purpose; self.createdAt = createdAt
   }
 }
+
+/// Main-actor owners hold a reservation across asynchronous launch preparation.
+/// Running sessions and reservations are a union, never two counts of one session.
+public struct WorkspaceSessionAdmission: Sendable {
+  public enum Decision: Equatable, Sendable { case start, steer, atCapacity, preparing }
+  private var preparing: Set<String> = []
+  public init() {}
+  public mutating func begin(_ id: String, running: Set<String>, limit: Int) -> Decision {
+    guard !preparing.contains(id) else { return .preparing }
+    if running.contains(id) { preparing.insert(id); return .steer }
+    guard running.union(preparing).count < limit else { return .atCapacity }
+    preparing.insert(id)
+    return .start
+  }
+  public mutating func finish(_ id: String) { preparing.remove(id) }
+}
