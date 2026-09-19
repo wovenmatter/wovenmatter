@@ -272,6 +272,8 @@ public struct NoteEditingResponse: Codable, Equatable, Sendable {
   public var revision: String?
   public var document: NoteDocument?
   public var error: String?
+  /// Acknowledges the original revision without returning or restoring old contents.
+  public var replayed: Bool?
 
   public init(
     success: Bool,
@@ -279,7 +281,8 @@ public struct NoteEditingResponse: Codable, Equatable, Sendable {
     title: String? = nil,
     revision: String? = nil,
     document: NoteDocument? = nil,
-    error: String? = nil
+    error: String? = nil,
+    replayed: Bool? = nil
   ) {
     self.success = success
     self.noteID = noteID
@@ -287,6 +290,7 @@ public struct NoteEditingResponse: Codable, Equatable, Sendable {
     self.revision = revision
     self.document = document
     self.error = error
+    self.replayed = replayed
   }
 }
 

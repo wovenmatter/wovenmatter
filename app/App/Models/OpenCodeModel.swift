@@ -100,13 +100,15 @@ final class OpenCodeModel {
             ?? "local:" + registration.standardizedFileURL.path
         for link in (try? store.database.openCodeLinks()) ?? [] where link.connectionID == identity {
             links[link.conversationID] = link
-            snapshots[link.conversationID] = try? store.database.openCodeSnapshot(conversationID: link.conversationID)
+            if let snapshot = try? store.database.openCodeSnapshot(conversationID: link.conversationID) {
+                snapshots[link.conversationID] = try? store.database.openCodeDisplaySnapshot(snapshot, conversationID: link.conversationID)
+            }
         }
         updateTask = Task { [weak self, coordinator] in
             for await update in coordinator.updates {
                 guard let self, !Task.isCancelled else { return }
                 guard update.status == "Disconnected" || (self.isEnabled && !self.serverStopped && !self.quitting) else { continue }
-                if let snapshot = update.snapshot { self.snapshots[update.conversationID] = snapshot }
+                if let snapshot = update.snapshot { self.snapshots[update.conversationID] = try? store.database.openCodeDisplaySnapshot(snapshot, conversationID: update.conversationID) }
                 self.statuses[update.conversationID] = update.status
                 self.errors[update.conversationID] = update.error
                 if self.isEnabled, !self.serverStopped, !self.isControllingServer, self.isLocalSession(update.conversationID) {
@@ -289,19 +291,19 @@ final class OpenCodeModel {
         return try OpenCodeConnection.discover(file: registration).browserURL
     }
 
-    func create(workspace: URL) async throws -> String {
+    func create(workspace: URL, requestedConversationID: UUID? = nil) async throws -> String {
         guard isEnabled else { throw OpenCodeError.message("Enable OpenCode for this workspace before creating a chat.") }
         guard !serverStopped else { throw OpenCodeError.message("Start OpenCode from its settings page before creating a chat.") }
         guard !busy else { throw OpenCodeError.message("A session is already being created.") }
         busy = true; defer { busy = false }
         try await connectLocal()
-        let pendingKey = "wovenmatter.opencode.pending-create." + connectionID
+        let pendingKey = "wovenmatter.opencode.pending-create." + connectionID + (requestedConversationID.map { "." + $0.uuidString.lowercased() } ?? "")
         let pending = defaults.string(forKey: pendingKey)
-        let id = pending ?? "ses_" + UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
+        let id = pending ?? "ses_" + (requestedConversationID ?? UUID()).uuidString.replacingOccurrences(of: "-", with: "").lowercased()
         defaults.set(id, forKey: pendingKey)
         do {
-            let response = try await coordinator.createSession(connectionID: connectionID, id: id, workspace: workspace, recover: pending != nil)
-            let localID = try await open(response["data"])
+            let response = try await coordinator.createSession(connectionID: connectionID, id: id, workspace: workspace, recover: pending != nil || requestedConversationID != nil)
+            let localID = try await open(response["data"], requestedConversationID: requestedConversationID)
             defaults.removeObject(forKey: pendingKey)
             return localID
         } catch {
@@ -327,7 +329,7 @@ final class OpenCodeModel {
         _ = try await open(snapshot.info, importedSnapshot: snapshot)
     }
 
-    private func open(_ session: OpenCodeValue, importedSnapshot: OpenCodeSessionSnapshot? = nil) async throws -> String {
+    private func open(_ session: OpenCodeValue, importedSnapshot: OpenCodeSessionSnapshot? = nil, requestedConversationID: UUID? = nil) async throws -> String {
         let sessionID = session["id"].text
         guard sessionID.hasPrefix("ses") else { throw OpenCodeError.message("OpenCode did not return a session ID.") }
         let conversationID: String
@@ -335,11 +337,11 @@ final class OpenCodeModel {
             conversationID = try store.database.createRemoteACPSession(runtimeKind: .opencode,
                 remoteWorkspaceID: configuration.id, remoteWorkspaceName: configuration.name,
                 title: session["title"].string ?? "New OpenCode chat", ownerDeviceID: ownerDeviceID,
-                openCodeAssociation: (connectionID, sessionID))
+                openCodeAssociation: (connectionID, sessionID), requestedConversationID: requestedConversationID)
         } else {
             conversationID = try store.database.createLocalACPSession(runtimeKind: .opencode,
                 title: session["title"].string ?? "New OpenCode chat", ownerDeviceID: ownerDeviceID,
-                openCodeAssociation: (connectionID, sessionID), importedOpenCodeSnapshot: importedSnapshot)
+                openCodeAssociation: (connectionID, sessionID), importedOpenCodeSnapshot: importedSnapshot, requestedConversationID: requestedConversationID)
         }
         let link = OpenCodeSessionLink(conversationID: conversationID, connectionID: connectionID, sessionID: sessionID)
         links[conversationID] = link
@@ -398,20 +400,21 @@ final class OpenCodeModel {
         return OpenCodeComposerMetadata.metadata(session: snapshot.info, models: models[id] ?? [], defaultModel: defaultModels[id] ?? .null, hiddenModels: hiddenModels, commands: commands[id] ?? [])
     }
 
-    func updateSelection(_ id: String, model: String? = nil, thinking: String? = nil) {
-        guard updatingSessions.insert(id).inserted else { return }
+    @discardableResult
+    func updateSelection(_ id: String, model: String? = nil, thinking: String? = nil) -> Task<Void, Error>? {
+        guard updatingSessions.insert(id).inserted else { return nil }
         error = nil
         let task = Task { @MainActor in
             guard let key = model ?? self.metadata(id)?.model else {
                 throw OpenCodeError.message("OpenCode has no default model. Choose an available model.")
             }
             let selection = try OpenCodeComposerMetadata.selection(model: key, thinking: thinking, models: self.models[id] ?? [])
-            _ = try await self.sessionCall(id, "/model", method: "POST", body: selection)
-            let confirmed = try await self.sessionCall(id)
-            guard OpenCodeComposerMetadata.matchesSelection(confirmed["data"]["model"], selection["model"]) else {
-                throw OpenCodeError.message("OpenCode has not confirmed the selected model. Select it again before sending.")
+            guard let link = self.links[id], self.isLocalSession(id) else {
+                throw OpenCodeError.message("This saved transcript cannot change its model.")
             }
-            self.snapshots[id]?.info = confirmed["data"]
+            let confirmed = try await self.coordinator.configureSelection(link, selection: selection)
+            self.snapshots[id]?.info = confirmed
+            try? await self.coordinator.refresh(link)
         }
         selectionTasks[id] = task
         Task {
@@ -419,9 +422,20 @@ final class OpenCodeModel {
             do { try await task.value }
             catch { self.error = error.localizedDescription }
         }
+        return task
     }
 
-    func send(_ id: String, input: AgentMessageInput) async throws {
+    func confirmCreationSelection(_ id: String, model: String?, thinking: String?) async throws {
+        // Opening a native session can succeed before its model catalog arrives.
+        // Creation retries must retry that discovery instead of accepting defaults.
+        try await refreshCatalog(id)
+        guard let task = updateSelection(id, model: model, thinking: thinking) else {
+            throw OpenCodeError.message("A model selection is already in progress. Retry session creation after it completes.")
+        }
+        try await task.value
+    }
+
+    func send(_ id: String, input: AgentMessageInput, discovery: String? = nil) async throws {
         guard let link = links[id], isLocalSession(id) else { throw OpenCodeError.message("This saved transcript is read-only. Create a new OpenCode chat.") }
         guard isEnabled else { throw OpenCodeError.message("Enable OpenCode for this workspace before sending.") }
         if let configuration = remoteConfiguration,
@@ -434,9 +448,9 @@ final class OpenCodeModel {
         if let selection = selectionTasks[id] { try await selection.value }
         if let command = OpenCodeComposerMetadata.invocation(input.text, commands: commands[id] ?? []) {
             try await coordinator.command(link, name: command.name,
-                input: AgentMessageInput(text: command.arguments, attachments: input.attachments))
+                input: AgentMessageInput(text: command.arguments, attachments: input.attachments, historyDeliveryID: input.historyDeliveryID), discovery: discovery)
         } else {
-            try await coordinator.prompt(link, input: input)
+            try await coordinator.prompt(link, input: input, discovery: discovery)
         }
     }
 

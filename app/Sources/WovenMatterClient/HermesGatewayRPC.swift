@@ -1,4 +1,5 @@
 import Foundation
+import WovenMatterCore
 
 protocol HermesGatewayTransport: Sendable {
     var epoch: String? { get async }
@@ -15,6 +16,7 @@ public actor HermesGatewayRPC: HermesGatewayTransport {
     public typealias EventHandler = @Sendable (HermesValue) async -> Void
     public let connection: HermesGatewayConnection
     private let session: URLSession
+    private let historyRecorder: WorkspaceWireRecorder?
     private var socket: URLSessionWebSocketTask?
     private var reader: Task<Void, Never>?
     private var pending: [String: CheckedContinuation<HermesValue, any Error>] = [:]
@@ -26,8 +28,9 @@ public actor HermesGatewayRPC: HermesGatewayTransport {
     public var isConnected: Bool { socket != nil }
     private var generation = UUID()
 
-    public init(connection: HermesGatewayConnection) {
+    public init(connection: HermesGatewayConnection, historyRecorder: WorkspaceWireRecorder? = nil) {
         self.connection = connection
+        self.historyRecorder = historyRecorder
         let config = URLSessionConfiguration.ephemeral
         config.httpShouldSetCookies = false
         config.timeoutIntervalForRequest = 45
@@ -62,6 +65,7 @@ public actor HermesGatewayRPC: HermesGatewayTransport {
                     @unknown default: continue
                     }
                     for line in data.split(separator: 10) where !line.isEmpty {
+                        try await self?.record("in", data: Data(line))
                         let frame = try HermesValue.decode(Data(line))
                         await self?.receive(frame, generation: current)
                     }
@@ -92,6 +96,7 @@ public actor HermesGatewayRPC: HermesGatewayTransport {
         let id = UUID().uuidString
         let frame: HermesValue = ["jsonrpc": "2.0", "id": .string(id), "method": .string(method), "params": params]
         let text = String(decoding: try JSONEncoder().encode(frame), as: UTF8.self)
+        try record("out", data: Data(text.utf8))
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 pending[id] = continuation
@@ -113,7 +118,14 @@ public actor HermesGatewayRPC: HermesGatewayTransport {
 
     private func send(_ frame: HermesValue) async throws {
         guard let socket else { throw HermesGatewayError.message("Hermes Gateway is disconnected.") }
-        try await socket.send(.string(String(decoding: try JSONEncoder().encode(frame), as: UTF8.self)))
+        let data = try JSONEncoder().encode(frame)
+        try record("out", data: data)
+        try await socket.send(.string(String(decoding: data, as: UTF8.self)))
+    }
+
+    // Authentication stays in HTTP headers; it never enters this recorder.
+    private func record(_ direction: String, data: Data) throws {
+        try historyRecorder?(direction, data)
     }
 
     private func receive(_ frame: HermesValue, generation current: UUID) async {

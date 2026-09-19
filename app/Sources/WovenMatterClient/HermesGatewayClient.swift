@@ -46,7 +46,7 @@ public actor HermesGatewayClient {
         }
         self.connectTransport = { scoped in
             let connection = try await HermesGatewayService.shared.ensure(launch: scoped)
-            return (connection.identityHome, HermesGatewayRPC(connection: connection))
+            return (connection.identityHome, HermesGatewayRPC(connection: connection, historyRecorder: scoped.historyRecorder))
         }
     }
 
@@ -77,11 +77,12 @@ public actor HermesGatewayClient {
         if previous?.storedID == "" { throw HermesGatewayError.message("The saved Hermes conversation identity is invalid.") }
         var environment = launch.environment
         if let pinnedHome = previous?.home { environment["HERMES_HOME"] = pinnedHome }
-        let scoped = LocalACPRuntimeLaunchConfiguration(runtimeKind: .hermes, executableURL: launch.executableURL,
+        var scoped = LocalACPRuntimeLaunchConfiguration(runtimeKind: .hermes, executableURL: launch.executableURL,
             arguments: launch.arguments, environment: environment,
             environmentKeysToRemove: launch.environmentKeysToRemove,
             environmentKeyPrefixesToRemove: launch.environmentKeyPrefixesToRemove,
             processWorkingDirectoryURL: launch.processWorkingDirectoryURL)
+        scoped.historyRecorder = launch.historyRecorder
         let (profileHome, client) = try await connectTransport(scoped)
         if let pinnedHome = previous?.home, pinnedHome != profileHome {
             throw HermesGatewayError.message("This conversation belongs to another Hermes profile or remote workspace. Reconnect its original workspace before continuing.")

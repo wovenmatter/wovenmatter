@@ -120,6 +120,10 @@ public enum DashboardConversationSelection {
 }
 
 public struct WorkspaceMessageRecord: Codable, Equatable, Identifiable, Sendable {
+  public let senderKind: WorkspaceSessionDeliveryKind?
+  public let senderSessionID: String?
+  public let senderAgent: String?
+  public let senderSessionTitle: String?
   public let id: String
   public let conversationID: String
   public let clientMessageID: String?
@@ -134,6 +138,10 @@ public struct WorkspaceMessageRecord: Codable, Equatable, Identifiable, Sendable
 
   enum CodingKeys: String, CodingKey {
     case id, role, content, status
+    case senderKind = "sender_kind"
+    case senderSessionID = "sender_session_id"
+    case senderAgent = "sender_agent"
+    case senderSessionTitle = "sender_session_title"
     case conversationID = "conversation_id"
     case clientMessageID = "client_message_id"
     case runID = "run_id"

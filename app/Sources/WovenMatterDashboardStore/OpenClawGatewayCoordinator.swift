@@ -1879,6 +1879,7 @@ public actor OpenClawGatewayCoordinator {
         password: transport.password,
         credentialScope: "gateway-agent:\(agentID.uuidString.lowercased())"
           + (link.location == .remoteWorkspace ? "" : ":\(link.endpoint.url.absoluteString)"),
+        historyRecorder: database.historyWireRecorder(agentID: agentID.uuidString.lowercased(), harness: "openclaw"),
         eventHandler: { [weak self] event in
           await self?.handleGatewayEvent(event, agentID: agentID, generation: generation)
         },
