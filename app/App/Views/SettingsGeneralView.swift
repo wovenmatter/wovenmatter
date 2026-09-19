@@ -33,6 +33,7 @@ struct SettingsGeneralView: View {
             appearanceCard
             releaseUpdateCard
             conversationTitlesCard
+            if let tools = model.agentTools { WorkspaceToolDefaultsCard(tools: tools) }
         }
         .onChange(of: storedTheme) { _, _ in
             model.persistMacSurfaceProfileFromUserDefaults()

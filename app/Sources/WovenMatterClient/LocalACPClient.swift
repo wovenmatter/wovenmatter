@@ -141,6 +141,7 @@ public struct LocalACPSlashCommand: Codable, Equatable, Identifiable, Sendable {
 }
 
 public struct LocalACPSessionConfiguration: Equatable, Sendable {
+    public var workingDirectory: String?
     public let model: String?
     public let thinking: String?
     public let modelOptions: [String]
@@ -158,7 +159,8 @@ public struct LocalACPSessionConfiguration: Equatable, Sendable {
         thinkingOptions: [String] = [],
         slashCommands: [LocalACPSlashCommand] = [],
         modelOptionMetadata: [String: SessionOptionMetadata] = [:],
-        thinkingOptionMetadata: [String: SessionOptionMetadata] = [:]
+        thinkingOptionMetadata: [String: SessionOptionMetadata] = [:],
+        workingDirectory: String? = nil
     ) {
         self.model = model
         self.thinking = thinking
@@ -167,6 +169,7 @@ public struct LocalACPSessionConfiguration: Equatable, Sendable {
         self.slashCommands = slashCommands
         self.modelOptionMetadata = modelOptionMetadata
         self.thinkingOptionMetadata = thinkingOptionMetadata
+        self.workingDirectory = workingDirectory
     }
 
     public func selecting(
@@ -180,7 +183,8 @@ public struct LocalACPSessionConfiguration: Equatable, Sendable {
             thinkingOptions: thinkingOptions,
             slashCommands: slashCommands,
             modelOptionMetadata: modelOptionMetadata,
-            thinkingOptionMetadata: thinkingOptionMetadata
+            thinkingOptionMetadata: thinkingOptionMetadata,
+            workingDirectory: workingDirectory
         )
     }
 
@@ -514,6 +518,7 @@ public actor LocalACPClient {
     private var pendingRequests: [Int64: PendingRequest] = [:]
     private var readerTask: Task<Void, Never>?
     private var notificationTask: Task<Void, any Error>?
+    private let historyRecorder: WorkspaceWireRecorder?
     private var activeEventHandler: EventHandler?
     private var activePermissionHandler: PermissionHandler?
     private var activeInteractionHandler: InteractionHandler?
@@ -531,8 +536,10 @@ public actor LocalACPClient {
         input: FileHandle,
         cursor: ACPLineCursor,
         runtimeKind: AgentRuntimeKind,
-        workingDirectory: URL
+        workingDirectory: URL,
+        historyRecorder: WorkspaceWireRecorder? = nil
     ) {
+        self.historyRecorder = historyRecorder
         self.process = process
         self.input = input
         self.cursor = cursor
@@ -591,7 +598,8 @@ public actor LocalACPClient {
             input: stdin.fileHandleForWriting,
             cursor: ACPLineCursor(handle: stdout.fileHandleForReading),
             runtimeKind: launch.runtimeKind,
-            workingDirectory: workingDirectory
+            workingDirectory: workingDirectory,
+            historyRecorder: launch.historyRecorder
         )
     }
 
@@ -1379,6 +1387,7 @@ public actor LocalACPClient {
     }
 
     private func receive(_ data: Data) throws {
+        try historyRecorder?("in", data)
         let envelope = try Self.decodeEnvelope(data)
         if envelope.method == nil,
            let id = envelope.id?.integerValue,
@@ -1851,6 +1860,7 @@ public actor LocalACPClient {
     private func write(_ envelope: ACPEnvelope) throws {
         guard !closed else { throw LocalACPClientError.processExited }
         var data = try JSONEncoder().encode(envelope)
+        try historyRecorder?("out", data)
         data.append(0x0A)
         try input.write(contentsOf: data)
     }

@@ -22,6 +22,7 @@ struct DashboardNotePane: View {
     @FocusState private var titleFocused: Bool
     @State private var editorController = DashboardNoteEditorController()
     @State private var showsFormatting = false
+    @State private var showsVersionHistory = false
     @State private var linkedDataJSON: String?
     @State private var linkedDataError: String?
     @State private var isRefreshingLinkedData = false
@@ -119,6 +120,9 @@ struct DashboardNotePane: View {
                     .help("Refresh linked data")
                     .disabled(isRefreshingLinkedData)
                 }
+                Button { showsVersionHistory = true } label: {
+                    Image(systemName: "clock.arrow.circlepath").font(.system(size: 14)).frame(width: 32, height: 32)
+                }.buttonStyle(DashboardIconButtonStyle()).help("Version history").accessibilityLabel("Version history")
                 if currentDocument.kind == .note {
                     Button {
                         showsFormatting.toggle()
@@ -220,6 +224,7 @@ struct DashboardNotePane: View {
             .padding(.bottom, 24)
         }
         .background(theme.palette.workspace)
+        .sheet(isPresented: $showsVersionHistory) { WorkspaceNoteRecovery(model: model, noteID: note.id) }
         .onAppear {
             model.prepareNoteDraft(note)
             if focusesTitleOnAppear {

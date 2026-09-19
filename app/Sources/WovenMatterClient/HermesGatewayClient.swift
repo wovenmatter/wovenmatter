@@ -46,7 +46,7 @@ public actor HermesGatewayClient {
         }
         self.connectTransport = { scoped in
             let connection = try await HermesGatewayService.shared.ensure(launch: scoped)
-            return (connection.identityHome, HermesGatewayRPC(connection: connection))
+            return (connection.identityHome, HermesGatewayRPC(connection: connection, historyRecorder: scoped.historyRecorder))
         }
     }
 
@@ -77,11 +77,12 @@ public actor HermesGatewayClient {
         if previous?.storedID == "" { throw HermesGatewayError.message("The saved Hermes conversation identity is invalid.") }
         var environment = launch.environment
         if let pinnedHome = previous?.home { environment["HERMES_HOME"] = pinnedHome }
-        let scoped = LocalACPRuntimeLaunchConfiguration(runtimeKind: .hermes, executableURL: launch.executableURL,
+        var scoped = LocalACPRuntimeLaunchConfiguration(runtimeKind: .hermes, executableURL: launch.executableURL,
             arguments: launch.arguments, environment: environment,
             environmentKeysToRemove: launch.environmentKeysToRemove,
             environmentKeyPrefixesToRemove: launch.environmentKeyPrefixesToRemove,
             processWorkingDirectoryURL: launch.processWorkingDirectoryURL)
+        scoped.historyRecorder = launch.historyRecorder
         let (profileHome, client) = try await connectTransport(scoped)
         if let pinnedHome = previous?.home, pinnedHome != profileHome {
             throw HermesGatewayError.message("This conversation belongs to another Hermes profile or remote workspace. Reconnect its original workspace before continuing.")
@@ -112,6 +113,7 @@ public actor HermesGatewayClient {
         // Existing sessions keep their durable history, but Woven sessions follow their selected workspace.
         if !imported {
             _ = try await client.call("session.cwd.set", ["session_id": .string(sessionID), "cwd": .string(workingDirectory.path)])
+            configuration.workingDirectory = workingDirectory.path
         }
         try await refreshConfiguration()
         recoveryInvalidated = false
@@ -145,7 +147,8 @@ public actor HermesGatewayClient {
             modelOptions: configuration.modelOptions, thinkingOptions: configuration.thinkingOptions,
             slashCommands: configuration.slashCommands,
             modelOptionMetadata: configuration.modelOptionMetadata,
-            thinkingOptionMetadata: configuration.thinkingOptionMetadata)
+            thinkingOptionMetadata: configuration.thinkingOptionMetadata,
+            workingDirectory: info["cwd"].string ?? snapshot["cwd"].string)
     }
 
     public func sessionConfiguration() -> LocalACPSessionConfiguration { configuration }
@@ -163,7 +166,8 @@ public actor HermesGatewayClient {
                 modelOptions: configuration.modelOptions, thinkingOptions: configuration.thinkingOptions,
                 slashCommands: configuration.slashCommands,
                 modelOptionMetadata: configuration.modelOptionMetadata,
-                thinkingOptionMetadata: configuration.thinkingOptionMetadata)
+                thinkingOptionMetadata: configuration.thinkingOptionMetadata,
+                workingDirectory: configuration.workingDirectory)
         }
         try await refreshConfiguration()
         return configuration
@@ -174,11 +178,13 @@ public actor HermesGatewayClient {
         let reasoning = try await rpc.call("config.get", ["session_id": .string(sessionID), "key": "reasoning"])
         let options = try await rpc.call("model.options", ["session_id": .string(sessionID), "explicit_only": .bool(true)])
         let catalog = try? await rpc.call("commands.catalog", ["session_id": .string(sessionID)])
+        let directory = configuration.workingDirectory
         configuration = Self.configuration(
             options: options,
             reasoning: reasoning,
             slashCommands: catalog.map(HermesSlashCommands.catalog) ?? configuration.slashCommands
         )
+        configuration.workingDirectory = directory
     }
 
     /// The Gateway accepts this native session vocabulary and normalizes it at
