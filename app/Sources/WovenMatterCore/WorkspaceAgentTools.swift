@@ -190,7 +190,7 @@ public enum WorkspaceSessionDeliveryKind: String, Codable, Sendable {
   case message, created, timer, notification
 }
 
-public struct WorkspaceSessionDelivery: Codable, Identifiable, Sendable {
+public struct WorkspaceSessionDelivery: Codable, Identifiable, Equatable, Sendable {
   public let id: String
   public let sourceID: String
   public let targetID: String
