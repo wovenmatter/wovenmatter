@@ -6,7 +6,7 @@ import WovenMatterClient
 extension WorkspaceDatabase {
   public func listAgentNotes(callerID: String, search: String? = nil, folderID: String? = nil,
                               after: Int64 = 0, limit: Int = 50) throws -> GatewayJSONValue {
-    try lock.withLock {
+    try withLock {
       try requireToolUnlocked(.notes, sessionID: callerID)
       guard after >= 0, (1...200).contains(limit) else { throw WorkspaceToolError.invalid("Invalid pagination.") }
       let operatorID = try localMutationOperatorIDUnlocked()
@@ -23,7 +23,7 @@ extension WorkspaceDatabase {
   }
 
   public func listAgentFolders(callerID: String) throws -> GatewayJSONValue {
-    try lock.withLock {
+    try withLock {
       try requireToolUnlocked(.sessions, sessionID: callerID)
       let operatorID = try localMutationOperatorIDUnlocked()
       return .array(try historyRowsUnlocked("SELECT id,name,position FROM folders WHERE user_id=? ORDER BY position,id", values: [operatorID]))
@@ -32,7 +32,7 @@ extension WorkspaceDatabase {
 
   public func listAgentCalendar(callerID: String, since: Date? = nil, until: Date? = nil,
                                  after: Int64 = 0, limit: Int = 100) throws -> GatewayJSONValue {
-    try lock.withLock {
+    try withLock {
       try requireToolUnlocked(.calendar, sessionID: callerID)
       guard after >= 0, (1...200).contains(limit) else { throw WorkspaceToolError.invalid("Invalid pagination.") }
       let operatorID = try localMutationOperatorIDUnlocked()
@@ -75,7 +75,7 @@ extension WorkspaceDatabase {
             UPDATE dashboard_calendar_items SET title=?,description=?,starts_at=?,ends_at=?,all_day=?,updated_at=?
             WHERE id=? AND user_id=? AND kind='event'
             """, [title, details, Self.timestamp(startsAt), endsAt.map(Self.timestamp), allDay ? "1" : "0", now, id, operatorID])
-          guard sqlite3_changes(connection) == 1 else { throw WorkspaceToolError.invalid("Calendar event not found.") }
+          guard changedRowCountUnlocked == 1 else { throw WorkspaceToolError.invalid("Calendar event not found.") }
         }
         try recordHistoryUnlocked(.init(conversationID: callerID, harness: "wovenmatter", kind: "calendar.write",
           payload: try toolsJSON(["eventID": id, "action": creating ? "create" : "update"])))
@@ -91,7 +91,7 @@ extension WorkspaceDatabase {
         operation: "calendar.remove", input: id) {
         let operatorID = try localMutationOperatorIDUnlocked()
         try toolsExecuteUnlocked("DELETE FROM dashboard_calendar_items WHERE id=? AND user_id=? AND kind='event'", [id, operatorID])
-        guard sqlite3_changes(connection) == 1 else { throw WorkspaceToolError.invalid("Calendar event not found.") }
+        guard changedRowCountUnlocked == 1 else { throw WorkspaceToolError.invalid("Calendar event not found.") }
         try recordHistoryUnlocked(.init(conversationID: callerID, harness: "wovenmatter", kind: "calendar.remove", payload: try toolsJSON(["eventID": id])))
         return id
       }

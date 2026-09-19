@@ -101,6 +101,98 @@ struct OpenClawGatewayReviewTests {
     await fixture.coordinator.shutdown()
   }
 
+  @Test func interruptedWorkspaceCreationAdoptsTheExistingSessionWithoutResettingItsDirectory() async throws {
+    let fixture = try ReviewGatewayFixture()
+    defer { fixture.remove() }
+    let key = "agent:main:wovenmatter:recovered"
+    await fixture.socket.setWorkspaceSession(key, row: .object([
+      "key": .string(key), "spawnedCwd": .string("/workspace/user-moved"), "displayName": .string("User renamed")
+    ]))
+    try await fixture.coordinator.createWorkspaceSession(agentID: fixture.agentID, sessionKey: key,
+      cwd: URL(fileURLWithPath: "/workspace/original"), recover: true)
+    #expect(await fixture.socket.creationParameters == nil)
+    #expect(await fixture.socket.requestMethods.filter { $0 == "sessions.describe" }.count == 1)
+    await fixture.coordinator.shutdown()
+  }
+
+  @Test func workspaceCreationRecoveryCreatesOnlyWhenTheSessionIsMissing() async throws {
+    let fixture = try ReviewGatewayFixture()
+    defer { fixture.remove() }
+    let key = "agent:main:wovenmatter:new-retry"
+    for _ in 0..<2 {
+      try await fixture.coordinator.createWorkspaceSession(agentID: fixture.agentID, sessionKey: key,
+        cwd: URL(fileURLWithPath: "/workspace/initial"), recover: true)
+    }
+    #expect(await fixture.socket.requestMethods.filter { $0 == "sessions.create" }.count == 1)
+    await fixture.socket.setWorkspaceSession(key, row: .object(["key": .string("wrong-session")]))
+    await #expect(throws: OpenClawGatewayClientError.malformedFrame) {
+      try await fixture.coordinator.createWorkspaceSession(agentID: fixture.agentID, sessionKey: key,
+        cwd: URL(fileURLWithPath: "/workspace/initial"), recover: true)
+    }
+    #expect(await fixture.socket.requestMethods.filter { $0 == "sessions.create" }.count == 1)
+    await fixture.coordinator.shutdown()
+  }
+
+  @Test func creationSelectionRequiresGatewayConfirmation() async throws {
+    let fixture = try ReviewGatewayFixture()
+    defer { fixture.remove() }
+    let id = try fixture.database.importOpenClawGatewaySession(agentID: fixture.agentID, session: fixture.session)
+    try await fixture.coordinator.confirmCreationSelection(conversationID: id, model: "xai/grok-4.6", thinking: "high")
+    // This gateway fixture acknowledges writes without changing its selection.
+    await #expect(throws: (any Error).self) {
+      try await fixture.coordinator.confirmCreationSelection(conversationID: id, model: "anthropic/claude-sonnet-4-6", thinking: "high")
+    }
+    await #expect(throws: (any Error).self) {
+      try await fixture.coordinator.confirmCreationSelection(conversationID: id, model: nil, thinking: "low")
+    }
+    #expect(await fixture.socket.requestMethods.filter { $0 == "sessions.patch" }.count == 3)
+    await fixture.coordinator.shutdown()
+  }
+
+  @Test(.timeLimit(.minutes(1)), arguments: ["policy", "timer-pause", "timer-remove", "timer-disable", "assignment", "cancel"])
+  func revokedDeliveryCannotCrossAnAsynchronousGatewayConnection(revocation: String) async throws {
+    let gate = ReviewConnectionGate()
+    let fixture = try ReviewGatewayFixture(beforeConnect: { await gate.pause() })
+    defer { fixture.remove() }
+    let database = fixture.database
+    let target = try database.importOpenClawGatewaySession(agentID: fixture.agentID, session: fixture.session)
+    let caller = try database.createLocalACPSession(runtimeKind: .codex, title: "Source", ownerDeviceID: UUID())
+    var source = caller, requestID = UUID().uuidString
+    var kind = WorkspaceSessionDeliveryKind.message
+    var timerID: String?
+    if revocation.hasPrefix("timer-") {
+      let timer = WorkspaceSessionTimer(sessionID: target, instruction: "Follow up", nextFireAt: .distantPast)
+      try database.saveSessionTimer(timer)
+      timerID = timer.id
+      requestID = try #require(database.dueSessionTimers().first?.pendingDeliveryID)
+      source = target; kind = .timer
+    } else if revocation == "assignment" {
+      try database.beginCoordination(sourceID: target, targetID: caller, purpose: "Observe")
+      kind = .notification
+    }
+    _ = try database.reserveToolDelivery(sourceID: source, targetID: target, text: "Follow up", requestID: requestID, kind: kind)
+    _ = try #require(database.claimToolDelivery(id: requestID))
+    try database.validateClaimedToolDelivery(id: requestID)
+    let coordinator = fixture.coordinator
+    let input = AgentMessageInput(text: "Follow up", historyDeliveryID: requestID)
+    let acceptance = Task { try await coordinator.accept(conversationID: target, input: input) }
+    await gate.waitUntilPaused()
+    switch revocation {
+    case "policy": try database.setSessionTools(.init(enabled: []), sessionID: caller)
+    case "timer-pause": try database.pauseSessionTimer(id: try #require(timerID), paused: true)
+    case "timer-remove": try database.removeSessionTimer(id: try #require(timerID))
+    case "timer-disable": try database.setSessionTools(.init(enabled: [.sessions]), sessionID: target, confirmedPausingTimers: true)
+    case "assignment": try database.endCoordination(targetID: caller, sourceID: target)
+    default: try database.setToolDeliveryStatus(id: requestID, status: "cancelled")
+    }
+    await gate.release()
+    await #expect(throws: (any Error).self) { try await acceptance.value }
+    #expect(try database.conversationContent(id: target).messages.isEmpty)
+    #expect(try database.toolDelivery(id: requestID)?.messageID == nil)
+    #expect(!(await fixture.socket.requestMethods).contains("chat.send"))
+    await coordinator.shutdown()
+  }
+
   @Test func providerIdentityRepairsHistoryDuplicateAndContentRevisions() async throws {
     let fixture = try ReviewGatewayFixture()
     defer { fixture.remove() }
@@ -358,7 +450,7 @@ private struct ReviewGatewayFixture {
     .object(["id": .string("high"), "label": .string("High effort"),
       "description": .string("Thorough reasoning")]),
     .object(["id": .string("low"), "label": .string("Low effort")]),
-  ])) throws {
+  ]), beforeConnect: (@Sendable () async -> Void)? = nil) throws {
     directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     database = try WorkspaceDatabase(url: directory.appending(path: "review.sqlite"))
@@ -372,7 +464,10 @@ private struct ReviewGatewayFixture {
     )
     let socket = socket
     let client = OpenClawGatewayClient(endpoint: endpoint, credentialStore: ReviewCredentials(), socketFactory: { _ in socket })
-    coordinator = OpenClawGatewayCoordinator(database: database, client: client, connectClient: { try await $0.connect() })
+    coordinator = OpenClawGatewayCoordinator(database: database, client: client, connectClient: {
+      await beforeConnect?()
+      return try await $0.connect()
+    })
   }
   func remove() { try? FileManager.default.removeItem(at: directory) }
 }
@@ -390,7 +485,9 @@ private actor ReviewGatewaySocket: OpenClawGatewaySocket {
   var historyCalls = 0
   var requestMethods: [String] = []
   private var historyPayload: GatewayJSONValue?
+  private var workspaceSessions: [String: GatewayJSONValue] = [:]
   func setHistory(_ payload: GatewayJSONValue) { historyPayload = payload }
+  func setWorkspaceSession(_ key: String, row: GatewayJSONValue) { workspaceSessions[key] = row }
   private var frames: [Data] = []
   private var waiter: CheckedContinuation<Data, any Error>?
   private var closed = false
@@ -414,6 +511,8 @@ private actor ReviewGatewaySocket: OpenClawGatewaySocket {
     let payload: GatewayJSONValue
     switch method {
     case "connect": payload = .object(["protocol": .number(4)])
+    case "sessions.describe" where row["params"]?.objectValue?["key"]?.stringValue?.contains(":wovenmatter:") == true:
+      payload = .object(["session": workspaceSessions[row["params"]?.objectValue?["key"]?.stringValue ?? ""] ?? .null])
     case "sessions.describe": payload = .object(["session": .object([
       "model": .string("grok-4.6"), "modelProvider": .string("xai"),
       "thinkingLevel": .string("high"),
@@ -444,7 +543,11 @@ private actor ReviewGatewaySocket: OpenClawGatewaySocket {
       ]),
     ])])
     case "chat.history": payload = historyPayload ?? .object(["messages": .array([]), "sessionInfo": .object(["hasActiveRun": .bool(false)])])
-    case "sessions.create": payload = .object(["key": row["params"]?.objectValue?["key"] ?? .null, "entry": .object(["spawnedCwd": row["params"]?.objectValue?["cwd"] ?? .null])])
+    case "sessions.create":
+      let key = row["params"]?.objectValue?["key"]?.stringValue ?? ""
+      let entry: GatewayJSONValue = .object(["key": .string(key), "spawnedCwd": row["params"]?.objectValue?["cwd"] ?? .null])
+      workspaceSessions[key] = entry
+      payload = .object(["key": .string(key), "entry": entry])
     default: payload = .object(["messages": .array([]), "sessionInfo": .object(["hasActiveRun": .bool(false)])])
     }
     try push(.object(["type": .string("res"), "id": row["id"] ?? .null,
@@ -460,5 +563,26 @@ private actor ReviewGatewaySocket: OpenClawGatewaySocket {
   private func push(_ value: GatewayJSONValue) throws {
     let data = try JSONEncoder().encode(value)
     if let waiter { self.waiter = nil; waiter.resume(returning: data) } else { frames.append(data) }
+  }
+}
+
+private actor ReviewConnectionGate {
+  private var paused = false
+  private var released = false
+  private var observers: [CheckedContinuation<Void, Never>] = []
+  private var continuation: CheckedContinuation<Void, Never>?
+  func pause() async {
+    paused = true
+    observers.forEach { $0.resume() }; observers.removeAll()
+    guard !released else { return }
+    await withCheckedContinuation { continuation = $0 }
+  }
+  func waitUntilPaused() async {
+    guard !paused else { return }
+    await withCheckedContinuation { observers.append($0) }
+  }
+  func release() {
+    released = true
+    continuation?.resume(); continuation = nil
   }
 }

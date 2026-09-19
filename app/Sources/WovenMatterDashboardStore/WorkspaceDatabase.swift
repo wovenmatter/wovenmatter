@@ -186,8 +186,8 @@ public enum LocalACPSessionDatabaseError: LocalizedError, Equatable, Sendable {
 }
 
 public final class WorkspaceDatabase: @unchecked Sendable {
-  let lock = NSLock()
-  var connection: OpaquePointer?
+  private let lock = NSLock()
+  private var connection: OpaquePointer?
 
   public init(url: URL) throws {
     var database: OpaquePointer?
@@ -216,6 +216,12 @@ public final class WorkspaceDatabase: @unchecked Sendable {
   deinit {
     if let connection { sqlite3_close(connection) }
   }
+
+  func withLock<T>(_ operation: () throws -> T) rethrows -> T {
+    try lock.withLock(operation)
+  }
+
+  var changedRowCountUnlocked: Int32 { sqlite3_changes(connection) }
 
   func transaction<T>(_ operation: () throws -> T) throws -> T {
     try lock.withLock {
@@ -2625,7 +2631,6 @@ public final class WorkspaceDatabase: @unchecked Sendable {
       try bind(timestamp, at: 9, to: conversation)
       try bind(timestamp, at: 10, to: conversation)
       try stepDone(conversation)
-      try adoptReservedSessionOriginUnlocked(conversationID)
 
       let session = try prepareUnlocked("""
         INSERT INTO desktop_local_acp_sessions (
@@ -2644,6 +2649,7 @@ public final class WorkspaceDatabase: @unchecked Sendable {
       try bind(timestamp, at: 7, to: session)
       try bind(timestamp, at: 8, to: session)
       try stepDone(session)
+      try adoptReservedSessionOriginUnlocked(conversationID)
       if let link = openCodeAssociation {
         let association = try prepareUnlocked("INSERT INTO desktop_opencode_sessions(conversation_id, connection_id, session_id, snapshot_json) VALUES (?, ?, ?, '{}')")
         defer { sqlite3_finalize(association) }
@@ -2827,7 +2833,6 @@ public final class WorkspaceDatabase: @unchecked Sendable {
       try bind(timestamp, at: 9, to: conversation)
       try bind(timestamp, at: 10, to: conversation)
       try stepDone(conversation)
-      try adoptReservedSessionOriginUnlocked(conversationID)
 
       let session = try prepareUnlocked("""
         INSERT INTO desktop_local_acp_sessions (
@@ -2848,6 +2853,7 @@ public final class WorkspaceDatabase: @unchecked Sendable {
       try bind(timestamp, at: 8, to: session)
       try bind(timestamp, at: 9, to: session)
       try stepDone(session)
+      try adoptReservedSessionOriginUnlocked(conversationID)
       if let link = openCodeAssociation {
         let association = try prepareUnlocked("INSERT INTO desktop_opencode_sessions(conversation_id, connection_id, session_id, snapshot_json) VALUES (?, ?, ?, '{}')")
         defer { sqlite3_finalize(association) }
@@ -6295,7 +6301,7 @@ public final class WorkspaceDatabase: @unchecked Sendable {
     try canonicalWorkspaceOperatorIDUnlocked() ?? "local-operator"
   }
 
-  private func validateFolderUnlocked(id: String?, operatorID: String) throws {
+  func validateFolderUnlocked(id: String?, operatorID: String) throws {
     guard let id else { return }
     let statement = try prepareUnlocked("""
       SELECT 1 FROM folders
@@ -6680,6 +6686,7 @@ extension WorkspaceDatabase {
 
   public func saveOpenCodeSubmission(conversationID: String, id: String, payload: OpenCodeValue, status: String, visibleText: String? = nil, deliveryID: String? = nil) throws {
     try transaction {
+      if let deliveryID { try validateClaimedToolDeliveryUnlocked(id: deliveryID) }
       let statement = try prepareUnlocked("""
         INSERT INTO desktop_opencode_submissions(id, conversation_id, payload_json, status) VALUES (?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET status=excluded.status

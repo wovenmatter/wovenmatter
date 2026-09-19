@@ -236,6 +236,12 @@ extension WorkspaceDatabase {
       }
       var filters = ["e.sequence > ?"]
       values.append(String(query.after))
+      if query.command == "search", query.kind == nil {
+        // Retrieval journals contain the search term itself. Keep them available
+        // through events/trace or an explicit kind filter, but do not let that
+        // audit traffic manufacture a local match and suppress folder fallback.
+        filters.append("e.kind NOT LIKE 'cli.%'")
+      }
       for (column, value) in [
         ("conversation_id", query.conversationID),
         ("run_id", query.runID ?? (query.command == "trace" ? query.id : nil)),
@@ -433,7 +439,7 @@ extension WorkspaceDatabase {
   }
 
   public func noteAssetVersions(id: String) throws -> [NoteAssetVersion] {
-    try lock.withLock {
+    try withLock {
       let rows = try historyRowsUnlocked(
         "SELECT * FROM note_asset_versions WHERE note_id=? ORDER BY sequence DESC", values: [id])
       return rows.compactMap { value -> NoteAssetVersion? in
@@ -509,6 +515,7 @@ extension WorkspaceDatabase {
 
 extension WorkspaceDatabase {
   func attachSessionMessageUnlocked(requestID: String, messageID: String) throws {
+    try validateClaimedToolDeliveryUnlocked(id: requestID)
     let statement = try prepareUnlocked(
       """
       UPDATE workspace_session_deliveries SET message_id=?,status='accepted' WHERE id=?
@@ -520,7 +527,7 @@ extension WorkspaceDatabase {
     try bind(requestID, at: 2, to: statement)
     try bind(messageID, at: 3, to: statement)
     try stepDone(statement)
-    guard sqlite3_changes(connection) == 1 else {
+    guard changedRowCountUnlocked == 1 else {
       throw WorkspaceDatabaseError.open("Unable to attach session attribution")
     }
   }

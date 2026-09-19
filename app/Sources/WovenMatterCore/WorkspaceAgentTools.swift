@@ -50,6 +50,27 @@ public struct WorkspaceSessionTools: Codable, Equatable, Sendable {
   }
 }
 
+/// Resolved once before creating a session. Retrying a request must not inherit
+/// different choices merely because its source or General defaults changed.
+public struct WorkspaceSessionCreationConfiguration: Codable, Equatable, Sendable {
+  public var runtimeKind: AgentRuntimeKind
+  public var workspaceID: UUID?
+  public var folderID: String?
+  public var title: String
+  public var model: String?
+  public var thinking: String?
+  public var nativeWorkingDirectory: String?
+  public var tools: WorkspaceSessionTools
+
+  public init(runtimeKind: AgentRuntimeKind, workspaceID: UUID? = nil, folderID: String? = nil,
+              title: String, model: String? = nil, thinking: String? = nil,
+              nativeWorkingDirectory: String? = nil, tools: WorkspaceSessionTools = .init()) {
+    self.runtimeKind = runtimeKind; self.workspaceID = workspaceID; self.folderID = folderID
+    self.title = title; self.model = model; self.thinking = thinking
+    self.nativeWorkingDirectory = nativeWorkingDirectory; self.tools = tools
+  }
+}
+
 public struct WorkspaceSessionRelationship: Codable, Equatable, Sendable {
   public var sessionID: String
   public var createdBy: String?
@@ -113,6 +134,33 @@ public struct WorkspaceSessionTimer: Codable, Identifiable, Equatable, Sendable 
           intervalSeconds.map({ $0.isFinite && $0 >= 1 && $0 <= 365 * 86_400 }) ?? true else {
       throw WorkspaceToolError.invalid("A timer needs an instruction, a valid date and a positive interval.")
     }
+  }
+}
+
+/// The native editor keeps the exact persisted cadence while unrelated fields
+/// change, including fractional and sub-minute intervals created by the CLI.
+public struct WorkspaceSessionTimerDraft: Sendable {
+  private let original: WorkspaceSessionTimer
+  public var instruction: String
+  public var nextFireAt: Date
+  public var repeats: Bool
+  public var intervalSeconds: TimeInterval
+
+  public init(_ timer: WorkspaceSessionTimer) {
+    original = timer
+    instruction = timer.instruction
+    nextFireAt = timer.nextFireAt
+    repeats = timer.intervalSeconds != nil
+    intervalSeconds = timer.intervalSeconds ?? 3_600
+  }
+
+  public func timer() throws -> WorkspaceSessionTimer {
+    var value = original
+    value.instruction = instruction
+    value.nextFireAt = nextFireAt
+    value.intervalSeconds = repeats ? intervalSeconds : nil
+    try value.validate()
+    return value
   }
 }
 

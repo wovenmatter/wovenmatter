@@ -93,7 +93,7 @@ extension ApplicationModel {
     func handleAgentUsage(_ command: WovenMatterToolCommand) async throws -> WovenMatterToolResponse {
         let start = try command.options["since"].map(WorkspaceAgentToolsModel.date) ?? Date(timeIntervalSince1970: 0)
         let end = try command.options["until"].map(WorkspaceAgentToolsModel.date) ?? Date()
-        let samples = try await localUsageService.recordedSamples(from: start, to: end,
+        let samples = try await recordedUsageSamples(from: start, to: end,
             limit: command.integer("limit", default: 100, range: 1...200),
             offset: command.integer("offset", default: 0, range: 0...(Int.max - 1)))
         return try .value(samples)
@@ -162,25 +162,6 @@ extension ApplicationModel {
             let title = try command.required("title")
             let text = try command.required("text")
             let purpose = try command.required("purpose")
-            guard let runtime = command.options["harness"].flatMap(AgentRuntimeKind.init(rawValue:)) ?? source.localRuntimeKind else {
-                throw WorkspaceToolError.invalid("Choose a configured harness.")
-            }
-            if let raw = command.options["harness"], AgentRuntimeKind(rawValue: raw) == nil { throw WorkspaceToolError.invalid("Unknown harness.") }
-            let folder = command.options["folder"] ?? source.folderID
-            if let folder, !(try store.database.workspaceOverview().folders.contains { $0.id == folder }) {
-                throw WorkspaceToolError.invalid("The destination folder is unavailable.")
-            }
-            let workspace = command.options["workspace"] ?? source.remoteWorkspaceID?.uuidString.lowercased() ?? "local"
-            let remoteTarget: RemoteHarnessChatTarget?
-            if workspace == "local" { remoteTarget = nil }
-            else {
-                guard let id = UUID(uuidString: workspace), let configuration = self.remoteWorkspaces.configuration(id: id),
-                      let harness = self.remoteWorkspaces.harnesses[id]?.first(where: { $0.id == runtime }),
-                      self.remoteWorkspaces.isHarnessReady(runtime, in: configuration) else {
-                    throw WorkspaceToolError.invalid("The destination workspace or harness is unavailable.")
-                }
-                remoteTarget = .init(configuration: configuration, harness: harness)
-            }
             let reservation = try store.database.reserveToolSessionCreation(sourceID: source.id, requestID: request.requestID,
                 arguments: request.operationArguments, purpose: purpose, managed: command.options["independent"] == nil)
             guard let id = reservation.objectValue?["target_id"]?.stringValue, let uuid = UUID(uuidString: id) else {
@@ -188,33 +169,57 @@ extension ApplicationModel {
             }
             do {
                 if reservation.objectValue?["status"]?.stringValue != "ready" {
+                    let configuration: WorkspaceSessionCreationConfiguration
+                    if let json = reservation.objectValue?["configuration_json"]?.stringValue {
+                        configuration = try JSONDecoder().decode(WorkspaceSessionCreationConfiguration.self, from: Data(json.utf8))
+                    } else {
+                        let proposed = try await self.resolveToolSessionCreation(source: source, command: command, title: title)
+                        configuration = try store.database.saveToolSessionCreationConfiguration(requestID: request.requestID,
+                            sourceID: source.id, configuration: proposed)
+                    }
+                    let runtime = configuration.runtimeKind
+                    let remoteTarget: RemoteHarnessChatTarget?
+                    if let workspaceID = configuration.workspaceID {
+                        guard let workspace = self.remoteWorkspaces.configuration(id: workspaceID),
+                              let harness = self.remoteWorkspaces.harnesses[workspaceID]?.first(where: { $0.id == runtime }),
+                              self.remoteWorkspaces.isHarnessReady(runtime, in: workspace) else {
+                            throw WorkspaceToolError.invalid("The destination workspace or harness is unavailable.")
+                        }
+                        remoteTarget = .init(configuration: workspace, harness: harness)
+                    } else { remoteTarget = nil }
                     if (try? self.toolConversation(id)) == nil {
-                        let sourceWorkspace = source.remoteWorkspaceID?.uuidString.lowercased() ?? "local"
-                        let sourceDirectory = self.openCodeModel(for: source.id)?.snapshots[source.id]?.info["location"]["directory"].string
-                        let directory: URL? = runtime == .opencode && workspace == sourceWorkspace
-                            ? sourceDirectory.flatMap { $0.hasPrefix("/") ? URL(fileURLWithPath: $0) : nil } : nil
+                        let directory = configuration.nativeWorkingDirectory.map { URL(fileURLWithPath: $0) }
                         let created: String?
-                        if let remoteTarget { created = await self.createRemoteACPSession(target: remoteTarget, requestedConversationID: uuid, nativeWorkingDirectory: directory) }
-                        else { created = await self.createLocalACPSession(runtimeKind: runtime, requestedConversationID: uuid, nativeWorkingDirectory: directory) }
+                        if let remoteTarget {
+                            created = await self.createRemoteACPSession(target: remoteTarget, requestedConversationID: uuid,
+                                nativeWorkingDirectory: directory, initialTitle: configuration.title)
+                        } else {
+                            created = await self.createLocalACPSession(runtimeKind: runtime, requestedConversationID: uuid,
+                                nativeWorkingDirectory: directory, initialTitle: configuration.title)
+                        }
                         guard created == id else { throw WorkspaceToolError.invalid(self.localRunError ?? "Unable to create the session.") }
                     }
                     let target = try self.toolConversation(id)
-                    _ = try store.database.updateConversationTitleIfCurrent(id: id, expectedTitle: target.title, title: title)
-                    guard try store.database.moveConversation(id: id, toFolderID: folder) else { throw WorkspaceToolError.invalid("Unable to set the destination folder.") }
-                    if runtime == .opencode, let native = self.openCodeModel(for: id) {
-                        _ = try await native.sessionCall(id, "/rename", method: "POST", body: ["title": .string(title)])
+                    guard target.localRuntimeKind == runtime, target.remoteWorkspaceID == configuration.workspaceID else {
+                        throw WorkspaceToolError.invalid("The saved session does not match this creation request's destination.")
                     }
-                    let sameRuntime = runtime == source.localRuntimeKind
-                    if sameRuntime { await self.refreshLocalACPSession(conversation: source) }
-                    let metadata = source.localRuntimeKind == .opencode ? self.openCodeModel(for: source.id)?.metadata(source.id) : self.localACPSessionMetadata[source.id]
-                    let model = command.options["model"] ?? (sameRuntime ? metadata?.model : nil)
-                    let thinking = command.options["thinking"] ?? (sameRuntime ? metadata?.thinking : nil)
+                    try store.database.requireTool(.sessions, sessionID: source.id)
+                    if runtime == .openclaw {
+                        try await self.prepareCreatedOpenClawSession(target, configuration: configuration)
+                        try store.database.requireTool(.sessions, sessionID: source.id)
+                    }
+                    // Initial title/folder/tools commit with session insertion.
+                    // Retrying preparation must preserve any later user edits.
+                    let model = configuration.model
+                    let thinking = configuration.thinking
                     if model != nil || thinking != nil {
                         if runtime == .opencode {
                             guard let native = self.openCodeModel(for: id) else {
                                 throw WorkspaceToolError.invalid("The native OpenCode session is unavailable.")
                             }
                             try await native.confirmCreationSelection(id, model: model, thinking: thinking)
+                        } else if runtime == .openclaw {
+                            try await store.confirmOpenClawCreationSelection(conversationID: id, model: model, thinking: thinking)
                         } else {
                             let context = try self.directACPLaunchContext(conversation: target, runtimeKind: runtime, isBuzzWorkspaceSession: false)
                             _ = try await store.updateLocalACPSessionConfiguration(conversationID: id, model: model, thinking: thinking,
@@ -235,6 +240,37 @@ extension ApplicationModel {
         toolCreationTasks[creationKey] = task
         defer { toolCreationTasks.removeValue(forKey: creationKey) }
         return try await task.value
+    }
+
+    private func resolveToolSessionCreation(source: WorkspaceConversationRecord, command: WovenMatterToolCommand,
+                                            title: String) async throws -> WorkspaceSessionCreationConfiguration {
+        if let raw = command.options["harness"], AgentRuntimeKind(rawValue: raw) == nil {
+            throw WorkspaceToolError.invalid("Unknown harness.")
+        }
+        guard let runtime = command.options["harness"].flatMap(AgentRuntimeKind.init(rawValue:)) ?? source.localRuntimeKind else {
+            throw WorkspaceToolError.invalid("Choose a configured harness.")
+        }
+        let workspace = command.options["workspace"] ?? source.remoteWorkspaceID?.uuidString.lowercased() ?? "local"
+        let workspaceID: UUID?
+        if workspace == "local" { workspaceID = nil }
+        else {
+            guard let id = UUID(uuidString: workspace) else { throw WorkspaceToolError.invalid("The destination workspace is unavailable.") }
+            workspaceID = id
+        }
+        let sameRuntime = runtime == source.localRuntimeKind
+        let metadata: LocalACPSessionMetadata?
+        if sameRuntime, source.localRuntimeKind == .openclaw {
+            metadata = try await dashboardStore?.openClawGatewaySessionMetadata(conversationID: source.id)
+        } else {
+            if sameRuntime { await refreshLocalACPSession(conversation: source) }
+            metadata = source.localRuntimeKind == .opencode ? openCodeModel(for: source.id)?.metadata(source.id) : localACPSessionMetadata[source.id]
+        }
+        let sourceDirectory = openCodeModel(for: source.id)?.snapshots[source.id]?.info["location"]["directory"].string
+        return .init(runtimeKind: runtime, workspaceID: workspaceID, folderID: command.options["folder"] ?? source.folderID,
+            title: title, model: command.options["model"] ?? (sameRuntime ? metadata?.model : nil),
+            thinking: command.options["thinking"] ?? (sameRuntime ? metadata?.thinking : nil),
+            nativeWorkingDirectory: runtime == .opencode && workspaceID == source.remoteWorkspaceID
+                ? sourceDirectory.flatMap { $0.hasPrefix("/") ? $0 : nil } : nil)
     }
 
     func dispatchToolDelivery(_ delivery: WorkspaceSessionDelivery) async throws -> WovenMatterToolResponse {

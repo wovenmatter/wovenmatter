@@ -41,7 +41,7 @@ extension WorkspaceDatabase {
   }
 
   public func pendingCoordinationAccessRequests() throws -> [WorkspaceCoordinationAccessRequest] {
-    try lock.withLock {
+    try withLock {
       try historyRowsUnlocked(coordinationAccessSelect + " WHERE r.state='pending' ORDER BY r.created_at,r.id", values: []).map(coordinationAccessFromRow)
     }
   }

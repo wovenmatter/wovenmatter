@@ -73,26 +73,30 @@ private struct WorkspaceTimerEditor: View {
     @Bindable var tools: WorkspaceAgentToolsModel
     let initial: WorkspaceSessionTimer
     @Environment(\.dismiss) private var dismiss
-    @State private var instruction = ""
-    @State private var date = Date()
-    @State private var repeats = false
-    @State private var intervalMinutes = 60
+    @State private var draft: WorkspaceSessionTimerDraft
     @State private var error: String?
+
+    init(tools: WorkspaceAgentToolsModel, initial: WorkspaceSessionTimer) {
+        self.tools = tools
+        self.initial = initial
+        _draft = State(initialValue: WorkspaceSessionTimerDraft(initial))
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Session timer").font(.system(size: 16, weight: .semibold))
             Text("Send this instruction while Woven Matter is open.")
                 .font(.system(size: 12)).foregroundStyle(DashboardPalette.mutedForeground)
-            TextEditor(text: $instruction).font(.system(size: 13)).scrollIndicators(.never)
+            TextEditor(text: $draft.instruction).font(.system(size: 13)).scrollIndicators(.never)
                 .frame(height: 100).accessibilityLabel("Timer instruction")
-            DatePicker("Next run", selection: $date)
-            Toggle("Repeat", isOn: $repeats)
-            if repeats {
+            DatePicker("Next run", selection: $draft.nextFireAt)
+            Toggle("Repeat", isOn: $draft.repeats)
+            if draft.repeats {
                 HStack {
                     Text("Every")
-                    TextField("Minutes", value: $intervalMinutes, format: .number).frame(width: 75)
-                    Text("minutes")
+                    TextField("Seconds", value: $draft.intervalSeconds, format: .number)
+                        .frame(width: 100).accessibilityLabel("Repeat interval in seconds")
+                    Text("seconds")
                 }
             }
             if let error { Text(error).font(.system(size: 12)).foregroundStyle(DashboardPalette.mutedForeground) }
@@ -101,22 +105,13 @@ private struct WorkspaceTimerEditor: View {
                 Button("Cancel", role: .cancel) { dismiss() }
                 Button("Save timer") {
                     do {
-                        var timer = initial
-                        timer.instruction = instruction
-                        timer.nextFireAt = date
-                        timer.intervalSeconds = repeats ? Double(intervalMinutes) * 60 : nil
-                        try tools.database.saveSessionTimer(timer, callerID: initial.sessionID)
+                        try tools.database.saveSessionTimer(draft.timer(), callerID: initial.sessionID)
                         try tools.reload()
                         dismiss()
                     } catch { self.error = error.localizedDescription }
                 }.buttonStyle(DashboardPrimaryButtonStyle())
-                    .disabled(instruction.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || (repeats && !(1...525_600).contains(intervalMinutes)))
+                    .disabled((try? draft.timer()) == nil)
             }
         }.padding(24).frame(width: 410)
-        .onAppear {
-            instruction = initial.instruction; date = initial.nextFireAt
-            repeats = initial.intervalSeconds != nil
-            intervalMinutes = max(1, Int((initial.intervalSeconds ?? 3_600) / 60))
-        }
     }
 }
