@@ -229,6 +229,11 @@ struct WorkspaceView: View {
             )
         }
         .environment(\.dashboardTheme, theme)
+        .environment(\.workspaceApplicationModel, model)
+        .environment(\.openWorkspaceConversation, { id in
+            destination = .workspace
+            selectConversation(id)
+        })
         .preferredColorScheme(.light)
         .tint(DashboardPalette.primary)
         .foregroundStyle(DashboardPalette.foreground)

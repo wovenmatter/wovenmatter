@@ -27,10 +27,31 @@ def receive_all(connection, maximum):
         chunks.append(chunk)
 
 
+def option_indices(arguments):
+    # Values may themselves look like flags. Only inspect argument positions,
+    # never a literal message or document value, for CLI-side transformations.
+    boolean_flags = {"all-workspace", "independent", "no-notify", "paused", "all-day", "json", "header", "help"}
+    if arguments[:1] == ["notes"]:
+        boolean_flags.discard("json")
+    result, index = {}, 2
+    while index < len(arguments):
+        item = arguments[index]
+        if not item.startswith("--"):
+            index += 1
+            continue
+        key = item[2:]
+        if key in result:
+            raise ValueError("Repeated option: " + item)
+        result[key] = index
+        index += 1 if key in boolean_flags else 2
+    return result
+
+
 def build_request(arguments, environment):
     args = list(arguments)
-    if "--file" in args:
-        index = args.index("--file")
+    options = option_indices(args)
+    if "file" in options:
+        index = options["file"]
         if args[:2] not in (["notes", "apply"], ["notes", "set-html"]) or index + 1 >= len(args):
             raise ValueError("--file is supported by notes apply and notes set-html.")
         with open(args[index + 1], "rb") as source:
@@ -39,11 +60,11 @@ def build_request(arguments, environment):
             raise ValueError("Input files must be at most 3 MiB.")
         args[index:index + 2] = ["--html" if args[1] == "set-html" else "--json", data.decode("utf-8")]
     if len(args) > 1 and args[0] == "notes" and args[1] not in ("list", "create", "versions", "version", "restore", "help"):
-        if "--note-id" not in args and environment.get("WOVENMATTER_NOTE_ID"):
+        if "note-id" not in options and environment.get("WOVENMATTER_NOTE_ID"):
             args += ["--note-id", environment["WOVENMATTER_NOTE_ID"]]
     request_id = str(uuid.uuid4())
-    if "--request-id" in args:
-        index = args.index("--request-id")
+    if "request-id" in options:
+        index = options["request-id"]
         if index + 1 >= len(args):
             raise ValueError("--request-id requires a UUID.")
         request_id = str(uuid.UUID(args[index + 1]))

@@ -200,6 +200,7 @@ struct DashboardRailRow: View {
     var showsPin = false
     var selected = false
     var isRunningConversation = false
+    var conversationID: String? = nil
     var iconColor: Color? = nil
     var pinMenuTitle: String? = nil
     var onTogglePin: (() -> Void)? = nil
@@ -241,6 +242,7 @@ struct DashboardRailRow: View {
                 Text(title)
                     .lineLimit(1)
                 Spacer(minLength: 4)
+                if let conversationID { WorkspaceSessionIndicators(sessionID: conversationID) }
                 if showsPin {
                     DashboardLucideIcon(glyph: .pin, size: 11)
                         .foregroundStyle(DashboardPalette.foreground)
@@ -369,6 +371,7 @@ struct DashboardEmptyListRow: View {
 }
 
 struct DashboardConversationRow: View {
+    @Environment(\.workspaceApplicationModel) private var appModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var hovered = false
     @State private var hoverCardTask: Task<Void, Never>?
@@ -413,6 +416,7 @@ struct DashboardConversationRow: View {
                         .foregroundStyle(DashboardPalette.foreground)
                         .lineLimit(1)
                     Spacer(minLength: 4)
+                    WorkspaceSessionIndicators(sessionID: conversation.id)
                     if conversation.unread {
                         Circle()
                             .fill(DashboardPalette.foreground)
@@ -460,7 +464,9 @@ struct DashboardConversationRow: View {
         .focused($focused)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibility.label)
-        .accessibilityValue(accessibility.value)
+        .accessibilityValue(accessibility.value
+            + (appModel?.agentTools?.relationships[conversation.id]?.coordinatorID != nil ? ", actively coordinated" : "")
+            + (appModel?.agentTools?.timers.contains(where: { $0.sessionID == conversation.id && !$0.isPaused }) == true ? ", active timer" : ""))
         .accessibilityHint(accessibility.hint)
         .dashboardScrollAwareHover($hovered, token: "conversation:\(conversation.id)")
         .onChange(of: hovered) { _, isHovered in
@@ -589,6 +595,8 @@ struct DashboardConversationHoverCard: View {
                     hoverRow(icon: .panelTop, text: workspace)
                 }
             }
+
+            WorkspaceSessionProvenance(sessionID: presentation.id)
 
             if !presentation.preview.isEmpty {
                 Divider().opacity(0.35)

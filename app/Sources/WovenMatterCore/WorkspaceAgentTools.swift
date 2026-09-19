@@ -66,6 +66,26 @@ public struct WorkspaceSessionRelationship: Codable, Equatable, Sendable {
   }
 }
 
+/// A management intent is independent of its short-lived CLI connection.
+/// Only the app's user controls may resolve a pending access request.
+public struct WorkspaceCoordinationAccessRequest: Codable, Identifiable, Equatable, Sendable {
+  public let id: String
+  public let sourceID: String
+  public let targetID: String
+  public let sourceTitle: String
+  public let targetTitle: String
+  public let purpose: String
+  public let notifications: Bool
+  public let state: String
+  public let error: String?
+  public init(id: String, sourceID: String, targetID: String, sourceTitle: String, targetTitle: String,
+              purpose: String, notifications: Bool, state: String, error: String?) {
+    self.id = id; self.sourceID = sourceID; self.targetID = targetID
+    self.sourceTitle = sourceTitle; self.targetTitle = targetTitle; self.purpose = purpose
+    self.notifications = notifications; self.state = state; self.error = error
+  }
+}
+
 public struct WorkspaceSessionTimer: Codable, Identifiable, Equatable, Sendable {
   public var id: String
   public var sessionID: String
@@ -135,15 +155,16 @@ public struct WorkspaceSessionDelivery: Codable, Identifiable, Sendable {
   public let targetModel: String?
   public let purpose: String?
   public let createdAt: String
+  public let sequence: Int64?
   public init(id: String, sourceID: String, targetID: String, text: String,
               kind: WorkspaceSessionDeliveryKind, status: String, messageID: String?,
               sourceTitle: String, sourceHarness: String, targetTitle: String, targetHarness: String,
-              targetModel: String?, purpose: String?, createdAt: String) {
+              targetModel: String?, purpose: String?, createdAt: String, sequence: Int64? = nil) {
     self.id = id; self.sourceID = sourceID; self.targetID = targetID; self.text = text
     self.kind = kind; self.status = status; self.messageID = messageID
     self.sourceTitle = sourceTitle; self.sourceHarness = sourceHarness
     self.targetTitle = targetTitle; self.targetHarness = targetHarness
-    self.targetModel = targetModel; self.purpose = purpose; self.createdAt = createdAt
+    self.targetModel = targetModel; self.purpose = purpose; self.createdAt = createdAt; self.sequence = sequence
   }
 }
 
@@ -161,4 +182,35 @@ public struct WorkspaceSessionAdmission: Sendable {
     return .start
   }
   public mutating func finish(_ id: String) { preparing.remove(id) }
+}
+
+public enum WorkspaceConversationTimelineItem: Identifiable, Sendable {
+  case message(WorkspaceMessageRecord)
+  case receipt(WorkspaceSessionDelivery)
+  public var id: String {
+    switch self {
+    case .message(let value): value.id
+    case .receipt(let value): "tool-receipt:" + value.id
+    }
+  }
+
+  /// Preserve native message sequence; interleave outgoing actions by their
+  /// persisted time instead of moving them to a separate conversation grouping.
+  public static func weave(messages: [WorkspaceMessageRecord], receipts: [WorkspaceSessionDelivery], sessionID: String) -> [Self] {
+    let outgoing = receipts.filter { $0.sourceID == sessionID && [.message, .created].contains($0.kind) }
+      .sorted {
+        if let left = $0.sequence, let right = $1.sequence { return left < right }
+        return $0.createdAt == $1.createdAt ? $0.id < $1.id : $0.createdAt < $1.createdAt
+      }
+    var index = 0
+    var items: [Self] = []
+    for message in messages {
+      while index < outgoing.count, outgoing[index].createdAt < message.createdAt {
+        items.append(.receipt(outgoing[index])); index += 1
+      }
+      items.append(.message(message))
+    }
+    items += outgoing.dropFirst(index).map(Self.receipt)
+    return items
+  }
 }

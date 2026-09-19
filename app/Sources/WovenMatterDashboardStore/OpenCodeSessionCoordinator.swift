@@ -360,8 +360,10 @@ public actor OpenCodeSessionCoordinator {
         if let command {
             // Native commands return 204 and do not accept a caller message ID.
             // Never journal or retry them as idempotent prompt submissions.
-            let payload: OpenCodeValue = ["command": .string(command),
+            var commandPayload: [String: OpenCodeValue] = ["command": .string(command),
                 "text": .string(deliveryText), "files": .array(files)]
+            if input.historyDeliveryID != nil { commandPayload["delivery"] = .string("steer") }
+            let payload = OpenCodeValue.object(commandPayload)
             do {
                 _ = try await client.call("POST", "/api/session/\(OpenCodeHTTPClient.segment(link.sessionID))/command", body: payload)
             } catch {
@@ -372,7 +374,9 @@ public actor OpenCodeSessionCoordinator {
             try? await refresh(link)
             return
         }
-        let payload: OpenCodeValue = ["id": .string(id), "text": .string(deliveryText), "files": .array(files)]
+        var promptPayload: [String: OpenCodeValue] = ["id": .string(id), "text": .string(deliveryText), "files": .array(files)]
+        if input.historyDeliveryID != nil { promptPayload["delivery"] = .string("steer") }
+        let payload = OpenCodeValue.object(promptPayload)
         try database.saveOpenCodeSubmission(conversationID: link.conversationID, id: id, payload: payload, status: "sending", visibleText: input.text, deliveryID: input.historyDeliveryID)
         do {
             let result = try await client.call("POST", "/api/session/\(OpenCodeHTTPClient.segment(link.sessionID))/prompt", body: payload)

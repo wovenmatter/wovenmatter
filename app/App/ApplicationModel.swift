@@ -199,10 +199,10 @@ final class ApplicationModel {
     private(set) var noteMutationError: String?
     var agentTools: WorkspaceAgentToolsModel?
     var activeSessionLimitPresented = false
-    var pendingSessionAccess: [PendingSessionToolAccess] = []
+    var pendingSessionAccess: [WorkspaceCoordinationAccessRequest] = []
+    var sessionAccessError: String?
     @ObservationIgnored var toolRuntimeTask: Task<Void, Never>?
     @ObservationIgnored var toolCreationTasks: [String: Task<WovenMatterToolResponse, any Error>] = [:]
-    @ObservationIgnored var sessionAccessContinuations: [UUID: CheckedContinuation<Bool, Never>] = [:]
     @ObservationIgnored private var toolSessionAdmission = WorkspaceSessionAdmission()
     private(set) var calendarMutationError: String?
     private(set) var isCreatingCalendarItem = false
@@ -505,6 +505,8 @@ final class ApplicationModel {
                     return try await self.handleAgentUsage(command)
                 }, onMutation: { [weak self] in await self?.refreshWorkspace() })
             try dashboardStore.database.recoverToolDeliveries()
+            try dashboardStore.database.recoverToolSessionCreations()
+            try dashboardStore.database.cancelPendingCoordinationAccess()
             await refreshLocalACPWorkspace()
             await refreshBuzzWorkspaces()
             await refreshOpenClawGateways()
@@ -3237,7 +3239,8 @@ final class ApplicationModel {
         agentTools?.stop()
         for task in toolCreationTasks.values { task.cancel() }
         toolCreationTasks.removeAll()
-        for request in pendingSessionAccess { resolveSessionToolAccess(id: request.id, allowed: false) }
+        try? dashboardStore?.database.cancelPendingCoordinationAccess()
+        pendingSessionAccess.removeAll()
         let permissionIDs = pendingLocalACPPermissions.map(\.id)
         for permissionID in permissionIDs {
             resolveLocalACPPermission(id: permissionID, optionID: nil)

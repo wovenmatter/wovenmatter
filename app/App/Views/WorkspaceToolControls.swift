@@ -72,24 +72,29 @@ struct WorkspaceSessionToolsMenu: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 13) {
-            Text("Tools").font(.system(size: 13, weight: .semibold))
-            ForEach(WorkspaceToolGroup.allCases) { group in
-                HStack(spacing: 12) {
-                    Toggle(group.title, isOn: Binding(get: { tools.policy(for: sessionID).enabled.contains(group) }, set: { set(group, enabled: $0) }))
-                    Spacer(minLength: 0)
-                    if group == .calendar || group == .usage {
-                        Text(group == .usage ? "Read only" : tools.settings.calendarAccess.title)
-                            .font(.system(size: 10.5)).foregroundStyle(DashboardPalette.mutedForeground)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 13) {
+                Text("Tools").font(.system(size: 13, weight: .semibold))
+                ForEach(WorkspaceToolGroup.allCases) { group in
+                    HStack(spacing: 12) {
+                        Toggle(group.title, isOn: Binding(get: { tools.policy(for: sessionID).enabled.contains(group) }, set: { set(group, enabled: $0) }))
+                        Spacer(minLength: 0)
+                        if group == .calendar || group == .usage {
+                            Text(group == .usage ? "Read only" : tools.settings.calendarAccess.title)
+                                .font(.system(size: 10.5)).foregroundStyle(DashboardPalette.mutedForeground)
+                        }
                     }
                 }
-            }
-            if let error { Text(error).font(.system(size: 11.5)).foregroundStyle(DashboardPalette.mutedForeground) }
-        }
+                WorkspaceSessionManagementControls(tools: tools, sessionID: sessionID)
+                if let error = error ?? tools.error { Text(error).font(.system(size: 11.5)).foregroundStyle(DashboardPalette.mutedForeground) }
+            }.padding(16)
+        }.scrollIndicators(.never)
+        .frame(maxHeight: 520)
+        .fixedSize(horizontal: false, vertical: true)
         .font(.system(size: 12.5))
         .foregroundStyle(DashboardPalette.foreground)
         .toggleStyle(DashboardSwitchToggleStyle())
-        .padding(16).frame(width: 310)
+        .frame(width: 330)
         .alert("Disable timers?", isPresented: $confirmsTimerPause) {
             Button("Cancel", role: .cancel) { }
             Button("Disable and pause") { set(.timers, enabled: false, confirmed: true) }

@@ -3,12 +3,6 @@ import WovenMatterCore
 import WovenMatterClient
 import WovenMatterDashboardStore
 
-struct PendingSessionToolAccess: Identifiable {
-    let id: UUID
-    let sourceTitle: String
-    let targetTitle: String
-}
-
 extension ApplicationModel {
     func startAgentToolRuntime() {
         toolRuntimeTask?.cancel()
@@ -23,6 +17,29 @@ extension ApplicationModel {
     private func runAgentToolTick() async {
         guard let database = dashboardStore?.database else { return }
         do {
+            pendingSessionAccess = try database.pendingCoordinationAccessRequests()
+            var notifications = try database.collectCoordinationTurnNotifications()
+            for request in pendingLocalACPPermissions {
+                if let delivery = try database.recordCoordinationNeedsInput(sessionID: request.conversationID,
+                    requestID: request.id.uuidString, requiresUserApproval: true) { notifications.append(delivery) }
+            }
+            for request in pendingLocalACPInteractions {
+                if let delivery = try database.recordCoordinationNeedsInput(sessionID: request.conversationID,
+                    requestID: request.id.uuidString, requiresUserApproval: true) { notifications.append(delivery) }
+            }
+            for instance in openCodeInstances {
+                for (sessionID, snapshot) in instance.snapshots {
+                    for request in snapshot.permissions + snapshot.forms where !request["id"].text.isEmpty {
+                        if let delivery = try database.recordCoordinationNeedsInput(sessionID: sessionID,
+                            requestID: "opencode:" + request["id"].text, requiresUserApproval: true) { notifications.append(delivery) }
+                    }
+                }
+            }
+            for delivery in notifications {
+                guard !Task.isCancelled else { return }
+                do { _ = try await dispatchToolDelivery(delivery) }
+                catch { agentTools?.error = error.localizedDescription }
+            }
             let timers = try database.dueSessionTimers()
             for timer in timers {
                 guard !Task.isCancelled, let id = timer.pendingDeliveryID,
@@ -52,22 +69,14 @@ extension ApplicationModel {
         } catch { agentTools?.error = error.localizedDescription }
     }
 
-    func resolveSessionToolAccess(id: UUID, allowed: Bool) {
-        pendingSessionAccess.removeAll { $0.id == id }
-        sessionAccessContinuations.removeValue(forKey: id)?.resume(returning: allowed)
-    }
-
-    private func requestSessionToolAccess(source: WorkspaceConversationRecord, target: WorkspaceConversationRecord) async -> Bool {
-        let id = UUID()
-        return await withTaskCancellationHandler {
-            await withCheckedContinuation { continuation in
-                sessionAccessContinuations[id] = continuation
-                pendingSessionAccess.append(.init(id: id, sourceTitle: source.title, targetTitle: target.title))
-                if Task.isCancelled { resolveSessionToolAccess(id: id, allowed: false) }
-            }
-        } onCancel: {
-            Task { @MainActor [weak self] in self?.resolveSessionToolAccess(id: id, allowed: false) }
-        }
+    func resolveSessionToolAccess(id: String, allowed: Bool) {
+        guard let database = dashboardStore?.database else { return }
+        do {
+            let outcome = try database.resolveCoordinationAccess(requestID: id, allowed: allowed)
+            pendingSessionAccess = try database.pendingCoordinationAccessRequests()
+            try agentTools?.reload()
+            sessionAccessError = outcome.state == "failed" ? outcome.error : nil
+        } catch { sessionAccessError = error.localizedDescription }
     }
 
     func handleAgentNote(callerID: String, request: NoteEditingRequest) async throws -> NoteEditingResponse {
@@ -110,19 +119,12 @@ extension ApplicationModel {
                 targetID: command.required("id", allowPositional: true), text: command.required("text"), requestID: request.requestID)
             return try await dispatchToolDelivery(delivery)
         case "manage":
-            let target = try toolConversation(command.required("id", allowPositional: true))
-            let purpose = try command.required("purpose")
-            do {
-                try database.beginCoordination(sourceID: callerID, targetID: target.id, purpose: purpose, notifications: command.options["no-notify"] == nil)
-            } catch WorkspaceToolError.accessRequired {
-                guard await requestSessionToolAccess(source: source, target: target) else {
-                    throw WorkspaceToolError.invalid("The user did not grant access to this session.")
-                }
-                // Conflict, capability and fanout checks run again after the sheet.
-                try database.beginCoordination(sourceID: callerID, targetID: target.id, purpose: purpose,
-                    notifications: command.options["no-notify"] == nil, userApprovedAccess: true)
-            }
-            return try .value(database.sessionRelationship(target.id))
+            let outcome = try database.requestCoordinationAccess(sourceID: callerID,
+                targetID: command.required("id", allowPositional: true), purpose: command.required("purpose"),
+                notifications: command.options["no-notify"] == nil, requestID: request.requestID)
+            pendingSessionAccess = try database.pendingCoordinationAccessRequests()
+            let value = try WovenMatterToolResponse.value(outcome)
+            return .init(success: outcome.error == nil, result: value.result, error: outcome.error)
         case "release":
             let id = try command.required("id", allowPositional: true)
             try database.endCoordination(targetID: id, sourceID: callerID)
@@ -133,7 +135,8 @@ extension ApplicationModel {
             guard ["true", "false"].contains(raw) else { throw WorkspaceToolError.invalid("--enabled must be true or false.") }
             try database.setCoordinationNotifications(sourceID: callerID, targetID: id, enabled: raw == "true")
             return try .value(database.sessionRelationship(id))
-        case "receipts": return try .value(database.sessionDeliveries(sessionID: callerID))
+        case "receipts": return try .value(database.sessionDeliveries(sessionID: callerID,
+            limit: command.integer("limit", default: 200, range: 1...500), beforeID: command.options["before"]))
         case "harnesses":
             let local: [GatewayJSONValue] = LocalACPRuntimeCatalog.definitions.map {
                 .object(["harness": .string($0.runtimeKind.rawValue), "workspace": .string("local"), "ready": .bool(isLocalACPAgentReady($0.runtimeKind))])
@@ -153,7 +156,7 @@ extension ApplicationModel {
                                    request: WovenMatterToolRequest) async throws -> WovenMatterToolResponse {
         guard let store = dashboardStore else { throw CancellationError() }
         // Coalesce concurrent retries while native creation is suspended.
-        let creationKey = source.id + ":" + request.requestID + ":" + String(decoding: try JSONEncoder().encode(request.arguments), as: UTF8.self)
+        let creationKey = source.id + ":" + request.requestID + ":" + String(decoding: try JSONEncoder().encode(request.operationArguments), as: UTF8.self)
         if let pending = toolCreationTasks[creationKey] { return try await pending.value }
         let task = Task { @MainActor in
             let title = try command.required("title")
@@ -179,7 +182,7 @@ extension ApplicationModel {
                 remoteTarget = .init(configuration: configuration, harness: harness)
             }
             let reservation = try store.database.reserveToolSessionCreation(sourceID: source.id, requestID: request.requestID,
-                arguments: request.arguments, purpose: purpose, managed: command.options["independent"] == nil)
+                arguments: request.operationArguments, purpose: purpose, managed: command.options["independent"] == nil)
             guard let id = reservation.objectValue?["target_id"]?.stringValue, let uuid = UUID(uuidString: id) else {
                 throw WorkspaceToolError.invalid("Unable to reserve the new session.")
             }
@@ -217,6 +220,7 @@ extension ApplicationModel {
                 await self.refreshWorkspace()
                 return try await self.dispatchToolDelivery(delivery)
             } catch {
+                try? store.database.failToolSessionCreation(requestID: request.requestID)
                 throw error
             }
         }
@@ -227,7 +231,7 @@ extension ApplicationModel {
 
     func dispatchToolDelivery(_ delivery: WorkspaceSessionDelivery) async throws -> WovenMatterToolResponse {
         guard let database = dashboardStore?.database else { throw CancellationError() }
-        guard let claimed = try database.claimToolDelivery(id: delivery.id) else { return try .value(delivery) }
+        guard let claimed = try database.claimToolDelivery(id: delivery.id) else { return try .value(database.toolDelivery(id: delivery.id) ?? delivery) }
         do {
             let target = try toolConversation(claimed.targetID)
             let sent = try await dispatchAgentMessage(conversation: target,

@@ -115,11 +115,12 @@ struct OpenCodeIntegrationTests {
         let session = fixtureSession()
         let coordinator = OpenCodeSessionCoordinator(database: database, clientFactory: { OpenCodeHTTPClient(connection: $0, session: session) })
         try await coordinator.connect(connection())
-        try await coordinator.command(link, name: "review", input: .init(text: "current changes"))
+        try await coordinator.command(link, name: "review", input: .init(text: "current changes", historyDeliveryID: UUID().uuidString))
         #expect(fixture.commandCount == 1)
         #expect(fixture.lastCommand["command"].text == "review")
         #expect(fixture.lastCommand["text"].text == "current changes")
         #expect(fixture.lastCommand["id"].isNull)
+        #expect(fixture.lastCommand["delivery"].text == "steer")
         #expect(try database.openCodeUncertainSubmissions(conversationID: id).isEmpty)
         fixture.loseCommandResponse = true
         await #expect(throws: OpenCodeError.self) { try await coordinator.command(link, name: "review", input: .init(text: "again")) }
@@ -339,6 +340,7 @@ struct OpenCodeIntegrationTests {
         try await coordinator.connect(connection())
         try await coordinator.prompt(link, input: .init(text: "Build this", historyDeliveryID: deliveryID), discovery: "<wovenmatter-tools>session discovery</wovenmatter-tools>")
         let raw = try #require(try database.openCodeSnapshot(conversationID: target))
+        #expect(fixture.lastPrompt["delivery"].text == "steer")
         #expect(raw.messages.last?["text"].text.contains("session discovery") == true)
         let display = try database.openCodeDisplaySnapshot(raw, conversationID: target)
         #expect(display.messages.last?["text"].text == "Build this")
@@ -346,6 +348,7 @@ struct OpenCodeIntegrationTests {
         let input = try #require(content.messages.first(where: { $0.role == "user" }))
         #expect(input.content == "Build this")
         #expect(input.senderSessionID == source)
+        #expect(input.senderKind == .message)
         #expect(input.senderSessionTitle == "Coordinator")
         #expect(try database.toolDelivery(id: deliveryID)?.messageID == input.id)
         let reopened = try WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
@@ -703,6 +706,7 @@ private final class OpenCodeFixture: @unchecked Sendable {
     var losePromptResponse = false
     var acceptPrompt = true
     var promptCount = 0
+    var lastPrompt: OpenCodeValue = .null
     var commandCount = 0
     var loseCommandResponse = false
     var lastCommand: OpenCodeValue = .null
@@ -738,6 +742,7 @@ private final class OpenCodeFixture: @unchecked Sendable {
                     return (204, .null)
                 }
                 promptCount += 1
+                lastPrompt = input
                 let message: OpenCodeValue = ["id": input["id"], "text": input["text"], "type": "user", "time": ["created": .number(900)]]
                 if acceptPrompt { messages.append(message) }
                 if losePromptResponse { throw URLError(.networkConnectionLost) }

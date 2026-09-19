@@ -27,6 +27,18 @@ class RemoteToolTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             tools.build_request(["notes", "list", "--file", "/does/not/exist"], {})
 
+    def test_literal_flags_are_values_and_retry_id_is_preserved(self):
+        request_id = "10000000-0000-4000-8000-000000000001"
+        args = ["sessions", "send", "target", "--text", "--file", "--request-id", request_id]
+        request = json.loads(tools.build_request(args, {}))
+        self.assertEqual(request["arguments"], args)
+        self.assertEqual(request["requestID"], request_id)
+        args = ["notes", "append", "--text", "--note-id", "--request-id", request_id]
+        request = json.loads(tools.build_request(args, {"WOVENMATTER_NOTE_ID": "note-a"}))
+        self.assertEqual(request["arguments"], args + ["--note-id", "note-a"])
+        args = ["notes", "append", "--text", "--request-id"]
+        self.assertEqual(json.loads(tools.build_request(args, {}))["arguments"], args)
+
     def test_relay_binds_private_endpoint_and_closes_with_app(self):
         with tempfile.TemporaryDirectory(prefix="wmt-", dir="/tmp") as root:
             relay_dir = Path(root) / "relay"

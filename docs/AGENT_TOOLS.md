@@ -47,7 +47,10 @@ create an attachment grant. With Session management enabled, metadata/status and
 messaging are available independently of history. An active coordinator may
 read its managed sessions. With history disabled, managing an existing,
 unattached session requires an actual user confirmation in Woven Matter before
-the grant is created. Creating and managing a new session needs no extra grant.
+the grant is created. The CLI returns a durable pending request immediately; retries
+with the same request ID inspect that request instead of opening another sheet.
+Approval rechecks ownership, fanout and current capability. App shutdown cancels
+unanswered approvals. Creating and managing a new session needs no extra grant.
 Revocation blocks future reads; it cannot erase content already retrieved.
 
 ## Sessions and coordination
@@ -141,22 +144,43 @@ and distinct read/start/steer operations. No source from those projects is copie
 
 ## Integration checkpoint
 
-The unified service is now connected to app startup/shutdown and shared message
-admission, including native OpenCode. Session creation, management access approval,
-message receipts in storage, persistent timer dispatch, scoped notes/usage reads,
-General defaults and composer toggles are wired. The old exposed `woven-note`
-entry point and resource have been removed. Native OpenCode prompt projection
-retains original visible input and agent attribution separately from discovery.
+The unified service is connected to app startup/shutdown and shared message
+admission, including native OpenCode. The old exposed `woven-note` entry point
+and resource have been removed. General defaults, composer controls, scoped
+notes/usage reads, creation, management access and persistent timer dispatch are
+wired. Native OpenCode prompts preserve original visible input and attribution
+separately from discovery, and agent deliveries explicitly request steering.
 
-This remains a draft. Automatic coordinator notifications, receipt rendering,
-hover/sidebar indicators, user timer/coordination management and note recovery UI
-still need completion. All harness dispatch semantics, creation recovery and
-location inheritance still require end-to-end fixture review; native slash-command
-attribution needs special handling because that API returns no input ID. Full
-repository checks, rendered native UI proof and exact-head hosted checks remain
-release-readiness gates.
+Durable coordination observations produce completion, failure and needs-input
+notifications once per assignment. Notification-only turns do not trigger another
+completion notification. Finishing a turn leaves the assignment managed. Access
+approval requests return immediately, retain their result across retries, and
+cannot acquire a conflicting or disabled assignment after the user approves.
+Failed or interrupted creation releases the reserved fanout slot while retaining
+its target identity for recovery.
 
-At this checkpoint the unsigned Debug app build and 58 provider-free Core tests
-passed, covering admission reservations, scoped access, creation completion,
-notification controls, timer revocation, retention, and native OpenCode prompt
-projection/recovery. This is focused verification, not production acceptance.
+The transcript now presents incoming source links and outgoing creation/message
+receipts; receipt history uses insertion-order pagination. Hover cards include
+permanent creation provenance and current coordination. Sidebar additions are
+limited to active coordination and timer indicators. Session controls include
+notification preferences, release/end coordination, and timer editing/pause/
+removal. Note version history includes previews and revision-checked restoration.
+These native controls compile; rendered inspection is still pending.
+
+| Requirement | Implemented and checked | Remaining acceptance |
+| --- | --- | --- |
+| Unified CLI, seven capabilities, defaults, limits | Service routing, bound local/remote endpoints, access-policy and admission tests; bundled CLI and remote relay fixtures | Audit discovery and dispatch across all eight harnesses; rendered settings and composer proof |
+| History and attachments | Folder-first retrieval, bounded bodies, ID references, backend grants and revocation tests | Review all native imports, steering and scheduled output paths against the capture contract |
+| Notes and recovery | Bounded note/spreadsheet/HTML versions, restore conflict tests, recovery UI | Render populated recovery UI; finish mutation retry audit |
+| Calendar, usage, Library | Calendar mode checks and CRUD; recorded usage only; explicit unavailable response for the currently empty Library surface | Finish mutation retry audit and app-facing acceptance; broader Library work remains a later iteration |
+| Session creation | Origin, inherited tool policy, durable target identity, reservation recovery, exclusive coordination | Working-location inheritance and partial native/gateway setup recovery; confirm model configuration before declaring creation ready |
+| Scoped management | Durable immediate pending response, user-only resolution, shutdown cancellation, conflict/capability checks and replay tests | Render approval sheet and failure feedback; exercise app-lifetime recovery |
+| Notifications | Durable completion/failure/input observations, epoch-based dedupe, revoked-assignment cancellation and notification-only loop tests | Review native turn/steering association and reconnect request identity across all harnesses |
+| Bidirectional activity | Incoming attribution, larger creation cards, compact receipts, links and paged history | Render narrow/wide, navigation and selection; native OpenCode slash-command attribution still needs a solution because its API returns no input ID |
+| Timers | Persistent definitions/occurrences, runtime scheduling, pause/revoke tests, native editing controls | Render confirmation and icon lifecycle; verify all-harness steering/queue fallback |
+| Sidebar and folders | Existing peer/folder structure retained; provenance in hover card, active indicators only | Populated and empty native visual/accessibility proof |
+| Full validation | Required provider-free repository checks and unsigned Debug build passed; bundled CLI fixture passed | Final Release build, full-diff remediation, local/remote app exercises and exact-head hosted checks |
+
+This remains a draft. The table records implementation evidence separately from
+outstanding acceptance; unchecked product requirements are not waived by passing
+tests. No merge, installation or release publication is part of this checkpoint.

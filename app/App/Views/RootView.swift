@@ -28,6 +28,11 @@ struct RootView: View {
         } message: {
             Text("You're at your limit of \(model.agentTools?.settings.maximumRunningSessions ?? 16) sessions running simultaneously. Let a session finish or change the limit in General settings.")
         }
+        .alert("Session access could not be granted", isPresented: Binding(
+            get: { model.sessionAccessError != nil }, set: { if !$0 { model.sessionAccessError = nil } }
+        )) {
+            Button("OK", role: .cancel) { model.sessionAccessError = nil }
+        } message: { Text(model.sessionAccessError ?? "") }
         .sheet(item: Binding(get: { model.pendingSessionAccess.first }, set: { value in
             if value == nil, let request = model.pendingSessionAccess.first { model.resolveSessionToolAccess(id: request.id, allowed: false) }
         })) { request in

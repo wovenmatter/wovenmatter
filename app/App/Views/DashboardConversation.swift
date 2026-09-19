@@ -78,6 +78,7 @@ struct DashboardCloudConversation: View {
     private var workspaceOpenCode: OpenCodeModel? {
         conversation.flatMap { model.openCodeModel(for: $0.id) }
     }
+    @State private var toolObservationToken = UUID()
     @State private var scrollState = DashboardConversationScrollState()
     @State private var transcriptOwnsScroll = false
     @State private var isPrependingHistory = false
@@ -102,6 +103,8 @@ struct DashboardCloudConversation: View {
         let orderedMessages = openCodeOrder.isEmpty ? visibleMessages : visibleMessages.sorted {
             (openCodeOrder[$0.clientMessageID ?? ""] ?? 0) < (openCodeOrder[$1.clientMessageID ?? ""] ?? 0)
         }
+        let timeline = WorkspaceConversationTimelineItem.weave(messages: orderedMessages,
+            receipts: conversation.flatMap { model.agentTools?.receipts[$0.id] } ?? [], sessionID: conversation?.id ?? "")
         ZStack(alignment: .bottom) {
             ScrollViewReader { proxy in
                 ScrollView {
@@ -114,7 +117,7 @@ struct DashboardCloudConversation: View {
                                     ? "Choose New chat for a direct local workspace session, or select a synced conversation."
                                     : "Choose a synced conversation from Workspace."
                             )
-                        } else if visibleMessages.isEmpty {
+                        } else if timeline.isEmpty {
                             DashboardConversationEmptyState(
                                 icon: conversation?.localRuntimeKind == nil
                                     ? (agent.map { dashboardAgentGlyph($0) }
@@ -140,23 +143,33 @@ struct DashboardCloudConversation: View {
                                         )
                                     }
                             }
-                            ForEach(orderedMessages) { message in
-                                let presentation = messagePresentations[message.id]
-                                let run = runsByAssistantMessageID[message.id]
-                                DashboardMessageRow(
-                                    message: message,
-                                    attachments: attachmentsByMessageID[message.id] ?? [],
-                                    references: referencesByMessageID[message.id] ?? [],
-                                    renderedDocument: presentation?.document,
-                                    run: run.flatMap {
-                                        DashboardRunDisplayPolicy.presentsStatus($0) ? $0 : nil
-                                    },
-                                    runPresentation: run.flatMap { runPresentations[$0.id] },
-                                    activities: run.map { activitiesByRunID[$0.id] ?? [] } ?? []
-                                )
-                                .id(message.id)
-                                if let openCode = workspaceOpenCode, openCode.links[message.conversationID] != nil {
-                                    OpenCodeMessageMedia(model: openCode, conversationID: message.conversationID, messageID: message.clientMessageID ?? "")
+                            if let sessionID = conversation?.id, model.agentTools?.hasOlderReceipts.contains(sessionID) == true {
+                                Button("Load earlier session activity") {
+                                    model.agentTools?.loadOlderReceipts(sessionID: sessionID)
+                                }.buttonStyle(SettingsQuietButtonStyle())
+                            }
+                            ForEach(timeline) { item in
+                                switch item {
+                                case .receipt(let receipt):
+                                    WorkspaceOutgoingReceipt(receipt: receipt).id(item.id)
+                                case .message(let message):
+                                    let presentation = messagePresentations[message.id]
+                                    let run = runsByAssistantMessageID[message.id]
+                                    DashboardMessageRow(
+                                        message: message,
+                                        attachments: attachmentsByMessageID[message.id] ?? [],
+                                        references: referencesByMessageID[message.id] ?? [],
+                                        renderedDocument: presentation?.document,
+                                        run: run.flatMap {
+                                            DashboardRunDisplayPolicy.presentsStatus($0) ? $0 : nil
+                                        },
+                                        runPresentation: run.flatMap { runPresentations[$0.id] },
+                                        activities: run.map { activitiesByRunID[$0.id] ?? [] } ?? []
+                                    )
+                                    .id(message.id)
+                                    if let openCode = workspaceOpenCode, openCode.links[message.conversationID] != nil {
+                                        OpenCodeMessageMedia(model: openCode, conversationID: message.conversationID, messageID: message.clientMessageID ?? "")
+                                    }
                                 }
                             }
                         }
@@ -171,6 +184,7 @@ struct DashboardCloudConversation: View {
                     .scrollTargetLayout()
                 }
                 .scrollIndicators(.never)
+                .onDisappear { model.agentTools?.observeSession(nil, token: toolObservationToken) }
                 .environment(\.conversationTranscriptInteraction) {
                     transcriptOwnsScroll = true
                     scrollInteractionRevision += 1
@@ -231,6 +245,7 @@ struct DashboardCloudConversation: View {
                     draft = draft.isEmpty ? text : draft + "\n" + text
                 }
                 .onChange(of: conversation?.id, initial: true) { _, conversationID in
+                    model.agentTools?.observeSession(conversationID, token: toolObservationToken)
                     isUserScrolling = false
                     transcriptOwnsScroll = false
                     scrollInteractionRevision += 1
@@ -894,6 +909,7 @@ struct DashboardMessageRow: View {
                         )
                     }
                     if isUser {
+                        WorkspaceIncomingAgentHeader(message: message)
                         ConversationUserMessage(
                             content: message.content,
                             attachments: attachments,

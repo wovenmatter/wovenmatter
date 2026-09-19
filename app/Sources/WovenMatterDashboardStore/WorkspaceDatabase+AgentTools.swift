@@ -30,6 +30,12 @@ extension WorkspaceDatabase {
           instruction TEXT NOT NULL, next_fire_at REAL NOT NULL, interval_seconds REAL,
           is_paused INTEGER NOT NULL DEFAULT 0, pending_delivery_id TEXT);
         CREATE INDEX IF NOT EXISTS workspace_timer_due ON workspace_session_timers(is_paused,next_fire_at);
+        CREATE TABLE IF NOT EXISTS workspace_coordination_access_requests(
+          id TEXT PRIMARY KEY, source_id TEXT NOT NULL REFERENCES dashboard_conversations(id),
+          target_id TEXT NOT NULL REFERENCES dashboard_conversations(id), purpose TEXT NOT NULL,
+          notifications INTEGER NOT NULL, state TEXT NOT NULL, error TEXT,
+          created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')));
+        CREATE INDEX IF NOT EXISTS workspace_access_requests_state ON workspace_coordination_access_requests(state,created_at);
         CREATE TABLE IF NOT EXISTS workspace_session_creations(
           id TEXT PRIMARY KEY, source_id TEXT NOT NULL REFERENCES dashboard_conversations(id),
           target_id TEXT NOT NULL UNIQUE, arguments_json TEXT NOT NULL,
@@ -37,6 +43,17 @@ extension WorkspaceDatabase {
         """)
       try toolsExecuteUnlocked("INSERT OR IGNORE INTO workspace_tool_settings(id,value) VALUES(1,?)",
                                [try toolsJSON(WorkspaceToolSettings())])
+      let relationshipColumns = Set(try historyRowsUnlocked("PRAGMA table_info(workspace_session_relationships)", values: []).compactMap { $0.objectValue?["name"]?.stringValue })
+      for column in ["coordination_epoch", "coordination_since"] where !relationshipColumns.contains(column) {
+        try executeUnlocked("ALTER TABLE workspace_session_relationships ADD COLUMN \(column) TEXT")
+      }
+      try executeUnlocked("""
+        CREATE TABLE IF NOT EXISTS workspace_coordination_observations(
+          epoch TEXT NOT NULL, event_key TEXT NOT NULL, PRIMARY KEY(epoch,event_key));
+        UPDATE workspace_session_relationships SET coordination_epoch=lower(hex(randomblob(16))),
+          coordination_since=strftime('%Y-%m-%dT%H:%M:%fZ','now')
+          WHERE coordinator_id IS NOT NULL AND coordination_epoch IS NULL;
+        """)
       let columns = Set(try historyRowsUnlocked("PRAGMA table_info(workspace_session_deliveries)", values: []).compactMap { $0.objectValue?["name"]?.stringValue })
       for (name, type) in [("kind", "TEXT NOT NULL DEFAULT 'message'"), ("purpose", "TEXT"),
                            ("target_title", "TEXT"), ("target_harness", "TEXT"), ("target_model", "TEXT"), ("event_key", "TEXT")] where !columns.contains(name) {
@@ -246,10 +263,22 @@ extension WorkspaceDatabase {
   }
 
   func beginCoordinationUnlocked(sourceID: String, targetID: String, purpose: String, notifications: Bool) throws {
+    let existing = try relationshipUnlocked(targetID).coordinatorID
+    let epoch = UUID().uuidString.lowercased()
     try toolsExecuteUnlocked("""
-      INSERT INTO workspace_session_relationships(session_id,coordinator_id,purpose,notifications_enabled) VALUES(?,?,?,?)
-      ON CONFLICT(session_id) DO UPDATE SET coordinator_id=excluded.coordinator_id,purpose=excluded.purpose,notifications_enabled=excluded.notifications_enabled
-      """, [targetID, sourceID, purpose, notifications ? "1" : "0"])
+      INSERT INTO workspace_session_relationships(session_id,coordinator_id,purpose,notifications_enabled,coordination_epoch,coordination_since)
+      VALUES(?,?,?,?,?,?) ON CONFLICT(session_id) DO UPDATE SET
+        coordinator_id=excluded.coordinator_id,purpose=excluded.purpose,notifications_enabled=excluded.notifications_enabled,
+        coordination_epoch=CASE WHEN workspace_session_relationships.coordinator_id=excluded.coordinator_id
+          THEN coalesce(workspace_session_relationships.coordination_epoch,excluded.coordination_epoch) ELSE excluded.coordination_epoch END,
+        coordination_since=CASE WHEN workspace_session_relationships.coordinator_id=excluded.coordinator_id
+          THEN coalesce(workspace_session_relationships.coordination_since,excluded.coordination_since) ELSE excluded.coordination_since END
+      """, [targetID, sourceID, purpose, notifications ? "1" : "0", epoch, Self.timestamp(Date())])
+    if existing != sourceID {
+      // A reassigned session must not deliver stale queued notifications from a
+      // previous assignment, even if the same coordinator later acquires it.
+      try toolsExecuteUnlocked("UPDATE workspace_session_deliveries SET status='cancelled' WHERE source_id=? AND kind='notification' AND status='queued'", [targetID])
+    }
   }
 
   public func setCoordinationNotifications(sourceID: String, targetID: String, enabled: Bool) throws {

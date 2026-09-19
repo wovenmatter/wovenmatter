@@ -9,7 +9,13 @@ extension WorkspaceDatabase {
   public func reserveToolDelivery(sourceID: String, targetID: String, text: String, requestID: String,
                                   kind: WorkspaceSessionDeliveryKind = .message, purpose: String? = nil,
                                   eventKey: String? = nil) throws -> WorkspaceSessionDelivery {
-    try transaction {
+    try transaction { try reserveToolDeliveryUnlocked(sourceID: sourceID, targetID: targetID, text: text,
+      requestID: requestID, kind: kind, purpose: purpose, eventKey: eventKey) }
+  }
+
+  func reserveToolDeliveryUnlocked(sourceID: String, targetID: String, text: String, requestID: String,
+                                   kind: WorkspaceSessionDeliveryKind, purpose: String? = nil,
+                                   eventKey: String? = nil) throws -> WorkspaceSessionDelivery {
       guard UUID(uuidString: requestID) != nil, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
             text.utf8.count <= 65_536 else { throw WorkspaceToolError.invalid("A delivery needs a UUID and a message of at most 64 KiB.") }
       if kind == .message || kind == .created {
@@ -37,7 +43,6 @@ extension WorkspaceDatabase {
         """, [requestID, sourceID, targetID, text, kind.rawValue, purpose, eventKey, targetID, sourceID])
       guard let result = try deliveryUnlocked(requestID) else { throw WorkspaceToolError.invalid("Unable to reserve delivery.") }
       return result
-    }
   }
 
   /// A durable claim prevents concurrent callbacks or retries dispatching twice.
@@ -75,6 +80,11 @@ extension WorkspaceDatabase {
         values: [delivery.targetID, delivery.id])).isEmpty
     case .notification:
       let relation = try relationshipUnlocked(delivery.sourceID)
+      if let key = try historyRowsUnlocked("SELECT event_key FROM workspace_session_deliveries WHERE id=?", values: [delivery.id]).first?.objectValue?["event_key"]?.stringValue,
+         key.hasPrefix("coordination:") {
+        let epoch = try historyRowsUnlocked("SELECT coordination_epoch FROM workspace_session_relationships WHERE session_id=?", values: [delivery.sourceID]).first?.objectValue?["coordination_epoch"]?.stringValue ?? ""
+        guard key.hasPrefix("coordination:" + epoch + ":") else { return false }
+      }
       return target.enabled.contains(.sessions) && relation.coordinatorID == delivery.targetID && relation.notificationsEnabled
     }
   }
@@ -97,20 +107,46 @@ extension WorkspaceDatabase {
     try lock.withLock { try deliveryUnlocked(id) }
   }
 
-  public func sessionDeliveries(sessionID: String? = nil, queuedOnly: Bool = false, limit: Int = 200) throws -> [WorkspaceSessionDelivery] {
+  public func sessionDeliveries(sessionID: String? = nil, queuedOnly: Bool = false, limit: Int = 200, beforeID: String? = nil, outgoingOnly: Bool = false) throws -> [WorkspaceSessionDelivery] {
     try lock.withLock {
-      var sql = "SELECT * FROM workspace_session_deliveries WHERE 1=1"
+      var sql = "SELECT rowid AS sequence,* FROM workspace_session_deliveries WHERE 1=1"
       var values: [String?] = []
-      if let sessionID { sql += " AND (source_id=? OR target_id=?)"; values += [sessionID, sessionID] }
+      if let sessionID {
+        if outgoingOnly { sql += " AND source_id=? AND kind IN ('message','created')"; values.append(sessionID) }
+        else { sql += " AND (source_id=? OR target_id=?)"; values += [sessionID, sessionID] }
+      }
+      if let beforeID {
+        guard !queuedOnly, let cursor = try deliveryUnlocked(beforeID),
+              sessionID == nil || cursor.sourceID == sessionID || cursor.targetID == sessionID else {
+          throw WorkspaceToolError.invalid("The delivery cursor is unavailable for this session.")
+        }
+        guard let sequence = cursor.sequence else { throw WorkspaceToolError.invalid("The delivery cursor is unavailable.") }
+        sql += " AND rowid<?"
+        values.append(String(sequence))
+      }
       if queuedOnly { sql += " AND status='queued'" }
-      sql += queuedOnly ? " ORDER BY created_at,id LIMIT ?" : " ORDER BY created_at DESC,id DESC LIMIT ?"
+      sql += queuedOnly ? " ORDER BY rowid LIMIT ?" : " ORDER BY rowid DESC LIMIT ?"
       values.append(String(min(max(limit, 1), 500)))
       return try historyRowsUnlocked(sql, values: values).map(deliveryFromRow)
     }
   }
 
+  /// Refresh exactly the loaded transcript window, so polling updates receipt
+  /// statuses without dropping older pages or skipping bursts of new activity.
+  public func outgoingDeliveryWindow(sessionID: String, throughID: String) throws -> [WorkspaceSessionDelivery] {
+    try lock.withLock {
+      guard let cursor = try deliveryUnlocked(throughID), cursor.sourceID == sessionID, let sequence = cursor.sequence else {
+        throw WorkspaceToolError.invalid("The delivery cursor is unavailable for this session.")
+      }
+      return try historyRowsUnlocked("""
+        SELECT rowid AS sequence,* FROM workspace_session_deliveries WHERE source_id=? AND kind IN ('message','created')
+          AND rowid>=? ORDER BY rowid DESC
+        """, values: [sessionID, String(sequence)]).map(deliveryFromRow)
+    }
+  }
+
   private func deliveryUnlocked(_ id: String) throws -> WorkspaceSessionDelivery? {
-    try historyRowsUnlocked("SELECT * FROM workspace_session_deliveries WHERE id=?", values: [id]).first.map(deliveryFromRow)
+    try historyRowsUnlocked("SELECT rowid AS sequence,* FROM workspace_session_deliveries WHERE id=?", values: [id]).first.map(deliveryFromRow)
   }
 
   private func deliveryFromRow(_ value: GatewayJSONValue) -> WorkspaceSessionDelivery {
@@ -119,6 +155,6 @@ extension WorkspaceDatabase {
     return WorkspaceSessionDelivery(id: string("id"), sourceID: string("source_id"), targetID: string("target_id"), text: string("content"),
       kind: WorkspaceSessionDeliveryKind(rawValue: string("kind")) ?? .message, status: string("status"), messageID: r["message_id"]?.stringValue,
       sourceTitle: string("source_title"), sourceHarness: string("source_agent"), targetTitle: string("target_title"), targetHarness: string("target_harness"),
-      targetModel: r["target_model"]?.stringValue, purpose: r["purpose"]?.stringValue, createdAt: string("created_at"))
+      targetModel: r["target_model"]?.stringValue, purpose: r["purpose"]?.stringValue, createdAt: string("created_at"), sequence: r["sequence"]?.intValue.map(Int64.init))
   }
 }

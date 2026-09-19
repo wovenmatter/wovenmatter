@@ -14,6 +14,11 @@ public struct WovenMatterToolRequest: Codable, Sendable {
     self.arguments = arguments
     self.noteEdit = noteEdit
   }
+  /// The transport's request ID is not part of the operation's arguments. A
+  /// retry may add the returned ID without changing the original operation.
+  public var operationArguments: [String] {
+    (try? WovenMatterToolCommand(arguments).operationArguments) ?? arguments
+  }
 }
 
 public struct WovenMatterToolResponse: Codable, Sendable {
@@ -21,8 +26,9 @@ public struct WovenMatterToolResponse: Codable, Sendable {
   public let result: GatewayJSONValue?
   public let error: String?
   public let silent: Bool
-  public init(success: Bool = true, result: GatewayJSONValue? = nil, error: String? = nil, silent: Bool = false) {
-    self.success = success; self.result = result; self.error = error; self.silent = silent
+  public let requestID: String?
+  public init(success: Bool = true, result: GatewayJSONValue? = nil, error: String? = nil, silent: Bool = false, requestID: String? = nil) {
+    self.success = success; self.result = result; self.error = error; self.silent = silent; self.requestID = requestID
   }
   public static func value<T: Encodable>(_ value: T) throws -> Self {
     let encoder = JSONEncoder()
@@ -36,12 +42,14 @@ public struct WovenMatterToolCommand: Sendable {
   public let action: String
   public let positional: [String]
   public let options: [String: String]
+  public let optionIndices: [String: Int]
+  public let operationArguments: [String]
   public let wantsHelp: Bool
 
   public init(_ arguments: [String]) throws {
     var args = arguments
     if args.isEmpty || ["help", "--help", "-h"].contains(args[0]) {
-      self.group = nil; self.action = "help"; self.positional = []; self.options = [:]; self.wantsHelp = true
+      self.group = nil; self.action = "help"; self.positional = []; self.options = [:]; self.optionIndices = [:]; self.operationArguments = arguments; self.wantsHelp = true
       return
     }
     let domain = args.removeFirst()
@@ -49,9 +57,11 @@ public struct WovenMatterToolCommand: Sendable {
       throw WorkspaceToolError.invalid("Unknown tool group '\(domain)'. Run wovenmatter help.")
     }
     self.group = group
-    self.wantsHelp = args.isEmpty || args.contains("--help") || args == ["help"] || args == ["-h"]
-    self.action = wantsHelp ? "help" : args.removeFirst()
-    if wantsHelp { self.positional = []; self.options = [:]; return }
+    if args.isEmpty || [["help"], ["--help"], ["-h"]].contains(args) {
+      self.action = "help"; self.wantsHelp = true
+      self.positional = []; self.options = [:]; self.optionIndices = [:]; self.operationArguments = arguments; return
+    }
+    self.action = args.removeFirst()
     let allowedActions: [WorkspaceToolGroup: Set<String>] = [
       .notes: ["list", "create", "read", "append", "insert", "replace-block", "delete-block", "format", "set-title", "table", "set-html", "link", "unlink", "apply", "versions", "version", "restore"],
       .history: ["search", "conversations", "conversation", "message", "runs", "trace", "events", "event"],
@@ -61,23 +71,33 @@ public struct WovenMatterToolCommand: Sendable {
     ]
     guard allowedActions[group]?.contains(action) == true else { throw WorkspaceToolError.invalid("Unknown \(domain) command '\(action)'.") }
     let booleanFlags: Set<String> = ["all-workspace", "independent", "no-notify", "paused", "all-day", "json", "header"]
-    let valueFlags: Set<String> = ["id", "session", "conversation", "note-id", "folder", "workspace", "harness", "model", "thinking", "title", "text", "purpose", "request-id", "search", "run", "kind", "since", "until", "after", "limit", "offset", "characters", "at", "every", "starts-at", "ends-at", "description", "enabled", "revision", "version", "file", "html", "style", "block-id", "table-id", "row", "column", "rows", "columns", "source-id", "database-id", "path", "query"]
+    let valueFlags: Set<String> = ["id", "session", "conversation", "note-id", "folder", "workspace", "harness", "model", "thinking", "title", "text", "purpose", "request-id", "search", "run", "kind", "since", "until", "after", "before", "limit", "offset", "characters", "at", "every", "starts-at", "ends-at", "description", "enabled", "revision", "version", "file", "html", "style", "block-id", "table-id", "row", "column", "rows", "columns", "source-id", "database-id", "path", "query"]
     var positional: [String] = [], options: [String: String] = [:]
+    var indices: [String: Int] = [:], operationArguments = Array(arguments.prefix(2))
+    var wantsHelp = false
     while !args.isEmpty {
       let item = args.removeFirst()
-      if !item.hasPrefix("--") { positional.append(item); continue }
+      if ["--help", "-h"].contains(item) { wantsHelp = true; continue }
+      if !item.hasPrefix("--") { positional.append(item); operationArguments.append(item); continue }
       let key = String(item.dropFirst(2))
       guard booleanFlags.contains(key) || valueFlags.contains(key), options[key] == nil else {
         throw WorkspaceToolError.invalid("Unknown or repeated option '\(item)'.")
       }
-      if booleanFlags.contains(key) && !(group == .notes && key == "json") { options[key] = "true" }
-      else {
+      indices[key] = arguments.count - args.count - 1
+      if booleanFlags.contains(key) && !(group == .notes && key == "json") {
+        options[key] = "true"; operationArguments.append(item)
+      } else {
         guard !args.isEmpty else { throw WorkspaceToolError.invalid("\(item) requires a value.") }
-        options[key] = args.removeFirst()
+        let value = args.removeFirst()
+        options[key] = value
+        if key != "request-id" { operationArguments += [item, value] }
       }
     }
     self.positional = positional
     self.options = options
+    self.optionIndices = indices
+    self.wantsHelp = wantsHelp
+    self.operationArguments = operationArguments
   }
 
   public func required(_ key: String, allowPositional: Bool = false) throws -> String {
@@ -138,12 +158,15 @@ public struct WovenMatterToolCommand: Sendable {
       create --title TITLE --text INSTRUCTION --purpose INTENT [--independent]
         [--harness NAME --model MODEL --thinking LEVEL --folder ID --workspace ID]
       send SESSION_ID --text MESSAGE [--request-id UUID]
-      manage SESSION_ID --purpose INTENT [--no-notify]
-      release SESSION_ID | notifications SESSION_ID --enabled true|false | receipts
+      manage SESSION_ID --purpose INTENT [--no-notify] [--request-id UUID]
+      release SESSION_ID | notifications SESSION_ID --enabled true|false | receipts [--before RECEIPT_ID] [--limit N]
       Creation inherits this session's configuration and folder and starts coordination
       unless --independent is used. Status and one-off sends do not begin coordination.
       Only one coordinator may manage a destination. Existing unattached sessions require
-      user access approval when history is off. Messages steer busy sessions or queue when
+      user access approval when history is off. A request awaiting approval returns
+      state=pending immediately. Wait for the user; retry the same command with the returned
+      request ID to inspect its outcome without creating another prompt. App shutdown
+      cancels pending approvals. Messages steer busy sessions or queue when
       steering is unsupported. Use release when the assignment is complete.
       """
     case .timers: """

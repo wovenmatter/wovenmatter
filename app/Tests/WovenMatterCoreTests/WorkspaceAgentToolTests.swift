@@ -308,6 +308,35 @@ struct WorkspaceAgentToolTests {
     #expect(try db.toolDelivery(id: queued)?.status == "cancelled")
   }
 
+  @Test func failedOrInterruptedCreationReleasesItsSlotAndRetryRetainsIdentity() throws {
+    let (db, dir, source, _) = try fixture()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    var settings = try db.toolSettings(); settings.maximumManagedSessions = 1
+    try db.saveToolSettings(settings)
+    let firstID = UUID().uuidString, secondID = UUID().uuidString
+    let args = ["sessions", "create", "--title", "Fixture"]
+    let first = try db.reserveToolSessionCreation(sourceID: source, requestID: firstID, arguments: args, purpose: "Work", managed: true)
+    try db.failToolSessionCreation(requestID: firstID)
+    _ = try db.reserveToolSessionCreation(sourceID: source, requestID: secondID, arguments: args, purpose: "Work", managed: true)
+    #expect(throws: WorkspaceToolError.managedLimit(1)) {
+      _ = try db.reserveToolSessionCreation(sourceID: source, requestID: firstID, arguments: args, purpose: "Work", managed: true)
+    }
+    let reopened = try WorkspaceDatabase(url: dir.appending(path: "workspace.sqlite"))
+    try reopened.recoverToolSessionCreations()
+    let retry = try reopened.reserveToolSessionCreation(sourceID: source, requestID: firstID, arguments: args, purpose: "Work", managed: true)
+    #expect(retry.objectValue?["status"]?.stringValue == "planned")
+    let target = try #require(retry.objectValue?["target_id"]?.stringValue)
+    #expect(first.objectValue?["target_id"]?.stringValue == target)
+    _ = try reopened.createLocalACPSession(runtimeKind: .pi, title: "Fixture", ownerDeviceID: UUID(), requestedConversationID: UUID(uuidString: target))
+    try reopened.completeToolSessionCreation(requestID: firstID, sourceID: source)
+    try reopened.failToolSessionCreation(requestID: firstID)
+    try reopened.recoverToolSessionCreations()
+    try reopened.endCoordination(targetID: target)
+    let completed = try reopened.reserveToolSessionCreation(sourceID: source, requestID: firstID, arguments: args, purpose: "Work", managed: true)
+    #expect(completed.objectValue?["status"]?.stringValue == "ready")
+    #expect(try reopened.sessionRelationship(target).coordinatorID == nil)
+  }
+
   @Test func creationReservationsSurviveReopenAndCountTowardFanout() throws {
     let (db, dir, a, _) = try fixture()
     defer { try? FileManager.default.removeItem(at: dir) }
@@ -329,7 +358,7 @@ struct WorkspaceAgentToolTests {
     #expect(try reopened.sessionRelationship(target).createdBy == a)
     #expect(try reopened.sessionTools(target).enabled == [.sessions, .notes])
     try reopened.beginCoordination(sourceID: a, targetID: target, purpose: "Research", userApprovedAccess: true)
-    try reopened.finishToolSessionCreation(requestID: requestID, status: "ready")
+    try reopened.completeToolSessionCreation(requestID: requestID, sourceID: a)
     try reopened.endCoordination(targetID: target, sourceID: a)
     #expect(try reopened.sessionRelationship(target).createdBy == a)
     _ = try reopened.reserveToolSessionCreation(sourceID: a, requestID: UUID().uuidString, arguments: args, purpose: "Next", managed: true)

@@ -23,7 +23,7 @@ enum WovenMatterCommandLine {
             var args = arguments
             // File paths belong to the CLI host. Never ask the app to open an
             // arbitrary caller-supplied path on the Mac (remote callers included).
-            if let index = args.firstIndex(of: "--file") {
+            if let index = command.optionIndices["file"] {
                 guard command.group == .notes, ["apply", "set-html"].contains(command.action), index + 1 < args.count else {
                     throw WorkspaceToolError.invalid("--file is supported by notes apply and notes set-html.")
                 }
@@ -36,7 +36,7 @@ enum WovenMatterCommandLine {
                 }
                 args.replaceSubrange(index...index + 1, with: [command.action == "set-html" ? "--html" : "--json", value])
             }
-            if command.group == .notes, !args.contains("--note-id"), let noteID = environment["WOVENMATTER_NOTE_ID"],
+            if command.group == .notes, command.options["note-id"] == nil, let noteID = environment["WOVENMATTER_NOTE_ID"],
                !["list", "create", "versions", "version", "restore"].contains(command.action) {
                 args += ["--note-id", noteID]
             }

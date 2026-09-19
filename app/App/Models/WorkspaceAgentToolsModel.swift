@@ -15,6 +15,9 @@ final class WorkspaceAgentToolsModel {
     private(set) var sessionPolicies: [String: WorkspaceSessionTools] = [:]
     private(set) var relationships: [String: WorkspaceSessionRelationship] = [:]
     private(set) var timers: [WorkspaceSessionTimer] = []
+    private(set) var receipts: [String: [WorkspaceSessionDelivery]] = [:]
+    private var observedSessions: [UUID: String] = [:]
+    private(set) var hasOlderReceipts: Set<String> = []
     var error: String?
     private var services: [String: WovenMatterToolService] = [:]
     private var remoteBridges: [String: WovenMatterRemoteToolBridge] = [:]
@@ -48,6 +51,61 @@ final class WorkspaceAgentToolsModel {
         relationships = Dictionary(uniqueKeysWithValues: try database.sessionRelationships().map { ($0.sessionID, $0) })
         timers = try database.sessionTimers()
         for id in sessionPolicies.keys { sessionPolicies[id] = try? database.sessionTools(id) }
+        for id in Set(observedSessions.values) {
+            if let oldest = receipts[id]?.last {
+                receipts[id] = try database.outgoingDeliveryWindow(sessionID: id, throughID: oldest.id)
+            } else { try loadInitialReceipts(id) }
+        }
+    }
+
+    func observeSession(_ id: String?, token: UUID) {
+        observedSessions[token] = id
+        if let id {
+            do { if receipts[id] == nil { try loadInitialReceipts(id) } }
+            catch { self.error = error.localizedDescription }
+        }
+        let active = Set(observedSessions.values)
+        receipts = receipts.filter { active.contains($0.key) }
+        hasOlderReceipts.formIntersection(active)
+    }
+
+    private func loadInitialReceipts(_ id: String) throws {
+        let page = try database.sessionDeliveries(sessionID: id, limit: 201, outgoingOnly: true)
+        receipts[id] = Array(page.prefix(200))
+        if page.count > 200 { hasOlderReceipts.insert(id) } else { hasOlderReceipts.remove(id) }
+    }
+
+    func loadOlderReceipts(sessionID: String) {
+        guard let oldest = receipts[sessionID]?.last else { return }
+        do {
+            let page = try database.sessionDeliveries(sessionID: sessionID, limit: 201, beforeID: oldest.id, outgoingOnly: true)
+            receipts[sessionID, default: []].append(contentsOf: page.prefix(200))
+            if page.count > 200 { hasOlderReceipts.insert(sessionID) } else { hasOlderReceipts.remove(sessionID) }
+        } catch { self.error = error.localizedDescription }
+    }
+
+    func endCoordination(sessionID: String) {
+        do { try database.endCoordination(targetID: sessionID); try reload(); error = nil }
+        catch { self.error = error.localizedDescription }
+    }
+
+    func setNotifications(sessionID: String, enabled: Bool) {
+        do {
+            if let source = try database.sessionRelationship(sessionID).coordinatorID {
+                try database.setCoordinationNotifications(sourceID: source, targetID: sessionID, enabled: enabled)
+            }
+            try reload(); error = nil
+        } catch { self.error = error.localizedDescription }
+    }
+
+    func pauseTimer(_ timer: WorkspaceSessionTimer, paused: Bool) {
+        do { try database.pauseSessionTimer(id: timer.id, paused: paused); try reload(); error = nil }
+        catch { self.error = error.localizedDescription }
+    }
+
+    func removeTimer(_ timer: WorkspaceSessionTimer) {
+        do { try database.removeSessionTimer(id: timer.id); try reload(); error = nil }
+        catch { self.error = error.localizedDescription }
     }
 
     func policy(for sessionID: String) -> WorkspaceSessionTools {
@@ -197,10 +255,10 @@ final class WorkspaceAgentToolsModel {
             }
             try reload()
             await onMutation()
-            return result
+            return .init(success: result.success, result: result.result, error: result.error, silent: result.silent, requestID: request.requestID)
         } catch {
             try? database.recordHistory(.init(conversationID: callerID, harness: "wovenmatter", kind: "cli.error", payload: error.localizedDescription))
-            return .init(success: false, error: error.localizedDescription)
+            return .init(success: false, error: error.localizedDescription, requestID: request.requestID)
         }
     }
 
@@ -238,8 +296,7 @@ final class WorkspaceAgentToolsModel {
                 command.required("version"), command.required("revision")))
         default:
             guard command.options["file"] == nil else { throw WorkspaceToolError.invalid("Read input files on the CLI host before sending the request.") }
-            var args = Array(request.arguments.dropFirst())
-            if let index = args.firstIndex(of: "--request-id"), index + 1 < args.count { args.removeSubrange(index...index + 1) }
+            let args = Array(request.operationArguments.dropFirst())
             let edit = try WovenNoteCommandLine.request(arguments: args, environment: [:])
             return try .value(await noteHandler(callerID, edit))
         }

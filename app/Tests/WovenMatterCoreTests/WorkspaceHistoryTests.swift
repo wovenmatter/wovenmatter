@@ -19,7 +19,7 @@ struct WorkspaceHistoryTests {
       #expect(redacted.contains("future_field"))
       #expect(try JSONSerialization.jsonObject(with: Data(redacted.utf8)) is [String: Any])
     }
-    let ordinary = #"{"path":"/Users/example/a.swift","text":"preserved"}"#
+    let ordinary = #"{"path":"/workspace/example/a.swift","text":"preserved"}"#
     #expect(WorkspaceHistoryPrivacy.redactingToolEndpoints(ordinary) == ordinary)
   }
   private func database() throws -> (WorkspaceDatabase, URL) {

@@ -5377,6 +5377,7 @@ public final class WorkspaceDatabase: @unchecked Sendable {
         SELECT json_object(
           'id', message.id, 'conversation_id', message.conversation_id,
           'client_message_id', message.client_message_id,
+          'sender_kind',(SELECT kind FROM workspace_session_deliveries WHERE message_id=message.id),
           'sender_session_id',(SELECT source_id FROM workspace_session_deliveries WHERE message_id=message.id),
           'sender_agent',(SELECT source_agent FROM workspace_session_deliveries WHERE message_id=message.id),
           'sender_session_title',(SELECT source_title FROM workspace_session_deliveries WHERE message_id=message.id),
@@ -5468,6 +5469,7 @@ public final class WorkspaceDatabase: @unchecked Sendable {
         SELECT json_object(
           'id', message.id, 'conversation_id', message.conversation_id,
           'client_message_id', message.client_message_id,
+          'sender_kind',(SELECT kind FROM workspace_session_deliveries WHERE message_id=message.id),
           'sender_session_id',(SELECT source_id FROM workspace_session_deliveries WHERE message_id=message.id),
           'sender_agent',(SELECT source_agent FROM workspace_session_deliveries WHERE message_id=message.id),
           'sender_session_title',(SELECT source_title FROM workspace_session_deliveries WHERE message_id=message.id),

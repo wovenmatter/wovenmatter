@@ -21,6 +21,24 @@ struct WovenMatterToolProtocolTests {
     #expect(session.options["independent"] == "true")
   }
 
+  @Test func retryIDsAndLiteralFlagValuesDoNotChangeTheOperation() throws {
+    let id = UUID().uuidString
+    let arguments = ["sessions", "create", "--title", "--request-id", "--text", "--file", "--purpose", "--help"]
+    let original = WovenMatterToolRequest(arguments: arguments, requestID: id)
+    let retry = WovenMatterToolRequest(arguments: arguments + ["--request-id", id], requestID: id)
+    #expect(original.operationArguments == retry.operationArguments)
+    let command = try WovenMatterToolCommand(retry.arguments)
+    #expect(!command.wantsHelp)
+    #expect(command.optionIndices["file"] == nil)
+    #expect(command.options["title"] == "--request-id")
+    #expect(command.options["purpose"] == "--help")
+    #expect(command.options["request-id"] == id)
+    #expect(try WovenMatterToolCommand(["sessions", "send", "--help"]).wantsHelp)
+    #expect(try WovenMatterToolCommand(["sessions", "receipts", "--before", id]).options["before"] == id)
+    let response = WovenMatterToolResponse(requestID: id)
+    #expect(try JSONDecoder().decode(WovenMatterToolResponse.self, from: JSONEncoder().encode(response)).requestID == id)
+  }
+
   @Test func malformedCommandsAndAuthorityOverridesAreRejected() {
     for arguments in [["unknown"], ["sessions", "delete-everything"],
                       ["history", "search", "--caller", "another-session"],

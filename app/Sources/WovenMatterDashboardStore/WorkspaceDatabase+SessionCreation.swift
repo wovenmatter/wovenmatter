@@ -20,7 +20,7 @@ extension WorkspaceDatabase {
           }
           try toolsExecuteUnlocked("UPDATE workspace_session_creations SET status='planned' WHERE id=?", [requestID])
         }
-        return value
+        return try historyRowsUnlocked("SELECT * FROM workspace_session_creations WHERE id=?", values: [requestID]).first ?? value
       }
       if managed {
         let limit = try toolSettingsUnlocked().maximumManagedSessions
@@ -33,9 +33,17 @@ extension WorkspaceDatabase {
     }
   }
 
-  public func finishToolSessionCreation(requestID: String, status: String) throws {
-    guard ["ready", "failed"].contains(status) else { throw WorkspaceToolError.invalid("Invalid creation status.") }
-    try transaction { try toolsExecuteUnlocked("UPDATE workspace_session_creations SET status=? WHERE id=?", [status, requestID]) }
+  /// Failed setup releases its reservation slot while preserving the target ID
+  /// for a safe retry. An already completed creation is never downgraded by a
+  /// later failure to deliver its first message.
+  public func failToolSessionCreation(requestID: String) throws {
+    try transaction {
+      try toolsExecuteUnlocked("UPDATE workspace_session_creations SET status='failed' WHERE id=? AND status='planned'", [requestID])
+    }
+  }
+
+  public func recoverToolSessionCreations() throws {
+    try transaction { try executeUnlocked("UPDATE workspace_session_creations SET status='failed' WHERE status='planned'") }
   }
 
   public func completeToolSessionCreation(requestID: String, sourceID: String) throws {
