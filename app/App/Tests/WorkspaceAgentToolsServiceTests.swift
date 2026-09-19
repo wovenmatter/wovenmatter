@@ -57,6 +57,32 @@ struct WorkspaceAgentToolsServiceTests {
 
 extension WorkspaceAgentToolsServiceTests {
     @Test(.timeLimit(.minutes(1)))
+    func relayResponseCanHandItsSlotToTheNextRequestBeforeWriteReturns() async throws {
+        let fixture = try RelayForwardingFixture()
+        defer { fixture.stop() }
+        let firstID = UUID().uuidString, replacementID = UUID().uuidString
+        let replacement = try fixture.request(slow: false)
+        let output = RelayOutputCapture()
+        let holder = RelayForwarderReference()
+        let forwarder = WovenMatterRelayForwarder(localSocket: fixture.endpoint.path, maximumConnections: 1,
+            write: { data in
+                output.append(data)
+                if (try JSONDecoder().decode(GatewayJSONValue.self, from: data)).objectValue?["id"]?.stringValue == firstID {
+                    // Model the remote reader releasing its slot as soon as it
+                    // reads the newline, while the old write is still returning.
+                    try holder.value?.submit(id: replacementID, request: replacement)
+                }
+            }, onFailure: { output.fail($0) })
+        holder.value = forwarder
+        defer { forwarder.stop() }
+        try forwarder.submit(id: firstID, request: fixture.request(slow: false))
+        await forwarder.waitUntilIdle()
+        let ids = try output.lines.map { try JSONDecoder().decode(GatewayJSONValue.self, from: $0).objectValue?["id"]?.stringValue }
+        #expect(ids == [firstID, replacementID])
+        #expect(output.errors.isEmpty)
+    }
+
+    @Test(.timeLimit(.minutes(1)))
     func stalledRelayCallDoesNotBlockAFastConcurrentReply() async throws {
         let fixture = try RelayForwardingFixture()
         defer { fixture.stop() }
@@ -130,6 +156,15 @@ extension WorkspaceAgentToolsServiceTests {
 
 private func waitForRelaySignal(_ signal: DispatchSemaphore) -> Bool {
     signal.wait(timeout: .now() + 3) == .success
+}
+
+private final class RelayForwarderReference: @unchecked Sendable {
+    private let lock = NSLock()
+    private weak var forwarder: WovenMatterRelayForwarder?
+    var value: WovenMatterRelayForwarder? {
+        get { lock.withLock { forwarder } }
+        set { lock.withLock { forwarder = newValue } }
+    }
 }
 
 private final class RelayOutputCapture: @unchecked Sendable {

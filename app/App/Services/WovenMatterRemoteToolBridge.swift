@@ -155,6 +155,7 @@ final class WovenMatterRelayForwarder: @unchecked Sendable {
     private let onFailure: @Sendable (any Error) -> Void
     private var stopped = false
     private var active: [String: WovenToolForwardCancellation] = [:]
+    private var writingID: String?
     private var idleWaiters: [CheckedContinuation<Void, Never>] = []
 
     init(localSocket: String, timeout: TimeInterval = 55, maximumConnections: Int = 4,
@@ -172,13 +173,14 @@ final class WovenMatterRelayForwarder: @unchecked Sendable {
         let cancellation = WovenToolForwardCancellation()
         try lock.withLock {
             guard !stopped else { throw CancellationError() }
-            guard active[id] == nil, active.count < maximumConnections else {
+            guard active[id] == nil, writingID != id, active.count < maximumConnections else {
                 throw WorkspaceToolError.invalid("The tool relay already has its maximum in-flight requests.")
             }
             active[id] = cancellation
         }
         DispatchQueue.global(qos: .utility).async { [self] in
-            defer { finished(id: id) }
+            var ownershipFinished = false
+            defer { if !ownershipFinished { finished(id: id) } }
             do {
                 let response: Data
                 do {
@@ -192,7 +194,19 @@ final class WovenMatterRelayForwarder: @unchecked Sendable {
                 var packet = try JSONEncoder().encode(["id": id, "payload": response.base64EncodedString()])
                 packet.append(10)
                 try writeLock.withLock {
-                    guard lock.withLock({ !stopped }) else { return }
+                    // Complete ownership before another writer takes over; the
+                    // outer cleanup also handles errors before this boundary.
+                    defer { finished(id: id); ownershipFinished = true }
+                    let canWrite = lock.withLock {
+                        guard !stopped else { return false }
+                        // The peer can receive a complete line and replace its
+                        // request before write returns. Retire the socket slot
+                        // first; retain one bounded writer until it finishes.
+                        active.removeValue(forKey: id)
+                        writingID = id
+                        return true
+                    }
+                    guard canWrite else { return }
                     try write(packet)
                 }
             } catch { onFailure(error); stop() }
@@ -202,7 +216,8 @@ final class WovenMatterRelayForwarder: @unchecked Sendable {
     private func finished(id: String) {
         let waiters = lock.withLock {
             active.removeValue(forKey: id)
-            guard active.isEmpty else { return [CheckedContinuation<Void, Never>]() }
+            if writingID == id { writingID = nil }
+            guard active.isEmpty, writingID == nil else { return [CheckedContinuation<Void, Never>]() }
             let values = idleWaiters; idleWaiters.removeAll(); return values
         }
         waiters.forEach { $0.resume() }
@@ -211,7 +226,7 @@ final class WovenMatterRelayForwarder: @unchecked Sendable {
     func waitUntilIdle() async {
         await withCheckedContinuation { continuation in
             let ready = lock.withLock {
-                guard !active.isEmpty else { return true }
+                guard !active.isEmpty || writingID != nil else { return true }
                 idleWaiters.append(continuation); return false
             }
             if ready { continuation.resume() }

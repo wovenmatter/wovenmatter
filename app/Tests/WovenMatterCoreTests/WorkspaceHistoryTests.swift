@@ -194,6 +194,8 @@ struct WorkspaceHistoryTests {
       try db.reserveToolDelivery(
         sourceID: a, targetID: "missing", text: "Test", requestID: UUID().uuidString)
     }
-    #expect(rows(try db.queryHistory(.init(command: "search", search: "Findings"))).count >= 2)
+    let findings = rows(try db.queryHistory(.init(command: "search", search: "Findings")))
+    #expect(findings.count == 1) // the input, excluding this search's own audit event
+    #expect(findings.first?.objectValue?["kind"]?.stringValue == "message.insert")
   }
 }
