@@ -88,6 +88,7 @@ struct UsageLimitsRequest: Sendable {
   let openRouterAPIKey: String?
   let enabledProviders: Set<ProviderKind>
   let keychainInteraction: UsageKeychainInteraction
+  let interactiveProvider: ProviderKind?
   let codexWorkspaceSource: CodexWorkspaceSource?
   let codexWorkspaceCount: Int
   let now: Date
@@ -98,6 +99,7 @@ struct UsageLimitsRequest: Sendable {
       openRouterAPIKey: openRouterAPIKey,
       enabledProviders: enabledProviders,
       keychainInteraction: keychainInteraction,
+      interactiveProvider: interactiveProvider,
       codexWorkspaceSource: codexWorkspaceSource,
       codexWorkspaceCount: codexWorkspaceCount,
       now: now
@@ -123,6 +125,7 @@ public actor LocalUsageService {
   private let credentialStore: any UsageCredentialStoring
   private let databaseURL: URL
   private let limitCollector: @Sendable (UsageLimitsRequest) async -> [UsageLimitAccount]
+  private let openRouterActivityFetcher: @Sendable (String) async throws -> OpenRouterActivityResult
   private var limitsGeneration = UUID()
   private var analyticsGeneration = UUID()
   private var usageStore: UsageStore?
@@ -134,6 +137,9 @@ public actor LocalUsageService {
     accounts: [UsageLimitAccount]
   )?
   private var importOutcomes: [String: ImportOutcome] = [:]
+  // A successful read or explicit save authorizes this app session. Do not ask
+  // Keychain again during the refresh triggered by a one-time Allow response.
+  private var openRouterAPIKey: String?
   private var openRouterStatus: UsageSourceStatus = .unavailable
   private var openRouterDetail = "Add an OpenRouter management key to import official account activity."
   private var cursorAccountStatus: UsageSourceStatus = .unavailable
@@ -149,6 +155,7 @@ public actor LocalUsageService {
     self.fileManager = fileManager
     credentialStore = UsageCredentialStore(service: credentialService)
     limitCollector = { await $0.collect() }
+    openRouterActivityFetcher = { try await OpenRouterActivityClient.fetch(apiKey: $0) }
     databaseURL = usageDatabaseURL ?? homeDirectory.appending(
       path: "Library/Application Support/Woven Matter/workspace.sqlite"
     )
@@ -161,12 +168,16 @@ public actor LocalUsageService {
     usageDatabaseURL: URL,
     limitCollector: @escaping @Sendable (UsageLimitsRequest) async -> [UsageLimitAccount] = {
       await $0.collect()
+    },
+    openRouterActivityFetcher: @escaping @Sendable (String) async throws -> OpenRouterActivityResult = {
+      try await OpenRouterActivityClient.fetch(apiKey: $0)
     }
   ) {
     self.homeDirectory = homeDirectory
     self.fileManager = fileManager
     self.credentialStore = credentialStore
     self.limitCollector = limitCollector
+    self.openRouterActivityFetcher = openRouterActivityFetcher
     databaseURL = usageDatabaseURL
   }
 
@@ -224,6 +235,7 @@ public actor LocalUsageService {
     enabledProviders: Set<ProviderKind> = [],
     allowCredentialAccess: Bool = true,
     keychainInteraction: UsageKeychainInteraction = .noninteractive,
+    interactiveProvider: ProviderKind? = nil,
     selectedCodexWorkspaceID: String? = nil,
     now: Date = Date()
   ) async throws -> LocalUsageLimitsSnapshot {
@@ -256,15 +268,21 @@ public actor LocalUsageService {
         uniqueKeysWithValues: persistent.map { ($0.provider, $0) }
       )
       if refresh {
-        let openRouterAPIKey = allowCredentialAccess
-          && enabledProviders.contains(.openRouter)
-          ? (try? credentialStore.loadOpenRouterAPIKey())
-          : nil
+        var openRouterAPIKey: String?
+        var credentialError: String?
+        if allowCredentialAccess && enabledProviders.contains(.openRouter) {
+          do {
+            openRouterAPIKey = try loadOpenRouterAPIKey()
+          } catch {
+            credentialError = error.localizedDescription
+          }
+        }
         let refreshed = await limitCollector(UsageLimitsRequest(
           homeDirectory: homeDirectory,
           openRouterAPIKey: openRouterAPIKey,
           enabledProviders: enabledProviders,
           keychainInteraction: keychainInteraction,
+          interactiveProvider: interactiveProvider,
           codexWorkspaceSource: selectedCodexSource,
           codexWorkspaceCount: codexSources.count,
           now: now
@@ -272,7 +290,20 @@ public actor LocalUsageService {
         guard limitsGeneration == generation, !Task.isCancelled else {
           throw CancellationError()
         }
-        accounts = refreshed.map { account in
+        accounts = refreshed.map { refreshedAccount in
+          let account: UsageLimitAccount
+          if refreshedAccount.provider == .openRouter, let credentialError {
+            account = UsageLimitAccount(
+              provider: .openRouter,
+              accountLabel: refreshedAccount.accountLabel,
+              status: .unavailable,
+              source: "Mac Keychain",
+              detail: credentialError,
+              observedAt: now
+            )
+          } else {
+            account = refreshedAccount
+          }
           guard account.status == .failed || account.status == .unavailable,
                 let prior = persistentByProvider[account.provider]
           else { return account }
@@ -295,7 +326,7 @@ public actor LocalUsageService {
       accounts: accounts,
       hasOpenRouterCredential: allowCredentialAccess
         && enabledProviders.contains(.openRouter)
-        && (try? credentialStore.hasOpenRouterAPIKey()) == true,
+        && (openRouterAPIKey != nil || (try? credentialStore.hasOpenRouterAPIKey()) == true),
       codexWorkspaces: codexSources.map(\.workspace),
       selectedCodexWorkspaceID: resolvedCodexWorkspaceID
     )
@@ -398,6 +429,7 @@ public actor LocalUsageService {
     let key = value.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !key.isEmpty else { throw LocalUsageServiceError.emptyCredential }
     try credentialStore.saveOpenRouterAPIKey(key)
+    openRouterAPIKey = key
     limitsGeneration = UUID()
     analyticsGeneration = UUID()
     cachedLimits = nil
@@ -418,11 +450,41 @@ public actor LocalUsageService {
 
   public func deleteOpenRouterAPIKey() throws {
     try credentialStore.deleteOpenRouterAPIKey()
+    openRouterAPIKey = nil
     limitsGeneration = UUID()
     analyticsGeneration = UUID()
     cachedLimits = nil
     openRouterStatus = .unavailable
     openRouterDetail = "Add an OpenRouter management key to import official account activity."
+  }
+
+  /// Explicit saved-credential recovery. Never launches Claude or a sign-in flow.
+  public func authorizeClaudeCredentialAccess() throws {
+    try ProviderLimitCollector.authorizeClaudeCredentialAccess(
+      credentialsURL: ProviderLimitCollector.claudeCredentialsURL(homeDirectory: homeDirectory)
+    )
+    cachedLimits = nil
+  }
+
+  public func authorizeOpenRouterCredentialAccess() throws {
+    guard let key = try credentialStore.authorizeOpenRouterAPIKey() else {
+      openRouterAPIKey = nil
+      limitsGeneration = UUID()
+      analyticsGeneration = UUID()
+      cachedLimits = nil
+      throw LocalUsageServiceError.missingCredential
+    }
+    openRouterAPIKey = key
+    limitsGeneration = UUID()
+    analyticsGeneration = UUID()
+    cachedLimits = nil
+  }
+
+  private func loadOpenRouterAPIKey() throws -> String? {
+    if let openRouterAPIKey { return openRouterAPIKey }
+    let key = try credentialStore.loadOpenRouterAPIKey()
+    openRouterAPIKey = key
+    return key
   }
 
   private func openUsageStore() -> UsageStore? {
@@ -470,7 +532,6 @@ public actor LocalUsageService {
     reason: UsageRefreshReason,
     now: Date
   ) -> Bool {
-    guard (try? credentialStore.hasOpenRouterAPIKey()) == true else { return false }
     let lastAttempt = try? store.metadataDate("usage.openrouter-attempt-at")
     switch reason {
     case .rangeChanged, .runCompleted:
@@ -910,14 +971,13 @@ public actor LocalUsageService {
   }
 
   private func importOpenRouterActivity(store: UsageStore, generation: UUID, now: Date) async {
-    let storedKey = (try? credentialStore.loadOpenRouterAPIKey()) ?? nil
-    guard let key = storedKey else {
-      openRouterStatus = .unavailable
-      openRouterDetail = "Add an OpenRouter management key to import official account activity."
-      return
-    }
     do {
-      let activity = try await OpenRouterActivityClient.fetch(apiKey: key)
+      guard let key = try loadOpenRouterAPIKey() else {
+        openRouterStatus = .unavailable
+        openRouterDetail = "Add an OpenRouter management key to import official account activity."
+        return
+      }
+      let activity = try await openRouterActivityFetcher(key)
       guard isCurrentAnalytics(generation) else { return }
       for (date, samples) in activity.samplesByUTCDate {
         try store.replace(
@@ -1047,17 +1107,23 @@ public actor LocalUsageService {
         sourceIDPrefix: "openrouter:activity:",
         in: interval
       )
-      let hasCredential = allowCredentialAccess
-        && (try? credentialStore.hasOpenRouterAPIKey()) == true
-      let remoteStatus: UsageSourceStatus = if !hasCredential {
-        openRouterStats?.events ?? 0 > 0 ? .partial : .unavailable
-      } else {
-        openRouterStatus
+      let credentialPresence = Result {
+        try allowCredentialAccess && (openRouterAPIKey != nil || credentialStore.hasOpenRouterAPIKey())
       }
-      let remoteDetail = if !hasCredential, (openRouterStats?.events ?? 0) > 0 {
-        "Previously imported OpenRouter activity remains in the persistent index, but no credential is stored for refresh."
-      } else {
-        openRouterDetail
+      let remoteStatus: UsageSourceStatus
+      let remoteDetail: String
+      switch credentialPresence {
+      case .success(true):
+        remoteStatus = openRouterStatus
+        remoteDetail = openRouterDetail
+      case .success(false):
+        remoteStatus = (openRouterStats?.events ?? 0) > 0 ? .partial : .unavailable
+        remoteDetail = allowCredentialAccess
+          ? "Add an OpenRouter management key to refresh account activity. Previously imported activity remains available."
+          : "Credential access is disabled. Previously imported OpenRouter activity remains available."
+      case .failure(let error):
+        remoteStatus = (openRouterStats?.events ?? 0) > 0 ? .partial : .unavailable
+        remoteDetail = error.localizedDescription
       }
       sources.append(UsageSourceCoverage(
         id: "openrouter",
@@ -1415,10 +1481,12 @@ public actor LocalUsageService {
 
 public enum LocalUsageServiceError: LocalizedError {
   case emptyCredential
+  case missingCredential
 
   public var errorDescription: String? {
     switch self {
     case .emptyCredential: "Enter an OpenRouter API key before saving."
+    case .missingCredential: "No OpenRouter key is stored in Keychain. Save a key before retrying access."
     }
   }
 }

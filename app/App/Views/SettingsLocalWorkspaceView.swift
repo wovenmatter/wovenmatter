@@ -361,7 +361,7 @@ struct SettingsLocalWorkspaceView: View {
         guard let availability else { return "Checking" }
         return switch availability.state {
         case .ready:
-            "Ready"
+            "Installed"
         case .cliMissing:
             "CLI required"
         case .adapterMissing:

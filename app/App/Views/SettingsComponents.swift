@@ -888,7 +888,7 @@ struct CredentialAccessDisclosureView: View {
                         Circle().fill(DashboardPalette.primary.opacity(0.1))
                     )
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Allow credential access")
+                    Text("Enable credential access")
                         .font(.system(size: 17, weight: .semibold))
                     Text(purpose)
                         .font(.system(size: 12.5))
@@ -899,18 +899,18 @@ struct CredentialAccessDisclosureView: View {
 
             VStack(alignment: .leading, spacing: 9) {
                 disclosureRow(
-                    "Woven Matter may ask macOS Keychain for credentials that you have chosen to use."
+                    "This is one saved choice for Woven Matter across the features you enable."
                 )
                 disclosureRow(
-                    "Provider CLIs may check their own signed-in accounts and credential stores."
+                    "Enabled features can reuse saved credentials. Automatic background refreshes never request permission."
                 )
                 disclosureRow(
-                    "Cursor usage can read Cursor's local account session only after you enable Cursor usage tracking."
+                    "You still choose which providers, runtimes, and workspaces to enable."
                 )
             }
 
             DisclosureGroup("Keychain prompts") {
-                Text("macOS controls its password prompt. Choosing Always Allow normally prevents repeat prompts while the app's signing identity remains unchanged.")
+                Text("macOS may ask when you explicitly connect or reconnect saved credentials. This app-wide choice stays saved; background refreshes stay silent.")
                     .font(.system(size: 11.5))
                     .foregroundStyle(DashboardPalette.mutedForeground)
                     .fixedSize(horizontal: false, vertical: true)
@@ -921,7 +921,7 @@ struct CredentialAccessDisclosureView: View {
                 Spacer()
                 Button("Not now", role: .cancel, action: onCancel)
                     .buttonStyle(SettingsQuietButtonStyle())
-                Button("Continue", action: onEnable)
+                Button("Enable credential access", action: onEnable)
                     .buttonStyle(DashboardPrimaryButtonStyle())
             }
         }

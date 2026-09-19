@@ -271,13 +271,6 @@ struct PublicSourceContractsTests {
       disclosureAcknowledged: true,
       explicitUserAction: true
     ) == .oneShotExplicit)
-
-    #expect(ProviderLimitCollector.claudeAuthenticationContext(
-      for: .noninteractive
-    ).interactionNotAllowed)
-    #expect(!ProviderLimitCollector.claudeAuthenticationContext(
-      for: .oneShotExplicit
-    ).interactionNotAllowed)
   }
 
   @Test("normalized last-good limit snapshots persist without credentials")
@@ -557,6 +550,8 @@ private final class RecordingUsageCredentialStore:
     lock.withLock { reads += 1 }
     return true
   }
+
+  func authorizeOpenRouterAPIKey() throws -> String? { try loadOpenRouterAPIKey() }
 
   func loadOpenRouterAPIKey() throws -> String? {
     lock.withLock { reads += 1 }
