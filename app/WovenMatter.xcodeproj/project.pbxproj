@@ -12,6 +12,7 @@
 		D472AB9160464F1FAB826C32 /* WorkspaceSessionActivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = D472AB9160464F1FAB826C31 /* WorkspaceSessionActivity.swift */; };
 		D472AB9160464F1FAB826C22 /* WorkspaceToolControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = D472AB9160464F1FAB826C21 /* WorkspaceToolControls.swift */; };
 		D472AB9160464F1FAB826C12 /* ApplicationModel+AgentTools.swift in Sources */ = {isa = PBXBuildFile; fileRef = D472AB9160464F1FAB826C11 /* ApplicationModel+AgentTools.swift */; };
+		AA1900000000000000000001 /* WovenMatterLifecycleDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1900000000000000000002 /* WovenMatterLifecycleDelegate.swift */; };
 		0C11E0000000000000000001 /* WovenMatterClient in Frameworks */ = {isa = PBXBuildFile; productRef = 0C11E0000000000000000004 /* WovenMatterClient */; };
 		D46000000000000000000002 /* WovenMatterDashboardStore in Frameworks */ = {isa = PBXBuildFile; productRef = D46000000000000000000001 /* WovenMatterDashboardStore */; };
 		A11C00000000000000000001 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A11C00000000000000000002 /* Assets.xcassets */; };
@@ -75,6 +76,7 @@
 		D472AB9160464F1FAB826C31 /* WorkspaceSessionActivity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WorkspaceSessionActivity.swift"; sourceTree = "<group>"; };
 		D472AB9160464F1FAB826C21 /* WorkspaceToolControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WorkspaceToolControls.swift"; sourceTree = "<group>"; };
 		D472AB9160464F1FAB826C11 /* ApplicationModel+AgentTools.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ApplicationModel+AgentTools.swift"; sourceTree = "<group>"; };
+		AA1900000000000000000002 /* WovenMatterLifecycleDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WovenMatterLifecycleDelegate.swift; sourceTree = "<group>"; };
 		A11C00000000000000000002 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A11C00000000000000000004 /* WorkspaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceView.swift; sourceTree = "<group>"; };
 		DC0A00000000000000000002 /* DashboardComposerTextEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardComposerTextEditor.swift; sourceTree = "<group>"; };
@@ -178,6 +180,7 @@
 				5A0B27571F91CCF38534BB90 /* ApplicationModel.swift */,
 				D50000000000000000000009 /* Info.plist */,
 				624CEC46A7441DADEBBCE79E /* WovenMatterApp.swift */,
+				AA1900000000000000000002 /* WovenMatterLifecycleDelegate.swift */,
 				D49100000000000000000004 /* Models */,
 				D50000000000000000000007 /* Resources */,
 				D50000000000000000000008 /* Services */,
@@ -428,6 +431,7 @@
 				5E7A0000000000000000000B /* SettingsBuzzWorkspacesView.swift in Sources */,
 				5E7A0000000000000000000D /* SettingsUsageView.swift in Sources */,
 				5AECF7B494583F056FBE596C /* WovenMatterApp.swift in Sources */,
+				AA1900000000000000000001 /* WovenMatterLifecycleDelegate.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

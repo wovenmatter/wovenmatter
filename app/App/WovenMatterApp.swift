@@ -341,43 +341,6 @@ final class WorkspaceProcessLease {
     }
 }
 
-@MainActor
-final class WovenMatterLifecycleDelegate: NSObject, NSApplicationDelegate {
-    weak var model: ApplicationModel?
-    private var terminating = false
-
-    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        model?.refreshRuntimeInventory()
-        model?.refreshLocalACPRuntimesNow()
-        model?.remoteWorkspaces.refreshRuntimeMaintenanceAtStartup()
-        return true
-    }
-
-    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard let model else { return .terminateNow }
-        guard !terminating else { return .terminateLater }
-        terminating = true
-        model.flushNoteDrafts()
-        Task {
-            do {
-                try await model.prepareOpenCodeInstancesToQuit()
-                sender.reply(toApplicationShouldTerminate: true)
-            } catch {
-                let alert = NSAlert()
-                alert.messageText = "OpenCode could not be stopped"
-                alert.informativeText = error.localizedDescription
-                alert.addButton(withTitle: "Cancel quit")
-                alert.addButton(withTitle: "Quit anyway")
-                let quit = alert.runModal() == .alertSecondButtonReturn
-                terminating = false
-                sender.reply(toApplicationShouldTerminate: quit)
-                if !quit { await model.restoreOpenCodeInstances() }
-            }
-        }
-        return .terminateLater
-    }
-}
-
 @main
 struct WovenMatterApp: App {
     @NSApplicationDelegateAdaptor(WovenMatterLifecycleDelegate.self) private var lifecycleDelegate

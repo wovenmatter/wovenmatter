@@ -131,7 +131,7 @@ struct SettingsGeneralView: View {
         Task {
             do {
                 try await releaseUpdateInstaller.beginInstallation(of: release)
-                NSApplication.shared.terminate(nil)
+                WovenMatterLifecycleDelegate.requestTerminationAfterUpdate()
             } catch {
                 releaseUpdateState = .installFailed(
                     release,
