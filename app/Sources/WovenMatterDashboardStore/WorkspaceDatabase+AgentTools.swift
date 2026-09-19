@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 import SQLite3
 import WovenMatterCore
 import WovenMatterClient
@@ -7,6 +8,10 @@ extension WorkspaceDatabase {
   func migrateAgentTools() throws {
     try transaction {
       try executeUnlocked("""
+        CREATE TABLE IF NOT EXISTS workspace_tool_mutations(
+          source_id TEXT NOT NULL REFERENCES dashboard_conversations(id), request_id TEXT NOT NULL,
+          operation TEXT NOT NULL, input_digest TEXT NOT NULL, result_json TEXT NOT NULL,
+          PRIMARY KEY(source_id,request_id));
         CREATE TABLE IF NOT EXISTS workspace_tool_settings(id INTEGER PRIMARY KEY CHECK(id=1), value TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS workspace_opencode_input_context(
           id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, visible_text TEXT NOT NULL, delivery_id TEXT);
@@ -314,5 +319,46 @@ extension WorkspaceDatabase {
     defer { sqlite3_finalize(statement) }
     for (index, value) in values.enumerated() { try bindNullable(value, at: Int32(index + 1), to: statement) }
     try stepDone(statement)
+  }
+}
+
+
+extension WorkspaceDatabase {
+  /// Must run inside the mutation's transaction. A receipt and its write commit
+  /// together, including when independent connections retry after an app restart.
+  /// Callers recheck current authority before returning either a new or saved result.
+  func performToolMutationUnlocked<Input: Encodable, Output: Codable>(
+    callerID: String?, requestID: String?, operation: String, input: Input,
+    receipt: (Output) -> Output = { $0 }, mutation: () throws -> Output
+  ) throws -> (result: Output, replayed: Bool) {
+    guard let requestID else { return (try mutation(), false) }
+    guard let callerID, UUID(uuidString: requestID) != nil else {
+      throw WorkspaceToolError.invalid("A mutation request needs a bound caller and UUID request ID.")
+    }
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.sortedKeys]
+    let digest = SHA256.hash(data: try encoder.encode(input)).map { String(format: "%02x", $0) }.joined()
+    let rows = try historyRowsUnlocked(
+      "SELECT operation,input_digest,result_json FROM workspace_tool_mutations WHERE source_id=? AND request_id=?",
+      values: [callerID, requestID])
+    if let row = rows.first?.objectValue {
+      guard row["operation"]?.stringValue == operation, row["input_digest"]?.stringValue == digest,
+            let json = row["result_json"]?.stringValue else {
+        throw WorkspaceToolError.invalid("This request ID was already used for a different mutation.")
+      }
+      return (try JSONDecoder().decode(Output.self, from: Data(json.utf8)), true)
+    }
+    let result = try mutation()
+    let json = String(decoding: try encoder.encode(receipt(result)), as: UTF8.self)
+    try toolsExecuteUnlocked(
+      "INSERT INTO workspace_tool_mutations(source_id,request_id,operation,input_digest,result_json) VALUES(?,?,?,?,?)",
+      [callerID, requestID, operation, digest, json])
+    return (result, false)
+  }
+
+  /// Keep only an acknowledgement, never another unbounded copy of note contents.
+  func noteMutationReceipt(_ response: NoteEditingResponse) -> NoteEditingResponse {
+    NoteEditingResponse(success: response.success, noteID: response.noteID,
+      revision: response.revision, error: response.error, replayed: true)
   }
 }

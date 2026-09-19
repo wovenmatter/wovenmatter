@@ -51,7 +51,7 @@ extension WorkspaceDatabase {
   /// Full access is rechecked in the same transaction as the write.
   public func saveAgentCalendar(callerID: String, id: String = UUID().uuidString.lowercased(),
                                  creating: Bool, title: String, details: String?,
-                                 startsAt: Date, endsAt: Date?, allDay: Bool) throws -> String {
+                                 startsAt: Date, endsAt: Date?, allDay: Bool, requestID: String? = nil) throws -> String {
     guard !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, title.utf8.count <= 4_096,
           (details?.utf8.count ?? 0) <= 65_536, startsAt.timeIntervalSince1970.isFinite,
           endsAt.map({ $0.timeIntervalSince1970.isFinite && $0 > startsAt }) ?? true else {
@@ -59,34 +59,42 @@ extension WorkspaceDatabase {
     }
     return try transaction {
       try requireToolUnlocked(.calendar, sessionID: callerID, writesCalendar: true)
-      let operatorID = try localMutationOperatorIDUnlocked()
-      let now = Self.timestamp(Date())
-      if creating {
-        guard UUID(uuidString: id) != nil else { throw WorkspaceToolError.invalid("An event ID must be a UUID.") }
-        try toolsExecuteUnlocked("""
-          INSERT INTO dashboard_calendar_items(id,user_id,kind,title,description,starts_at,ends_at,all_day,status,source,created_at,updated_at)
-          VALUES(?,?,'event',?,?,?,?,?,'scheduled',?,?,?)
-          """, [id, operatorID, title, details, Self.timestamp(startsAt), endsAt.map(Self.timestamp), allDay ? "1" : "0", "session:" + callerID, now, now])
-      } else {
-        try toolsExecuteUnlocked("""
-          UPDATE dashboard_calendar_items SET title=?,description=?,starts_at=?,ends_at=?,all_day=?,updated_at=?
-          WHERE id=? AND user_id=? AND kind='event'
-          """, [title, details, Self.timestamp(startsAt), endsAt.map(Self.timestamp), allDay ? "1" : "0", now, id, operatorID])
-        guard sqlite3_changes(connection) == 1 else { throw WorkspaceToolError.invalid("Calendar event not found.") }
-      }
-      try recordHistoryUnlocked(.init(conversationID: callerID, harness: "wovenmatter", kind: "calendar.write",
-        payload: try toolsJSON(["eventID": id, "action": creating ? "create" : "update"])))
-      return id
+      return try performToolMutationUnlocked(callerID: callerID, requestID: requestID,
+        operation: creating ? "calendar.create" : "calendar.update",
+        input: [id, title, details, String(startsAt.timeIntervalSince1970), endsAt.map { String($0.timeIntervalSince1970) }, allDay ? "true" : "false"]) {
+        let operatorID = try localMutationOperatorIDUnlocked()
+        let now = Self.timestamp(Date())
+        if creating {
+          guard UUID(uuidString: id) != nil else { throw WorkspaceToolError.invalid("An event ID must be a UUID.") }
+          try toolsExecuteUnlocked("""
+            INSERT INTO dashboard_calendar_items(id,user_id,kind,title,description,starts_at,ends_at,all_day,status,source,created_at,updated_at)
+            VALUES(?,?,'event',?,?,?,?,?,'scheduled',?,?,?)
+            """, [id, operatorID, title, details, Self.timestamp(startsAt), endsAt.map(Self.timestamp), allDay ? "1" : "0", "session:" + callerID, now, now])
+        } else {
+          try toolsExecuteUnlocked("""
+            UPDATE dashboard_calendar_items SET title=?,description=?,starts_at=?,ends_at=?,all_day=?,updated_at=?
+            WHERE id=? AND user_id=? AND kind='event'
+            """, [title, details, Self.timestamp(startsAt), endsAt.map(Self.timestamp), allDay ? "1" : "0", now, id, operatorID])
+          guard sqlite3_changes(connection) == 1 else { throw WorkspaceToolError.invalid("Calendar event not found.") }
+        }
+        try recordHistoryUnlocked(.init(conversationID: callerID, harness: "wovenmatter", kind: "calendar.write",
+          payload: try toolsJSON(["eventID": id, "action": creating ? "create" : "update"])))
+        return id
+      }.result
     }
   }
 
-  public func removeAgentCalendar(callerID: String, id: String) throws {
+  public func removeAgentCalendar(callerID: String, id: String, requestID: String? = nil) throws {
     try transaction {
       try requireToolUnlocked(.calendar, sessionID: callerID, writesCalendar: true)
-      let operatorID = try localMutationOperatorIDUnlocked()
-      try toolsExecuteUnlocked("DELETE FROM dashboard_calendar_items WHERE id=? AND user_id=? AND kind='event'", [id, operatorID])
-      guard sqlite3_changes(connection) == 1 else { throw WorkspaceToolError.invalid("Calendar event not found.") }
-      try recordHistoryUnlocked(.init(conversationID: callerID, harness: "wovenmatter", kind: "calendar.remove", payload: try toolsJSON(["eventID": id])))
+      _ = try performToolMutationUnlocked(callerID: callerID, requestID: requestID,
+        operation: "calendar.remove", input: id) {
+        let operatorID = try localMutationOperatorIDUnlocked()
+        try toolsExecuteUnlocked("DELETE FROM dashboard_calendar_items WHERE id=? AND user_id=? AND kind='event'", [id, operatorID])
+        guard sqlite3_changes(connection) == 1 else { throw WorkspaceToolError.invalid("Calendar event not found.") }
+        try recordHistoryUnlocked(.init(conversationID: callerID, harness: "wovenmatter", kind: "calendar.remove", payload: try toolsJSON(["eventID": id])))
+        return id
+      }
     }
   }
 }

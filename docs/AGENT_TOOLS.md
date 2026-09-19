@@ -159,25 +159,40 @@ cannot acquire a conflicting or disabled assignment after the user approves.
 Failed or interrupted creation releases the reserved fanout slot while retaining
 its target identity for recovery.
 
+Note create/edit/restore, timer mutations and Calendar mutations now commit a
+caller-bound request receipt with the write. Reusing the same request ID and
+payload acknowledges the original operation across restarts without repeating
+it, resetting a schedule, resurrecting a removed item or overwriting later user
+edits. Reusing the ID with a different payload fails. Current capabilities and
+Calendar mode are still enforced on replay. Note edit/restore replay responses
+contain `replayed: true` and the original revision, without an old document that
+could be adopted into the editor. Use `notes read` for the current document.
+Receipts retain hashes and acknowledgements, not extra note snapshots.
+
 The transcript now presents incoming source links and outgoing creation/message
 receipts; receipt history uses insertion-order pagination. Hover cards include
 permanent creation provenance and current coordination. Sidebar additions are
 limited to active coordination and timer indicators. Session controls include
 notification preferences, release/end coordination, and timer editing/pause/
 removal. Note version history includes previews and revision-checked restoration.
-These native controls compile; rendered inspection is still pending.
+Native inspection of the isolated Tools preview on 2026-09-19 confirmed the
+empty workspace and General tools defaults, the 1–16 coordinator and 1–48 running
+session menus, and both Calendar modes. A populated note recovery exercise
+confirmed version preview, restore confirmation, live editor restoration and
+retention of the replaced revision. Populated session activity, timer and
+management flows still require rendered verification.
 
 | Requirement | Implemented and checked | Remaining acceptance |
 | --- | --- | --- |
-| Unified CLI, seven capabilities, defaults, limits | Service routing, bound local/remote endpoints, access-policy and admission tests; bundled CLI and remote relay fixtures | Audit discovery and dispatch across all eight harnesses; rendered settings and composer proof |
+| Unified CLI, seven capabilities, defaults, limits | Service routing, bound local/remote endpoints, access-policy and admission tests; bundled CLI and remote relay fixtures | Audit discovery and dispatch across all eight harnesses; composer proof |
 | History and attachments | Folder-first retrieval, bounded bodies, ID references, backend grants and revocation tests | Review all native imports, steering and scheduled output paths against the capture contract |
-| Notes and recovery | Bounded note/spreadsheet/HTML versions, restore conflict tests, recovery UI | Render populated recovery UI; finish mutation retry audit |
-| Calendar, usage, Library | Calendar mode checks and CRUD; recorded usage only; explicit unavailable response for the currently empty Library surface | Finish mutation retry audit and app-facing acceptance; broader Library work remains a later iteration |
+| Notes and recovery | Bounded versions, revision-checked restore, durable mutation receipts and concurrent/reopen/revocation tests | Spreadsheet/HTML recovery and narrow-window acceptance |
+| Calendar, usage, Library | Calendar mode checks, CRUD and durable retry tests; recorded usage only; explicit unavailable response for the empty Library surface | App-facing acceptance; broader Library work remains a later iteration |
 | Session creation | Origin, inherited tool policy, durable target identity, reservation recovery, exclusive coordination | Working-location inheritance and partial native/gateway setup recovery; confirm model configuration before declaring creation ready |
 | Scoped management | Durable immediate pending response, user-only resolution, shutdown cancellation, conflict/capability checks and replay tests | Render approval sheet and failure feedback; exercise app-lifetime recovery |
 | Notifications | Durable completion/failure/input observations, epoch-based dedupe, revoked-assignment cancellation and notification-only loop tests | Review native turn/steering association and reconnect request identity across all harnesses |
 | Bidirectional activity | Incoming attribution, larger creation cards, compact receipts, links and paged history | Render narrow/wide, navigation and selection; native OpenCode slash-command attribution still needs a solution because its API returns no input ID |
-| Timers | Persistent definitions/occurrences, runtime scheduling, pause/revoke tests, native editing controls | Render confirmation and icon lifecycle; verify all-harness steering/queue fallback |
+| Timers | Persistent definitions/occurrences, runtime scheduling, pause/revoke and durable mutation retry tests, native editing controls | Render confirmation and icon lifecycle; verify all-harness steering/queue fallback |
 | Sidebar and folders | Existing peer/folder structure retained; provenance in hover card, active indicators only | Populated and empty native visual/accessibility proof |
 | Full validation | Required provider-free repository checks and unsigned Debug build passed; bundled CLI fixture passed | Final Release build, full-diff remediation, local/remote app exercises and exact-head hosted checks |
 

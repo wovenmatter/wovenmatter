@@ -364,3 +364,182 @@ struct WorkspaceAgentToolTests {
     _ = try reopened.reserveToolSessionCreation(sourceID: a, requestID: UUID().uuidString, arguments: args, purpose: "Next", managed: true)
   }
 }
+
+
+extension WorkspaceAgentToolTests {
+  @Test func concurrentNoteRetryCommitsOnceAndReopenPreservesLaterEdits() async throws {
+    let (db, dir, caller, _) = try fixture()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let note = try db.createNote(folderID: nil)
+    let requestID = UUID().uuidString
+    let request = NoteEditingRequest(command: .apply, noteID: note,
+      operations: [.appendText("Exactly once", .paragraph)])
+    let before = try db.noteAssetVersions(id: note).count
+    let responses = try await withThrowingTaskGroup(of: NoteEditingResponse.self) { group in
+      for _ in 0..<12 {
+        group.addTask { try db.applyNoteEdits(request, callerConversationID: caller, requestID: requestID) }
+      }
+      var values: [NoteEditingResponse] = []
+      for try await value in group { values.append(value) }
+      return values
+    }
+    #expect(responses.filter { $0.replayed != true }.count == 1)
+    #expect(Set(responses.compactMap(\.revision)).count == 1)
+    #expect(try db.noteAssetVersions(id: note).count == before + 1)
+    let userEdit = try db.applyNoteEdits(.init(command: .apply, noteID: note, operations: [.setTitle("Later user edit")]))
+    let reopened = try WorkspaceDatabase(url: dir.appending(path: "workspace.sqlite"))
+    let replay = try reopened.applyNoteEdits(request, callerConversationID: caller, requestID: requestID)
+    #expect(replay.replayed == true && replay.document == nil && replay.title == nil)
+    #expect(replay.revision == responses.first?.revision)
+    #expect(try reopened.readNoteForEditing(id: note) == userEdit)
+    #expect(throws: (any Error).self) {
+      try reopened.applyNoteEdits(.init(command: .apply, noteID: note, operations: [.setTitle("Changed payload")]),
+        callerConversationID: caller, requestID: requestID)
+    }
+    try reopened.setSessionTools(.init(enabled: []), sessionID: caller)
+    #expect(throws: WorkspaceToolError.disabled(.notes)) {
+      try reopened.applyNoteEdits(request, callerConversationID: caller, requestID: requestID)
+    }
+  }
+
+  @Test func noteCreationRetryAndRestoreAcknowledgementsDoNotResurrectOldContents() throws {
+    let (db, dir, caller, _) = try fixture()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let creationID = UUID().uuidString
+    let note = try db.createNote(folderID: nil, title: "Original", callerConversationID: caller, requestID: creationID)
+    #expect(try db.createNote(folderID: nil, title: "Original", callerConversationID: caller, requestID: creationID) == note)
+    #expect(try db.listAgentNotes(callerID: caller).objectValue?["rows"]?.arrayValue?.count == 1)
+    let version = try #require(db.noteAssetVersions(id: note).first)
+    let edited = try db.applyNoteEdits(.init(command: .apply, noteID: note, operations: [.setTitle("Second")]))
+    let expected = try #require(edited.revision)
+    let restoreID = UUID().uuidString
+    let restored = try db.restoreNoteAssetVersion(noteID: note, versionID: version.id, expectedRevision: expected,
+      callerConversationID: caller, requestID: restoreID)
+    #expect(restored.title == "Original")
+    let latest = try db.applyNoteEdits(.init(command: .apply, noteID: note, operations: [.setTitle("Third")]))
+    // A receipt remains usable after its old version has been pruned.
+    try db.transaction { try db.toolsExecuteUnlocked("DELETE FROM note_asset_versions WHERE id=?", [version.id]) }
+    let replay = try db.restoreNoteAssetVersion(noteID: note, versionID: version.id, expectedRevision: expected,
+      callerConversationID: caller, requestID: restoreID)
+    #expect(replay.replayed == true && replay.document == nil && replay.revision == restored.revision)
+    #expect(try db.readNoteForEditing(id: note) == latest)
+    let receipts = try db.lock.withLock { try db.historyRowsUnlocked("SELECT result_json FROM workspace_tool_mutations", values: []) }
+    #expect(receipts.allSatisfy { $0.objectValue?["result_json"]?.stringValue?.contains("document") == false })
+    #expect(throws: (any Error).self) {
+      try db.createNote(folderID: nil, title: "Different", callerConversationID: caller, requestID: creationID)
+    }
+  }
+
+  @Test func failedNoteMutationRollsBackReceiptAndCheckpoints() throws {
+    let (db, dir, caller, _) = try fixture()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let note = try db.createNote(folderID: nil)
+    let requestID = UUID().uuidString
+    let request = NoteEditingRequest(command: .apply, noteID: note,
+      operations: [.appendText("Must roll back", .paragraph), .deleteBlock(id: "missing-block")])
+    let original = try db.readNoteForEditing(id: note)
+    let versions = try db.noteAssetVersions(id: note)
+    #expect(throws: (any Error).self) { try db.applyNoteEdits(request, callerConversationID: caller, requestID: requestID) }
+    #expect(try db.readNoteForEditing(id: note) == original)
+    #expect(try db.noteAssetVersions(id: note).map(\.id) == versions.map(\.id))
+    // A failed transaction did not burn the request ID.
+    let success = try db.applyNoteEdits(.init(command: .apply, noteID: note, operations: [.setTitle("Recovered")]),
+      callerConversationID: caller, requestID: requestID)
+    #expect(success.title == "Recovered" && success.replayed != true)
+  }
+
+  @Test func timerRetryPreservesPauseRemovalAndLaterSchedule() throws {
+    let (db, dir, caller, _) = try fixture()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let timer = WorkspaceSessionTimer(sessionID: caller, instruction: "Original", nextFireAt: .distantPast)
+    let requestID = UUID().uuidString
+    try db.saveSessionTimer(timer, callerID: caller, requestID: requestID, creating: true)
+    try db.pauseSessionTimer(id: timer.id, paused: true)
+    let reopened = try WorkspaceDatabase(url: dir.appending(path: "workspace.sqlite"))
+    try reopened.saveSessionTimer(timer, callerID: caller, requestID: requestID, creating: true)
+    #expect(try reopened.sessionTimers().first?.isPaused == true)
+    var changed = timer; changed.instruction = "Later user instruction"
+    try reopened.saveSessionTimer(changed, callerID: caller)
+    let pauseID = UUID().uuidString
+    try reopened.pauseSessionTimer(id: timer.id, paused: true, callerID: caller, requestID: pauseID)
+    try reopened.pauseSessionTimer(id: timer.id, paused: false)
+    try reopened.pauseSessionTimer(id: timer.id, paused: true, callerID: caller, requestID: pauseID)
+    #expect(try reopened.sessionTimers().first == changed)
+    let removeID = UUID().uuidString
+    try reopened.removeSessionTimer(id: timer.id, callerID: caller, requestID: removeID)
+    try reopened.removeSessionTimer(id: timer.id, callerID: caller, requestID: removeID)
+    try reopened.saveSessionTimer(timer, callerID: caller, requestID: requestID, creating: true)
+    #expect(try reopened.sessionTimers().isEmpty)
+    #expect(throws: (any Error).self) {
+      try reopened.saveSessionTimer(changed, callerID: caller, requestID: requestID, creating: true)
+    }
+    try reopened.setSessionTools(.init(enabled: []), sessionID: caller)
+    #expect(throws: WorkspaceToolError.disabled(.timers)) {
+      try reopened.removeSessionTimer(id: timer.id, callerID: caller, requestID: removeID)
+    }
+  }
+
+  @Test func timerUpdateRetrySurvivesRemovalAndRechecksCoordination() throws {
+    let (db, dir, caller, target) = try fixture()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    try db.beginCoordination(sourceID: caller, targetID: target, purpose: "Manage")
+    let timer = WorkspaceSessionTimer(sessionID: target, instruction: "Original", nextFireAt: .distantPast)
+    try db.saveSessionTimer(timer, callerID: caller)
+    // CLI updates by ID without requiring the target session argument again.
+    var update = timer; update.sessionID = caller; update.instruction = "Updated"
+    let requestID = UUID().uuidString
+    let saved = try db.saveSessionTimer(update, callerID: caller, requestID: requestID, creating: false)
+    #expect(saved.sessionID == target)
+    try db.removeSessionTimer(id: timer.id)
+    #expect(try db.saveSessionTimer(update, callerID: caller, requestID: requestID, creating: false) == saved)
+    #expect(try db.sessionTimers().isEmpty)
+    try db.endCoordination(targetID: target, sourceID: caller)
+    #expect(throws: (any Error).self) {
+      try db.saveSessionTimer(update, callerID: caller, requestID: requestID, creating: false)
+    }
+  }
+
+  @Test func timerIdentityCannotBeReusedAfterItsSessionWasDeleted() throws {
+    let (db, dir, caller, target) = try fixture()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let timer = WorkspaceSessionTimer(sessionID: target, instruction: "Original", nextFireAt: .distantPast)
+    try db.saveSessionTimer(timer, callerID: target)
+    try db.transaction {
+      try db.toolsExecuteUnlocked("UPDATE dashboard_conversations SET deleted_at=? WHERE id=?", ["2026-09-19T00:00:00Z", target])
+    }
+    var moved = timer; moved.sessionID = caller
+    #expect(throws: (any Error).self) { try db.saveSessionTimer(moved, callerID: caller) }
+    #expect(throws: (any Error).self) {
+      try db.saveSessionTimer(moved, callerID: caller, requestID: UUID().uuidString, creating: true)
+    }
+    #expect(try db.sessionTimers().isEmpty)
+  }
+
+  @Test func calendarRetryPreservesLaterEditsAndRemovalAndHonorsReadOnly() throws {
+    let (db, dir, caller, _) = try fixture()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let id = UUID().uuidString, creationID = UUID().uuidString, updateID = UUID().uuidString
+    let start = Date(timeIntervalSince1970: 1_000)
+    func save(_ database: WorkspaceDatabase, title: String, creating: Bool, request: String?) throws -> String {
+      try database.saveAgentCalendar(callerID: caller, id: id, creating: creating, title: title, details: nil,
+        startsAt: start, endsAt: nil, allDay: false, requestID: request)
+    }
+    _ = try save(db, title: "Original", creating: true, request: creationID)
+    _ = try save(db, title: "Updated", creating: false, request: updateID)
+    _ = try save(db, title: "User change", creating: false, request: nil)
+    let reopened = try WorkspaceDatabase(url: dir.appending(path: "workspace.sqlite"))
+    #expect(try save(reopened, title: "Original", creating: true, request: creationID) == id)
+    #expect(try save(reopened, title: "Updated", creating: false, request: updateID) == id)
+    #expect(try reopened.listAgentCalendar(callerID: caller).objectValue?["rows"]?.arrayValue?.first?.objectValue?["title"]?.stringValue == "User change")
+    #expect(throws: (any Error).self) { try save(reopened, title: "Different", creating: false, request: updateID) }
+    let removeID = UUID().uuidString
+    try reopened.removeAgentCalendar(callerID: caller, id: id, requestID: removeID)
+    try reopened.removeAgentCalendar(callerID: caller, id: id, requestID: removeID)
+    _ = try save(reopened, title: "Original", creating: true, request: creationID)
+    #expect(try reopened.listAgentCalendar(callerID: caller).objectValue?["rows"]?.arrayValue?.isEmpty == true)
+    var settings = try reopened.toolSettings(); settings.calendarAccess = .readOnly
+    try reopened.saveToolSettings(settings)
+    #expect(throws: (any Error).self) { try save(reopened, title: "Original", creating: true, request: creationID) }
+    #expect(throws: (any Error).self) { try reopened.removeAgentCalendar(callerID: caller, id: id, requestID: removeID) }
+  }
+}

@@ -490,14 +490,14 @@ final class ApplicationModel {
                 sessionHandler: { [weak self] caller, command, request in
                     guard let self else { throw CancellationError() }
                     return try await self.handleSessionTool(callerID: caller, command: command, request: request)
-                }, noteHandler: { [weak self] caller, request in
+                }, noteHandler: { [weak self] caller, request, requestID in
                     guard let self else { throw CancellationError() }
-                    return try await self.handleAgentNote(callerID: caller, request: request)
-                }, noteRestoreHandler: { [weak self] caller, noteID, versionID, revision in
+                    return try await self.handleAgentNote(callerID: caller, request: request, requestID: requestID)
+                }, noteRestoreHandler: { [weak self] caller, noteID, versionID, revision, requestID in
                     guard let self else { throw CancellationError() }
                     guard self.flushNoteDrafts() else { throw ApplicationModelError.noteDraftSaveFailed }
                     let response = try dashboardStore.database.restoreNoteAssetVersion(noteID: noteID, versionID: versionID,
-                        expectedRevision: revision, callerConversationID: caller)
+                        expectedRevision: revision, callerConversationID: caller, requestID: requestID)
                     await self.adoptNoteEditingResponse(response)
                     return response
                 }, usageHandler: { [weak self] command in

@@ -31,40 +31,70 @@ extension WorkspaceDatabase {
     }
   }
 
-  public func saveSessionTimer(_ timer: WorkspaceSessionTimer, callerID: String) throws {
+  @discardableResult
+  public func saveSessionTimer(_ timer: WorkspaceSessionTimer, callerID: String,
+                               requestID: String? = nil, creating: Bool? = nil) throws -> WorkspaceSessionTimer {
     try timer.validate()
-    try transaction {
-      try requireTimerAccessUnlocked(sourceID: callerID, targetID: timer.sessionID)
-      let existing = try historyRowsUnlocked("SELECT session_id FROM workspace_session_timers WHERE id=?", values: [timer.id])
-      if let id = existing.first?.objectValue?["session_id"]?.stringValue, id != timer.sessionID {
-        throw WorkspaceToolError.invalid("A timer cannot move to another session.")
+    return try transaction {
+      try requireToolUnlocked(.timers, sessionID: callerID)
+      let outcome = try performToolMutationUnlocked(callerID: callerID, requestID: requestID,
+        operation: creating == true ? "timers.create" : "timers.save", input: timer) {
+        // Include timers whose destination was deleted: an upsert must not reuse
+        // their identity or silently modify a timer hidden from the active list.
+        let existing = try historyRowsUnlocked("SELECT session_id FROM workspace_session_timers WHERE id=?", values: [timer.id])
+          .first?.objectValue?["session_id"]?.stringValue
+        if creating == true, existing != nil { throw WorkspaceToolError.invalid("Timer already exists.") }
+        if creating == false, existing == nil { throw WorkspaceToolError.invalid("Timer not found.") }
+        var saved = timer
+        if creating == false, let existing { saved.sessionID = existing }
+        try requireTimerAccessUnlocked(sourceID: callerID, targetID: saved.sessionID)
+        if let existing, existing != saved.sessionID {
+          throw WorkspaceToolError.invalid("A timer cannot move to another session.")
+        }
+        try toolsExecuteUnlocked("""
+          INSERT INTO workspace_session_timers(id,session_id,instruction,next_fire_at,interval_seconds,is_paused)
+          VALUES(?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET instruction=excluded.instruction,
+            next_fire_at=excluded.next_fire_at,interval_seconds=excluded.interval_seconds,
+            is_paused=excluded.is_paused,pending_delivery_id=NULL
+          """, [saved.id, saved.sessionID, saved.instruction, String(saved.nextFireAt.timeIntervalSince1970),
+                 saved.intervalSeconds.map { String($0) }, saved.isPaused ? "1" : "0"])
+        return saved
       }
-      try toolsExecuteUnlocked("""
-        INSERT INTO workspace_session_timers(id,session_id,instruction,next_fire_at,interval_seconds,is_paused)
-        VALUES(?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET instruction=excluded.instruction,
-          next_fire_at=excluded.next_fire_at,interval_seconds=excluded.interval_seconds,
-          is_paused=excluded.is_paused,pending_delivery_id=NULL
-        """, [timer.id, timer.sessionID, timer.instruction, String(timer.nextFireAt.timeIntervalSince1970),
-               timer.intervalSeconds.map { String($0) }, timer.isPaused ? "1" : "0"])
+      try requireTimerAccessUnlocked(sourceID: callerID, targetID: outcome.result.sessionID)
+      return outcome.result
     }
   }
 
-  public func pauseSessionTimer(id: String, paused: Bool, callerID: String? = nil) throws {
+  public func pauseSessionTimer(id: String, paused: Bool, callerID: String? = nil, requestID: String? = nil) throws {
     try transaction {
-      guard let timer = try timersUnlocked().first(where: { $0.id == id }) else {
-        throw WorkspaceToolError.invalid("Timer not found.")
+      if let callerID { try requireToolUnlocked(.timers, sessionID: callerID) }
+      let outcome = try performToolMutationUnlocked(callerID: callerID, requestID: requestID,
+        operation: paused ? "timers.pause" : "timers.resume", input: id) {
+        guard let timer = try timersUnlocked().first(where: { $0.id == id }) else {
+          throw WorkspaceToolError.invalid("Timer not found.")
+        }
+        if let callerID { try requireTimerAccessUnlocked(sourceID: callerID, targetID: timer.sessionID) }
+        if !paused { try requireToolUnlocked(.timers, sessionID: timer.sessionID) }
+        try toolsExecuteUnlocked("UPDATE workspace_session_timers SET is_paused=?,pending_delivery_id=NULL WHERE id=?", [paused ? "1" : "0", id])
+        return timer.sessionID
       }
-      if let callerID { try requireTimerAccessUnlocked(sourceID: callerID, targetID: timer.sessionID) }
-      if !paused { try requireToolUnlocked(.timers, sessionID: timer.sessionID) }
-      try toolsExecuteUnlocked("UPDATE workspace_session_timers SET is_paused=?,pending_delivery_id=NULL WHERE id=?", [paused ? "1" : "0", id])
+      if let callerID { try requireTimerAccessUnlocked(sourceID: callerID, targetID: outcome.result) }
     }
   }
 
-  public func removeSessionTimer(id: String, callerID: String? = nil) throws {
+  public func removeSessionTimer(id: String, callerID: String? = nil, requestID: String? = nil) throws {
     try transaction {
-      guard let timer = try timersUnlocked().first(where: { $0.id == id }) else { return }
-      if let callerID { try requireTimerAccessUnlocked(sourceID: callerID, targetID: timer.sessionID) }
-      try toolsExecuteUnlocked("DELETE FROM workspace_session_timers WHERE id=?", [id])
+      if let callerID { try requireToolUnlocked(.timers, sessionID: callerID) }
+      let outcome = try performToolMutationUnlocked(callerID: callerID, requestID: requestID,
+        operation: "timers.remove", input: id) { () -> String? in
+        guard let timer = try timersUnlocked().first(where: { $0.id == id }) else { return nil }
+        if let callerID { try requireTimerAccessUnlocked(sourceID: callerID, targetID: timer.sessionID) }
+        try toolsExecuteUnlocked("DELETE FROM workspace_session_timers WHERE id=?", [id])
+        return timer.sessionID
+      }
+      if let callerID, let targetID = outcome.result {
+        try requireTimerAccessUnlocked(sourceID: callerID, targetID: targetID)
+      }
     }
   }
 

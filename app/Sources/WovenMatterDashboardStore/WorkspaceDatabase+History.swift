@@ -447,39 +447,42 @@ extension WorkspaceDatabase {
   }
 
   /// Restore is an application mutation, deliberately not a history CLI command.
-  public func restoreNoteAssetVersion(noteID: String, versionID: String, expectedRevision: String, callerConversationID: String? = nil)
-    throws -> NoteEditingResponse
+  public func restoreNoteAssetVersion(noteID: String, versionID: String, expectedRevision: String, callerConversationID: String? = nil,
+                                      requestID: String? = nil) throws -> NoteEditingResponse
   {
     try transaction {
       if let callerConversationID { try requireToolUnlocked(.notes, sessionID: callerConversationID) }
-      let operatorID = try localMutationOperatorIDUnlocked()
-      let current = try noteForEditingUnlocked(id: noteID, operatorID: operatorID)
-      guard current.revision == expectedRevision else {
-        throw WorkspaceNoteMutationError.revisionConflict
-      }
-      let rows = try historyRowsUnlocked(
-        "SELECT title,content FROM note_asset_versions WHERE id=? AND note_id=?",
-        values: [versionID, noteID])
-      guard let row = rows.first?.objectValue, let title = row["title"]?.stringValue,
-        let content = row["content"]?.stringValue
-      else {
-        throw WorkspaceDatabaseError.open("This version is no longer retained")
-      }
-      try checkpointNoteUnlocked(id: noteID, source: "before-restore", force: true)
-      let update = try prepareUnlocked(
-        "UPDATE notes SET title=?,content=?,snippet=?,updated_at=? WHERE id=? AND user_id=?")
-      defer { sqlite3_finalize(update) }
-      let revision = try nextNoteRevisionUnlocked(id: noteID)
-      for (index, value) in [
-        title, content, Self.noteSnippet(content), revision, noteID, operatorID,
-      ].enumerated() {
-        try bind(value, at: Int32(index + 1), to: update)
-      }
-      try stepDone(update)
-      try checkpointNoteUnlocked(id: noteID, source: "restore", force: true)
-      return NoteEditingResponse(
-        success: true, noteID: noteID, title: title, revision: revision,
-        document: NoteDocument.decode(content))
+      return try performToolMutationUnlocked(callerID: callerConversationID, requestID: requestID,
+        operation: "notes.restore", input: [noteID, versionID, expectedRevision], receipt: noteMutationReceipt) {
+        let operatorID = try localMutationOperatorIDUnlocked()
+        let current = try noteForEditingUnlocked(id: noteID, operatorID: operatorID)
+        guard current.revision == expectedRevision else {
+          throw WorkspaceNoteMutationError.revisionConflict
+        }
+        let rows = try historyRowsUnlocked(
+          "SELECT title,content FROM note_asset_versions WHERE id=? AND note_id=?",
+          values: [versionID, noteID])
+        guard let row = rows.first?.objectValue, let title = row["title"]?.stringValue,
+          let content = row["content"]?.stringValue
+        else {
+          throw WorkspaceDatabaseError.open("This version is no longer retained")
+        }
+        try checkpointNoteUnlocked(id: noteID, source: "before-restore", force: true)
+        let update = try prepareUnlocked(
+          "UPDATE notes SET title=?,content=?,snippet=?,updated_at=? WHERE id=? AND user_id=?")
+        defer { sqlite3_finalize(update) }
+        let revision = try nextNoteRevisionUnlocked(id: noteID)
+        for (index, value) in [
+          title, content, Self.noteSnippet(content), revision, noteID, operatorID,
+        ].enumerated() {
+          try bind(value, at: Int32(index + 1), to: update)
+        }
+        try stepDone(update)
+        try checkpointNoteUnlocked(id: noteID, source: "restore", force: true)
+        return NoteEditingResponse(
+          success: true, noteID: noteID, title: title, revision: revision,
+          document: NoteDocument.decode(content))
+      }.result
     }
   }
 }

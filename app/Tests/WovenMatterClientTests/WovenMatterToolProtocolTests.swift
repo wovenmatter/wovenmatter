@@ -4,6 +4,14 @@ import WovenMatterCore
 @testable import WovenMatterClient
 
 struct WovenMatterToolProtocolTests {
+  @Test func unsuccessfulNoteResponseRemainsAnUnsuccessfulCLIResponse() throws {
+    let response = try WovenMatterToolResponse.note(.init(success: false, noteID: "note", error: "Revision conflict"))
+    #expect(!response.success && response.error == "Revision conflict")
+    #expect(response.result?.objectValue?["success"]?.boolValue == false)
+    let replay = try WovenMatterToolResponse.note(.init(success: true, noteID: "note", revision: "original", replayed: true))
+    #expect(replay.success && replay.result?.objectValue?["replayed"]?.boolValue == true)
+  }
+
   @Test func helpIsLazyForEveryGroup() throws {
     #expect(try WovenMatterToolCommand([]).wantsHelp)
     for group in WorkspaceToolGroup.allCases {

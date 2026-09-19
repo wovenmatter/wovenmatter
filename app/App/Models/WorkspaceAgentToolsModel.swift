@@ -7,8 +7,8 @@ import WovenMatterDashboardStore
 @MainActor @Observable
 final class WorkspaceAgentToolsModel {
     typealias SessionHandler = @MainActor (String, WovenMatterToolCommand, WovenMatterToolRequest) async throws -> WovenMatterToolResponse
-    typealias NoteHandler = @MainActor (String, NoteEditingRequest) async throws -> NoteEditingResponse
-    typealias NoteRestoreHandler = @MainActor (String, String, String, String) async throws -> NoteEditingResponse
+    typealias NoteHandler = @MainActor (String, NoteEditingRequest, String) async throws -> NoteEditingResponse
+    typealias NoteRestoreHandler = @MainActor (String, String, String, String, String) async throws -> NoteEditingResponse
     typealias UsageHandler = @MainActor (WovenMatterToolCommand) async throws -> WovenMatterToolResponse
     let database: WorkspaceDatabase
     private(set) var settings: WorkspaceToolSettings
@@ -237,7 +237,7 @@ final class WorkspaceAgentToolsModel {
                 } else if command.action == "folders" {
                     result = .init(result: try database.listAgentFolders(callerID: callerID))
                 } else { result = try await sessionHandler(callerID, command, request) }
-            case .timers: result = try timer(command, callerID: callerID)
+            case .timers: result = try timer(command, callerID: callerID, requestID: request.requestID)
             case .calendar: result = try calendar(command, callerID: callerID, requestID: request.requestID)
             case .usage: result = try await usageHandler(command)
             case .library:
@@ -287,22 +287,22 @@ final class WorkspaceAgentToolsModel {
                 after: Int64(try command.integer("after", default: 0, range: 0...Int.max)), limit: try command.integer("limit", default: 50, range: 1...200)))
         case "create":
             guard let kind = NoteArtifactKind(rawValue: command.options["kind"] ?? "note") else { throw WorkspaceToolError.invalid("Choose note, spreadsheet or html.") }
-            let id = try database.createNote(folderID: command.options["folder"], title: command.required("title"), kind: kind, callerConversationID: callerID)
+            let id = try database.createNote(folderID: command.options["folder"], title: command.required("title"), kind: kind, callerConversationID: callerID, requestID: request.requestID)
             return .init(result: .object(["id": .string(id)]))
         case "versions", "version":
             return .init(result: try database.queryAgentHistory(historyQuery(command), callerID: callerID))
         case "restore":
-            return try .value(await noteRestoreHandler(callerID, command.required("note-id", allowPositional: true),
-                command.required("version"), command.required("revision")))
+            return try .note(await noteRestoreHandler(callerID, command.required("note-id", allowPositional: true),
+                command.required("version"), command.required("revision"), request.requestID))
         default:
             guard command.options["file"] == nil else { throw WorkspaceToolError.invalid("Read input files on the CLI host before sending the request.") }
             let args = Array(request.operationArguments.dropFirst())
             let edit = try WovenNoteCommandLine.request(arguments: args, environment: [:])
-            return try .value(await noteHandler(callerID, edit))
+            return try .note(await noteHandler(callerID, edit, request.requestID))
         }
     }
 
-    private func timer(_ command: WovenMatterToolCommand, callerID: String) throws -> WovenMatterToolResponse {
+    private func timer(_ command: WovenMatterToolCommand, callerID: String, requestID: String) throws -> WovenMatterToolResponse {
         let target = command.options["session"] ?? callerID
         if target != callerID {
             try database.requireTool(.sessions, sessionID: callerID)
@@ -310,23 +310,21 @@ final class WorkspaceAgentToolsModel {
         }
         if command.action == "list" { return try .value(database.sessionTimers(sessionID: target)) }
         if command.action == "create" || command.action == "update" {
-            let id = command.action == "create" ? UUID().uuidString.lowercased() : try command.required("id", allowPositional: true)
-            let existing = try database.sessionTimers().first { $0.id == id }
-            if command.action == "update", existing == nil { throw WorkspaceToolError.invalid("Timer not found.") }
+            let id = command.action == "create" ? requestID : try command.required("id", allowPositional: true)
             let interval: Double?
             if let raw = command.options["every"] {
                 guard let value = Double(raw) else { throw WorkspaceToolError.invalid("--every requires seconds.") }
                 interval = value
             } else { interval = nil }
-            let timer = WorkspaceSessionTimer(id: id, sessionID: existing?.sessionID ?? target,
+            let timer = WorkspaceSessionTimer(id: id, sessionID: target,
                 instruction: try command.required("text"), nextFireAt: try Self.date(command.required("at")),
                 intervalSeconds: interval, isPaused: command.options["paused"] != nil)
-            try database.saveSessionTimer(timer, callerID: callerID)
-            return try .value(timer)
+            return try .value(database.saveSessionTimer(timer, callerID: callerID, requestID: requestID,
+                creating: command.action == "create"))
         }
         let id = try command.required("id", allowPositional: true)
-        if command.action == "remove" { try database.removeSessionTimer(id: id, callerID: callerID) }
-        else { try database.pauseSessionTimer(id: id, paused: command.action == "pause", callerID: callerID) }
+        if command.action == "remove" { try database.removeSessionTimer(id: id, callerID: callerID, requestID: requestID) }
+        else { try database.pauseSessionTimer(id: id, paused: command.action == "pause", callerID: callerID, requestID: requestID) }
         return .init(result: .object(["id": .string(id), "status": .string(command.action)]))
     }
 
@@ -337,13 +335,13 @@ final class WorkspaceAgentToolsModel {
                 after: Int64(command.integer("after", default: 0, range: 0...Int.max)), limit: command.integer("limit", default: 100, range: 1...200)))
         }
         if command.action == "remove" {
-            try database.removeAgentCalendar(callerID: callerID, id: command.required("id", allowPositional: true))
+            try database.removeAgentCalendar(callerID: callerID, id: command.required("id", allowPositional: true), requestID: requestID)
             return .init()
         }
         let creating = command.action == "create"
         let id = try database.saveAgentCalendar(callerID: callerID, id: creating ? requestID : command.required("id", allowPositional: true),
             creating: creating, title: command.required("title"), details: command.options["description"], startsAt: Self.date(command.required("starts-at")),
-            endsAt: command.options["ends-at"].map(Self.date), allDay: command.options["all-day"] != nil)
+            endsAt: command.options["ends-at"].map(Self.date), allDay: command.options["all-day"] != nil, requestID: requestID)
         return .init(result: .object(["id": .string(id)]))
     }
 

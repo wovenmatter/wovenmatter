@@ -4714,44 +4714,48 @@ public final class WorkspaceDatabase: @unchecked Sendable {
     content: String = "",
     kind: NoteArtifactKind = .note,
     createdAt: Date = Date(),
-    callerConversationID: String? = nil
+    callerConversationID: String? = nil,
+    requestID: String? = nil
   ) throws -> String {
     try transaction {
       if let callerConversationID { try requireToolUnlocked(.notes, sessionID: callerConversationID) }
-      let content = try (content.isEmpty
-        ? NoteDocument(kind: kind)
-        : NoteDocument.decode(content)).encoded()
-      let noteID = id.uuidString.lowercased()
-      let operatorID = try localMutationOperatorIDUnlocked()
-      try validateFolderUnlocked(id: folderID, operatorID: operatorID)
-      let timestamp = Self.timestamp(createdAt)
-      let position = try nextNotePositionUnlocked(
-        folderID: folderID,
-        operatorID: operatorID
-      )
+      return try performToolMutationUnlocked(callerID: callerConversationID, requestID: requestID,
+        operation: "notes.create", input: [folderID, title, content, kind.rawValue]) {
+        let content = try (content.isEmpty
+          ? NoteDocument(kind: kind)
+          : NoteDocument.decode(content)).encoded()
+        let noteID = id.uuidString.lowercased()
+        let operatorID = try localMutationOperatorIDUnlocked()
+        try validateFolderUnlocked(id: folderID, operatorID: operatorID)
+        let timestamp = Self.timestamp(createdAt)
+        let position = try nextNotePositionUnlocked(
+          folderID: folderID,
+          operatorID: operatorID
+        )
 
-      let note = try prepareUnlocked("""
-        INSERT INTO notes (
-          id, user_id, folder_id, title, content, snippet, is_pinned, position,
-          created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
-        """)
-      defer { sqlite3_finalize(note) }
-      try bind(noteID, at: 1, to: note)
-      try bind(operatorID, at: 2, to: note)
-      try bindNullable(folderID, at: 3, to: note)
-      try bind(title, at: 4, to: note)
-      try bind(content, at: 5, to: note)
-      try bind(Self.noteSnippet(content), at: 6, to: note)
-      guard sqlite3_bind_int64(note, 7, Int64(position)) == SQLITE_OK else {
-        throw bindError()
-      }
-      try bind(timestamp, at: 8, to: note)
-      try bind(timestamp, at: 9, to: note)
-      try stepDone(note)
+        let note = try prepareUnlocked("""
+          INSERT INTO notes (
+            id, user_id, folder_id, title, content, snippet, is_pinned, position,
+            created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
+          """)
+        defer { sqlite3_finalize(note) }
+        try bind(noteID, at: 1, to: note)
+        try bind(operatorID, at: 2, to: note)
+        try bindNullable(folderID, at: 3, to: note)
+        try bind(title, at: 4, to: note)
+        try bind(content, at: 5, to: note)
+        try bind(Self.noteSnippet(content), at: 6, to: note)
+        guard sqlite3_bind_int64(note, 7, Int64(position)) == SQLITE_OK else {
+          throw bindError()
+        }
+        try bind(timestamp, at: 8, to: note)
+        try bind(timestamp, at: 9, to: note)
+        try stepDone(note)
 
-      try checkpointNoteUnlocked(id: noteID, source: "created", force: true)
-      return noteID
+        try checkpointNoteUnlocked(id: noteID, source: "created", force: true)
+        return noteID
+      }.result
     }
   }
 
@@ -4864,10 +4868,14 @@ public final class WorkspaceDatabase: @unchecked Sendable {
     }
   }
 
-  public func applyNoteEdits(_ request: NoteEditingRequest, callerConversationID: String? = nil) throws -> NoteEditingResponse {
+  public func applyNoteEdits(_ request: NoteEditingRequest, callerConversationID: String? = nil,
+                             requestID: String? = nil) throws -> NoteEditingResponse {
     try transaction {
       if let callerConversationID { try requireToolUnlocked(.notes, sessionID: callerConversationID) }
-      return try applyNoteEditsUnlocked(request)
+      return try performToolMutationUnlocked(callerID: callerConversationID, requestID: requestID,
+        operation: "notes.apply", input: request, receipt: noteMutationReceipt) {
+          try applyNoteEditsUnlocked(request)
+        }.result
     }
   }
 

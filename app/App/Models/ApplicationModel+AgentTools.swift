@@ -79,12 +79,12 @@ extension ApplicationModel {
         } catch { sessionAccessError = error.localizedDescription }
     }
 
-    func handleAgentNote(callerID: String, request: NoteEditingRequest) async throws -> NoteEditingResponse {
+    func handleAgentNote(callerID: String, request: NoteEditingRequest, requestID: String) async throws -> NoteEditingResponse {
         guard let database = dashboardStore?.database else { throw CancellationError() }
         guard flushNoteDrafts() else { throw ApplicationModelError.noteDraftSaveFailed }
         let response: NoteEditingResponse = switch request.command {
         case .read: try database.readNoteForEditing(id: request.noteID, callerConversationID: callerID)
-        case .apply: try database.applyNoteEdits(request, callerConversationID: callerID)
+        case .apply: try database.applyNoteEdits(request, callerConversationID: callerID, requestID: requestID)
         }
         await adoptNoteEditingResponse(response)
         return response

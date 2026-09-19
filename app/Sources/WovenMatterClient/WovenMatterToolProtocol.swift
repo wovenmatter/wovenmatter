@@ -30,6 +30,10 @@ public struct WovenMatterToolResponse: Codable, Sendable {
   public init(success: Bool = true, result: GatewayJSONValue? = nil, error: String? = nil, silent: Bool = false, requestID: String? = nil) {
     self.success = success; self.result = result; self.error = error; self.silent = silent; self.requestID = requestID
   }
+  public static func note(_ response: NoteEditingResponse) throws -> Self {
+    let encoded = try value(response)
+    return Self(success: response.success, result: encoded.result, error: response.error)
+  }
   public static func value<T: Encodable>(_ value: T) throws -> Self {
     let encoder = JSONEncoder()
     encoder.dateEncodingStrategy = .iso8601
@@ -125,7 +129,7 @@ public struct WovenMatterToolCommand: Sendable {
 
     Run wovenmatter GROUP help for details. Tools must be enabled for this session.
     Commands are scoped to the session that supplied WOVENMATTER_SOCKET.
-    Use --request-id UUID when retrying a creation or message command.
+    Choose --request-id UUID before a mutation; reuse it with the same command after a lost response.
     """ + "\n"
 
   public static func help(for group: WorkspaceToolGroup) -> String {
@@ -142,6 +146,8 @@ public struct WovenMatterToolCommand: Sendable {
       restore NOTE_ID --version VERSION_ID --revision CURRENT_REVISION
       Note edits also support insert, replace-block, delete-block, format, set-title, link and unlink.
       Use read to obtain the current document, block/table IDs and revision before editing.
+      Mutation retries accept --request-id UUID. A replayed edit/restore acknowledges its
+      original revision without old content; read again for the current document.
       """
     case .history: """
       search TEXT [--all-workspace] [--conversation ID]
@@ -176,6 +182,8 @@ public struct WovenMatterToolCommand: Sendable {
       pause TIMER_ID | resume TIMER_ID | remove TIMER_ID
       Timers persist but execute only while Woven Matter runs. Missed recurring firings
       coalesce into one. You may set a timer in this session or a session you coordinate.
+      Mutation retries accept --request-id UUID and acknowledge the original operation;
+      use list for the current state. A retry never reactivates a paused or removed timer.
       """
     case .usage: "read [--since ISO8601 --until ISO8601 --offset N --limit 1...200]\nRead recorded usage. This tool cannot change usage or credentials."
     case .calendar: """
@@ -184,6 +192,7 @@ public struct WovenMatterToolCommand: Sendable {
       update EVENT_ID --title TITLE --starts-at ISO8601 [--ends-at ISO8601 --description TEXT --all-day]
       remove EVENT_ID
       Calendar access is set in General settings; read-only mode rejects mutations.
+      Mutation retries accept --request-id UUID and preserve later edits or removal.
       """
     case .library: "list | read ITEM_ID\nOnly existing retained items are available. The Library UI is still under development."
     }
