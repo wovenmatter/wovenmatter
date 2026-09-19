@@ -629,7 +629,7 @@ extension WorkspaceAgentToolTests {
     defer { try? FileManager.default.removeItem(at: dir) }
     let requestID = UUID().uuidString
     _ = try db.reserveToolDelivery(sourceID: caller, targetID: target, text: "Work", requestID: requestID)
-    _ = try #require(db.claimToolDelivery(id: requestID))
+    _ = try #require(try db.claimToolDelivery(id: requestID))
     try db.validateClaimedToolDelivery(id: requestID)
     try db.setSessionTools(.init(enabled: []), sessionID: caller)
     #expect(throws: (any Error).self) {
@@ -648,22 +648,50 @@ extension WorkspaceAgentToolTests {
     defer { try? FileManager.default.removeItem(at: dir) }
     let original = WorkspaceSessionTimer(sessionID: caller, instruction: "Original", nextFireAt: .distantFuture,
       intervalSeconds: interval)
-    try db.saveSessionTimer(original)
+    try db.saveSessionTimer(original, callerID: caller)
     let saved = try #require(db.sessionTimers(sessionID: caller).first)
     var draft = WorkspaceSessionTimerDraft(saved)
     draft.instruction = "Changed instruction"
-    try db.saveSessionTimer(draft.timer())
+    try db.saveSessionTimer(draft.timer(), callerID: caller)
     #expect(try db.sessionTimers(sessionID: caller).first?.intervalSeconds == interval)
     draft.nextFireAt = Date(timeIntervalSince1970: 2_000)
-    try db.saveSessionTimer(draft.timer())
+    try db.saveSessionTimer(draft.timer(), callerID: caller)
     #expect(try db.sessionTimers(sessionID: caller).first?.intervalSeconds == interval)
     draft.intervalSeconds = 75.125
-    try db.saveSessionTimer(draft.timer())
+    try db.saveSessionTimer(draft.timer(), callerID: caller)
     #expect(try db.sessionTimers(sessionID: caller).first?.intervalSeconds == 75.125)
     draft.repeats = false
     #expect(try draft.timer().intervalSeconds == nil)
     draft.repeats = true
     draft.intervalSeconds = 0.5
     #expect(throws: (any Error).self) { try draft.timer() }
+  }
+}
+
+extension WorkspaceAgentToolTests {
+  @Test func confirmedCreationSelectionIsNotReappliedAfterCoordinationFailure() throws {
+    let (db, dir, source, competing) = try fixture()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let requestID = UUID().uuidString
+    let arguments = ["sessions", "create", "--model", "original"]
+    let reservation = try db.reserveToolSessionCreation(sourceID: source, requestID: requestID,
+      arguments: arguments, purpose: "Work", managed: true)
+    let target = try #require(reservation.objectValue?["target_id"]?.stringValue)
+    _ = try db.saveToolSessionCreationConfiguration(requestID: requestID, sourceID: source,
+      configuration: .init(runtimeKind: .pi, title: "Created", model: "original"))
+    _ = try db.createLocalACPSession(runtimeKind: .pi, title: "Created", ownerDeviceID: UUID(), requestedConversationID: UUID(uuidString: target))
+    try db.markToolSessionCreationConfigured(requestID: requestID, sourceID: source)
+    try db.beginCoordination(sourceID: competing, targetID: target, purpose: "User reassigned")
+    #expect(throws: WorkspaceToolError.coordinationConflict(competing)) {
+      try db.completeToolSessionCreation(requestID: requestID, sourceID: source)
+    }
+    try db.failToolSessionCreation(requestID: requestID)
+    try db.transaction {
+      try db.toolsExecuteUnlocked("UPDATE desktop_local_acp_sessions SET model=? WHERE conversation_id=?", ["later-user-selection", target])
+    }
+    let reopened = try WorkspaceDatabase(url: dir.appending(path: "workspace.sqlite"))
+    let retry = try reopened.reserveToolSessionCreation(sourceID: source, requestID: requestID, arguments: arguments, purpose: "Work", managed: true)
+    #expect(retry.objectValue?["configuration_applied"]?.intValue == 1)
+    #expect(try reopened.localACPSession(conversationID: target).model == "later-user-selection")
   }
 }

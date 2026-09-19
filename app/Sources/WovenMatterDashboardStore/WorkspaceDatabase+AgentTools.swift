@@ -52,6 +52,9 @@ extension WorkspaceDatabase {
       if !creationColumns.contains("configuration_json") {
         try executeUnlocked("ALTER TABLE workspace_session_creations ADD COLUMN configuration_json TEXT")
       }
+      if !creationColumns.contains("configuration_applied") {
+        try executeUnlocked("ALTER TABLE workspace_session_creations ADD COLUMN configuration_applied INTEGER NOT NULL DEFAULT 0")
+      }
       let relationshipColumns = Set(try historyRowsUnlocked("PRAGMA table_info(workspace_session_relationships)", values: []).compactMap { $0.objectValue?["name"]?.stringValue })
       for column in ["coordination_epoch", "coordination_since"] where !relationshipColumns.contains(column) {
         try executeUnlocked("ALTER TABLE workspace_session_relationships ADD COLUMN \(column) TEXT")

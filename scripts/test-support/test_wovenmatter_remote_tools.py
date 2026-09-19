@@ -1,4 +1,6 @@
 import base64
+import contextlib
+import io
 import importlib.util
 import json
 import os
@@ -8,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 SOURCE = Path(__file__).resolve().parents[2] / "app/App/Resources/wovenmatter-remote.py"
 spec = importlib.util.spec_from_file_location("wovenmatter_remote_tools", SOURCE)
@@ -16,6 +19,17 @@ spec.loader.exec_module(tools)
 
 
 class RemoteToolTests(unittest.TestCase):
+    def test_transport_failure_retains_the_retry_identity(self):
+        identity = "10000000-0000-4000-8000-000000000002"
+        with tempfile.TemporaryDirectory(prefix="wmt-", dir="/tmp") as root:
+            output = io.StringIO()
+            with patch.dict(os.environ, {"WOVENMATTER_SOCKET": str(Path(root) / "missing.sock")}), contextlib.redirect_stdout(output):
+                status = tools.run_cli(["sessions", "create", "--title", "Retry", "--request-id", identity])
+            response = json.loads(output.getvalue())
+            self.assertEqual(status, 1)
+            self.assertFalse(response["success"])
+            self.assertEqual(response["requestID"], identity)
+
     def test_files_are_read_on_the_cli_host_and_identity_is_absent(self):
         with tempfile.TemporaryDirectory() as root:
             file = Path(root) / "artifact.html"

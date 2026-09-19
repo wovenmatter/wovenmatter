@@ -13,6 +13,7 @@ typealias WovenMatterToolService = WovenSocketService<WovenMatterToolRequest, Wo
 
 enum WovenMatterCommandLine {
     static func run(arguments: [String], environment: [String: String]) -> Int32 {
+        var dispatchedRequestID: String?
         do {
             let command = try WovenMatterToolCommand(arguments)
             if command.wantsHelp {
@@ -46,6 +47,7 @@ enum WovenMatterCommandLine {
                 throw WorkspaceToolError.invalid("WOVENMATTER_SOCKET is missing. Use the invocation supplied by this Woven Matter session.")
             }
             let request = WovenMatterToolRequest(arguments: args, requestID: requestID)
+            dispatchedRequestID = requestID
             let data = try forward(try JSONEncoder().encode(request), to: socketPath)
             let response = try JSONDecoder().decode(WovenMatterToolResponse.self, from: data)
             if !response.silent {
@@ -54,16 +56,25 @@ enum WovenMatterCommandLine {
             }
             return response.success ? EXIT_SUCCESS : EXIT_FAILURE
         } catch {
+            if let dispatchedRequestID,
+               let data = try? JSONEncoder().encode(WovenMatterToolResponse(success: false,
+                   error: error.localizedDescription, requestID: dispatchedRequestID)) {
+                FileHandle.standardOutput.write(data + Data("\n".utf8))
+                return EXIT_FAILURE
+            }
             FileHandle.standardError.write(Data("wovenmatter: \(error.localizedDescription)\n".utf8))
             return EXIT_FAILURE
         }
     }
 
-    static func forward(_ data: Data, to path: String) throws -> Data {
+    static func forward(_ data: Data, to path: String, timeout: TimeInterval = 60,
+                        cancellation: WovenToolForwardCancellation? = nil) throws -> Data {
         guard data.count <= 4 * 1_024 * 1_024 else { throw WovenNoteSocketError.requestTooLarge }
+        let deadline = ProcessInfo.processInfo.systemUptime + timeout
         let descriptor = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
         guard descriptor >= 0 else { throw WovenNoteSocketError.system(errno) }
-        defer { Darwin.close(descriptor) }
+        defer { cancellation?.clear(descriptor); Darwin.close(descriptor) }
+        try cancellation?.register(descriptor)
         try configureSocket(descriptor)
         var address = try unixAddress(path: path)
         let status = withUnsafePointer(to: &address) { pointer in
@@ -72,8 +83,33 @@ enum WovenMatterCommandLine {
             }
         }
         guard status == 0 else { throw WovenNoteSocketError.system(errno) }
-        try writeMessage(data, to: descriptor, timeout: 30)
+        try writeMessage(data, to: descriptor, timeout: min(30, deadline - ProcessInfo.processInfo.systemUptime))
         _ = Darwin.shutdown(descriptor, SHUT_WR)
-        return try readMessage(from: descriptor, timeout: 60, maximumBytes: 32 * 1_024 * 1_024)
+        let response = try readMessage(from: descriptor, timeout: deadline - ProcessInfo.processInfo.systemUptime,
+            maximumBytes: 32 * 1_024 * 1_024)
+        try cancellation?.check()
+        return response
+    }
+}
+
+/// Shutdown interrupts a blocked poll without closing an fd that another thread
+/// might reuse. The forwarding owner remains responsible for the final close.
+final class WovenToolForwardCancellation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stopped = false
+    private var descriptor: Int32?
+    func register(_ value: Int32) throws {
+        try lock.withLock {
+            guard !stopped else { throw CancellationError() }
+            descriptor = value
+        }
+    }
+    func clear(_ value: Int32) { lock.withLock { if descriptor == value { descriptor = nil } } }
+    func check() throws { try lock.withLock { if stopped { throw CancellationError() } } }
+    func cancel() {
+        lock.withLock {
+            stopped = true
+            if let descriptor { _ = Darwin.shutdown(descriptor, SHUT_RDWR) }
+        }
     }
 }

@@ -41,7 +41,7 @@ source requires fresh focused and full validation; old results are not current
 proof. The previous pushed `3429cc2` had passed hosted checks.
 
 The integration manager coordinates compiler/profiling windows. Performance owns
-the current first window; do not start costly builds or foreground UI work until
+the next window after our focused pass below; do not start costly builds or foreground UI work until
 that window is released. Keep new evidence in tracked checkpoints and commit
 source promptly, not exclusively in temporary files.
 
@@ -87,10 +87,25 @@ Never use production profiles or the manager-owned shared Dev for feature work.
 - Timer UI edits now retain exact seconds in a draft. Round-trip fixtures include
   fractional/sub-minute/non-integral-minute intervals and intentional changes.
 
-The recovered creation batch is local commit `81f089f`. This follow-up source
-iteration has not been compiled yet. Neither batch has fresh native evidence.
-Performance still owns the current coordinated window; request the next window
-before focused recovery/service/scheduler tests and `scripts/test-changes.sh --all`.
+The recovered creation batch is local commit `81f089f`; the authority, history and
+scheduler batch is `0fc465d`. Fresh focused validation passed 91 Core tests and
+4 app-service tests using actual Unix sockets, concurrent Swift relay calls,
+shutdown cancellation and request-identity preservation. Four Python relay tests
+also pass. The old native-command fixture now reserves and claims its delivery
+instead of passing an invented authorization ID.
+
+The relay now forwards at most four simultaneous calls, serializes responses,
+interrupts blocked socket work at shutdown and retains retry identity on timeout.
+Local forwarding has a 55-second total budget, below the remote 75-second relay
+and 90-second CLI budgets. Creation records durable confirmed-configuration
+progress so a later coordination failure cannot reapply old model preferences;
+the initial OpenClaw native create also uses describe-before-create recovery.
+
+The compiler window has been released to Performance. Source work continues on
+delivery acceptance stages and timer recovery; request the next window before
+`scripts/test-changes.sh --all` and native builds. Native application model changes
+are not covered by the focused package pass. The built-CLI timeout test likewise
+awaits a fresh native bundle. No current native evidence is claimed.
 The original feature goal is stored as usageLimited and cannot be resumed via
 available goal APIs. The authorized integration manager continues this full
 feature through its active completion goal; do not narrow scope or bypass app UI.

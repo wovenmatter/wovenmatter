@@ -212,7 +212,7 @@ extension ApplicationModel {
                     // Retrying preparation must preserve any later user edits.
                     let model = configuration.model
                     let thinking = configuration.thinking
-                    if model != nil || thinking != nil {
+                    if reservation.objectValue?["configuration_applied"]?.intValue != 1, model != nil || thinking != nil {
                         if runtime == .opencode {
                             guard let native = self.openCodeModel(for: id) else {
                                 throw WorkspaceToolError.invalid("The native OpenCode session is unavailable.")
@@ -225,6 +225,7 @@ extension ApplicationModel {
                             _ = try await store.updateLocalACPSessionConfiguration(conversationID: id, model: model, thinking: thinking,
                                 launch: context?.launch, workspace: context?.workspace)
                         }
+                        try store.database.markToolSessionCreationConfigured(requestID: request.requestID, sourceID: source.id)
                     }
                     try store.database.completeToolSessionCreation(requestID: request.requestID, sourceID: source.id)
                 }
