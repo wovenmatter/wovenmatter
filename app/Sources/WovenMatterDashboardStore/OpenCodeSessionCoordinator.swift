@@ -62,7 +62,7 @@ public actor OpenCodeSessionCoordinator {
         guard token == connectionTokens[connectionID] else { throw CancellationError() }
         return result
     }
-    public func createSession(connectionID: String, id: String, workspace: URL, recover: Bool, title: String? = nil) async throws -> OpenCodeValue {
+    public func createSession(connectionID: String, id: String, workspace: URL, recover: Bool, title: String? = nil, nativeWorkspaceID: String? = nil) async throws -> OpenCodeValue {
         if recover {
             do { return try await call(connectionID: connectionID, path: "/api/session/" + OpenCodeHTTPClient.segment(id)) }
             catch OpenCodeError.http(404) {
@@ -71,6 +71,7 @@ public actor OpenCodeSessionCoordinator {
             }
         }
         var body: OpenCodeValue = ["id": .string(id), "location": ["directory": .string(workspace.path)], "metadata": ["wovenmatter": ["origin": "created"]]]
+        if let nativeWorkspaceID { body["location"] = ["directory": .string(workspace.path), "workspaceID": .string(nativeWorkspaceID)] }
         if let title { body["title"] = .string(title) }
         return try await call(connectionID: connectionID, method: "POST", path: "/api/session", body: body)
     }
@@ -386,7 +387,9 @@ public actor OpenCodeSessionCoordinator {
                 "text": .string(deliveryText), "files": .array(files)]
             if input.historyDeliveryID != nil { commandPayload["delivery"] = .string("steer") }
             let payload = OpenCodeValue.object(commandPayload)
-            if let deliveryID = input.historyDeliveryID { try database.markToolDeliveryTransportStarted(id: deliveryID) }
+            if let deliveryID = input.historyDeliveryID {
+                try database.markToolDeliveryTransportStarted(id: deliveryID, targetID: link.conversationID, nativeCommand: command)
+            }
             do {
                 _ = try await client.call("POST", "/api/session/\(OpenCodeHTTPClient.segment(link.sessionID))/command", body: payload)
             } catch {

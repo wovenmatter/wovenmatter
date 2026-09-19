@@ -60,14 +60,16 @@ public struct WorkspaceSessionCreationConfiguration: Codable, Equatable, Sendabl
   public var model: String?
   public var thinking: String?
   public var nativeWorkingDirectory: String?
+  public var nativeWorkspaceID: String?
   public var tools: WorkspaceSessionTools
 
   public init(runtimeKind: AgentRuntimeKind, workspaceID: UUID? = nil, folderID: String? = nil,
               title: String, model: String? = nil, thinking: String? = nil,
-              nativeWorkingDirectory: String? = nil, tools: WorkspaceSessionTools = .init()) {
+              nativeWorkingDirectory: String? = nil, nativeWorkspaceID: String? = nil, tools: WorkspaceSessionTools = .init()) {
     self.runtimeKind = runtimeKind; self.workspaceID = workspaceID; self.folderID = folderID
     self.title = title; self.model = model; self.thinking = thinking
     self.nativeWorkingDirectory = nativeWorkingDirectory; self.tools = tools
+    self.nativeWorkspaceID = nativeWorkspaceID
   }
 }
 
@@ -204,15 +206,17 @@ public struct WorkspaceSessionDelivery: Codable, Identifiable, Sendable {
   public let purpose: String?
   public let createdAt: String
   public let sequence: Int64?
+  public let nativeCommand: String?
   public init(id: String, sourceID: String, targetID: String, text: String,
               kind: WorkspaceSessionDeliveryKind, status: String, messageID: String?,
               sourceTitle: String, sourceHarness: String, targetTitle: String, targetHarness: String,
-              targetModel: String?, purpose: String?, createdAt: String, sequence: Int64? = nil) {
+              targetModel: String?, purpose: String?, createdAt: String, sequence: Int64? = nil, nativeCommand: String? = nil) {
     self.id = id; self.sourceID = sourceID; self.targetID = targetID; self.text = text
     self.kind = kind; self.status = status; self.messageID = messageID
     self.sourceTitle = sourceTitle; self.sourceHarness = sourceHarness
     self.targetTitle = targetTitle; self.targetHarness = targetHarness
     self.targetModel = targetModel; self.purpose = purpose; self.createdAt = createdAt; self.sequence = sequence
+    self.nativeCommand = nativeCommand
   }
 }
 
@@ -235,30 +239,38 @@ public struct WorkspaceSessionAdmission: Sendable {
 public enum WorkspaceConversationTimelineItem: Identifiable, Sendable {
   case message(WorkspaceMessageRecord)
   case receipt(WorkspaceSessionDelivery)
+  case incomingCommand(WorkspaceSessionDelivery)
   public var id: String {
     switch self {
     case .message(let value): value.id
     case .receipt(let value): "tool-receipt:" + value.id
+    case .incomingCommand(let value): "tool-command:" + value.id
     }
   }
 
   /// Preserve native message sequence; interleave outgoing actions by their
   /// persisted time instead of moving them to a separate conversation grouping.
   public static func weave(messages: [WorkspaceMessageRecord], receipts: [WorkspaceSessionDelivery], sessionID: String) -> [Self] {
-    let outgoing = receipts.filter { $0.sourceID == sessionID && [.message, .created].contains($0.kind) }
+    let outgoing = receipts.filter {
+      ($0.sourceID == sessionID && [.message, .created].contains($0.kind))
+        || ($0.targetID == sessionID && $0.nativeCommand != nil)
+    }
       .sorted {
         if let left = $0.sequence, let right = $1.sequence { return left < right }
         return $0.createdAt == $1.createdAt ? $0.id < $1.id : $0.createdAt < $1.createdAt
       }
     var index = 0
     var items: [Self] = []
+    func action(_ receipt: WorkspaceSessionDelivery) -> Self {
+      receipt.targetID == sessionID && receipt.nativeCommand != nil ? .incomingCommand(receipt) : .receipt(receipt)
+    }
     for message in messages {
       while index < outgoing.count, outgoing[index].createdAt < message.createdAt {
-        items.append(.receipt(outgoing[index])); index += 1
+        items.append(action(outgoing[index])); index += 1
       }
       items.append(.message(message))
     }
-    items += outgoing.dropFirst(index).map(Self.receipt)
+    items += outgoing.dropFirst(index).map(action)
     return items
   }
 }

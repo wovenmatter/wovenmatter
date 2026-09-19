@@ -192,10 +192,10 @@ extension ApplicationModel {
                         let created: String?
                         if let remoteTarget {
                             created = await self.createRemoteACPSession(target: remoteTarget, requestedConversationID: uuid,
-                                nativeWorkingDirectory: directory, initialTitle: configuration.title)
+                                nativeWorkingDirectory: directory, initialTitle: configuration.title, nativeWorkspaceID: configuration.nativeWorkspaceID)
                         } else {
                             created = await self.createLocalACPSession(runtimeKind: runtime, requestedConversationID: uuid,
-                                nativeWorkingDirectory: directory, initialTitle: configuration.title)
+                                nativeWorkingDirectory: directory, initialTitle: configuration.title, nativeWorkspaceID: configuration.nativeWorkspaceID)
                         }
                         guard created == id else { throw WorkspaceToolError.invalid(self.localRunError ?? "Unable to create the session.") }
                     }
@@ -259,19 +259,38 @@ extension ApplicationModel {
             workspaceID = id
         }
         let sameRuntime = runtime == source.localRuntimeKind
-        let metadata: LocalACPSessionMetadata?
-        if sameRuntime, source.localRuntimeKind == .openclaw {
-            metadata = try await dashboardStore?.openClawGatewaySessionMetadata(conversationID: source.id)
-        } else {
-            if sameRuntime { await refreshLocalACPSession(conversation: source) }
-            metadata = source.localRuntimeKind == .opencode ? openCodeModel(for: source.id)?.metadata(source.id) : localACPSessionMetadata[source.id]
-        }
-        let sourceDirectory = openCodeModel(for: source.id)?.snapshots[source.id]?.info["location"]["directory"].string
+        guard let store = dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
+        let sourceModel: String?, sourceThinking: String?, observedDirectory: String?
+        let nativeLocation: OpenCodeValue?
+        if source.localRuntimeKind == .openclaw {
+            let metadata = try await store.openClawGatewaySessionMetadata(conversationID: source.id)
+            sourceModel = metadata.model; sourceThinking = metadata.thinking
+            observedDirectory = metadata.workingDirectory; nativeLocation = nil
+        } else if source.localRuntimeKind == .opencode {
+            await refreshLocalACPSession(conversation: source)
+            guard let native = openCodeModel(for: source.id), let snapshot = native.snapshots[source.id] else {
+                throw WorkspaceToolError.invalid("The source OpenCode session is unavailable. Reconnect it before creating another session.")
+            }
+            sourceModel = native.metadata(source.id)?.model; sourceThinking = native.metadata(source.id)?.thinking
+            nativeLocation = snapshot.info["location"]
+            observedDirectory = snapshot.info["location"]["directory"].string
+        } else if let sourceRuntime = source.localRuntimeKind {
+            let context = try directACPLaunchContext(conversation: source, runtimeKind: sourceRuntime, isBuzzWorkspaceSession: false)
+            let configuration = try await store.localACPSessionConfiguration(conversationID: source.id,
+                launch: context?.launch, workspace: context?.workspace)
+            sourceModel = configuration.model; sourceThinking = configuration.thinking
+            observedDirectory = configuration.workingDirectory ?? context?.workspace.rootURL.path; nativeLocation = nil
+        } else { throw WorkspaceToolError.invalid("The source session has no configured harness.") }
+        let savedDirectory = try store.database.toolSessionCreationConfiguration(targetID: source.id)?.nativeWorkingDirectory
+        let sameWorkspace = workspaceID == source.remoteWorkspaceID
+        let inheritedDirectory = sameWorkspace ? observedDirectory ?? savedDirectory : nil
+        let directory = try command.options["directory"] ?? inheritedDirectory ?? defaultToolWorkingDirectory(workspaceID: workspaceID)
         return .init(runtimeKind: runtime, workspaceID: workspaceID, folderID: command.options["folder"] ?? source.folderID,
-            title: title, model: command.options["model"] ?? (sameRuntime ? metadata?.model : nil),
-            thinking: command.options["thinking"] ?? (sameRuntime ? metadata?.thinking : nil),
-            nativeWorkingDirectory: runtime == .opencode && workspaceID == source.remoteWorkspaceID
-                ? sourceDirectory.flatMap { $0.hasPrefix("/") ? $0 : nil } : nil)
+            title: title, model: command.options["model"] ?? (sameRuntime ? sourceModel : nil),
+            thinking: command.options["thinking"] ?? (sameRuntime ? sourceThinking : nil),
+            nativeWorkingDirectory: directory,
+            nativeWorkspaceID: runtime == .opencode && sameWorkspace && command.options["directory"] == nil
+                ? nativeLocation?["workspaceID"].string : nil)
     }
 
     func dispatchToolDelivery(_ delivery: WorkspaceSessionDelivery) async throws -> WovenMatterToolResponse {

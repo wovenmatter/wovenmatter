@@ -68,8 +68,17 @@ extension WorkspaceDatabase {
 
   /// Native HTTP dispatch has no durable local input acceptance. Record this
   /// boundary before issuing a request so a lost response can never be retried.
-  public func markToolDeliveryTransportStarted(id: String) throws {
-    try transaction { try markToolDeliveryTransportStartedUnlocked(id: id) }
+  public func markToolDeliveryTransportStarted(id: String, targetID: String? = nil, nativeCommand: String? = nil) throws {
+    try transaction {
+      if let targetID, try deliveryUnlocked(id)?.targetID != targetID {
+        throw WorkspaceToolError.invalid("This delivery is not reserved for this session.")
+      }
+      try markToolDeliveryTransportStartedUnlocked(id: id)
+      if let nativeCommand {
+        guard !nativeCommand.isEmpty, nativeCommand.utf8.count <= 256 else { throw WorkspaceToolError.invalid("Invalid native command.") }
+        try toolsExecuteUnlocked("UPDATE workspace_session_deliveries SET native_command=? WHERE id=?", [nativeCommand, id])
+      }
+    }
   }
 
   func markToolDeliveryTransportStartedUnlocked(id: String) throws {
@@ -153,12 +162,15 @@ extension WorkspaceDatabase {
     try withLock { try deliveryUnlocked(id) }
   }
 
-  public func sessionDeliveries(sessionID: String? = nil, queuedOnly: Bool = false, limit: Int = 200, beforeID: String? = nil, outgoingOnly: Bool = false) throws -> [WorkspaceSessionDelivery] {
+  public func sessionDeliveries(sessionID: String? = nil, queuedOnly: Bool = false, limit: Int = 200, beforeID: String? = nil, outgoingOnly: Bool = false, activityOnly: Bool = false) throws -> [WorkspaceSessionDelivery] {
     try withLock {
       var sql = "SELECT rowid AS sequence,* FROM workspace_session_deliveries WHERE 1=1"
       var values: [String?] = []
       if let sessionID {
-        if outgoingOnly { sql += " AND source_id=? AND kind IN ('message','created')"; values.append(sessionID) }
+        if activityOnly {
+          sql += " AND ((source_id=? AND kind IN ('message','created')) OR (target_id=? AND native_command IS NOT NULL))"
+          values += [sessionID, sessionID]
+        } else if outgoingOnly { sql += " AND source_id=? AND kind IN ('message','created')"; values.append(sessionID) }
         else { sql += " AND (source_id=? OR target_id=?)"; values += [sessionID, sessionID] }
       }
       if let beforeID {
@@ -182,15 +194,18 @@ extension WorkspaceDatabase {
 
   /// Refresh exactly the loaded transcript window, so polling updates receipt
   /// statuses without dropping older pages or skipping bursts of new activity.
-  public func outgoingDeliveryWindow(sessionID: String, throughID: String) throws -> [WorkspaceSessionDelivery] {
+  public func sessionActivityWindow(sessionID: String, throughID: String) throws -> [WorkspaceSessionDelivery] {
     try withLock {
-      guard let cursor = try deliveryUnlocked(throughID), cursor.sourceID == sessionID, let sequence = cursor.sequence else {
+      guard let cursor = try deliveryUnlocked(throughID),
+            cursor.sourceID == sessionID || (cursor.targetID == sessionID && cursor.nativeCommand != nil),
+            let sequence = cursor.sequence else {
         throw WorkspaceToolError.invalid("The delivery cursor is unavailable for this session.")
       }
       return try historyRowsUnlocked("""
-        SELECT rowid AS sequence,* FROM workspace_session_deliveries WHERE source_id=? AND kind IN ('message','created')
+        SELECT rowid AS sequence,* FROM workspace_session_deliveries
+          WHERE ((source_id=? AND kind IN ('message','created')) OR (target_id=? AND native_command IS NOT NULL))
           AND rowid>=? ORDER BY rowid DESC
-        """, values: [sessionID, String(sequence)]).map(deliveryFromRow)
+        """, values: [sessionID, sessionID, String(sequence)]).map(deliveryFromRow)
     }
   }
 
@@ -204,6 +219,7 @@ extension WorkspaceDatabase {
     return WorkspaceSessionDelivery(id: string("id"), sourceID: string("source_id"), targetID: string("target_id"), text: string("content"),
       kind: WorkspaceSessionDeliveryKind(rawValue: string("kind")) ?? .message, status: string("status"), messageID: r["message_id"]?.stringValue,
       sourceTitle: string("source_title"), sourceHarness: string("source_agent"), targetTitle: string("target_title"), targetHarness: string("target_harness"),
-      targetModel: r["target_model"]?.stringValue, purpose: r["purpose"]?.stringValue, createdAt: string("created_at"), sequence: r["sequence"]?.intValue.map(Int64.init))
+      targetModel: r["target_model"]?.stringValue, purpose: r["purpose"]?.stringValue, createdAt: string("created_at"),
+      sequence: r["sequence"]?.intValue.map(Int64.init), nativeCommand: r["native_command"]?.stringValue)
   }
 }

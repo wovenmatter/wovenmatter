@@ -1421,7 +1421,9 @@ public actor OpenClawGatewayCoordinator {
       thinkingLevels: thinking,
       slashCommands: commands,
       modelOptionMetadata: modelOptionMetadata,
-      thinkingOptionMetadata: thinkingOptionMetadata
+      thinkingOptionMetadata: thinkingOptionMetadata,
+      workingDirectory: session["execCwd"]?.stringValue ?? session["spawnedCwd"]?.stringValue
+        ?? session["spawnedWorkspaceDir"]?.stringValue
     )
   }
 

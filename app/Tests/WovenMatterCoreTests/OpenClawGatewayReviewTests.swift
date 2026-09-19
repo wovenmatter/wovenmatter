@@ -435,6 +435,7 @@ struct OpenClawGatewayReviewTests {
       name: "Grok 4.6", description: "Native model description"
     ))
     #expect(metadata.thinkingLevels == ["high", "low"])
+    #expect(metadata.workingDirectory == "/native/gateway project")
     #expect(metadata.thinkingOptionMetadata?["high"] == SessionOptionMetadata(
       name: "High effort", description: "Thorough reasoning"
     ))
@@ -559,6 +560,7 @@ private actor ReviewGatewaySocket: OpenClawGatewaySocket {
     case "sessions.describe": payload = .object(["session": .object([
       "model": .string("grok-4.6"), "modelProvider": .string("xai"),
       "thinkingLevel": .string("high"),
+      "spawnedCwd": .string("/native/gateway project"),
       "thinkingLevels": .array([.object([
         "id": .string("medium"), "label": .string("Session medium"),
       ])]),

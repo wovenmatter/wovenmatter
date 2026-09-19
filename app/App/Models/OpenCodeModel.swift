@@ -291,7 +291,7 @@ final class OpenCodeModel {
         return try OpenCodeConnection.discover(file: registration).browserURL
     }
 
-    func create(workspace: URL, requestedConversationID: UUID? = nil, title: String? = nil) async throws -> String {
+    func create(workspace: URL, requestedConversationID: UUID? = nil, title: String? = nil, nativeWorkspaceID: String? = nil) async throws -> String {
         guard isEnabled else { throw OpenCodeError.message("Enable OpenCode for this workspace before creating a chat.") }
         guard !serverStopped else { throw OpenCodeError.message("Start OpenCode from its settings page before creating a chat.") }
         guard !busy else { throw OpenCodeError.message("A session is already being created.") }
@@ -302,7 +302,7 @@ final class OpenCodeModel {
         let id = pending ?? "ses_" + (requestedConversationID ?? UUID()).uuidString.replacingOccurrences(of: "-", with: "").lowercased()
         defaults.set(id, forKey: pendingKey)
         do {
-            let response = try await coordinator.createSession(connectionID: connectionID, id: id, workspace: workspace, recover: pending != nil || requestedConversationID != nil, title: title)
+            let response = try await coordinator.createSession(connectionID: connectionID, id: id, workspace: workspace, recover: pending != nil || requestedConversationID != nil, title: title, nativeWorkspaceID: nativeWorkspaceID)
             let localID = try await open(response["data"], requestedConversationID: requestedConversationID)
             defaults.removeObject(forKey: pendingKey)
             return localID

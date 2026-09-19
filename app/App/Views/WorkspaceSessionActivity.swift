@@ -164,3 +164,47 @@ struct WorkspaceOutgoingReceipt: View {
         Text(sessionStatus)
     }
 }
+
+/// Native commands can finish without producing a provider user-message ID.
+/// Show the known incoming action without attributing an unrelated later message.
+struct WorkspaceIncomingCommandReceipt: View {
+    @Environment(\.openWorkspaceConversation) private var open
+    let receipt: WorkspaceSessionDelivery
+
+    private var outcome: String {
+        switch receipt.status {
+        case "accepted": "Command sent"
+        case "uncertain": "Command delivery unconfirmed"
+        case "failed", "cancelled": "Command not sent"
+        case "queued": "Command queued"
+        default: "Sending command"
+        }
+    }
+
+    var body: some View {
+        HStack {
+            Spacer(minLength: 72)
+            VStack(alignment: .trailing, spacing: 10) {
+                if receipt.kind == .timer {
+                    Label("Timer", systemImage: "timer")
+                        .font(.system(size: 11.5, weight: .medium))
+                } else {
+                    Button { open(receipt.sourceID) } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: "arrow.down.left")
+                            Text("From \(receipt.sourceTitle)").lineLimit(2).multilineTextAlignment(.trailing)
+                            Text(AgentRuntimeKind(rawValue: receipt.sourceHarness)?.displayName ?? receipt.sourceHarness)
+                                .foregroundStyle(DashboardPalette.mutedForeground)
+                            Image(systemName: "arrow.up.right")
+                        }.font(.system(size: 11.5, weight: .medium))
+                    }.buttonStyle(.plain).help("Open the session that sent this command")
+                }
+                ConversationUserMessage(content: receipt.text, attachments: [], references: [])
+                Text(outcome).font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
+            }
+        }
+        .foregroundStyle(DashboardPalette.foreground)
+        .fixedSize(horizontal: false, vertical: true)
+        .accessibilityElement(children: .contain)
+    }
+}

@@ -126,6 +126,8 @@ struct OpenCodeIntegrationTests {
         #expect(fixture.lastCommand["id"].isNull)
         #expect(fixture.lastCommand["delivery"].text == "steer")
         #expect(try database.toolDelivery(id: deliveryID)?.status == "accepted")
+        #expect(try database.toolDelivery(id: deliveryID)?.nativeCommand == "review")
+        #expect(try database.toolDelivery(id: deliveryID)?.messageID == nil)
         #expect(try database.openCodeUncertainSubmissions(conversationID: id).isEmpty)
         fixture.loseCommandResponse = true
         let uncertainID = UUID().uuidString.lowercased()
@@ -138,6 +140,12 @@ struct OpenCodeIntegrationTests {
         #expect(fixture.commandCount == 2)
         #expect(fixture.promptCount == 0)
         #expect(try database.openCodeUncertainSubmissions(conversationID: id).isEmpty)
+        let reopened = try WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+        let incoming = try reopened.sessionDeliveries(sessionID: id, activityOnly: true)
+        #expect(incoming.count == 2)
+        let timeline = WorkspaceConversationTimelineItem.weave(messages: [], receipts: incoming, sessionID: id)
+        #expect(timeline.count == 2)
+        #expect(timeline.allSatisfy { if case .incomingCommand(let receipt) = $0 { receipt.sourceID == source } else { false } })
         await coordinator.shutdown()
     }
 
@@ -667,10 +675,11 @@ struct OpenCodeIntegrationTests {
         try await coordinator.connect(connection())
         // A previous create did not reach the server. Recovery sees 404 and
         // safely submits that same identity instead of blocking all new chats.
-        let created = try await coordinator.createSession(connectionID: "fixture", id: "ses_fixture", workspace: directory, recover: true, title: "Requested title")
+        let created = try await coordinator.createSession(connectionID: "fixture", id: "ses_fixture", workspace: directory, recover: true, title: "Requested title", nativeWorkspaceID: "workspace_fixture")
         #expect(created["data"]["id"].text == "ses_fixture")
         #expect(fixture.createCount == 1)
         #expect(fixture.lastCreate["location"]["directory"].text == directory.path)
+        #expect(fixture.lastCreate["location"]["workspaceID"].text == "workspace_fixture")
         #expect(fixture.lastCreate["title"].text == "Requested title")
         // If only the response was lost, recovery retrieves the existing session.
         let recovered = try await coordinator.createSession(connectionID: "fixture", id: "ses_fixture", workspace: directory, recover: true)

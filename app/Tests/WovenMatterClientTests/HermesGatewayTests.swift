@@ -4,6 +4,19 @@ import WovenMatterCore
 @testable import WovenMatterClient
 
 struct HermesGatewayTests {
+    @Test func importedNativeDirectorySurvivesConfigurationRefresh() async throws {
+        let transport = HermesTransportFixture()
+        let client = makeClient(transport)
+        let identity = HermesGatewayClient.identity(home: "/tmp/hermes-fixture", storedID: "stored", imported: true)
+        let initialized = try await client.initializeSession(workingDirectory: URL(fileURLWithPath: "/different/app/workspace"),
+            existingSessionID: identity, title: nil, systemPrompt: nil)
+        #expect(initialized.configuration.workingDirectory == "/native/imported project")
+        let updated = try await client.setSessionConfiguration(model: nil, thinking: nil)
+        #expect(updated.workingDirectory == "/native/imported project")
+        #expect(await !transport.calls.contains { $0.0 == "session.cwd.set" })
+        await client.shutdown()
+    }
+
     @Test func pinnedIdentityCannotResumeOnAnotherProfileOrWorkspace() async throws {
         let transport = HermesTransportFixture()
         let client = makeClient(transport)
@@ -22,6 +35,7 @@ struct HermesGatewayTests {
         let client = makeClient(transport)
         let created = try await client.initializeSession(workingDirectory: URL(fileURLWithPath: "/tmp"),
             existingSessionID: nil, title: "A conversation", systemPrompt: nil)
+        #expect(created.configuration.workingDirectory == "/tmp")
         _ = try await client.initializeSession(workingDirectory: URL(fileURLWithPath: "/tmp"),
             existingSessionID: created.sessionID, title: "A conversation", systemPrompt: nil)
         #expect(await transport.calls.first { $0.0 == "session.create" }?.1["title"] == "A conversation")
@@ -302,7 +316,7 @@ private actor HermesTransportFixture: HermesGatewayTransport {
             if rejectFile { throw HermesGatewayError.rpc(code: 5028, message: "File could not be staged") }
             return ["attached": .bool(true), "ref_text": "@file:file.txt"]
         case "session.create", "session.resume":
-            return ["session_id": "live", "stored_session_id": "stored", "running": .bool(running)]
+            return ["session_id": "live", "stored_session_id": "stored", "running": .bool(running), "info": ["cwd": "/native/imported project"]]
         case "session.events.since": return replay ?? ["latest_seq": .number(Double(sequence)), "epoch": .string(epoch ?? "")]
         case "prompt.submit":
             running = true

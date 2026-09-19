@@ -53,7 +53,7 @@ final class WorkspaceAgentToolsModel {
         for id in sessionPolicies.keys { sessionPolicies[id] = try? database.sessionTools(id) }
         for id in Set(observedSessions.values) {
             if let oldest = receipts[id]?.last {
-                receipts[id] = try database.outgoingDeliveryWindow(sessionID: id, throughID: oldest.id)
+                receipts[id] = try database.sessionActivityWindow(sessionID: id, throughID: oldest.id)
             } else { try loadInitialReceipts(id) }
         }
     }
@@ -70,7 +70,7 @@ final class WorkspaceAgentToolsModel {
     }
 
     private func loadInitialReceipts(_ id: String) throws {
-        let page = try database.sessionDeliveries(sessionID: id, limit: 201, outgoingOnly: true)
+        let page = try database.sessionDeliveries(sessionID: id, limit: 201, activityOnly: true)
         receipts[id] = Array(page.prefix(200))
         if page.count > 200 { hasOlderReceipts.insert(id) } else { hasOlderReceipts.remove(id) }
     }
@@ -78,7 +78,7 @@ final class WorkspaceAgentToolsModel {
     func loadOlderReceipts(sessionID: String) {
         guard let oldest = receipts[sessionID]?.last else { return }
         do {
-            let page = try database.sessionDeliveries(sessionID: sessionID, limit: 201, beforeID: oldest.id, outgoingOnly: true)
+            let page = try database.sessionDeliveries(sessionID: sessionID, limit: 201, beforeID: oldest.id, activityOnly: true)
             receipts[sessionID, default: []].append(contentsOf: page.prefix(200))
             if page.count > 200 { hasOlderReceipts.insert(sessionID) } else { hasOlderReceipts.remove(sessionID) }
         } catch { self.error = error.localizedDescription }
