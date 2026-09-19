@@ -141,3 +141,38 @@ struct WorkspaceCoordinationEventTests {
     #expect(try db.toolDelivery(id: failure.id)?.status == "cancelled")
   }
 }
+
+extension WorkspaceCoordinationEventTests {
+  @Test(arguments: [false, true])
+  func tombstonedCoordinatorCannotBlockUnrelatedNotificationsAndTimers(inputFirst: Bool) throws {
+    let (db, dir, deletedCoordinator, worker) = try fixture()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let liveCoordinator = try db.createLocalACPSession(runtimeKind: .codex, title: "Live coordinator", ownerDeviceID: UUID())
+    let liveWorker = try db.createLocalACPSession(runtimeKind: .pi, title: "Live worker", ownerDeviceID: UUID())
+    try db.beginCoordination(sourceID: deletedCoordinator, targetID: worker, purpose: "Stale")
+    try db.beginCoordination(sourceID: liveCoordinator, targetID: liveWorker, purpose: "Live")
+    let stale = try db.beginLocalACPRun(conversationID: worker, content: "Stale coordinator")
+    let live = try db.beginLocalACPRun(conversationID: liveWorker, content: "Live coordinator")
+    try db.completeLocalACPRun(runID: stale.runID)
+    try db.completeLocalACPRun(runID: live.runID)
+    let timer = WorkspaceSessionTimer(sessionID: liveWorker, instruction: "Due", nextFireAt: .distantPast)
+    try db.saveSessionTimer(timer)
+    try db.transaction {
+      try db.toolsExecuteUnlocked("UPDATE dashboard_conversations SET deleted_at=? WHERE id=?", ["2026-09-19T00:00:00Z", deletedCoordinator])
+    }
+    if inputFirst {
+      #expect(try db.recordCoordinationNeedsInput(sessionID: worker, requestID: "stale-permission", requiresUserApproval: true) == nil)
+    }
+    let notifications = try db.collectCoordinationTurnNotifications()
+    #expect(notifications.count == 1 && notifications.first?.targetID == liveCoordinator)
+    #expect(try db.sessionRelationship(worker).coordinatorID == nil)
+    #expect(try db.sessionRelationship(liveWorker).coordinatorID == liveCoordinator)
+    let due = try #require(db.dueSessionTimers().first { $0.id == timer.id })
+    let deliveryID = try #require(due.pendingDeliveryID)
+    _ = try db.reserveToolDelivery(sourceID: liveWorker, targetID: liveWorker, text: due.instruction, requestID: deliveryID, kind: .timer)
+    #expect(try db.claimToolDelivery(id: deliveryID) != nil)
+    let reopened = try WorkspaceDatabase(url: dir.appending(path: "workspace.sqlite"))
+    #expect(try reopened.collectCoordinationTurnNotifications().isEmpty)
+    #expect(try reopened.recordCoordinationNeedsInput(sessionID: worker, requestID: "stale-again", requiresUserApproval: true) == nil)
+  }
+}

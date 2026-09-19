@@ -7,6 +7,7 @@ extension WorkspaceDatabase {
   /// semantics. Only turns completed during the current assignment are eligible.
   public func collectCoordinationTurnNotifications(limit: Int = 100) throws -> [WorkspaceSessionDelivery] {
     try transaction {
+      try retireUnavailableCoordinationUnlocked()
       let rows = try historyRowsUnlocked("""
         SELECT r.id,r.conversation_id,r.status,r.error,r.user_message_id,r.started_at,
           m.coordination_epoch FROM dashboard_runs r
@@ -58,7 +59,8 @@ extension WorkspaceDatabase {
   /// transfers approval authority to another agent.
   public func recordCoordinationNeedsInput(sessionID: String, requestID: String, requiresUserApproval: Bool) throws -> WorkspaceSessionDelivery? {
     try transaction {
-      try recordCoordinationObservationUnlocked(sessionID: sessionID, eventID: "input:" + requestID,
+      try retireUnavailableCoordinationUnlocked(sessionID: sessionID)
+      return try recordCoordinationObservationUnlocked(sessionID: sessionID, eventID: "input:" + requestID,
         detail: requiresUserApproval
           ? "Needs user approval. The user must answer the permission request in Woven Matter; do not approve it on their behalf."
           : "Needs input. Inspect the session and help with the work if appropriate. User-facing questions remain available in Woven Matter.",
@@ -79,5 +81,17 @@ extension WorkspaceDatabase {
       text: "Woven Matter update from “\(title)” (\(sessionID)).\n\(detail)",
       requestID: UUID().uuidString.lowercased(), kind: .notification,
       eventKey: "coordination:" + epoch + ":" + eventID)
+  }
+
+  /// Snapshot tombstones can outlive a coordination relationship. Retire only
+  /// those invalid assignments; a missing session must not stop the scheduler.
+  private func retireUnavailableCoordinationUnlocked(sessionID: String? = nil) throws {
+    let predicate = """
+      coordinator_id IS NOT NULL AND (? IS NULL OR session_id=?) AND (
+        NOT EXISTS (SELECT 1 FROM dashboard_conversations c WHERE c.id=workspace_session_relationships.session_id AND c.deleted_at IS NULL)
+        OR NOT EXISTS (SELECT 1 FROM dashboard_conversations c WHERE c.id=workspace_session_relationships.coordinator_id AND c.deleted_at IS NULL))
+      """
+    try toolsExecuteUnlocked("DELETE FROM workspace_session_grants WHERE kind='approved' AND target_id IN (SELECT session_id FROM workspace_session_relationships WHERE " + predicate + ")", [sessionID, sessionID])
+    try toolsExecuteUnlocked("UPDATE workspace_session_relationships SET coordinator_id=NULL,coordination_epoch=NULL,coordination_since=NULL WHERE " + predicate, [sessionID, sessionID])
   }
 }

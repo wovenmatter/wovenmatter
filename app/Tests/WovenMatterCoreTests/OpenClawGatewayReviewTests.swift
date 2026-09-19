@@ -149,6 +149,50 @@ struct OpenClawGatewayReviewTests {
     await fixture.coordinator.shutdown()
   }
 
+  @Test(.timeLimit(.minutes(1)), arguments: ["policy", "timer-pause", "timer-remove", "timer-disable", "assignment", "cancel"])
+  func revokedDeliveryCannotCrossAnAsynchronousGatewayConnection(revocation: String) async throws {
+    let gate = ReviewConnectionGate()
+    let fixture = try ReviewGatewayFixture(beforeConnect: { await gate.pause() })
+    defer { fixture.remove() }
+    let database = fixture.database
+    let target = try database.importOpenClawGatewaySession(agentID: fixture.agentID, session: fixture.session)
+    let caller = try database.createLocalACPSession(runtimeKind: .codex, title: "Source", ownerDeviceID: UUID())
+    var source = caller, requestID = UUID().uuidString
+    var kind = WorkspaceSessionDeliveryKind.message
+    var timerID: String?
+    if revocation.hasPrefix("timer-") {
+      let timer = WorkspaceSessionTimer(sessionID: target, instruction: "Follow up", nextFireAt: .distantPast)
+      try database.saveSessionTimer(timer)
+      timerID = timer.id
+      requestID = try #require(database.dueSessionTimers().first?.pendingDeliveryID)
+      source = target; kind = .timer
+    } else if revocation == "assignment" {
+      try database.beginCoordination(sourceID: target, targetID: caller, purpose: "Observe")
+      kind = .notification
+    }
+    _ = try database.reserveToolDelivery(sourceID: source, targetID: target, text: "Follow up", requestID: requestID, kind: kind)
+    _ = try #require(database.claimToolDelivery(id: requestID))
+    try database.validateClaimedToolDelivery(id: requestID)
+    let coordinator = fixture.coordinator
+    let input = AgentMessageInput(text: "Follow up", historyDeliveryID: requestID)
+    let acceptance = Task { try await coordinator.accept(conversationID: target, input: input) }
+    await gate.waitUntilPaused()
+    switch revocation {
+    case "policy": try database.setSessionTools(.init(enabled: []), sessionID: caller)
+    case "timer-pause": try database.pauseSessionTimer(id: try #require(timerID), paused: true)
+    case "timer-remove": try database.removeSessionTimer(id: try #require(timerID))
+    case "timer-disable": try database.setSessionTools(.init(enabled: [.sessions]), sessionID: target, confirmedPausingTimers: true)
+    case "assignment": try database.endCoordination(targetID: caller, sourceID: target)
+    default: try database.setToolDeliveryStatus(id: requestID, status: "cancelled")
+    }
+    await gate.release()
+    await #expect(throws: (any Error).self) { try await acceptance.value }
+    #expect(try database.conversationContent(id: target).messages.isEmpty)
+    #expect(try database.toolDelivery(id: requestID)?.messageID == nil)
+    #expect(!(await fixture.socket.requestMethods).contains("chat.send"))
+    await coordinator.shutdown()
+  }
+
   @Test func providerIdentityRepairsHistoryDuplicateAndContentRevisions() async throws {
     let fixture = try ReviewGatewayFixture()
     defer { fixture.remove() }
@@ -406,7 +450,7 @@ private struct ReviewGatewayFixture {
     .object(["id": .string("high"), "label": .string("High effort"),
       "description": .string("Thorough reasoning")]),
     .object(["id": .string("low"), "label": .string("Low effort")]),
-  ])) throws {
+  ]), beforeConnect: (@Sendable () async -> Void)? = nil) throws {
     directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     database = try WorkspaceDatabase(url: directory.appending(path: "review.sqlite"))
@@ -420,7 +464,10 @@ private struct ReviewGatewayFixture {
     )
     let socket = socket
     let client = OpenClawGatewayClient(endpoint: endpoint, credentialStore: ReviewCredentials(), socketFactory: { _ in socket })
-    coordinator = OpenClawGatewayCoordinator(database: database, client: client, connectClient: { try await $0.connect() })
+    coordinator = OpenClawGatewayCoordinator(database: database, client: client, connectClient: {
+      await beforeConnect?()
+      return try await $0.connect()
+    })
   }
   func remove() { try? FileManager.default.removeItem(at: directory) }
 }
@@ -516,5 +563,26 @@ private actor ReviewGatewaySocket: OpenClawGatewaySocket {
   private func push(_ value: GatewayJSONValue) throws {
     let data = try JSONEncoder().encode(value)
     if let waiter { self.waiter = nil; waiter.resume(returning: data) } else { frames.append(data) }
+  }
+}
+
+private actor ReviewConnectionGate {
+  private var paused = false
+  private var released = false
+  private var observers: [CheckedContinuation<Void, Never>] = []
+  private var continuation: CheckedContinuation<Void, Never>?
+  func pause() async {
+    paused = true
+    observers.forEach { $0.resume() }; observers.removeAll()
+    guard !released else { return }
+    await withCheckedContinuation { continuation = $0 }
+  }
+  func waitUntilPaused() async {
+    guard !paused else { return }
+    await withCheckedContinuation { observers.append($0) }
+  }
+  func release() {
+    released = true
+    continuation?.resume(); continuation = nil
   }
 }

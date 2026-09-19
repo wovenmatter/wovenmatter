@@ -137,6 +137,33 @@ public struct WorkspaceSessionTimer: Codable, Identifiable, Equatable, Sendable 
   }
 }
 
+/// The native editor keeps the exact persisted cadence while unrelated fields
+/// change, including fractional and sub-minute intervals created by the CLI.
+public struct WorkspaceSessionTimerDraft: Sendable {
+  private let original: WorkspaceSessionTimer
+  public var instruction: String
+  public var nextFireAt: Date
+  public var repeats: Bool
+  public var intervalSeconds: TimeInterval
+
+  public init(_ timer: WorkspaceSessionTimer) {
+    original = timer
+    instruction = timer.instruction
+    nextFireAt = timer.nextFireAt
+    repeats = timer.intervalSeconds != nil
+    intervalSeconds = timer.intervalSeconds ?? 3_600
+  }
+
+  public func timer() throws -> WorkspaceSessionTimer {
+    var value = original
+    value.instruction = instruction
+    value.nextFireAt = nextFireAt
+    value.intervalSeconds = repeats ? intervalSeconds : nil
+    try value.validate()
+    return value
+  }
+}
+
 public enum WorkspaceToolError: Error, LocalizedError, Equatable, Sendable {
   case disabled(WorkspaceToolGroup)
   case accessRequired(String)

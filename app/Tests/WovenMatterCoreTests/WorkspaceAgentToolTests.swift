@@ -622,3 +622,48 @@ extension WorkspaceAgentToolTests {
     #expect(try db.workspaceOverview().conversations.first { $0.id == target }?.title == "Planned")
   }
 }
+
+extension WorkspaceAgentToolTests {
+  @Test func nativeSubmissionRechecksAuthorityBeforePersistingInput() throws {
+    let (db, dir, caller, target) = try fixture()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let requestID = UUID().uuidString
+    _ = try db.reserveToolDelivery(sourceID: caller, targetID: target, text: "Work", requestID: requestID)
+    _ = try #require(db.claimToolDelivery(id: requestID))
+    try db.validateClaimedToolDelivery(id: requestID)
+    try db.setSessionTools(.init(enabled: []), sessionID: caller)
+    #expect(throws: (any Error).self) {
+      try db.saveOpenCodeSubmission(conversationID: target, id: "msg_revoked", payload: ["text": "Work"],
+        status: "sending", visibleText: "Work", deliveryID: requestID)
+    }
+    #expect(try db.openCodeUncertainSubmissions(conversationID: target).isEmpty)
+    #expect(try db.toolDelivery(id: requestID)?.messageID == nil)
+  }
+}
+
+extension WorkspaceAgentToolTests {
+  @Test(arguments: [1.0, 1.25, 90.0, 3_600.125])
+  func timerEditorPreservesExactCadenceUnlessExplicitlyChanged(interval: Double) throws {
+    let (db, dir, caller, _) = try fixture()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let original = WorkspaceSessionTimer(sessionID: caller, instruction: "Original", nextFireAt: .distantFuture,
+      intervalSeconds: interval)
+    try db.saveSessionTimer(original)
+    let saved = try #require(db.sessionTimers(sessionID: caller).first)
+    var draft = WorkspaceSessionTimerDraft(saved)
+    draft.instruction = "Changed instruction"
+    try db.saveSessionTimer(draft.timer())
+    #expect(try db.sessionTimers(sessionID: caller).first?.intervalSeconds == interval)
+    draft.nextFireAt = Date(timeIntervalSince1970: 2_000)
+    try db.saveSessionTimer(draft.timer())
+    #expect(try db.sessionTimers(sessionID: caller).first?.intervalSeconds == interval)
+    draft.intervalSeconds = 75.125
+    try db.saveSessionTimer(draft.timer())
+    #expect(try db.sessionTimers(sessionID: caller).first?.intervalSeconds == 75.125)
+    draft.repeats = false
+    #expect(try draft.timer().intervalSeconds == nil)
+    draft.repeats = true
+    draft.intervalSeconds = 0.5
+    #expect(throws: (any Error).self) { try draft.timer() }
+  }
+}

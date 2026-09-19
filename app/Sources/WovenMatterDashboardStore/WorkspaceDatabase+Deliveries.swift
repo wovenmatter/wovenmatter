@@ -60,11 +60,15 @@ extension WorkspaceDatabase {
   }
 
   public func validateClaimedToolDelivery(id: String) throws {
-    try withLock {
-      guard let delivery = try deliveryUnlocked(id), delivery.status == "sending",
-            try toolDeliveryAuthorizedUnlocked(delivery) else {
-        throw WorkspaceToolError.invalid("This delivery was cancelled or its access was revoked.")
-      }
+    try withLock { try validateClaimedToolDeliveryUnlocked(id: id) }
+  }
+
+  /// Call inside the final acceptance transaction, after asynchronous connection
+  /// and attachment preparation. A prior app-level check is only a preflight.
+  func validateClaimedToolDeliveryUnlocked(id: String) throws {
+    guard let delivery = try deliveryUnlocked(id), delivery.status == "sending",
+          try toolDeliveryAuthorizedUnlocked(delivery) else {
+      throw WorkspaceToolError.invalid("This delivery was cancelled or its access was revoked.")
     }
   }
 

@@ -70,3 +70,27 @@ The isolated Tools profile previously proved General defaults, both limit ranges
 Calendar modes, the empty workspace and plain-note version recovery. Its old
 bundle/cache was temporary and must be rebuilt before current UI verification.
 Never use production profiles or the manager-owned shared Dev for feature work.
+
+## Source iteration after recovery (awaiting fresh validation)
+
+- Added an app-service SwiftPM test target compiling the actual tool handler,
+  socket service and remote bridge sources. A bound-socket history search fixture
+  proves current/prior CLI request audit rows cannot manufacture local matches;
+  explicit audit kind filters remain readable and real local hits retain priority.
+- Added final transactional delivery authorization checks to attributed local
+  input insertion and native OpenCode submission, plus a native command gate.
+  Gateway tests deliberately suspend connect and revoke source capability,
+  timer pause/removal/disable, assignment or the delivery itself before resuming.
+- Retire only assignments whose coordinator or target was tombstoned/missing.
+  Collector and input-observation tests retain unrelated notifications and due
+  timers; real database errors still propagate.
+- Timer UI edits now retain exact seconds in a draft. Round-trip fixtures include
+  fractional/sub-minute/non-integral-minute intervals and intentional changes.
+
+The recovered creation batch is local commit `81f089f`. This follow-up source
+iteration has not been compiled yet. Neither batch has fresh native evidence.
+Performance still owns the current coordinated window; request the next window
+before focused recovery/service/scheduler tests and `scripts/test-changes.sh --all`.
+The original feature goal is stored as usageLimited and cannot be resumed via
+available goal APIs. The authorized integration manager continues this full
+feature through its active completion goal; do not narrow scope or bypass app UI.

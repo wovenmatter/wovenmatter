@@ -373,6 +373,7 @@ public actor OpenCodeSessionCoordinator {
         if let command {
             // Native commands return 204 and do not accept a caller message ID.
             // Never journal or retry them as idempotent prompt submissions.
+            if let deliveryID = input.historyDeliveryID { try database.validateClaimedToolDelivery(id: deliveryID) }
             var commandPayload: [String: OpenCodeValue] = ["command": .string(command),
                 "text": .string(deliveryText), "files": .array(files)]
             if input.historyDeliveryID != nil { commandPayload["delivery"] = .string("steer") }
