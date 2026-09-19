@@ -128,6 +128,10 @@ extension WorkspaceDatabase {
     try transaction {
       guard let timer = try timersUnlocked().first(where: { $0.id == id }), !timer.isPaused,
             timer.pendingDeliveryID == deliveryID else { return }
+      // A failed preparation or uncertain backend outcome does not consume an
+      // occurrence. Keep its identity until accepted, cancelled or edited.
+      guard !(try historyRowsUnlocked("SELECT 1 FROM workspace_session_deliveries WHERE id=? AND status IN ('accepted','cancelled')",
+        values: [deliveryID])).isEmpty else { return }
       if let interval = timer.intervalSeconds {
         // Coalesce missed firings, including time while the application was closed.
         let skipped = max(1, floor(now.timeIntervalSince(timer.nextFireAt) / interval) + 1)

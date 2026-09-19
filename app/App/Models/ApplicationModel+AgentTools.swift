@@ -62,7 +62,7 @@ extension ApplicationModel {
             for timer in timers {
                 guard let id = timer.pendingDeliveryID,
                       let receipt = try database.toolDelivery(id: id),
-                      !["queued", "sending"].contains(receipt.status) else { continue }
+                      ["accepted", "cancelled"].contains(receipt.status) else { continue }
                 try database.finishTimerOccurrence(id: timer.id, deliveryID: id)
             }
             try agentTools?.reload()
@@ -290,9 +290,7 @@ extension ApplicationModel {
         } catch LocalACPSessionDatabaseError.steeringUnsupported {
             try database.setToolDeliveryStatus(id: claimed.id, status: "queued")
         } catch {
-            // The transport may have accepted input before losing its reply. The
-            // durable receipt prevents an automatic duplicate in that case.
-            try database.setToolDeliveryStatus(id: claimed.id, status: "uncertain")
+            try database.failToolDeliveryAttempt(id: claimed.id)
             throw error
         }
         return try .value(database.toolDelivery(id: claimed.id) ?? claimed)

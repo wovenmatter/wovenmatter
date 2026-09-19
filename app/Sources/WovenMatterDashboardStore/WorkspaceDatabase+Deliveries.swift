@@ -46,21 +46,53 @@ extension WorkspaceDatabase {
   }
 
   /// A durable claim prevents concurrent callbacks or retries dispatching twice.
-  /// Sending claims recovered after an app exit stay uncertain until reconciled.
-  public func claimToolDelivery(id: String) throws -> WorkspaceSessionDelivery? {
+  /// Preparation is safe to recover; an unconfirmed native submission is not.
+  public func claimToolDelivery(id: String, now: Date = Date()) throws -> WorkspaceSessionDelivery? {
     try transaction {
       guard let delivery = try deliveryUnlocked(id), delivery.status == "queued" else { return nil }
+      let retryAfter = try historyRowsUnlocked("SELECT retry_after FROM workspace_session_deliveries WHERE id=?", values: [id])
+        .first?.objectValue?["retry_after"]?.doubleValue
+      if let retryAfter, retryAfter > now.timeIntervalSince1970 { return nil }
       guard try toolDeliveryAuthorizedUnlocked(delivery) else {
         try toolsExecuteUnlocked("UPDATE workspace_session_deliveries SET status='cancelled' WHERE id=?", [id])
         return nil
       }
-      try toolsExecuteUnlocked("UPDATE workspace_session_deliveries SET status='sending' WHERE id=? AND status='queued'", [id])
+      try toolsExecuteUnlocked("UPDATE workspace_session_deliveries SET status='sending',transport_started=0,retry_after=NULL WHERE id=? AND status='queued'", [id])
       return try deliveryUnlocked(id)
     }
   }
 
   public func validateClaimedToolDelivery(id: String) throws {
     try withLock { try validateClaimedToolDeliveryUnlocked(id: id) }
+  }
+
+  /// Native HTTP dispatch has no durable local input acceptance. Record this
+  /// boundary before issuing a request so a lost response can never be retried.
+  public func markToolDeliveryTransportStarted(id: String) throws {
+    try transaction { try markToolDeliveryTransportStartedUnlocked(id: id) }
+  }
+
+  func markToolDeliveryTransportStartedUnlocked(id: String) throws {
+    try validateClaimedToolDeliveryUnlocked(id: id)
+    try toolsExecuteUnlocked("UPDATE workspace_session_deliveries SET transport_started=1 WHERE id=?", [id])
+  }
+
+  /// A scheduler may retry preparation with the same occurrence identity. Once
+  /// input could have reached the backend, only reconciliation can settle it.
+  public func failToolDeliveryAttempt(id: String, now: Date = Date()) throws {
+    try transaction {
+      guard let delivery = try deliveryUnlocked(id), delivery.status == "sending" else { return }
+      let submitted = try historyRowsUnlocked("SELECT transport_started FROM workspace_session_deliveries WHERE id=?", values: [id])
+        .first?.objectValue?["transport_started"]?.intValue != 0
+      if !submitted, try !toolDeliveryAuthorizedUnlocked(delivery) {
+        try toolsExecuteUnlocked("UPDATE workspace_session_deliveries SET status='cancelled' WHERE id=?", [id])
+        return
+      }
+      let scheduled = delivery.kind == .timer || delivery.kind == .notification
+      let status = submitted ? "uncertain" : scheduled ? "queued" : "failed"
+      try toolsExecuteUnlocked("UPDATE workspace_session_deliveries SET status=?,retry_after=? WHERE id=?",
+        [status, status == "queued" ? String(now.addingTimeInterval(30).timeIntervalSince1970) : nil, id])
+    }
   }
 
   /// Call inside the final acceptance transaction, after asynchronous connection
@@ -73,8 +105,11 @@ extension WorkspaceDatabase {
   }
 
   private func toolDeliveryAuthorizedUnlocked(_ delivery: WorkspaceSessionDelivery) throws -> Bool {
-    guard let source = try? sessionToolsUnlocked(delivery.sourceID),
-          let target = try? sessionToolsUnlocked(delivery.targetID) else { return false }
+    for id in [delivery.sourceID, delivery.targetID] {
+      guard !(try historyRowsUnlocked("SELECT 1 FROM dashboard_conversations WHERE id=? AND deleted_at IS NULL", values: [id])).isEmpty else { return false }
+    }
+    let source = try sessionToolsUnlocked(delivery.sourceID)
+    let target = try sessionToolsUnlocked(delivery.targetID)
     switch delivery.kind {
     case .message, .created: return source.enabled.contains(.sessions)
     case .timer:
@@ -104,7 +139,14 @@ extension WorkspaceDatabase {
   }
 
   public func recoverToolDeliveries() throws {
-    try transaction { try executeUnlocked("UPDATE workspace_session_deliveries SET status='uncertain' WHERE status='sending' AND message_id IS NULL") }
+    try transaction {
+      try executeUnlocked("""
+        UPDATE workspace_session_deliveries SET status=CASE
+          WHEN transport_started=1 THEN 'uncertain'
+          WHEN kind IN ('timer','notification') THEN 'queued' ELSE 'failed' END
+          WHERE status='sending' AND message_id IS NULL
+        """)
+    }
   }
 
   public func toolDelivery(id: String) throws -> WorkspaceSessionDelivery? {
@@ -128,7 +170,10 @@ extension WorkspaceDatabase {
         sql += " AND rowid<?"
         values.append(String(sequence))
       }
-      if queuedOnly { sql += " AND status='queued'" }
+      if queuedOnly {
+        sql += " AND status='queued' AND (retry_after IS NULL OR retry_after<=?)"
+        values.append(String(Date().timeIntervalSince1970))
+      }
       sql += queuedOnly ? " ORDER BY rowid LIMIT ?" : " ORDER BY rowid DESC LIMIT ?"
       values.append(String(min(max(limit, 1), 500)))
       return try historyRowsUnlocked(sql, values: values).map(deliveryFromRow)

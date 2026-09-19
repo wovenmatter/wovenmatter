@@ -109,3 +109,25 @@ awaits a fresh native bundle. No current native evidence is claimed.
 The original feature goal is stored as usageLimited and cannot be resumed via
 available goal APIs. The authorized integration manager continues this full
 feature through its active completion goal; do not narrow scope or bypass app UI.
+
+## Delivery acceptance checkpoint
+
+The relay/creation-progress checkpoint is `11ad4e8`. The next source batch records
+the native HTTP submission boundary durably, after authorization and before
+dispatch. Old in-flight records migrate conservatively as possibly submitted.
+Local ACP and Gateway input insertion remain their transactional app-acceptance
+point. Confirmed native HTTP acceptance is persisted independently of refresh.
+
+An offline failure before acceptance leaves scheduler deliveries queued under the
+same identity with a 30-second retry delay. A possibly accepted request stays
+uncertain and cannot be claimed again. Revocation cannot mislabel an already sent
+request as cancelled. Timer occurrences advance only on accepted/cancelled
+receipts; failed and uncertain outcomes keep their pending occurrence. Explicit
+HTTP rejection is recorded as failed without automatic resend.
+
+Fresh focused validation passed 93 Core tests and 4 actual app-service tests,
+including a real native coordinator disconnected before HTTP, followed by lost
+HTTP response and absent reconciliation. One-shot identity persists throughout;
+native command 204 acceptance and lost-response no-retry are also covered.
+Performance has returned the compiler window. Full `--all` and native builds are
+next; the desktop is locked, so foreground native review awaits manual unlock.

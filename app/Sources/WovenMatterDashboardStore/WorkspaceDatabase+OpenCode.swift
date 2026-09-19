@@ -133,7 +133,7 @@ extension WorkspaceDatabase {
 
   public func saveOpenCodeSubmission(conversationID: String, id: String, payload: OpenCodeValue, status: String, visibleText: String? = nil, deliveryID: String? = nil) throws {
     try transaction {
-      if let deliveryID { try validateClaimedToolDeliveryUnlocked(id: deliveryID) }
+      if let deliveryID { try markToolDeliveryTransportStartedUnlocked(id: deliveryID) }
       let statement = try prepareUnlocked("""
         INSERT INTO desktop_opencode_submissions(id, conversation_id, payload_json, status) VALUES (?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET status=excluded.status
@@ -148,6 +148,12 @@ extension WorkspaceDatabase {
           }
         }
         try toolsExecuteUnlocked("INSERT OR IGNORE INTO workspace_opencode_input_context(id,conversation_id,visible_text,delivery_id) VALUES(?,?,?,?)", [id, conversationID, visibleText, deliveryID])
+      }
+      if status == "accepted" {
+        try toolsExecuteUnlocked("""
+          UPDATE workspace_session_deliveries SET status='accepted'
+          WHERE id=(SELECT delivery_id FROM workspace_opencode_input_context WHERE id=? AND conversation_id=?)
+          """, [id, conversationID])
       }
     }
   }
