@@ -8,7 +8,7 @@ import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs
 import { connect, createServer as createNetServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
-import { authenticationDeadline, downloadInstallerSource, probeHarnessTransport } from '../src/server.mjs'
+import { authenticationInput, authenticationDeadline, downloadInstallerSource, probeHarnessTransport } from '../src/server.mjs'
 
 const repositoryRoot = resolve(import.meta.dirname, '../..')
 const catalogPath = resolve(repositoryRoot, 'harnesses/catalog.json')
@@ -211,6 +211,54 @@ test('service authentication exposes the reviewed harness catalog', async (conte
     !['adapterInstalled', 'cliInstalled', 'installCommand', 'installSource', 'operation']
       .some((field) => Object.hasOwn(value, field))
   ))
+})
+
+test('authorization input contains asynchronous pipe failures and observes later stream errors', async () => {
+  const failure = Object.assign(new Error('write EPIPE'), { code: 'EPIPE' })
+  const input = new Writable({ write(_chunk, _encoding, callback) { callback(failure) } })
+  const session = { child: { stdin: input }, method: { acceptsInput: true }, state: 'waiting_for_user' }
+  const submit = authenticationInput(session)
+  await assert.rejects(submit(async () => ({ code: 'fixture-code' })), { statusCode: 409, message: 'authentication_session_not_active' })
+  // Writable emits its error after the write callback. Neither event may crash
+  // the service, and the actual failure remains recorded for session settlement.
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(session.inputError, failure)
+  assert.equal(session.error, 'Sign-in input is unavailable.')
+  input.emit('error', failure)
+  await assert.rejects(submit(async () => ({ code: 'again' })), { statusCode: 409 })
+})
+
+for (const outcome of ['exit', 'cancel', 'timeout']) {
+  test(`authorization input rechecks ${outcome} after the request body arrives`, async () => {
+    let writes = 0
+    const input = new Writable({ write(_chunk, _encoding, callback) { writes++; callback() } })
+    const session = { child: { stdin: input }, method: { acceptsInput: true }, state: 'waiting_for_user' }
+    const submit = authenticationInput(session)
+    let finishBody
+    const pending = submit(() => new Promise(resolve => { finishBody = resolve }))
+    if (outcome === 'exit') { session.child = null; session.state = 'failed' }
+    if (outcome === 'cancel') session.cancelRequested = true
+    if (outcome === 'timeout') { session.timedOut = true; session.error = 'Sign-in timed out.' }
+    finishBody({ code: 'fixture-code' })
+    await assert.rejects(pending, { statusCode: 409, message: 'authentication_session_not_active' })
+    assert.equal(writes, 0)
+    input.destroy()
+  })
+}
+
+test('authorization input reports acceptance only after the write completes', async () => {
+  let finishWrite, written, accepted = false
+  const input = new Writable({ write(chunk, _encoding, callback) { written = chunk.toString(); finishWrite = callback } })
+  const session = { child: { stdin: input }, method: { acceptsInput: true }, state: 'waiting_for_user' }
+  const submit = authenticationInput(session)
+  const pending = submit(async () => ({ code: '  fixture-code\n' })).then(() => { accepted = true })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(written, 'fixture-code\n')
+  assert.equal(accepted, false)
+  finishWrite()
+  await pending
+  assert.equal(accepted, true)
+  input.destroy()
 })
 
 test('authorization input rejects additional lines and accepts a single trimmed credential', async context => {

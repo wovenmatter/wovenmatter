@@ -155,22 +155,7 @@ const server = createServer(async (request, response) => {
     )
     if (request.method === 'POST' && authorizationCodeMatch) {
       const session = requireAuthenticationSession(authorizationCodeMatch[1])
-      if (session.method.acceptsInput !== true) {
-        return json(response, 409, { error: 'authorization_code_not_supported' })
-      }
-      if (session.state !== 'waiting_for_user'
-        || session.child?.stdin?.writable !== true
-        || session.child.stdin.destroyed) {
-        return json(response, 409, { error: 'authentication_session_not_active' })
-      }
-      const body = await readJSON(request)
-      if (typeof body.code !== 'string'
-        || body.code.trim().length === 0
-        || /[\r\n]/.test(body.code.trim())
-        || Buffer.byteLength(body.code) > 4_096) {
-        return json(response, 400, { error: 'invalid_authorization_code' })
-      }
-      session.child.stdin.write(`${body.code.trim()}\n`)
+      await session.submitCode(() => readJSON(request))
       return json(response, 202, { accepted: true })
     }
 
@@ -468,7 +453,9 @@ function startAuthenticationSession(harness, method) {
     error: null,
     cancelRequested: false,
     timedOut: false,
+    inputError: null,
   }
+  session.submitCode = authenticationInput(session)
   const clearDeadline = authenticationDeadline(session)
   authenticationSessions.set(normalizeIdentifier(id), session)
   captureAuthenticationOutput(child.stdout, session)
@@ -481,7 +468,7 @@ function startAuthenticationSession(harness, method) {
     clearDeadline()
     if (session.cancelRequested) {
       session.state = 'cancelled'
-    } else if (session.timedOut || code !== 0) {
+    } else if (session.timedOut || session.inputError || code !== 0) {
       session.state = 'failed'
     } else if (await harnessAuthenticationConfigured(harness)) {
       session.state = 'succeeded'
@@ -500,6 +487,43 @@ function startAuthenticationSession(harness, method) {
     )
   })
   return session
+}
+
+// Observe the stream for its lifetime: ChildProcess error handlers do not catch
+// asynchronous EPIPE from stdin, including errors delivered after a write callback.
+export function authenticationInput(session) {
+  const input = session.child.stdin
+  input.on('error', error => {
+    session.inputError = error
+    session.error ??= 'Sign-in input is unavailable.'
+  })
+  const requireActive = () => {
+    if (session.state !== 'waiting_for_user' || session.cancelRequested || session.timedOut
+      || session.inputError || session.child?.stdin !== input
+      || !input.writable || input.destroyed) {
+      throw httpError(409, 'authentication_session_not_active')
+    }
+  }
+  return async readBody => {
+    if (session.method.acceptsInput !== true) throw httpError(409, 'authorization_code_not_supported')
+    requireActive()
+    const body = await readBody()
+    if (typeof body?.code !== 'string' || body.code.trim().length === 0
+      || /[\r\n]/.test(body.code.trim()) || Buffer.byteLength(body.code) > 4_096) {
+      throw httpError(400, 'invalid_authorization_code')
+    }
+    // Reading the request yields; cancellation, timeout, or process exit can win.
+    requireActive()
+    await new Promise((resolvePromise, reject) => {
+      input.write(`${body.code.trim()}\n`, error => {
+        if (error) {
+          session.inputError = error
+          session.error ??= 'Sign-in input is unavailable.'
+          reject(httpError(409, 'authentication_session_not_active'))
+        } else resolvePromise()
+      })
+    })
+  }
 }
 
 // Keep the timeout outcome even if a CLI handles SIGTERM by exiting successfully.
