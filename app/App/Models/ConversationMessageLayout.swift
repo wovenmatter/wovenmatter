@@ -7,6 +7,7 @@ struct ConversationMessageLayout {
         enum Content: Equatable, Sendable {
             case message
             case markdownBlock(index: Int, count: Int)
+            case fileChanges
             case media(index: Int)
         }
 
@@ -17,6 +18,7 @@ struct ConversationMessageLayout {
             switch content {
             case .message, .markdownBlock(index: 0, count: _): messageID
             case .markdownBlock(let index, _): "\(messageID):markdown:\(index)"
+            case .fileChanges: "\(messageID):files"
             case .media(let index): "\(messageID):media:\(index)"
             }
         }
@@ -32,11 +34,13 @@ struct ConversationMessageLayout {
             switch content {
             case .message: true
             case .markdownBlock(let index, let count): index == count - 1
-            case .media: false
+            case .fileChanges, .media: false
             }
         }
 
         var spacingBefore: Double {
+            // The card adds its own gap only when it has visible changes.
+            if case .fileChanges = content { return 0 }
             if case .markdownBlock(let index, _) = content, index > 0 { return 14 }
             return 32
         }
@@ -62,6 +66,11 @@ struct ConversationMessageLayout {
             }
         } else {
             rows = [Row(messageID: messageID, content: .message)]
+        }
+        if role != "user", role != "system" {
+            // Keep footer state attached to the message, never its streaming
+            // last block. Empty cards remain zero-height lazy rows.
+            rows.append(Row(messageID: messageID, content: .fileChanges))
         }
         rows += (0..<max(0, mediaCount)).map { Row(messageID: messageID, content: .media(index: $0)) }
         return rows
