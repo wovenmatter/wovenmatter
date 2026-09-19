@@ -75,8 +75,10 @@ struct DashboardSpreadsheetEditor: View {
             .frame(height: 38)
             Divider()
             ScrollView([.horizontal, .vertical]) {
-                Grid(horizontalSpacing: 0, verticalSpacing: 0) {
-                    GridRow {
+                // Cell widths are fixed, so row virtualization preserves the
+                // grid geometry without constructing every off-screen editor.
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    HStack(spacing: 0) {
                         spreadsheetCorner
                         ForEach(Array(table.columns.enumerated()), id: \.element.id) { index, _ in
                             Text(spreadsheetColumnName(index))
@@ -88,7 +90,7 @@ struct DashboardSpreadsheetEditor: View {
                         }
                     }
                     ForEach(Array(table.rows.enumerated()), id: \.element.id) { rowIndex, row in
-                        GridRow {
+                        HStack(spacing: 0) {
                             Text("\(rowIndex + 1)")
                                 .font(.system(size: 11))
                                 .foregroundStyle(.secondary)
@@ -97,6 +99,7 @@ struct DashboardSpreadsheetEditor: View {
                                 .overlay { Rectangle().stroke(Color.secondary.opacity(0.16), lineWidth: 0.5) }
                             ForEach(Array(row.cells.enumerated()), id: \.element.id) { columnIndex, _ in
                                 TextField("", text: cellBinding(row: rowIndex, column: columnIndex))
+                                    .accessibilityLabel("Cell \(spreadsheetColumnName(columnIndex))\(rowIndex + 1)")
                                     .textFieldStyle(.plain)
                                     .font(.system(size: 12))
                                     .padding(.horizontal, 7)
