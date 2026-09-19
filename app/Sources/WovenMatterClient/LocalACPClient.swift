@@ -141,6 +141,7 @@ public struct LocalACPSlashCommand: Codable, Equatable, Identifiable, Sendable {
 }
 
 public struct LocalACPSessionConfiguration: Equatable, Sendable {
+    public var workingDirectory: String?
     public let model: String?
     public let thinking: String?
     public let modelOptions: [String]
@@ -158,7 +159,8 @@ public struct LocalACPSessionConfiguration: Equatable, Sendable {
         thinkingOptions: [String] = [],
         slashCommands: [LocalACPSlashCommand] = [],
         modelOptionMetadata: [String: SessionOptionMetadata] = [:],
-        thinkingOptionMetadata: [String: SessionOptionMetadata] = [:]
+        thinkingOptionMetadata: [String: SessionOptionMetadata] = [:],
+        workingDirectory: String? = nil
     ) {
         self.model = model
         self.thinking = thinking
@@ -167,6 +169,7 @@ public struct LocalACPSessionConfiguration: Equatable, Sendable {
         self.slashCommands = slashCommands
         self.modelOptionMetadata = modelOptionMetadata
         self.thinkingOptionMetadata = thinkingOptionMetadata
+        self.workingDirectory = workingDirectory
     }
 
     public func selecting(
@@ -180,7 +183,8 @@ public struct LocalACPSessionConfiguration: Equatable, Sendable {
             thinkingOptions: thinkingOptions,
             slashCommands: slashCommands,
             modelOptionMetadata: modelOptionMetadata,
-            thinkingOptionMetadata: thinkingOptionMetadata
+            thinkingOptionMetadata: thinkingOptionMetadata,
+            workingDirectory: workingDirectory
         )
     }
 

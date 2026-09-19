@@ -152,6 +152,8 @@ struct DashboardCloudConversation: View {
                                 switch item {
                                 case .receipt(let receipt):
                                     WorkspaceOutgoingReceipt(receipt: receipt).id(item.id)
+                                case .incomingCommand(let receipt):
+                                    WorkspaceIncomingCommandReceipt(receipt: receipt).id(item.id)
                                 case .message(let message):
                                     let presentation = messagePresentations[message.id]
                                     let run = runsByAssistantMessageID[message.id]

@@ -6,6 +6,69 @@ import WovenMatterClient
 
 @Suite("Agent tools access, coordination and timers")
 struct WorkspaceAgentToolTests {
+  @Test func explicitCreationDirectoryCrossesParserAndRejectsInvalidPathsBeforeSaving() throws {
+    let (db, root, source, _) = try fixture()
+    defer { try? FileManager.default.removeItem(at: root) }
+    for directory in ["/workspace/a quoted ' project", "relative/project", "/workspace/invalid\0suffix"] {
+      let command = try WovenMatterToolCommand(["sessions", "create", "--title", "Explicit directory", "--directory", directory])
+      #expect(command.options["directory"] == directory)
+      let requestID = UUID().uuidString
+      let reserved = try db.reserveToolSessionCreation(sourceID: source, requestID: requestID,
+        arguments: command.operationArguments, purpose: "Check location", managed: false)
+      let target = try #require(reserved.objectValue?["target_id"]?.stringValue)
+      let configuration = WorkspaceSessionCreationConfiguration(runtimeKind: .codex, title: "Explicit directory",
+        nativeWorkingDirectory: command.options["directory"])
+      if directory.hasPrefix("/"), !directory.contains("\0") {
+        _ = try db.saveToolSessionCreationConfiguration(requestID: requestID, sourceID: source, configuration: configuration)
+        #expect(try db.toolSessionCreationConfiguration(targetID: target)?.nativeWorkingDirectory == directory)
+      } else {
+        #expect(throws: WorkspaceToolError.self) {
+          try db.saveToolSessionCreationConfiguration(requestID: requestID, sourceID: source, configuration: configuration)
+        }
+        #expect(try db.toolSessionCreationConfiguration(targetID: target) == nil)
+      }
+    }
+  }
+
+  @Test func usageConnectionCanIngestAfterWorkspaceSchemaMigration() async throws {
+    let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let url = directory.appending(path: "workspace.sqlite")
+    let recorder = try UsageRunRecorder(databaseURL: url)
+    let usageReader = try UsageStore(databaseURL: url)
+    let database = try WorkspaceDatabase(url: url)
+    let session = try database.createLocalACPSession(runtimeKind: .codex, title: "Recorded usage", ownerDeviceID: UUID())
+    let run = try database.beginLocalACPRun(conversationID: session, content: "Offline fixture")
+    let date = Date(timeIntervalSince1970: 1_800_000_000)
+    let observation = UsageRunRecorder.Observation(runID: run.runID, timestamp: date,
+      runtimeKind: .codex, sessionID: session, model: "fixture", reasoningLevel: nil,
+      agent: "fixture", workspace: directory.path, tokens: .init(inputTokens: 17, outputTokens: 5), costUSD: nil)
+    try await recorder.record(observation)
+    try await recorder.record(observation)
+    let samples = try usageReader.samples(in: DateInterval(start: date.addingTimeInterval(-1), duration: 2))
+    #expect(samples.count == 1)
+    #expect(samples.first?.sessionID == session && samples.first?.sourceEventID == session + ":" + run.runID)
+    #expect(samples.first?.tokens.inputTokens == 17 && samples.first?.tokens.outputTokens == 5)
+    try database.recoverInterruptedLocalACPRuns()
+    #expect(try database.conversationContent(id: session).runs.first?.status == "failed")
+  }
+
+  @Test func freshDashboardStoreAndUsageInitializationRetainTheWorkspaceSchema() async throws {
+    let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let store = try DashboardStore(supportDirectory: directory)
+    let session = try store.database.createLocalACPSession(runtimeKind: .codex, title: "Fresh app", ownerDeviceID: UUID())
+    #expect(try store.database.toolSettings().enabledByDefault == Set(WorkspaceToolGroup.allCases))
+    let run = try store.database.beginLocalACPRun(conversationID: session, content: "Retained input")
+    try store.database.completeLocalACPRun(runID: run.runID)
+    await store.shutdownLocalACPSessions()
+    let reopened = try DashboardStore(supportDirectory: directory)
+    #expect(try reopened.database.conversationContent(id: session).messages.first?.content == "Retained input")
+    #expect(try reopened.database.sessionTools(session).enabled == Set(WorkspaceToolGroup.allCases))
+    await reopened.shutdownLocalACPSessions()
+  }
+
   private func fixture() throws -> (WorkspaceDatabase, URL, String, String) {
     let dir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -615,7 +678,7 @@ extension WorkspaceAgentToolTests {
     let target = try #require(reservation.objectValue?["target_id"]?.stringValue)
     let proposed = WorkspaceSessionCreationConfiguration(runtimeKind: .pi, workspaceID: remote ? UUID() : nil,
       folderID: folder, title: "Planned title", model: "original-model", thinking: "high",
-      nativeWorkingDirectory: "/workspace/original")
+      nativeWorkingDirectory: "/workspace/original", nativeWorkspaceID: "native-workspace")
     let saved = try db.saveToolSessionCreationConfiguration(requestID: requestID, sourceID: source, configuration: proposed)
     #expect(saved.tools.enabled == [.sessions, .notes])
     #expect(throws: (any Error).self) {
@@ -628,6 +691,7 @@ extension WorkspaceAgentToolTests {
       arguments: args, purpose: "Implement", managed: true)
     let json = try #require(retry.objectValue?["configuration_json"]?.stringValue)
     #expect(try JSONDecoder().decode(WorkspaceSessionCreationConfiguration.self, from: Data(json.utf8)) == saved)
+    #expect(try reopened.toolSessionCreationConfiguration(targetID: target) == saved)
     let changed = WorkspaceSessionCreationConfiguration(runtimeKind: .codex, folderID: laterFolder,
       title: "Different", model: "new-model", thinking: "low", nativeWorkingDirectory: "/workspace/later")
     #expect(try reopened.saveToolSessionCreationConfiguration(requestID: requestID, sourceID: source, configuration: changed) == saved)

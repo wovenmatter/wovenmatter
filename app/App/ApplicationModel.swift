@@ -805,7 +805,8 @@ final class ApplicationModel {
                 thinkingLevels: configuration.thinkingOptions,
                 slashCommands: configuration.slashCommands,
                 modelOptionMetadata: configuration.modelOptionMetadata,
-                thinkingOptionMetadata: configuration.thinkingOptionMetadata
+                thinkingOptionMetadata: configuration.thinkingOptionMetadata,
+                workingDirectory: configuration.workingDirectory
             )
             return
         }
@@ -2412,7 +2413,8 @@ final class ApplicationModel {
                 thinkingLevels: configuration.thinkingOptions,
                 slashCommands: configuration.slashCommands,
                 modelOptionMetadata: configuration.modelOptionMetadata,
-                thinkingOptionMetadata: configuration.thinkingOptionMetadata
+                thinkingOptionMetadata: configuration.thinkingOptionMetadata,
+                workingDirectory: configuration.workingDirectory
             )
             ensureConversationState(id: conversation.id).setError(nil)
         } catch {
@@ -2476,7 +2478,8 @@ final class ApplicationModel {
                         thinkingLevels: configuration.thinkingOptions,
                         slashCommands: configuration.slashCommands,
                         modelOptionMetadata: configuration.modelOptionMetadata,
-                        thinkingOptionMetadata: configuration.thinkingOptionMetadata
+                        thinkingOptionMetadata: configuration.thinkingOptionMetadata,
+                        workingDirectory: configuration.workingDirectory
                     )
             } catch {
                 ensureConversationState(id: conversation.id).setError(
@@ -2489,6 +2492,15 @@ final class ApplicationModel {
     /// Reads the retained usage index without refreshing providers or credentials.
     func recordedUsageSamples(from start: Date, to end: Date, limit: Int, offset: Int) async throws -> [UsageSample] {
         try await localUsageService.recordedSamples(from: start, to: end, limit: limit, offset: offset)
+    }
+
+    func defaultToolWorkingDirectory(workspaceID: UUID?) throws -> String {
+        if let workspaceID {
+            guard let workspace = remoteWorkspaces.configuration(id: workspaceID) else { throw ApplicationModelError.remoteHarnessUnavailable }
+            return remoteWorkspaces.remoteWorkspaceRoot(for: workspace)
+        }
+        guard let workspace = localACPWorkspaceLaunchConfiguration else { throw ApplicationModelError.localACPRuntimeUnavailable }
+        return workspace.rootURL.path
     }
 
     func prepareCreatedOpenClawSession(_ target: WorkspaceConversationRecord,
@@ -2516,7 +2528,8 @@ final class ApplicationModel {
         runtimeKind: AgentRuntimeKind,
         requestedConversationID: UUID? = nil,
         nativeWorkingDirectory: URL? = nil,
-        initialTitle: String? = nil
+        initialTitle: String? = nil,
+        nativeWorkspaceID: String? = nil
     ) async -> String? {
         if runtimeKind == .hermes {
             do { try requireLocalHermesLink(openSettings: true) }
@@ -2526,7 +2539,7 @@ final class ApplicationModel {
             do {
                 guard let openCode else { throw OpenCodeError.message("OpenCode is still starting.") }
                 guard let workspace = localACPWorkspaceLaunchConfiguration else { throw ApplicationModelError.localACPRuntimeUnavailable }
-                let id = try await openCode.create(workspace: nativeWorkingDirectory ?? workspace.rootURL, requestedConversationID: requestedConversationID, title: initialTitle)
+                let id = try await openCode.create(workspace: nativeWorkingDirectory ?? workspace.rootURL, requestedConversationID: requestedConversationID, title: initialTitle, nativeWorkspaceID: nativeWorkspaceID)
                 await refreshWorkspace()
                 return id
             } catch { localRunError = error.localizedDescription; return nil }
@@ -2547,7 +2560,7 @@ final class ApplicationModel {
             if let agent = openClawAgent, isOpenClawGatewayLinked(agentID: agent.id),
                let workspace = localACPWorkspaceLaunchConfiguration {
                 try await dashboardStore.createOpenClawWorkspaceSession(agentID: agent.id, sessionKey: gatewayKey,
-                    cwd: workspace.rootURL, recover: requestedConversationID != nil)
+                    cwd: nativeWorkingDirectory ?? workspace.rootURL, recover: requestedConversationID != nil)
             }
             let conversationID = try await dashboardStore.createLocalACPSession(
                 runtimeKind: runtimeKind,
@@ -2584,7 +2597,8 @@ final class ApplicationModel {
         target: RemoteHarnessChatTarget,
         requestedConversationID: UUID? = nil,
         nativeWorkingDirectory: URL? = nil,
-        initialTitle: String? = nil
+        initialTitle: String? = nil,
+        nativeWorkspaceID: String? = nil
     ) async -> String? {
         guard remoteWorkspaces.isHarnessReady(
             target.harness.id,
@@ -2601,7 +2615,7 @@ final class ApplicationModel {
                 }
                 try await instance.connectLocal()
                 let directory = remoteWorkspaces.remoteWorkspaceRoot(for: target.configuration)
-                let id = try await instance.create(workspace: nativeWorkingDirectory ?? URL(fileURLWithPath: directory), requestedConversationID: requestedConversationID, title: initialTitle)
+                let id = try await instance.create(workspace: nativeWorkingDirectory ?? URL(fileURLWithPath: directory), requestedConversationID: requestedConversationID, title: initialTitle, nativeWorkspaceID: nativeWorkspaceID)
                 await refreshWorkspace()
                 return id
             }
@@ -2651,6 +2665,8 @@ final class ApplicationModel {
         isBuzzWorkspaceSession: Bool
     ) throws -> RemoteHarnessLaunchContext? {
         if isBuzzWorkspaceSession { return nil }
+        let savedDirectory = try dashboardStore?.database.toolSessionCreationConfiguration(targetID: conversation.id)?.nativeWorkingDirectory
+        let inheritedRoot = savedDirectory.map { URL(fileURLWithPath: $0) }
         if let remoteWorkspaceID = conversation.remoteWorkspaceID {
             guard let configuration = remoteWorkspaces.configuration(
                 id: remoteWorkspaceID
@@ -2664,21 +2680,34 @@ final class ApplicationModel {
                     throw HermesGatewayError.message("Connect Hermes in this remote workspace's settings first.")
                 }
                 let encoded = try JSONEncoder().encode(connection).base64EncodedString()
-                let root = URL(fileURLWithPath: remoteWorkspaces.remoteWorkspaceRoot(for: configuration))
+                let workspaceRoot = URL(fileURLWithPath: remoteWorkspaces.remoteWorkspaceRoot(for: configuration))
+                let root = inheritedRoot ?? workspaceRoot
                 return RemoteHarnessLaunchContext(launch: LocalACPRuntimeLaunchConfiguration(runtimeKind: .hermes,
                     executableURL: URL(fileURLWithPath: "/usr/bin/ssh"), arguments: [], environment: ["WOVENMATTER_HERMES_CONNECTION": encoded],
-                    processWorkingDirectoryURL: processDirectory), workspace: LocalACPWorkspaceLaunchConfiguration(rootURL: root, repositoriesURL: root.appending(path: "REPOS")))
+                    processWorkingDirectoryURL: processDirectory), workspace: LocalACPWorkspaceLaunchConfiguration(rootURL: root, repositoriesURL: workspaceRoot.appending(path: "REPOS"), databasesURL: workspaceRoot.appending(path: "Databases")))
             }
             return try RemoteHarnessLaunchResolver.resolve(
                 configuration: configuration,
                 runtimeKind: runtimeKind,
-                processWorkingDirectory: processDirectory
+                processWorkingDirectory: processDirectory,
+                workspaceRoot: URL(fileURLWithPath: remoteWorkspaces.remoteWorkspaceRoot(for: configuration)),
+                workingDirectory: inheritedRoot
             )
         }
         if runtimeKind == .hermes { try requireLocalHermesLink(conversationID: conversation.id) }
         guard let launch = localACPLaunchConfigurations[runtimeKind],
               let workspace = localACPWorkspaceLaunchConfiguration else {
             throw ApplicationModelError.localACPRuntimeUnavailable
+        }
+        if let inheritedRoot {
+            var scopedLaunch = LocalACPRuntimeLaunchConfiguration(runtimeKind: launch.runtimeKind,
+                executableURL: launch.executableURL, arguments: launch.arguments, environment: launch.environment,
+                environmentKeysToRemove: launch.environmentKeysToRemove,
+                environmentKeyPrefixesToRemove: launch.environmentKeyPrefixesToRemove,
+                processWorkingDirectoryURL: inheritedRoot)
+            scopedLaunch.historyRecorder = launch.historyRecorder
+            return .init(launch: scopedLaunch, workspace: .init(rootURL: inheritedRoot,
+                repositoriesURL: workspace.repositoriesURL, databasesURL: workspace.databasesURL))
         }
         return RemoteHarnessLaunchContext(
             launch: launch,

@@ -162,3 +162,46 @@ Fresh focused history/Gateway/OpenCode validation passed 64 tests, including
 interleaved keyless responses before import, scoped attachment reads with history
 disabled, database reopen, duplicate replies and two OpenCode workspace imports
 sharing one native ID. This delta still needs the next full native build.
+
+## Incoming commands, working locations and native startup
+
+Trace scope was committed as `879464f`. The next source batch records a native
+command name with its durable delivery before HTTP. The destination timeline
+loads incoming command actions alongside outgoing receipts, including pagination
+and refresh, without inventing a provider message identity. Native command 204
+and lost-response fixtures retain sender identity and outcome after reopen.
+The native view reuses the existing user-message content and links its source.
+
+Creation snapshots now carry the resolved directory for all harnesses and the
+optional native OpenCode workspace ID. App launch routing applies that snapshot
+to local process/ACP directories, remote Docker `--workdir`, remote Hermes and
+native OpenClaw creation. Shared REPOS/Databases roots stay with the workspace.
+`--directory` permits an explicit absolute override. Native Hermes imported cwd
+survives configuration refresh; OpenClaw directory metadata and full OpenCode
+location identity are retained. Referenced protocols: OpenCode `be41bc4`,
+OpenClaw `3a9d69d`, installed Hermes `d4063e62` contract/source.
+
+The manager's actual native startup probe exposed system SQLite stale-schema
+behavior when UsageStore migrates after WorkspaceDatabase is opened. A new real
+DashboardStore initialization/reopen fixture reproduced `no such table:
+dashboard_messages` on this feature branch. Sequencing independent usage
+migrations before opening the workspace owner fixes the fixture without retries.
+
+Fresh focused validation passed 95 Core, 23 Client and 5 app-service tests.
+Full validation/native compile follows. Actual ApplicationModel creation/launch
+routing proof remains outstanding, beyond resolver/native-payload fixtures;
+populated visible command, timer and management UI still awaits manual unlock.
+
+The final directory batch also registers `--directory` in the CLI value parser;
+a parser-to-configuration fixture retains spaces/quotes and rejects relative/NUL
+paths before persistence. Full validation now passes 223 Core, 113 Client and
+5 app-service tests, plus 5 built-CLI tests, remote/static checks, native Debug
+build and bundle validation. The earlier-opened usage writer AND reader are
+exercised after workspace DDL: an offline observation ingests once on replay,
+its exact counts remain readable, and workspace recovery still succeeds.
+Log: `/private/tmp/wovenmatter-tools-location-full-final.log` (temporary).
+
+Pushed `10b199a` macOS CI passed. Its remote job failed in the pre-existing
+readiness stdin/EPIPE race, already fixed by separately retained PR #55. Do not
+duplicate that fix here; final PR61 head still requires fresh hosted checks and
+a bounded rerun if that base failure recurs. Integration checks with #55 pass.

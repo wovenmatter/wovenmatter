@@ -102,10 +102,13 @@ public actor DashboardStore {
 
   public init(supportDirectory: URL) throws {
     try FileManager.default.createDirectory(at: supportDirectory, withIntermediateDirectories: true)
-    let database = try WorkspaceDatabase(url: supportDirectory.appending(path: "workspace.sqlite"))
+    // Complete usage DDL before opening the workspace owner and its recovery
+    // transaction. A second handle changing schema after workspace triggers are
+    // loaded can leave startup recovery with a stale schema on system SQLite.
     let usageRecorder = try UsageRunRecorder(
       databaseURL: supportDirectory.appending(path: "workspace.sqlite")
     )
+    let database = try WorkspaceDatabase(url: supportDirectory.appending(path: "workspace.sqlite"))
     let localProcessLease = try LocalACPProcessLease(
       fileURL: supportDirectory.appending(path: "local-acp-process.lock")
     )

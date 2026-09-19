@@ -75,7 +75,7 @@ public struct WovenMatterToolCommand: Sendable {
     ]
     guard allowedActions[group]?.contains(action) == true else { throw WorkspaceToolError.invalid("Unknown \(domain) command '\(action)'.") }
     let booleanFlags: Set<String> = ["all-workspace", "independent", "no-notify", "paused", "all-day", "json", "header"]
-    let valueFlags: Set<String> = ["id", "session", "conversation", "note-id", "folder", "workspace", "harness", "model", "thinking", "title", "text", "purpose", "request-id", "search", "run", "kind", "since", "until", "after", "before", "limit", "offset", "characters", "at", "every", "starts-at", "ends-at", "description", "enabled", "revision", "version", "file", "html", "style", "block-id", "table-id", "row", "column", "rows", "columns", "source-id", "database-id", "path", "query"]
+    let valueFlags: Set<String> = ["id", "session", "conversation", "note-id", "folder", "workspace", "directory", "harness", "model", "thinking", "title", "text", "purpose", "request-id", "search", "run", "kind", "since", "until", "after", "before", "limit", "offset", "characters", "at", "every", "starts-at", "ends-at", "description", "enabled", "revision", "version", "file", "html", "style", "block-id", "table-id", "row", "column", "rows", "columns", "source-id", "database-id", "path", "query"]
     var positional: [String] = [], options: [String: String] = [:]
     var indices: [String: Int] = [:], operationArguments = Array(arguments.prefix(2))
     var wantsHelp = false
@@ -162,7 +162,7 @@ public struct WovenMatterToolCommand: Sendable {
     case .sessions: """
       list [--search TEXT] [--all-workspace] | status SESSION_ID | folders | harnesses
       create --title TITLE --text INSTRUCTION --purpose INTENT [--independent]
-        [--harness NAME --model MODEL --thinking LEVEL --folder ID --workspace ID]
+        [--harness NAME --model MODEL --thinking LEVEL --folder ID --workspace ID --directory ABSOLUTE_PATH]
       send SESSION_ID --text MESSAGE [--request-id UUID]
       manage SESSION_ID --purpose INTENT [--no-notify] [--request-id UUID]
       release SESSION_ID | notifications SESSION_ID --enabled true|false | receipts [--before RECEIPT_ID] [--limit N]

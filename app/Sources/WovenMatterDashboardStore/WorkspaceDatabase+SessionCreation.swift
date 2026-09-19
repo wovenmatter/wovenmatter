@@ -3,6 +3,16 @@ import WovenMatterCore
 import WovenMatterClient
 
 extension WorkspaceDatabase {
+  /// App launch routing reads the original resolved location, including after a
+  /// restart or failed final coordination. It never derives a path from a title.
+  public func toolSessionCreationConfiguration(targetID: String) throws -> WorkspaceSessionCreationConfiguration? {
+    try withLock {
+      guard let json = try historyRowsUnlocked("SELECT configuration_json FROM workspace_session_creations WHERE target_id=?",
+        values: [targetID]).first?.objectValue?["configuration_json"]?.stringValue else { return nil }
+      return try JSONDecoder().decode(WorkspaceSessionCreationConfiguration.self, from: Data(json.utf8))
+    }
+  }
+
   public func reserveToolSessionCreation(sourceID: String, requestID: String, arguments: [String], purpose: String, managed: Bool) throws -> GatewayJSONValue {
     try transaction {
       try requireToolUnlocked(.sessions, sessionID: sourceID)
@@ -47,7 +57,8 @@ extension WorkspaceDatabase {
       guard row["status"]?.stringValue == "planned" else { throw WorkspaceToolError.invalid("This creation request is not being prepared.") }
       let title = configuration.title.trimmingCharacters(in: .whitespacesAndNewlines)
       guard !title.isEmpty, title.utf8.count <= 4_096,
-            configuration.nativeWorkingDirectory.map({ $0.hasPrefix("/") && $0.utf8.count <= 4_096 }) ?? true else {
+            configuration.nativeWorkingDirectory.map({ $0.hasPrefix("/") && !$0.contains("\0") && $0.utf8.count <= 4_096 }) ?? true,
+            configuration.nativeWorkspaceID.map({ !$0.isEmpty && $0.utf8.count <= 256 }) ?? true else {
         throw WorkspaceToolError.invalid("A session needs a title and a valid working directory.")
       }
       let operatorID = try localMutationOperatorIDUnlocked()
