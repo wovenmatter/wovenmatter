@@ -113,7 +113,7 @@ public enum AgentMessageAttachmentDraft: Equatable, Identifiable, Sendable {
 
 public struct AgentMessageInput: Equatable, Sendable {
   public let text: String
-  public let attachments: [AgentMessageAttachmentDraft]
+  public private(set) var attachments: [AgentMessageAttachmentDraft]
 
   public init(text: String, attachments: [AgentMessageAttachmentDraft] = []) {
     self.text = text
@@ -152,7 +152,9 @@ public struct AgentMessageInput: Equatable, Sendable {
         mapped.append(attachment)
       }
     }
-    return AgentMessageInput(text: text, attachments: mapped)
+    var result = self
+    result.attachments = mapped
+    return result
   }
 
   /// References are immutable snapshots and are materialized for transports

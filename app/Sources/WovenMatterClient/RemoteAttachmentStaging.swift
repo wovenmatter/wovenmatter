@@ -94,7 +94,7 @@ public struct RemoteAttachmentStager: Sendable {
         matches() { [ -f "$1" ] && [ "$(wc -c <"$1")" -eq "$n" ] && [ "$(sha256sum <"$1" | cut -d ' ' -f 1)" = "$h" ]; }
         if matches "$p"; then cat >/dev/null; else
           mkdir -p "$(dirname "$p")"
-          t=$(mktemp "$p.part.XXXXXX")
+          t=$(mktemp "$(dirname "$p")/.part.XXXXXX")
           trap 'rm -f "$t"' EXIT
           cat >"$t"
           matches "$t" || { echo "attachment integrity check failed" >&2; exit 1; }

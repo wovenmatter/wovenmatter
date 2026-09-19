@@ -144,12 +144,13 @@ struct RemoteAttachmentStagingTests {
     #expect(recorder.command == nil)
   }
 
-  @Test("staging repairs same-size corruption and cleans up truncated transfers")
-  func executesAtomicStaging() throws {
+  @Test("staging repairs corruption, cleans partials, and supports maximum-length names",
+        arguments: ["it's $(not-a-command).pdf", String(repeating: "a", count: 251) + ".pdf"])
+  func executesAtomicStaging(name: String) throws {
     let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: root) }
-    let path = root.appending(path: "it's $(not-a-command).pdf")
+    let path = root.appending(path: name)
     let stdin = root.appending(path: "stdin")
     // macOS uses shasum; the container supplies coreutils sha256sum.
     let shim = "sha256sum() { /usr/bin/shasum -a 256; }; "

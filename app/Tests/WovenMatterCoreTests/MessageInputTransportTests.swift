@@ -62,6 +62,8 @@ struct MessageInputTransportTests {
       file.staged(at: "/staged/\(file.fileName)")
     }
     #expect(mapped.text == "keep text")
+    #expect(input.files.allSatisfy { $0.remotePath == nil })
+    #expect(input.attachments == [.file(first), .reference(note), .file(second)])
     #expect(mapped.attachments.map(\.id) == ["file-a", "note-1", "file-b"])
     #expect(mapped.references == [note])
     #expect(mapped.files.map(\.id) == ["file-a", "file-b"])
