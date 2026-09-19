@@ -1,6 +1,5 @@
 import Darwin
 import Foundation
-import LocalAuthentication
 import Security
 import SQLite3
 import WovenMatterClient
@@ -10,6 +9,50 @@ struct CodexWorkspaceSource: Sendable {
   let workspace: CodexUsageWorkspace
   let credentialsURL: URL
   let isLive: Bool
+}
+
+/// Successful Claude Keychain reads live only in this app process. This keeps a
+/// one-time Allow useful for later polls without changing the item's ACL.
+final class ClaudeUsageCredentialCache: @unchecked Sendable {
+  static let shared = ClaudeUsageCredentialCache()
+  private let lock = NSLock()
+  private var tokens: [URL: String] = [:]
+
+  func token(for url: URL, reload: Bool, read: () throws -> String?) rethrows -> String? {
+    try lock.withLock {
+      let key = url.standardizedFileURL
+      if !reload, let token = tokens[key] { return token }
+      let token = try read()
+      tokens[key] = token
+      return token
+    }
+  }
+
+  func receivedResponse(statusCode: Int, token: String, credentialsURL: URL) {
+    guard statusCode == 401 || statusCode == 403 else { return }
+    lock.withLock {
+      let key = credentialsURL.standardizedFileURL
+      // An older request must not invalidate a newly authorized credential.
+      if tokens[key] == token { tokens[key] = nil }
+    }
+  }
+}
+
+enum ClaudeUsageCredentialError: LocalizedError {
+  case missing
+  case invalid
+  case keychain(OSStatus)
+
+  var errorDescription: String? {
+    switch self {
+    case .missing:
+      "No saved Claude credential was found. Sign in to Claude before reconnecting saved credentials."
+    case .invalid:
+      "The saved Claude credential could not be read. Sign in to Claude again to replace it."
+    case .keychain(let status):
+      "Claude credential access was not granted (Keychain status \(status)). Automatic refresh will stay quiet; use Reconnect saved credentials in Settings > General when ready."
+    }
+  }
 }
 
 enum ProviderLimitCollector {
@@ -35,6 +78,7 @@ enum ProviderLimitCollector {
     openRouterAPIKey: String?,
     enabledProviders: Set<ProviderKind>,
     keychainInteraction: UsageKeychainInteraction = .noninteractive,
+    interactiveProvider: ProviderKind? = nil,
     codexWorkspaceSource: CodexWorkspaceSource? = nil,
     codexWorkspaceCount: Int = 0,
     now: Date
@@ -47,23 +91,65 @@ enum ProviderLimitCollector {
         where enabledProviders.contains(provider) {
         group.addTask {
           switch provider {
-          case .codex:
-            await codex(
-              homeDirectory: homeDirectory,
-              workspaceSource: codexWorkspaceSource,
-              workspaceCount: codexWorkspaceCount,
-              now: now
-            )
-          case .claude:
-            await claude(
-              homeDirectory: homeDirectory,
+          case .codex, .claude, .grok, .cursor:
+            await credentialSensitiveAccount(
+              provider: provider,
+              accountScopeID: provider == .codex ? codexWorkspaceSource?.workspace.id : nil,
+              accountLabel: provider == .codex ? codexWorkspaceSource?.workspace.selectionLabel : nil,
               keychainInteraction: keychainInteraction,
-              now: now
+              interactiveProvider: interactiveProvider,
+              now: now,
+              directRead: { interaction in
+                switch provider {
+                case .codex:
+                  if let codexWorkspaceSource {
+                    return try? await codexOAuth(
+                      credentialsURL: codexWorkspaceSource.credentialsURL,
+                      workspace: codexWorkspaceSource.workspace,
+                      showsWorkspaceIdentity: codexWorkspaceCount > 1,
+                      now: now
+                    )
+                  }
+                  return try? await codexOAuth(homeDirectory: homeDirectory, now: now)
+                case .claude:
+                  return try? await claudeOAuth(
+                    homeDirectory: homeDirectory,
+                    keychainInteraction: interaction,
+                    now: now
+                  )
+                case .grok:
+                  return try? await grokProxy(homeDirectory: homeDirectory, now: now)
+                case .cursor:
+                  return try? await CursorAccountClient(homeDirectory: homeDirectory).limits(now: now)
+                default:
+                  return nil
+                }
+              },
+              commandRead: {
+                switch provider {
+                case .codex:
+                  return await codexCLI(
+                    workspaceSource: codexWorkspaceSource,
+                    workspaceCount: codexWorkspaceCount,
+                    now: now
+                  )
+                case .claude:
+                  // The direct read already checked Claude's credential. A CLI
+                  // fallback could ask again after denial, without adding limits.
+                  return unavailable(
+                    .claude,
+                    detail: "Claude account limits could not be read. Check the existing sign-in or retry access when ready.",
+                    now: now
+                  )
+                case .grok:
+                  return await grokCLI(now: now)
+                case .cursor:
+                  return await cursorCLI(now: now)
+                default:
+                  return unavailable(provider, detail: "This provider is unavailable.", now: now)
+                }
+              }
             )
-          case .grok:
-            await grok(homeDirectory: homeDirectory, now: now)
-          case .cursor:
-            await cursor(homeDirectory: homeDirectory, now: now)
           case .openCodeGo:
             await OpenCodeGoLimitReader(homeDirectory: homeDirectory).account(now: now)
           case .openRouter:
@@ -81,6 +167,37 @@ enum ProviderLimitCollector {
       uniqueKeysWithValues: enabled.map { ($0.provider, $0) }
     )
     return ProviderKind.supportedAccounts.compactMap { accountsByProvider[$0] }
+  }
+
+  /// Child CLIs own their credential access, so they cannot inherit this
+  /// process's noninteractive Keychain policy. Only an explicit retry for this
+  /// provider may launch one; all other refreshes keep using direct safe reads.
+  static func credentialSensitiveAccount(
+    provider: ProviderKind,
+    accountScopeID: String? = nil,
+    accountLabel: String? = nil,
+    keychainInteraction: UsageKeychainInteraction,
+    interactiveProvider: ProviderKind?,
+    now: Date,
+    directRead: @Sendable (UsageKeychainInteraction) async -> UsageLimitAccount?,
+    commandRead: @Sendable () async -> UsageLimitAccount
+  ) async -> UsageLimitAccount {
+    let interaction: UsageKeychainInteraction =
+      keychainInteraction.allowsInteraction && interactiveProvider == provider
+        ? .oneShotExplicit : .noninteractive
+    if let account = await directRead(interaction) { return account }
+    guard interaction.allowsInteraction, !Task.isCancelled else {
+      return unavailable(
+        provider,
+        accountScopeID: accountScopeID,
+        accountLabel: accountLabel,
+        detail: provider == .claude
+          ? "Claude limits could not be read quietly. Use Reconnect saved credentials in Settings > General to restore saved access, or sign in if needed."
+          : "Account limits are temporarily unavailable. Background refresh does not start the provider's credential-reading CLI. Check the existing provider sign-in if this continues.",
+        now: now
+      )
+    }
+    return await commandRead()
   }
 
   static func codexWorkspaceSources(homeDirectory: URL) -> [CodexWorkspaceSource] {
@@ -218,24 +335,11 @@ enum ProviderLimitCollector {
     return object
   }
 
-  private static func codex(
-    homeDirectory: URL,
+  private static func codexCLI(
     workspaceSource: CodexWorkspaceSource?,
     workspaceCount: Int,
     now: Date
   ) async -> UsageLimitAccount {
-    if let workspaceSource {
-      if let direct = try? await codexOAuth(
-        credentialsURL: workspaceSource.credentialsURL,
-        workspace: workspaceSource.workspace,
-        showsWorkspaceIdentity: workspaceCount > 1,
-        now: now
-      ) {
-        return direct
-      }
-    } else if let direct = try? await codexOAuth(homeDirectory: homeDirectory, now: now) {
-      return direct
-    }
     guard let executable = LocalACPRuntimeResolver.resolveExecutable(named: "codex") else {
       if let workspaceSource {
         return unavailable(
@@ -329,49 +433,7 @@ enum ProviderLimitCollector {
     }
   }
 
-  private static func claude(
-    homeDirectory: URL,
-    keychainInteraction: UsageKeychainInteraction,
-    now: Date
-  ) async -> UsageLimitAccount {
-    if let direct = try? await claudeOAuth(
-      homeDirectory: homeDirectory,
-      keychainInteraction: keychainInteraction,
-      now: now
-    ) {
-      return direct
-    }
-    guard let executable = LocalACPRuntimeResolver.resolveExecutable(named: "claude") else {
-      return unavailable(.claude, detail: "Claude CLI is not installed.", now: now)
-    }
-    do {
-      let result = try await BoundedUsageCommand.run(
-        executable: executable,
-        arguments: ["auth", "status", "--json"],
-        maximumBytes: 256 * 1_024,
-        timeout: .seconds(8)
-      )
-      let object = try JSONSerialization.jsonObject(with: result.stdout) as? [String: Any]
-      let loggedIn = boolean(object?["loggedIn"] ?? object?["logged_in"]) ?? false
-      let email = string(object?["email"])
-      let method = string(object?["authMethod"] ?? object?["auth_method"])
-      return UsageLimitAccount(
-        provider: .claude,
-        accountLabel: email ?? "Claude account",
-        status: loggedIn ? .signedIn : .needsCredential,
-        source: "Claude CLI auth status",
-        detail: loggedIn
-          ? "Signed in via \(method ?? "Claude CLI"). The OAuth usage endpoint was unavailable, so no limits are inferred."
-          : "Claude CLI is installed but not signed in.",
-        observedAt: now,
-        dashboardURL: ProviderDashboardURL.claude
-      )
-    } catch {
-      return failed(.claude, detail: "Claude sign-in state could not be read from the local CLI.", now: now)
-    }
-  }
-
-  private static func grok(homeDirectory: URL, now: Date) async -> UsageLimitAccount {
+  private static func grokCLI(now: Date) async -> UsageLimitAccount {
     guard let executable = LocalACPRuntimeResolver.resolveExecutable(named: "grok") else {
       return unavailable(.grok, detail: "Grok CLI is not installed.", now: now)
     }
@@ -446,9 +508,6 @@ enum ProviderLimitCollector {
         dashboardURL: ProviderDashboardURL.grok
       )
     } catch {
-      if let proxy = try? await grokProxy(homeDirectory: homeDirectory, now: now) {
-        return proxy
-      }
       return grokLocalSignIn(now: now) ?? failed(
         .grok,
         detail: "Grok account billing was unavailable. Sign in with the Grok CLI to enable it.",
@@ -639,11 +698,7 @@ enum ProviderLimitCollector {
     keychainInteraction: UsageKeychainInteraction,
     now: Date
   ) async throws -> UsageLimitAccount {
-    let configured = ProcessInfo.processInfo.environment["CLAUDE_CONFIG_DIR"].map {
-      URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath)
-    }
-    let credentialURL = (configured ?? homeDirectory.appending(path: ".claude"))
-      .appending(path: ".credentials.json")
+    let credentialURL = claudeCredentialsURL(homeDirectory: homeDirectory)
     guard let token = claudeOAuthToken(
       credentialsURL: credentialURL,
       keychainInteraction: keychainInteraction
@@ -657,44 +712,83 @@ enum ProviderLimitCollector {
         "anthropic-beta": "oauth-2025-04-20",
         "Content-Type": "application/json",
         "User-Agent": "claude-code/2.1.0",
-      ]
+      ],
+      onResponse: { statusCode in
+        ClaudeUsageCredentialCache.shared.receivedResponse(
+          statusCode: statusCode, token: token, credentialsURL: credentialURL
+        )
+      }
     )
     return mapClaudeUsage(object, now: now)
   }
 
-  private static func claudeOAuthToken(
+  static func claudeCredentialsURL(homeDirectory: URL) -> URL {
+    let configured = ProcessInfo.processInfo.environment["CLAUDE_CONFIG_DIR"].map {
+      URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath)
+    }
+    return (configured ?? homeDirectory.appending(path: ".claude"))
+      .appending(path: ".credentials.json")
+  }
+
+  static func authorizeClaudeCredentialAccess(
     credentialsURL: URL,
-    keychainInteraction: UsageKeychainInteraction
+    keychain: KeychainAccess = KeychainAccess(),
+    cache: ClaudeUsageCredentialCache = .shared
+  ) throws {
+    guard try readClaudeOAuthToken(
+      credentialsURL: credentialsURL,
+      keychainInteraction: .oneShotExplicit,
+      keychain: keychain,
+      cache: cache
+    ) != nil else { throw ClaudeUsageCredentialError.missing }
+  }
+
+  static func claudeOAuthToken(
+    credentialsURL: URL,
+    keychainInteraction: UsageKeychainInteraction = .noninteractive,
+    keychain: KeychainAccess = KeychainAccess(),
+    cache: ClaudeUsageCredentialCache = .shared
   ) -> String? {
+    try? readClaudeOAuthToken(
+      credentialsURL: credentialsURL,
+      keychainInteraction: keychainInteraction,
+      keychain: keychain,
+      cache: cache
+    )
+  }
+
+  private static func readClaudeOAuthToken(
+    credentialsURL: URL,
+    keychainInteraction: UsageKeychainInteraction,
+    keychain: KeychainAccess,
+    cache: ClaudeUsageCredentialCache
+  ) throws -> String? {
     if let root = try? localJSONObject(at: credentialsURL, maximumBytes: 1_048_576),
        let oauth = dictionary(root["claudeAiOauth"]),
        let token = string(oauth["accessToken"] ?? oauth["access_token"]) {
       return token
     }
-    let context = claudeAuthenticationContext(for: keychainInteraction)
-    let query: [String: Any] = [
-      kSecClass as String: kSecClassGenericPassword,
-      kSecAttrService as String: "Claude Code-credentials",
-      kSecMatchLimit as String: kSecMatchLimitOne,
-      kSecReturnData as String: true,
-      kSecUseAuthenticationContext as String: context,
-    ]
-    var result: CFTypeRef?
-    guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
-          let data = result as? Data,
-          data.count <= 1_048_576,
-          let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-          let oauth = dictionary(root["claudeAiOauth"])
-    else { return nil }
-    return string(oauth["accessToken"] ?? oauth["access_token"])
-  }
-
-  static func claudeAuthenticationContext(
-    for interaction: UsageKeychainInteraction
-  ) -> LAContext {
-    let context = LAContext()
-    context.interactionNotAllowed = !interaction.allowsInteraction
-    return context
+    return try cache.token(for: credentialsURL, reload: keychainInteraction.allowsInteraction) {
+      let query: [String: Any] = [
+        kSecClass as String: kSecClassGenericPassword,
+        kSecAttrService as String: "Claude Code-credentials",
+        kSecMatchLimit as String: kSecMatchLimitOne,
+        kSecReturnData as String: true,
+      ]
+      let (status, result) = keychain.copyMatching(
+        query,
+        allowInteraction: keychainInteraction.allowsInteraction
+      )
+      if status == errSecItemNotFound { return nil }
+      guard status == errSecSuccess else { throw ClaudeUsageCredentialError.keychain(status) }
+      guard let data = result as? Data,
+            data.count <= 1_048_576,
+            let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let oauth = dictionary(root["claudeAiOauth"]),
+            let token = string(oauth["accessToken"] ?? oauth["access_token"])
+      else { throw ClaudeUsageCredentialError.invalid }
+      return token
+    }
   }
 
   static func mapClaudeUsage(
@@ -929,13 +1023,7 @@ enum ProviderLimitCollector {
     )
   }
 
-  private static func cursor(
-    homeDirectory: URL,
-    now: Date
-  ) async -> UsageLimitAccount {
-    if let account = try? await CursorAccountClient(homeDirectory: homeDirectory).limits(now: now) {
-      return account
-    }
+  private static func cursorCLI(now: Date) async -> UsageLimitAccount {
     guard let executable = LocalACPRuntimeResolver.resolveExecutable(named: "cursor-agent") else {
       return unavailable(.cursor, detail: "Cursor Agent CLI is not installed.", now: now)
     }
@@ -1092,7 +1180,8 @@ enum ProviderLimitCollector {
   private static func authenticatedJSONObject(
     url: URL,
     bearer: String,
-    headers: [String: String] = [:]
+    headers: [String: String] = [:],
+    onResponse: (@Sendable (Int) -> Void)? = nil
   ) async throws -> [String: Any] {
     var request = URLRequest(url: url)
     request.timeoutInterval = 12
@@ -1104,6 +1193,7 @@ enum ProviderLimitCollector {
       using: .shared,
       maximumBytes: 1_048_576
     )
+    if let http = response as? HTTPURLResponse { onResponse?(http.statusCode) }
     guard let http = response as? HTTPURLResponse,
           (200..<300).contains(http.statusCode),
           let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
@@ -1387,64 +1477,6 @@ private final class SequentialJSONRPCProcess: @unchecked Sendable {
     if let value = value as? Int64 { return value }
     if let value = value as? Int { return Int64(value) }
     return nil
-  }
-}
-
-private enum BoundedUsageCommand {
-  struct Result: Sendable {
-    let stdout: Data
-  }
-
-  static func run(
-    executable: URL,
-    arguments: [String],
-    maximumBytes: Int,
-    timeout: Duration
-  ) async throws -> Result {
-    let command = UsageCommandProcess()
-    return try await withTaskCancellationHandler {
-      try await withThrowingTaskGroup(of: Result.self) { group in
-        let process = command.process
-        let inputPipe = Pipe()
-        let outputPipe = Pipe()
-        _ = fcntl(inputPipe.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1)
-        process.executableURL = executable
-        process.arguments = arguments
-        process.environment = usageCommandEnvironment()
-        process.standardInput = inputPipe
-        process.standardOutput = outputPipe
-        process.standardError = FileHandle.nullDevice
-        try process.run()
-        try? outputPipe.fileHandleForWriting.close()
-        try? inputPipe.fileHandleForWriting.close()
-
-        group.addTask {
-          var output = Data()
-          while let chunk = try outputPipe.fileHandleForReading.read(upToCount: 64 * 1_024),
-                !chunk.isEmpty {
-            output.append(chunk)
-            guard output.count <= maximumBytes else {
-              command.terminate()
-              throw ProviderLimitCollectorError.outputTooLarge
-            }
-          }
-          return Result(stdout: output)
-        }
-        group.addTask {
-          try await Task.sleep(for: timeout)
-          command.terminate()
-          throw ProviderLimitCollectorError.commandTimedOut
-        }
-        guard let result = try await group.next() else {
-          throw ProviderLimitCollectorError.commandFailed
-        }
-        group.cancelAll()
-        command.terminate()
-        return result
-      }
-    } onCancel: {
-      command.terminate()
-    }
   }
 }
 

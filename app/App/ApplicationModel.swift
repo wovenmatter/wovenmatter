@@ -52,6 +52,7 @@ private struct UsageLimitsRefreshKey: Hashable, Sendable {
     let enabledProviders: [String]
     let allowsCredentialAccess: Bool
     let keychainInteraction: String
+    let interactiveProvider: String?
     let selectedCodexWorkspaceID: String?
 }
 
@@ -258,8 +259,11 @@ final class ApplicationModel {
     private(set) var localUsageError: String?
     private(set) var isRefreshingUsageAnalytics = false
     private(set) var isRefreshingUsageLimits = false
+    private(set) var isAuthorizingUsageCredential = false
+    private(set) var isReconnectingSavedCredentials = false
+    private(set) var credentialAccessStatus: String?
     var isRefreshingLocalUsage: Bool {
-        isRefreshingUsageAnalytics || isRefreshingUsageLimits
+        isRefreshingUsageAnalytics || isRefreshingUsageLimits || isAuthorizingUsageCredential
     }
     private(set) var isOpenRouterCredentialConfigured = false
     private(set) var signingInUsageProviders: Set<ProviderKind> = []
@@ -1553,7 +1557,8 @@ final class ApplicationModel {
         range: UsageTimeRange,
         refreshLimits: Bool = false,
         reason: UsageRefreshReason = .manual,
-        explicitCredentialAccess: Bool = false
+        explicitCredentialAccess: Bool = false,
+        interactiveProvider: ProviderKind? = nil
     ) async {
         localUsageError = nil
         prepareUsageSnapshot(range: range)
@@ -1570,7 +1575,7 @@ final class ApplicationModel {
             let keychainInteraction = UsageKeychainInteraction.resolve(
                 refreshReason: reason,
                 disclosureAcknowledged: hasAcknowledgedCredentialAccessDisclosure,
-                explicitUserAction: explicitCredentialAccess
+                explicitUserAction: explicitCredentialAccess && interactiveProvider != nil
             )
             async let analyticsRefresh: Void = refreshUsageAnalytics(
                 range: range,
@@ -1580,7 +1585,8 @@ final class ApplicationModel {
             async let limitsRefresh: Void = refreshUsageLimits(
                 reason: reason,
                 force: policy == .force,
-                keychainInteraction: keychainInteraction
+                keychainInteraction: keychainInteraction,
+                interactiveProvider: interactiveProvider
             )
             _ = await (analyticsRefresh, limitsRefresh)
         } else {
@@ -1668,7 +1674,8 @@ final class ApplicationModel {
     private func refreshUsageLimits(
         reason: UsageRefreshReason,
         force: Bool,
-        keychainInteraction: UsageKeychainInteraction
+        keychainInteraction: UsageKeychainInteraction,
+        interactiveProvider: ProviderKind?
     ) async {
         let enabledProviders = enabledUsageProviders
         let allowsCredentialAccess = isOpenRouterCredentialConfigured
@@ -1679,6 +1686,7 @@ final class ApplicationModel {
             enabledProviders: enabledProviders.map(\.rawValue).sorted(),
             allowsCredentialAccess: allowsCredentialAccess,
             keychainInteraction: keychainInteraction.rawValue,
+            interactiveProvider: interactiveProvider?.rawValue,
             selectedCodexWorkspaceID: requestedCodexWorkspaceID
         )
         let requestID = UUID()
@@ -1695,6 +1703,7 @@ final class ApplicationModel {
                     enabledProviders: enabledProviders,
                     allowCredentialAccess: allowsCredentialAccess,
                     keychainInteraction: keychainInteraction,
+                    interactiveProvider: interactiveProvider,
                     selectedCodexWorkspaceID: requestedCodexWorkspaceID
                 )
             }
@@ -1754,6 +1763,9 @@ final class ApplicationModel {
     }
 
     func saveOpenRouterAPIKey(_ value: String, range: UsageTimeRange) async {
+        guard !isAuthorizingUsageCredential else { return }
+        isAuthorizingUsageCredential = true
+        defer { isAuthorizingUsageCredential = false }
         do {
             acknowledgeCredentialAccessDisclosure()
             enableUsageProviderPreference(.openRouter)
@@ -1774,6 +1786,9 @@ final class ApplicationModel {
     }
 
     func deleteOpenRouterAPIKey(range: UsageTimeRange) async {
+        guard !isAuthorizingUsageCredential else { return }
+        isAuthorizingUsageCredential = true
+        defer { isAuthorizingUsageCredential = false }
         do {
             try await localUsageService.deleteOpenRouterAPIKey()
             isOpenRouterCredentialConfigured = false
@@ -1801,6 +1816,59 @@ final class ApplicationModel {
         )
     }
 
+    func reconnectSavedCredentials() async {
+        guard !isAuthorizingUsageCredential, !isReconnectingSavedCredentials else { return }
+        isAuthorizingUsageCredential = true
+        isReconnectingSavedCredentials = true
+        credentialAccessStatus = "Reconnecting saved credentials…"
+        defer {
+            isAuthorizingUsageCredential = false
+            isReconnectingSavedCredentials = false
+        }
+        acknowledgeCredentialAccessDisclosure()
+        do {
+            if isOpenRouterCredentialConfigured, enabledUsageProviders.contains(.openRouter) {
+                try await localUsageService.authorizeOpenRouterCredentialAccess()
+            }
+            if enabledUsageProviders.contains(.claude) {
+                try await localUsageService.authorizeClaudeCredentialAccess()
+            }
+            if remoteWorkspaces.isCredentialAccessEnabled {
+                for workspace in remoteWorkspaces.workspaces {
+                    try Task.checkCancellation()
+                    try await remoteWorkspaces.authorizeCredentialAccess(for: workspace)
+                }
+            }
+            let links = openClawGatewayLinks.filter {
+                $0.location != .remoteWorkspace || remoteWorkspaces.isCredentialAccessEnabled
+            }
+            if !links.isEmpty {
+                guard let dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
+                for link in links {
+                    try Task.checkCancellation()
+                    guard openClawGatewayOperationAgentIDs.insert(link.agentID).inserted else {
+                        throw CancellationError()
+                    }
+                    defer { openClawGatewayOperationAgentIDs.remove(link.agentID) }
+                    try await dashboardStore.authorizeOpenClawGatewayCredentials(link)
+                }
+            }
+            try Task.checkCancellation()
+            await refreshLocalUsage(
+                range: currentUsageRange,
+                refreshLimits: true,
+                reason: .credentialChanged
+            )
+            remoteWorkspaces.refreshAll()
+            await refreshOpenClawGateways()
+            credentialAccessStatus = "Saved credentials are ready. Automatic refreshes will stay silent."
+        } catch is CancellationError {
+            credentialAccessStatus = "Credential recovery stopped. Automatic refreshes will stay silent."
+        } catch {
+            credentialAccessStatus = "Credential recovery stopped: \(error.localizedDescription)"
+        }
+    }
+
     func isUsageProviderEnabled(_ provider: ProviderKind) -> Bool {
         enabledUsageProviders.contains(provider)
     }
@@ -1809,13 +1877,17 @@ final class ApplicationModel {
         _ provider: ProviderKind,
         range: UsageTimeRange
     ) async {
+        guard !isAuthorizingUsageCredential else { return }
+        isAuthorizingUsageCredential = true
+        defer { isAuthorizingUsageCredential = false }
         acknowledgeCredentialAccessDisclosure()
         enableUsageProviderPreference(provider)
         await refreshLocalUsage(
             range: range,
             refreshLimits: true,
             reason: .credentialChanged,
-            explicitCredentialAccess: provider == .claude
+            explicitCredentialAccess: [.codex, .claude, .grok, .cursor].contains(provider),
+            interactiveProvider: provider == .openRouter ? nil : provider
         )
     }
 
@@ -1823,13 +1895,25 @@ final class ApplicationModel {
         _ provider: ProviderKind,
         range: UsageTimeRange
     ) async {
-        guard enabledUsageProviders.contains(provider) else { return }
+        guard enabledUsageProviders.contains(provider),
+              !isAuthorizingUsageCredential else { return }
+        isAuthorizingUsageCredential = true
+        defer { isAuthorizingUsageCredential = false }
         acknowledgeCredentialAccessDisclosure()
+        if provider == .openRouter {
+            do {
+                try await localUsageService.authorizeOpenRouterCredentialAccess()
+            } catch {
+                localUsageError = error.localizedDescription
+                return
+            }
+        }
         await refreshLocalUsage(
             range: range,
             refreshLimits: true,
             reason: .credentialChanged,
-            explicitCredentialAccess: provider == .claude
+            explicitCredentialAccess: [.codex, .claude, .grok, .cursor].contains(provider),
+            interactiveProvider: provider == .openRouter ? nil : provider
         )
     }
 
@@ -1910,7 +1994,7 @@ final class ApplicationModel {
         let state = localACPRuntimePreferences.enable(runtimeKind)
         enabledLocalACPRuntimeKinds = state.enabledRuntimeKinds
         shownLocalACPRuntimeKinds = state.shownRuntimeKinds
-        refreshLocalACPRuntimesNow()
+        refreshLocalACPRuntimesNow(checkCredentialsFor: [runtimeKind])
     }
 
     func disableLocalACPRuntimeCredentialAccess(
@@ -1971,7 +2055,8 @@ final class ApplicationModel {
                     range: currentUsageRange,
                     refreshLimits: true,
                     reason: .credentialChanged,
-                    explicitCredentialAccess: provider == .claude
+                    explicitCredentialAccess: [.codex, .claude, .grok, .cursor].contains(provider),
+                    interactiveProvider: provider == .openRouter ? nil : provider
                 )
             } catch {
                 localUsageError = error.localizedDescription
@@ -3374,8 +3459,8 @@ final class ApplicationModel {
         await refreshWorkspace()
     }
 
-    func refreshLocalACPRuntimesNow() {
-        Task { await refreshLocalACPRuntimes() }
+    func refreshLocalACPRuntimesNow(checkCredentialsFor runtimeKinds: Set<AgentRuntimeKind> = []) {
+        Task { await refreshLocalACPRuntimes(checkCredentialsFor: runtimeKinds) }
     }
 
     func setTitleGenerationEnabled(_ enabled: Bool) {
@@ -3556,15 +3641,15 @@ final class ApplicationModel {
         }
     }
 
-    private func refreshLocalACPRuntimes() async {
+    private func refreshLocalACPRuntimes(checkCredentialsFor runtimeKinds: Set<AgentRuntimeKind> = []) async {
         localACPRuntimeRefreshGeneration &+= 1
         let generation = localACPRuntimeRefreshGeneration
         let enabledRuntimeKinds = enabledLocalACPRuntimeKinds
         checkingLocalACPRuntimeKinds = Set(
             LocalACPRuntimeCatalog.definitions.compactMap {
-                $0.readinessProbe == nil
-                    || !enabledRuntimeKinds.contains($0.runtimeKind)
-                    ? nil : $0.runtimeKind
+                enabledRuntimeKinds.contains($0.runtimeKind)
+                    && runtimeKinds.contains($0.runtimeKind)
+                    ? $0.runtimeKind : nil
             }
         )
         defer {
@@ -3572,6 +3657,12 @@ final class ApplicationModel {
                 checkingLocalACPRuntimeKinds.removeAll()
             }
         }
+        let previousResolutions = Dictionary(uniqueKeysWithValues: localACPRuntimeAvailability.map {
+            ($0.runtimeKind, LocalACPRuntimeResolution(
+                availability: $0,
+                launchConfiguration: localACPLaunchConfigurations[$0.runtimeKind]
+            ))
+        })
         let resolver = localACPRuntimeResolver
         let definitions = LocalACPRuntimeCatalog.definitions
         let workingDirectory = localACPWorkspaceLaunchConfiguration?.rootURL
@@ -3602,10 +3693,12 @@ final class ApplicationModel {
                     }
                     continue
                 }
-                resolutions.append(await LocalACPRuntimeVerifier.verify(
+                resolutions.append(await LocalACPRuntimeVerifier.refresh(
                     definition: definition,
                     resolution: discovered,
-                    workingDirectory: workingDirectory
+                    workingDirectory: workingDirectory,
+                    credentialCheckRuntimeKinds: runtimeKinds,
+                    previousResolution: previousResolutions[definition.runtimeKind]
                 ))
             }
             return resolutions
@@ -3650,7 +3743,14 @@ final class ApplicationModel {
                 String(describing: error)
             )
         }
-        await refreshTitleGenerationCapabilities()
+        // Loading title options starts a Codex session. Keep discovery passive;
+        // the existing Refresh options action requests that work explicitly.
+        if localACPLaunchConfigurations[.codex] == nil {
+            titleGenerationCapabilities = nil
+            titleGenerationStatus = "Codex CLI and codex-acp must be ready"
+        } else if titleGenerationCapabilities == nil {
+            titleGenerationStatus = "Refresh options to load Codex models"
+        }
     }
 
     private func refreshTitleGenerationCapabilities() async {
@@ -4251,6 +4351,7 @@ final class ApplicationModel {
 
     func renameOpenClawAgent(agentID: UUID, displayName: String) {
         guard let dashboardStore else { return }
+        guard !openClawGatewayOperationAgentIDs.contains(agentID) else { return }
         let cleanName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleanName.isEmpty else {
             openClawGatewayErrors[agentID] = "Enter a Woven Matter agent name."
@@ -4280,7 +4381,7 @@ final class ApplicationModel {
                 .openClawRequired.localizedDescription
             return
         }
-        openClawGatewayOperationAgentIDs.insert(agent.id)
+        guard openClawGatewayOperationAgentIDs.insert(agent.id).inserted else { return }
         openClawGatewayOperationStatuses[agent.id] = .connecting
         openClawGatewayErrors[agent.id] = nil
         openClawGatewayNotices[agent.id] = nil
@@ -4292,7 +4393,8 @@ final class ApplicationModel {
             do {
                 let link = try await preparedOpenClawGatewayLink(
                     for: agent,
-                    status: .connecting
+                    status: .connecting,
+                    authorizeCredentials: true
                 )
                 let linked = try await dashboardStore.linkOpenClawGateway(link)
                 if linked.connectionStatus == .ready {
@@ -4321,7 +4423,7 @@ final class ApplicationModel {
 
     func unlinkOpenClawGateway(agentID: UUID) {
         guard let dashboardStore else { return }
-        openClawGatewayOperationAgentIDs.insert(agentID)
+        guard openClawGatewayOperationAgentIDs.insert(agentID).inserted else { return }
         openClawGatewayOperationStatuses[agentID] = .unlinking
         openClawGatewayErrors[agentID] = nil
         openClawGatewayNotices[agentID] = nil
@@ -4344,7 +4446,7 @@ final class ApplicationModel {
         guard let existing = openClawGatewayLink(agentID: agentID),
               let agent = openClawAgent(agentID: agentID),
               let dashboardStore else { return }
-        openClawGatewayOperationAgentIDs.insert(agentID)
+        guard openClawGatewayOperationAgentIDs.insert(agentID).inserted else { return }
         openClawGatewayOperationStatuses[agentID] = .reconnecting
         openClawGatewayErrors[agentID] = nil
         openClawGatewayNotices[agentID] = nil
@@ -4362,7 +4464,8 @@ final class ApplicationModel {
                 let link = try await preparedOpenClawGatewayLink(
                     for: agent,
                     existing: existing,
-                    status: .reconnecting
+                    status: .reconnecting,
+                    authorizeCredentials: true
                 )
                 _ = try await dashboardStore.linkOpenClawGateway(link)
                 await refreshOpenClawGateways()
@@ -4382,7 +4485,7 @@ final class ApplicationModel {
         guard let existing = openClawGatewayLink(agentID: agentID),
               let agent = openClawAgent(agentID: agentID),
               let dashboardStore else { return }
-        openClawGatewayOperationAgentIDs.insert(agentID)
+        guard openClawGatewayOperationAgentIDs.insert(agentID).inserted else { return }
         openClawGatewayOperationStatuses[agentID] = .restarting
         openClawGatewayErrors[agentID] = nil
         openClawGatewayNotices[agentID] = nil
@@ -4396,9 +4499,12 @@ final class ApplicationModel {
                     let prepared = try await preparedOpenClawGatewayLink(
                         for: agent,
                         existing: existing,
-                        status: .reconnecting
+                        status: .reconnecting,
+                        authorizeCredentials: true
                     )
                     _ = try await dashboardStore.linkOpenClawGateway(prepared)
+                } else {
+                    try await dashboardStore.authorizeOpenClawGatewayCredentials(existing)
                 }
                 _ = try await dashboardStore.restartOpenClawGateway(agentID: agentID)
                 await refreshOpenClawGateways()
@@ -4472,7 +4578,8 @@ final class ApplicationModel {
     private func preparedOpenClawGatewayLink(
         for agent: WorkspaceAgent,
         existing: OpenClawGatewayLink? = nil,
-        status: OpenClawGatewayConnectionStatus
+        status: OpenClawGatewayConnectionStatus,
+        authorizeCredentials: Bool = false
     ) async throws -> OpenClawGatewayLink {
         guard let dashboardStore else {
             throw ApplicationModelError.dashboardStoreUnavailable
@@ -4486,6 +4593,9 @@ final class ApplicationModel {
                     id: remoteWorkspaceID
                   ) else {
                 throw ApplicationModelError.remoteHarnessUnavailable
+            }
+            if authorizeCredentials {
+                try await remoteWorkspaces.authorizeCredentialAccess(for: configuration)
             }
             let connection = try await remoteWorkspaces.prepareOpenClawGateway(
                 for: configuration
@@ -4514,7 +4624,7 @@ final class ApplicationModel {
                 workingDirectory: workspace.rootURL
             )
         }
-        return OpenClawGatewayLink(
+        let link = OpenClawGatewayLink(
             agentID: agent.id,
             location: location,
             endpoint: endpoint,
@@ -4525,6 +4635,10 @@ final class ApplicationModel {
             linkedAt: existing?.linkedAt ?? Date(),
             updatedAt: Date()
         )
+        if authorizeCredentials {
+            try await dashboardStore.authorizeOpenClawGatewayCredentials(link)
+        }
+        return link
     }
 
     func cancelOpenClawGatewayPrompt(conversationID: String) {
