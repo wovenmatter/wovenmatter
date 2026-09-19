@@ -5,6 +5,49 @@ import WovenMatterCore
 @testable import WovenMatterDashboardStore
 
 struct OpenClawGatewayReviewTests {
+  @Test func keylessGatewayResponsesRemainScopedThroughImportAndDatabaseReopen() async throws {
+    let fixture = try ReviewGatewayFixture()
+    defer { fixture.remove() }
+    let database = fixture.database
+    let recorder = database.historyWireRecorder(agentID: fixture.agentID.uuidString.lowercased(), harness: "openclaw")
+    let firstKey = fixture.session.key, otherKey = "agent:eddie:other"
+    func request(_ id: String, key: String) throws -> Data {
+      try JSONEncoder().encode(GatewayJSONValue.object(["type": .string("req"), "id": .string(id),
+        "method": .string("chat.history"), "params": .object(["sessionKey": .string(key)])]))
+    }
+    let firstResponse = #"{"type":"res","id":"first","ok":true,"payload":{"messages":["first-only"],"future_field":17}}"#
+    let otherResponse = #"{"type":"res","id":"other","ok":true,"payload":{"messages":["other-only"]}}"#
+    try recorder("out", request("first", key: firstKey))
+    try recorder("out", request("other", key: otherKey))
+    try recorder("in", Data(otherResponse.utf8))
+    try recorder("in", Data(firstResponse.utf8))
+    // Import comes after its history RPC, so native identity must survive even
+    // before a local conversation exists. Associations adopt only their scope.
+    let first = try database.importOpenClawGatewaySession(agentID: fixture.agentID, session: fixture.session)
+    let other = try database.importOpenClawGatewaySession(agentID: fixture.agentID,
+      session: #require(OpenClawGatewaySession(payload: .object(["key": .string(otherKey)]))))
+    let caller = try database.createLocalACPSession(runtimeKind: .codex, title: "Scoped reader", ownerDeviceID: UUID())
+    try database.setSessionTools(.init(enabled: [.sessions]), sessionID: caller)
+    try database.attachConversationReference(sourceID: caller, targetID: first)
+    let reopened = try WorkspaceDatabase(url: fixture.directory.appending(path: "review.sqlite"))
+    let rows = try reopened.queryAgentHistory(.init(command: "events", conversationID: first, kind: "wire.in"), callerID: caller)
+      .objectValue?["rows"]?.arrayValue ?? []
+    #expect(rows.count == 1)
+    #expect(rows.first?.objectValue?["payload"]?.stringValue == firstResponse)
+    #expect(throws: WorkspaceToolError.accessRequired(other)) {
+      try reopened.queryAgentHistory(.init(command: "events", conversationID: other, kind: "wire.in"), callerID: caller)
+    }
+    // Request IDs are local to a connection. Neither another recorder nor a
+    // duplicate keyless response may inherit a completed request's scope.
+    let fresh = reopened.historyWireRecorder(agentID: fixture.agentID.uuidString.lowercased(), harness: "openclaw")
+    try fresh("in", Data(firstResponse.utf8))
+    try recorder("in", Data(firstResponse.utf8))
+    let after = try reopened.queryAgentHistory(.init(command: "events", conversationID: first, kind: "wire.in"), callerID: caller)
+      .objectValue?["rows"]?.arrayValue ?? []
+    #expect(after.count == 1)
+    await fixture.coordinator.shutdown()
+  }
+
   @Test(arguments: ["off", "serve", "funnel"])
   func localConfigurationPreservesAuthenticationAndTailscale(mode: String) throws {
     let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)

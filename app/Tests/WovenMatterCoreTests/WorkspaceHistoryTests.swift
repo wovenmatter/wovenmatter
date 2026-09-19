@@ -8,6 +8,31 @@ import WovenMatterCore
 
 @Suite("Workspace history and bounded versions")
 struct WorkspaceHistoryTests {
+  @Test func nativeHTTPHistoryIsAdoptedOnlyByTheMatchingWorkspaceImport() throws {
+    let (db, url) = try database()
+    defer { try? FileManager.default.removeItem(at: url) }
+    let body = #"{"data":[{"id":"message-a","text":"full original response"}]}"#
+    let observation = try JSONEncoder().encode(WorkspaceHTTPObservation(method: "GET", path: "/api/session/ses_shared/message",
+      query: [:], status: 200, body: body))
+    let local = db.openCodeHistoryRecorder(connectionID: "local")
+    let remote = db.openCodeHistoryRecorder(connectionID: "remote")
+    try local("in", observation)
+    try remote("in", observation)
+    let imported = try db.createLocalACPSession(runtimeKind: .opencode, title: "Imported", ownerDeviceID: UUID(),
+      openCodeAssociation: ("local", "ses_shared"))
+    let other = try db.createLocalACPSession(runtimeKind: .opencode, title: "Other workspace", ownerDeviceID: UUID(),
+      openCodeAssociation: ("remote", "ses_shared"))
+    let reopened = try WorkspaceDatabase(url: url.appending(path: "workspace.sqlite"))
+    for id in [imported, other] {
+      let result = rows(try reopened.queryHistory(.init(command: "events", conversationID: id, kind: "wire.in")))
+      #expect(result.count == 1)
+      #expect(result.first?.objectValue?["payload"]?.stringValue == String(decoding: observation, as: UTF8.self))
+    }
+    try local("in", observation)
+    #expect(rows(try reopened.queryHistory(.init(command: "events", conversationID: imported, kind: "wire.in"))).count == 2)
+    #expect(rows(try reopened.queryHistory(.init(command: "events", conversationID: other, kind: "wire.in"))).count == 1)
+  }
+
   @Test func sessionEndpointCapabilitiesAreRedactedWithoutChangingOtherProtocolContent() throws {
     let a = String(repeating: "a", count: 32), b = String(repeating: "b", count: 32)
     let socket = "/private/tmp/wmtools-\(a)/\(b).sock"

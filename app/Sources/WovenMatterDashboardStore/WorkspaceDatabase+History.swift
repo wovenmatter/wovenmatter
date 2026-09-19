@@ -3,6 +3,34 @@ import SQLite3
 import WovenMatterCore
 import WovenMatterClient
 
+/// One recorder belongs to one native connection. Gateway responses omit the
+/// session key, so retain bounded request correlation without altering raw bytes.
+private final class GatewayHistoryRequestCorrelation: @unchecked Sendable {
+  private let lock = NSLock()
+  private var requests: [String: (key: String, order: UInt64)] = [:]
+  private var sequence: UInt64 = 0
+
+  func sessionKey(direction: String, data: Data) -> String? {
+    guard let frame = (try? JSONDecoder().decode(GatewayJSONValue.self, from: data))?.objectValue else { return nil }
+    let payload = frame["params"]?.objectValue ?? frame["payload"]?.objectValue ?? [:]
+    let key = payload["sessionKey"]?.stringValue ?? payload["key"]?.stringValue
+    return lock.withLock {
+      if direction == "out", frame["type"]?.stringValue == "req",
+         let id = frame["id"]?.stringValue, let key {
+        sequence &+= 1
+        requests[id] = (key, sequence)
+        if requests.count > 1_024, let oldest = requests.min(by: { $0.value.order < $1.value.order })?.key {
+          requests.removeValue(forKey: oldest)
+        }
+      }
+      if direction == "in", frame["type"]?.stringValue == "res", let id = frame["id"]?.stringValue {
+        return requests.removeValue(forKey: id)?.key ?? key
+      }
+      return key
+    }
+  }
+}
+
 // MARK: - User-owned history (same workspace.sqlite; independent of UI projections)
 extension WorkspaceDatabase {
   func migrateWorkspaceHistory() throws {
@@ -38,6 +66,25 @@ extension WorkspaceDatabase {
           created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
         );
         CREATE INDEX IF NOT EXISTS note_versions_note ON note_asset_versions(note_id,sequence DESC);
+        """)
+      let columns = Set(try historyRowsUnlocked("PRAGMA table_info(workspace_history_events)", values: [])
+        .compactMap { $0.objectValue?["name"]?.stringValue })
+      for column in ["native_session_id", "source_connection_id"] where !columns.contains(column) {
+        try executeUnlocked("ALTER TABLE workspace_history_events ADD COLUMN \(column) TEXT")
+      }
+      try executeUnlocked("""
+        CREATE INDEX IF NOT EXISTS history_native_session ON workspace_history_events(harness,source_connection_id,agent_id,native_session_id)
+          WHERE conversation_id IS NULL;
+        CREATE TRIGGER IF NOT EXISTS history_opencode_import AFTER INSERT ON desktop_opencode_sessions BEGIN
+          UPDATE workspace_history_events SET conversation_id=new.conversation_id
+          WHERE conversation_id IS NULL AND harness='opencode'
+            AND source_connection_id=new.connection_id AND native_session_id=new.session_id;
+        END;
+        CREATE TRIGGER IF NOT EXISTS history_openclaw_import AFTER INSERT ON desktop_openclaw_gateway_sessions BEGIN
+          UPDATE workspace_history_events SET conversation_id=new.conversation_id
+          WHERE conversation_id IS NULL AND harness='openclaw'
+            AND agent_id=new.agent_id AND native_session_id=new.session_key;
+        END;
         """)
       // Import only surviving projections once. Never imply that old raw traces existed.
       let version = try prepareUnlocked("SELECT 1 FROM workspace_history_schema WHERE version=1")
@@ -102,24 +149,30 @@ extension WorkspaceDatabase {
   func recordHistoryUnlocked(_ incoming: WorkspaceHistoryEvent) throws {
     var event = incoming
     event.payload = WorkspaceHistoryPrivacy.redactingToolEndpoints(event.payload)
-    if event.conversationID == nil, event.harness == "openclaw",
+    if event.nativeSessionID == nil, event.harness == "openclaw",
       let object = try? JSONSerialization.jsonObject(with: Data(event.payload.utf8))
         as? [String: Any]
     {
       let payload =
         (object["payload"] as? [String: Any]) ?? (object["params"] as? [String: Any]) ?? object
       let key = (payload["sessionKey"] as? String) ?? (payload["key"] as? String)
-      if let key {
+      event.nativeSessionID = key
+    }
+    if event.conversationID == nil, let key = event.nativeSessionID {
+      if event.harness == "openclaw" {
         let rows = try historyRowsUnlocked(
           "SELECT conversation_id FROM desktop_openclaw_gateway_sessions WHERE session_key=? AND agent_id=?",
           values: [key, event.agentID])
         if rows.count == 1 {
           event.conversationID = rows.first?.objectValue?["conversation_id"]?.stringValue
         }
+      } else if event.harness == "opencode" {
+        event.conversationID = try historyRowsUnlocked("SELECT conversation_id FROM desktop_opencode_sessions WHERE connection_id=? AND session_id=?",
+          values: [event.sourceConnectionID, key]).first?.objectValue?["conversation_id"]?.stringValue
       }
     }
     let existing = try prepareUnlocked(
-      "SELECT payload,kind,harness,conversation_id,agent_id,run_id,completeness FROM workspace_history_events WHERE id=?")
+      "SELECT payload,kind,harness,conversation_id,agent_id,run_id,completeness,native_session_id,source_connection_id FROM workspace_history_events WHERE id=?")
     defer { sqlite3_finalize(existing) }
     try bind(event.id, at: 1, to: existing)
     if sqlite3_step(existing) == SQLITE_ROW {
@@ -129,7 +182,9 @@ extension WorkspaceDatabase {
         optionalText(existing,column:3) == event.conversationID,
         optionalText(existing,column:4) == event.agentID,
         event.runID == nil || optionalText(existing,column:5) == event.runID,
-        try text(existing,column:6) == event.completeness
+        try text(existing,column:6) == event.completeness,
+        optionalText(existing,column:7) == event.nativeSessionID,
+        optionalText(existing,column:8) == event.sourceConnectionID
       else {
         throw WorkspaceDatabaseError.open("History event ID collision")
       }
@@ -137,14 +192,15 @@ extension WorkspaceDatabase {
     }
     let statement = try prepareUnlocked(
       """
-      INSERT INTO workspace_history_events(id,conversation_id,run_id,agent_id,harness,kind,payload,completeness)
+      INSERT INTO workspace_history_events(id,conversation_id,run_id,agent_id,harness,kind,payload,completeness,native_session_id,source_connection_id)
       VALUES(?,?,coalesce(?,(SELECT id FROM dashboard_runs WHERE conversation_id=?
-        AND status IN ('queued','running') ORDER BY rowid DESC LIMIT 1)),?,?,?,?,?)
+        AND status IN ('queued','running') ORDER BY rowid DESC LIMIT 1)),?,?,?,?,?,?,?)
       """)
     defer { sqlite3_finalize(statement) }
     for (index, value) in [
       event.id, event.conversationID, event.runID, event.conversationID,
       event.agentID, event.harness, event.kind, event.payload, event.completeness,
+      event.nativeSessionID, event.sourceConnectionID,
     ].enumerated() {
       try bindNullable(value, at: Int32(index + 1), to: statement)
     }
@@ -155,12 +211,14 @@ extension WorkspaceDatabase {
     conversationID: String? = nil, agentID: String? = nil,
     harness: String
   ) -> WorkspaceWireRecorder {
-    { [self] direction, data in
+    let correlation = GatewayHistoryRequestCorrelation()
+    return { [self] direction, data in
+      let key = harness == "openclaw" ? correlation.sessionKey(direction: direction, data: data) : nil
       try recordHistory(
         WorkspaceHistoryEvent(
           conversationID: conversationID, agentID: agentID,
           harness: harness, kind: "wire.\(direction)",
-          payload: String(decoding: data, as: UTF8.self)))
+          payload: String(decoding: data, as: UTF8.self), nativeSessionID: key))
     }
   }
 
@@ -177,7 +235,8 @@ extension WorkspaceDatabase {
           conversationID = try historyRowsUnlocked("SELECT conversation_id FROM desktop_opencode_sessions WHERE connection_id=? AND session_id=?", values: [connectionID, nativeID]).first?.objectValue?["conversation_id"]?.stringValue
         } else { conversationID = nil }
         try recordHistoryUnlocked(.init(conversationID: conversationID, harness: "opencode",
-          kind: "wire.\(direction)", payload: String(decoding: data, as: UTF8.self)))
+          kind: "wire.\(direction)", payload: String(decoding: data, as: UTF8.self),
+          nativeSessionID: nativeID, sourceConnectionID: connectionID))
       }
     }
   }
