@@ -17,7 +17,8 @@ extension WorkspaceDatabase {
           id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, visible_text TEXT NOT NULL, delivery_id TEXT);
         CREATE TABLE IF NOT EXISTS workspace_tool_schema(version INTEGER PRIMARY KEY);
         CREATE TABLE IF NOT EXISTS workspace_session_tools(
-          session_id TEXT PRIMARY KEY REFERENCES dashboard_conversations(id), enabled_json TEXT NOT NULL);
+          session_id TEXT PRIMARY KEY REFERENCES dashboard_conversations(id), enabled_json TEXT NOT NULL,
+          defaults_applied INTEGER NOT NULL DEFAULT 0);
         CREATE TABLE IF NOT EXISTS workspace_session_grants(
           source_id TEXT NOT NULL REFERENCES dashboard_conversations(id),
           target_id TEXT NOT NULL REFERENCES dashboard_conversations(id),
@@ -48,6 +49,12 @@ extension WorkspaceDatabase {
         """)
       try toolsExecuteUnlocked("INSERT OR IGNORE INTO workspace_tool_settings(id,value) VALUES(1,?)",
                                [try toolsJSON(WorkspaceToolSettings())])
+      let toolColumns = Set(try historyRowsUnlocked("PRAGMA table_info(workspace_session_tools)", values: []).compactMap { $0.objectValue?["name"]?.stringValue })
+      if !toolColumns.contains("defaults_applied") {
+        // Existing sessions have already chosen their tools. Only new insertions
+        // may consume captured defaults after this migration.
+        try executeUnlocked("ALTER TABLE workspace_session_tools ADD COLUMN defaults_applied INTEGER NOT NULL DEFAULT 1")
+      }
       let creationColumns = Set(try historyRowsUnlocked("PRAGMA table_info(workspace_session_creations)", values: []).compactMap { $0.objectValue?["name"]?.stringValue })
       if !creationColumns.contains("configuration_json") {
         try executeUnlocked("ALTER TABLE workspace_session_creations ADD COLUMN configuration_json TEXT")
@@ -87,12 +94,13 @@ extension WorkspaceDatabase {
       }
       // Existing and newly imported sessions take a snapshot of the defaults.
       try executeUnlocked("""
-        INSERT OR IGNORE INTO workspace_session_tools(session_id,enabled_json)
-          SELECT id,(SELECT json_extract(value,'$.enabledByDefault') FROM workspace_tool_settings WHERE id=1)
+        INSERT OR IGNORE INTO workspace_session_tools(session_id,enabled_json,defaults_applied)
+          SELECT id,(SELECT json_extract(value,'$.enabledByDefault') FROM workspace_tool_settings WHERE id=1),1
           FROM dashboard_conversations;
-        CREATE TRIGGER IF NOT EXISTS workspace_session_tool_defaults AFTER INSERT ON dashboard_conversations BEGIN
-          INSERT OR IGNORE INTO workspace_session_tools(session_id,enabled_json)
-            VALUES(new.id,(SELECT json_extract(value,'$.enabledByDefault') FROM workspace_tool_settings WHERE id=1));
+        DROP TRIGGER IF EXISTS workspace_session_tool_defaults;
+        CREATE TRIGGER workspace_session_tool_defaults AFTER INSERT ON dashboard_conversations BEGIN
+          INSERT OR IGNORE INTO workspace_session_tools(session_id,enabled_json,defaults_applied)
+            VALUES(new.id,(SELECT json_extract(value,'$.enabledByDefault') FROM workspace_tool_settings WHERE id=1),0);
         END;
         """)
     }
@@ -145,7 +153,18 @@ extension WorkspaceDatabase {
         // Approved access lasts for a management assignment; attachments are independent.
         try toolsExecuteUnlocked("DELETE FROM workspace_session_grants WHERE source_id=? AND kind='approved'", [sessionID])
       }
-      try toolsExecuteUnlocked("UPDATE workspace_session_tools SET enabled_json=? WHERE session_id=?", [try toolsJSON(tools.enabled), sessionID])
+      try toolsExecuteUnlocked("UPDATE workspace_session_tools SET enabled_json=?,defaults_applied=1 WHERE session_id=?", [try toolsJSON(tools.enabled), sessionID])
+    }
+  }
+
+  /// New-chat defaults are applied at most once, before any tools run. An
+  /// explicit user change also seals the snapshot, including an empty tool set.
+  public func applyInitialSessionTools(_ tools: WorkspaceSessionTools, sessionID: String) throws {
+    try transaction {
+      try requireToolSessionUnlocked(sessionID)
+      let row = try historyRowsUnlocked("SELECT defaults_applied FROM workspace_session_tools WHERE session_id=?", values: [sessionID]).first
+      guard row?.objectValue?["defaults_applied"]?.intValue == 0 else { return }
+      try toolsExecuteUnlocked("UPDATE workspace_session_tools SET enabled_json=?,defaults_applied=1 WHERE session_id=?", [try toolsJSON(tools.enabled), sessionID])
     }
   }
 
@@ -234,7 +253,7 @@ extension WorkspaceDatabase {
         ON CONFLICT(session_id) DO UPDATE SET created_by=excluded.created_by
         """, [targetID, sourceID, purpose])
       let inherited = try sessionToolsUnlocked(sourceID)
-      try toolsExecuteUnlocked("UPDATE workspace_session_tools SET enabled_json=? WHERE session_id=?", [try toolsJSON(inherited.enabled), targetID])
+      try toolsExecuteUnlocked("UPDATE workspace_session_tools SET enabled_json=?,defaults_applied=1 WHERE session_id=?", [try toolsJSON(inherited.enabled), targetID])
       if managed { try beginCoordinationUnlocked(sourceID: sourceID, targetID: targetID, purpose: purpose, notifications: true) }
     }
   }

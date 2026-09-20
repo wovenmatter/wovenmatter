@@ -504,6 +504,7 @@ final class ApplicationModel {
                     guard let self else { throw CancellationError() }
                     return try await self.handleAgentUsage(command)
                 }, onMutation: { [weak self] in await self?.refreshWorkspace() })
+            configureSessionToolSelectionAdapter()
             try dashboardStore.database.recoverToolDeliveries()
             try dashboardStore.database.recoverToolSessionCreations()
             try dashboardStore.database.cancelPendingCoordinationAccess()

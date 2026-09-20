@@ -381,7 +381,14 @@ struct DashboardComposer: View {
             .accessibilityLabel("Session tools")
             .accessibilityValue(openMenu == .tools ? "Expanded" : "Collapsed")
             .popover(isPresented: Binding(get: { openMenu == .tools }, set: { if !$0, openMenu == .tools { openMenu = nil } })) {
-                WorkspaceSessionToolsMenu(tools: agentTools, sessionID: sessionID)
+                WorkspaceSessionToolsMenu(tools: agentTools, sessionID: sessionID,
+                    onSaveDefault: onSaveDefault.map { save in { workspaceOnly in
+                        save(.tools, workspaceOnly)
+                        openMenu = nil
+                    } }, onClearDefault: onClearDefault.map { clear in { workspaceOnly in
+                        clear(.tools, workspaceOnly)
+                        openMenu = nil
+                    } })
             }
         }
     }

@@ -55,10 +55,20 @@ Revocation blocks future reads; it cannot erase content already retrieved.
 
 ## Sessions and coordination
 
-New sessions inherit source harness, model, reasoning, working location, folder
-and tool settings unless explicitly overridden. Creation supports another
-configured harness/model and another folder or workspace. Creation binds the
-working location before dispatch. Provider native subagents are not redefined.
+New sessions inherit the source harness, working location, and folder unless
+explicitly overridden. A Buzz source uses the selected local or remote destination
+root; this command does not create Buzz-bound sessions. Model and thinking accept
+the existing explicit creation arguments. Remaining selections resolve from the
+user's destination workspace/harness defaults, harness defaults, and native
+defaults, in that order. The source chat's selections do not become defaults for
+the new chat. General Agent tools settings supply the native tool fallback.
+
+Permissions and tools come from user controls and cannot be overridden by agent
+commands. A user-saved empty Tools default disables every tool group for new chats
+in that scope. Creation binds the working location before resolving defaults and
+freezes every choice with the request, so retries survive changed defaults.
+Native settings must be accepted before the initial instruction is sent. Provider
+native subagents are not redefined.
 
 An agent-created work session is coordinated by its creator unless explicitly
 requested as independent. Existing sessions become managed only on an explicit

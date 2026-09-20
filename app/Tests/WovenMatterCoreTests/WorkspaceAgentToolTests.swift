@@ -664,8 +664,8 @@ extension WorkspaceAgentToolTests {
 }
 
 extension WorkspaceAgentToolTests {
-  @Test(arguments: [false, true])
-  func creationConfigurationSurvivesReopenAndKeepsOriginalInheritance(remote: Bool) throws {
+  @Test(arguments: [false, true], [false, true])
+  func creationConfigurationSurvivesReopenAndKeepsResolvedDefaults(remote: Bool, emptyTools: Bool) throws {
     let (db, dir, source, other) = try fixture()
     defer { try? FileManager.default.removeItem(at: dir) }
     let folder = try db.createFolder(name: "Original folder")
@@ -676,11 +676,13 @@ extension WorkspaceAgentToolTests {
     let reservation = try db.reserveToolSessionCreation(sourceID: source, requestID: requestID,
       arguments: args, purpose: "Implement", managed: true)
     let target = try #require(reservation.objectValue?["target_id"]?.stringValue)
-    let proposed = WorkspaceSessionCreationConfiguration(runtimeKind: .pi, workspaceID: remote ? UUID() : nil,
-      folderID: folder, title: "Planned title", model: "original-model", thinking: "high",
-      nativeWorkingDirectory: "/workspace/original", nativeWorkspaceID: "native-workspace")
+    let resolvedTools = WorkspaceSessionTools(enabled: emptyTools ? [] : [.history, .calendar])
+    let proposed = WorkspaceSessionCreationConfiguration(runtimeKind: .codex, workspaceID: remote ? UUID() : nil,
+      folderID: folder, title: "Planned title", model: "original-model", thinking: "high", permission: "native-permission",
+      selectionWorkspace: remote ? "remote:fixture" : "local:/workspace/original",
+      nativeWorkingDirectory: "/workspace/original", nativeWorkspaceID: "native-workspace", tools: resolvedTools)
     let saved = try db.saveToolSessionCreationConfiguration(requestID: requestID, sourceID: source, configuration: proposed)
-    #expect(saved.tools.enabled == [.sessions, .notes])
+    #expect(saved.tools == resolvedTools)
     #expect(throws: (any Error).self) {
       try db.saveToolSessionCreationConfiguration(requestID: requestID, sourceID: other, configuration: proposed)
     }
@@ -705,6 +707,10 @@ extension WorkspaceAgentToolTests {
     let inserted = try #require(reopened.workspaceOverview().conversations.first { $0.id == target })
     #expect(inserted.title == saved.title && inserted.folderID == folder && inserted.remoteWorkspaceID == saved.workspaceID)
     #expect(try reopened.sessionTools(target) == saved.tools)
+    // Session insertion seals reservation tools; a delayed generic default
+    // callback must not override the frozen creation snapshot.
+    try reopened.applyInitialSessionTools(.init(enabled: [.library]), sessionID: target)
+    #expect(try reopened.sessionTools(target) == saved.tools)
     #expect(try reopened.sessionRelationship(target).createdBy == source)
     let localTitle = try reopened.withLock {
       try reopened.historyRowsUnlocked("SELECT title FROM desktop_local_acp_sessions WHERE conversation_id=?", values: [target])
@@ -714,6 +720,7 @@ extension WorkspaceAgentToolTests {
     _ = try reopened.updateConversationTitleIfCurrent(id: target, expectedTitle: saved.title, title: "User renamed")
     _ = try reopened.moveConversation(id: target, toFolderID: laterFolder)
     try reopened.setSessionTools(.init(enabled: [.history]), sessionID: target)
+    try reopened.applyInitialSessionTools(saved.tools, sessionID: target)
     try reopened.recoverToolSessionCreations()
     _ = try reopened.reserveToolSessionCreation(sourceID: source, requestID: requestID, arguments: args, purpose: "Implement", managed: true)
     try reopened.completeToolSessionCreation(requestID: requestID, sourceID: source)
@@ -813,5 +820,50 @@ extension WorkspaceAgentToolTests {
     let retry = try reopened.reserveToolSessionCreation(sourceID: source, requestID: requestID, arguments: arguments, purpose: "Work", managed: true)
     #expect(retry.objectValue?["configuration_applied"]?.intValue == 1)
     #expect(try reopened.localACPSession(conversationID: target).model == "later-user-selection")
+  }
+}
+
+
+extension WorkspaceAgentToolTests {
+  @Test(arguments: [false, true])
+  func initialToolsAreAppliedOnceAndRespectUserChanges(userChangesFirst: Bool) throws {
+    let (database, directory, _, _) = try fixture()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let id = try database.createLocalACPSession(runtimeKind: .codex, title: "New chat", ownerDeviceID: UUID())
+    if userChangesFirst {
+      try database.setSessionTools(.init(enabled: [.notes]), sessionID: id)
+    }
+    try database.applyInitialSessionTools(.init(enabled: []), sessionID: id)
+    #expect(try database.sessionTools(id).enabled == (userChangesFirst ? [.notes] : []))
+    let reopened = try WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+    try reopened.applyInitialSessionTools(.init(enabled: [.library]), sessionID: id)
+    #expect(try reopened.sessionTools(id).enabled == (userChangesFirst ? [.notes] : []))
+    try reopened.setSessionTools(.init(enabled: [.history]), sessionID: id)
+    try reopened.applyInitialSessionTools(.init(enabled: []), sessionID: id)
+    #expect(try reopened.sessionTools(id).enabled == [.history])
+  }
+
+  @Test func migratingToolDefaultsPreservesExistingSessionsAndEnablesNewSnapshots() throws {
+    let (database, directory, source, _) = try fixture()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    try database.setSessionTools(.init(enabled: [.history]), sessionID: source)
+    // Recreate the prior schema shape, retaining the user's stored tool choices.
+    try database.withLock {
+      try database.executeUnlocked("DROP TRIGGER workspace_session_tool_defaults")
+      try database.executeUnlocked("ALTER TABLE workspace_session_tools DROP COLUMN defaults_applied")
+    }
+    let reopened = try WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+    try reopened.applyInitialSessionTools(.init(enabled: []), sessionID: source)
+    #expect(try reopened.sessionTools(source).enabled == [.history])
+    let new = try reopened.createLocalACPSession(runtimeKind: .codex, title: "After migration", ownerDeviceID: UUID())
+    try reopened.applyInitialSessionTools(.init(enabled: []), sessionID: new)
+    #expect(try reopened.sessionTools(new).enabled.isEmpty)
+  }
+
+  @Test func oldCreationConfigurationDecodesWithoutNewSelectionFields() throws {
+    let oldJSON = #"{"runtimeKind":"codex","title":"Existing","tools":{"enabled":[]}}"#
+    let configuration = try JSONDecoder().decode(WorkspaceSessionCreationConfiguration.self, from: Data(oldJSON.utf8))
+    #expect(configuration.permission == nil && configuration.selectionWorkspace == nil)
+    #expect(configuration.tools.enabled.isEmpty)
   }
 }
