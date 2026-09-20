@@ -276,7 +276,8 @@ public actor HermesGatewayClient {
             slashCommands: configuration.slashCommands, modelOptionMetadata: configuration.modelOptionMetadata,
             thinkingOptionMetadata: configuration.thinkingOptionMetadata,
             permission: state.permission, permissionOptions: state.permissionOptions,
-            permissionOptionMetadata: state.permissionOptionMetadata, workingDirectory: configuration.workingDirectory)
+            permissionOptionMetadata: state.permissionOptionMetadata,
+            workingDirectory: configuration.workingDirectory)
     }
 
     /// The Gateway accepts this native session vocabulary and normalizes it at

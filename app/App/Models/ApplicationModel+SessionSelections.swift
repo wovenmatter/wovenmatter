@@ -108,7 +108,8 @@ extension ApplicationModel {
                     thinkingOptionMetadata: configuration.thinkingOptionMetadata,
                     permission: native.runtimeKind == .pi ? nil : configuration.permission,
                     permissionOptions: configuration.permissionOptions,
-                    permissionOptionMetadata: configuration.permissionOptionMetadata)
+                    permissionOptionMetadata: configuration.permissionOptionMetadata,
+                    workingDirectory: configuration.workingDirectory)
                 publishSessionSelectionMetadata(metadata, conversationID: conversationID, gateway: false)
                 confirmedMetadata = metadata
             }

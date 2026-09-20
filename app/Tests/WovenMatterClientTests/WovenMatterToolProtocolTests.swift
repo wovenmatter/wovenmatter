@@ -55,3 +55,14 @@ struct WovenMatterToolProtocolTests {
     }
   }
 }
+
+
+extension WovenMatterToolProtocolTests {
+  @Test func agentsCannotOverrideChildPermissionOrTools() {
+    for arguments in [["sessions", "create", "--tools", "[]"],
+                      ["sessions", "create", "--tools", #"["sessions","calendar"]"#],
+                      ["sessions", "create", "--permission", "unrestricted"]] {
+      #expect(throws: (any Error).self) { try WovenMatterToolCommand(arguments) }
+    }
+  }
+}

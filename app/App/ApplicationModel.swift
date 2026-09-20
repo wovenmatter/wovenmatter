@@ -479,6 +479,7 @@ final class ApplicationModel {
                     guard let self else { throw CancellationError() }
                     return try await self.handleAgentUsage(command)
                 }, onMutation: { [weak self] in await self?.refreshWorkspace() })
+            configureSessionToolSelectionAdapter()
             try dashboardStore.database.recoverToolDeliveries()
             try dashboardStore.database.recoverToolSessionCreations()
             try dashboardStore.database.cancelPendingCoordinationAccess()
@@ -1787,6 +1788,7 @@ final class ApplicationModel {
         note: WorkspaceNoteRecord? = nil
     ) async throws -> Bool {
         guard let dashboardStore, let agentTools else { throw ApplicationModelError.dashboardStoreUnavailable }
+        try await applyPendingSessionSelections(conversationID: conversation.id)
         guard !loadingLocalACPSessionIDs.contains(conversation.id),
               !updatingLocalACPSessionIDs.contains(conversation.id) else {
             throw ApplicationModelError.localSessionConfigurationInProgress
@@ -2228,7 +2230,7 @@ final class ApplicationModel {
             return nil
         }
         let capturedDefaults = sessionSelectionPreferences.defaults(harness: runtimeKind.rawValue,
-            workspace: "local:" + creationWorkspace.rootURL.standardizedFileURL.path)
+            workspace: "local:" + (nativeWorkingDirectory ?? creationWorkspace.rootURL).standardizedFileURL.path)
         do {
             guard let dashboardStore else {
                 throw ApplicationModelError.dashboardStoreUnavailable

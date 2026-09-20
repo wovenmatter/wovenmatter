@@ -4,6 +4,62 @@ import WovenMatterClient
 import WovenMatterDashboardStore
 
 extension ApplicationModel {
+    func configureSessionToolSelectionAdapter() {
+        sessionSelectionWorkspaceID = { [weak self] id in
+            try self?.sessionToolSelectionWorkspace(conversationID: id)
+        }
+        currentSessionToolIDs = { [weak self] id in
+            guard let database = self?.dashboardStore?.database,
+                  let tools = try? database.sessionTools(id) else { return nil }
+            return tools.enabled.map(\.rawValue).sorted()
+        }
+        applyInitialSessionToolIDs = { [weak self] id, identifiers in
+            guard let self, let database = self.dashboardStore?.database else {
+                throw ApplicationModelError.dashboardStoreUnavailable
+            }
+            try database.applyInitialSessionTools(WorkspaceSessionTools(identifiers: identifiers), sessionID: id)
+            try self.agentTools?.reload()
+        }
+    }
+
+    /// Resolves the actual native folder for local sessions, rather than assuming
+    /// that an imported or tool-created chat uses the app's default working root.
+    func sessionToolSelectionWorkspace(conversationID: String) throws -> String {
+        guard let database = dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
+        let session = try database.localACPSession(conversationID: conversationID)
+        if let remote = session.remoteWorkspaceID { return "remote:" + remote.uuidString.lowercased() }
+        if let buzz = session.buzzWorkspaceLinkID { return "buzz:" + buzz.uuidString.lowercased() }
+        let creation = try database.toolSessionCreationConfiguration(targetID: conversationID)
+        let directory = creation?.nativeWorkingDirectory
+            ?? openCodeModel(for: conversationID)?.snapshots[conversationID]?.info["location"]["directory"].string
+            ?? openClawGatewaySessionMetadata[conversationID]?.workingDirectory
+            ?? localACPSessionMetadata[conversationID]?.workingDirectory
+        let path = try directory ?? defaultToolWorkingDirectory(workspaceID: nil)
+        return "local:" + URL(fileURLWithPath: path).standardizedFileURL.path
+    }
+
+    private func captureToolSessionSelections(id: String, configuration: WorkspaceSessionCreationConfiguration,
+                                              alreadyConfigured: Bool) throws {
+        let scope: String
+        if let saved = configuration.selectionWorkspace { scope = saved }
+        else if let remote = configuration.workspaceID { scope = "remote:" + remote.uuidString.lowercased() }
+        else {
+            let path = try configuration.nativeWorkingDirectory ?? defaultToolWorkingDirectory(workspaceID: nil)
+            scope = "local:" + URL(fileURLWithPath: path).standardizedFileURL.path
+        }
+        let selections = SessionSelections(model: configuration.model, thinking: configuration.thinking,
+            permission: configuration.permission, tools: configuration.tools.enabled.map(\.rawValue).sorted())
+        if alreadyConfigured {
+            // Old reservations may predate preference snapshots; do not replay
+            // their already-confirmed configuration over a later user change.
+            sessionSelectionPreferences.captureExistingConversation(id: id,
+                harness: configuration.runtimeKind.rawValue, workspace: scope, selections: selections)
+        } else {
+            sessionSelectionPreferences.captureConversation(id: id, harness: configuration.runtimeKind.rawValue,
+                workspace: scope, selections: selections, capturedDefaults: SessionSelections())
+        }
+    }
+
     func startAgentToolRuntime() {
         toolRuntimeTask?.cancel()
         toolRuntimeTask = Task { [weak self] in
@@ -178,6 +234,8 @@ extension ApplicationModel {
                             sourceID: source.id, configuration: proposed)
                     }
                     let runtime = configuration.runtimeKind
+                    let alreadyConfigured = reservation.objectValue?["configuration_applied"]?.intValue == 1
+                    try self.captureToolSessionSelections(id: id, configuration: configuration, alreadyConfigured: alreadyConfigured)
                     let remoteTarget: RemoteHarnessChatTarget?
                     if let workspaceID = configuration.workspaceID {
                         guard let workspace = self.remoteWorkspaces.configuration(id: workspaceID),
@@ -210,20 +268,10 @@ extension ApplicationModel {
                     }
                     // Initial title/folder/tools commit with session insertion.
                     // Retrying preparation must preserve any later user edits.
-                    let model = configuration.model
-                    let thinking = configuration.thinking
-                    if reservation.objectValue?["configuration_applied"]?.intValue != 1, model != nil || thinking != nil {
-                        if runtime == .opencode {
-                            guard let native = self.openCodeModel(for: id) else {
-                                throw WorkspaceToolError.invalid("The native OpenCode session is unavailable.")
-                            }
-                            try await native.confirmCreationSelection(id, model: model, thinking: thinking)
-                        } else if runtime == .openclaw {
-                            try await store.confirmOpenClawCreationSelection(conversationID: id, model: model, thinking: thinking)
-                        } else {
-                            let context = try self.directACPLaunchContext(conversation: target, runtimeKind: runtime, isBuzzWorkspaceSession: false)
-                            _ = try await store.updateLocalACPSessionConfiguration(conversationID: id, model: model, thinking: thinking,
-                                launch: context?.launch, workspace: context?.workspace)
+                    if !alreadyConfigured {
+                        try await self.applyPendingSessionSelections(conversationID: id)
+                        guard self.sessionSelectionPreferences.conversation(id: id)?.requiresApplication == false else {
+                            throw WorkspaceToolError.invalid("The session's initial settings are not ready. Retry after connecting its harness.")
                         }
                         try store.database.markToolSessionCreationConfigured(requestID: request.requestID, sourceID: source.id)
                     }
@@ -258,39 +306,47 @@ extension ApplicationModel {
             guard let id = UUID(uuidString: workspace) else { throw WorkspaceToolError.invalid("The destination workspace is unavailable.") }
             workspaceID = id
         }
-        let sameRuntime = runtime == source.localRuntimeKind
         guard let store = dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
-        let sourceModel: String?, sourceThinking: String?, observedDirectory: String?
-        let nativeLocation: OpenCodeValue?
-        if source.localRuntimeKind == .openclaw {
-            let metadata = try await store.openClawGatewaySessionMetadata(conversationID: source.id)
-            sourceModel = metadata.model; sourceThinking = metadata.thinking
-            observedDirectory = metadata.workingDirectory; nativeLocation = nil
-        } else if source.localRuntimeKind == .opencode {
-            await refreshLocalACPSession(conversation: source)
-            guard let native = openCodeModel(for: source.id), let snapshot = native.snapshots[source.id] else {
-                throw WorkspaceToolError.invalid("The source OpenCode session is unavailable. Reconnect it before creating another session.")
+        let sourceSession = try store.database.localACPSession(conversationID: source.id)
+        let sameWorkspace = workspaceID == source.remoteWorkspaceID && sourceSession.buzzWorkspaceLinkID == nil
+        var nativeLocation: OpenCodeValue?
+        var inheritedDirectory: String?
+        // An explicit destination does not need to query the source provider.
+        // Buzz workspaces are separate from the local/remote creation targets.
+        if sameWorkspace, command.options["directory"] == nil {
+            if source.localRuntimeKind == .openclaw {
+                inheritedDirectory = try await store.openClawGatewaySessionMetadata(conversationID: source.id).workingDirectory
+            } else if source.localRuntimeKind == .opencode {
+                await refreshLocalACPSession(conversation: source)
+                guard let native = openCodeModel(for: source.id), let snapshot = native.snapshots[source.id] else {
+                    throw WorkspaceToolError.invalid("The source OpenCode session is unavailable. Reconnect it before creating another session.")
+                }
+                nativeLocation = snapshot.info["location"]
+                inheritedDirectory = snapshot.info["location"]["directory"].string
+            } else if let sourceRuntime = source.localRuntimeKind {
+                let context = try directACPLaunchContext(conversation: source, runtimeKind: sourceRuntime,
+                    isBuzzWorkspaceSession: buzzBoundLocalACPConversationIDs.contains(source.id))
+                let configuration = try await store.localACPSessionConfiguration(conversationID: source.id,
+                    launch: context?.launch, workspace: context?.workspace)
+                inheritedDirectory = configuration.workingDirectory ?? context?.workspace.rootURL.path
             }
-            sourceModel = native.metadata(source.id)?.model; sourceThinking = native.metadata(source.id)?.thinking
-            nativeLocation = snapshot.info["location"]
-            observedDirectory = snapshot.info["location"]["directory"].string
-        } else if let sourceRuntime = source.localRuntimeKind {
-            let context = try directACPLaunchContext(conversation: source, runtimeKind: sourceRuntime, isBuzzWorkspaceSession: false)
-            let configuration = try await store.localACPSessionConfiguration(conversationID: source.id,
-                launch: context?.launch, workspace: context?.workspace)
-            sourceModel = configuration.model; sourceThinking = configuration.thinking
-            observedDirectory = configuration.workingDirectory ?? context?.workspace.rootURL.path; nativeLocation = nil
-        } else { throw WorkspaceToolError.invalid("The source session has no configured harness.") }
-        let savedDirectory = try store.database.toolSessionCreationConfiguration(targetID: source.id)?.nativeWorkingDirectory
-        let sameWorkspace = workspaceID == source.remoteWorkspaceID
-        let inheritedDirectory = sameWorkspace ? observedDirectory ?? savedDirectory : nil
+            if inheritedDirectory == nil {
+                inheritedDirectory = try store.database.toolSessionCreationConfiguration(targetID: source.id)?.nativeWorkingDirectory
+            }
+        }
         let directory = try command.options["directory"] ?? inheritedDirectory ?? defaultToolWorkingDirectory(workspaceID: workspaceID)
+        let scope = workspaceID.map { "remote:" + $0.uuidString.lowercased() }
+            ?? "local:" + URL(fileURLWithPath: directory).standardizedFileURL.path
+        let explicit = SessionSelections(model: command.options["model"], thinking: command.options["thinking"])
+        let resolved = explicit.overlaying(sessionSelectionPreferences.defaults(harness: runtime.rawValue, workspace: scope))
+        let tools = try resolved.tools.map { try WorkspaceSessionTools(identifiers: $0) }
+            ?? WorkspaceSessionTools(enabled: store.database.toolSettings().enabledByDefault)
         return .init(runtimeKind: runtime, workspaceID: workspaceID, folderID: command.options["folder"] ?? source.folderID,
-            title: title, model: command.options["model"] ?? (sameRuntime ? sourceModel : nil),
-            thinking: command.options["thinking"] ?? (sameRuntime ? sourceThinking : nil),
+            title: title, model: resolved.model, thinking: resolved.thinking,
+            permission: runtime == .pi ? nil : resolved.permission, selectionWorkspace: scope,
             nativeWorkingDirectory: directory,
             nativeWorkspaceID: runtime == .opencode && sameWorkspace && command.options["directory"] == nil
-                ? nativeLocation?["workspaceID"].string : nil)
+                ? nativeLocation?["workspaceID"].string : nil, tools: tools)
     }
 
     func dispatchToolDelivery(_ delivery: WorkspaceSessionDelivery) async throws -> WovenMatterToolResponse {

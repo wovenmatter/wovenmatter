@@ -166,8 +166,12 @@ public struct WovenMatterToolCommand: Sendable {
       send SESSION_ID --text MESSAGE [--request-id UUID]
       manage SESSION_ID --purpose INTENT [--no-notify] [--request-id UUID]
       release SESSION_ID | notifications SESSION_ID --enabled true|false | receipts [--before RECEIPT_ID] [--limit N]
-      Creation inherits this session's configuration and folder and starts coordination
-      unless --independent is used. Status and one-off sends do not begin coordination.
+      Creation inherits the harness, workspace, directory and folder unless overridden.
+      Model and thinking accept explicit arguments. Remaining selections use the user's
+      destination workspace/harness defaults, harness defaults, then native defaults.
+      Permissions and tools are selected only through user controls; agents cannot
+      override them. Choices are frozen for retries. Creation starts
+      coordination unless --independent is used. Status and one-off sends do not begin coordination.
       Only one coordinator may manage a destination. Existing unattached sessions require
       user access approval when history is off. A request awaiting approval returns
       state=pending immediately. Wait for the user; retry the same command with the returned

@@ -1399,7 +1399,7 @@ public actor LocalACPSessionCoordinator {
             processWorkingDirectoryURL: launch.processWorkingDirectoryURL,
             requestedPermission: descriptor.permission,
             wrappedCommand: launch.wrappedCommand
-)
+        )
         launch.historyRecorder = database.historyWireRecorder(
             conversationID: descriptor.conversationID, harness: descriptor.runtimeKind.rawValue
         )

@@ -48,6 +48,14 @@ public struct WorkspaceSessionTools: Codable, Equatable, Sendable {
   public init(enabled: Set<WorkspaceToolGroup> = Set(WorkspaceToolGroup.allCases)) {
     self.enabled = enabled
   }
+
+  public init(identifiers: [String]) throws {
+    let groups = identifiers.compactMap(WorkspaceToolGroup.init(rawValue:))
+    guard groups.count == identifiers.count else {
+      throw WorkspaceToolError.invalid("Unknown tool group. Use notes, history, sessions, timers, usage, calendar, or library.")
+    }
+    self.enabled = Set(groups)
+  }
 }
 
 /// Resolved once before creating a session. Retrying a request must not inherit
@@ -59,15 +67,18 @@ public struct WorkspaceSessionCreationConfiguration: Codable, Equatable, Sendabl
   public var title: String
   public var model: String?
   public var thinking: String?
+  public var permission: String?
+  public var selectionWorkspace: String?
   public var nativeWorkingDirectory: String?
   public var nativeWorkspaceID: String?
   public var tools: WorkspaceSessionTools
 
   public init(runtimeKind: AgentRuntimeKind, workspaceID: UUID? = nil, folderID: String? = nil,
-              title: String, model: String? = nil, thinking: String? = nil,
-              nativeWorkingDirectory: String? = nil, nativeWorkspaceID: String? = nil, tools: WorkspaceSessionTools = .init()) {
+              title: String, model: String? = nil, thinking: String? = nil, permission: String? = nil,
+              selectionWorkspace: String? = nil, nativeWorkingDirectory: String? = nil, nativeWorkspaceID: String? = nil, tools: WorkspaceSessionTools = .init()) {
     self.runtimeKind = runtimeKind; self.workspaceID = workspaceID; self.folderID = folderID
     self.title = title; self.model = model; self.thinking = thinking
+    self.permission = permission; self.selectionWorkspace = selectionWorkspace
     self.nativeWorkingDirectory = nativeWorkingDirectory; self.tools = tools
     self.nativeWorkspaceID = nativeWorkspaceID
   }
