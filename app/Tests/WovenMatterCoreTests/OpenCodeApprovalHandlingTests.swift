@@ -6,7 +6,7 @@ import WovenMatterCore
 
 @Suite(.serialized)
 struct OpenCodeApprovalHandlingTests {
-    @Test func automaticRepliesStayInOneSessionAndNeverHandleFormsOrAuthentication() async throws {
+    @Test func fullAccessRepliesStayInOneSessionAndNeverHandleFormsQuestionsOrAuthentication() async throws {
         let context = try ApprovalContext()
         defer { context.clean() }
         let fixture = context.fixture
@@ -14,21 +14,81 @@ struct OpenCodeApprovalHandlingTests {
             request("per_a", "ses_a"), request("per_other", "ses_b"),
             request("per_auth", "ses_a", action: "auth.login"),
             request("per_form", "ses_a", type: "form"),
+            request("per_question", "ses_a", action: "question"),
+            request("per_ask", "ses_a", action: "ask_user"),
             request("per_denied", "ses_a", effect: "deny")
         ], session: "ses_a")
         await fixture.setRequests([request("per_b", "ses_b")], session: "ses_b")
         let coordinator = context.coordinator()
         try await coordinator.connect(context.connection)
-        _ = try await coordinator.setSessionPermission(conversationID: context.a.conversationID, permission: "auto")
+        _ = try await coordinator.setSessionPermission(conversationID: context.a.conversationID, permission: "full")
         try await coordinator.refresh(context.a)
         try await coordinator.refresh(context.b)
         try await fixture.waitForReplies(1)
         let replies = await fixture.replies
         #expect(replies.map(\.0) == ["/api/session/ses_a/permission/per_a/reply"])
         #expect(replies.allSatisfy { $0.1 == ["reply": "once"] })
-        #expect(try context.database.openCodeSnapshot(conversationID: context.a.conversationID)?.approvalMode == "auto")
+        #expect(try context.database.openCodeSnapshot(conversationID: context.a.conversationID)?.approvalMode == "full")
         #expect(try context.database.openCodeSnapshot(conversationID: context.b.conversationID)?.approvalMode == nil)
         await coordinator.shutdown()
+    }
+
+    @Test func choicesDistinguishEditsFromFullAccessAndPreserveLegacyAuthority() throws {
+        #expect(OpenCodePermissionHandling.options == ["normal", "acceptEdits", "full"])
+        #expect(OpenCodePermissionHandling.metadata["normal"]?.name == "Ask for approval")
+        #expect(OpenCodePermissionHandling.metadata["acceptEdits"]?.name == "Auto-accept edits")
+        #expect(OpenCodePermissionHandling.metadata["full"]?.name == "Full access")
+        #expect(try OpenCodePermissionHandling.validate("auto") == "full")
+        #expect(throws: OpenCodeError.self) { try OpenCodePermissionHandling.validate("smart") }
+        for mode in [nil, "normal", "unknown"] as [String?] {
+            #expect(OpenCodePermissionHandling.requestID(request("per_edit", "ses_a", action: "edit"), sessionID: "ses_a", mode: mode) == nil)
+        }
+        let restored = OpenCodeComposerMetadata.metadata(session: ["id": "ses_a"], models: [], approvalMode: "auto")
+        #expect(restored.permission == "full")
+        #expect(!(restored.permissionOptions ?? []).contains("auto"))
+    }
+
+    @Test func autoAcceptEditsOnlyRepliesToExactNativeEditAction() async throws {
+        let context = try ApprovalContext()
+        defer { context.clean() }
+        let actions = ["edit", "bash", "write", "apply_patch", "edit.file", "Edit", "read"]
+        await context.fixture.setRequests(actions.enumerated().map {
+            request("per_\($0.offset)", "ses_a", action: $0.element)
+        }, session: "ses_a")
+        let coordinator = context.coordinator()
+        try await coordinator.connect(context.connection)
+        _ = try await coordinator.setSessionPermission(conversationID: context.a.conversationID, permission: "acceptEdits")
+        try await coordinator.refresh(context.a)
+        try await context.fixture.waitForReplies(1)
+        try await Task.sleep(for: .milliseconds(30))
+        #expect(await context.fixture.replies.map(\.0) == ["/api/session/ses_a/permission/per_0/reply"])
+        #expect(try context.database.openCodeSnapshot(conversationID: context.a.conversationID)?.approvalMode == "acceptEdits")
+        let replies = await context.fixture.replies
+        #expect(replies.allSatisfy { $0.1 == ["reply": "once"] })
+        await coordinator.shutdown()
+    }
+
+    @Test func malformedAndInteractiveRequestsStayManualInBothAutomaticModes() {
+        var invalid: [OpenCodeValue] = [
+            request("per_foreign", "ses_b", action: "edit"),
+            request("not_permission", "ses_a", action: "edit"),
+            request("per_empty", "ses_a", action: ""),
+            request("per_denied", "ses_a", action: "edit", effect: "deny"),
+            request("per_auth", "ses_a", action: "authentication"),
+            request("per_question", "ses_a", action: "question"),
+            request("per_form", "ses_a", action: "edit", type: "form")
+        ]
+        var resources = request("per_resources", "ses_a", action: "edit")
+        resources["resources"] = .array([.number(42)])
+        invalid.append(resources)
+        var interactiveSource = request("per_source", "ses_a", action: "edit")
+        interactiveSource["source"] = ["type": "form"]
+        invalid.append(interactiveSource)
+        for mode in ["acceptEdits", "full", "auto"] {
+            for value in invalid {
+                #expect(OpenCodePermissionHandling.requestID(value, sessionID: "ses_a", mode: mode) == nil)
+            }
+        }
     }
 
     @Test func repeatedSnapshotsDoNotRepeatAcceptedReplies() async throws {
@@ -37,7 +97,7 @@ struct OpenCodeApprovalHandlingTests {
         await context.fixture.setRequests([request("per_a", "ses_a")], session: "ses_a")
         let coordinator = context.coordinator()
         try await coordinator.connect(context.connection)
-        _ = try await coordinator.setSessionPermission(conversationID: context.a.conversationID, permission: "auto")
+        _ = try await coordinator.setSessionPermission(conversationID: context.a.conversationID, permission: "full")
         try await coordinator.refresh(context.a)
         try await context.fixture.waitForReplies(1)
         for _ in 0..<3 { try await coordinator.refresh(context.a) }
@@ -53,7 +113,7 @@ struct OpenCodeApprovalHandlingTests {
         await context.fixture.setRequests([request("per_a", "ses_a"), request("per_second", "ses_a")], session: "ses_a")
         let coordinator = context.coordinator()
         try await coordinator.connect(context.connection)
-        _ = try await coordinator.setSessionPermission(conversationID: context.a.conversationID, permission: "auto")
+        _ = try await coordinator.setSessionPermission(conversationID: context.a.conversationID, permission: "full")
         try await coordinator.refresh(context.a)
         try await context.fixture.waitForReplies(1)
         _ = try await coordinator.setSessionPermission(conversationID: context.a.conversationID, permission: "normal")
@@ -65,12 +125,38 @@ struct OpenCodeApprovalHandlingTests {
         await coordinator.shutdown()
     }
 
+    @Test func changingFullAccessToEditsStopsQueuedCommandApprovals() async throws {
+        let context = try ApprovalContext()
+        defer { context.clean() }
+        await context.fixture.setReplyDelay(.milliseconds(200))
+        await context.fixture.setRequests([
+            request("per_started", "ses_a"), request("per_queued", "ses_a"),
+            request("per_edit", "ses_a", action: "edit")
+        ], session: "ses_a")
+        let coordinator = context.coordinator()
+        try await coordinator.connect(context.connection)
+        _ = try await coordinator.setSessionPermission(conversationID: context.a.conversationID, permission: "full")
+        try await coordinator.refresh(context.a)
+        try await context.fixture.waitForReplies(1)
+        _ = try await coordinator.setSessionPermission(conversationID: context.a.conversationID, permission: "acceptEdits")
+        try await context.fixture.waitForReplies(2)
+        try await Task.sleep(for: .milliseconds(250))
+        #expect(await context.fixture.replies.map(\.0) == [
+            "/api/session/ses_a/permission/per_started/reply", "/api/session/ses_a/permission/per_edit/reply"
+        ])
+        await coordinator.shutdown()
+    }
+
     @Test func reconnectRestoresModeAndOnlyUsesFreshPendingRequests() async throws {
         let context = try ApprovalContext()
         defer { context.clean() }
         let first = context.coordinator()
         try await first.connect(context.connection)
-        _ = try await first.setSessionPermission(conversationID: context.a.conversationID, permission: "auto")
+        // A persisted pre-correction `auto` setting retains exactly its old
+        // blanket approval behavior and is presented as Full access on reopen.
+        var legacy = OpenCodeSessionSnapshot()
+        legacy.approvalMode = "auto"
+        try context.database.saveOpenCodeSnapshot(legacy, conversationID: context.a.conversationID)
         await first.disconnect(connectionID: context.connection.identity)
         await context.fixture.setRequests([request("per_reconnected", "ses_a")], session: "ses_a")
         // Reopening a coordinator also proves that mode is durable, not just an actor flag.
@@ -79,6 +165,9 @@ struct OpenCodeApprovalHandlingTests {
         try await second.refresh(context.a)
         try await context.fixture.waitForReplies(1)
         #expect(await context.fixture.replies.first?.0 == "/api/session/ses_a/permission/per_reconnected/reply")
+        let canonical = try await second.setSessionPermission(conversationID: context.a.conversationID, permission: "auto")
+        #expect(canonical == "full")
+        #expect(try context.database.openCodeSnapshot(conversationID: context.a.conversationID)?.approvalMode == "full")
         await first.shutdown(); await second.shutdown()
     }
 
@@ -87,7 +176,7 @@ struct OpenCodeApprovalHandlingTests {
         defer { context.clean() }
         let coordinator = context.coordinator()
         try await coordinator.connect(context.connection)
-        _ = try await coordinator.setSessionPermission(conversationID: context.a.conversationID, permission: "auto")
+        _ = try await coordinator.setSessionPermission(conversationID: context.a.conversationID, permission: "full")
         try await coordinator.refresh(context.a)
         try await Task.sleep(for: .milliseconds(30))
         #expect(await context.fixture.replies.isEmpty)
@@ -95,7 +184,24 @@ struct OpenCodeApprovalHandlingTests {
         #expect(old.approvalMode == nil)
         let metadata = OpenCodeComposerMetadata.metadata(session: ["id": "ses_a"], models: [])
         #expect(metadata.permission == "normal")
-        #expect(metadata.permissionOptions == ["normal", "auto"])
+        #expect(metadata.permissionOptions == ["normal", "acceptEdits", "full"])
+        await coordinator.shutdown()
+    }
+
+    @Test func rejectedModeNeverIncreasesAuthority() async throws {
+        let context = try ApprovalContext()
+        defer { context.clean() }
+        await context.fixture.setRequests([request("per_a", "ses_a")], session: "ses_a")
+        let coordinator = context.coordinator()
+        try await coordinator.connect(context.connection)
+        _ = try await coordinator.setSessionPermission(conversationID: context.a.conversationID, permission: "normal")
+        await #expect(throws: OpenCodeError.self) {
+            try await coordinator.setSessionPermission(conversationID: context.a.conversationID, permission: "unknown")
+        }
+        try await coordinator.refresh(context.a)
+        try await Task.sleep(for: .milliseconds(30))
+        #expect(await context.fixture.replies.isEmpty)
+        #expect(try context.database.openCodeSnapshot(conversationID: context.a.conversationID)?.approvalMode == "normal")
         await coordinator.shutdown()
     }
 

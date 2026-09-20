@@ -519,6 +519,9 @@ public actor LocalACPClient {
     private var thinkingConfigurationID: String?
     private var permissionConfigurationID: String?
     private var permissionUsesSessionModeMethod = false
+    // Native-supported policies include legacy values hidden from the picker.
+    // Keep them available to restore an existing conversation without translation.
+    private var nativePermissionOptions: [String] = []
     private var permissionStateRevision: UInt64 = 0
     private var cursorPermission: String
     private let requestedPermission: String?
@@ -927,10 +930,12 @@ public actor LocalACPClient {
 
     public func setSessionPermission(_ permission: String) async throws -> LocalACPSessionConfiguration {
         guard let sessionID else { throw LocalACPClientError.sessionNotInitialized }
-        guard !configuration.permissionOptions.isEmpty else {
+        let supportedOptions = runtimeKind == .codex || runtimeKind == .claudeCode
+            ? nativePermissionOptions : configuration.permissionOptions
+        guard !supportedOptions.isEmpty else {
             throw LocalACPClientError.unsupportedConfiguration("permission")
         }
-        guard configuration.permissionOptions.contains(permission) else {
+        guard supportedOptions.contains(permission) else {
             throw LocalACPClientError.invalidConfigurationValue(field: "permission", value: permission)
         }
         if configuration.permission == permission { return configuration }
@@ -1631,6 +1636,7 @@ public actor LocalACPClient {
            let available = modes["availableModes"]?.arrayValue {
             permissionStateRevision &+= 1
             permissionUsesSessionModeMethod = true
+            nativePermissionOptions = available.compactMap { $0["id"]?.stringValue }
             configuration = LocalACPSessionConfiguration(
                 model: configuration.model, thinking: configuration.thinking,
                 modelOptions: configuration.modelOptions, thinkingOptions: configuration.thinkingOptions,
@@ -1638,8 +1644,8 @@ public actor LocalACPClient {
                 modelOptionMetadata: configuration.modelOptionMetadata,
                 thinkingOptionMetadata: configuration.thinkingOptionMetadata,
                 permission: modes["currentModeId"]?.stringValue,
-                permissionOptions: available.compactMap { $0["id"]?.stringValue },
-                permissionOptionMetadata: Self.modelMetadata(available, idKeys: ["id"])
+                permissionOptions: LocalACPSessionPermissions.nativeOptions(runtimeKind: runtimeKind, options: nativePermissionOptions),
+                permissionOptionMetadata: LocalACPSessionPermissions.nativeMetadata(runtimeKind: runtimeKind, options: available, idKeys: ["id"])
             )
         }
         if permissionConfigurationID != nil || permissionUsesSessionModeMethod,
@@ -1679,7 +1685,10 @@ public actor LocalACPClient {
             modelConfigurationID = parsed.model?.id
             thinkingConfigurationID = parsed.thinking?.id
             permissionConfigurationID = parsed.permission?.id
-            if parsed.permission != nil || hadPermissionOption { permissionStateRevision &+= 1 }
+            if parsed.permission != nil || hadPermissionOption {
+                permissionStateRevision &+= 1
+                nativePermissionOptions = parsed.permission?.options ?? []
+            }
             if hadPermissionOption && parsed.permission == nil {
                 permissionUsesSessionModeMethod = false
             }
@@ -1694,7 +1703,9 @@ public actor LocalACPClient {
                 modelOptionMetadata: parsed.model?.metadata ?? (hadModelOption ? [:] : configuration.modelOptionMetadata),
                 thinkingOptionMetadata: parsed.thinking?.metadata ?? [:],
                 permission: parsed.permission?.currentValue ?? (hadPermissionOption ? nil : configuration.permission),
-                permissionOptions: parsed.permission?.options ?? (hadPermissionOption ? [] : configuration.permissionOptions),
+                permissionOptions: parsed.permission.map {
+                    LocalACPSessionPermissions.nativeOptions(runtimeKind: runtimeKind, options: $0.options)
+                } ?? (hadPermissionOption ? [] : configuration.permissionOptions),
                 permissionOptionMetadata: parsed.permission?.metadata ?? (hadPermissionOption ? [:] : configuration.permissionOptionMetadata)
             )
         }
@@ -1763,7 +1774,7 @@ public actor LocalACPClient {
                 modelOptionMetadata: configuration.modelOptionMetadata,
                 thinkingOptionMetadata: configuration.thinkingOptionMetadata,
                 permission: requestedPermission,
-                permissionOptions: LocalACPSessionPermissions.grokOptions,
+                permissionOptions: LocalACPSessionPermissions.grokOptions(currentPermission: requestedPermission),
                 permissionOptionMetadata: LocalACPSessionPermissions.grokMetadata
             )
         }
@@ -1819,7 +1830,12 @@ public actor LocalACPClient {
                 thinking = parsed
             } else if ["permission_mode", "approval_mode"].contains(id)
                         || (id == "mode" && (runtimeKind == .codex || runtimeKind == .claudeCode)) {
-                permission = parsed
+                permission = ParsedConfigurationOption(
+                    id: parsed.id, currentValue: parsed.currentValue,
+                    options: parsed.options,
+                    metadata: LocalACPSessionPermissions.nativeMetadata(runtimeKind: runtimeKind,
+                        options: option["options"]?.arrayValue ?? [], idKeys: ["value"])
+                )
             }
         }
         return (model, thinking, permission)
@@ -1938,6 +1954,8 @@ public actor LocalACPClient {
         }
         pendingPermissionRequestIDs.append(id)
         let selectedID: String?
+        // Cursor's persisted `auto` value means Full access in this client.
+        // It does not invoke the native Smart Auto classifier or set sticky --force.
         if runtimeKind == .cursor, cursorPermission == "auto",
            let sessionID, envelope.params?["sessionId"]?.stringValue == sessionID,
            // Cursor's question fallback uses allow_once for answer choices.
