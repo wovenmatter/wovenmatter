@@ -71,6 +71,7 @@
 		0D0C4EE8248E4F63A87CF7B4 /* WovenMatterRemoteToolBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = D8761929DCF444669E58A75E /* WovenMatterRemoteToolBridge.swift */; };
 		1A239171AFDF4F0AA55642C4 /* wovenmatter-remote.py in Resources */ = {isa = PBXBuildFile; fileRef = 3C0A700E6F1C4902ACCF3585 /* wovenmatter-remote.py */; };
 		F19000000000000000000001 /* DashboardNoteDocumentCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = F19000000000000000000002 /* DashboardNoteDocumentCache.swift */; };
+		A14000000000000000000001 /* ApplicationModel+SessionSelections.swift in Sources */ = {isa = PBXBuildFile; fileRef = A14000000000000000000002 /* ApplicationModel+SessionSelections.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -139,6 +140,7 @@
 		D8761929DCF444669E58A75E /* WovenMatterRemoteToolBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WovenMatterRemoteToolBridge.swift"; sourceTree = "<group>"; };
 		3C0A700E6F1C4902ACCF3585 /* wovenmatter-remote.py */ = {isa = PBXFileReference; lastKnownFileType = text.script.python; path = "wovenmatter-remote.py"; sourceTree = "<group>"; };
 		F19000000000000000000002 /* DashboardNoteDocumentCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardNoteDocumentCache.swift; sourceTree = "<group>"; };
+		A14000000000000000000002 /* ApplicationModel+SessionSelections.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ApplicationModel+SessionSelections.swift"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -198,6 +200,7 @@
 		D49100000000000000000004 /* Models */ = {
 			isa = PBXGroup;
 			children = (
+				A14000000000000000000002 /* ApplicationModel+SessionSelections.swift */,
 				3CE258FB55B3D55A39972D5B /* OpenCodeModel.swift */,
 				D472AB9160464F1FAB826C11 /* ApplicationModel+AgentTools.swift */,
 				20E807F893654CD4A1F24D40 /* WorkspaceAgentToolsModel.swift */,
@@ -394,6 +397,7 @@
 				BA480090AAD04BE7A8327211 /* SettingsHermesView.swift in Sources */,
 				E45100000000000000000001 /* DashboardHermesCron.swift in Sources */,
 				ECBF462874DF484F9FDD5C91 /* DashboardLocalSecretCard.swift in Sources */,
+				A14000000000000000000001 /* ApplicationModel+SessionSelections.swift in Sources */,
 				4C606D43824083BD3A612FF1 /* OpenCodeModel.swift in Sources */,
 				923D138C1F54FC887AA90493 /* DashboardSharedViews.swift in Sources */,
 				C04200000000000000000001 /* DashboardConversationPopover.swift in Sources */,

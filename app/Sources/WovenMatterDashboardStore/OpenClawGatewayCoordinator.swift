@@ -1438,6 +1438,9 @@ public actor OpenClawGatewayCoordinator {
       slashCommands: commands,
       modelOptionMetadata: modelOptionMetadata,
       thinkingOptionMetadata: thinkingOptionMetadata,
+      permission: session["permissionMode"]?.stringValue ?? "default",
+      permissionOptions: OpenClawSessionPermissions.options,
+      permissionOptionMetadata: OpenClawSessionPermissions.metadata,
       workingDirectory: session["execCwd"]?.stringValue ?? session["spawnedCwd"]?.stringValue
         ?? session["spawnedWorkspaceDir"]?.stringValue
     )

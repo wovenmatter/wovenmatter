@@ -125,20 +125,23 @@ public enum RemoteHarnessLaunchResolver {
             "woven-runtime",
         ])
         command.append(harness.command)
+        let harnessArgumentsStartIndex = command.count
         command.append(contentsOf: harness.arguments)
         let remoteCommand = command.map(shellQuote).joined(separator: " ")
+        let sshArguments = [
+            "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", destination, remoteCommand,
+        ]
         return RemoteHarnessLaunchContext(
             launch: LocalACPRuntimeLaunchConfiguration(
                 runtimeKind: runtimeKind,
                 executableURL: URL(fileURLWithPath: "/usr/bin/ssh"),
-                arguments: [
-                    "-T",
-                    "-o", "BatchMode=yes",
-                    "-o", "ConnectTimeout=10",
-                    destination,
-                    remoteCommand,
-                ],
-                processWorkingDirectoryURL: processWorkingDirectory
+                arguments: sshArguments,
+                processWorkingDirectoryURL: processWorkingDirectory,
+                wrappedCommand: LocalACPRuntimeWrappedCommand(
+                    argumentIndex: sshArguments.count - 1,
+                    command: command,
+                    harnessArgumentsStartIndex: harnessArgumentsStartIndex
+                )
             ),
             workspace: LocalACPWorkspaceLaunchConfiguration(
                 rootURL: remoteRoot,

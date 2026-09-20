@@ -14,6 +14,11 @@ public actor HermesGatewayClient {
     private var sequence: Double = 0
     private var epoch: String?
     private var configuration = LocalACPSessionConfiguration.empty
+    private var permissionInfo: HermesValue = .null
+    private var inheritedPermissionMode: String?
+    private var permissionChangeInFlight = false
+    private var confirmedPermissionOverride: String?
+    private var permissionDowngradeUnavailable = false
     private var onEvent: LocalACPClient.EventHandler?
     private var onPermission: LocalACPClient.PermissionHandler?
     private var onInteraction: LocalACPClient.InteractionHandler?
@@ -73,12 +78,18 @@ public actor HermesGatewayClient {
 
     public func initializeSession(workingDirectory: URL, existingSessionID: String?, title: String?, systemPrompt: String?) async throws -> LocalACPInitializedSession {
         recoveryInvalidated = true
+        permissionInfo = .null
+        inheritedPermissionMode = nil
+        permissionDowngradeUnavailable = false
         self.workingDirectory = workingDirectory
         heartbeat?.cancel(); heartbeat = nil
         await rpc?.setHandlers(event: nil, disconnected: nil, request: nil)
         await rpc?.disconnect()
         imported = existingSessionID?.hasPrefix("hermes-import:") == true
         let previous = existingSessionID.map(Self.parseIdentity)
+        if previous?.storedID != storedID || (previous?.home != nil && previous?.home != home) {
+            confirmedPermissionOverride = nil
+        }
         if previous?.storedID == "" { throw HermesGatewayError.message("The saved Hermes conversation identity is invalid.") }
         var environment = launch.environment
         if let pinnedHome = previous?.home { environment["HERMES_HOME"] = pinnedHome }
@@ -121,6 +132,11 @@ public actor HermesGatewayClient {
             configuration.workingDirectory = workingDirectory.path
         }
         try await refreshConfiguration()
+        // Transport recovery may rebuild this native session internally, without
+        // returning to the coordinator. Restore only an explicitly chosen mode.
+        if let permission = confirmedPermissionOverride {
+            _ = try await setSessionPermission(permission)
+        }
         recoveryInvalidated = false
         heartbeat = Task { [weak self] in
             while !Task.isCancelled {
@@ -147,12 +163,15 @@ public actor HermesGatewayClient {
         }
         sessionID = live; storedID = requestedStoredID ?? stored
         let info = snapshot["info"]
+        updatePermissionInfo(info)
         if !info["usage"].isNull { latestUsage = info["usage"] }
         configuration = LocalACPSessionConfiguration(model: info["model"].string, thinking: info["reasoning_effort"].string,
             modelOptions: configuration.modelOptions, thinkingOptions: configuration.thinkingOptions,
             slashCommands: configuration.slashCommands,
             modelOptionMetadata: configuration.modelOptionMetadata,
             thinkingOptionMetadata: configuration.thinkingOptionMetadata,
+            permission: configuration.permission, permissionOptions: configuration.permissionOptions,
+            permissionOptionMetadata: configuration.permissionOptionMetadata,
             workingDirectory: info["cwd"].string ?? snapshot["cwd"].string)
     }
 
@@ -172,6 +191,8 @@ public actor HermesGatewayClient {
                 slashCommands: configuration.slashCommands,
                 modelOptionMetadata: configuration.modelOptionMetadata,
                 thinkingOptionMetadata: configuration.thinkingOptionMetadata,
+                permission: configuration.permission, permissionOptions: configuration.permissionOptions,
+                permissionOptionMetadata: configuration.permissionOptionMetadata,
                 workingDirectory: configuration.workingDirectory)
         }
         try await refreshConfiguration()
@@ -181,15 +202,81 @@ public actor HermesGatewayClient {
     private func refreshConfiguration() async throws {
         guard let rpc else { return }
         let reasoning = try await rpc.call("config.get", ["session_id": .string(sessionID), "key": "reasoning"])
+        let approvals = try? await rpc.call("config.get", ["session_id": .string(sessionID), "key": "approvals.mode"])
+        inheritedPermissionMode = approvals?["value"].string ?? inheritedPermissionMode
         let options = try await rpc.call("model.options", ["session_id": .string(sessionID), "explicit_only": .bool(true)])
         let catalog = try? await rpc.call("commands.catalog", ["session_id": .string(sessionID)])
         let directory = configuration.workingDirectory
+        // Initial create/resume can return before the agent's effective policy
+        // is ready. Read it after catalog discovery without changing any flags.
+        if let snapshot = try? await rpc.call("session.activate", ["session_id": .string(sessionID), "omit_messages": .bool(true)]),
+           snapshot["session_id"].text == sessionID {
+            updatePermissionInfo(snapshot["info"])
+        }
         configuration = Self.configuration(
             options: options,
             reasoning: reasoning,
             slashCommands: catalog.map(HermesSlashCommands.catalog) ?? configuration.slashCommands
         )
         configuration.workingDirectory = directory
+        applyPermissionConfiguration()
+    }
+
+    /// Changes only this session's native YOLO flag. The inherited approval mode
+    /// is read-only: changing approvals.mode would affect other conversations.
+    public func setSessionPermission(_ permission: String) async throws -> LocalACPSessionConfiguration {
+        guard !permissionChangeInFlight, !closed, !sessionID.isEmpty, let rpc else {
+            throw HermesGatewayError.message("Hermes is busy or disconnected.")
+        }
+        guard ["default", "full"].contains(permission) else {
+            throw HermesGatewayError.message("This Hermes permission mode is not supported.")
+        }
+        if permission == "default", inheritedPermissionMode == "off" || permissionDowngradeUnavailable {
+            throw HermesGatewayError.message("Hermes has full access enabled in its inherited policy. Change that policy in Hermes before lowering access for this conversation.")
+        }
+        permissionChangeInFlight = true
+        defer { permissionChangeInFlight = false }
+        let target = sessionID
+        let response = try await rpc.call("config.set", ["session_id": .string(target), "key": "yolo",
+            "value": permission == "full" ? "1" : "0", "scope": "session"])
+        guard sessionID == target, !closed else { throw CancellationError() }
+        guard response["scope"].text == "session", response["value"].text == (permission == "full" ? "1" : "0") else {
+            throw HermesGatewayError.message("Hermes did not confirm the session permission override.")
+        }
+        // A successful flag write is not sufficient: global/process YOLO can
+        // still force full access. Read the live session's effective policy.
+        let snapshot = try await rpc.call("session.activate", ["session_id": .string(target), "omit_messages": .bool(true)])
+        guard sessionID == target, !closed, snapshot["session_id"].text == target else { throw CancellationError() }
+        permissionInfo = snapshot["info"]
+        updatePermissionInfo(permissionInfo)
+        if permission == "default", permissionInfo["yolo"] == .bool(true) {
+            permissionDowngradeUnavailable = true
+            applyPermissionConfiguration()
+            throw HermesGatewayError.message("Hermes still reports full access from its inherited or process policy. This conversation has not switched to approvals.")
+        }
+        guard configuration.permission == permission else {
+            throw HermesGatewayError.message("Hermes has not reported the effective permission policy yet. Wait for it to finish preparing and try again.")
+        }
+        confirmedPermissionOverride = permission
+        return configuration
+    }
+
+    private func updatePermissionInfo(_ info: HermesValue) {
+        if !info["yolo"].isNull { permissionInfo = info }
+        inheritedPermissionMode = info["approval_mode"].string ?? inheritedPermissionMode
+        if info["yolo"] == .bool(false) { permissionDowngradeUnavailable = false }
+        applyPermissionConfiguration()
+    }
+
+    private func applyPermissionConfiguration() {
+        let state = HermesSessionPermissions.configuration(info: permissionInfo,
+            inheritedMode: inheritedPermissionMode, downgradeUnavailable: permissionDowngradeUnavailable)
+        configuration = LocalACPSessionConfiguration(model: configuration.model, thinking: configuration.thinking,
+            modelOptions: configuration.modelOptions, thinkingOptions: configuration.thinkingOptions,
+            slashCommands: configuration.slashCommands, modelOptionMetadata: configuration.modelOptionMetadata,
+            thinkingOptionMetadata: configuration.thinkingOptionMetadata,
+            permission: state.permission, permissionOptions: state.permissionOptions,
+            permissionOptionMetadata: state.permissionOptionMetadata, workingDirectory: configuration.workingDirectory)
     }
 
     /// The Gateway accepts this native session vocabulary and normalizes it at
@@ -472,6 +559,7 @@ public actor HermesGatewayClient {
                     finish(.failure(HermesGatewayError.message(payload["error"].string ?? "Hermes turn failed.")))
                 } else { finish(.success(stopped || payload["status"].text == "interrupted" ? .cancelled : .endTurn)) }
             case "session.info":
+                updatePermissionInfo(payload)
                 if !payload["usage"].isNull { latestUsage = payload["usage"] }
             case "reasoning.delta", "thinking.delta":
                 let id = reasoningID()

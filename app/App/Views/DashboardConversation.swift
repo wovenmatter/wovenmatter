@@ -453,6 +453,18 @@ struct DashboardCloudConversation: View {
                         showsSessionControls: conversation.map {
                             model.isOpenClawGatewayConversation($0.id) || $0.localRuntimeKind != nil
                         } ?? false,
+                        showsPermissionControl: conversation.map {
+                            model.isOpenClawGatewayConversation($0.id)
+                                || ($0.localRuntimeKind != nil && $0.localRuntimeKind != .pi)
+                        } ?? false,
+                        sessionMetadataLoading: conversation.map {
+                            if $0.localRuntimeKind == .opencode { return workspaceOpenCode?.metadata($0.id) == nil }
+                            if model.isOpenClawGatewayConversation($0.id) {
+                                return model.openClawGatewaySessionMetadata[$0.id] == nil
+                            }
+                            return model.loadingLocalACPSessionIDs.contains($0.id)
+                                || model.localACPSessionMetadata[$0.id] == nil
+                        } ?? false,
                         sessionMetadata: conversation.flatMap {
                             if $0.localRuntimeKind == .opencode { return workspaceOpenCode?.metadata($0.id) }
                             if model.isOpenClawGatewayConversation($0.id) {
@@ -469,6 +481,7 @@ struct DashboardCloudConversation: View {
                             }
                             if model.isOpenClawGatewayConversation($0.id) {
                                 return model.localRunningConversationIDs.contains($0.id)
+                                    || model.updatingLocalACPSessionIDs.contains($0.id)
                             }
                             if $0.localRuntimeKind != nil {
                                 return model.loadingLocalACPSessionIDs.contains($0.id)
@@ -523,6 +536,33 @@ struct DashboardCloudConversation: View {
                                 )
                                 return
                             }
+                        },
+                        onSelectPermission: { selection in
+                            guard let conversation else { return }
+                            if conversation.localRuntimeKind == .opencode {
+                                workspaceOpenCode?.updateSelection(conversation.id, permission: selection)
+                                return
+                            }
+                            if model.isOpenClawGatewayConversation(conversation.id) {
+                                model.patchOpenClawGatewaySession(
+                                    conversationID: conversation.id,
+                                    model: nil,
+                                    thinkingLevel: nil,
+                                    permission: selection
+                                )
+                                return
+                            }
+                            if let runtimeKind = conversation.localRuntimeKind, runtimeKind != .pi {
+                                model.updateLocalACPSession(conversation: conversation, permission: selection)
+                            }
+                        },
+                        onSaveDefault: { field, workspaceOnly in
+                            guard let conversation else { return }
+                            model.saveSessionDefault(conversation: conversation, field: field, workspaceOnly: workspaceOnly)
+                        },
+                        onClearDefault: { field, workspaceOnly in
+                            guard let conversation else { return }
+                            model.clearSessionDefault(conversation: conversation, field: field, workspaceOnly: workspaceOnly)
                         },
                         onAttachmentAction: onAttachmentAction,
                         onRemoveAttachment: onRemoveAttachment,

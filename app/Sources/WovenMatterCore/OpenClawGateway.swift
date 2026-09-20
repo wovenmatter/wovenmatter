@@ -129,10 +129,13 @@ public struct OpenClawGatewayCapabilities: Codable, Equatable, Sendable {
 public struct OpenClawSessionPreferences: Codable, Equatable, Sendable {
   public var model: String?
   public var thinkingLevel: String?
+  /// `nil` leaves the override unchanged; `default` explicitly restores native inheritance.
+  public var permissionMode: String?
 
-  public init(model: String? = nil, thinkingLevel: String? = nil) {
+  public init(model: String? = nil, thinkingLevel: String? = nil, permissionMode: String? = nil) {
     self.model = model
     self.thinkingLevel = thinkingLevel
+    self.permissionMode = permissionMode
   }
 }
 
