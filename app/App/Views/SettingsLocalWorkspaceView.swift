@@ -175,7 +175,18 @@ struct SettingsLocalWorkspaceView: View {
                     $0.runtimeKind.presentationRank < $1.runtimeKind.presentationRank
                 }
             ) { definition in
-                if definition.runtimeKind == .opencode {
+                if definition.runtimeKind == .defaultAgent {
+                    SettingsInset {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Default Agent").font(.system(size: 13, weight: .medium))
+                                Text("Built into Woven Matter.").font(.callout).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Button("Settings") { onMore(.defaultAgent) }.buttonStyle(SettingsQuietButtonStyle())
+                        }
+                    }
+                } else if definition.runtimeKind == .opencode {
                     openCodeRuntimeRow
                 } else {
                 let availability = model.localACPRuntimeAvailability.first {

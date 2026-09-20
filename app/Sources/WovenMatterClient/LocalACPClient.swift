@@ -148,6 +148,7 @@ public struct LocalACPSessionConfiguration: Equatable, Sendable {
     public let slashCommands: [LocalACPSlashCommand]
     public let modelOptionMetadata: [String: SessionOptionMetadata]
     public let thinkingOptionMetadata: [String: SessionOptionMetadata]
+    public let fallbackNotice: String?
 
     public static let empty = LocalACPSessionConfiguration()
 
@@ -158,7 +159,8 @@ public struct LocalACPSessionConfiguration: Equatable, Sendable {
         thinkingOptions: [String] = [],
         slashCommands: [LocalACPSlashCommand] = [],
         modelOptionMetadata: [String: SessionOptionMetadata] = [:],
-        thinkingOptionMetadata: [String: SessionOptionMetadata] = [:]
+        thinkingOptionMetadata: [String: SessionOptionMetadata] = [:],
+        fallbackNotice: String? = nil
     ) {
         self.model = model
         self.thinking = thinking
@@ -167,6 +169,7 @@ public struct LocalACPSessionConfiguration: Equatable, Sendable {
         self.slashCommands = slashCommands
         self.modelOptionMetadata = modelOptionMetadata
         self.thinkingOptionMetadata = thinkingOptionMetadata
+        self.fallbackNotice = fallbackNotice
     }
 
     public func selecting(
@@ -196,15 +199,18 @@ public struct LocalACPSessionConfiguration: Equatable, Sendable {
 public struct LocalACPInitializedSession: Equatable, Sendable {
     public let sessionID: String
     public let loadedExistingSession: Bool
+    public let recoveredDefaultAgentRuns: [DefaultAgentRunSnapshot]
     public let configuration: LocalACPSessionConfiguration
 
     public init(
         sessionID: String,
         loadedExistingSession: Bool,
-        configuration: LocalACPSessionConfiguration = .empty
+        configuration: LocalACPSessionConfiguration = .empty,
+        recoveredDefaultAgentRuns: [DefaultAgentRunSnapshot] = []
     ) {
         self.sessionID = sessionID
         self.loadedExistingSession = loadedExistingSession
+        self.recoveredDefaultAgentRuns = recoveredDefaultAgentRuns
         self.configuration = configuration
     }
 }
@@ -489,6 +495,17 @@ public actor LocalACPClient {
     private var agentName: String?
     private var pendingInitialSystemPrompt: String?
     private var initialSystemPromptInFlight = false
+    private var defaultAgentRunID: String?
+    private var defaultAgentRemote = false
+    public func setDefaultAgentRunID(_ value: String) async throws {
+        defaultAgentRunID = value
+        guard runtimeKind == .defaultAgent, !defaultAgentRemote else { return }
+        let data = try DefaultAgentSupport.payload(workspace: "local")
+        let parameters = try JSONDecoder().decode(ACPJSONValue.self, from: data)
+        let result = try await request(method: "woven/configure", params: parameters)
+        captureSessionConfiguration(from: result)
+        await configurationHandler?(configuration)
+    }
     private var loadSessionSupported = false
     private var steeringSupported = false
     private var sessionID: String?
@@ -537,6 +554,7 @@ public actor LocalACPClient {
         self.input = input
         self.cursor = cursor
         self.runtimeKind = runtimeKind
+        self.defaultAgentRemote = process.arguments?.contains("/usr/bin/ssh") == true
         self.workingDirectory = workingDirectory.standardizedFileURL
     }
 
@@ -673,7 +691,8 @@ public actor LocalACPClient {
                 return LocalACPInitializedSession(
                     sessionID: existingSessionID,
                     loadedExistingSession: true,
-                    configuration: configuration
+                    configuration: configuration,
+                    recoveredDefaultAgentRuns: runtimeKind == .defaultAgent ? ((try? JSONDecoder().decode([DefaultAgentRunSnapshot].self, from: JSONEncoder().encode(loaded?["_meta"]?["recoveredRuns"] ?? .array([])))) ?? []) : []
                 )
             } catch LocalACPClientError.agent(let code, let message)
                 where Self.isMissingSessionError(
@@ -1080,6 +1099,8 @@ public actor LocalACPClient {
             .grokInterjection
         case .hermes, .cursor, .opencode, .openclaw:
             .concurrentPrompt
+        case .defaultAgent:
+            .unsupported
         case .pi:
             .piRPC
         }
@@ -1120,6 +1141,7 @@ public actor LocalACPClient {
             params: .object([
                 "sessionId": .string(sessionID),
                 "prompt": try Self.promptBlocks(input, text: prefixedText),
+                "_meta": runtimeKind == .defaultAgent ? .object(["wovenRunID": .string(defaultAgentRunID ?? UUID().uuidString.lowercased())]) : .object([:]),
             ])
         )
         if initialSystemPrompt != nil {
@@ -1511,7 +1533,8 @@ public actor LocalACPClient {
                 thinkingOptions: parsed.thinking?.options ?? [],
                 slashCommands: configuration.slashCommands,
                 modelOptionMetadata: parsed.model?.metadata ?? (hadModelOption ? [:] : configuration.modelOptionMetadata),
-                thinkingOptionMetadata: parsed.thinking?.metadata ?? [:]
+                thinkingOptionMetadata: parsed.thinking?.metadata ?? [:],
+                fallbackNotice: value["_meta"]?["fallbackReason"]?.stringValue
             )
         }
 

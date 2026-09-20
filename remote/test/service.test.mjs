@@ -148,11 +148,12 @@ test('service authentication exposes the reviewed harness catalog', async (conte
   const response = await fetch(`${service.url}/v1/harnesses`, { headers })
   const harnesses = (await response.json()).harnesses
   assert.deepEqual(harnesses.map((value) => value.id), [
+    'default_agent',
     'codex', 'claude_code', 'grok_build', 'hermes',
     'cursor', 'opencode', 'pi', 'openclaw',
   ])
   assert.ok(harnesses.every((value) =>
-    Array.isArray(value.setupMethods) && (value.id === 'opencode' || value.setupMethods.length > 0)
+    Array.isArray(value.setupMethods) && (['opencode', 'default_agent'].includes(value.id) || value.setupMethods.length > 0)
   ))
   const openCode = harnesses.find((value) => value.id === 'opencode')
   assert.equal(openCode.transport, 'opencode-v2')
@@ -160,7 +161,7 @@ test('service authentication exposes the reviewed harness catalog', async (conte
   assert.deepEqual(openCode.setupMethods, [])
   assert.match(openCode.transportError, /this workspace’s OpenCode v2 server/)
   assert.deepEqual(
-    Object.keys(harnesses[0].setupMethods[0]).sort(),
+    Object.keys(harnesses.find(value => value.id === 'codex').setupMethods[0]).sort(),
     ['displayName', 'id']
   )
   assert.ok(harnesses.every((value) =>
@@ -235,9 +236,9 @@ test('native sign-in reports a real handoff and verifies provider state', async 
   const harnessDocument = await waitFor(
     `${service.url}/v1/harnesses`,
     headers,
-    (value) => value.harnesses[0].state === 'ready'
+    (value) => value.harnesses.find(h => h.id === 'codex').state === 'ready'
   )
-  assert.equal(harnessDocument.harnesses[0].authenticationStatus, 'configured')
+  assert.equal(harnessDocument.harnesses.find(h => h.id === 'codex').authenticationStatus, 'configured')
   const terminalAuthorizationCode = await fetch(
     `${service.url}/v1/authentication-sessions/${session.id}/authorization-code`,
     { method: 'POST', headers, body: JSON.stringify({ code: 'too-late' }) }
@@ -311,7 +312,7 @@ test('harness readiness requires a real bounded transport handshake', async (con
     headers: { authorization: 'Bearer transport-token' },
   })
   assert.equal(response.status, 200)
-  const statuses = (await response.json()).harnesses
+  const statuses = (await response.json()).harnesses.filter(h => h.id !== 'default_agent')
   assert.equal(statuses[0].state, 'ready')
   assert.equal(statuses[0].transportStatus, 'ready')
   assert.equal(statuses[0].transportError, null)

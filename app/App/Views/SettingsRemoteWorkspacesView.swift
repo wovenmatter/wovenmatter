@@ -523,7 +523,9 @@ struct SettingsRemoteWorkspacesView: View {
                                 harness.state.replacingOccurrences(of: "_", with: " ").capitalized,
                                 tone: harness.state == "ready" ? .neutral : .warning
                             )
-                            runtimeButtons(harness, workspace: workspace)
+                            if harness.id == .defaultAgent {
+                                Button("Settings") { onMoreRuntime(.defaultAgent, workspace) }.buttonStyle(SettingsQuietButtonStyle())
+                            } else { runtimeButtons(harness, workspace: workspace) }
                         }
                         if let runtime = model.runtimeMaintenance[workspace.id]?.first(where: { $0.id == harness.id }) {
                             runtimeInventory(runtime, workspace: workspace)

@@ -92,11 +92,10 @@ public enum RemoteHarnessLaunchResolver {
         guard configuration.workspaceID.wholeMatch(of: idPattern) != nil else {
             throw RemoteWorkspaceClientError.invalidWorkspaceID
         }
-        guard let harness = try HarnessCatalog.loadBundled().harnesses.first(
+        let harness = try HarnessCatalog.loadBundled().harnesses.first(
             where: { $0.id == runtimeKind }
-        ) else {
-            throw RemoteWorkspaceClientError.harnessUnavailable
-        }
+        )
+        guard harness != nil || runtimeKind == .defaultAgent else { throw RemoteWorkspaceClientError.harnessUnavailable }
         let destination = try RemoteWorkspaceSSHClient.validatedDestination(
             hostName: configuration.hostName,
             userName: configuration.userName
@@ -111,19 +110,24 @@ public enum RemoteHarnessLaunchResolver {
             "wovenmatter-\(configuration.workspaceID)",
             "env",
             "HOME=/home",
+            "WOVEN_DEFAULT_AGENT_DIRECTORY=/home/.woven-matter/.wovenmatter/default-agent",
             "PATH=/home/.local/bin:/home/.npm-global/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
         ]
         for (key, value) in LocalACPRuntimeCatalog
             .definition(for: runtimeKind)?.environment.sorted(by: { $0.key < $1.key }) ?? [] {
             command.append("\(key)=\(value)")
         }
-        command.append(contentsOf: [
-            "bash", "-c",
-            #"mkdir -p /home/.wovenmatter && exec 9>/home/.wovenmatter/runtime-operation.lock && { flock --shared --nonblock 9 || { printf '%s\n' 'Runtime maintenance is in progress. Retry after it finishes.' >&2; exit 75; }; } && exec "$@""#,
-            "woven-runtime",
-        ])
-        command.append(harness.command)
-        command.append(contentsOf: harness.arguments)
+        if runtimeKind == .defaultAgent {
+            command.append(contentsOf: ["node", "/opt/wovenmatter/default-agent/src/main.mjs", "--remote"])
+        } else if let harness {
+            command.append(contentsOf: [
+                "bash", "-c",
+                #"mkdir -p /home/.wovenmatter && exec 9>/home/.wovenmatter/runtime-operation.lock && { flock --shared --nonblock 9 || { printf '%s\n' 'Runtime maintenance is in progress. Retry after it finishes.' >&2; exit 75; }; } && exec "$@""#,
+                "woven-runtime",
+            ])
+            command.append(harness.command)
+            command.append(contentsOf: harness.arguments)
+        }
         let remoteCommand = command.map(shellQuote).joined(separator: " ")
         return RemoteHarnessLaunchContext(
             launch: LocalACPRuntimeLaunchConfiguration(
@@ -803,7 +807,8 @@ public actor RemoteWorkspaceSSHClient {
                 "--exclude=remote/.env.example",
                 "--exclude=remote/compose.yaml",
                 "-C", root.path,
-                "remote", "harnesses",
+                "--exclude=default-agent/node_modules", "--exclude=default-agent/bin", "--exclude=default-agent/test",
+                "remote", "harnesses", "default-agent",
             ]
         )
         guard result.status == 0 else {
@@ -1102,6 +1107,11 @@ public struct RemoteWorkspaceServiceClient: Sendable {
             method: "POST",
             body: nil
         )
+    }
+
+    public func configureDefaultAgent(_ payload: Data) async throws {
+        struct Response: Decodable { let saved: Bool }
+        let _: Response = try await request(path: "v1/default-agent/configuration", method: "POST", body: payload)
     }
 
     private func request<Value: Decodable>(

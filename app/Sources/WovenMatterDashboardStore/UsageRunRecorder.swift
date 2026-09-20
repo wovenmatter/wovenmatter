@@ -88,7 +88,7 @@ actor UsageRunRecorder {
     case .cursor: (.cursor, "Cursor", "Cursor subscription")
     // OpenCode, Pi, OpenClaw, and Hermes are harnesses rather than billing
     // authorities. Their durable histories provide the actual provider route.
-    case .opencode, .openclaw, .pi, .hermes: (.unknown, "Unknown", "Unknown")
+    case .defaultAgent, .opencode, .openclaw, .pi, .hermes: (.unknown, "Unknown", "Unknown")
     }
   }
 }

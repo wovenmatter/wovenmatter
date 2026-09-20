@@ -29,6 +29,7 @@ public enum AgentBucket: String, Codable, CaseIterable, Hashable, Sendable {
 }
 
 public enum AgentRuntimeKind: String, Codable, CaseIterable, Hashable, Sendable {
+  case defaultAgent = "default_agent"
   case openclaw
   case pi
   case codex
@@ -39,6 +40,7 @@ public enum AgentRuntimeKind: String, Codable, CaseIterable, Hashable, Sendable 
   case opencode
 
   public static let presentationOrder: [Self] = [
+    .defaultAgent,
     .codex,
     .claudeCode,
     .grokBuild,
@@ -55,6 +57,7 @@ public enum AgentRuntimeKind: String, Codable, CaseIterable, Hashable, Sendable 
 
   public var displayName: String {
     switch self {
+    case .defaultAgent: "Default Agent"
     case .openclaw: "OpenClaw"
     case .pi: "Pi"
     case .codex: "Codex"

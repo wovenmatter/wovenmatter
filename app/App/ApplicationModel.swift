@@ -672,6 +672,8 @@ final class ApplicationModel {
             && (lhs.localCLIAgentOrder ?? []) == (rhs.localCLIAgentOrder ?? [])
     }
 
+    var defaultAgentFallbackNotice: String?
+
     var orderedLocalCLIAgents: [WorkspaceAgent] {
         Self.orderLocalCLIAgents(
             localCLIAgents,
@@ -788,6 +790,7 @@ final class ApplicationModel {
         // Metadata changes are independent of run content and must not replace
         // or be suppressed by a pending terminal notification.
         if case .configuration(let configuration) = change.phase {
+            if let notice = configuration.fallbackNotice { defaultAgentFallbackNotice = notice }
             // The running adapter already supplied this snapshot. Preparing a
             // session here would turn its initial notification into a refresh
             // loop, keeping the composer loading while idle sessions restart.
@@ -2557,6 +2560,10 @@ final class ApplicationModel {
             runtimeKind: runtimeKind,
             isBuzzWorkspaceSession: isBuzzWorkspaceSession
         )
+        if runtimeKind == .defaultAgent, let workspaceID = conversation.remoteWorkspaceID,
+           let remote = remoteWorkspaces.configuration(id: workspaceID) {
+            try await remoteWorkspaces.synchronizeDefaultAgent(remote)
+        }
         let launch = context?.launch
         let workspace = context?.workspace
         guard isBuzzWorkspaceSession || (launch != nil && workspace != nil) else {
@@ -2900,7 +2907,7 @@ final class ApplicationModel {
             throw ApplicationModelError.localACPRuntimeUnavailable
         }
         return RemoteHarnessLaunchContext(
-            launch: launch,
+            launch: runtimeKind == .defaultAgent ? try DefaultAgentSupport.configuredLaunch(launch) : launch,
             workspace: workspace
         )
     }
@@ -3121,6 +3128,7 @@ final class ApplicationModel {
         }
     }
 
+    var pendingDefaultAgentSettingsScope: String?
     private(set) var pendingHermesSettingsAgentID: UUID?
     private(set) var hermesGatewayConnections: [UUID: HermesGatewayConnection] = [:]
     private(set) var hermesCronJobs: [UUID: [HermesValue]] = [:]

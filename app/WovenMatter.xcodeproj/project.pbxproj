@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		DA2000000000000000000004 /* SettingsDefaultAgentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA2000000000000000000003 /* SettingsDefaultAgentView.swift */; };
+		DA2000000000000000000002 /* DefaultAgentSettingsModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA2000000000000000000001 /* DefaultAgentSettingsModel.swift */; };
 		AA1900000000000000000001 /* WovenMatterLifecycleDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1900000000000000000002 /* WovenMatterLifecycleDelegate.swift */; };
 		0C11E0000000000000000001 /* WovenMatterClient in Frameworks */ = {isa = PBXBuildFile; productRef = 0C11E0000000000000000004 /* WovenMatterClient */; };
 		D46000000000000000000002 /* WovenMatterDashboardStore in Frameworks */ = {isa = PBXBuildFile; productRef = D46000000000000000000001 /* WovenMatterDashboardStore */; };
@@ -62,6 +64,8 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		DA2000000000000000000003 /* SettingsDefaultAgentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsDefaultAgentView.swift; sourceTree = "<group>"; };
+		DA2000000000000000000001 /* DefaultAgentSettingsModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DefaultAgentSettingsModel.swift; sourceTree = "<group>"; };
 		AA1900000000000000000002 /* WovenMatterLifecycleDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WovenMatterLifecycleDelegate.swift; sourceTree = "<group>"; };
 		A11C00000000000000000002 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A11C00000000000000000004 /* WorkspaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceView.swift; sourceTree = "<group>"; };
@@ -174,6 +178,7 @@
 		D49100000000000000000004 /* Models */ = {
 			isa = PBXGroup;
 			children = (
+				DA2000000000000000000001 /* DefaultAgentSettingsModel.swift */,
 				3CE258FB55B3D55A39972D5B /* OpenCodeModel.swift */,
 				87BA82494C4524C032235AAF /* DashboardConversationReferencePreview.swift */,
 				FC6A850ACFC17DE4433439A7 /* DashboardConversationState.swift */,
@@ -187,6 +192,7 @@
 		D0E0A91C0032120E4CDF1388 /* Views */ = {
 			isa = PBXGroup;
 			children = (
+				DA2000000000000000000003 /* SettingsDefaultAgentView.swift */,
 				6F6AFCDD4A429E11B0945492 /* OpenCodeSessionView.swift */,
 				17AF06D69A7DE73E3F94E40A /* OpenCodeInteractionView.swift */,
 				97160C827D94B74AFAB2961A /* OpenCodeSettingsView.swift */,
@@ -342,7 +348,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "set -eu\n/usr/bin/xattr -cr \"${TARGET_BUILD_DIR}/${WRAPPER_NAME}\"\n/bin/rm -rf \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/remote/test\"\n/bin/rm -f \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/remote/.env.example\" \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/remote/compose.yaml\"\ntouch \"${DERIVED_FILE_DIR}/bundle-metadata-cleaned.stamp\"\n";
+			shellScript = "set -eu\n\"${SRCROOT}/../scripts/prepare-default-agent.sh\" \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/default-agent\"\n/usr/bin/xattr -cr \"${TARGET_BUILD_DIR}/${WRAPPER_NAME}\"\n/bin/rm -rf \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/remote/test\"\n/bin/rm -f \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/remote/.env.example\" \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/remote/compose.yaml\"\ntouch \"${DERIVED_FILE_DIR}/bundle-metadata-cleaned.stamp\"\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -351,6 +357,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				DA2000000000000000000004 /* SettingsDefaultAgentView.swift in Sources */,
+				DA2000000000000000000002 /* DefaultAgentSettingsModel.swift in Sources */,
 				46E81C4CE9571D1C715098CA /* OpenCodeSessionView.swift in Sources */,
 				8B47C81B917AA853D87FB56A /* OpenCodeInteractionView.swift in Sources */,
 				E86083BC811D526E0900522B /* OpenCodeSettingsView.swift in Sources */,

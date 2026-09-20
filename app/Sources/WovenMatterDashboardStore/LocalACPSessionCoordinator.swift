@@ -25,6 +25,7 @@ struct LocalACPSessionDriver: Sendable {
         _ input: AgentMessageInput
     ) async throws -> LocalACPActiveInputReceipt)?
     let cancel: @Sendable () async throws -> Void
+    let setRunID: (@Sendable (String) async throws -> Void)?
     let shutdown: @Sendable () async -> Void
 
     init(
@@ -50,7 +51,8 @@ struct LocalACPSessionDriver: Sendable {
             _ input: AgentMessageInput
         ) async throws -> LocalACPActiveInputReceipt)? = nil,
         cancel: @escaping @Sendable () async throws -> Void,
-        shutdown: @escaping @Sendable () async -> Void
+        shutdown: @escaping @Sendable () async -> Void,
+        setRunID: (@Sendable (String) async throws -> Void)? = nil
     ) {
         self.initializeSession = initializeSession
         self.prompt = prompt
@@ -59,6 +61,7 @@ struct LocalACPSessionDriver: Sendable {
         self.setConfiguration = setConfiguration
         self.activeInput = activeInput
         self.cancel = cancel
+        self.setRunID = setRunID
         self.shutdown = shutdown
     }
 
@@ -179,7 +182,8 @@ struct LocalACPSessionDriver: Sendable {
             },
             shutdown: {
                 await client.shutdown()
-            }
+            },
+            setRunID: { value in try await client.setDefaultAgentRunID(value) }
         )
     }
 }
@@ -483,6 +487,7 @@ public actor LocalACPSessionCoordinator {
             } else {
                 interactionHandler = nil
             }
+            try await client.setRunID?(run.runID)
             var stopReason = try await client.prompt(
                 input,
                 { event in
@@ -1178,8 +1183,13 @@ public actor LocalACPSessionCoordinator {
                     )
                 }
             }
+            if descriptor.runtimeKind == .defaultAgent, !initialized.recoveredDefaultAgentRuns.isEmpty {
+                try database.recoverDefaultAgentRuns(conversationID: descriptor.conversationID, snapshots: initialized.recoveredDefaultAgentRuns)
+                publishChange(conversationID: descriptor.conversationID, runID: "", phase: .terminal)
+            }
             var configuration = initialized.configuration
             if let model,
+               !(descriptor.runtimeKind == .defaultAgent && initialized.loadedExistingSession),
                model != configuration.model,
                configuration.modelOptions.contains(model) {
                 configuration = try await started.setConfiguration(

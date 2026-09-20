@@ -19,6 +19,7 @@ private enum HarnessSettingsOrigin: Equatable {
 private enum SettingsSection: Equatable {
     case landing
     case general
+    case defaultAgent(String, HarnessSettingsOrigin)
     case harness(AgentRuntimeKind, UUID?, HarnessSettingsOrigin)
     case openClaw
     case openCode
@@ -54,6 +55,8 @@ struct SettingsView: View {
             switch section {
             case .landing:
                 landing
+            case .defaultAgent(let scope, let origin):
+                SettingsDefaultAgentView(model: model, initialScope: scope, reservesRailControlSpace: reservesRailControlSpace, onBack: { section = origin.section })
             case .general:
                 SettingsGeneralView(
                     model: model,
@@ -164,8 +167,15 @@ struct SettingsView: View {
         .task {
             model.refreshLocalACPRuntimesNow()
         }
-        .onAppear { openPendingHermesSettings() }
+        .onAppear { openPendingHermesSettings(); openPendingDefaultAgentSettings() }
+        .onChange(of: model.pendingDefaultAgentSettingsScope) { _, _ in openPendingDefaultAgentSettings() }
         .onChange(of: model.pendingHermesSettingsAgentID) { _, _ in openPendingHermesSettings() }
+    }
+
+    private func openPendingDefaultAgentSettings() {
+        guard let scope = model.pendingDefaultAgentSettingsScope else { return }
+        section = .defaultAgent(scope, .landing)
+        model.pendingDefaultAgentSettingsScope = nil
     }
 
     private func openPendingHermesSettings() {
@@ -186,6 +196,12 @@ struct SettingsView: View {
                     detail: "Theme, sidebar layout, and conversation titles.",
                     icon: { DashboardLucideIcon(glyph: .settings, size: 15) },
                     action: { section = .general }
+                )
+                SettingsDestinationRow(
+                    title: "Default Agent",
+                    detail: "Providers, search, and models across your workspaces.",
+                    icon: { DashboardLucideIcon(glyph: .terminal, size: 15) },
+                    action: { section = .defaultAgent("global", .landing) }
                 )
                 SettingsDestinationRow(
                     title: "Local agent workspace",
@@ -269,6 +285,7 @@ struct SettingsView: View {
         origin: HarnessSettingsOrigin
     ) -> SettingsSection {
         switch runtimeKind {
+        case .defaultAgent: .defaultAgent(workspaceID?.uuidString.lowercased() ?? "local", origin)
         case .openclaw: .openClawWorkspace(workspaceID)
         case .hermes: .hermesWorkspace(workspaceID)
         case .opencode: .openCodeWorkspace(workspaceID)

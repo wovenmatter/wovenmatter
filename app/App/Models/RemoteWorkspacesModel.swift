@@ -124,9 +124,9 @@ final class RemoteWorkspacesModel {
             return currentHarnesses(for: configuration).compactMap { harness in
                 harness.state == "ready"
                     && !isRuntimeInventoryUnavailable(harness.id, configuration: configuration)
-                    && self.runtimeMaintenance[configuration.id]?.contains(where: {
+                    && (harness.id == .defaultAgent || self.runtimeMaintenance[configuration.id]?.contains(where: {
                         $0.id == harness.id && $0.enabled && $0.visible && $0.installed && $0.operation?.status != "running"
-                    }) == true
+                    }) == true)
                     ? RemoteHarnessChatTarget(
                         configuration: configuration,
                         harness: harness
@@ -160,14 +160,14 @@ final class RemoteWorkspacesModel {
         _ runtimeKind: AgentRuntimeKind,
         in configuration: RemoteWorkspaceConfiguration
     ) -> Bool {
-        isRuntimeEnabled(runtimeKind, in: configuration)
+        (runtimeKind == .defaultAgent || isRuntimeEnabled(runtimeKind, in: configuration))
             && !isRuntimeInventoryUnavailable(runtimeKind, configuration: configuration)
             && statuses[configuration.id]?.running == true
             && currentHarnesses(for: configuration).contains {
                 $0.id == runtimeKind && $0.state == "ready"
-            } && runtimeMaintenance[configuration.id]?.contains(where: {
+            } && (runtimeKind == .defaultAgent || runtimeMaintenance[configuration.id]?.contains(where: {
                 $0.id == runtimeKind && $0.enabled && $0.installed && $0.operation?.status != "running"
-            }) == true
+            }) == true)
     }
 
     func refreshAll() {
@@ -214,7 +214,7 @@ final class RemoteWorkspacesModel {
     }
 
     func isRuntimeInventoryUnavailable(_ kind: AgentRuntimeKind, configuration: RemoteWorkspaceConfiguration) -> Bool {
-        runtimeErrors[configuration.id] != nil && runtimeChecksVerifiedAfterError[configuration.id]?.contains(kind) != true
+        kind != .defaultAgent && runtimeErrors[configuration.id] != nil && runtimeChecksVerifiedAfterError[configuration.id]?.contains(kind) != true
     }
 
     func checkRuntimeUpdates(_ kind: AgentRuntimeKind, configuration: RemoteWorkspaceConfiguration) {
@@ -1011,6 +1011,15 @@ final class RemoteWorkspacesModel {
         }
     }
 
+    func synchronizeDefaultAgent(_ configuration: RemoteWorkspaceConfiguration) async throws {
+        let identity = try requestIdentity(configuration)
+        let payload = try DefaultAgentSupport.payload(workspace: configuration.id.uuidString.lowercased())
+        let client = try await serviceClient(for: configuration)
+        try requireCurrent(identity)
+        try await client.configureDefaultAgent(payload)
+        try requireCurrent(identity)
+    }
+
     private func refreshService(
         _ configuration: RemoteWorkspaceConfiguration
     ) async {
@@ -1029,6 +1038,7 @@ final class RemoteWorkspacesModel {
             try requireCurrent(identity)
             workspaceRoots[configuration.id] = health.workspaceRoot
             harnesses[configuration.id] = inventory
+            if inventory.contains(where: { $0.id == .defaultAgent }) { try await synchronizeDefaultAgent(configuration) }
             await refreshRuntimeMaintenance(configuration)
         } catch {
             guard (try? requireCurrent(identity)) != nil else { return }

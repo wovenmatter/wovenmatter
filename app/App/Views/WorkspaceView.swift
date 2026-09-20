@@ -188,6 +188,9 @@ struct WorkspaceView: View {
                     }
                 }
                 .background(theme.palette.workspace)
+                .alert("Default Agent switched models", isPresented: Binding(get: { model.defaultAgentFallbackNotice != nil }, set: { if !$0 { model.defaultAgentFallbackNotice = nil } })) {
+                    Button("OK") { model.defaultAgentFallbackNotice = nil }
+                } message: { Text(model.defaultAgentFallbackNotice ?? "") }
 
                 if showsNewChatChooser || showsNewNoteChooser {
                     Color.black.opacity(0.20)
@@ -315,6 +318,9 @@ struct WorkspaceView: View {
                     }
                 }
             )
+        }
+        .onChange(of: model.pendingDefaultAgentSettingsScope) { _, scope in
+            if scope != nil { openUtility(.settings) }
         }
         .onChange(of: model.pendingHermesSettingsAgentID) { _, agentID in
             if agentID != nil {
