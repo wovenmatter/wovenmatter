@@ -4,12 +4,15 @@ import WovenMatterCore
 /// The gateway enforces these policies, including active-run downgrade handling.
 /// Never emulate a permission mode by answering pending approval requests.
 public enum OpenClawSessionPermissions {
-    public static let options = ["default", "read-only", "guarded", "workspace", "full"]
+    public static let options = ["guarded", "workspace", "full"]
+    // Existing sessions may still inherit a policy or be read-only. Keep those
+    // values readable/restorable without adding unrelated modes to the picker.
+    private static let supportedPolicies = options + ["default", "read-only"]
     public static let metadata: [String: SessionOptionMetadata] = [
         "default": .init(name: "Default", description: "Use the gateway's inherited permission policy."),
         "read-only": .init(name: "Read only", description: "Read session files; block edits and command execution."),
-        "guarded": .init(name: "Guarded", description: "Use the session workspace with native allowlists and approval prompts."),
-        "workspace": .init(name: "Workspace", description: "Use the session workspace with native command review and approval when needed."),
+        "guarded": .init(name: "Ask for approval", description: "Use the session workspace; ask before commands outside the native allowlist."),
+        "workspace": .init(name: "Auto", description: "OpenClaw reviews commands automatically and asks when approval is needed. File access stays within the session workspace."),
         "full": .init(name: "Full access", description: "Allow unrestricted files and commands within the gateway's host policy.")
     ]
 
@@ -18,7 +21,7 @@ public enum OpenClawSessionPermissions {
         if let model = preferences.model { params["model"] = .string(model) }
         if let thinking = preferences.thinkingLevel { params["thinkingLevel"] = .string(thinking) }
         if let permission = preferences.permissionMode {
-            guard options.contains(permission) else {
+            guard supportedPolicies.contains(permission) else {
                 throw OpenClawGatewayClientError.rejected("This OpenClaw permission mode is not supported.")
             }
             params["permissionMode"] = permission == "default" ? .null : .string(permission)

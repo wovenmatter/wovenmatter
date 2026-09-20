@@ -83,7 +83,7 @@ public actor OpenCodeSessionCoordinator {
         guard let link = try database.openCodeLinks().first(where: { $0.conversationID == conversationID }) else {
             throw OpenCodeError.message("This OpenCode conversation is no longer available.")
         }
-        // Cancel queued replies immediately when returning to normal, even if a
+        // Cancel queued replies immediately when changing modes, even if a
         // canonical refresh is still in flight. Already sent replies cannot be revoked.
         let previouslyReplied = automaticallyReplied[conversationID]
         stopAutomaticApprovals(conversationID)
@@ -127,7 +127,7 @@ public actor OpenCodeSessionCoordinator {
 
     private func scheduleAutomaticApprovals(_ link: OpenCodeSessionLink) {
         guard (try? database.openCodeLinks())?.contains(link) == true,
-              snapshots[link.conversationID]?.approvalMode == "auto",
+              OpenCodePermissionHandling.normalized(snapshots[link.conversationID]?.approvalMode) != "normal",
               !changingPermissionHandling.contains(link.conversationID),
               automaticApprovalTasks[link.conversationID] == nil,
               let token = connectionTokens[link.connectionID], clients[link.connectionID] != nil else { return }
@@ -142,10 +142,11 @@ public actor OpenCodeSessionCoordinator {
         }
         while !Task.isCancelled, automaticApprovalEpochs[link.conversationID] == epoch,
               connectionTokens[link.connectionID] == token,
-              snapshots[link.conversationID]?.approvalMode == "auto", let client = clients[link.connectionID] {
+              OpenCodePermissionHandling.normalized(snapshots[link.conversationID]?.approvalMode) != "normal", let client = clients[link.connectionID] {
+            let mode = snapshots[link.conversationID]?.approvalMode
             let handled = (automaticallyReplied[link.conversationID] ?? []).union(automaticApprovalFailures[link.conversationID] ?? [])
             guard let requestID = snapshots[link.conversationID]?.permissions.compactMap({
-                OpenCodePermissionHandling.requestID($0, sessionID: link.sessionID)
+                OpenCodePermissionHandling.requestID($0, sessionID: link.sessionID, mode: mode)
             }).first(where: { !handled.contains($0) }) else { return }
             do {
                 // Native TUI uses this same reply: once, never always. The

@@ -220,12 +220,17 @@ public actor HermesGatewayClient {
         guard ["default", "full"].contains(permission) else {
             throw HermesGatewayError.message("This Hermes permission mode is not supported.")
         }
-        if permission == "default", inheritedPermissionMode == "off" || permissionDowngradeUnavailable {
-            throw HermesGatewayError.message("Hermes has full access enabled in its inherited policy. Change that policy in Hermes before lowering access for this conversation.")
-        }
         permissionChangeInFlight = true
         defer { permissionChangeInFlight = false }
         let target = sessionID
+        // Settings or another native client may have changed the profile since
+        // the last event. Do not let stale inherited `off` hide a valid downgrade.
+        let current = try await rpc.call("session.activate", ["session_id": .string(target), "omit_messages": .bool(true)])
+        guard sessionID == target, !closed, current["session_id"].text == target else { throw CancellationError() }
+        updatePermissionInfo(current["info"])
+        if permission == "default", inheritedPermissionMode == "off" || permissionDowngradeUnavailable {
+            throw HermesGatewayError.message("Hermes has full access enabled in its inherited policy. Change that policy in Settings before lowering access for this conversation.")
+        }
         let response = try await rpc.call("config.set", ["session_id": .string(target), "key": "yolo",
             "value": permission == "full" ? "1" : "0", "scope": "session"])
         guard sessionID == target, !closed else { throw CancellationError() }

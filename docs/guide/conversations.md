@@ -20,21 +20,43 @@ are independent for each control, so a workspace can override the model while
 inheriting the harness's permission choice. Resetting a workspace default restores
 inheritance from the harness default.
 
-Permission choices follow the selected harness:
+Permission choices follow the selected harness. Similar names have consistent
+meanings:
 
-- Codex and Claude Code show their available native approval modes.
+- **Ask for approval** keeps the harness's approval prompts.
+- **Auto-accept edits** allows file edits while leaving other actions subject to
+  approval.
+- **Auto**, **Auto-review**, or **Smart approvals** uses the harness's own review
+  system to evaluate actions and decide what it can approve. This is not blanket
+  acceptance of requests.
+- **Full access** allows commands and edits without ordinary approval prompts,
+  within the harness's enforced policy.
+
+Only supported choices appear. A harness may also offer more specific policies:
+
+- Codex offers **Ask for approval**, **Approve for me**, and **Full access** when
+  its adapter advertises those native modes. Approve for me uses native automatic
+  review; older adapters without that capability do not advertise it as smart
+  approval.
+- Claude Code offers its available native **Ask for approval**, **Auto-accept
+  edits**, **Auto**, and **Full access** modes. Auto appears only when supported.
 - Grok Build offers its native approval policies. Changing the policy reconnects
   the same conversation before the next message.
-- OpenClaw offers its native session policies, including Read only, Guarded,
-  Workspace, and Full access.
-- Hermes offers its inherited approval policy or Full access for this session.
-  A profile or process that already forces Full access cannot be restricted by
-  this conversation control.
-- OpenCode and Cursor offer native approval handling or automatic one-time
-  approval of this conversation's tool requests while WovenMatter is connected.
-  Their native deny rules remain in effect; questions and sign-in steps still
-  need your response. Returning to native approvals stops automatic replies and
-  preserves permissions already allowed by the harness.
+- OpenClaw offers **Ask for approval**, **Auto**, and **Full access**. Auto uses
+  OpenClaw's command reviewer within the session workspace.
+- Hermes offers **Ask for approval** and **Full access** in the composer. Ask
+  restores the profile's approval policy. Choose **Ask for approval** or **Smart
+  approvals** in Hermes Settings; that choice applies to every conversation
+  using that profile. Smart approvals uses Hermes's native reviewer. A profile
+  or process that already forces Full access cannot be restricted by the
+  conversation control.
+- OpenCode offers **Ask for approval**, **Auto-accept edits**, and **Full access**.
+  Cursor offers **Ask for approval** and **Full access**. These apply to the
+  conversation while WovenMatter is connected. They do not run a smart reviewer
+  or save permissions for other conversations. Native deny rules remain in
+  effect; questions and sign-in steps still need your response. Returning to Ask
+  stops accepting new requests and preserves permissions already allowed by the
+  harness.
 - Pi has no permission selector. WovenMatter does not manage Pi permission
   extensions.
 

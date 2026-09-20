@@ -2,6 +2,72 @@ import SwiftUI
 import WovenMatterClient
 import WovenMatterCore
 
+private struct SettingsHermesProfileApprovals: View {
+    let connection: HermesGatewayConnection?
+    @State private var mode: String?
+    @State private var busy = false
+    @State private var error: String?
+    @State private var requestID = UUID()
+
+    private var selection: String {
+        if let mode, let known = HermesProfileApprovalMode(rawValue: mode) { return known.displayName }
+        if mode == "off" { return "Full access (profile)" }
+        return busy ? "Loading…" : "Unavailable"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 12) {
+                Text("Approval policy").font(.system(size: 12.5, weight: .medium))
+                Spacer(minLength: 8)
+                SettingsMenuPicker(
+                    selection: selection,
+                    options: HermesProfileApprovalMode.allCases.map(\.displayName),
+                    width: 190
+                ) { label in
+                    guard let choice = HermesProfileApprovalMode.allCases.first(where: { $0.displayName == label }) else { return }
+                    Task { await update(choice) }
+                }
+                .accessibilityLabel("Hermes profile approval policy")
+                .disabled(busy || connection == nil || mode == nil)
+                Button("Refresh") { Task { await update(nil) } }
+                    .buttonStyle(SettingsQuietButtonStyle())
+                    .disabled(busy || connection == nil)
+            }
+            SettingsNote("This setting applies to every conversation in this Hermes profile. Smart approvals uses Hermes’s reviewer to decide when to ask. The conversation’s Full access option bypasses that policy until you return to Ask for approval.")
+            if connection == nil { SettingsNote("Connect Gateway to choose this profile’s approval policy.") }
+            if let error { SettingsError(error) }
+        }
+        .task(id: connection) { await update(nil) }
+        .onDisappear { requestID = UUID() }
+    }
+
+    @MainActor
+    private func update(_ choice: HermesProfileApprovalMode?) async {
+        let id = UUID()
+        requestID = id
+        error = nil
+        if choice == nil { mode = nil }
+        guard let connection else { busy = false; return }
+        busy = true
+        defer { if requestID == id { busy = false } }
+        do {
+            let confirmed: String
+            if let choice {
+                confirmed = try await HermesProfileApprovals.set(choice, connection: connection)
+            } else {
+                confirmed = try await HermesProfileApprovals.read(connection: connection)
+            }
+            guard requestID == id, !Task.isCancelled else { return }
+            mode = confirmed
+        } catch {
+            guard requestID == id, !Task.isCancelled else { return }
+            if choice != nil { mode = nil }
+            self.error = error.localizedDescription
+        }
+    }
+}
+
 struct SettingsHermesView: View {
     @Bindable var model: ApplicationModel
     var workspaceID: UUID?
@@ -119,6 +185,7 @@ struct SettingsHermesView: View {
                         Task { do { try await model.stopRemoteHermes(configuration) } catch { self.error=error.localizedDescription } }
                     }.buttonStyle(SettingsQuietButtonStyle())
                     SettingsNote("Stopping Hermes pauses scheduled jobs until you reconnect its Gateway.")
+                    SettingsHermesProfileApprovals(connection: model.remoteHermesConnections[configuration.id])
                 } else { SettingsEmpty("No Hermes agents discovered.") }
                 SettingsRuntimeMaintenanceErrorView(
                     model: model,
@@ -181,6 +248,9 @@ struct SettingsHermesAgentView: View {
                     if let checked = model.hermesGatewayCheckedAt[agentID] {
                         SettingsValueRow(label: "Last checked", value: checked.formatted(date: .omitted, time: .standard))
                     }
+                }
+                SettingsCard(title: "Approvals", detail: "Applies to every conversation using this Hermes profile.") {
+                    SettingsHermesProfileApprovals(connection: connection)
                 }
                 SettingsCard(title: "Woven Matter name", detail: "This name is shown only in Woven Matter.") {
                     VStack(alignment: .leading, spacing: 8) {
