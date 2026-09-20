@@ -114,6 +114,10 @@ final class ApplicationModel {
             else {
                 instance = OpenCodeModel(store: dashboardStore, ownerDeviceID: ownerDeviceID, defaults: applicationDefaults,
                     remoteConfiguration: configuration, remoteWorkspaces: remoteWorkspaces)
+                instance.applyInitialSessionTools = { [weak self] id, tools in
+                    guard let apply = self?.applyInitialSessionToolIDs else { throw ApplicationModelError.unavailableSessionTools }
+                    try apply(id, tools)
+                }
                 remoteOpenCodes[configuration.id] = instance
                 instance.onChange = { [weak self, weak instance] id in
                     guard let self, let instance, self.remoteOpenCodes[configuration.id] === instance else { return }
@@ -270,7 +274,7 @@ final class ApplicationModel {
     private(set) var enabledLocalACPRuntimeKinds: Set<AgentRuntimeKind> = []
     private(set) var shownLocalACPRuntimeKinds: Set<AgentRuntimeKind> = []
 
-    private var dashboardStore: DashboardStore?
+    private(set) var dashboardStore: DashboardStore?
     private var noteWriteBehind: DashboardNoteWriteBehind?
     @ObservationIgnored
     private var noteEditingService: WovenNoteService?
@@ -304,6 +308,11 @@ final class ApplicationModel {
     >()
     @ObservationIgnored
     private let applicationDefaults: UserDefaults
+    let sessionSelectionPreferences: SessionSelectionPreferences
+    @ObservationIgnored var currentSessionToolIDs: ((String) -> [String]?)?
+    @ObservationIgnored var sessionSelectionWorkspaceID: ((String) throws -> String?)?
+    @ObservationIgnored var applyInitialSessionToolIDs: ((String, [String]) throws -> Void)?
+    @ObservationIgnored var applyingSessionSelectionTasks: [String: Task<Void, any Error>] = [:]
     @ObservationIgnored
     private let localACPRuntimePreferences: LocalACPRuntimePreferences
     @ObservationIgnored
@@ -321,7 +330,7 @@ final class ApplicationModel {
     @ObservationIgnored
     private var generatingConversationTitleIDs: Set<String> = []
     @ObservationIgnored
-    private var localACPWorkspaceLaunchConfiguration:
+    private(set) var localACPWorkspaceLaunchConfiguration:
         LocalACPWorkspaceLaunchConfiguration?
     @ObservationIgnored
     private var localACPPermissionContinuations: [
@@ -358,6 +367,7 @@ final class ApplicationModel {
         startsAutomatically: Bool? = nil
     ) {
         self.applicationDefaults = applicationDefaults
+        self.sessionSelectionPreferences = SessionSelectionPreferences(defaults: applicationDefaults)
         self.localACPRuntimePreferences = LocalACPRuntimePreferences(
             defaults: applicationDefaults
         )
@@ -441,6 +451,10 @@ final class ApplicationModel {
             self.dashboardStore = dashboardStore
             try await dashboardStore.prepareLocalWorkspace()
             let openCode = OpenCodeModel(store: dashboardStore, ownerDeviceID: try await dashboardStore.dashboardDeviceID(), defaults: applicationDefaults)
+            openCode.applyInitialSessionTools = { [weak self] id, tools in
+                guard let apply = self?.applyInitialSessionToolIDs else { throw ApplicationModelError.unavailableSessionTools }
+                try apply(id, tools)
+            }
             self.openCode = openCode
             openCode.onChange = { [weak self, weak openCode] id in
                 guard let self, let openCode else { return }
@@ -799,7 +813,10 @@ final class ApplicationModel {
                 thinkingLevels: configuration.thinkingOptions,
                 slashCommands: configuration.slashCommands,
                 modelOptionMetadata: configuration.modelOptionMetadata,
-                thinkingOptionMetadata: configuration.thinkingOptionMetadata
+                thinkingOptionMetadata: configuration.thinkingOptionMetadata,
+                permission: configuration.permission,
+                permissionOptions: configuration.permissionOptions,
+                permissionOptionMetadata: configuration.permissionOptionMetadata
             )
             return
         }
@@ -1128,7 +1145,7 @@ final class ApplicationModel {
         }
     }
 
-    private func ensureConversationState(id: String) -> DashboardConversationState {
+    func ensureConversationState(id: String) -> DashboardConversationState {
         if let state = conversationStatesByID[id] {
             touchConversationState(state)
             return state
@@ -2343,6 +2360,8 @@ final class ApplicationModel {
         note: WorkspaceNoteRecord? = nil
     ) async -> Bool {
         let conversationState = ensureConversationState(id: conversation.id)
+        do { try await applyPendingSessionSelections(conversationID: conversation.id) }
+        catch { conversationState.setError(error.localizedDescription); return false }
         if conversation.localRuntimeKind == .hermes, conversation.remoteWorkspaceID == nil,
            !buzzBoundLocalACPConversationIDs.contains(conversation.id) {
             do { try requireLocalHermesLink(conversationID: conversation.id, openSettings: true) }
@@ -2618,6 +2637,8 @@ final class ApplicationModel {
     func refreshLocalACPSession(
         conversation: WorkspaceConversationRecord
     ) async {
+        do { try await applyPendingSessionSelections(conversationID: conversation.id) }
+        catch { ensureConversationState(id: conversation.id).setError(error.localizedDescription); return }
         if conversation.localRuntimeKind == .opencode {
             if let openCode = openCodeModel(for: conversation.id), openCode.isEnabled, let link = openCode.links[conversation.id] {
                 await openCode.coordinator.watch(link)
@@ -2666,8 +2687,14 @@ final class ApplicationModel {
                 thinkingLevels: configuration.thinkingOptions,
                 slashCommands: configuration.slashCommands,
                 modelOptionMetadata: configuration.modelOptionMetadata,
-                thinkingOptionMetadata: configuration.thinkingOptionMetadata
+                thinkingOptionMetadata: configuration.thinkingOptionMetadata,
+                permission: configuration.permission,
+                permissionOptions: configuration.permissionOptions,
+                permissionOptionMetadata: configuration.permissionOptionMetadata
             )
+            if let metadata = localACPSessionMetadata[conversation.id] {
+                recordConfirmedSessionSelections(conversationID: conversation.id, metadata: metadata)
+            }
             ensureConversationState(id: conversation.id).setError(nil)
         } catch {
             guard !Task.isCancelled,
@@ -2680,14 +2707,34 @@ final class ApplicationModel {
         }
     }
 
+    func beginSessionSelectionApplication(conversationID: String) throws {
+        guard !localRunningConversationIDs.contains(conversationID) else { throw ApplicationModelError.steeringUnavailable }
+        guard updatingLocalACPSessionIDs.insert(conversationID).inserted else {
+            throw ApplicationModelError.localSessionConfigurationInProgress
+        }
+    }
+
+    func endSessionSelectionApplication(conversationID: String) {
+        updatingLocalACPSessionIDs.remove(conversationID)
+    }
+
+    func publishSessionSelectionMetadata(_ metadata: LocalACPSessionMetadata, conversationID: String, gateway: Bool) {
+        if gateway { openClawGatewaySessionMetadata[conversationID] = metadata }
+        else { localACPSessionMetadata[conversationID] = metadata }
+    }
+
     func updateLocalACPSession(
         conversation: WorkspaceConversationRecord,
         model: String? = nil,
-        thinking: String? = nil
+        thinking: String? = nil,
+        permission: String? = nil
     ) {
         guard let runtimeKind = conversation.localRuntimeKind,
-              model != nil || thinking != nil,
-              !localRunningConversationIDs.contains(conversation.id),
+              model != nil || thinking != nil || permission != nil else { return }
+        let permission = runtimeKind == .pi ? nil : permission
+        if retryPendingSessionSelections(conversationID: conversation.id,
+            selections: SessionSelections(model: model, thinking: thinking, permission: permission)) { return }
+        guard !localRunningConversationIDs.contains(conversation.id),
               updatingLocalACPSessionIDs.insert(conversation.id).inserted else {
             return
         }
@@ -2718,6 +2765,7 @@ final class ApplicationModel {
                         conversationID: conversation.id,
                         model: model,
                         thinking: thinking,
+                        permission: permission,
                         launch: launch,
                         workspace: workspace
                     )
@@ -2730,8 +2778,14 @@ final class ApplicationModel {
                         thinkingLevels: configuration.thinkingOptions,
                         slashCommands: configuration.slashCommands,
                         modelOptionMetadata: configuration.modelOptionMetadata,
-                        thinkingOptionMetadata: configuration.thinkingOptionMetadata
+                        thinkingOptionMetadata: configuration.thinkingOptionMetadata,
+                        permission: configuration.permission,
+                        permissionOptions: configuration.permissionOptions,
+                        permissionOptionMetadata: configuration.permissionOptionMetadata
                     )
+                if let metadata = localACPSessionMetadata[conversation.id] {
+                    recordConfirmedSessionSelections(conversationID: conversation.id, metadata: metadata)
+                }
             } catch {
                 ensureConversationState(id: conversation.id).setError(
                     error.localizedDescription
@@ -2757,11 +2811,13 @@ final class ApplicationModel {
             } catch { localRunError = error.localizedDescription; return nil }
         }
         guard localACPLaunchConfigurations[runtimeKind] != nil,
-              localACPWorkspaceLaunchConfiguration != nil,
+              let creationWorkspace = localACPWorkspaceLaunchConfiguration,
               isLocalACPAgentReady(runtimeKind) else {
             localRunError = ApplicationModelError.localACPRuntimeUnavailable.localizedDescription
             return nil
         }
+        let capturedDefaults = sessionSelectionPreferences.defaults(harness: runtimeKind.rawValue,
+            workspace: "local:" + creationWorkspace.rootURL.standardizedFileURL.path)
         do {
             guard let dashboardStore else {
                 throw ApplicationModelError.dashboardStoreUnavailable
@@ -2787,6 +2843,8 @@ final class ApplicationModel {
                 )
                 openClawGatewayConversationIDs.insert(conversationID)
             }
+            do { try await prepareNewSessionSelections(conversationID: conversationID, capturedDefaults: capturedDefaults) }
+            catch { ensureConversationState(id: conversationID).setError(error.localizedDescription) }
             localRunError = nil
             await refreshWorkspace()
             return conversationID
@@ -2813,6 +2871,8 @@ final class ApplicationModel {
             localRunError = "This remote harness is not ready. Refresh it in Settings and try again."
             return nil
         }
+        let capturedDefaults = sessionSelectionPreferences.defaults(harness: target.harness.id.rawValue,
+            workspace: "remote:" + target.configuration.id.uuidString.lowercased())
         do {
             if target.harness.id == .opencode {
                 await synchronizeRemoteOpenCodeInstances()
@@ -2854,6 +2914,8 @@ final class ApplicationModel {
                     unlinkedOpenClawAgentID = agentID
                 }
             }
+            do { try await prepareNewSessionSelections(conversationID: conversationID, capturedDefaults: capturedDefaults) }
+            catch { ensureConversationState(id: conversationID).setError(error.localizedDescription) }
             localRunError = nil
             await refreshWorkspace()
             pendingOpenClawGatewayAgentID = unlinkedOpenClawAgentID
@@ -2864,7 +2926,7 @@ final class ApplicationModel {
         }
     }
 
-    private func directACPLaunchContext(
+    func directACPLaunchContext(
         conversation: WorkspaceConversationRecord,
         runtimeKind: AgentRuntimeKind,
         isBuzzWorkspaceSession: Bool
@@ -2912,6 +2974,8 @@ final class ApplicationModel {
             localRunError = "The selected Buzz agent is not available from its linked workspace."
             return nil
         }
+        let capturedDefaults = sessionSelectionPreferences.defaults(harness: enrollment.runtimeKind?.rawValue ?? enrollment.harnessIdentifier,
+            workspace: "buzz:" + enrollment.workspaceLinkID.uuidString.lowercased())
         do {
             guard let dashboardStore else {
                 throw ApplicationModelError.dashboardStoreUnavailable
@@ -2930,6 +2994,8 @@ final class ApplicationModel {
                 )
                 openClawGatewayConversationIDs.insert(conversationID)
             }
+            do { try await prepareNewSessionSelections(conversationID: conversationID, capturedDefaults: capturedDefaults) }
+            catch { ensureConversationState(id: conversationID).setError(error.localizedDescription) }
             localRunError = nil
             await refreshWorkspace()
             return conversationID
@@ -3485,6 +3551,8 @@ final class ApplicationModel {
     }
 
     func shutdownLocalACPSessions() {
+        for task in applyingSessionSelectionTasks.values { task.cancel() }
+        applyingSessionSelectionTasks.removeAll()
         let permissionIDs = pendingLocalACPPermissions.map(\.id)
         for permissionID in permissionIDs {
             resolveLocalACPPermission(id: permissionID, optionID: nil)
@@ -4553,21 +4621,32 @@ final class ApplicationModel {
     func patchOpenClawGatewaySession(
         conversationID: String,
         model: String?,
-        thinkingLevel: String?
+        thinkingLevel: String?,
+        permission: String? = nil
     ) {
-        guard let dashboardStore else { return }
+        guard model != nil || thinkingLevel != nil || permission != nil else { return }
+        if retryPendingSessionSelections(conversationID: conversationID,
+            selections: SessionSelections(model: model, thinking: thinkingLevel, permission: permission)) { return }
+        guard let dashboardStore,
+              !localRunningConversationIDs.contains(conversationID),
+              updatingLocalACPSessionIDs.insert(conversationID).inserted else { return }
         Task {
+            defer { updatingLocalACPSessionIDs.remove(conversationID) }
             do {
                 _ = try await dashboardStore
                     .patchOpenClawGatewaySession(
                         conversationID: conversationID,
                         preferences: OpenClawSessionPreferences(
                             model: model,
-                            thinkingLevel: thinkingLevel
+                            thinkingLevel: thinkingLevel,
+                            permissionMode: permission
                         )
                     )
                 openClawGatewaySessionMetadata[conversationID] = try await dashboardStore
                     .openClawGatewaySessionMetadata(conversationID: conversationID)
+                if let metadata = openClawGatewaySessionMetadata[conversationID] {
+                    recordConfirmedSessionSelections(conversationID: conversationID, metadata: metadata)
+                }
                 ensureConversationState(id: conversationID).setError(nil)
             } catch {
                 ensureConversationState(id: conversationID).setError(
@@ -4580,9 +4659,13 @@ final class ApplicationModel {
     func refreshOpenClawGatewaySession(conversationID: String) async {
         guard let dashboardStore else { return }
         do {
+            try await applyPendingSessionSelections(conversationID: conversationID)
             _ = try await dashboardStore.synchronizeOpenClawSession(conversationID: conversationID)
             openClawGatewaySessionMetadata[conversationID] = try await dashboardStore
                 .openClawGatewaySessionMetadata(conversationID: conversationID)
+            if let metadata = openClawGatewaySessionMetadata[conversationID] {
+                recordConfirmedSessionSelections(conversationID: conversationID, metadata: metadata)
+            }
             ensureConversationState(id: conversationID).setError(nil)
         } catch {
             ensureConversationState(id: conversationID).setError(
@@ -4871,6 +4954,7 @@ enum ApplicationModelError: LocalizedError {
     case dashboardStoreUnavailable
     case localACPRuntimeUnavailable
     case remoteHarnessUnavailable
+    case unavailableSessionTools
     case localSessionConfigurationInProgress
     case steeringUnavailable
     case activeTurnLimitReached
@@ -4887,8 +4971,10 @@ enum ApplicationModelError: LocalizedError {
             "This local ACP runtime is unavailable. Open Settings to install or update its CLI or adapter, then try again."
         case .remoteHarnessUnavailable:
             "This remote harness is unavailable. Start and refresh its workspace in Settings, then try again."
+        case .unavailableSessionTools:
+            "Tool selections are unavailable in this build."
         case .localSessionConfigurationInProgress:
-            "Wait for this direct chat to finish loading its model and thinking settings."
+            "Wait for this chat's settings change to finish."
         case .steeringUnavailable:
             "This agent is still working in this chat. Try again when the current turn finishes."
         case .activeTurnLimitReached:

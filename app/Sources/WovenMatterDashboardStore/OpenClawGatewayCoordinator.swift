@@ -1421,7 +1421,10 @@ public actor OpenClawGatewayCoordinator {
       thinkingLevels: thinking,
       slashCommands: commands,
       modelOptionMetadata: modelOptionMetadata,
-      thinkingOptionMetadata: thinkingOptionMetadata
+      thinkingOptionMetadata: thinkingOptionMetadata,
+      permission: session["permissionMode"]?.stringValue ?? "default",
+      permissionOptions: OpenClawSessionPermissions.options,
+      permissionOptionMetadata: OpenClawSessionPermissions.metadata
     )
   }
 

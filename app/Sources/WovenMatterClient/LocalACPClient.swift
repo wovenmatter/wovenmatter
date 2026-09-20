@@ -148,6 +148,9 @@ public struct LocalACPSessionConfiguration: Equatable, Sendable {
     public let slashCommands: [LocalACPSlashCommand]
     public let modelOptionMetadata: [String: SessionOptionMetadata]
     public let thinkingOptionMetadata: [String: SessionOptionMetadata]
+    public let permission: String?
+    public let permissionOptions: [String]
+    public let permissionOptionMetadata: [String: SessionOptionMetadata]
 
     public static let empty = LocalACPSessionConfiguration()
 
@@ -158,7 +161,10 @@ public struct LocalACPSessionConfiguration: Equatable, Sendable {
         thinkingOptions: [String] = [],
         slashCommands: [LocalACPSlashCommand] = [],
         modelOptionMetadata: [String: SessionOptionMetadata] = [:],
-        thinkingOptionMetadata: [String: SessionOptionMetadata] = [:]
+        thinkingOptionMetadata: [String: SessionOptionMetadata] = [:],
+        permission: String? = nil,
+        permissionOptions: [String] = [],
+        permissionOptionMetadata: [String: SessionOptionMetadata] = [:]
     ) {
         self.model = model
         self.thinking = thinking
@@ -167,11 +173,15 @@ public struct LocalACPSessionConfiguration: Equatable, Sendable {
         self.slashCommands = slashCommands
         self.modelOptionMetadata = modelOptionMetadata
         self.thinkingOptionMetadata = thinkingOptionMetadata
+        self.permission = permission
+        self.permissionOptions = Self.unique(permissionOptions)
+        self.permissionOptionMetadata = permissionOptionMetadata
     }
 
     public func selecting(
         model: String? = nil,
-        thinking: String? = nil
+        thinking: String? = nil,
+        permission: String? = nil
     ) -> Self {
         Self(
             model: model ?? self.model,
@@ -180,7 +190,10 @@ public struct LocalACPSessionConfiguration: Equatable, Sendable {
             thinkingOptions: thinkingOptions,
             slashCommands: slashCommands,
             modelOptionMetadata: modelOptionMetadata,
-            thinkingOptionMetadata: thinkingOptionMetadata
+            thinkingOptionMetadata: thinkingOptionMetadata,
+            permission: permission ?? self.permission,
+            permissionOptions: permissionOptions,
+            permissionOptionMetadata: permissionOptionMetadata
         )
     }
 
@@ -492,11 +505,19 @@ public actor LocalACPClient {
     private var loadSessionSupported = false
     private var steeringSupported = false
     private var sessionID: String?
+    // A new session's identity is supplied by its response. Keep early updates
+    // in wire order until that identity is known, then apply normal routing.
+    private var pendingNewSessionUpdates: [ACPEnvelope]?
     private var configuration = LocalACPSessionConfiguration.empty
     private var configurationHandler: (@Sendable (LocalACPSessionConfiguration) async -> Void)?
     private var modelConfigurationID: String?
     private var modelUsesSessionModelMethod = false
     private var thinkingConfigurationID: String?
+    private var permissionConfigurationID: String?
+    private var permissionUsesSessionModeMethod = false
+    private var permissionStateRevision: UInt64 = 0
+    private var cursorPermission: String
+    private let requestedPermission: String?
     private var sessionCancellationRequested = false
     private var pendingPermissionRequestIDs: [ACPJSONValue] = []
     private struct PendingCursorRequest {
@@ -531,8 +552,11 @@ public actor LocalACPClient {
         input: FileHandle,
         cursor: ACPLineCursor,
         runtimeKind: AgentRuntimeKind,
-        workingDirectory: URL
+        workingDirectory: URL,
+        requestedPermission: String?
     ) {
+        self.requestedPermission = requestedPermission
+        self.cursorPermission = requestedPermission ?? "normal"
         self.process = process
         self.input = input
         self.cursor = cursor
@@ -554,12 +578,13 @@ public actor LocalACPClient {
         // process-group leader. Group-wide shutdown also catches CLI and tool
         // subprocesses spawned by the adapter.
         process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        let preparedLaunch = try LocalACPSessionPermissions.prepareLaunch(launch)
         process.arguments = [
             "-c",
             #"set -m; exec "$@""#,
             "wovenmatter-local-acp",
             launch.executableURL.path,
-        ] + launch.arguments
+        ] + preparedLaunch.arguments
         process.currentDirectoryURL = launch.processWorkingDirectoryURL
             ?? workingDirectory
         var environment = ProcessInfo.processInfo.environment
@@ -591,7 +616,8 @@ public actor LocalACPClient {
             input: stdin.fileHandleForWriting,
             cursor: ACPLineCursor(handle: stdout.fileHandleForReading),
             runtimeKind: launch.runtimeKind,
-            workingDirectory: workingDirectory
+            workingDirectory: workingDirectory,
+            requestedPermission: preparedLaunch.explicitPermission
         )
     }
 
@@ -645,6 +671,8 @@ public actor LocalACPClient {
         }
 
         if let existingSessionID, loadSessionSupported {
+            let previousSessionID = sessionID
+            sessionID = existingSessionID
             do {
                 let loaded = try await request(
                     method: "session/load",
@@ -666,10 +694,6 @@ public actor LocalACPClient {
                 sessionID = existingSessionID
                 captureSessionConfiguration(from: loaded)
                 try await discoverCursorModelsIfNeeded()
-                try await selectNativeAutomaticPermissionMode(
-                    from: loaded,
-                    sessionID: existingSessionID
-                )
                 return LocalACPInitializedSession(
                     sessionID: existingSessionID,
                     loadedExistingSession: true,
@@ -686,6 +710,10 @@ public actor LocalACPClient {
                 // resource-not-found error proves this one no longer exists,
                 // so replace it in the same initialized client. Other failures
                 // remain visible rather than silently forking the conversation.
+                sessionID = previousSessionID
+            } catch {
+                sessionID = previousSessionID
+                throw error
             }
         }
 
@@ -775,6 +803,8 @@ public actor LocalACPClient {
         if !metadata.isEmpty {
             parameters["_meta"] = .object(metadata)
         }
+        pendingNewSessionUpdates = []
+        defer { pendingNewSessionUpdates = nil }
         guard let response = try await request(
             method: "session/new",
             params: .object(parameters)
@@ -782,6 +812,12 @@ public actor LocalACPClient {
             throw LocalACPClientError.missingSessionID
         }
         sessionID = created
+        let earlyUpdates = pendingNewSessionUpdates ?? []
+        pendingNewSessionUpdates = nil
+        for update in earlyUpdates {
+            enqueueNotification(update)
+        }
+        try await notificationTask?.value
         captureSessionConfiguration(from: response)
         try await discoverCursorModelsIfNeeded()
         try await selectNativeAutomaticPermissionMode(
@@ -817,7 +853,10 @@ public actor LocalACPClient {
                 thinkingOptions: configuration.thinkingOptions,
                 slashCommands: configuration.slashCommands,
                 modelOptionMetadata: catalogMetadata.merging(configuration.modelOptionMetadata) { _, session in session },
-                thinkingOptionMetadata: configuration.thinkingOptionMetadata
+                thinkingOptionMetadata: configuration.thinkingOptionMetadata,
+                permission: configuration.permission,
+                permissionOptions: configuration.permissionOptions,
+                permissionOptionMetadata: configuration.permissionOptionMetadata
             )
         } catch {
             // session/new already advertised a catalog; keep that if the
@@ -834,20 +873,13 @@ public actor LocalACPClient {
         sessionID: String
     ) async throws {
         guard runtimeKind == .claudeCode,
+              requestedPermission == nil,
               let sessionResult,
               Self.automaticPermissionModeIsAvailable(in: sessionResult),
               !Self.automaticPermissionModeIsSelected(in: sessionResult) else {
             return
         }
-        let response = try await request(
-            method: "session/set_config_option",
-            params: .object([
-                "sessionId": .string(sessionID),
-                "configId": .string("mode"),
-                "value": .string("auto"),
-            ])
-        )
-        captureSessionConfiguration(from: response)
+        _ = try await setSessionPermission("auto")
     }
 
     private static func automaticPermissionModeIsAvailable(
@@ -883,6 +915,66 @@ public actor LocalACPClient {
     public func setConfigurationHandler(_ handler: @escaping @Sendable (LocalACPSessionConfiguration) async -> Void) async {
         configurationHandler = handler
         await handler(configuration)
+    }
+
+    public func setSessionPermission(_ permission: String) async throws -> LocalACPSessionConfiguration {
+        guard let sessionID else { throw LocalACPClientError.sessionNotInitialized }
+        guard !configuration.permissionOptions.isEmpty else {
+            throw LocalACPClientError.unsupportedConfiguration("permission")
+        }
+        guard configuration.permissionOptions.contains(permission) else {
+            throw LocalACPClientError.invalidConfigurationValue(field: "permission", value: permission)
+        }
+        if configuration.permission == permission { return configuration }
+        if runtimeKind == .cursor {
+            cursorPermission = permission
+            configuration = configuration.selecting(permission: permission)
+            await configurationHandler?(configuration)
+            return configuration
+        }
+        if runtimeKind == .grokBuild {
+            throw LocalACPClientError.permissionChangeRequiresRestart
+        }
+        if let permissionConfigurationID {
+            let response = try await request(
+                method: "session/set_config_option",
+                params: .object([
+                    "sessionId": .string(sessionID),
+                    "configId": .string(permissionConfigurationID),
+                    "value": .string(permission),
+                ])
+            )
+            let previous = configuration
+            captureSessionConfiguration(from: response)
+            if configuration != previous { await configurationHandler?(configuration) }
+            guard configuration.permission == permission else {
+                throw LocalACPClientError.configurationNotConfirmed("permission")
+            }
+        } else if permissionUsesSessionModeMethod {
+            let revision = permissionStateRevision
+            let response = try await request(
+                method: "session/set_mode",
+                params: .object([
+                    "sessionId": .string(sessionID),
+                    "modeId": .string(permission),
+                ])
+            )
+            let previous = configuration
+            captureSessionConfiguration(from: response)
+            // Legacy ACP returns an empty success response after applying an
+            // advertised mode. Respect any authoritative update that accompanied
+            // that acknowledgement, including a policy clamp to another mode.
+            if permissionStateRevision == revision {
+                configuration = configuration.selecting(permission: permission)
+            }
+            if configuration != previous { await configurationHandler?(configuration) }
+            guard configuration.permission == permission else {
+                throw LocalACPClientError.configurationNotConfirmed("permission")
+            }
+        } else {
+            throw LocalACPClientError.unsupportedConfiguration("permission")
+        }
+        return configuration
     }
 
     public func setSessionConfiguration(
@@ -1396,6 +1488,14 @@ public actor LocalACPClient {
             }
             return
         }
+        if envelope.method == "session/update", pendingNewSessionUpdates != nil {
+            pendingNewSessionUpdates?.append(envelope)
+            return
+        }
+        enqueueNotification(envelope)
+    }
+
+    private func enqueueNotification(_ envelope: ACPEnvelope) {
         let previous = notificationTask
         let task = Task<Void, any Error> { [weak self] in
             try await previous?.value
@@ -1418,7 +1518,8 @@ public actor LocalACPClient {
         if envelope.method == "session/update" {
             let update = envelope.params?["update"]
             switch update?["sessionUpdate"]?.stringValue {
-            case "config_option_update", "available_commands_update":
+            case "config_option_update", "available_commands_update", "current_mode_update":
+                guard belongsToActiveSession(envelope) else { return }
                 let previousConfiguration = configuration
                 captureSessionConfiguration(from: update)
                 if previousConfiguration != configuration { await configurationHandler?(configuration) }
@@ -1461,6 +1562,15 @@ public actor LocalACPClient {
         }
     }
 
+    private func belongsToActiveSession(_ envelope: ACPEnvelope) -> Bool {
+        guard pendingNewSessionUpdates == nil else { return false }
+        // Older adapters omit the identity on their single-session connection.
+        // An explicit identity, including an invalid one, never uses that fallback.
+        guard let value = envelope.params?["sessionId"] else { return true }
+        guard let incomingSessionID = value.stringValue, !incomingSessionID.isEmpty else { return false }
+        return incomingSessionID == sessionID
+    }
+
     private func readerFailed(_ error: any Error) {
         failPendingRequests(with: error)
     }
@@ -1475,6 +1585,29 @@ public actor LocalACPClient {
 
     private func captureSessionConfiguration(from value: ACPJSONValue?) {
         guard let value else { return }
+        // Codex/Claude modes govern approval policy. Cursor's agent/plan/ask
+        // modes govern execution and must not appear as permission choices.
+        if runtimeKind == .codex || runtimeKind == .claudeCode,
+           let modes = value["modes"],
+           let available = modes["availableModes"]?.arrayValue {
+            permissionStateRevision &+= 1
+            permissionUsesSessionModeMethod = true
+            configuration = LocalACPSessionConfiguration(
+                model: configuration.model, thinking: configuration.thinking,
+                modelOptions: configuration.modelOptions, thinkingOptions: configuration.thinkingOptions,
+                slashCommands: configuration.slashCommands,
+                modelOptionMetadata: configuration.modelOptionMetadata,
+                thinkingOptionMetadata: configuration.thinkingOptionMetadata,
+                permission: modes["currentModeId"]?.stringValue,
+                permissionOptions: available.compactMap { $0["id"]?.stringValue },
+                permissionOptionMetadata: Self.modelMetadata(available, idKeys: ["id"])
+            )
+        }
+        if permissionConfigurationID != nil || permissionUsesSessionModeMethod,
+           let currentMode = value["currentModeId"]?.stringValue {
+            permissionStateRevision &+= 1
+            configuration = configuration.selecting(permission: currentMode)
+        }
         if let commands = value["availableCommands"]?.arrayValue {
             var seen: Set<String> = []
             let slashCommands = commands.compactMap { command -> LocalACPSlashCommand? in
@@ -1494,14 +1627,23 @@ public actor LocalACPClient {
                 thinkingOptions: configuration.thinkingOptions,
                 slashCommands: slashCommands,
                 modelOptionMetadata: configuration.modelOptionMetadata,
-                thinkingOptionMetadata: configuration.thinkingOptionMetadata
+                thinkingOptionMetadata: configuration.thinkingOptionMetadata,
+                permission: configuration.permission,
+                permissionOptions: configuration.permissionOptions,
+                permissionOptionMetadata: configuration.permissionOptionMetadata
             )
         }
         if let configOptions = value["configOptions"]?.arrayValue {
-            let parsed = Self.configuration(from: configOptions)
+            let parsed = configurationOptions(from: configOptions)
             let hadModelOption = modelConfigurationID != nil
+            let hadPermissionOption = permissionConfigurationID != nil
             modelConfigurationID = parsed.model?.id
             thinkingConfigurationID = parsed.thinking?.id
+            permissionConfigurationID = parsed.permission?.id
+            if parsed.permission != nil || hadPermissionOption { permissionStateRevision &+= 1 }
+            if hadPermissionOption && parsed.permission == nil {
+                permissionUsesSessionModeMethod = false
+            }
             // ACP publishes the complete current option list. A model switch
             // may remove effort support; do not retain its old menu or setter.
             configuration = LocalACPSessionConfiguration(
@@ -1511,7 +1653,10 @@ public actor LocalACPClient {
                 thinkingOptions: parsed.thinking?.options ?? [],
                 slashCommands: configuration.slashCommands,
                 modelOptionMetadata: parsed.model?.metadata ?? (hadModelOption ? [:] : configuration.modelOptionMetadata),
-                thinkingOptionMetadata: parsed.thinking?.metadata ?? [:]
+                thinkingOptionMetadata: parsed.thinking?.metadata ?? [:],
+                permission: parsed.permission?.currentValue ?? (hadPermissionOption ? nil : configuration.permission),
+                permissionOptions: parsed.permission?.options ?? (hadPermissionOption ? [] : configuration.permissionOptions),
+                permissionOptionMetadata: parsed.permission?.metadata ?? (hadPermissionOption ? [:] : configuration.permissionOptionMetadata)
             )
         }
 
@@ -1531,7 +1676,10 @@ public actor LocalACPClient {
                 thinkingOptions: configuration.thinkingOptions,
                 slashCommands: configuration.slashCommands,
                 modelOptionMetadata: modelState.metadata,
-                thinkingOptionMetadata: configuration.thinkingOptionMetadata
+                thinkingOptionMetadata: configuration.thinkingOptionMetadata,
+                permission: configuration.permission,
+                permissionOptions: configuration.permissionOptions,
+                permissionOptionMetadata: configuration.permissionOptionMetadata
             )
         }
         if let grokConfiguration = Self.grokConfiguration(from: value) {
@@ -1545,7 +1693,10 @@ public actor LocalACPClient {
                 thinkingOptions: configuration.thinkingOptions,
                 slashCommands: configuration.slashCommands,
                 modelOptionMetadata: grokConfiguration.modelOptionMetadata.merging(configuration.modelOptionMetadata) { _, standard in standard },
-                thinkingOptionMetadata: configuration.thinkingOptionMetadata
+                thinkingOptionMetadata: configuration.thinkingOptionMetadata,
+                permission: configuration.permission,
+                permissionOptions: configuration.permissionOptions,
+                permissionOptionMetadata: configuration.permissionOptionMetadata
             )
         }
         if runtimeKind == .claudeCode {
@@ -1556,7 +1707,40 @@ public actor LocalACPClient {
                 modelOptionMetadata: configuration.modelOptionMetadata.reduce(into: [:]) { result, entry in
                     result[entry.key] = ClaudeModelPresentation.metadata(id: entry.key, supplied: entry.value)
                 },
-                thinkingOptionMetadata: configuration.thinkingOptionMetadata
+                thinkingOptionMetadata: configuration.thinkingOptionMetadata,
+                permission: configuration.permission,
+                permissionOptions: configuration.permissionOptions,
+                permissionOptionMetadata: configuration.permissionOptionMetadata
+            )
+        }
+        if runtimeKind == .grokBuild {
+            // Grok reports model/effort over ACP, but not its effective permission
+            // setting. This is the explicit native CLI policy of this process;
+            // nil preserves an unknown inherited policy until the user chooses.
+            configuration = LocalACPSessionConfiguration(
+                model: configuration.model, thinking: configuration.thinking,
+                modelOptions: configuration.modelOptions, thinkingOptions: configuration.thinkingOptions,
+                slashCommands: configuration.slashCommands,
+                modelOptionMetadata: configuration.modelOptionMetadata,
+                thinkingOptionMetadata: configuration.thinkingOptionMetadata,
+                permission: requestedPermission,
+                permissionOptions: LocalACPSessionPermissions.grokOptions,
+                permissionOptionMetadata: LocalACPSessionPermissions.grokMetadata
+            )
+        }
+        if runtimeKind == .cursor {
+            // Cursor's ACP mode is an execution mode, and --force can persist in
+            // its native session. This picker controls only requests delivered
+            // to this client, without changing either native setting.
+            configuration = LocalACPSessionConfiguration(
+                model: configuration.model, thinking: configuration.thinking,
+                modelOptions: configuration.modelOptions, thinkingOptions: configuration.thinkingOptions,
+                slashCommands: configuration.slashCommands,
+                modelOptionMetadata: configuration.modelOptionMetadata,
+                thinkingOptionMetadata: configuration.thinkingOptionMetadata,
+                permission: cursorPermission,
+                permissionOptions: LocalACPSessionPermissions.cursorOptions,
+                permissionOptionMetadata: LocalACPSessionPermissions.cursorMetadata
             )
         }
     }
@@ -1568,33 +1752,38 @@ public actor LocalACPClient {
         let metadata: [String: SessionOptionMetadata]
     }
 
-    private static func configuration(
+    private func configurationOptions(
         from options: [ACPJSONValue]
     ) -> (
         model: ParsedConfigurationOption?,
-        thinking: ParsedConfigurationOption?
+        thinking: ParsedConfigurationOption?,
+        permission: ParsedConfigurationOption?
     ) {
         var model: ParsedConfigurationOption?
         var thinking: ParsedConfigurationOption?
+        var permission: ParsedConfigurationOption?
         for option in options {
             guard let id = option["id"]?.stringValue else { continue }
             let category = option["category"]?.stringValue
             let parsed = ParsedConfigurationOption(
                 id: id,
                 currentValue: option["currentValue"]?.stringValue,
-                options: configurationOptionValues(
+                options: Self.configurationOptionValues(
                     option["options"]?.arrayValue ?? []
                 ),
-                metadata: configurationOptionMetadata(option["options"]?.arrayValue ?? [])
+                metadata: Self.configurationOptionMetadata(option["options"]?.arrayValue ?? [])
             )
             if id == "model" || category == "model" {
                 model = parsed
             } else if category == "thought_level"
                         || ["effort", "reasoning_effort", "thinking"].contains(id) {
                 thinking = parsed
+            } else if ["permission_mode", "approval_mode"].contains(id)
+                        || (id == "mode" && (runtimeKind == .codex || runtimeKind == .claudeCode)) {
+                permission = parsed
             }
         }
-        return (model, thinking)
+        return (model, thinking, permission)
     }
 
     private static func configurationOptionValues(
@@ -1676,6 +1865,13 @@ public actor LocalACPClient {
         _ envelope: ACPEnvelope,
         handler: PermissionHandler?
     ) async throws {
+        if runtimeKind == .cursor,
+           let id = envelope.id,
+           let requestSessionID = envelope.params?["sessionId"]?.stringValue,
+           let sessionID, requestSessionID != sessionID {
+            try respondWithCancelledPermission(id: id)
+            return
+        }
         guard let id = envelope.id,
               let rawOptions = envelope.params?["options"]?.arrayValue else {
             throw LocalACPClientError.invalidPermissionRequest
@@ -1702,7 +1898,18 @@ public actor LocalACPClient {
             return
         }
         pendingPermissionRequestIDs.append(id)
-        let selectedID = await handler?(request)
+        let selectedID: String?
+        if runtimeKind == .cursor, cursorPermission == "auto",
+           let sessionID, envelope.params?["sessionId"]?.stringValue == sessionID,
+           // Cursor's question fallback uses allow_once for answer choices.
+           // Those are user input, not approval of a tool operation.
+           !options.contains(where: { $0.id == "__ask_question_skip__" }),
+           options.filter({ $0.kind == "allow_once" }).count == 1,
+           let allowOnce = options.first(where: { $0.kind == "allow_once" }) {
+            selectedID = allowOnce.id
+        } else {
+            selectedID = await handler?(request)
+        }
         guard let pendingIndex = pendingPermissionRequestIDs.firstIndex(of: id) else {
             return
         }
@@ -2124,6 +2331,7 @@ private extension String {
 }
 
 public enum LocalACPClientError: LocalizedError, Sendable {
+    case invalidLaunchConfiguration
     case lineTooLarge
     case processExited
     case missingSessionID
@@ -2135,12 +2343,16 @@ public enum LocalACPClientError: LocalizedError, Sendable {
     case invalidResponse(String)
     case unsupportedProtocolVersion(Int64?)
     case unsupportedConfiguration(String)
+    case configurationNotConfirmed(String)
+    case permissionChangeRequiresRestart
     case invalidConfigurationValue(field: String, value: String)
     case invalidCursorExtension(String)
     case agent(code: Int, message: String)
 
     public var errorDescription: String? {
         switch self {
+        case .invalidLaunchConfiguration:
+            "The local agent's wrapped launch command is invalid."
         case .lineTooLarge:
             "The ACP agent emitted a response larger than 10 MB."
         case .processExited:
@@ -2167,6 +2379,10 @@ public enum LocalACPClientError: LocalizedError, Sendable {
             }
         case .unsupportedConfiguration(let name):
             "The ACP agent does not expose a selectable \(name) for this session."
+        case .configurationNotConfirmed(let name):
+            "The ACP agent did not confirm the requested \(name)."
+        case .permissionChangeRequiresRestart:
+            "This harness requires reconnecting the session to change its permission mode."
         case .invalidConfigurationValue(let field, let value):
             "The ACP agent did not advertise \"\(value)\" as a selectable \(field) for this session."
         case .invalidCursorExtension(let method):

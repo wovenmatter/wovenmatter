@@ -28,6 +28,8 @@ struct DashboardComposer: View {
     let attachedNoteTitle: String?
     let attachments: [AgentMessageAttachmentDraft]
     let showsSessionControls: Bool
+    let showsPermissionControl: Bool
+    let sessionMetadataLoading: Bool
     let sessionMetadata: LocalACPSessionMetadata?
     let sessionControlsDisabled: Bool
     let sendDisabled: Bool
@@ -36,6 +38,9 @@ struct DashboardComposer: View {
     let onActivate: () -> Void
     let onSelectModel: ((String) -> Void)?
     let onSelectThinking: ((String) -> Void)?
+    let onSelectPermission: ((String) -> Void)?
+    let onSaveDefault: ((SessionSelectionField, Bool) -> Void)?
+    let onClearDefault: ((SessionSelectionField, Bool) -> Void)?
     let onAttachmentAction: (DashboardComposerAttachmentAction) -> Void
     let onRemoveAttachment: (String) -> Void
     let onDropFiles: ([URL]) -> Bool
@@ -384,6 +389,9 @@ struct DashboardComposer: View {
                     capitalizeOptions: true,
                     action: onSelectThinking
                 )
+                if showsPermissionControl {
+                    permissionMenu(compact: false)
+                }
             }
 
             Spacer(minLength: 8)
@@ -421,6 +429,9 @@ struct DashboardComposer: View {
                         capitalizeOptions: true,
                         action: onSelectThinking
                     )
+                    if showsPermissionControl {
+                        permissionMenu(compact: true)
+                    }
                 }
             }
 
@@ -517,6 +528,77 @@ struct DashboardComposer: View {
         .accessibilityLabel("Send")
     }
 
+    @ViewBuilder
+    private func permissionMenu(compact: Bool) -> some View {
+        let selection = sessionMetadata?.permission
+        let metadata = sessionMetadata?.permissionOptionMetadata ?? [:]
+        let title = sessionMetadataLoading
+            ? "Loading permissions…"
+            : selection.map { metadata[$0]?.name ?? $0 } ?? "Permissions"
+        if compact {
+            compactSessionMenu(
+                kind: .permission,
+                icon: .keyRound,
+                title: title,
+                menuTitle: "Permissions",
+                accessibilityLabel: "Choose session permissions",
+                options: sessionMetadata?.permissionOptions ?? [],
+                selection: selection,
+                optionMetadata: metadata,
+                capitalizeOptions: true,
+                action: onSelectPermission
+            )
+        } else {
+            sessionMenu(
+                kind: .permission,
+                icon: .keyRound,
+                title: title,
+                menuTitle: "Permissions",
+                accessibilityLabel: "Choose session permissions",
+                options: sessionMetadata?.permissionOptions ?? [],
+                selection: selection,
+                optionMetadata: metadata,
+                capitalizeOptions: true,
+                action: onSelectPermission
+            )
+        }
+    }
+
+    private func sessionMenuUnavailable(
+        kind: DashboardComposerMenuKind,
+        options: [String],
+        selection: String?,
+        action: ((String) -> Void)?
+    ) -> Bool {
+        if sessionControlsDisabled { return true }
+        // Keep unsupported permission controls discoverable without inventing choices.
+        if kind == .permission { return sessionMetadataLoading }
+        let canChange = action != nil && (options.count > 1 || options.first != selection)
+        let hasDefaults = onSaveDefault != nil || onClearDefault != nil
+        return options.isEmpty || (!canChange && !hasDefaults)
+    }
+
+    private func saveDefaultAction(
+        for kind: DashboardComposerMenuKind,
+        selection: String?,
+        options: [String]
+    ) -> ((Bool) -> Void)? {
+        guard let field = kind.selectionField, let onSaveDefault,
+              let selection, options.contains(selection) else { return nil }
+        return { workspaceOnly in
+            openMenu = nil
+            onSaveDefault(field, workspaceOnly)
+        }
+    }
+
+    private func clearDefaultAction(for kind: DashboardComposerMenuKind) -> ((Bool) -> Void)? {
+        guard let field = kind.selectionField, let onClearDefault else { return nil }
+        return { workspaceOnly in
+            openMenu = nil
+            onClearDefault(field, workspaceOnly)
+        }
+    }
+
     private func compactSessionMenu(
         kind: DashboardComposerMenuKind,
         icon: DashboardLucideGlyph,
@@ -529,7 +611,9 @@ struct DashboardComposer: View {
         capitalizeOptions: Bool = false,
         action: ((String) -> Void)?
     ) -> some View {
-        let unavailable = sessionControlsDisabled || (options.isEmpty || (options.count == 1 && options.first == selection)) || action == nil
+        let unavailable = sessionMenuUnavailable(
+            kind: kind, options: options, selection: selection, action: action
+        )
         return Button {
             guard !unavailable else { return }
             onActivate()
@@ -556,7 +640,13 @@ struct DashboardComposer: View {
                 options: options,
                 selection: selection,
                 capitalizeOptions: capitalizeOptions,
-                optionMetadata: optionMetadata
+                optionMetadata: optionMetadata,
+                showsDescriptions: kind == .permission,
+                emptyMessage: kind == .permission
+                    ? "This harness has not reported native permission choices."
+                    : nil,
+                onSaveDefault: saveDefaultAction(for: kind, selection: selection, options: options),
+                onClearDefault: clearDefaultAction(for: kind)
             ) { option in
                 openMenu = nil
                 action?(option)
@@ -577,7 +667,9 @@ struct DashboardComposer: View {
         capitalizeOptions: Bool = false,
         action: ((String) -> Void)?
     ) -> some View {
-        let unavailable = sessionControlsDisabled || (options.isEmpty || (options.count == 1 && options.first == selection)) || action == nil
+        let unavailable = sessionMenuUnavailable(
+            kind: kind, options: options, selection: selection, action: action
+        )
         return Button {
             guard !unavailable else { return }
             onActivate()
@@ -603,7 +695,13 @@ struct DashboardComposer: View {
                 options: options,
                 selection: selection,
                 capitalizeOptions: capitalizeOptions,
-                optionMetadata: optionMetadata
+                optionMetadata: optionMetadata,
+                showsDescriptions: kind == .permission,
+                emptyMessage: kind == .permission
+                    ? "This harness has not reported native permission choices."
+                    : nil,
+                onSaveDefault: saveDefaultAction(for: kind, selection: selection, options: options),
+                onClearDefault: clearDefaultAction(for: kind)
             ) { option in
                 openMenu = nil
                 action?(option)
@@ -679,6 +777,16 @@ enum DashboardComposerMenuKind {
     case attachments
     case model
     case thinking
+    case permission
+
+    var selectionField: SessionSelectionField? {
+        switch self {
+        case .attachments: nil
+        case .model: .model
+        case .thinking: .thinking
+        case .permission: .permission
+        }
+    }
 }
 
 enum DashboardComposerAttachmentAction {
@@ -898,6 +1006,10 @@ struct DashboardComposerOptionMenu: View {
     let selection: String?
     let capitalizeOptions: Bool
     var optionMetadata: [String: SessionOptionMetadata] = [:]
+    var showsDescriptions = false
+    var emptyMessage: String? = nil
+    var onSaveDefault: ((Bool) -> Void)? = nil
+    var onClearDefault: ((Bool) -> Void)? = nil
     let onSelect: (String) -> Void
 
     var body: some View {
@@ -909,49 +1021,96 @@ struct DashboardComposerOptionMenu: View {
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
 
-            ScrollView {
-                LazyVStack(spacing: 2) {
-                    ForEach(options, id: \.self) { option in
-                        DashboardComposerPopoverRow(action: { onSelect(option) }) {
-                            HStack(spacing: 12) {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(optionLabel(option)).lineLimit(1)
-                                    if needsDisambiguation(option) {
-                                        Text(option)
-                                            .font(.system(size: 10, design: .monospaced))
-                                            .foregroundStyle(DashboardPalette.mutedForeground)
-                                            .lineLimit(1)
+            if options.isEmpty, let emptyMessage {
+                Text(emptyMessage)
+                    .font(.system(size: 12))
+                    .foregroundStyle(DashboardPalette.mutedForeground)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(10)
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 2) {
+                        ForEach(options, id: \.self) { option in
+                            DashboardComposerPopoverRow(action: { onSelect(option) }) {
+                                HStack(spacing: 12) {
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Text(optionLabel(option)).lineLimit(1)
+                                        if needsDisambiguation(option) {
+                                            Text(option)
+                                                .font(.system(size: 10, design: .monospaced))
+                                                .foregroundStyle(DashboardPalette.mutedForeground)
+                                                .lineLimit(1)
+                                        }
+                                        if showsDescriptions, let description = optionDescription(option) {
+                                            Text(description)
+                                                .font(.system(size: 11.5))
+                                                .foregroundStyle(DashboardPalette.mutedForeground)
+                                                .lineLimit(3)
+                                                .fixedSize(horizontal: false, vertical: true)
+                                        }
+                                    }
+                                    Spacer(minLength: 0)
+                                    if option == selection {
+                                        DashboardLucideIcon(glyph: .check, size: 14)
+                                            .foregroundStyle(DashboardPalette.primary)
                                     }
                                 }
-                                Spacer(minLength: 0)
-                                if option == selection {
-                                    DashboardLucideIcon(glyph: .check, size: 14)
-                                        .foregroundStyle(DashboardPalette.primary)
-                                }
+                                .font(.system(size: 13))
+                                .foregroundStyle(DashboardPalette.foreground)
+                                .padding(.horizontal, 10)
+                                .frame(height: rowHeight(option))
+                                .help(optionHelp(option))
+                                .accessibilityLabel(optionHelp(option))
+                                .accessibilityValue(option == selection ? "Selected" : "")
+                                .background(
+                                    option == selection ? DashboardPalette.muted.opacity(0.55) : .clear,
+                                    in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                )
                             }
-                            .font(.system(size: 13))
-                            .foregroundStyle(DashboardPalette.foreground)
-                            .padding(.horizontal, 10)
-                            .frame(height: rowHeight(option))
-                            .help(optionHelp(option))
-                            .accessibilityLabel(optionHelp(option))
-                            .background(
-                                option == selection ? DashboardPalette.muted.opacity(0.55) : .clear,
-                                in: RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            )
                         }
                     }
                 }
+                .scrollIndicators(.never)
+                .frame(height: min(options.reduce(CGFloat(0)) { $0 + rowHeight($1) + 2 }, 248))
             }
-            .scrollIndicators(.never)
-            .frame(height: min(options.reduce(CGFloat(0)) { $0 + rowHeight($1) + 2 }, 248))
+
+            if onSaveDefault != nil || onClearDefault != nil {
+                Divider().padding(.vertical, 5)
+                Text("Defaults apply to new chats.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(DashboardPalette.mutedForeground)
+                    .padding(.horizontal, 10)
+                    .padding(.bottom, 4)
+                if let onSaveDefault {
+                    defaultRow("Use for new chats in this workspace") { onSaveDefault(true) }
+                    defaultRow("Use for new chats with this harness") { onSaveDefault(false) }
+                }
+                if let onClearDefault {
+                    defaultRow("Reset workspace default") { onClearDefault(true) }
+                    defaultRow("Reset harness default") { onClearDefault(false) }
+                }
+            }
         }
         .padding(6)
-        .frame(width: 288)
+        .frame(width: showsDescriptions ? 320 : 288)
         .dashboardComposerPopover()
     }
 
+    private func defaultRow(_ label: String, action: @escaping () -> Void) -> some View {
+        DashboardComposerPopoverRow(action: action) {
+            Text(label)
+                .font(.system(size: 11.5))
+                .foregroundStyle(DashboardPalette.foreground)
+                .frame(maxWidth: .infinity, minHeight: 30, alignment: .leading)
+                .padding(.horizontal, 10)
+        }
+        .accessibilityLabel("\(label), \(title.lowercased())")
+    }
+
     private func optionLabel(_ option: String) -> String {
+        if showsDescriptions {
+            return optionMetadata[option]?.name ?? option
+        }
         if capitalizeOptions {
             return optionMetadata[option]?.name ?? dashboardSessionThinkingLabel(option)
         }
@@ -962,13 +1121,20 @@ struct DashboardComposerOptionMenu: View {
         options.contains { $0 != option && optionLabel($0) == optionLabel(option) }
     }
 
+    private func optionDescription(_ option: String) -> String? {
+        guard let description = optionMetadata[option]?.description,
+              !description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        return description
+    }
+
     private func optionHelp(_ option: String) -> String {
         [optionLabel(option), optionLabel(option) == option ? nil : option,
-         optionMetadata[option]?.description].compactMap { $0 }.joined(separator: "\n")
+         optionDescription(option)].compactMap { $0 }.joined(separator: "\n")
     }
 
     private func rowHeight(_ option: String) -> CGFloat {
-        needsDisambiguation(option) ? 52 : 38
+        let base: CGFloat = needsDisambiguation(option) ? 52 : 38
+        return base + (showsDescriptions && optionDescription(option) != nil ? 48 : 0)
     }
 }
 

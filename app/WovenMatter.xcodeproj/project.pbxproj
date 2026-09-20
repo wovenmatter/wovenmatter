@@ -59,6 +59,7 @@
 		ECBF462874DF484F9FDD5C91 /* DashboardLocalSecretCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 502EF864DA314DFBB322C973 /* DashboardLocalSecretCard.swift */; };
 		8B47C81B917AA853D87FB56A /* OpenCodeInteractionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17AF06D69A7DE73E3F94E40A /* OpenCodeInteractionView.swift */; };
 		46E81C4CE9571D1C715098CA /* OpenCodeSessionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F6AFCDD4A429E11B0945492 /* OpenCodeSessionView.swift */; };
+		A14000000000000000000001 /* ApplicationModel+SessionSelections.swift in Sources */ = {isa = PBXBuildFile; fileRef = A14000000000000000000002 /* ApplicationModel+SessionSelections.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -115,6 +116,7 @@
 		502EF864DA314DFBB322C973 /* DashboardLocalSecretCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardLocalSecretCard.swift; sourceTree = "<group>"; };
 		17AF06D69A7DE73E3F94E40A /* OpenCodeInteractionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenCodeInteractionView.swift; sourceTree = "<group>"; };
 		6F6AFCDD4A429E11B0945492 /* OpenCodeSessionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenCodeSessionView.swift; sourceTree = "<group>"; };
+		A14000000000000000000002 /* ApplicationModel+SessionSelections.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ApplicationModel+SessionSelections.swift"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -174,6 +176,7 @@
 		D49100000000000000000004 /* Models */ = {
 			isa = PBXGroup;
 			children = (
+				A14000000000000000000002 /* ApplicationModel+SessionSelections.swift */,
 				3CE258FB55B3D55A39972D5B /* OpenCodeModel.swift */,
 				87BA82494C4524C032235AAF /* DashboardConversationReferencePreview.swift */,
 				FC6A850ACFC17DE4433439A7 /* DashboardConversationState.swift */,
@@ -357,6 +360,7 @@
 				BA480090AAD04BE7A8327211 /* SettingsHermesView.swift in Sources */,
 				E45100000000000000000001 /* DashboardHermesCron.swift in Sources */,
 				ECBF462874DF484F9FDD5C91 /* DashboardLocalSecretCard.swift in Sources */,
+				A14000000000000000000001 /* ApplicationModel+SessionSelections.swift in Sources */,
 				4C606D43824083BD3A612FF1 /* OpenCodeModel.swift in Sources */,
 				923D138C1F54FC887AA90493 /* DashboardSharedViews.swift in Sources */,
 				C04200000000000000000001 /* DashboardConversationPopover.swift in Sources */,

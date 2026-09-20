@@ -936,6 +936,7 @@ public actor DashboardStore {
     conversationID: String,
     model: String? = nil,
     thinking: String? = nil,
+    permission: String? = nil,
     launch: LocalACPRuntimeLaunchConfiguration?,
     workspace: LocalACPWorkspaceLaunchConfiguration?
   ) async throws -> LocalACPSessionConfiguration {
@@ -948,6 +949,7 @@ public actor DashboardStore {
       conversationID: conversationID,
       model: model,
       thinking: thinking,
+      permission: permission,
       launch: context.launch,
       workspace: context.workspace,
       systemPrompt: context.systemPrompt

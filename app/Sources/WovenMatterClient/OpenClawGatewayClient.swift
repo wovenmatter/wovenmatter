@@ -453,7 +453,8 @@ public actor OpenClawGatewayClient {
         guard !value.contains("/"), let provider, !provider.isEmpty else { return value }
         return provider + "/" + value
       },
-      thinkingLevel: object["thinkingLevel"]?.stringValue
+      thinkingLevel: object["thinkingLevel"]?.stringValue,
+      permissionMode: object["permissionMode"]?.stringValue ?? "default"
     )
   }
 
@@ -461,11 +462,11 @@ public actor OpenClawGatewayClient {
     key: String,
     preferences: OpenClawSessionPreferences
   ) async throws -> OpenClawSessionPreferences {
-    var params: [String: GatewayJSONValue] = ["key": .string(key)]
-    if let model = preferences.model { params["model"] = .string(model) }
-    if let thinking = preferences.thinkingLevel { params["thinkingLevel"] = .string(thinking) }
-    _ = try await request("sessions.patch", params: .object(params))
-    return try await sessionPreferences(key: key)
+    let params = try OpenClawSessionPermissions.patchParameters(key: key, preferences: preferences)
+    _ = try await request("sessions.patch", params: params)
+    let description = try await request("sessions.describe", params: .object(["key": .string(key)]))
+    try OpenClawSessionPermissions.confirm(preferences.permissionMode, description: description)
+    return Self.sessionPreferences(from: description)
   }
 
   private func receiveLoop(from socket: any OpenClawGatewaySocket, generation attempt: UUID) async {
