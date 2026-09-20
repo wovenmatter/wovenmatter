@@ -38,7 +38,7 @@ public enum OpenCodeComposerMetadata {
             slashCommands: slashCommands(commands),
             modelOptionMetadata: modelMetadata,
             thinkingOptionMetadata: thinkingMetadata,
-            permission: OpenCodePermissionHandling.options.contains(approvalMode) ? approvalMode : "normal",
+            permission: OpenCodePermissionHandling.normalized(approvalMode),
             permissionOptions: OpenCodePermissionHandling.options,
             permissionOptionMetadata: OpenCodePermissionHandling.metadata)
     }
