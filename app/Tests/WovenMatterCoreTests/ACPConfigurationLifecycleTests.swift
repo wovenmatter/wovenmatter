@@ -120,7 +120,7 @@ struct ACPConfigurationLifecycleTests {
 
     #expect(selected.model == "selected-model")
     #expect(selected.thinking == "high")
-    #expect(firstState.setRequests == ["model=selected-model;thinking=high"])
+    #expect(firstState.setRequests == ["model=selected-model;thinking=nil", "model=nil;thinking=high"])
     #expect(firstState.starts == 1)
     #expect(firstState.shutdowns == 1)
     await first.shutdown()
@@ -225,9 +225,7 @@ struct ACPConfigurationLifecycleTests {
     #expect(selected.model == "selected-model")
     #expect(selected.thinking == "low")
     #expect(secondState.setRequests == [
-      "model=native-model;thinking=nil",
-      "model=nil;thinking=high",
-      "model=selected-model;thinking=low",
+      "model=selected-model;thinking=nil",
     ])
     #expect(secondState.shutdowns == 1)
 

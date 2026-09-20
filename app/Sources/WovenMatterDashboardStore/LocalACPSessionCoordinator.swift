@@ -21,6 +21,7 @@ struct LocalACPSessionDriver: Sendable {
         _ model: String?,
         _ thinking: String?
     ) async throws -> LocalACPSessionConfiguration
+    let setPermission: (@Sendable (String) async throws -> LocalACPSessionConfiguration)?
     let activeInput: (@Sendable (
         _ input: AgentMessageInput
     ) async throws -> LocalACPActiveInputReceipt)?
@@ -46,6 +47,7 @@ struct LocalACPSessionDriver: Sendable {
             _ model: String?,
             _ thinking: String?
         ) async throws -> LocalACPSessionConfiguration,
+        setPermission: (@Sendable (String) async throws -> LocalACPSessionConfiguration)? = nil,
         activeInput: (@Sendable (
             _ input: AgentMessageInput
         ) async throws -> LocalACPActiveInputReceipt)? = nil,
@@ -57,6 +59,7 @@ struct LocalACPSessionDriver: Sendable {
         self.configuration = configuration
         self.observeConfiguration = observeConfiguration
         self.setConfiguration = setConfiguration
+        self.setPermission = setPermission
         self.activeInput = activeInput
         self.cancel = cancel
         self.shutdown = shutdown
@@ -77,6 +80,7 @@ struct LocalACPSessionDriver: Sendable {
                 },
                 configuration: { await client.sessionConfiguration() },
                 setConfiguration: { model, thinking in try await client.setSessionConfiguration(model: model, thinking: thinking) },
+                setPermission: { try await client.setSessionPermission($0) },
                 activeInput: { input in
                     try await client.steer(input)
                     return LocalACPActiveInputReceipt(completion: Task { nil })
@@ -167,6 +171,7 @@ struct LocalACPSessionDriver: Sendable {
                     thinking: thinking
                 )
             },
+            setPermission: { try await client.setSessionPermission($0) },
             activeInput: { input in
                 do {
                     return try await client.beginActiveInput(input)
@@ -222,9 +227,15 @@ public actor LocalACPSessionCoordinator {
 
     private enum LifecycleError: LocalizedError {
         case shutDown
+        case sessionBusy
+        case sessionIdentityChanged
 
         var errorDescription: String? {
-            "The local ACP session coordinator has shut down."
+            switch self {
+            case .shutDown: "The local ACP session coordinator has shut down."
+            case .sessionBusy: "Wait for the current session operation to finish before changing permissions."
+            case .sessionIdentityChanged: "The harness could not reconnect the existing session to change permissions."
+            }
         }
     }
 
@@ -261,6 +272,7 @@ public actor LocalACPSessionCoordinator {
     private var steeringWaiters: [String: [CheckedContinuation<Void, Never>]] = [:]
     private var pendingSessionStarts: [String: PendingSessionStart] = [:]
     private var pendingSessionShutdowns: [String: PendingSessionShutdown] = [:]
+    private var permissionMutationConversationIDs: Set<String> = []
     private var isShutDown = false
     private var sessionStartSequence: UInt64 = 0
     private var sessionShutdownSequence: UInt64 = 0
@@ -367,6 +379,7 @@ public actor LocalACPSessionCoordinator {
         onPermission: PermissionHandler?,
         onInteraction: InteractionHandler?
     ) throws -> (LocalACPRunIdentifiers, Task<Void, any Error>) {
+        try ensureNoPermissionMutation(conversationID: conversationID)
         let leaseAcquisition = try acquireOperationLease(
             recoveringInterruptedRuns: true
         )
@@ -617,6 +630,7 @@ public actor LocalACPSessionCoordinator {
         workspace: LocalACPWorkspaceLaunchConfiguration,
         systemPrompt: String? = nil
     ) async throws -> LocalACPSessionConfiguration {
+        try ensureNoPermissionMutation(conversationID: conversationID)
         let leaseAcquisition = try acquireOperationLease()
         defer {
             releaseOperationLease(leaseAcquisition)
@@ -651,11 +665,12 @@ public actor LocalACPSessionCoordinator {
         conversationID: String,
         model: String? = nil,
         thinking: String? = nil,
+        permission: String? = nil,
         launch: LocalACPRuntimeLaunchConfiguration,
         workspace: LocalACPWorkspaceLaunchConfiguration,
         systemPrompt: String? = nil
     ) async throws -> LocalACPSessionConfiguration {
-        guard model != nil || thinking != nil else {
+        guard model != nil || thinking != nil || permission != nil else {
             return try await configuration(
                 conversationID: conversationID,
                 launch: launch,
@@ -663,28 +678,85 @@ public actor LocalACPSessionCoordinator {
                 systemPrompt: systemPrompt
             )
         }
+        try ensureNoPermissionMutation(conversationID: conversationID)
+        if permission != nil {
+            guard runIDsByConversation[conversationID] == nil else {
+                throw LocalACPSessionDatabaseError.runAlreadyActive
+            }
+            guard (activeSessions[conversationID]?.activeUseCount ?? 0) == 0,
+                  pendingSessionStarts[conversationID] == nil else {
+                throw LifecycleError.sessionBusy
+            }
+            permissionMutationConversationIDs.insert(conversationID)
+        }
+        defer {
+            if permission != nil { permissionMutationConversationIDs.remove(conversationID) }
+        }
         let leaseAcquisition = try acquireOperationLease()
         defer {
             releaseOperationLease(leaseAcquisition)
         }
-        let descriptor = try database.localACPSession(
+        let stored = try database.localACPSession(
             conversationID: conversationID
+        )
+        // A replacement must be able to recover from an obsolete saved choice.
+        // Keep it in memory until the native session confirms it.
+        let descriptor = selecting(
+            stored,
+            model: model ?? stored.model,
+            thinking: thinking ?? (model != nil && model != stored.model ? nil : stored.thinking),
+            permission: permission ?? stored.permission
         )
         guard descriptor.runtimeKind == launch.runtimeKind else {
             throw LocalACPSessionDatabaseError.runtimeUnavailable
         }
 
-        let client = try await acquireSession(
+        var client = try await acquireSession(
             descriptor: descriptor,
             launch: launch,
             workspace: workspace,
-            systemPrompt: systemPrompt
+            systemPrompt: systemPrompt,
+            requiredSessionID: permission == nil ? nil : stored.acpSessionID
         )
         do {
-            let configuration = try await client.setConfiguration(
-                model,
-                thinking
-            )
+            var configuration = await client.configuration()
+            if (model != nil && model != configuration.model)
+                || (thinking != nil && thinking != configuration.thinking) {
+                configuration = try await client.setConfiguration(model, thinking)
+            }
+            if let model, configuration.model != model {
+                throw LocalACPClientError.configurationNotConfirmed("model")
+            }
+            if let thinking, configuration.thinking != thinking {
+                throw LocalACPClientError.configurationNotConfirmed("thinking")
+            }
+            if let permission {
+                guard let setPermission = client.setPermission else {
+                    throw LocalACPClientError.unsupportedConfiguration("permissions")
+                }
+                do {
+                    configuration = try await setPermission(permission)
+                } catch LocalACPClientError.permissionChangeRequiresRestart {
+                    let latest = try database.localACPSession(conversationID: conversationID)
+                    guard let sessionID = latest.acpSessionID,
+                          let active = activeSessions[conversationID],
+                          active.activeUseCount == 1 else {
+                        throw LifecycleError.sessionBusy
+                    }
+                    activeSessions.removeValue(forKey: conversationID)
+                    await shutDownSession(active, conversationID: conversationID)
+                    let replacement = selecting(latest, model: configuration.model,
+                        thinking: configuration.thinking, permission: permission)
+                    client = try await acquireSession(
+                        descriptor: replacement, launch: launch, workspace: workspace,
+                        systemPrompt: systemPrompt, requiredSessionID: sessionID
+                    )
+                    configuration = await client.configuration()
+                }
+                guard configuration.permission == permission else {
+                    throw LocalACPClientError.configurationNotConfirmed("permission")
+                }
+            }
             try persistConfiguration(
                 configuration,
                 conversationID: conversationID
@@ -692,9 +764,35 @@ public actor LocalACPSessionCoordinator {
             await releaseSession(conversationID: conversationID)
             return configuration
         } catch {
+            // A rejected or unconfirmed policy must not leave a partly changed
+            // process serving later prompts under an unrecorded permission mode.
+            if permission != nil,
+               let active = activeSessions[conversationID], active.activeUseCount == 1 {
+                activeSessions.removeValue(forKey: conversationID)
+                await shutDownSession(active, conversationID: conversationID)
+            }
             await releaseSession(conversationID: conversationID)
             throw error
         }
+    }
+
+    private func ensureNoPermissionMutation(conversationID: String) throws {
+        guard !permissionMutationConversationIDs.contains(conversationID) else {
+            throw LifecycleError.sessionBusy
+        }
+    }
+
+    private func selecting(
+        _ descriptor: LocalACPSessionDescriptor,
+        model: String?, thinking: String?, permission: String?
+    ) -> LocalACPSessionDescriptor {
+        LocalACPSessionDescriptor(
+            conversationID: descriptor.conversationID, runtimeKind: descriptor.runtimeKind,
+            title: descriptor.title, acpSessionID: descriptor.acpSessionID,
+            model: model, thinking: thinking, permission: permission,
+            buzzWorkspaceLinkID: descriptor.buzzWorkspaceLinkID,
+            buzzAgentID: descriptor.buzzAgentID, remoteWorkspaceID: descriptor.remoteWorkspaceID
+        )
     }
 
     public func cancel(conversationID: String) async {
@@ -944,7 +1042,8 @@ public actor LocalACPSessionCoordinator {
         launch: LocalACPRuntimeLaunchConfiguration,
         workspace: LocalACPWorkspaceLaunchConfiguration,
         systemPrompt: String?,
-        runID: String? = nil
+        runID: String? = nil,
+        requiredSessionID: String? = nil
     ) async throws -> LocalACPSessionDriver {
         guard !isShutDown else {
             throw LifecycleError.shutDown
@@ -969,7 +1068,8 @@ public actor LocalACPSessionCoordinator {
                 launch: launch,
                 workspace: workspace,
                 systemPrompt: systemPrompt,
-                runID: runID
+                runID: runID,
+                requiredSessionID: requiredSessionID
             )
         }
         guard !isShutDown else {
@@ -998,7 +1098,8 @@ public actor LocalACPSessionCoordinator {
         launch: LocalACPRuntimeLaunchConfiguration,
         workspace: LocalACPWorkspaceLaunchConfiguration,
         systemPrompt: String?,
-        runID: String?
+        runID: String?,
+        requiredSessionID: String? = nil
     ) async throws -> LocalACPSessionDriver {
         let waiterID = UUID()
         let pending: PendingSessionStart
@@ -1015,7 +1116,8 @@ public actor LocalACPSessionCoordinator {
                     launch: launch,
                     workspace: workspace,
                     systemPrompt: systemPrompt,
-                    runID: runID
+                    runID: runID,
+                    requiredSessionID: requiredSessionID
                 )
             }
             pending = PendingSessionStart(
@@ -1132,7 +1234,11 @@ public actor LocalACPSessionCoordinator {
     private func evictIdleSessionsIfNeeded() async {
         while activeSessions.count > maximumRetainedSessionCount {
             guard let conversationID = activeSessions
-                .filter({ $0.value.activeUseCount == 0 })
+                .filter({
+                    $0.value.activeUseCount == 0
+                        && !permissionMutationConversationIDs.contains($0.key)
+                        && pendingSessionStarts[$0.key] == nil
+                })
                 .min(by: {
                     $0.value.lastUsedSequence < $1.value.lastUsedSequence
                 })?
@@ -1151,7 +1257,8 @@ public actor LocalACPSessionCoordinator {
         launch: LocalACPRuntimeLaunchConfiguration,
         workspace: LocalACPWorkspaceLaunchConfiguration,
         systemPrompt: String?,
-        runID: String? = nil
+        runID: String? = nil,
+        requiredSessionID: String? = nil
     ) async throws -> LocalACPSessionDriver {
         let model = descriptor.model
         let thinking = descriptor.thinking
@@ -1166,6 +1273,10 @@ public actor LocalACPSessionCoordinator {
             guard !isShutDown else {
                 throw LifecycleError.shutDown
             }
+            if let requiredSessionID,
+               initialized.sessionID != requiredSessionID || !initialized.loadedExistingSession {
+                throw LifecycleError.sessionIdentityChanged
+            }
             if initialized.sessionID != descriptor.acpSessionID {
                 // Cursor, Pi and Hermes allocate IDs before their session stores
                 // are durable. Configuration-only drafts must remain recreatable.
@@ -1179,25 +1290,53 @@ public actor LocalACPSessionCoordinator {
                 }
             }
             var configuration = initialized.configuration
-            if let model,
-               model != configuration.model,
-               configuration.modelOptions.contains(model) {
+            if let permission = descriptor.permission, permission != configuration.permission {
+                do {
+                    guard let setPermission = started.setPermission else {
+                        throw LocalACPClientError.unsupportedConfiguration("permissions")
+                    }
+                    configuration = try await setPermission(permission)
+                    try Task.checkCancellation()
+                    guard configuration.permission == permission else {
+                        throw LocalACPClientError.configurationNotConfirmed("permission")
+                    }
+                } catch {
+                    publishChange(conversationID: descriptor.conversationID, runID: runID ?? "",
+                        phase: .configuration(configuration))
+                    throw error
+                }
+            }
+            if let model, model != configuration.model {
+                guard configuration.modelOptions.contains(model) else {
+                    publishChange(conversationID: descriptor.conversationID, runID: runID ?? "",
+                        phase: .configuration(configuration))
+                    throw LocalACPClientError.invalidConfigurationValue(field: "model", value: model)
+                }
                 configuration = try await started.setConfiguration(
                     model,
                     nil
                 )
                 try Task.checkCancellation()
                 guard !isShutDown else { throw LifecycleError.shutDown }
+                guard configuration.model == model else {
+                    throw LocalACPClientError.configurationNotConfirmed("model")
+                }
             }
-            if let thinking,
-               thinking != configuration.thinking,
-               configuration.thinkingOptions.contains(thinking) {
+            if let thinking, thinking != configuration.thinking {
+                guard configuration.thinkingOptions.contains(thinking) else {
+                    publishChange(conversationID: descriptor.conversationID, runID: runID ?? "",
+                        phase: .configuration(configuration))
+                    throw LocalACPClientError.invalidConfigurationValue(field: "thinking", value: thinking)
+                }
                 configuration = try await started.setConfiguration(
                     nil,
                     thinking
                 )
                 try Task.checkCancellation()
                 guard !isShutDown else { throw LifecycleError.shutDown }
+                guard configuration.thinking == thinking else {
+                    throw LocalACPClientError.configurationNotConfirmed("thinking")
+                }
             }
             try persistConfiguration(
                 configuration,
@@ -1238,7 +1377,9 @@ public actor LocalACPSessionCoordinator {
         guard activeSessions[conversationID]?.configurationObservationID == observationID else { return }
         // Keep native model/effort changes for session recreation, without
         // letting an evicted adapter overwrite its replacement's preferences.
-        try? persistConfiguration(configuration, conversationID: conversationID)
+        if !permissionMutationConversationIDs.contains(conversationID) {
+            try? persistConfiguration(configuration, conversationID: conversationID)
+        }
         onChange?(DashboardConversationChange(conversationID: conversationID,
             runID: runID, phase: .configuration(configuration)))
     }
@@ -1249,7 +1390,16 @@ public actor LocalACPSessionCoordinator {
         workspace: LocalACPWorkspaceLaunchConfiguration,
         systemPrompt: String?
     ) async throws -> (LocalACPSessionDriver, LocalACPInitializedSession) {
-        var launch = launch
+        // The launch descriptor is shared across conversations; permission is not.
+        var launch = LocalACPRuntimeLaunchConfiguration(
+            runtimeKind: launch.runtimeKind, executableURL: launch.executableURL,
+            arguments: launch.arguments, environment: launch.environment,
+            environmentKeysToRemove: launch.environmentKeysToRemove,
+            environmentKeyPrefixesToRemove: launch.environmentKeyPrefixesToRemove,
+            processWorkingDirectoryURL: launch.processWorkingDirectoryURL,
+            requestedPermission: descriptor.permission,
+            wrappedCommand: launch.wrappedCommand
+        )
         launch.historyRecorder = database.historyWireRecorder(
             conversationID: descriptor.conversationID, harness: descriptor.runtimeKind.rawValue
         )
@@ -1329,7 +1479,8 @@ public actor LocalACPSessionCoordinator {
         try database.updateLocalACPSessionConfiguration(
             conversationID: conversationID,
             model: configuration.model,
-            thinking: configuration.thinking
+            thinking: configuration.thinking,
+            permission: configuration.permission
         )
     }
 

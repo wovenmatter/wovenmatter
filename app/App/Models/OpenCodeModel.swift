@@ -16,12 +16,14 @@ final class OpenCodeModel {
     var workspaceName: String { remoteConfiguration?.name ?? "Local agent workspace" }
     var isRemote: Bool { remoteConfiguration != nil }
     private let defaults: UserDefaults
+    private let sessionPreferences: SessionSelectionPreferences
     private let registration = OpenCodeConnection.registrationURL()
     private var updateTask: Task<Void, Never>?
     private var connectionTask: Task<Void, Error>?
     private var executable: URL?
     var runtimeExecutable: URL? { executable }
     var onChange: ((String) async -> Void)?
+    var applyInitialSessionTools: ((String, [String]) throws -> Void)?
     var links: [String: OpenCodeSessionLink] = [:]
     var snapshots: [String: OpenCodeSessionSnapshot] = [:]
     var statuses: [String: String] = [:]
@@ -59,6 +61,13 @@ final class OpenCodeModel {
     private var models: [String: [OpenCodeValue]] = [:]
     private var commands: [String: [OpenCodeValue]] = [:]
 
+    private struct PendingCreationPreferences: Codable {
+        let nativeSessionID: String
+        let workspace: String
+        let nativeDirectory: String
+        let selections: SessionSelections
+    }
+
     private var connectionID: String {
         remoteConfiguration.map { "remote-workspace:" + $0.id.uuidString.lowercased() }
             ?? "local:" + registration.standardizedFileURL.path
@@ -93,6 +102,7 @@ final class OpenCodeModel {
         isEnabled = defaults.object(forKey: preference("enabled")) as? Bool ?? defaults.bool(forKey: preference("local-connected"))
         hiddenModels = Set(defaults.stringArray(forKey: preference("hidden-models")) ?? [])
         self.store = store; self.ownerDeviceID = ownerDeviceID; self.defaults = defaults
+        sessionPreferences = SessionSelectionPreferences(defaults: defaults)
         coordinator = OpenCodeSessionCoordinator(database: store.database)
         // Honor a previously selected CLI, never an old custom/remote service.
         if remoteConfiguration == nil, let path = defaults.string(forKey: preference("executable")), FileManager.default.isExecutableFile(atPath: path) { executable = URL(fileURLWithPath: path) }
@@ -296,18 +306,44 @@ final class OpenCodeModel {
         guard !serverStopped else { throw OpenCodeError.message("Start OpenCode from its settings page before creating a chat.") }
         guard !busy else { throw OpenCodeError.message("A session is already being created.") }
         busy = true; defer { busy = false }
-        try await connectLocal()
         let pendingKey = "wovenmatter.opencode.pending-create." + connectionID + (requestedConversationID.map { "." + $0.uuidString.lowercased() } ?? "")
         let pending = defaults.string(forKey: pendingKey)
         let id = pending ?? "ses_" + (requestedConversationID ?? UUID()).uuidString.replacingOccurrences(of: "-", with: "").lowercased()
+        let selectionKey = pendingKey + ".selections"
+        let captured: PendingCreationPreferences
+        if pending != nil, let data = defaults.data(forKey: selectionKey),
+           let saved = try? JSONDecoder().decode(PendingCreationPreferences.self, from: data),
+           saved.nativeSessionID == id {
+            captured = saved
+        } else {
+            let reserved = requestedConversationID.flatMap { sessionPreferences.conversation(id: $0.uuidString.lowercased()) }
+            let scope = reserved?.workspace ?? selectionWorkspace(workspace)
+            captured = PendingCreationPreferences(nativeSessionID: id, workspace: scope,
+                nativeDirectory: workspace.standardizedFileURL.path,
+                selections: reserved?.desiredSelections
+                    ?? sessionPreferences.defaults(harness: AgentRuntimeKind.opencode.rawValue, workspace: scope))
+            defaults.set(try JSONEncoder().encode(captured), forKey: selectionKey)
+        }
         defaults.set(id, forKey: pendingKey)
+        var nativeCreationConfirmed = false
         do {
-            let response = try await coordinator.createSession(connectionID: connectionID, id: id, workspace: workspace, recover: pending != nil || requestedConversationID != nil, title: title, nativeWorkspaceID: nativeWorkspaceID)
-            let localID = try await open(response["data"], requestedConversationID: requestedConversationID)
+            try await connectLocal()
+            let response = try await coordinator.createSession(connectionID: connectionID, id: id,
+                workspace: URL(fileURLWithPath: captured.nativeDirectory), recover: pending != nil || requestedConversationID != nil,
+                title: title, nativeWorkspaceID: nativeWorkspaceID)
+            nativeCreationConfirmed = true
+            let localID = try await open(response["data"], requestedConversationID: requestedConversationID, creationPreferences: captured)
             defaults.removeObject(forKey: pendingKey)
+            defaults.removeObject(forKey: selectionKey)
             return localID
         } catch {
-            if case OpenCodeError.http(let code) = error, [400, 401, 403, 404, 422].contains(code) { defaults.removeObject(forKey: pendingKey) }
+            // A catalog or selection failure after native creation must retry
+            // that same conversation with its original captured defaults.
+            if pending == nil, !nativeCreationConfirmed, case OpenCodeError.http(let code) = error,
+               [400, 401, 403, 404, 422].contains(code) {
+                defaults.removeObject(forKey: pendingKey)
+                defaults.removeObject(forKey: selectionKey)
+            }
             throw error
         }
     }
@@ -329,7 +365,8 @@ final class OpenCodeModel {
         _ = try await open(snapshot.info, importedSnapshot: snapshot)
     }
 
-    private func open(_ session: OpenCodeValue, importedSnapshot: OpenCodeSessionSnapshot? = nil, requestedConversationID: UUID? = nil) async throws -> String {
+    private func open(_ session: OpenCodeValue, importedSnapshot: OpenCodeSessionSnapshot? = nil,
+                      requestedConversationID: UUID? = nil, creationPreferences: PendingCreationPreferences? = nil) async throws -> String {
         let sessionID = session["id"].text
         guard sessionID.hasPrefix("ses") else { throw OpenCodeError.message("OpenCode did not return a session ID.") }
         let conversationID: String
@@ -345,11 +382,26 @@ final class OpenCodeModel {
         }
         let link = OpenCodeSessionLink(conversationID: conversationID, connectionID: connectionID, sessionID: sessionID)
         links[conversationID] = link
-        var initial = importedSnapshot ?? OpenCodeSessionSnapshot()
+        var initial = importedSnapshot ?? snapshots[conversationID]
+            ?? (try? store.database.openCodeSnapshot(conversationID: conversationID)) ?? OpenCodeSessionSnapshot()
         initial.info = session
         snapshots[conversationID] = initial
-        do { try await refreshCatalog(conversationID) }
-        catch { self.error = error.localizedDescription }
+        if let captured = creationPreferences {
+            sessionPreferences.captureConversation(id: conversationID,
+                harness: AgentRuntimeKind.opencode.rawValue, workspace: captured.workspace,
+                nativeFallback: nativeSelections(conversationID), capturedDefaults: captured.selections)
+        }
+        if creationPreferences != nil, let captured = sessionPreferences.conversation(id: conversationID), captured.requiresApplication {
+            try await applySessionSelections(conversationID, selections: captured.desiredSelections)
+            sessionPreferences.markApplied(id: conversationID)
+        } else {
+            do { try await refreshCatalog(conversationID) }
+            catch { self.error = error.localizedDescription }
+            if creationPreferences == nil {
+                // Imports retain their own native settings, irrespective of defaults.
+                captureExistingSelections(conversationID)
+            }
+        }
         await coordinator.watch(link)
         await onChange?(conversationID)
         return conversationID
@@ -397,24 +449,29 @@ final class OpenCodeModel {
 
     func metadata(_ id: String) -> LocalACPSessionMetadata? {
         guard let snapshot = snapshots[id], isLocalSession(id) else { return nil }
-        return OpenCodeComposerMetadata.metadata(session: snapshot.info, models: models[id] ?? [], defaultModel: defaultModels[id] ?? .null, hiddenModels: hiddenModels, commands: commands[id] ?? [])
+        return OpenCodeComposerMetadata.metadata(session: snapshot.info, models: models[id] ?? [], defaultModel: defaultModels[id] ?? .null, hiddenModels: hiddenModels, commands: commands[id] ?? [], approvalMode: snapshot.approvalMode ?? "normal")
     }
 
     @discardableResult
-    func updateSelection(_ id: String, model: String? = nil, thinking: String? = nil) -> Task<Void, Error>? {
+    func updateSelection(_ id: String, model: String? = nil, thinking: String? = nil, permission: String? = nil) -> Task<Void, Error>? {
         guard updatingSessions.insert(id).inserted else { return nil }
         error = nil
         let task = Task { @MainActor in
-            guard let key = model ?? self.metadata(id)?.model else {
-                throw OpenCodeError.message("OpenCode has no default model. Choose an available model.")
+            let pending = self.sessionPreferences.conversation(id: id).flatMap {
+                $0.requiresApplication ? $0 : nil
             }
-            let selection = try OpenCodeComposerMetadata.selection(model: key, thinking: thinking, models: self.models[id] ?? [])
-            guard let link = self.links[id], self.isLocalSession(id) else {
-                throw OpenCodeError.message("This saved transcript cannot change its model.")
+            let correction = SessionSelections(model: model, thinking: thinking, permission: permission)
+            let desired = pending?.desiredSelections.applyingPendingCorrection(correction) ?? correction
+            if let pending {
+                // Preserve each repair even if another field still fails, so a
+                // later correction or relaunch cannot restore the rejected value.
+                self.sessionPreferences.updateConversation(id: id, selections: desired)
+                if pending.desiredSelections.thinking != nil, desired.thinking == nil {
+                    self.sessionPreferences.updateConversation(id: id, field: .thinking, from: desired)
+                }
             }
-            let confirmed = try await self.coordinator.configureSelection(link, selection: selection)
-            self.snapshots[id]?.info = confirmed
-            try? await self.coordinator.refresh(link)
+            try await self.performSessionSelections(id, selections: desired)
+            self.sessionPreferences.markApplied(id: id)
         }
         selectionTasks[id] = task
         Task {
@@ -435,6 +492,89 @@ final class OpenCodeModel {
         try await task.value
     }
 
+    func applySessionSelections(_ id: String, selections: SessionSelections) async throws {
+        guard updatingSessions.insert(id).inserted else { throw OpenCodeError.message("Wait for the current session settings change to finish.") }
+        defer { updatingSessions.remove(id) }
+        let task = Task { @MainActor in try await self.performSessionSelections(id, selections: selections) }
+        // Keep a failed application as a send barrier, just like a manual edit.
+        selectionTasks[id] = task
+        try await task.value
+    }
+
+    private func performSessionSelections(_ id: String, selections: SessionSelections) async throws {
+        if selections.tools != nil, applyInitialSessionTools == nil {
+            throw OpenCodeError.message("Session tool settings are unavailable in this build.")
+        }
+        let needsModelRefresh = selections.model != nil || selections.thinking != nil
+            || sessionPreferences.conversation(id: id)?.requiresApplication == true
+        if needsModelRefresh {
+            try await refreshCatalog(id)
+            let current = try await sessionCall(id)
+            snapshots[id]?.info = current["data"]
+        }
+        captureExistingSelections(id)
+        let needsNativeModelSnapshot = sessionPreferences.conversation(id: id)?.requiresApplication == true
+            && OpenCodeComposerMetadata.modelKey(snapshots[id]?.info["model"] ?? .null).isEmpty
+        let initialMetadata = metadata(id)
+        let modelToApply = selections.model ?? (needsNativeModelSnapshot ? initialMetadata?.model : nil)
+        let nativeThinking = needsNativeModelSnapshot
+            && (selections.model == nil || selections.model == initialMetadata?.model)
+            ? initialMetadata?.thinking : nil
+        let thinkingToApply = selections.thinking ?? nativeThinking
+        if let model = modelToApply {
+            _ = try OpenCodeComposerMetadata.selection(model: model, models: models[id] ?? [])
+            if model != metadata(id)?.model || needsNativeModelSnapshot {
+                try await setNativeModel(id, model: model, thinking: nil)
+            }
+        }
+        if let thinking = thinkingToApply {
+            guard let model = metadata(id)?.model else {
+                throw OpenCodeError.message("OpenCode has no default model. Choose an available model.")
+            }
+            try await setNativeModel(id, model: model, thinking: thinking)
+        }
+        if let permission = selections.permission {
+            let confirmed = try await coordinator.setSessionPermission(conversationID: id, permission: permission)
+            snapshots[id]?.approvalMode = confirmed
+        }
+        if let tools = selections.tools { try applyInitialSessionTools?(id, tools) }
+        // Read back the native result; changing models can remove an old variant.
+        let confirmed = nativeSelections(id)
+        sessionPreferences.updateConversation(id: id, selections: SessionSelections(
+            model: selections.model == nil ? nil : confirmed.model,
+            thinking: selections.thinking == nil ? nil : confirmed.thinking,
+            permission: selections.permission == nil ? nil : confirmed.permission))
+        sessionPreferences.replaceConfirmedSelections(id: id, selections: confirmed)
+    }
+
+    private func setNativeModel(_ id: String, model: String, thinking: String?) async throws {
+        let selection = try OpenCodeComposerMetadata.selection(model: model, thinking: thinking, models: models[id] ?? [])
+        _ = try await sessionCall(id, "/model", method: "POST", body: selection)
+        let confirmed = try await sessionCall(id)
+        guard OpenCodeComposerMetadata.matchesSelection(confirmed["data"]["model"], selection["model"]) else {
+            throw OpenCodeError.message("OpenCode has not confirmed the selected model. Select it again before sending.")
+        }
+        snapshots[id]?.info = confirmed["data"]
+    }
+
+    private func selectionWorkspace(_ workspace: URL) -> String {
+        remoteConfiguration.map { "remote:" + $0.id.uuidString.lowercased() }
+            ?? "local:" + workspace.standardizedFileURL.path
+    }
+
+    private func nativeSelections(_ id: String) -> SessionSelections {
+        let metadata = metadata(id)
+        return SessionSelections(model: metadata?.model, thinking: metadata?.thinking, permission: metadata?.permission,
+            tools: sessionPreferences.conversation(id: id)?.selections.tools)
+    }
+
+    private func captureExistingSelections(_ id: String) {
+        let directory = snapshots[id]?.info["location"]["directory"].string ?? ""
+        let workspace = selectionWorkspace(URL(fileURLWithPath: directory))
+        sessionPreferences.captureExistingConversation(id: id, harness: AgentRuntimeKind.opencode.rawValue,
+            workspace: workspace, selections: nativeSelections(id))
+    }
+
     func send(_ id: String, input: AgentMessageInput, discovery: String? = nil) async throws {
         guard let link = links[id], isLocalSession(id) else { throw OpenCodeError.message("This saved transcript is read-only. Create a new OpenCode chat.") }
         guard isEnabled else { throw OpenCodeError.message("Enable OpenCode for this workspace before sending.") }
@@ -446,6 +586,10 @@ final class OpenCodeModel {
         if !isReady { try await connectLocal() }
         // A failed selection remains a send barrier until the user selects again.
         if let selection = selectionTasks[id] { try await selection.value }
+        if let captured = sessionPreferences.conversation(id: id), captured.requiresApplication {
+            try await applySessionSelections(id, selections: captured.desiredSelections)
+            sessionPreferences.markApplied(id: id)
+        }
         if let command = OpenCodeComposerMetadata.invocation(input.text, commands: commands[id] ?? []) {
             try await coordinator.command(link, name: command.name,
                 input: AgentMessageInput(text: command.arguments, attachments: input.attachments, historyDeliveryID: input.historyDeliveryID), discovery: discovery)
