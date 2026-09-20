@@ -325,7 +325,7 @@ extension ApplicationModel {
                 inheritedDirectory = snapshot.info["location"]["directory"].string
             } else if let sourceRuntime = source.localRuntimeKind {
                 let context = try directACPLaunchContext(conversation: source, runtimeKind: sourceRuntime,
-                    isBuzzWorkspaceSession: buzzBoundLocalACPConversationIDs.contains(source.id))
+                    isBuzzWorkspaceSession: sourceSession.buzzWorkspaceLinkID != nil)
                 let configuration = try await store.localACPSessionConfiguration(conversationID: source.id,
                     launch: context?.launch, workspace: context?.workspace)
                 inheritedDirectory = configuration.workingDirectory ?? context?.workspace.rootURL.path
