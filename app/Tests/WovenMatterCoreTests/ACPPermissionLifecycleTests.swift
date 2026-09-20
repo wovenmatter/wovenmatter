@@ -437,8 +437,8 @@ private final class PermissionLifecycleDriver: @unchecked Sendable {
     lock.withLock { observer = handler }
   }
   func emit(_ configuration: LocalACPSessionConfiguration) async {
-    let observer = lock.withLock { observer }
-    await observer?(configuration)
+    let callback = lock.withLock { self.observer }
+    await callback?(configuration)
   }
   func select(model: String? = nil, thinking: String? = nil, permission: String? = nil) -> LocalACPSessionConfiguration {
     lock.withLock {
