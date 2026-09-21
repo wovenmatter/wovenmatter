@@ -489,7 +489,7 @@ extension WorkspaceDatabase {
         conversations: count("dashboard_conversations", where: activeConversationScoped),
         messages: count("dashboard_messages", where: conversationChildScope),
         runs: count("dashboard_runs", where: conversationChildScope),
-        calendarItems: count("dashboard_calendar_items", where: scoped)
+        calendarItems: count("dashboard_calendar_items", where: activeScoped)
       )
     }
   }

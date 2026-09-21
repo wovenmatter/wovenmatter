@@ -128,7 +128,8 @@ extension ApplicationModel {
                 arguments: local.arguments, environment: local.environment,
                 environmentKeysToRemove: local.environmentKeysToRemove,
                 environmentKeyPrefixesToRemove: local.environmentKeyPrefixesToRemove,
-                processWorkingDirectoryURL: URL(fileURLWithPath: directory))
+                processWorkingDirectoryURL: URL(fileURLWithPath: directory),
+                requestedPermission: local.requestedPermission, wrappedCommand: local.wrappedCommand)
         }
         return try await CalendarSessionOptions.load(launch: launch, directory: URL(fileURLWithPath: directory), model: config.model)
     }

@@ -160,6 +160,7 @@ struct WorkspaceCalendarTests {
     #expect(try db.claimToolDelivery(id: run.id, now: start) == nil)
     #expect(try db.dueCalendarRuns(now: start).isEmpty)
     #expect(try db.workspaceOverview().conversations.contains { $0.id == run.sessionID })
+    #expect(try db.dashboardRecordCounts().calendarItems == 0)
   }
 
   @Test func pendingNativeAcceptanceIsNeverAutomaticallySubmittedAgain() throws {
