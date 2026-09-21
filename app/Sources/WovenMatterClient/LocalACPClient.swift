@@ -1558,7 +1558,6 @@ public actor LocalACPClient {
             let update = envelope.params?["update"]
             switch update?["sessionUpdate"]?.stringValue {
             case "config_option_update", "available_commands_update", "current_mode_update":
-                guard belongsToActiveSession(envelope) else { return }
                 let previousConfiguration = configuration
                 captureSessionConfiguration(from: update)
                 if previousConfiguration != configuration { await configurationHandler?(configuration) }

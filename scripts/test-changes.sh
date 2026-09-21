@@ -23,6 +23,7 @@ run_static_checks() {
   bash scripts/test-dev-signing.sh
   scripts/test-app-termination.sh
   scripts/test-composer-text-editor.sh
+  scripts/test-conversation-layout.sh
   scripts/test-note-editor.sh
   scripts/test-note-socket.sh
   python3 scripts/test-support/test_wovenmatter_remote_tools.py
