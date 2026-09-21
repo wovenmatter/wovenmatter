@@ -33,6 +33,7 @@ public final class WorkspaceDatabase: @unchecked Sendable {
       try migrate()
       try migrateWorkspaceHistory()
       try migrateAgentTools()
+      try migrateCalendar()
     } catch {
       sqlite3_close(database)
       connection = nil

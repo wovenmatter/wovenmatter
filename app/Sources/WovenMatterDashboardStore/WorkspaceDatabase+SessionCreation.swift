@@ -7,8 +7,8 @@ extension WorkspaceDatabase {
   /// restart or failed final coordination. It never derives a path from a title.
   public func toolSessionCreationConfiguration(targetID: String) throws -> WorkspaceSessionCreationConfiguration? {
     try withLock {
-      guard let json = try historyRowsUnlocked("SELECT configuration_json FROM workspace_session_creations WHERE target_id=?",
-        values: [targetID]).first?.objectValue?["configuration_json"]?.stringValue else { return nil }
+      guard let json = try historyRowsUnlocked("SELECT configuration_json FROM workspace_session_creations WHERE target_id=? UNION ALL SELECT configuration_json FROM workspace_calendar_sessions WHERE id=? LIMIT 1",
+        values: [targetID, targetID]).first?.objectValue?["configuration_json"]?.stringValue else { return nil }
       return try JSONDecoder().decode(WorkspaceSessionCreationConfiguration.self, from: Data(json.utf8))
     }
   }
@@ -116,6 +116,7 @@ extension WorkspaceDatabase {
   /// Session insertion and creation provenance commit together, so an interrupted
   /// remote setup cannot leave an apparently user-created conversation behind.
   func adoptReservedSessionOriginUnlocked(_ targetID: String) throws {
+    try adoptCalendarSessionUnlocked(targetID)
     guard let row = try historyRowsUnlocked("SELECT source_id,purpose,configuration_json FROM workspace_session_creations WHERE target_id=?", values: [targetID]).first?.objectValue,
           let source = row["source_id"]?.stringValue else { return }
     try requireToolUnlocked(.sessions, sessionID: source)

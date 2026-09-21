@@ -182,6 +182,7 @@ final class ApplicationModel {
     private var buzzBoundLocalACPConversationIDs: Set<String> = []
     private(set) var workspaceOverview: DashboardWorkspaceOverview?
     private(set) var calendarItems: [WorkspaceCalendarItemRecord] = []
+    private(set) var calendarRuns: [WorkspaceCalendarRun] = []
     private(set) var workspaceRevision: Int64 = 0
     private(set) var workspaceListRevision: Int64 = 0
     private(set) var macSurfaceProfile: SurfaceProfile?
@@ -195,8 +196,8 @@ final class ApplicationModel {
     @ObservationIgnored var toolRuntimeTask: Task<Void, Never>?
     @ObservationIgnored var toolCreationTasks: [String: Task<WovenMatterToolResponse, any Error>] = [:]
     @ObservationIgnored private var toolSessionAdmission = WorkspaceSessionAdmission()
-    private(set) var calendarMutationError: String?
-    private(set) var isCreatingCalendarItem = false
+    var calendarMutationError: String?
+    var isCreatingCalendarItem = false
     private(set) var noteDrafts: [String: DashboardNoteDraft] = [:]
     var pendingComposerPrefills: [String: String] = [:]
     private(set) var localACPSessionMetadata: [
@@ -302,7 +303,7 @@ final class ApplicationModel {
     @ObservationIgnored
     private let conversationTitleGenerator = CodexConversationTitleGenerator()
     @ObservationIgnored
-    private var localACPLaunchConfigurations: [
+    private(set) var localACPLaunchConfigurations: [
         AgentRuntimeKind: LocalACPRuntimeLaunchConfiguration
     ] = [:]
     @ObservationIgnored
@@ -478,6 +479,9 @@ final class ApplicationModel {
                 }, usageHandler: { [weak self] command in
                     guard let self else { throw CancellationError() }
                     return try await self.handleAgentUsage(command)
+                }, calendarTaskHandler: { [weak self] caller, command, existing in
+                    guard let self else { throw CancellationError() }
+                    return try await self.resolveCalendarTask(callerID: caller, command: command, existing: existing)
                 }, onMutation: { [weak self] in await self?.refreshWorkspace() })
             configureSessionToolSelectionAdapter()
             try dashboardStore.database.recoverToolDeliveries()
@@ -2635,7 +2639,7 @@ final class ApplicationModel {
 
     func dismissPendingHermesSettings() { pendingHermesSettingsAgentID = nil }
 
-    private func requireLocalHermesLink(conversationID: String? = nil, openSettings: Bool = false) throws {
+    func requireLocalHermesLink(conversationID: String? = nil, openSettings: Bool = false) throws {
         guard let agent = localCLIAgents.first(where: { $0.runtimeKind == .hermes }) else {
             throw HermesGatewayError.message("Enable Hermes in Local agent workspace first.")
         }
@@ -4398,6 +4402,7 @@ final class ApplicationModel {
         if calendarItems != snapshot.calendarItems {
             calendarItems = snapshot.calendarItems
         }
+        if calendarRuns != snapshot.calendarRuns { calendarRuns = snapshot.calendarRuns }
         let nextOverview = DashboardWorkspaceOverview(snapshot.workspace)
         if workspaceOverview?.folders != nextOverview.folders
             || workspaceOverview?.conversations != nextOverview.conversations

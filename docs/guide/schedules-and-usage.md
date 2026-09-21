@@ -27,8 +27,38 @@ you to confirm pausing active timers.
 
 ## Calendar
 
-Use **Calendar** to add and view workspace events. A calendar event is separate
-from a Cron Job; adding an event does not schedule an agent run.
+Use **Calendar** for ordinary events and scheduled tasks. Click **Add event**,
+choose a day and time, and optionally add a description. Ordinary events can be
+all-day or span several days. Click an event to inspect, edit, copy, or delete it.
+Copy an event, select another day, then choose **Paste event** to make an
+independent copy.
+
+Choose **Scheduled task** to save a prompt with an agent, model, thinking level,
+access setting, and enabled tools. Choose the session's folder (or **All
+Workspace**), local or remote workspace, and working directory. Model and
+session options come from the selected agent. The agent must be connected to
+load its available options and run the task. Normal session permission requests
+still apply.
+
+Events and tasks can repeat every chosen number of days, weeks, or months in
+their saved time zone. Recurring events have a distinct color and repeat label.
+Recurring tasks use the same session by default; choose **New session each
+time** for independent conversations. Editing a recurring event offers two
+choices: change the **Entire series**, or **Detach this occurrence** into an
+independent one-time event. Detaching retains its settings and removes that
+occurrence from the series.
+
+Calendar tasks run while Woven Matter is open. When the app returns, every
+overdue independent task runs, while each recurring task catches up once.
+Tasks wait when their session is busy or the running-session limit is reached;
+an unavailable connection is retried. A send whose acceptance cannot be
+confirmed is marked for inspection rather than automatically sent again.
+Future recurring occurrences continue on their schedule. These app-owned
+tasks are separate from the agent-service schedules in **Cron Jobs**.
+
+After a task sends, click its event and choose **Open session**. Deleting an
+event does not delete its sessions. Each event shows who created it and who
+last edited it, including the agent for changes made through Calendar tools.
 
 ## Usage
 

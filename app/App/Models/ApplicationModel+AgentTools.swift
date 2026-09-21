@@ -73,6 +73,7 @@ extension ApplicationModel {
     private func runAgentToolTick() async {
         guard let database = dashboardStore?.database else { return }
         do {
+            await runCalendarTasks()
             pendingSessionAccess = try database.pendingCoordinationAccessRequests()
             var notifications = try database.collectCoordinationTurnNotifications()
             for request in pendingLocalACPPermissions {
@@ -121,6 +122,7 @@ extension ApplicationModel {
                       ["accepted", "cancelled"].contains(receipt.status) else { continue }
                 try database.finishTimerOccurrence(id: timer.id, deliveryID: id)
             }
+            try database.settleCalendarRuns()
             try agentTools?.reload()
         } catch { agentTools?.error = error.localizedDescription }
     }
@@ -291,7 +293,7 @@ extension ApplicationModel {
         return try await task.value
     }
 
-    private func resolveToolSessionCreation(source: WorkspaceConversationRecord, command: WovenMatterToolCommand,
+    func resolveToolSessionCreation(source: WorkspaceConversationRecord, command: WovenMatterToolCommand,
                                             title: String) async throws -> WorkspaceSessionCreationConfiguration {
         if let raw = command.options["harness"], AgentRuntimeKind(rawValue: raw) == nil {
             throw WorkspaceToolError.invalid("Unknown harness.")
@@ -357,6 +359,10 @@ extension ApplicationModel {
             let sent = try await dispatchAgentMessage(conversation: target,
                 input: .init(text: claimed.text, historyDeliveryID: claimed.id))
             guard sent else {
+                if claimed.kind == .calendar {
+                    try database.setToolDeliveryStatus(id: claimed.id, status: "queued")
+                    return try .value(database.toolDelivery(id: claimed.id) ?? claimed)
+                }
                 // Capacity is not a scheduler. No new queue is created by the limit.
                 try database.setToolDeliveryStatus(id: claimed.id, status: "cancelled")
                 return .init(silent: true)

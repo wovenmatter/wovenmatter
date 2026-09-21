@@ -1,0 +1,223 @@
+import SwiftUI
+import WovenMatterCore
+
+struct DashboardCalendarEventSheet: View {
+    enum EditScope: String, CaseIterable { case series, detach }
+    @Environment(\.dismiss) private var dismiss
+    @Bindable var model: ApplicationModel
+    let selection: DashboardCalendarSelection
+    let onOpenSession: (String) -> Void
+    @State private var draft: WorkspaceCalendarDraft
+    @State private var editing: Bool
+    @State private var scope: EditScope = .series
+    @State private var showsDelete = false
+
+    init(model: ApplicationModel, selection: DashboardCalendarSelection, onOpenSession: @escaping (String) -> Void) {
+        self.model = model; self.selection = selection; self.onOpenSession = onOpenSession
+        _draft = State(initialValue: selection.draft)
+        _editing = State(initialValue: selection.occurrence == nil)
+    }
+    private var event: WorkspaceCalendarItemRecord? { selection.occurrence?.event }
+    private var isSeries: Bool { event?.calendar.recurrence != nil }
+    private var calendar: Calendar {
+        var value = Calendar(identifier: .gregorian); value.timeZone = TimeZone(identifier: draft.timeZoneID) ?? .current
+        return value
+    }
+    private var run: WorkspaceCalendarRun? {
+        guard let event else { return nil }
+        let runs = model.calendarRuns.filter { $0.eventID == event.id && $0.status != "cancelled" }
+        return runs.last { $0.scheduledAt == selection.occurrence?.startsAt } ?? (isSeries ? nil : runs.last)
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text(editing ? (event == nil ? "Add event" : "Edit event") : draft.title)
+                    .font(.system(size: 20, weight: .semibold)).lineLimit(2)
+                Spacer()
+                if !editing { Button("Done") { dismiss() }.buttonStyle(DashboardQuietButtonStyle()).keyboardShortcut(.cancelAction) }
+            }.padding(24)
+            Divider()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    if editing { editor } else { information }
+                    if let event { attribution(event) }
+                    if let error = model.calendarMutationError {
+                        Text(error).font(.system(size: 12)).foregroundStyle(DashboardPalette.danger).fixedSize(horizontal: false, vertical: true)
+                    }
+                }.padding(24)
+            }.scrollIndicators(.never)
+            Divider()
+            footer.padding(20)
+        }
+        .frame(width: 560).frame(minHeight: 400, maxHeight: 760)
+        .background(DashboardPalette.background)
+        .foregroundStyle(DashboardPalette.foreground)
+        .confirmationDialog("Delete this event?", isPresented: $showsDelete) {
+            if isSeries, let occurrence = selection.occurrence {
+                Button("Delete this occurrence", role: .destructive) { remove(occurrence.index) }
+                Button("Delete entire series", role: .destructive) { remove(nil) }
+            } else { Button("Delete event", role: .destructive) { remove(nil) } }
+            Button("Cancel", role: .cancel) { }
+        } message: { Text("Sessions that already ran will remain in your workspace.") }
+    }
+
+    private var editor: some View {
+        VStack(alignment: .leading, spacing: 15) {
+            if isSeries {
+                Picker("Apply changes to", selection: $scope) {
+                    Text("Entire series").tag(EditScope.series)
+                    Text("Detach this occurrence").tag(EditScope.detach)
+                }.pickerStyle(.segmented)
+                .onChange(of: scope) { _, scope in
+                    if scope == .detach, let occurrence = selection.occurrence {
+                        draft.startsAt = occurrence.startsAt; draft.endsAt = occurrence.endsAt; draft.recurrence = nil
+                    } else if let event {
+                        draft.startsAt = event.startDate ?? draft.startsAt; draft.endsAt = event.endDate
+                        draft.recurrence = event.calendar.recurrence
+                    }
+                }
+            }
+            TextField("Event title", text: $draft.title).textFieldStyle(.roundedBorder)
+            Picker("Type", selection: Binding(get: { draft.task != nil }, set: { enabled in
+                draft.task = enabled ? model.calendarTaskDefaults(runtime: .codex, workspaceID: nil, title: draft.title) : nil
+                if enabled { draft.allDay = false }
+            })) {
+                Text("Event").tag(false); Text("Scheduled task").tag(true)
+            }.pickerStyle(.segmented)
+            if draft.task == nil {
+                Toggle("All-day event", isOn: $draft.allDay).toggleStyle(DashboardSwitchToggleStyle())
+                    .onChange(of: draft.allDay) { _, allDay in
+                        if allDay {
+                            draft.startsAt = calendar.startOfDay(for: draft.startsAt)
+                            draft.endsAt = calendar.date(byAdding: .day, value: 1, to: draft.startsAt)
+                        } else { draft.endsAt = draft.startsAt.addingTimeInterval(3_600) }
+                    }
+            }
+            DatePicker("Starts", selection: $draft.startsAt, displayedComponents: draft.allDay ? [.date] : [.date, .hourAndMinute])
+            DatePicker("Ends", selection: endDate, in: draft.startsAt..., displayedComponents: draft.allDay ? [.date] : [.date, .hourAndMinute])
+            Picker("Time zone", selection: $draft.timeZoneID) {
+                ForEach(TimeZone.knownTimeZoneIdentifiers, id: \.self) { Text($0.replacingOccurrences(of: "_", with: " ")).tag($0) }
+            }
+            if !isSeries || scope == .series {
+                Toggle("Repeat", isOn: Binding(get: { draft.recurrence != nil }, set: { draft.recurrence = $0 ? .init(unit: .week) : nil }))
+                    .toggleStyle(DashboardSwitchToggleStyle())
+                if draft.recurrence != nil {
+                    HStack {
+                        Text("Every")
+                        TextField("Interval", value: Binding(get: { draft.recurrence?.interval ?? 1 }, set: { draft.recurrence?.interval = $0 }), format: .number)
+                            .frame(width: 55).textFieldStyle(.roundedBorder)
+                        Picker("Repeat unit", selection: Binding(get: { draft.recurrence?.unit ?? .week }, set: { draft.recurrence?.unit = $0 })) {
+                            ForEach(WorkspaceCalendarRecurrence.Unit.allCases, id: \.self) { Text($0.title).tag($0) }
+                        }.labelsHidden()
+                    }
+                }
+            }
+            Text("Description").font(.system(size: 12, weight: .medium))
+            TextField("Optional description", text: $draft.details, axis: .vertical)
+                .lineLimit(3...6).textFieldStyle(.roundedBorder)
+            if draft.task != nil {
+                Divider()
+                DashboardCalendarTaskFields(model: model, task: Binding(get: { draft.task ?? model.calendarTaskDefaults(runtime: .codex, workspaceID: nil) }, set: { draft.task = $0 }), recurring: draft.recurrence != nil)
+            }
+        }
+        .font(.system(size: 13))
+        .environment(\.timeZone, calendar.timeZone)
+        .onChange(of: draft.startsAt) { _, start in
+            if draft.endsAt.map({ $0 <= start }) ?? true {
+                draft.endsAt = calendar.date(byAdding: draft.allDay ? .day : .hour, value: 1, to: start)
+            }
+        }
+    }
+
+    private var endDate: Binding<Date> {
+        Binding(get: {
+            let end = draft.endsAt ?? draft.startsAt.addingTimeInterval(3_600)
+            return draft.allDay ? calendar.date(byAdding: .day, value: -1, to: end) ?? end : end
+        }, set: { draft.endsAt = draft.allDay ? calendar.date(byAdding: .day, value: 1, to: $0) : $0 })
+    }
+
+    private var information: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            LabeledContent("Type", value: draft.task == nil ? "Event" : "Scheduled task")
+            LabeledContent("Starts", value: dateLabel(draft.startsAt))
+            if let end = draft.endsAt { LabeledContent("Ends", value: dateLabel(draft.allDay ? calendar.date(byAdding: .day, value: -1, to: end) ?? end : end)) }
+            LabeledContent("Time zone", value: draft.timeZoneID)
+            if let recurrence = draft.recurrence {
+                LabeledContent("Repeats", value: recurrence.label).foregroundStyle(DashboardPalette.calendarRecurring)
+            }
+            if !draft.details.isEmpty { Text(draft.details).textSelection(.enabled).fixedSize(horizontal: false, vertical: true) }
+            if let task = draft.task {
+                Divider()
+                LabeledContent("Agent", value: task.configuration.runtimeKind.displayName)
+                LabeledContent("Model", value: task.configuration.model ?? "Agent default")
+                LabeledContent("Thinking", value: task.configuration.thinking ?? "Agent default")
+                LabeledContent("Access", value: task.configuration.permission ?? "Agent default")
+                LabeledContent("Tools", value: WorkspaceToolGroup.allCases.filter { task.configuration.tools.enabled.contains($0) }.map(\.title).joined(separator: ", "))
+                LabeledContent("Work location", value: task.configuration.workspaceID.map { model.remoteWorkspaces.configuration(id: $0)?.name ?? "Unavailable workspace" } ?? "Local workspace")
+                LabeledContent("Session folder", value: task.configuration.folderID.map { id in model.workspaceOverview?.folders.first { $0.id == id }?.name ?? "Unavailable folder" } ?? "All Workspace")
+                if let directory = task.configuration.nativeWorkingDirectory { LabeledContent("Directory", value: directory).textSelection(.enabled) }
+                if draft.recurrence != nil { LabeledContent("Session", value: task.sessionMode.title) }
+                Text("Prompt").fontWeight(.medium)
+                Text(task.prompt).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+            }
+            if let run {
+                Divider()
+                LabeledContent("Status", value: run.statusLabel)
+                if let error = run.error { Text(error).foregroundStyle(DashboardPalette.danger).fixedSize(horizontal: false, vertical: true) }
+                Button("Open session") { dismiss(); onOpenSession(run.sessionID) }
+                    .buttonStyle(DashboardPrimaryButtonStyle())
+                    .disabled(model.workspaceOverview?.conversations.contains { $0.id == run.sessionID } != true)
+            }
+        }.font(.system(size: 13))
+    }
+
+    private func attribution(_ event: WorkspaceCalendarItemRecord) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Divider().padding(.bottom, 5)
+            Text("Created by \(event.calendar.createdBy.label)")
+            if let author = event.calendar.editedBy {
+                Text("Edited \(dashboardParsedDate(event.updatedAt)?.formatted(date: .abbreviated, time: .shortened) ?? event.updatedAt) by \(author.label)")
+            }
+        }.font(.system(size: 11.5)).foregroundStyle(DashboardPalette.mutedForeground)
+    }
+
+    private var footer: some View {
+        HStack {
+            if event != nil && !editing {
+                Button("Delete", role: .destructive) { showsDelete = true }.buttonStyle(DashboardQuietButtonStyle())
+                Button("Copy event") { DashboardCalendarClipboard.copy(draft) }
+                    .buttonStyle(DashboardQuietButtonStyle()).keyboardShortcut("c", modifiers: .command)
+            }
+            Spacer()
+            if editing {
+                Button("Cancel") {
+                    model.clearCalendarMutationError()
+                    if event == nil { dismiss() } else { editing = false; draft = selection.draft }
+                }.buttonStyle(DashboardQuietButtonStyle()).keyboardShortcut(.cancelAction)
+                Button(model.isCreatingCalendarItem ? "Saving…" : "Save") {
+                    Task {
+                        if await model.saveCalendarEvent(draft, event: event, detaching: isSeries && scope == .detach ? selection.occurrence?.index : nil) { dismiss() }
+                    }
+                }.buttonStyle(DashboardPrimaryButtonStyle()).keyboardShortcut(.defaultAction)
+                    .disabled(model.isCreatingCalendarItem || (try? draft.validated()) == nil)
+            } else {
+                Button("Edit") {
+                    draft = event.map(WorkspaceCalendarDraft.init) ?? selection.draft
+                    scope = .series; editing = true; model.clearCalendarMutationError()
+                }.buttonStyle(DashboardPrimaryButtonStyle())
+            }
+        }
+    }
+    private func dateLabel(_ date: Date) -> String {
+        let format = DateFormatter()
+        format.timeZone = calendar.timeZone
+        format.dateStyle = .medium
+        format.timeStyle = draft.allDay ? .none : .short
+        return format.string(from: date)
+    }
+    private func remove(_ occurrence: Int?) {
+        guard let event else { return }
+        Task { if await model.deleteCalendarEvent(event, occurrence: occurrence) { dismiss() } }
+    }
+}
