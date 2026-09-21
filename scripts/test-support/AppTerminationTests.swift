@@ -7,12 +7,14 @@ final class ApplicationModel {
     var flushCount = 0
     var cleanupCount = 0
     var cleanupFinished = false
+    var sessionShutdownCount = 0
     var remoteWorkspaces: ApplicationModel { self }
     func refreshRuntimeInventory() {}
     func refreshLocalACPRuntimesNow() {}
     func refreshRuntimeMaintenanceAtStartup() {}
     func flushNoteDrafts() { flushCount += 1 }
     func restoreOpenCodeInstances() async {}
+    func shutdownLocalACPSessions() { sessionShutdownCount += 1 }
     func prepareOpenCodeInstancesToQuit() async throws {
         cleanupCount += 1
         try await Task.sleep(for: .milliseconds(20))
@@ -33,14 +35,25 @@ private final class TerminationProbe: NSObject, NSApplicationDelegate {
         delegate.model = model
         NotificationCenter.default.addObserver(self, selector: #selector(start),
             name: NSApplication.didFinishLaunchingNotification, object: nil)
-        NotificationCenter.default.addObserver(self, selector: #selector(finished),
-            name: NSApplication.willTerminateNotification, object: nil)
     }
 
     @objc private func start(_ notification: Notification) {
         Task { @MainActor in
             WovenMatterLifecycleDelegate.requestTerminationAfterUpdate()
         }
+    }
+
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        delegate.applicationShouldTerminateAfterLastWindowClosed(sender)
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        delegate.applicationWillTerminate(notification)
+        let passed = deferredTermination && model.flushCount == 1 && model.cleanupCount == 1
+            && model.cleanupFinished && model.sessionShutdownCount == 1
+            && !delegate.applicationShouldTerminateAfterLastWindowClosed(NSApplication.shared)
+        try! (passed ? "PASS\n" : "FAIL: termination cancelled, cleanup unfinished, or duplicate cleanup\n")
+            .write(to: resultURL, atomically: true, encoding: .utf8)
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
@@ -52,11 +65,6 @@ private final class TerminationProbe: NSObject, NSApplicationDelegate {
         return reply
     }
 
-    @objc private func finished(_ notification: Notification) {
-        let passed = deferredTermination && model.flushCount == 1 && model.cleanupCount == 1 && model.cleanupFinished
-        try! (passed ? "PASS\n" : "FAIL: termination cancelled, cleanup unfinished, or duplicate cleanup\n")
-            .write(to: resultURL, atomically: true, encoding: .utf8)
-    }
 }
 
 @main

@@ -626,7 +626,8 @@ extension WorkspaceDatabase {
           SELECT json_object(
             'id', id, 'folder_id', folder_id, 'title', title,
             'content', content, 'created_at', created_at,
-            'updated_at', updated_at, 'is_pinned', is_pinned
+            'updated_at', updated_at, 'is_pinned', is_pinned,
+            'revision', CAST(COALESCE((SELECT revision FROM companion_versions WHERE kind = 'note' AND resource_id = notes.id), 1) AS TEXT)
           )
           FROM notes
           WHERE user_id = ? AND deleted_at IS NULL
@@ -687,6 +688,14 @@ extension WorkspaceDatabase {
 
   func localMutationOperatorIDUnlocked() throws -> String {
     try canonicalWorkspaceOperatorIDUnlocked() ?? "local-operator"
+  }
+
+  /// Recheck a selected destination around asynchronous native session creation.
+  /// The insertion transaction validates it again before writing the session.
+  public func validateSessionFolder(_ folderID: String?) throws {
+    try withLock {
+      try validateFolderUnlocked(id: folderID, operatorID: localMutationOperatorIDUnlocked())
+    }
   }
 
   func validateFolderUnlocked(id: String?, operatorID: String) throws {

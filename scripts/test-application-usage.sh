@@ -17,10 +17,11 @@ build_dir="$(swift build --package-path "$repo_root/app" --scratch-path "$swift_
 # keeps per-source objects and a separate Modules directory.
 if [ -f "$build_dir/WovenMatterCore.o" ]; then
   module_dir="$build_dir"
-  objects=("$build_dir/WovenMatterCore.o" "$build_dir/WovenMatterClient.o" "$build_dir/WovenMatterDashboardStore.o")
+  objects=("$build_dir/WovenMatterCompanion.o" "$build_dir/WovenMatterCore.o" "$build_dir/WovenMatterClient.o" "$build_dir/WovenMatterDashboardStore.o")
 else
   module_dir="$build_dir/Modules"
   objects=(
+    "$build_dir"/WovenMatterCompanion.build/*.swift.o
     "$build_dir"/WovenMatterCore.build/*.swift.o
     "$build_dir"/WovenMatterClient.build/*.swift.o
     "$build_dir"/WovenMatterDashboardStore.build/*.swift.o

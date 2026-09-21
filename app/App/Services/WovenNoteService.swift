@@ -207,21 +207,22 @@ enum WovenNoteCommandLine {
     Usage: woven-note COMMAND [OPTIONS]
 
       read
-      append --text TEXT [--style STYLE] [--revision REVISION]
-      insert --text TEXT [--after BLOCK_ID] [--style STYLE] [--revision REVISION]
-      replace-block --id BLOCK_ID --json BLOCK_JSON [--revision REVISION]
-      delete-block --id BLOCK_ID [--revision REVISION]
-      format --block-id BLOCK_ID --style STYLE [--revision REVISION]
-      set-title --title TITLE [--revision REVISION]
-      table create [--rows N] [--columns N] [--header] [--revision REVISION]
-      table set-cell --table-id ID --row N --column N --text TEXT [--revision REVISION]
-      table add-row|remove-row|add-column|remove-column ... [--revision REVISION]
-      set-html --html HTML | --file PATH [--revision REVISION]
-      link --source-id ID --database-id ID --path PATH [--query SQL] [--table-id ID] [--revision REVISION]
-      unlink [--table-id ID] [--revision REVISION]
-      apply --json OPERATIONS_JSON | --file PATH [--revision REVISION]
+      append --text TEXT [--style STYLE] --revision REVISION
+      insert --text TEXT [--after BLOCK_ID] [--style STYLE] --revision REVISION
+      replace-block --id BLOCK_ID --json BLOCK_JSON --revision REVISION
+      delete-block --id BLOCK_ID --revision REVISION
+      format --block-id BLOCK_ID --style STYLE --revision REVISION
+      set-title --title TITLE --revision REVISION
+      table create [--rows N] [--columns N] [--header] --revision REVISION
+      table set-cell --table-id ID --row N --column N --text TEXT --revision REVISION
+      table add-row|remove-row|add-column|remove-column ... --revision REVISION
+      set-html --html HTML | --file PATH --revision REVISION
+      link --source-id ID --database-id ID --path PATH [--query SQL] [--table-id ID] --revision REVISION
+      unlink [--table-id ID] --revision REVISION
+      apply --json OPERATIONS_JSON | --file PATH --revision REVISION
 
     Set WOVEN_NOTE_ID and WOVEN_NOTE_SOCKET, or pass --note-id explicitly.
+    Read the note first; modifying commands require its current --revision to prevent overwriting concurrent edits.
     Paragraph styles: paragraph, heading1...heading6, bulletedList, numberedList.
     """ + "\n"
 

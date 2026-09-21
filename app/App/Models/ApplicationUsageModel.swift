@@ -38,7 +38,7 @@ final class ApplicationUsageModel {
     private(set) var codexUsageWorkspaces: [CodexUsageWorkspace] = []
     private(set) var selectedCodexUsageWorkspaceID: String?
     @ObservationIgnored
-    private let localUsageService = LocalUsageService()
+    private let localUsageService: LocalUsageService
     @ObservationIgnored
     private var usageAnalyticsRequestID: UUID?
     @ObservationIgnored
@@ -65,7 +65,8 @@ final class ApplicationUsageModel {
         try await localUsageService.recordedSamples(from: start, to: end, limit: limit, offset: offset)
     }
 
-    init(applicationDefaults: UserDefaults) {
+    init(applicationDefaults: UserDefaults, localUsageService: LocalUsageService = LocalUsageService()) {
+        self.localUsageService = localUsageService
         self.applicationDefaults = applicationDefaults
         isOpenRouterCredentialConfigured = applicationDefaults.bool(
             forKey: Self.openRouterCredentialConfiguredDefaultsKey

@@ -119,9 +119,10 @@ public struct LocalACPActiveInputReceipt: Sendable {
     }
 }
 
-enum LocalACPActiveInputRoute: Equatable, Sendable {
+public enum LocalACPActiveInputRoute: String, Codable, Equatable, Sendable {
     case acpSteering
     case grokInterjection
+    case hermesGateway
     case concurrentPrompt
     case piRPC
     case unsupported
@@ -1169,12 +1170,16 @@ public actor LocalACPClient {
             return LocalACPActiveInputReceipt(
                 completion: try beginActivePrompt(input)
             )
-        case .piRPC, .unsupported:
+        case .hermesGateway, .piRPC, .unsupported:
             throw LocalACPClientError.activeInputUnsupported
         }
     }
 
-    nonisolated static func activeInputRoute(
+    public func activeInputCapability() -> LocalACPActiveInputRoute {
+        Self.activeInputRoute(runtimeKind: runtimeKind, steeringSupported: steeringSupported)
+    }
+
+    public nonisolated static func activeInputRoute(
         runtimeKind: AgentRuntimeKind,
         steeringSupported: Bool
     ) -> LocalACPActiveInputRoute {
@@ -1183,7 +1188,9 @@ public actor LocalACPClient {
             steeringSupported ? .acpSteering : .unsupported
         case .grokBuild:
             .grokInterjection
-        case .hermes, .cursor, .opencode, .openclaw:
+        case .hermes:
+            .hermesGateway
+        case .cursor, .opencode, .openclaw:
             .concurrentPrompt
         case .pi:
             .piRPC

@@ -447,7 +447,9 @@ extension WorkspaceDatabase {
     title: String,
     ownerDeviceID: UUID,
     model: String? = nil,
-    createdAt: Date = Date()
+    createdAt: Date = Date(),
+    requestedConversationID: UUID? = nil,
+    folderID: String? = nil
   ) throws -> String {
     let enrollment = try buzzWorkspaceAgentEnrollments().first(where: {
       $0.id == enrollmentID
@@ -466,6 +468,7 @@ extension WorkspaceDatabase {
 
     return try transaction {
       let operatorID = try localMutationOperatorIDUnlocked()
+      try validateFolderUnlocked(id: folderID, operatorID: operatorID)
       try reconcileBuzzWorkspaceAgentUnlocked(
         enrollment: enrollment,
         ownerDeviceID: ownerDeviceID,
@@ -474,7 +477,7 @@ extension WorkspaceDatabase {
         updatedAt: createdAt
       )
       let rawAgentID = enrollment.id.uuidString.lowercased()
-      let conversationID = UUID().uuidString.lowercased()
+      let conversationID = (requestedConversationID ?? UUID()).uuidString.lowercased()
       let cleanTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
       let sessionTitle = cleanTitle.isEmpty
         ? "New \(enrollment.displayNameSnapshot) chat"
@@ -486,9 +489,9 @@ extension WorkspaceDatabase {
           authority_kind, authority_device_id, authority_agent_id,
           title, unread, kind,
           is_deletable, is_archived, last_message_at, is_pinned,
-          created_at, updated_at, desktop_owned
+          created_at, updated_at, desktop_owned, folder_id
         ) VALUES (?, ?, ?, ?, 'wovenmatter_macos', 'device_owned', ?, ?,
-          ?, 0, 'local_acp', 1, 0, ?, 0, ?, ?, 1)
+          ?, 0, 'local_acp', 1, 0, ?, 0, ?, ?, 1, ?)
         """)
       defer { sqlite3_finalize(conversation) }
       try bind(conversationID, at: 1, to: conversation)
@@ -501,6 +504,7 @@ extension WorkspaceDatabase {
       try bind(timestamp, at: 8, to: conversation)
       try bind(timestamp, at: 9, to: conversation)
       try bind(timestamp, at: 10, to: conversation)
+      try bindNullable(folderID, at: 11, to: conversation)
       try stepDone(conversation)
 
       let session = try prepareUnlocked("""
@@ -525,6 +529,7 @@ extension WorkspaceDatabase {
       try bind(timestamp, at: 10, to: session)
       try bind(timestamp, at: 11, to: session)
       try stepDone(session)
+      try adoptReservedSessionOriginUnlocked(conversationID)
 
       return conversationID
     }

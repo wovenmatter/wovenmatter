@@ -440,7 +440,7 @@ extension WorkspaceDatabase {
   func checkpointNoteUnlocked(id: String, source: String, force: Bool) throws {
     let note = try prepareUnlocked(
       """
-      SELECT title,content,updated_at FROM notes WHERE id=? AND deleted_at IS NULL
+      SELECT title,content,CAST(COALESCE((SELECT revision FROM companion_versions WHERE kind='note' AND resource_id=notes.id),1) AS TEXT) FROM notes WHERE id=? AND deleted_at IS NULL
       """)
     defer { sqlite3_finalize(note) }
     try bind(id, at: 1, to: note)
@@ -536,16 +536,17 @@ extension WorkspaceDatabase {
         let update = try prepareUnlocked(
           "UPDATE notes SET title=?,content=?,snippet=?,updated_at=? WHERE id=? AND user_id=?")
         defer { sqlite3_finalize(update) }
-        let revision = try nextNoteRevisionUnlocked(id: noteID)
+        let updatedAt = try nextNoteUpdatedAtUnlocked(id: noteID)
         for (index, value) in [
-          title, content, Self.noteSnippet(content), revision, noteID, operatorID,
+          title, content, Self.noteSnippet(content), updatedAt, noteID, operatorID,
         ].enumerated() {
           try bind(value, at: Int32(index + 1), to: update)
         }
         try stepDone(update)
         try checkpointNoteUnlocked(id: noteID, source: "restore", force: true)
         return NoteEditingResponse(
-          success: true, noteID: noteID, title: title, revision: revision,
+          success: true, noteID: noteID, title: title,
+          revision: try noteForEditingUnlocked(id: noteID, operatorID: operatorID).revision,
           document: NoteDocument.decode(content))
       }.result
     }
@@ -559,9 +560,9 @@ extension WorkspaceDatabase {
 }
 
 extension WorkspaceDatabase {
-  // Timestamp-shaped tokens stay compatible with existing clients but must be
-  // strictly increasing even when multiple agent edits occur in one millisecond.
-  func nextNoteRevisionUnlocked(id: String, now: Date = Date()) throws -> String {
+  // Preserve chronological metadata even for writes within one millisecond.
+  // Optimistic revision tokens come from companion_versions, never this timestamp.
+  func nextNoteUpdatedAtUnlocked(id: String, now: Date = Date()) throws -> String {
     let rows = try historyRowsUnlocked("SELECT updated_at FROM notes WHERE id=?", values: [id])
     let formatter = ISO8601DateFormatter()
     formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]

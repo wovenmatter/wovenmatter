@@ -119,7 +119,9 @@ struct OpenCodeIntegrationTests {
         let session = fixtureSession()
         let coordinator = OpenCodeSessionCoordinator(database: database, clientFactory: { OpenCodeHTTPClient(connection: $0, session: session) })
         try await coordinator.connect(connection())
-        try await coordinator.command(link, name: "review", input: .init(text: "current changes", historyDeliveryID: deliveryID))
+        let receipt = try await coordinator.command(link, name: "review", input: .init(text: "current changes", historyDeliveryID: deliveryID))
+        #expect(receipt.nativeUserMessageID == nil)
+        #expect(receipt.identifiers == nil)
         #expect(fixture.commandCount == 1)
         #expect(fixture.lastCommand["command"].text == "review")
         #expect(fixture.lastCommand["text"].text == "current changes")
@@ -401,7 +403,9 @@ struct OpenCodeIntegrationTests {
         #expect(fixture.historyRequests >= 4)
         // Server accepts exactly once, then the HTTP response is lost.
         fixture.losePromptResponse = true
-        try await coordinator.prompt(link, input: .init(text: "one input"))
+        let receipt = try await coordinator.prompt(link, input: .init(text: "one input"))
+        #expect(receipt.nativeUserMessageID == fixture.lastPrompt["id"].text)
+        #expect(receipt.identifiers == nil)
         #expect(fixture.promptCount == 1)
         #expect(try database.openCodeUncertainSubmissions(conversationID: id).isEmpty)
         #expect(try database.openCodeSnapshot(conversationID: id)?.messages.last?["text"].text == "one input")
@@ -410,6 +414,97 @@ struct OpenCodeIntegrationTests {
         let reopened = try WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
         #expect(try reopened.openCodeLinks() == [link])
         #expect(try reopened.openCodeSnapshot(conversationID: id)?.messages.count == 252)
+    }
+
+    @Test func nativeAcceptedPromptSurvivesCallerCancellationAndReconnect() async throws {
+        let fixture = OpenCodeFixture(); FixtureProtocol.fixture = fixture
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let database = try WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+        let id = try database.createLocalACPSession(runtimeKind: .opencode, title: "Native recovery",
+            ownerDeviceID: UUID(), openCodeAssociation: ("fixture", "ses_fixture"))
+        let link = OpenCodeSessionLink(conversationID: id, connectionID: "fixture", sessionID: "ses_fixture")
+        let session = fixtureSession()
+        let coordinator = OpenCodeSessionCoordinator(database: database,
+            clientFactory: { OpenCodeHTTPClient(connection: $0, session: session) })
+        try await coordinator.connect(connection())
+        let caller = Task { try await coordinator.prompt(link, input: .init(text: "Keep working")) }
+        let receipt = try await caller.value
+        let nativeUserID = try #require(receipt.nativeUserMessageID)
+        caller.cancel()
+        await coordinator.disconnect(connectionID: "fixture")
+        #expect(fixture.promptCount == 1 && fixture.interruptCount == 0)
+
+        // The service owns accepted execution and can publish its assistant
+        // while both the requesting caller and observing client are gone.
+        fixture.active = true
+        fixture.messages.append(["id": "msg_recovered_assistant", "type": "assistant", "text": "Still working",
+            "time": ["created": .number(1000)]])
+        let reopened = try WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+        let restored = OpenCodeSessionCoordinator(database: reopened,
+            clientFactory: { OpenCodeHTTPClient(connection: $0, session: session) })
+        try await restored.connect(connection())
+        try await restored.refresh(link)
+        let running = try reopened.conversationContent(id: id)
+        #expect(running.messages.filter { $0.role == "user" }.map(\.id) == ["opencode:\(id):\(nativeUserID)"])
+        #expect(running.runs.count == 1)
+        #expect(running.runs.first?.status == "running")
+        let runID = try #require(running.runs.first?.id)
+        #expect(try reopened.activeRunID(conversationID: id) == runID)
+        #expect(try reopened.openCodeUncertainSubmissions(conversationID: id).isEmpty)
+
+        fixture.active = false
+        fixture.messages[1]["time"]["completed"] = .number(2000)
+        try await restored.refresh(link)
+        let completed = try reopened.conversationContent(id: id)
+        #expect(completed.runs.count == 1 && completed.runs.first?.id == runID)
+        #expect(completed.runs.first?.status == "completed")
+        #expect(fixture.promptCount == 1 && fixture.interruptCount == 0)
+        await coordinator.shutdown()
+        await restored.shutdown()
+    }
+
+    @Test func companionAdmissionChecksNativeActivityAndInterruptRejectsStaleRuns() async throws {
+        let fixture = OpenCodeFixture(); FixtureProtocol.fixture = fixture
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let database = try WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+        let id = try database.createLocalACPSession(runtimeKind: .opencode, title: "Companion",
+            ownerDeviceID: UUID(), openCodeAssociation: ("fixture", "ses_fixture"))
+        let link = OpenCodeSessionLink(conversationID: id, connectionID: "fixture", sessionID: "ses_fixture")
+        let session = fixtureSession()
+        let coordinator = OpenCodeSessionCoordinator(database: database,
+            clientFactory: { OpenCodeHTTPClient(connection: $0, session: session) })
+        try await coordinator.connect(connection())
+
+        // Native execution may be active before it publishes an assistant row.
+        fixture.active = true
+        await #expect(throws: LocalACPSessionDatabaseError.runAlreadyActive) {
+            try await coordinator.prompt(link, input: .init(text: "Do not queue"), requiresIdle: true)
+        }
+        await #expect(throws: LocalACPSessionDatabaseError.runAlreadyActive) {
+            try await coordinator.command(link, name: "review", input: .init(text: ""), requiresIdle: true)
+        }
+        #expect(fixture.promptCount == 0 && fixture.commandCount == 0)
+
+        fixture.messages = [["id": "msg_current", "type": "assistant", "text": "Working",
+            "time": ["created": .number(900)]]]
+        await #expect(throws: LocalACPSessionDatabaseError.runNotFound) {
+            try await coordinator.interrupt(link, expectedRunID: "opencode:\(id):msg_previous:run")
+        }
+        #expect(fixture.interruptCount == 0)
+        let currentRunID = try #require(try database.activeRunID(conversationID: id))
+        #expect(currentRunID == "opencode:\(id):msg_current:run")
+        try await coordinator.interrupt(link, expectedRunID: currentRunID)
+        #expect(fixture.interruptCount == 1)
+
+        fixture.active = false
+        let receipt = try await coordinator.prompt(link, input: .init(text: "Next"), requiresIdle: true)
+        #expect(receipt.nativeUserMessageID == fixture.lastPrompt["id"].text)
+        #expect(receipt.identifiers == nil)
+        await coordinator.shutdown()
     }
 
     @Test func unknownAcceptanceBlocksNewInputWithoutTreating404AsRejection() async throws {
@@ -843,6 +938,7 @@ private final class OpenCodeFixture: @unchecked Sendable {
     var loseCommandResponse = false
     var lastCommand: OpenCodeValue = .null
     var interruptCount = 0
+    var active = false
     var historyRequests = 0
     var streamTimeout: TimeInterval?
     func waitForHistoryRequests(_ count: Int) async throws {
@@ -872,7 +968,9 @@ private final class OpenCodeFixture: @unchecked Sendable {
             if path.hasPrefix(prefix) { path.removeFirst(prefix.count) }
             if path.hasSuffix("/log") { streamTimeout = request.timeoutInterval; return (200, [:]) }
             if path == "/api/health" { return (200, ["healthy": .bool(true), "version": .string(version), "pid": .number(Double(ProcessInfo.processInfo.processIdentifier))]) }
-            if path == "/api/session/active" { return (200, ["data": [:]]) }
+            if path == "/api/session/active" {
+                return (200, ["data": active ? ["ses_fixture": ["status": "running"]] : [:]])
+            }
             if path.hasSuffix("/interrupt") { interruptCount += 1; return (200, [:]) }
             if path.hasSuffix("/prompt") || path.hasSuffix("/command") {
                 var bytes = request.httpBody ?? Data()

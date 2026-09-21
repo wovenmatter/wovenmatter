@@ -86,6 +86,20 @@ final class RemoteWorkspacesModel {
         load()
     }
 
+    #if COMPANION_FACADE_TESTS
+    func configureCompanionFixture(_ configuration: RemoteWorkspaceConfiguration,
+                                   status: RemoteWorkspaceStatus, harnesses: [RemoteHarnessStatus],
+                                   maintenance: [RemoteRuntimeMaintenance]) {
+        // Captured readiness only: no credential authorization, clients or tunnels.
+        isCredentialAccessEnabled = true
+        workspaces = [configuration]
+        statuses = [configuration.id: status]
+        self.harnesses = [configuration.id: harnesses]
+        runtimeMaintenance = [configuration.id: maintenance]
+        workspaceRoots[configuration.id] = "/fixture/workspace"
+    }
+    #endif
+
     func enableCredentialAccess() {
         guard !isCredentialAccessEnabled else { return }
         isCredentialAccessEnabled = true

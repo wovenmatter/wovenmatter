@@ -30,6 +30,11 @@ final class WorkspaceAgentToolsModel {
     private let noteRestoreHandler: NoteRestoreHandler
     private let usageHandler: UsageHandler
     private let onMutation: @MainActor () async -> Void
+    #if COMPANION_FACADE_TESTS
+    /// Replaces only CLI placement/SSH establishment; discovery still opens its
+    /// real session-bound endpoint and renders the current persisted policy.
+    @ObservationIgnored var companionFixtureCLIPath: ((String, String, RemoteWorkspaceConfiguration?) throws -> String)?
+    #endif
 
     init(database: WorkspaceDatabase, sessionHandler: @escaping SessionHandler,
          noteHandler: @escaping NoteHandler, noteRestoreHandler: @escaping NoteRestoreHandler, usageHandler: @escaping UsageHandler,
@@ -180,7 +185,15 @@ final class WorkspaceAgentToolsModel {
         let path = try endpoint(for: sessionID)
         let cliPath: String
         var exports: [String]
-        if let remote {
+        #if COMPANION_FACADE_TESTS
+        let fixturePath = try companionFixtureCLIPath?(sessionID, path, remote)
+        #else
+        let fixturePath: String? = nil
+        #endif
+        if let fixturePath {
+            cliPath = fixturePath
+            exports = remote == nil ? ["export WOVENMATTER_SOCKET=" + Self.quote(path)] : ["unset WOVENMATTER_SOCKET"]
+        } else if let remote {
             if let bridge = remoteBridges[sessionID], bridge.isRunning {
                 cliPath = bridge.remoteCLIPath
             } else {

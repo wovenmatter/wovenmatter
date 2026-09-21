@@ -28,6 +28,8 @@ public enum DatabaseLinkedData {
   public static let maximumFileBytes = 8 * 1_024 * 1_024
   public static let maximumRows = 1_000
   public static let maximumColumns = 128
+  public static let maximumSQLiteCellBytes = 1_024 * 1_024
+  public static let maximumSQLiteResultBytes = 8 * 1_024 * 1_024
 
   public static func load(
     queryResponse: AgentDatabaseQueryResponse
@@ -197,6 +199,7 @@ public enum DatabaseLinkedData {
   ) throws -> DatabaseTabularData {
     let query = rawQuery?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     guard !query.isEmpty else { throw DatabaseLinkedDataError.sqliteQueryRequired }
+    guard query.utf8.count <= 256 * 1_024 else { throw DatabaseLinkedDataError.fileTooLarge }
     let normalized = query.hasSuffix(";")
       ? String(query.dropLast()).trimmingCharacters(in: .whitespacesAndNewlines)
       : query
@@ -218,6 +221,20 @@ public enum DatabaseLinkedData {
     }
     defer { sqlite3_close(connection) }
 
+    // A row limit alone does not bound a single sqlite3_step (for example an
+    // unending recursive aggregate). These limits belong to this connection.
+    sqlite3_limit(connection, SQLITE_LIMIT_LENGTH, Int32(maximumSQLiteCellBytes))
+    sqlite3_limit(connection, SQLITE_LIMIT_SQL_LENGTH, 256 * 1_024)
+    sqlite3_limit(connection, SQLITE_LIMIT_VDBE_OP, 100_000)
+    sqlite3_limit(connection, SQLITE_LIMIT_COMPOUND_SELECT, 32)
+    sqlite3_limit(connection, SQLITE_LIMIT_WORKER_THREADS, 0)
+    let budget = SQLitePreviewBudget()
+    sqlite3_progress_handler(connection, 1_000, { context in
+      guard let context else { return 1 }
+      return Unmanaged<SQLitePreviewBudget>.fromOpaque(context).takeUnretainedValue().shouldInterrupt() ? 1 : 0
+    }, Unmanaged.passUnretained(budget).toOpaque())
+    defer { sqlite3_progress_handler(connection, 0, nil, nil); withExtendedLifetime(budget) {} }
+
     var statement: OpaquePointer?
     guard sqlite3_prepare_v2(connection, normalized, -1, &statement, nil) == SQLITE_OK,
           let statement else {
@@ -235,13 +252,25 @@ public enum DatabaseLinkedData {
     }
     let columns = uniqueColumnNames(rawColumns)
     var rows: [[String]] = []
+    var totalBytes = columns.reduce(0) { $0 + $1.utf8.count }
     while rows.count < maximumRows {
       let result = sqlite3_step(statement)
       if result == SQLITE_DONE { break }
       guard result == SQLITE_ROW else {
         throw DatabaseLinkedDataError.sqliteFailure(String(cString: sqlite3_errmsg(connection)))
       }
-      rows.append((0..<count).map { sqliteValue(statement, index: Int32($0)) })
+      var row: [String] = []
+      for index in 0..<count {
+        // Check before constructing a Swift String or base64 copy. The SQLite
+        // length limit also prevents oversized intermediate result allocation.
+        let bytes = Int(sqlite3_column_bytes(statement, Int32(index)))
+        guard bytes <= maximumSQLiteCellBytes else { throw DatabaseLinkedDataError.fileTooLarge }
+        let value = sqliteValue(statement, index: Int32(index))
+        totalBytes += value.utf8.count
+        guard totalBytes <= maximumSQLiteResultBytes else { throw DatabaseLinkedDataError.fileTooLarge }
+        row.append(value)
+      }
+      rows.append(row)
     }
     let objects = rows.map { row in
       Dictionary(uniqueKeysWithValues: columns.enumerated().map { index, column in
@@ -255,13 +284,24 @@ public enum DatabaseLinkedData {
     )
   }
 
+  private final class SQLitePreviewBudget {
+    private let deadline = ProcessInfo.processInfo.systemUptime + 2
+    private var remainingCallbacks = 20_000
+    func shouldInterrupt() -> Bool {
+      remainingCallbacks -= 1
+      return remainingCallbacks <= 0 || ProcessInfo.processInfo.systemUptime >= deadline
+        || withUnsafeCurrentTask { $0?.isCancelled == true }
+    }
+  }
+
   private static func sqliteValue(_ statement: OpaquePointer, index: Int32) -> String {
     switch sqlite3_column_type(statement, index) {
     case SQLITE_NULL: return ""
     case SQLITE_INTEGER: return String(sqlite3_column_int64(statement, index))
     case SQLITE_FLOAT: return String(sqlite3_column_double(statement, index))
     case SQLITE_TEXT:
-      return sqlite3_column_text(statement, index).map(String.init(cString:)) ?? ""
+      guard let bytes = sqlite3_column_text(statement, index) else { return "" }
+      return String(decoding: UnsafeBufferPointer(start: bytes, count: Int(sqlite3_column_bytes(statement, index))), as: UTF8.self)
     case SQLITE_BLOB:
       let count = Int(sqlite3_column_bytes(statement, index))
       guard let bytes = sqlite3_column_blob(statement, index), count > 0 else { return "" }
