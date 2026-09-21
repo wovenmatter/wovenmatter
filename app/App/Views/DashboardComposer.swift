@@ -41,8 +41,6 @@ struct DashboardComposer: View {
     let onSelectModel: ((String) -> Void)?
     let onSelectThinking: ((String) -> Void)?
     let onSelectPermission: ((String) -> Void)?
-    let onSaveDefault: ((SessionSelectionField, Bool) -> Void)?
-    let onClearDefault: ((SessionSelectionField, Bool) -> Void)?
     let onAttachmentAction: (DashboardComposerAttachmentAction) -> Void
     let onRemoveAttachment: (String) -> Void
     let onDropFiles: ([URL]) -> Bool
@@ -411,7 +409,7 @@ struct DashboardComposer: View {
                     kind: .thinking,
                     icon: .brain,
                     title: sessionMetadata?.thinking.map { sessionMetadata?.thinkingOptionMetadata?[$0]?.name ?? dashboardSessionThinkingLabel($0) } ?? "Thinking",
-                    menuTitle: "Thinking",
+                    menuTitle: "Thinking Level",
                     accessibilityLabel: "Choose thinking level",
                     options: sessionMetadata?.selectableThinkingLevels ?? [],
                     selection: sessionMetadata?.thinking,
@@ -452,7 +450,7 @@ struct DashboardComposer: View {
                         kind: .thinking,
                         icon: .brain,
                         title: sessionMetadata?.thinking.map { sessionMetadata?.thinkingOptionMetadata?[$0]?.name ?? dashboardSessionThinkingLabel($0) } ?? "Thinking",
-                        menuTitle: "Thinking",
+                        menuTitle: "Thinking Level",
                         accessibilityLabel: "Choose thinking level",
                         options: sessionMetadata?.selectableThinkingLevels ?? [],
                         selection: sessionMetadata?.thinking,
@@ -607,29 +605,7 @@ struct DashboardComposer: View {
         // Keep unsupported permission controls discoverable without inventing choices.
         if kind == .permission { return sessionMetadataLoading }
         let canChange = action != nil && (options.count > 1 || options.first != selection)
-        let hasDefaults = onSaveDefault != nil || onClearDefault != nil
-        return options.isEmpty || (!canChange && !hasDefaults)
-    }
-
-    private func saveDefaultAction(
-        for kind: DashboardComposerMenuKind,
-        selection: String?,
-        options: [String]
-    ) -> ((Bool) -> Void)? {
-        guard let field = kind.selectionField, let onSaveDefault,
-              let selection, options.contains(selection) else { return nil }
-        return { workspaceOnly in
-            openMenu = nil
-            onSaveDefault(field, workspaceOnly)
-        }
-    }
-
-    private func clearDefaultAction(for kind: DashboardComposerMenuKind) -> ((Bool) -> Void)? {
-        guard let field = kind.selectionField, let onClearDefault else { return nil }
-        return { workspaceOnly in
-            openMenu = nil
-            onClearDefault(field, workspaceOnly)
-        }
+        return options.isEmpty || !canChange
     }
 
     private func compactSessionMenu(
@@ -677,9 +653,7 @@ struct DashboardComposer: View {
                 showsDescriptions: kind == .permission,
                 emptyMessage: kind == .permission
                     ? "This harness has not reported native permission choices."
-                    : nil,
-                onSaveDefault: saveDefaultAction(for: kind, selection: selection, options: options),
-                onClearDefault: clearDefaultAction(for: kind)
+                    : nil
             ) { option in
                 openMenu = nil
                 action?(option)
@@ -732,9 +706,7 @@ struct DashboardComposer: View {
                 showsDescriptions: kind == .permission,
                 emptyMessage: kind == .permission
                     ? "This harness has not reported native permission choices."
-                    : nil,
-                onSaveDefault: saveDefaultAction(for: kind, selection: selection, options: options),
-                onClearDefault: clearDefaultAction(for: kind)
+                    : nil
             ) { option in
                 openMenu = nil
                 action?(option)
@@ -812,16 +784,6 @@ enum DashboardComposerMenuKind {
     case model
     case thinking
     case permission
-
-    var selectionField: SessionSelectionField? {
-        switch self {
-        case .attachments: nil
-        case .tools: .tools
-        case .model: .model
-        case .thinking: .thinking
-        case .permission: .permission
-        }
-    }
 }
 
 enum DashboardComposerAttachmentAction {
@@ -1043,15 +1005,12 @@ struct DashboardComposerOptionMenu: View {
     var optionMetadata: [String: SessionOptionMetadata] = [:]
     var showsDescriptions = false
     var emptyMessage: String? = nil
-    var onSaveDefault: ((Bool) -> Void)? = nil
-    var onClearDefault: ((Bool) -> Void)? = nil
     let onSelect: (String) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(title.uppercased())
-                .font(.system(size: 10, weight: .semibold))
-                .tracking(1.8)
+            Text(title)
+                .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(DashboardPalette.mutedForeground)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
@@ -1108,38 +1067,10 @@ struct DashboardComposerOptionMenu: View {
                 .scrollIndicators(.never)
                 .frame(height: min(options.reduce(CGFloat(0)) { $0 + rowHeight($1) + 2 }, 248))
             }
-
-            if onSaveDefault != nil || onClearDefault != nil {
-                Divider().padding(.vertical, 5)
-                Text("Defaults apply to new chats.")
-                    .font(.system(size: 11))
-                    .foregroundStyle(DashboardPalette.mutedForeground)
-                    .padding(.horizontal, 10)
-                    .padding(.bottom, 4)
-                if let onSaveDefault {
-                    defaultRow("Use for new chats in this workspace") { onSaveDefault(true) }
-                    defaultRow("Use for new chats with this harness") { onSaveDefault(false) }
-                }
-                if let onClearDefault {
-                    defaultRow("Reset workspace default") { onClearDefault(true) }
-                    defaultRow("Reset harness default") { onClearDefault(false) }
-                }
-            }
         }
         .padding(6)
         .frame(width: showsDescriptions ? 320 : 288)
         .dashboardComposerPopover()
-    }
-
-    private func defaultRow(_ label: String, action: @escaping () -> Void) -> some View {
-        DashboardComposerPopoverRow(action: action) {
-            Text(label)
-                .font(.system(size: 11.5))
-                .foregroundStyle(DashboardPalette.foreground)
-                .frame(maxWidth: .infinity, minHeight: 30, alignment: .leading)
-                .padding(.horizontal, 10)
-        }
-        .accessibilityLabel("\(label), \(title.lowercased())")
     }
 
     private func optionLabel(_ option: String) -> String {

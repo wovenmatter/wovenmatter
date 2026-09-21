@@ -6,19 +6,23 @@ select a model and thinking level where the harness offers those controls.
 
 ## Models, thinking, tools, and permissions
 
-Selections belong to the conversation and stay with it when you reopen it. Each
-control also lets you save its current selection for new chats in this workspace
-or for new chats with this harness. New conversations use this order:
+Selections belong to the conversation and stay with it when you reopen it. The
+composer popouts contain the choices for that conversation. Previously saved
+workspace and harness defaults are retained. New conversations use this order:
 
 1. A choice supplied for that conversation.
 2. The workspace default for that harness.
 3. The harness default.
-4. The harness's own default.
+4. WovenMatter's starting default: **Full access** for permissions on supported
+   harnesses; the harness's own default for other selections.
 
-Saving or resetting a default does not change existing conversations. Defaults
-are independent for each control, so a workspace can override the model while
-inheriting the harness's permission choice. Resetting a workspace default restores
-inheritance from the harness default.
+New conversations start with Full access unless you choose or save a different
+permission policy. Existing and imported conversations keep their current policy.
+Pi has no permission setting.
+
+Existing conversations keep their selections when defaults change. Defaults are
+independent for each control, so a saved workspace default can override the model
+while inheriting the harness's permission choice.
 
 Permission choices follow the selected harness. Similar names have consistent
 meanings:

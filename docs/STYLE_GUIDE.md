@@ -11,6 +11,9 @@ when an intentional design change is accepted.
 - **Typography:** use the macOS system font and the existing size/weight
   hierarchy. Use monospaced text for code and monospaced digits for aligned
   numeric displays.
+- **Composer selectors:** use title-case popout headings, such as `Thinking Level`,
+  without all-caps styling or expanded letter spacing. Keep saved-default actions
+  out of the conversation selector popouts.
 - **Components:** reuse the shared cards, selectors, search fields, and button
   styles in `DashboardDesign.swift`, and the page/row patterns in
   [SettingsComponents.swift](../app/App/Views/SettingsComponents.swift).
