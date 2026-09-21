@@ -59,12 +59,25 @@ description of the material changes since the previous public release. Use this
 structure for every release:
 
 1. A short opening explanation of the release and its biggest changes.
-2. **New capabilities**, with bullet points for major new features.
-3. **Improvements and fixes**, with bullet points for noticeable improvements
+2. The README-style download badge directly below the opening paragraph.
+3. **New capabilities**, with bullet points for major new features.
+4. **Improvements and fixes**, with bullet points for noticeable improvements
    and meaningful fixes.
-4. A **Full changelog** comparison link.
-5. **How to update** as the final section, with the exact text:
+5. A **Full changelog** comparison link.
+6. **How to update** as the final section, with the exact text:
    "Go to Settings > General to check for and install the update."
+
+Use the same badge image, label, and Apple logo as the README, but link directly
+to this release's DMG, never `/releases/latest`. For version `X.Y.Z`:
+
+```markdown
+[![Download Woven Matter for Apple silicon](https://img.shields.io/badge/Download-Woven_Matter_for_Apple_silicon-000000?logo=apple&logoColor=white)](https://github.com/wovenmatter/wovenmatter/releases/download/vX.Y.Z/WovenMatter_X.Y.Z_arm64.dmg)
+```
+
+Verify the link matches an asset on the release. Include the badge in the full
+description presented for approval. An explicitly requested description edit to
+an already-published release can use `gh release edit --notes-file`; it does not
+require rebuilding or changing the tag or assets.
 
 Use plain, natural language that explains what users can now do or what works
 better. Omit implementation details unless they materially affect users. Put any
