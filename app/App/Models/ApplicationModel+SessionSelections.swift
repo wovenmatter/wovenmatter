@@ -167,28 +167,4 @@ extension ApplicationModel {
             sessionSelectionPreferences.replaceConfirmedSelections(id: conversationID, selections: selections)
         }
     }
-
-    func saveSessionDefault(conversation: WorkspaceConversationRecord, field: SessionSelectionField, workspaceOnly: Bool) {
-        guard !updatingLocalACPSessionIDs.contains(conversation.id),
-              openCodeModel(for: conversation.id)?.updatingSessions.contains(conversation.id) != true else { return }
-        do {
-            let context = try sessionSelectionContext(conversationID: conversation.id)
-            let metadata = openCodeModel(for: conversation.id)?.metadata(conversation.id)
-                ?? openClawGatewaySessionMetadata[conversation.id] ?? localACPSessionMetadata[conversation.id]
-            let selection = SessionSelections(model: metadata?.model, thinking: metadata?.thinking,
-                permission: metadata?.permission, tools: currentSessionToolIDs?(conversation.id))
-            sessionSelectionPreferences.saveDefault(field, from: selection,
-                harness: context.harness, workspace: workspaceOnly ? context.workspace : nil)
-            ensureConversationState(id: conversation.id).setError(nil)
-        } catch { ensureConversationState(id: conversation.id).setError(error.localizedDescription) }
-    }
-
-    func clearSessionDefault(conversation: WorkspaceConversationRecord, field: SessionSelectionField, workspaceOnly: Bool) {
-        do {
-            let context = try sessionSelectionContext(conversationID: conversation.id)
-            sessionSelectionPreferences.removeDefault(field, harness: context.harness,
-                workspace: workspaceOnly ? context.workspace : nil)
-            ensureConversationState(id: conversation.id).setError(nil)
-        } catch { ensureConversationState(id: conversation.id).setError(error.localizedDescription) }
-    }
 }

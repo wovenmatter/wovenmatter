@@ -10,10 +10,21 @@ The **New Note** picker offers **Note**, **Spreadsheet**, and **HTML**. Each is
 saved in WovenMatter's SQLite database. You can take and organize notes without
 connecting an agent.
 
-When you work with an agent beside a note, WovenMatter supplies that note's
-context and editing tools. Ask the agent to read it, add text, update a table,
-or create an HTML artifact. Changes appear in the editor. This access is tied
-to the note associated with the conversation.
+With **Notes** enabled in the conversation's **Tools** menu, the agent can find,
+read, create, and edit workspace notes. Opening a note beside the conversation
+supplies its context. Ask the agent to add text, update a table, or create an HTML
+artifact; changes appear in the editor. Disable Notes to stop further tool access.
+
+## Restore a version
+
+Choose **Version history** in the note toolbar to preview a retained version and
+restore its title and content. The current saved document is retained before
+restoration. If the document changed while you were reviewing, refresh before
+trying again.
+
+WovenMatter retains up to 50 versions and 20 MB per document, within a 256 MB
+workspace limit. This covers notes, spreadsheets, and HTML; externally linked
+data files are not versioned.
 
 ## Curate data with your agents
 

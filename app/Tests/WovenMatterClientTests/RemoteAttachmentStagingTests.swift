@@ -1,4 +1,5 @@
 import CryptoKit
+import Darwin
 import Foundation
 import Testing
 import WovenMatterCore
@@ -121,15 +122,34 @@ struct RemoteAttachmentStagingTests {
     #expect(ProcessInfo.processInfo.systemUptime - start < 5)
   }
 
-  @Test("cancelling an attachment subprocess terminates it promptly")
+  @Test("cancelling a running attachment subprocess terminates it")
   func transferCancellation() async throws {
+    let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let marker = root.appending(path: "pid")
     let task = Task.detached {
-      try RemoteWorkspaceProcess.run(executable: "/bin/sleep", arguments: ["30"], timeLimit: 60)
+      try RemoteWorkspaceProcess.run(executable: "/bin/sh",
+        arguments: ["-c", "echo $$ > \"$1\"; exec /bin/sleep 30", "attachment-fixture", marker.path], timeLimit: 60)
+    }
+    defer { task.cancel() }
+    // Cancellation before Task.detached starts only measures executor latency.
+    // Wait for the real child, then verify cancellation and process cleanup.
+    let deadline = ContinuousClock.now.advanced(by: .seconds(30))
+    var processID: pid_t?
+    while processID == nil, ContinuousClock.now < deadline {
+      processID = (try? String(contentsOf: marker, encoding: .utf8))
+        .flatMap { pid_t($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+      if processID == nil { try await Task.sleep(for: .milliseconds(20)) }
     }
     task.cancel()
-    let start = ProcessInfo.processInfo.systemUptime
     await #expect(throws: CancellationError.self) { try await task.value }
-    #expect(ProcessInfo.processInfo.systemUptime - start < 5)
+    let pid = try #require(processID)
+    #expect(pid > 0)
+    let status = kill(pid, 0)
+    let error = errno
+    #expect(status == -1)
+    #expect(error == ESRCH)
   }
 
   @Test("changed local bytes are rejected before SSH")

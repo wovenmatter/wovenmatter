@@ -482,16 +482,6 @@ final class OpenCodeModel {
         return task
     }
 
-    func confirmCreationSelection(_ id: String, model: String?, thinking: String?) async throws {
-        // Opening a native session can succeed before its model catalog arrives.
-        // Creation retries must retry that discovery instead of accepting defaults.
-        try await refreshCatalog(id)
-        guard let task = updateSelection(id, model: model, thinking: thinking) else {
-            throw OpenCodeError.message("A model selection is already in progress. Retry session creation after it completes.")
-        }
-        try await task.value
-    }
-
     func applySessionSelections(_ id: String, selections: SessionSelections) async throws {
         guard updatingSessions.insert(id).inserted else { throw OpenCodeError.message("Wait for the current session settings change to finish.") }
         defer { updatingSessions.remove(id) }

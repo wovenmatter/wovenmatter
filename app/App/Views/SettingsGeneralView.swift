@@ -32,10 +32,10 @@ struct SettingsGeneralView: View {
             onBack: onBack
         ) {
             appearanceCard
-            credentialAccessCard
             releaseUpdateCard
             conversationTitlesCard
             if let tools = model.agentTools { WorkspaceToolDefaultsCard(tools: tools) }
+            credentialAccessCard
         }
         .onChange(of: storedTheme) { _, _ in
             model.persistMacSurfaceProfileFromUserDefaults()
