@@ -492,6 +492,9 @@ public actor LocalACPClient {
     private var loadSessionSupported = false
     private var steeringSupported = false
     private var sessionID: String?
+    // A new session's identity is supplied by its response. Keep early updates
+    // in wire order until that identity is known, then apply normal routing.
+    private var pendingNewSessionUpdates: [ACPEnvelope]?
     private var configuration = LocalACPSessionConfiguration.empty
     private var configurationHandler: (@Sendable (LocalACPSessionConfiguration) async -> Void)?
     private var modelConfigurationID: String?
@@ -645,6 +648,8 @@ public actor LocalACPClient {
         }
 
         if let existingSessionID, loadSessionSupported {
+            let previousSessionID = sessionID
+            sessionID = existingSessionID
             do {
                 let loaded = try await request(
                     method: "session/load",
@@ -686,6 +691,10 @@ public actor LocalACPClient {
                 // resource-not-found error proves this one no longer exists,
                 // so replace it in the same initialized client. Other failures
                 // remain visible rather than silently forking the conversation.
+                sessionID = previousSessionID
+            } catch {
+                sessionID = previousSessionID
+                throw error
             }
         }
 
@@ -775,6 +784,8 @@ public actor LocalACPClient {
         if !metadata.isEmpty {
             parameters["_meta"] = .object(metadata)
         }
+        pendingNewSessionUpdates = []
+        defer { pendingNewSessionUpdates = nil }
         guard let response = try await request(
             method: "session/new",
             params: .object(parameters)
@@ -782,6 +793,12 @@ public actor LocalACPClient {
             throw LocalACPClientError.missingSessionID
         }
         sessionID = created
+        let earlyUpdates = pendingNewSessionUpdates ?? []
+        pendingNewSessionUpdates = nil
+        for update in earlyUpdates {
+            enqueueNotification(update)
+        }
+        try await notificationTask?.value
         captureSessionConfiguration(from: response)
         try await discoverCursorModelsIfNeeded()
         try await selectNativeAutomaticPermissionMode(
@@ -1412,6 +1429,22 @@ public actor LocalACPClient {
             }
             return
         }
+        if envelope.method == "session/update", pendingNewSessionUpdates != nil {
+            pendingNewSessionUpdates?.append(envelope)
+            return
+        }
+        if envelope.method == "session/request_permission",
+           pendingNewSessionUpdates == nil,
+           !belongsToActiveSession(envelope) {
+            // A child must not wait behind an unrelated parent approval. This
+            // settles only foreign requests; parent delivery keeps its barrier.
+            if let id = envelope.id { try respondWithCancelledPermission(id: id) }
+            return
+        }
+        enqueueNotification(envelope)
+    }
+
+    private func enqueueNotification(_ envelope: ACPEnvelope) {
         let previous = notificationTask
         let task = Task<Void, any Error> { [weak self] in
             try await previous?.value
@@ -1432,6 +1465,7 @@ public actor LocalACPClient {
 
     private func handleNotification(_ envelope: ACPEnvelope) async throws {
         if envelope.method == "session/update" {
+            guard belongsToActiveSession(envelope) else { return }
             let update = envelope.params?["update"]
             switch update?["sessionUpdate"]?.stringValue {
             case "config_option_update", "available_commands_update":
@@ -1448,6 +1482,12 @@ public actor LocalACPClient {
                 try await activeEventHandler?(event)
             }
         } else if envelope.method == "session/request_permission" {
+            guard belongsToActiveSession(envelope) else {
+                // Multiplexed child requests must settle on the same connection,
+                // without exposing or authorizing them as this session's work.
+                if let id = envelope.id { try respondWithCancelledPermission(id: id) }
+                return
+            }
             try await respondToPermissionRequest(
                 envelope,
                 handler: activePermissionHandler
@@ -1475,6 +1515,15 @@ public actor LocalACPClient {
                 error: ACPErrorBody(code: -32601, message: "Method not found")
             ))
         }
+    }
+
+    private func belongsToActiveSession(_ envelope: ACPEnvelope) -> Bool {
+        guard pendingNewSessionUpdates == nil else { return false }
+        // Older adapters omit the identity on their single-session connection.
+        // An explicit identity, including an invalid one, never uses that fallback.
+        guard let value = envelope.params?["sessionId"] else { return true }
+        guard let incomingSessionID = value.stringValue, !incomingSessionID.isEmpty else { return false }
+        return incomingSessionID == sessionID
     }
 
     private func readerFailed(_ error: any Error) {
@@ -1725,7 +1774,7 @@ public actor LocalACPClient {
         pendingPermissionRequestIDs.remove(at: pendingIndex)
         let selected = selectedID.flatMap { candidate in
             options.first { $0.id == candidate }
-        } ?? options.first { $0.kind == "reject_once" }
+        }
 
         if let selected {
             try write(ACPEnvelope(

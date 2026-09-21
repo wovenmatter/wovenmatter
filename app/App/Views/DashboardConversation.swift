@@ -660,9 +660,17 @@ struct DashboardLocalPermissionCard: View {
     let onSelect: (String) -> Void
     let onCancel: () -> Void
 
+    private var allowOnce: LocalACPPermissionOption? {
+        permission.options.first { $0.kind == "allow_once" }
+    }
+
+    private var otherOptions: [LocalACPPermissionOption] {
+        permission.options.filter { $0.id != allowOnce?.id }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Permission requested")
+            Text("Approval needed")
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(DashboardPalette.mutedForeground)
                 .textCase(.uppercase)
@@ -670,18 +678,9 @@ struct DashboardLocalPermissionCard: View {
             Text(permission.title)
                 .font(.system(size: 13, weight: .medium))
                 .fixedSize(horizontal: false, vertical: true)
-            HStack(spacing: 8) {
-                ForEach(permission.options) { option in
-                    if option.kind.hasPrefix("allow") {
-                        Button(option.name) { onSelect(option.id) }
-                            .buttonStyle(DashboardPrimaryButtonStyle())
-                    } else {
-                        Button(option.name) { onSelect(option.id) }
-                            .buttonStyle(DashboardQuietButtonStyle())
-                    }
-                }
-                Button("Cancel", role: .cancel, action: onCancel)
-                    .buttonStyle(DashboardQuietButtonStyle())
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) { actions }
+                VStack(alignment: .leading, spacing: 8) { actions }
             }
         }
         .padding(13)
@@ -692,6 +691,33 @@ struct DashboardLocalPermissionCard: View {
             DashboardShapes.card
                 .stroke(theme.palette.border, lineWidth: 1)
         }
+    }
+
+    @ViewBuilder
+    private var actions: some View {
+        if let option = allowOnce {
+            Button("Allow once") { onSelect(option.id) }
+                .buttonStyle(DashboardPrimaryButtonStyle())
+                .help(option.name)
+                .accessibilityLabel(option.name)
+        }
+        if !otherOptions.isEmpty {
+            Menu(allowOnce == nil ? "Choose response" : "More options") {
+                // Keep the provider's complete labels: persistent choices may
+                // apply only to a domain, command, or project, not every tool.
+                ForEach(otherOptions) { option in
+                    Button(option.name) { onSelect(option.id) }
+                }
+            }
+            .menuStyle(.borderlessButton)
+            .font(.system(size: 12.5, weight: .medium))
+            .foregroundStyle(DashboardPalette.foreground)
+            .fixedSize()
+            .padding(.horizontal, 8)
+            .accessibilityLabel("Other permission responses")
+        }
+        Button("Cancel", role: .cancel, action: onCancel)
+            .buttonStyle(DashboardQuietButtonStyle())
     }
 }
 
