@@ -386,14 +386,7 @@ struct DashboardComposer: View {
             .accessibilityLabel("Session tools")
             .accessibilityValue(openMenu == .tools ? "Expanded" : "Collapsed")
             .popover(isPresented: Binding(get: { openMenu == .tools }, set: { if !$0, openMenu == .tools { openMenu = nil } })) {
-                WorkspaceSessionToolsMenu(tools: agentTools, sessionID: sessionID,
-                    onSaveDefault: onSaveDefault.map { save in { workspaceOnly in
-                        save(.tools, workspaceOnly)
-                        openMenu = nil
-                    } }, onClearDefault: onClearDefault.map { clear in { workspaceOnly in
-                        clear(.tools, workspaceOnly)
-                        openMenu = nil
-                    } })
+                WorkspaceSessionToolsMenu(tools: agentTools, sessionID: sessionID)
             }
         }
     }
@@ -401,7 +394,6 @@ struct DashboardComposer: View {
     private var regularControls: some View {
         HStack(spacing: 4) {
             attachmentControl
-            toolsControl
 
             if showsSessionControls {
                 sessionMenu(
@@ -431,6 +423,7 @@ struct DashboardComposer: View {
                     permissionMenu(compact: false)
                 }
             }
+            toolsControl
 
             Spacer(minLength: 8)
             collapseControl
@@ -443,7 +436,6 @@ struct DashboardComposer: View {
         VStack(alignment: .trailing, spacing: 4) {
             HStack(spacing: 4) {
                 attachmentControl
-                toolsControl
                 if showsSessionControls {
                     compactSessionMenu(
                         kind: .model,
@@ -472,6 +464,7 @@ struct DashboardComposer: View {
                         permissionMenu(compact: true)
                     }
                 }
+                toolsControl
             }
 
             HStack(spacing: 4) {
