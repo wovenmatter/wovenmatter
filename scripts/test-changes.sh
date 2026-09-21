@@ -37,6 +37,7 @@ run_package_tests() {
     CLANG_MODULE_CACHE_PATH="${cache_root}/ModuleCache" \
     SWIFTPM_MODULECACHE_OVERRIDE="${cache_root}/ModuleCache" \
     swift test --package-path app --scratch-path "$swift_scratch"
+  WOVENMATTER_TEST_CACHE_DIR="$cache_root" scripts/test-application-usage.sh
 }
 
 run_remote_tests() {
