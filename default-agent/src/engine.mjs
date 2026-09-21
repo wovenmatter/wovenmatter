@@ -2,26 +2,58 @@ import { mkdir, readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createAgentSession, DefaultResourceLoader, ModelRuntime, SessionManager, SettingsManager } from '@earendil-works/pi-coding-agent';
 import { Credentials } from './credentials.mjs';
-import { accessFailure, emptyConfig, modelRef, providerNames, providers, readJSON, validateConfig, writePrivateJSON } from './config.mjs';
+import { accessFailure, emptyConfig, modelRef, providerNames, providers, validateConfig } from './config.mjs';
 import { searchTools } from './search.mjs';
 import { providerFetch } from './transport.mjs';
 
 export class DefaultAgentEngine {
-  constructor({ cwd, directory, config = {}, credentials = {}, discover = true }) {
-    this.cwd = cwd; this.directory = directory; this.config = validateConfig({ ...emptyConfig, ...config }); this.supplied = credentials; this.discover = discover; this.sessions = new Map();
+  constructor({ cwd, directory, config = {}, credentials = {}, vault, requestCredentials }) {
+    this.cwd = cwd; this.directory = directory; this.config = validateConfig({ ...emptyConfig, ...config }); this.supplied = credentials; this.vault = vault; this.requestCredentials = requestCredentials; this.sessions = new Map();
   }
   async initialize() {
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
-    this.credentials = await new Credentials(join(this.directory, 'oauth.json'), this.supplied, this.discover).initialize();
+    this.credentials = await new Credentials(this.supplied, this.vault).initialize();
     this.runtime = await ModelRuntime.create({ credentials: this.credentials, modelsPath: null, modelsStorePath: join(this.directory, 'models.json'), refreshOnCreate: false });
+    const resolveAuth = this.runtime.getAuth.bind(this.runtime);
+    this.runtime.getAuth = async (model, options = {}) => {
+      const provider = typeof model === 'string' ? model : model.provider;
+      let credential = await this.credentials.read(provider);
+      if (credential?.borrowed) {
+        if (credential.expires <= Date.now() + 60000 && this.requestCredentials) {
+          await this.apply(await this.requestCredentials());
+          credential = await this.credentials.read(provider);
+        }
+        // Borrowers do not call refresh. Keep valid access usable during a
+        // transient renewal failure. Expired access pauses between requests.
+        while (credential?.borrowed && credential.expires <= Date.now()) {
+          if (options.allowWait === false) throw new Error('Authentication required.');
+          options.signal?.throwIfAborted();
+          await new Promise((resolve, reject) => {
+            const done = () => { clearTimeout(timer); options.signal?.removeEventListener('abort', abort); resolve(); };
+            const abort = () => { clearTimeout(timer); reject(options.signal.reason); };
+            const timer = setTimeout(done, 1000);
+            options.signal?.addEventListener('abort', abort, { once: true });
+          });
+          if (this.requestCredentials) await this.apply(await this.requestCredentials());
+          credential = await this.credentials.read(provider);
+        }
+        if (!credential) throw new Error('Authentication required.');
+        if (credential.borrowed) return { auth: await this.runtime.getProvider(provider).auth.oauth.toAuth(credential), source: 'OAuth' };
+      }
+      if (!credential) throw new Error('Authentication required.');
+      return resolveAuth(model, options);
+    };
     return this;
+  }
+  async apply(payload) {
+    if (payload.config) this.config = validateConfig(payload.config);
+    if (payload.credentials) { this.supplied = payload.credentials; await this.credentials.replace(payload.credentials); }
   }
   catalog() {
     return this.runtime.getModels().filter(m => this.config.providers.includes(m.provider)).map(m => ({ id: modelRef(m), name: m.name, provider: m.provider, providerName: providerNames[m.provider] }));
   }
   async status() {
-    const stored = await this.credentials.list();
-    return { providers: providers.map(id => ({ id, name: providerNames[id], connected: stored.some(c => c.providerId === id) })), models: this.catalog(), searchConfigured: Boolean(this.supplied.exa?.key) };
+    return { providers: await Promise.all(providers.map(async id => { const c = await this.credentials.read(id); const expired = c?.type === 'oauth' && c.expires <= Date.now(); return { id, name: providerNames[id], connected: Boolean(c) && !expired, state: !c || expired ? 'sign_in_required' : 'credentials_present', detail: expired ? 'Access expired. Reconnect Woven Matter or sign in.' : c ? 'Credentials stored; provider access has not been verified.' : 'No credentials stored.' }; })), models: this.catalog(), searchConfigured: Boolean((await this.credentials.read('exa'))?.key) };
   }
   modelOptions() {
     const all = this.catalog();
@@ -59,7 +91,7 @@ export class DefaultAgentEngine {
       appendSystemPrompt: ['You are Default Agent in Woven Matter. Work in the supplied agent workspace. Use the Woven Matter CLI and workspace instructions for notes and databases. Use web_search and web_read for current information and cite source URLs. If search is not configured, direct the user to Settings → Default Agent. Never claim a tool succeeded when it failed.'] });
     await loader.reload();
     const { session } = await createAgentSession({ cwd: this.cwd, agentDir: this.directory, modelRuntime: this.runtime, model, sessionManager: manager, settingsManager, resourceLoader: loader,
-      tools: ['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls', 'web_search', 'web_read'], customTools: searchTools(this.supplied.exa?.key) });
+      tools: ['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls', 'web_search', 'web_read'], customTools: searchTools(async () => (await this.credentials.read('exa'))?.key) });
     const record = { session, manager, selected: model ? modelRef(model) : selected, busy: false };
     const stream = session.agent.streamFunction;
     session.agent.streamFunction = (model, context, options) => stream(model, context, {
@@ -101,7 +133,7 @@ export class DefaultAgentEngine {
           if (!model) throw new Error('Model is no longer available. Select a model in Settings → Default Agent.');
           if (!await this.credentials.read(model.provider)) throw new Error('Authentication required.');
           // Explicit auth deadlines also cover refresh; no provider requests happen during discovery.
-          if (!await this.runtime.getAuth(model, { signal: AbortSignal.timeout(30000) })) throw new Error('Authentication required.');
+          if (!await this.runtime.getAuth(model, { signal: AbortSignal.timeout(30000), allowWait: false })) throw new Error('Authentication required.');
           await record.session.setModel(model);
           if (record.selected !== reference) {
             record.selected = reference;

@@ -397,6 +397,7 @@ final class ApplicationModel {
     }
 
     private func start() async {
+        remoteWorkspaces.startDefaultAgentMaintenance()
         do {
             conversationChangeTask?.cancel()
             for worker in conversationChangeWorkers.values { worker.cancel() }
@@ -652,6 +653,30 @@ final class ApplicationModel {
             && lhs.noteOnLeft == rhs.noteOnLeft
             && lhs.workspaceMode == rhs.workspaceMode
             && (lhs.localCLIAgentOrder ?? []) == (rhs.localCLIAgentOrder ?? [])
+    }
+
+    private(set) var localSignInStatuses: [AgentSignInStatus] = []
+    private(set) var checkingLocalSignIn = false
+    private(set) var localSignInError: String?
+    func refreshLocalSignInStatus() async {
+        guard !checkingLocalSignIn else { return }
+        checkingLocalSignIn = true
+        defer { checkingLocalSignIn = false }
+        do {
+            let snapshot = try DefaultAgentSupport.snapshot(workspace: "local")
+            var body = try JSONSerialization.jsonObject(with: snapshot.data()) as! [String: Any]
+            body["action"] = "sign-in-status"
+            let resolver = localACPRuntimeResolver.snapshottingExecutableSearchDirectories()
+            body["harnesses"] = LocalACPRuntimeCatalog.definitions.filter { $0.runtimeKind != .defaultAgent }.map { definition -> [String: Any] in
+                let executable = resolver.executable(named: definition.underlyingCLIName ?? definition.commandName)?.path
+                return ["id": definition.runtimeKind.rawValue, "name": definition.displayName,
+                        "enabled": enabledLocalACPRuntimeKinds.contains(definition.runtimeKind), "executable": executable ?? NSNull() as Any]
+            }
+            struct Result: Decodable { let statuses: [AgentSignInStatus] }
+            let response = try await DefaultAgentControl.run(JSONSerialization.data(withJSONObject: body))
+            localSignInStatuses = try JSONDecoder().decode(Result.self, from: response).statuses
+            localSignInError = nil
+        } catch { localSignInError = "Could not check sign-in status. Previous results are unchanged. " + error.localizedDescription }
     }
 
     var defaultAgentFallbackNotice: String?
@@ -1957,7 +1982,7 @@ final class ApplicationModel {
         )
         if runtimeKind == .defaultAgent, let workspaceID = conversation.remoteWorkspaceID,
            let remote = remoteWorkspaces.configuration(id: workspaceID) {
-            try await remoteWorkspaces.synchronizeDefaultAgent(remote)
+            try await remoteWorkspaces.ensureDefaultAgent(remote)
         }
         let launch = context?.launch
         let workspace = context?.workspace
@@ -2404,7 +2429,7 @@ final class ApplicationModel {
                 repositoriesURL: workspace.repositoriesURL, databasesURL: workspace.databasesURL))
         }
         return RemoteHarnessLaunchContext(
-            launch: runtimeKind == .defaultAgent ? try DefaultAgentSupport.configuredLaunch(launch) : launch,
+            launch: launch,
             workspace: workspace
         )
     }

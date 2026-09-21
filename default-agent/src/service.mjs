@@ -1,38 +1,44 @@
-import { isDeepStrictEqual } from 'node:util';
+import { CredentialVault, sharedCredentials } from './vault.mjs';
 import { join } from 'node:path';
 import { appendFile, readFile, readdir } from 'node:fs/promises';
 import { readJSON, validateConfig, writePrivateJSON } from './config.mjs';
 
 // Owned by the workspace service. Requests only attach to runs; disconnecting a
 // reader never cancels the SDK session. Journals support replay after reconnect.
-export function createDefaultAgentService({ cwd, directory, discover = true }) {
+export function createDefaultAgentService({ cwd, directory, discover = false }) {
   let enginePromise;
+  const vault = new CredentialVault(directory);
+  const epoch = crypto.randomUUID();
+  let configurationQueue = Promise.resolve();
   let generation = 0;
   const operations = new Map();
   const admissions = new Map();
   async function engine() {
     if (!enginePromise) enginePromise = (async () => {
+      await vault.read();
       const { DefaultAgentEngine } = await import('./engine.mjs');
       const value = await readJSON(join(directory, 'configuration.json'));
-      return new DefaultAgentEngine({ cwd, directory, config: value.config, credentials: value.credentials, discover }).initialize();
+      return new DefaultAgentEngine({ cwd, directory, config: value.config, vault }).initialize();
     })().catch(error => { enginePromise = undefined; throw error; });
     return enginePromise;
   }
-  async function configure(value) {
-    const previous = await readJSON(join(directory, 'configuration.json'));
-    if (isDeepStrictEqual(previous.config, validateConfig(value.config)) && isDeepStrictEqual(previous.credentials, value.credentials ?? {})) return { saved: true, generation };
-    const current = enginePromise ? await enginePromise : null;
-    if (current && [...current.sessions.values()].some(s => s.busy)) throw Object.assign(new Error('Wait for active Default Agent runs before changing this workspace’s settings.'), { status: 409 });
-    const credentials = {};
-    for (const [id, credential] of Object.entries(value.credentials ?? {})) {
-      if (['openai', 'openrouter', 'opencode-go', 'exa'].includes(id) && credential?.type === 'api_key' && typeof credential.key === 'string') credentials[id] = credential;
-      // Shared OAuth access is borrowed. Never clone refresh-token ownership.
-      if (['openai-codex', 'xai'].includes(id) && credential?.borrowed && typeof credential.access === 'string') credentials[id] = { ...credential, refresh: '' };
-    }
-    await writePrivateJSON(join(directory, 'configuration.json'), { config: validateConfig(value.config), credentials });
-    if (current) for (const record of current.sessions.values()) record.session.dispose();
-    generation++; enginePromise = undefined;
-    return { saved: true, generation };
+  function configure(value) {
+    const pending = configurationQueue.then(async () => {
+      await vault.unlock(value.workspace, value.unlockKey);
+      await vault.modify(async stored => ({ ...stored, shared: sharedCredentials(value.credentials), revision: value.revision }));
+      const config = validateConfig(value.config);
+      await writePrivateJSON(join(directory, 'configuration.json'), { config });
+      const current = enginePromise ? await enginePromise : null;
+      if (current) await current.apply({ config });
+      generation++;
+      return { saved: true, revision: value.revision, epoch, generation };
+    });
+    configurationQueue = pending.catch(() => {});
+    return pending;
+  }
+  async function status() {
+    if (!vault.unlocked) return { locked: true, providers: [], models: [], searchConfigured: false };
+    return { ...(await (await engine()).status()), locked: false, epoch };
   }
   function invoke(message) {
     const id = message.operationID;
@@ -96,5 +102,5 @@ export function createDefaultAgentService({ cwd, directory, discover = true }) {
     let updates = []; try { updates = (await readFile(join(directory, `run-${id}.jsonl`), 'utf8')).trim().split('\n').filter(Boolean).map(JSON.parse); } catch (error) { if (error.code !== 'ENOENT') throw error; }
     return { updates: updates.slice(after, after + 200), cursor: Math.min(updates.length, after + 200), done: after + 200 >= updates.length, ...completion };
   }
-  return { engine, configure, invoke, poll };
+  return { engine, configure, invoke, poll, status };
 }

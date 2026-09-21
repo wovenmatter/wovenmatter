@@ -13,6 +13,7 @@ struct SettingsDefaultAgentView: View {
     @State private var modelSearch = ""
     @State private var answer = ""
     @State private var syncError: String?
+    @State private var confirmingCredentialReset = false
 
     private var remote: RemoteWorkspaceConfiguration? {
         model.remoteWorkspaces.workspaces.first { $0.id.uuidString.lowercased() == agent.scope }
@@ -29,15 +30,25 @@ struct SettingsDefaultAgentView: View {
             searchSection
             if let notice = agent.notice { Text(notice).font(.callout).foregroundStyle(.secondary) }
             if let error = agent.error ?? syncError { Text(error).font(.callout).foregroundStyle(.red).textSelection(.enabled) }
-            HStack {
-                Button("Refresh connections") { agent.refresh(remote: remote) }.disabled(agent.busy)
-                Button("Apply to workspaces") { synchronize() }
-                if agent.busy { ProgressView().controlSize(.small); Button("Cancel") { agent.cancel() } }
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Button("Refresh connections") { agent.refresh(remote: remote) }.disabled(agent.busy)
+                    Button("Apply to workspaces") { synchronize() }
+                    if agent.busy { ProgressView().controlSize(.small); Button("Cancel") { agent.cancel() } }
+                }
+                if remote != nil {
+                    Button("Reset workspace credentials") { confirmingCredentialReset = true }.disabled(agent.busy)
+                }
             }.buttonStyle(SettingsQuietButtonStyle())
             modelsSection
         }
         .task { agent.changeScope(initialScope); agent.refresh(remote: remote) }
         .onDisappear { agent.cancel() }
+        .confirmationDialog("Reset Default Agent credentials in this workspace?", isPresented: $confirmingCredentialReset) {
+            Button("Reset credentials", role: .destructive) { agent.refresh(remote: remote, action: "reset") }
+        } message: {
+            Text("Independent workspace sign-ins will be removed. Shared keys and sign-ins from this Mac will be restored. Files and conversations are kept.")
+        }
     }
     private var scopeSection: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -74,9 +85,11 @@ struct SettingsDefaultAgentView: View {
                     var config = agent.configuration; config.providers.removeAll { $0 == id }; if enabled { config.providers.append(id) }; agent.configuration = config
                 })).disabled(!editable)
                 Spacer()
-                Text(agent.providers.first { $0.id == id }?.connected == true ? "Configured" : "Not configured").font(.callout).foregroundStyle(.secondary)
+                Text(agent.providers.first { $0.id == id }?.connected == true ? "Credentials present" : "Sign-in required").font(.callout).foregroundStyle(.secondary)
                 if id == "openai-codex" || id == "xai" {
                     Button("Sign in") { agent.refresh(remote: remote, login: id) }.buttonStyle(SettingsQuietButtonStyle()).disabled(agent.busy)
+                    Button(remote == nil ? "Sign out" : "Use shared sign-in") { agent.signOut(id, remote: remote) }
+                        .buttonStyle(SettingsQuietButtonStyle()).disabled(agent.busy)
                 }
             }
             if id != "openai-codex" && id != "xai" { keyEntry(id) }
@@ -158,6 +171,34 @@ struct SettingsDefaultAgentView: View {
             for workspace in model.remoteWorkspaces.workspaces {
                 do { try await model.remoteWorkspaces.synchronizeDefaultAgent(workspace) }
                 catch { syncError = "\(workspace.name): \(error.localizedDescription)" }
+            }
+        }
+    }
+}
+
+
+struct SettingsSignInStatusCard: View {
+    let statuses: [AgentSignInStatus]
+    let checking: Bool
+    let error: String?
+    let refresh: () -> Void
+    var body: some View {
+        SettingsCard(title: "Sign-in status", detail: "Check Default Agent connections and independently installed harnesses.") {
+            HStack {
+                Button(checking ? "Checking sign-in status…" : "Refresh sign-in status", action: refresh)
+                    .buttonStyle(SettingsQuietButtonStyle()).disabled(checking)
+                if checking { ProgressView().controlSize(.small) }
+            }
+            if let error { SettingsError(error) }
+            ForEach(statuses) { status in
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack {
+                        Text(status.name).font(.callout)
+                        Spacer()
+                        Text(status.label).font(.caption).foregroundStyle(.secondary)
+                    }
+                    Text(status.detail).font(.caption).foregroundStyle(.secondary)
+                }.padding(.vertical, 4)
             }
         }
     }

@@ -45,6 +45,9 @@ struct SettingsRemoteWorkspacesView: View {
                 credentialAccessCard
                 if let selectedWorkspace {
                     workspaceCard(selectedWorkspace)
+                    SettingsSignInStatusCard(statuses: model.signInStatuses[selectedWorkspace.id] ?? [], checking: model.checkingSignIn.contains(selectedWorkspace.id), error: model.signInErrors[selectedWorkspace.id]) {
+                        Task { await model.refreshSignInStatus(selectedWorkspace) }
+                    }
                     resourceCard(selectedWorkspace)
                     harnessesCard(selectedWorkspace)
                     if let progress = model.progress {

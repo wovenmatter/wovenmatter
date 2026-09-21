@@ -514,12 +514,19 @@ public actor LocalACPClient {
     private var initialSystemPromptInFlight = false
     private var defaultAgentRunID: String?
     private var defaultAgentRemote = false
+    private var defaultAgentScope = "local"
+    private var defaultAgentCredentialRevision: String?
     public func setDefaultAgentRunID(_ value: String) async throws {
         defaultAgentRunID = value
+        try await prepareDefaultAgent()
+    }
+    private func prepareDefaultAgent() async throws {
         guard runtimeKind == .defaultAgent, !defaultAgentRemote else { return }
-        let data = try DefaultAgentSupport.payload(workspace: "local")
-        let parameters = try JSONDecoder().decode(ACPJSONValue.self, from: data)
+        let payload = try await DefaultAgentCredentialCoordinator.shared.prepare("local")
+        guard payload.revision != defaultAgentCredentialRevision else { return }
+        let parameters = try JSONDecoder().decode(ACPJSONValue.self, from: payload.data())
         let result = try await request(method: "woven/configure", params: parameters)
+        defaultAgentCredentialRevision = payload.revision
         captureSessionConfiguration(from: result)
         await configurationHandler?(configuration)
     }
@@ -588,6 +595,7 @@ public actor LocalACPClient {
         self.input = input
         self.cursor = cursor
         self.runtimeKind = runtimeKind
+        self.defaultAgentScope = process.environment?["WOVEN_DEFAULT_AGENT_SCOPE"] ?? "local"
         self.defaultAgentRemote = process.arguments?.contains("/usr/bin/ssh") == true
         self.workingDirectory = workingDirectory.standardizedFileURL
     }
@@ -609,7 +617,7 @@ public actor LocalACPClient {
         let preparedLaunch = try LocalACPSessionPermissions.prepareLaunch(launch)
         process.arguments = [
             "-c",
-            #"set -m; exec "$@""#,
+            #"ulimit -c 0; set -m; exec "$@""#,
             "wovenmatter-local-acp",
             launch.executableURL.path,
         ] + preparedLaunch.arguments
@@ -689,6 +697,7 @@ public actor LocalACPClient {
         title: String?,
         systemPrompt: String? = nil
     ) async throws -> LocalACPInitializedSession {
+        try await prepareDefaultAgent()
         _ = try await initializeConnection()
         if runtimeKind == .cursor {
             _ = try await request(
@@ -1522,7 +1531,7 @@ public actor LocalACPClient {
     }
 
     private func receive(_ data: Data) throws {
-        try historyRecorder?("in", data)
+        if runtimeKind != .defaultAgent { try historyRecorder?("in", data) }
         let envelope = try Self.decodeEnvelope(data)
         if envelope.method == nil,
            let id = envelope.id?.integerValue,
@@ -1575,7 +1584,14 @@ public actor LocalACPClient {
     }
 
     private func handleNotification(_ envelope: ACPEnvelope) async throws {
-        if envelope.method == "session/update" {
+        if envelope.method == "woven/credentials", runtimeKind == .defaultAgent {
+            do {
+                let payload = try await DefaultAgentCredentialCoordinator.shared.prepare(defaultAgentScope)
+                try write(ACPEnvelope(id: envelope.id, result: JSONDecoder().decode(ACPJSONValue.self, from: payload.data())))
+            } catch {
+                try write(ACPEnvelope(id: envelope.id, error: .init(code: -32000, message: "Default Agent credentials are unavailable.")))
+            }
+        } else if envelope.method == "session/update" {
             guard belongsToActiveSession(envelope) else { return }
             let update = envelope.params?["update"]
             switch update?["sessionUpdate"]?.stringValue {
@@ -2138,7 +2154,7 @@ public actor LocalACPClient {
     private func write(_ envelope: ACPEnvelope) throws {
         guard !closed else { throw LocalACPClientError.processExited }
         var data = try JSONEncoder().encode(envelope)
-        try historyRecorder?("out", data)
+        if runtimeKind != .defaultAgent { try historyRecorder?("out", data) }
         data.append(0x0A)
         try input.write(contentsOf: data)
     }

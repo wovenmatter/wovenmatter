@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 import { PassThrough, Writable } from 'node:stream'
-import { createHash } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { connect, createServer as createNetServer } from 'node:net'
 import { tmpdir } from 'node:os'
@@ -820,6 +820,31 @@ test('database routes require authentication and ignore client-supplied workspac
   assert.deepEqual(listed.databases, [{ id: 'Sales', name: 'Sales', preference: 'sqlite' }])
   assert.equal((await request('/v1/databases/data', 'POST', { databaseID: '../Sales', relativePath: 'data.json' })).status, 400)
 })
+
+test('Default Agent credential routes require authentication, unlock explicitly, and keep files encrypted', async context => {
+  const root = await temporaryFixture(context, 'wovenmatter-credentials-api-');
+  const home = resolve(root, 'home'); await mkdir(home);
+  const service = await startService({ workspace: root, home, catalog: catalogPath, token: 'credential-test-token' });
+  context.after(() => service.child.kill('SIGTERM'));
+  const request = (path, body, token = 'credential-test-token') => fetch(service.url + path, {
+    method: body ? 'POST' : 'GET', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  assert.equal((await request('/v1/default-agent/status', undefined, 'wrong')).status, 401);
+  assert.equal((await (await request('/v1/default-agent/status')).json()).locked, true);
+  assert.equal((await request('/v1/default-agent/rpc', { method: 'initialize' })).status, 423);
+  const unlockKey = randomBytes(32).toString('base64');
+  const body = { workspace: 'fixture-workspace', unlockKey, revision: 'fixture-revision', config: {},
+    credentials: { openrouter: { type: 'api_key', key: 'fixture-provider-secret' } } };
+  const receipt = await (await request('/v1/default-agent/configuration', body)).json();
+  assert.equal(receipt.revision, 'fixture-revision');
+  const status = await (await request('/v1/default-agent/status')).json();
+  assert.equal(status.locked, false);
+  assert.equal(status.providers.find(p => p.id === 'openrouter').state, 'credentials_present');
+  assert.ok(!JSON.stringify(status).includes('fixture-provider-secret'));
+  const disk = await readFile(resolve(root, '.wovenmatter/default-agent/credentials.enc.json'), 'utf8');
+  assert.ok(!disk.includes('fixture-provider-secret') && !disk.includes(unlockKey));
+});
 
 async function startService({ workspace, home, catalog, token, gatewayPort }) {
   const port = await unusedPort()

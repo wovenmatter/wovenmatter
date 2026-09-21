@@ -3,7 +3,7 @@ import Security
 import WovenMatterCore
 
 /// Captures authorization and destination before suspension; stale responses must not apply.
-public struct RemoteWorkspaceRequestIdentity: Sendable {
+public struct RemoteWorkspaceRequestIdentity: Sendable, Equatable {
     public let configuration: RemoteWorkspaceConfiguration
     public let credentialEpoch: UUID
     public let workspaceEpoch: UUID
@@ -121,7 +121,7 @@ public enum RemoteHarnessLaunchResolver {
         }
         var harnessArgumentsStartIndex = command.count
         if runtimeKind == .defaultAgent {
-            command.append(contentsOf: ["node", "/opt/wovenmatter/default-agent/src/main.mjs", "--remote"])
+            command.append(contentsOf: ["sh", "-c", #"ulimit -c 0; exec "$@""#, "woven-default-agent", "node", "/opt/wovenmatter/default-agent/src/main.mjs", "--remote"])
         } else if let harness {
             command.append(contentsOf: [
                 "bash", "-c",
@@ -141,6 +141,7 @@ public enum RemoteHarnessLaunchResolver {
                 runtimeKind: runtimeKind,
                 executableURL: URL(fileURLWithPath: "/usr/bin/ssh"),
                 arguments: sshArguments,
+                environment: runtimeKind == .defaultAgent ? ["WOVEN_DEFAULT_AGENT_SCOPE": configuration.id.uuidString.lowercased()] : [:],
                 processWorkingDirectoryURL: processWorkingDirectory,
                 wrappedCommand: LocalACPRuntimeWrappedCommand(
                     argumentIndex: sshArguments.count - 1,
@@ -1126,9 +1127,16 @@ public struct RemoteWorkspaceServiceClient: Sendable {
         )
     }
 
-    public func configureDefaultAgent(_ payload: Data) async throws {
-        struct Response: Decodable { let saved: Bool }
-        let _: Response = try await request(path: "v1/default-agent/configuration", method: "POST", body: payload)
+    public func configureDefaultAgent(_ payload: Data) async throws -> DefaultAgentSyncReceipt {
+        try await request(path: "v1/default-agent/configuration", method: "POST", body: payload)
+    }
+    public func defaultAgentStatus() async throws -> DefaultAgentStatus {
+        try await request(path: "v1/default-agent/status", method: "GET", body: nil)
+    }
+    public func signInStatuses() async throws -> [AgentSignInStatus] {
+        struct Response: Decodable { let statuses: [AgentSignInStatus] }
+        let value: Response = try await request(path: "v1/sign-in-status", method: "GET", body: nil)
+        return value.statuses
     }
 
     private func request<Value: Decodable>(

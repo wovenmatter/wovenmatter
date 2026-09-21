@@ -16,6 +16,8 @@ final class DefaultAgentSettingsModel {
         let id: String
         let name: String
         let connected: Bool
+        let state: String?
+        let detail: String?
     }
     struct Status: Decodable { let providers: [Provider]; let models: [Model]; let searchConfigured: Bool }
     var scope = "global"
@@ -35,6 +37,9 @@ final class DefaultAgentSettingsModel {
     private var input: FileHandle?
     private var outputBuffer = Data()
     private var generation = UUID()
+    private var operationTask: Task<Void, Never>?
+    private var signInLease: UUID?
+    private var activeKeyScope = "global"
 
     var configuration: DefaultAgentSettings {
         get { scope == "global" ? settings.global : settings.resolved(scope) }
@@ -53,6 +58,13 @@ final class DefaultAgentSettingsModel {
     func saveKey(_ key: String, provider: String) {
         do { try DefaultAgentSupport.saveKey(key.trimmingCharacters(in: .whitespacesAndNewlines), provider: provider, scope: keyScope); notice = "Key saved."; error = nil }
         catch { self.error = error.localizedDescription }
+    }
+    func signOut(_ provider: String, remote: RemoteWorkspaceConfiguration?) {
+        if let remote { refresh(remote: remote, login: provider, action: "logout"); return }
+        do {
+            try DefaultAgentSupport.saveKey("", provider: "oauth." + provider, scope: keyScope)
+            refresh()
+        } catch { self.error = error.localizedDescription }
     }
     func move(_ id: String, by offset: Int) {
         var value = configuration
@@ -81,29 +93,39 @@ final class DefaultAgentSettingsModel {
     func changeScope(_ scope: String) { cancel(); self.scope = scope; catalog = []; providers = []; notice = nil; error = nil }
     func cancel() {
         generation = UUID()
+        operationTask?.cancel(); operationTask = nil
+        finishSignIn()
         input?.closeFile(); input = nil
         if let process, process.isRunning { process.terminate() }
         process = nil; busy = false; signInURL = nil; signInCode = nil; prompt = nil; promptID = nil; promptOptions = []
+    }
+    private func finishSignIn() {
+        if let signInLease { DefaultAgentCredentialCoordinator.shared.endSignIn(signInLease) }
+        signInLease = nil
     }
     func respond(_ answer: String) {
         guard let id = promptID else { return }
         write(["answerTo": id, "answer": answer]); promptID = nil; prompt = nil; promptOptions = []
     }
-    func refresh(remote: RemoteWorkspaceConfiguration? = nil, login: String? = nil) {
+    func refresh(remote: RemoteWorkspaceConfiguration? = nil, login: String? = nil, action: String? = nil) {
         cancel(); busy = true; error = nil; outputBuffer = Data()
         let runID = generation
+        activeKeyScope = keyScope
+        operationTask = Task { [self] in
         do {
-            var body = try JSONSerialization.jsonObject(with: DefaultAgentSupport.payload(workspace: scope == "global" ? "local" : scope)) as! [String: Any]
-            // Global editing must use global values even when the local workspace has an override.
-            if scope == "global" {
-                body["config"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(settings.global))
-                var keys: [String: [String: String]] = [:]
-                for id in ["openai", "openrouter", "opencode-go", "exa"] {
-                    if let key = try DefaultAgentSupport.key(id) { keys[id] = ["type": "api_key", "key": key] }
+            let prepared = try await DefaultAgentCredentialCoordinator.shared.prepare(scope)
+            if login != nil {
+                let lease = try await DefaultAgentCredentialCoordinator.shared.beginSignIn()
+                guard generation == runID, !Task.isCancelled else {
+                    DefaultAgentCredentialCoordinator.shared.endSignIn(lease)
+                    return
                 }
-                body["credentials"] = keys
+                signInLease = lease
             }
-            body["action"] = login == nil ? "status" : "login"
+            try Task.checkCancellation()
+            guard generation == runID else { return }
+            var body = try JSONSerialization.jsonObject(with: prepared.data()) as! [String: Any]
+            body["action"] = action ?? (login == nil ? "status" : "login")
             if let login { body["provider"] = login }
             let child = Process()
             if let remote {
@@ -112,7 +134,8 @@ final class DefaultAgentSettingsModel {
                 child.arguments = launch.arguments.map { $0.replacingOccurrences(of: "'--remote'", with: "'--control'") }
             } else {
                 guard let launch = DefaultAgentSupport.resolution().launchConfiguration else { throw DefaultAgentError.message("The bundled helper is unavailable. Rebuild Woven Matter.") }
-                child.executableURL = launch.executableURL; child.arguments = launch.arguments + ["--control"]
+                child.executableURL = URL(fileURLWithPath: "/bin/sh")
+                child.arguments = ["-c", #"ulimit -c 0; exec "$@""#, "woven-default-agent", launch.executableURL.path] + launch.arguments + ["--control"]
             }
             let stdin = Pipe(), stdout = Pipe()
             child.standardInput = stdin; child.standardOutput = stdout; child.standardError = FileHandle.nullDevice
@@ -125,11 +148,17 @@ final class DefaultAgentSettingsModel {
                 Task { @MainActor in
                     guard let self, self.generation == runID else { return }
                     self.busy = false
+                    if child.terminationStatus != 0 { self.finishSignIn() }
                     if child.terminationStatus != 0 && self.error == nil { self.error = "Default Agent setup did not complete. Try again." }
                 }
             }
             try child.run(); process = child; input = stdin.fileHandleForWriting; write(body)
-        } catch { busy = false; self.error = error.localizedDescription }
+        } catch {
+            guard generation == runID else { return }
+            busy = false; self.error = error.localizedDescription
+            finishSignIn()
+        }
+        }
     }
     private func write(_ value: [String: Any]) {
         do { var data = try JSONSerialization.data(withJSONObject: value); data.append(0x0a); try input?.write(contentsOf: data) }
@@ -141,12 +170,22 @@ final class DefaultAgentSettingsModel {
             let line = outputBuffer[..<newline]; outputBuffer.removeSubrange(...newline)
             guard let object = try? JSONSerialization.jsonObject(with: line) as? [String: Any] else { continue }
             if let result = object["result"] as? [String: Any] {
+                if let raw = result["credential"], let provider = result["provider"] as? String {
+                    do {
+                        let credential = try JSONDecoder().decode(DefaultAgentCredential.self, from: JSONSerialization.data(withJSONObject: raw))
+                        try DefaultAgentSupport.saveOAuth(credential, provider: provider, scope: activeKeyScope)
+                    } catch { self.error = "Sign-in completed but could not be saved in Keychain. Try again."; busy = false; finishSignIn(); continue }
+                }
+                finishSignIn()
+                if result["credential"] != nil || result["connected"] != nil || result["reset"] != nil || result["disconnected"] != nil { DefaultAgentSupport.changed() }
                 if let data = try? JSONSerialization.data(withJSONObject: result), let status = try? JSONDecoder().decode(Status.self, from: data) {
                     providers = status.providers; catalog = status.models; searchConfigured = status.searchConfigured
-                } else { notice = "Signed in. Refresh connections to see available models." }
+                } else if result["reset"] as? Bool == true { notice = "Workspace credentials reset. Shared connections are available; sign in again for independent workspace accounts." }
+                else if result["disconnected"] as? Bool == true { notice = "Workspace sign-in removed. Shared credentials will be used when available." }
+                else { notice = "Signed in. Refresh connections to see available models." }
                 busy = false; signInURL = nil; signInCode = nil; prompt = nil
             }
-            if let error = object["error"] as? String { self.error = error; busy = false }
+            if let error = object["error"] as? String { self.error = error; busy = false; finishSignIn() }
             if let event = object["notification"] as? [String: Any] {
                 if let url = (event["url"] ?? event["verificationUri"]) as? String, let value = URL(string: url), value.scheme == "https" { signInURL = value }
                 signInCode = event["userCode"] as? String

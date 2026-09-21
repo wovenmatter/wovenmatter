@@ -7,6 +7,8 @@ import { searchTools } from '../src/search.mjs';
 import { DefaultAgentEngine } from '../src/engine.mjs';
 import { createDefaultAgentService } from '../src/service.mjs';
 import { Credentials } from '../src/credentials.mjs';
+import { CredentialVault } from '../src/vault.mjs';
+import { randomBytes } from 'node:crypto';
 import { providerFetch } from '../src/transport.mjs';
 
 const temporary = () => mkdtemp('/tmp/woven-default-agent-test-');
@@ -77,20 +79,32 @@ test('a failed turn that already ran tools is never silently replayed', async ()
   await assert.rejects(engine.prompt(record, 'change files', () => {}));
   assert.deepEqual(selected, ['openai-codex']);
 });
-test('credentials stay in private files and external refresh ownership is never duplicated', async () => {
+test('credentials migrate to encrypted storage and refresh ownership remains separate', async () => {
   const directory = await temporary();
-  const path = join(directory, 'oauth.json');
-  await writePrivateJSON(path, { xai: { type: 'oauth', access: 'fixture', refresh: 'owned', expires: Date.now() + 3600000 } });
-  assert.equal((await stat(path)).mode & 0o777, 0o600);
-  const credentials = await new Credentials(path, {}, false).initialize();
-  await credentials.modify('xai', async old => ({ ...old, access: 'rotated' }));
-  assert.equal(JSON.parse(await readFile(path, 'utf8')).xai.access, 'rotated');
-  const borrowed = await new Credentials(join(directory, 'borrowed.json'), { xai: { type: 'oauth', access: 'fixture', refresh: '', borrowed: true, expires: 0 } }, false).initialize();
+  const key = randomBytes(32).toString('base64');
+  await writePrivateJSON(join(directory, 'oauth.json'), { xai: { type: 'oauth', access: 'fixture-access', refresh: 'owned-refresh', expires: 0 } });
+  const vault = new CredentialVault(directory);
+  await vault.unlock('workspace-a', key);
+  const credentials = await new Credentials({}, vault).initialize();
+  await credentials.modify('xai', async old => ({ ...old, access: 'rotated-access' }));
+  const contents = await readFile(vault.path, 'utf8');
+  assert.ok(!contents.includes('owned-refresh') && !contents.includes('rotated-access'));
+  assert.equal((await stat(vault.path)).mode & 0o777, 0o600);
+  await assert.rejects(readFile(join(directory, 'oauth.json')), { code: 'ENOENT' });
+  const restarted = new CredentialVault(directory);
+  await assert.rejects(restarted.read(), /locked/);
+  await assert.rejects(restarted.unlock('workspace-a', randomBytes(32).toString('base64')), /decrypted/);
+  await assert.rejects(restarted.read(), /locked/);
+  await assert.rejects(restarted.unlock('workspace-b', key), /decrypted/);
+  await restarted.unlock('workspace-a', key);
+  assert.equal((await restarted.read()).owned.xai.access, 'rotated-access');
+  const borrowed = await new Credentials({ xai: { type: 'oauth', access: 'fixture', refresh: '', borrowed: true, expires: 0 } }).initialize();
   await assert.rejects(borrowed.modify('xai', async c => c), /Authentication required/);
 });
 test('remote service owns an accepted run and completion can be recovered without resubmission', async () => {
   const directory = await temporary();
   const service = createDefaultAgentService({ cwd: directory, directory, discover: false });
+  await service.configure({ workspace: 'fixture', unlockKey: randomBytes(32).toString('base64'), config: {}, credentials: {}, revision: '1' });
   // Inject a provider-free fake session at the SDK boundary, retain real service journaling.
   const engine = await service.engine();
   let release;
@@ -117,20 +131,19 @@ test('remote service owns an accepted run and completion can be recovered withou
   assert.equal(JSON.parse(await readFile(join(directory, `run-${operationID}.json`))).snapshot.runID, operationID);
 });
 
-test('credential refresh observes rotations made by another helper and permits an explicit replacement sign-in', async () => {
-  const directory = await temporary();
-  const path = join(directory, 'oauth.json');
-  await writePrivateJSON(path, { xai: { type: 'oauth', access: 'old', refresh: 'old', expires: 0 } });
-  const credentials = await new Credentials(path, {}, false).initialize();
-  await writePrivateJSON(path, { xai: { type: 'oauth', access: 'new', refresh: 'new', expires: Date.now() + 3600000 } });
-  const current = await credentials.modify('xai', async () => undefined);
-  assert.equal(current.access, 'new');
-  const borrowed = await new Credentials(join(directory, 'borrowed.json'), { xai: { type: 'oauth', access: 'expired', refresh: '', borrowed: true, expires: 0 } }, false).initialize();
-  borrowed.signingIn = true;
-  await borrowed.modify('xai', async () => ({ type: 'oauth', access: 'new-login', refresh: 'owned', expires: Date.now() + 3600000 }));
-  assert.equal((await borrowed.read('xai')).access, 'new-login');
+test('independent remote sign-in takes priority over updates and is encrypted across helpers', async () => {
+  const directory = await temporary(), key = randomBytes(32).toString('base64');
+  const first = new CredentialVault(directory), second = new CredentialVault(directory);
+  await first.unlock('fixture', key); await second.unlock('fixture', key);
+  await first.modify(async () => ({ shared: { xai: { type: 'oauth', access: 'borrowed', borrowed: true, expires: 0 } } }));
+  const login = await new Credentials({}, second).initialize();
+  login.signingIn = true;
+  await login.modify('xai', async () => ({ type: 'oauth', access: 'new-login', refresh: 'owned', expires: Date.now() + 3600000 }));
+  const running = await new Credentials({}, first).initialize();
+  assert.equal((await running.read('xai')).access, 'new-login');
+  await first.modify(async stored => ({ ...stored, shared: { xai: { type: 'oauth', access: 'new-borrowed', borrowed: true, expires: 1 } } }));
+  assert.equal((await running.read('xai')).access, 'new-login');
 });
-
 test('raw Codex HTTP errors distinguish subscription exhaustion from transient 429s before SDK rewriting', async () => {
   for (const [code, shouldFallback] of [['usage_limit_reached', true], ['rate_limit_exceeded', false]]) {
     const record = {};

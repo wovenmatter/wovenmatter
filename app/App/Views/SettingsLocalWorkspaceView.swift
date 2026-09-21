@@ -18,6 +18,9 @@ struct SettingsLocalWorkspaceView: View {
         ) {
             SettingsWorkspaceSidebarVisibilityControl(.localWorkspace)
             workspaceCard
+            SettingsSignInStatusCard(statuses: model.localSignInStatuses, checking: model.checkingLocalSignIn, error: model.localSignInError) {
+                Task { await model.refreshLocalSignInStatus() }
+            }
             runtimesCard
         }
         .task { await model.openCode?.resolveExecutable(); model.refreshRuntimeInventory() }

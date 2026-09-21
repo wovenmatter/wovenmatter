@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs'
 const defaultAgentModule = new URL('../default-agent/src/service.mjs', import.meta.url)
 const { createDefaultAgentService } = await import(existsSync(defaultAgentModule) ? defaultAgentModule.href : new URL('../../default-agent/src/service.mjs', import.meta.url).href)
+const { signInStatuses } = await import(new URL('./sign-in-status.mjs', existsSync(defaultAgentModule) ? defaultAgentModule : new URL('../../default-agent/src/service.mjs', import.meta.url)).href)
 import { databaseOperation } from './database-catalog.mjs'
 import { createHermesInstance } from './hermes-instance.mjs'
 import { createRuntimeMaintenance, acquireHostLock } from './runtime-maintenance.mjs'
@@ -76,9 +77,20 @@ const server = createServer(async (request, response) => {
   try {
     if (!authorized(request)) return json(response, 401, { error: 'unauthorized' })
     const url = new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`)
-    if (url.pathname === '/v1/default-agent/configuration' && request.method === 'POST') {
+    if (url.pathname === '/v1/sign-in-status' && request.method === 'GET') {
+      const agent = await defaultAgent.status();
+      const entries = await Promise.all([...catalog.values()].map(async h => ({
+        id: h.id, name: h.displayName, executable: await commandExists(h.cliCommand) ? h.cliCommand : null,
+      })));
+      const statuses = await signInStatuses(entries);
+      statuses.unshift(...(agent.locked ? [{ id: 'default_agent', name: 'Default Agent', state: 'locked', detail: 'Reconnect Woven Matter to unlock stored credentials.' }]
+        : agent.providers.map(p => ({ ...p, name: 'Default Agent · ' + p.name }))));
+      return json(response, 200, { statuses });
+    }
+    if (url.pathname === '/v1/default-agent/configuration'  && request.method === 'POST') {
       return json(response, 200, await defaultAgent.configure(await readJSON(request)))
     }
+    if (url.pathname === '/v1/default-agent/status' && request.method === 'GET') return json(response, 200, await defaultAgent.status())
     if (url.pathname === '/v1/default-agent/rpc' && request.method === 'POST') {
       return json(response, 200, await defaultAgent.invoke(await readJSON(request)))
     }

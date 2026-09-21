@@ -14,17 +14,22 @@ Node receives its own JIT entitlement when the app is signed. SDK dependencies
 and runtime binaries are build products, not checked into Git.
 
 `DefaultAgentSettingsScope` stores non-secret preferences and per-workspace
-replacements. API keys use macOS Keychain. Global OpenRouter uses the same
-Keychain item as Usage. A local helper receives its configuration in the launch
-environment, removes it before creating tools, and accepts fresh configuration
-before subsequent turns. Owned SDK OAuth credentials are private files, protected
-by a cross-process lock for token rotation. Existing Codex/Grok credentials are
-borrowed without taking refresh ownership. The source sign-in is reread so a
-logout does not leave a stale process cache authenticated.
+replacements. API keys and owned OAuth credentials use macOS Keychain. Global
+OpenRouter uses the same Keychain item as Usage. Local helpers receive access-only
+credentials over private pipes. The Mac coordinator owns renewal and saves rotated
+credentials before publishing new snapshots. External harness sign-ins are separate
+and their credential stores are never imported. Ordinary message checks compare
+cached revisions and deadlines without Keychain or network access.
 
 Remote configuration travels over the existing authenticated workspace service
-connection and is stored privately in the persistent workspace volume. It is
-never part of an image. Remote SDK sessions and accepted operations are owned by
+connection and is encrypted using AES-256-GCM in the persistent workspace volume.
+The per-workspace key persists only in Mac Keychain; a restarted helper stays
+locked until the Mac reconnects. Shared OAuth exports contain no refresh tokens.
+Independent remote sign-ins remain encrypted and take precedence. See
+[credential ownership](../architecture/DEFAULT_AGENT_CREDENTIALS.md) for lifecycle,
+migration, recovery, and protection boundaries.
+
+Remote SDK sessions and accepted operations are owned by
 the workspace service, not an SSH reader. The helper inside `docker exec` only
 attaches to those operations. Accepted native run UUIDs make duplicate submissions
 idempotent; journals and completion snapshots recover results after disconnect.
