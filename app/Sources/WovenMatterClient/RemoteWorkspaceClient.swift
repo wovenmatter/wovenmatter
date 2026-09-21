@@ -729,10 +729,19 @@ public actor RemoteWorkspaceSSHClient {
         return cleanHost
     }
 
-    private static func runSSH(
+    static func runSSH(destination: String, command: String, input: Data?) throws -> Data {
+        try runSSH(destination: destination, command: command, input: input, timeLimit: nil)
+    }
+
+    static func runAttachmentSSH(destination: String, command: String, input: Data?) throws -> Data {
+        try runSSH(destination: destination, command: command, input: input, timeLimit: 60)
+    }
+
+    static func runSSH(
         destination: String,
         command: String,
-        input: Data?
+        input: Data?,
+        timeLimit: TimeInterval?
     ) throws -> Data {
         let result = try RemoteWorkspaceProcess.run(
             executable: "/usr/bin/ssh",
@@ -744,7 +753,8 @@ public actor RemoteWorkspaceSSHClient {
                 destination,
                 command,
             ],
-            input: input
+            input: input,
+            timeLimit: timeLimit
         )
         guard result.status == 0 else {
             throw RemoteWorkspaceClientError.commandFailed(result.output)
@@ -1262,7 +1272,7 @@ public enum RemoteWorkspaceClientError: LocalizedError, Equatable, Sendable {
     }
 }
 
-private enum RemoteWorkspaceProcess {
+enum RemoteWorkspaceProcess {
     struct Result {
         let data: Data
         let status: Int32
@@ -1275,7 +1285,8 @@ private enum RemoteWorkspaceProcess {
     static func run(
         executable: String,
         arguments: [String],
-        input: Data? = nil
+        input: Data? = nil,
+        timeLimit: TimeInterval? = nil
     ) throws -> Result {
         let process = Process()
         let fileManager = FileManager.default
@@ -1327,6 +1338,23 @@ private enum RemoteWorkspaceProcess {
             try? fileManager.removeItem(at: errorURL)
         }
         try process.run()
+        if let timeLimit {
+            let deadline = ProcessInfo.processInfo.systemUptime + timeLimit
+            while process.isRunning {
+                if Task.isCancelled || ProcessInfo.processInfo.systemUptime >= deadline {
+                    process.terminate()
+                    let grace = ProcessInfo.processInfo.systemUptime + 1
+                    while process.isRunning, ProcessInfo.processInfo.systemUptime < grace {
+                        Thread.sleep(forTimeInterval: 0.02)
+                    }
+                    if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+                    process.waitUntilExit()
+                    try Task.checkCancellation()
+                    throw RemoteWorkspaceClientError.commandFailed("Attachment transfer timed out. Please try again.")
+                }
+                Thread.sleep(forTimeInterval: 0.02)
+            }
+        }
         process.waitUntilExit()
         try outputHandle.close()
         try errorHandle.close()

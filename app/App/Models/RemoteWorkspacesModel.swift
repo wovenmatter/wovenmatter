@@ -198,6 +198,25 @@ final class RemoteWorkspacesModel {
         workspaces.first { $0.id == id }
     }
 
+    /// Copies the input's files into the workspace container and returns the
+    /// input with each file carrying its container path. Local conversations
+    /// (`workspaceID == nil`) pass through unchanged.
+    func stagingFiles(
+        of input: AgentMessageInput,
+        in workspaceID: UUID?
+    ) async throws -> AgentMessageInput {
+        guard let workspaceID, !input.files.isEmpty else { return input }
+        guard let configuration = configuration(id: workspaceID) else {
+            throw AgentMessageAttachmentError.unsupportedForAgent(
+                "This conversation's remote workspace is no longer configured."
+            )
+        }
+        let stager = RemoteAttachmentStager()
+        return try await input.mappingFiles { file in
+            file.staged(at: try await stager.stage(file, in: configuration))
+        }
+    }
+
     func isHarnessReady(
         _ runtimeKind: AgentRuntimeKind,
         in configuration: RemoteWorkspaceConfiguration

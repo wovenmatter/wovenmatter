@@ -1,6 +1,30 @@
 import AppKit
 import SwiftUI
 
+struct DashboardConversationDetailCardState: Equatable, Sendable {
+    private(set) var presentedConversationID: String?
+
+    mutating func setHovered(_ hovered: Bool, conversationID: String) {
+        if hovered {
+            presentedConversationID = conversationID
+        } else if presentedConversationID == conversationID {
+            presentedConversationID = nil
+        }
+    }
+
+    mutating func remove(conversationID: String) {
+        setHovered(false, conversationID: conversationID)
+    }
+
+    mutating func dismiss() {
+        presentedConversationID = nil
+    }
+
+    mutating func completePrimaryAction() {
+        dismiss()
+    }
+}
+
 /// Retains native popover chrome and placement while animating the actual window.
 /// SwiftUI's `.popover` does not expose its presentation/dismissal animation.
 struct DashboardConversationPopover<Content: View>: NSViewRepresentable {

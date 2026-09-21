@@ -141,6 +141,14 @@ struct ConversationWorkTranscript: View {
     }
 
     private var activities: [AgentRunActivity] {
+        Self.visibleActivities(in: records, commentaryIDs: commentaryIDs)
+    }
+
+    static func hasVisibleActivities(in records: [WorkspaceRunActivityRecord], commentaryIDs: Set<String>) -> Bool {
+        visibleActivities(in: records, commentaryIDs: commentaryIDs).contains { $0.kind != .fileChange }
+    }
+
+    private static func visibleActivities(in records: [WorkspaceRunActivityRecord], commentaryIDs: Set<String>) -> [AgentRunActivity] {
         var order: [String] = []
         var values: [String: AgentRunActivity] = [:]
         for record in records.filter({
@@ -541,6 +549,9 @@ private struct ConversationPlanProgress: View {
 
 struct ConversationChangedFilesCard: View {
     let records: [WorkspaceRunActivityRecord]
+    // Evaluate only for a nonempty card. The lazy footer otherwise has no
+    // height and need not project the work transcript merely to decide a gap.
+    var topSpacing: () -> CGFloat = { 0 }
     @State private var expanded = true
     @State private var expandedDirectories: Set<String> = []
     @State private var selectedChange: AgentRunFileChange?
@@ -648,6 +659,7 @@ struct ConversationChangedFilesCard: View {
             .sheet(item: $selectedChange) { change in
                 ConversationDiffSheet(change: change)
             }
+            .padding(.top, topSpacing())
         }
     }
 
