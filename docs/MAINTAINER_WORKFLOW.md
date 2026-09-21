@@ -41,9 +41,9 @@ still fails, stop and report it. Never initiate login, device authorization,
 browser authentication, account switching, or credential recovery. Publication
 authorization does not authorize those actions.
 
-A supplied or confirmed version authorizes completion through publication unless
-the request explicitly limits the work to a private draft. A tag push only
-stages a draft. For version `X.Y.Z`, the identities are:
+A supplied or confirmed version authorizes building and verifying a private
+draft. Publication requires Trey's explicit manual approval of the exact release
+description for that release. A tag push only stages a draft. For version `X.Y.Z`, the identities are:
 
 - Tag: `vX.Y.Z`
 - Title: `Woven Matter vX.Y.Z`
@@ -52,7 +52,21 @@ stages a draft. For version `X.Y.Z`, the identities are:
 The draft contains the disk image, its checksum file, and `latest-mac.json`.
 `scripts/publish-release.sh` independently verifies the exact commit, workflow,
 asset set, checksums, manifest, signature, notarization, and Gatekeeper before
-publishing. Use its `--verify-only` mode for an explicitly requested draft.
+publishing. The default invocation and `--verify-only` both leave the draft private.
+
+After the build and verification, the release agent writes a short, user-facing
+explanation of the material changes since the previous public release: major new
+capabilities, noticeable improvements, meaningful fixes, and any required upgrade
+actions, followed by a full changelog comparison link. Omit implementation details
+unless they materially affect users. Save the exact text in a Markdown file,
+update the private draft, and present the complete description to Trey. Pause for
+edits or explicit approval; changed descriptions or release commits need new approval.
+
+Only after that approval, run
+`scripts/publish-release.sh --approved-notes /absolute/path/to/notes.md vX.Y.Z EXPECTED_COMMIT_SHA`.
+The flag attests to manual approval and publishes that file's text after repeating
+verification. The script cannot establish conversational consent; the release
+operator must enforce it and must not bypass it with direct publication commands.
 GitHub Releases is the canonical binary distribution channel.
 
 The production app uses `latest-mac.json` to discover updates and can install a
