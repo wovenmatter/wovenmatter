@@ -162,7 +162,9 @@ extension WorkspaceDatabase {
     details.timeZoneID = draft.timeZoneID; details.recurrence = draft.recurrence; details.task = draft.task
     let operatorID = try localMutationOperatorIDUnlocked()
     let stamp = Self.timestamp(now)
-    var next: Date? = draft.task == nil ? nil : draft.startsAt
+    // Match the precision of the canonical persisted start date. Comparing a
+    // sub-millisecond draft against its rounded ISO timestamp can skip a task.
+    var next: Date? = draft.task == nil ? nil : Self.date(Self.timestamp(draft.startsAt))
     let pastRuns = try calendarRunsUnlocked(eventID: id).filter { $0.status != "cancelled" }
     if draft.task != nil, existing != nil, !pastRuns.isEmpty {
       let event = WorkspaceCalendarItemRecord(id: id, userID: operatorID, kind: "event", title: draft.title,

@@ -80,6 +80,14 @@ struct WorkspaceCalendarTests {
     #expect(try reopened.calendarRuns().allSatisfy { $0.status == "accepted" })
   }
 
+  @Test func schedulingUsesTheSamePrecisionAsPersistedDates() throws {
+    let (db, directory) = try fixture(); defer { try? FileManager.default.removeItem(at: directory) }
+    let start = date("2026-09-01T13:00:00Z").addingTimeInterval(0.123456)
+    let id = try insert(db, start: start)
+    let run = try #require(db.dueCalendarRuns(now: start.addingTimeInterval(1)).first)
+    #expect(run.eventID == id)
+  }
+
   @Test(arguments: [WorkspaceCalendarTask.SessionMode.same, .new])
   func recurringSessionChoiceIsDurable(mode: WorkspaceCalendarTask.SessionMode) throws {
     let (db, directory) = try fixture(); defer { try? FileManager.default.removeItem(at: directory) }
