@@ -380,18 +380,19 @@ private enum ReleaseUpdateState {
         case .available(let manifest),
              .downloading(let manifest),
              .downloadFailed(let manifest, _):
-            "Woven Matter \(manifest.version) is available"
+            "Woven Matter v\(manifest.version) is available"
         case .ready(let release),
              .installing(let release),
              .installFailed(let release, _):
-            "Woven Matter \(release.manifest.version) is ready"
-        default: "Woven Matter \(currentVersion)"
+            "Woven Matter v\(release.manifest.version) is ready"
+        default: "Woven Matter v\(currentVersion)"
         }
     }
 
     var detail: String? {
         switch self {
-        case .idle, .checking, .available, .downloading: nil
+        case .idle: "Check for the latest version of Woven Matter."
+        case .checking, .available, .downloading: nil
         case .current: "You’re up to date."
         case .ready: "Installing restarts Woven Matter."
         case .installing: "Woven Matter will restart."
