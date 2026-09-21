@@ -437,6 +437,7 @@ final class OpenCodeModel {
     }
 
     func calendarTaskMetadata(directory: String, model: String?) async throws -> LocalACPSessionMetadata {
+        guard isEnabled else { throw OpenCodeError.message("Enable OpenCode in this workspace's settings to load its models.") }
         try await connectLocal()
         let query = ["location[directory]": directory]
         let result = try await coordinator.call(connectionID: connectionID, path: "/api/model", query: query)

@@ -152,6 +152,9 @@ extension ApplicationModel {
     private func prepareCalendarSession(_ run: WorkspaceCalendarRun) async throws {
         guard let store = dashboardStore, let id = UUID(uuidString: run.sessionID) else { throw ApplicationModelError.dashboardStoreUnavailable }
         let config = run.task.configuration
+        if config.runtimeKind == .opencode, config.workspaceID == nil, openCode?.isEnabled != true {
+            throw WorkspaceToolError.invalid("Enable OpenCode in Local agent workspace before running this task.")
+        }
         let scope = config.selectionWorkspace ?? config.workspaceID.map { "remote:" + $0.uuidString.lowercased() }
             ?? "local:" + (config.nativeWorkingDirectory ?? "")
         let selections = SessionSelections(model: config.model, thinking: config.thinking,

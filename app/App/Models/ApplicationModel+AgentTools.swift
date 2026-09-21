@@ -356,6 +356,10 @@ extension ApplicationModel {
         guard let claimed = try database.claimToolDelivery(id: delivery.id) else { return try .value(database.toolDelivery(id: delivery.id) ?? delivery) }
         do {
             let target = try toolConversation(claimed.targetID)
+            if claimed.kind == .calendar, target.localRuntimeKind == .opencode,
+               target.remoteWorkspaceID == nil, openCode?.isEnabled != true {
+                throw WorkspaceToolError.invalid("Enable OpenCode in Local agent workspace before running this task.")
+            }
             let sent = try await dispatchAgentMessage(conversation: target,
                 input: .init(text: claimed.text, historyDeliveryID: claimed.id))
             guard sent else {
