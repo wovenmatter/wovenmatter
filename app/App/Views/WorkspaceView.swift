@@ -174,6 +174,45 @@ struct WorkspaceView: View {
     }
 
     var body: some View {
+        workspaceWithAttachments
+        .onChange(of: model.pendingDefaultAgentSettingsScope) { _, scope in
+            if scope != nil { openUtility(.settings) }
+        }
+        .onChange(of: model.pendingConnectionsScope) { _, scope in
+            if scope != nil { openUtility(.settings) }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .init("wovenmatter.open-connections"))) { event in
+            model.pendingConnectionsScope = event.object as? String ?? "global"
+            openUtility(.settings)
+        }
+        .onChange(of: model.pendingHermesSettingsAgentID) { _, agentID in
+            if agentID != nil {
+                closeNewChatChooser()
+                openUtility(.settings)
+            }
+        }
+        .confirmationDialog(
+            "Connect the OpenClaw Gateway?",
+            isPresented: Binding(
+                get: { model.pendingOpenClawGatewayAgentID != nil },
+                set: { if !$0 { model.dismissPendingOpenClawGatewayLink() } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Connect Gateway") {
+                model.confirmPendingOpenClawGatewayLink()
+            }
+            Button("Use ACP for now", role: .cancel) {
+                model.dismissPendingOpenClawGatewayLink()
+            }
+        } message: {
+            Text("You can chat now with ACP. Connect the Gateway to also use shared sessions and scheduled jobs.")
+        }
+    }
+
+    // Keep presentation and routing as separate opaque expressions so the
+    // supported Xcode toolchains do not solve one enormous modifier chain.
+    private var workspaceSurface: some View {
         GeometryReader { geometry in
             let layout = DashboardLayoutState.resolve(
                 width: geometry.size.width,
@@ -283,6 +322,10 @@ struct WorkspaceView: View {
             model.persistMacSurfaceProfileFromUserDefaults()
         }
         .onDisappear { noticeTask?.cancel() }
+    }
+
+    private var workspaceWithAttachments: some View {
+        workspaceSurface
         .fileImporter(
             isPresented: $showsAttachmentImporter,
             allowedContentTypes: [.data],
@@ -332,39 +375,6 @@ struct WorkspaceView: View {
                     }
                 }
             )
-        }
-        .onChange(of: model.pendingDefaultAgentSettingsScope) { _, scope in
-            if scope != nil { openUtility(.settings) }
-        }
-        .onChange(of: model.pendingConnectionsScope) { _, scope in
-            if scope != nil { openUtility(.settings) }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .init("wovenmatter.open-connections"))) { event in
-            model.pendingConnectionsScope = event.object as? String ?? "global"
-            openUtility(.settings)
-        }
-        .onChange(of: model.pendingHermesSettingsAgentID) { _, agentID in
-            if agentID != nil {
-                closeNewChatChooser()
-                openUtility(.settings)
-            }
-        }
-        .confirmationDialog(
-            "Connect the OpenClaw Gateway?",
-            isPresented: Binding(
-                get: { model.pendingOpenClawGatewayAgentID != nil },
-                set: { if !$0 { model.dismissPendingOpenClawGatewayLink() } }
-            ),
-            titleVisibility: .visible
-        ) {
-            Button("Connect Gateway") {
-                model.confirmPendingOpenClawGatewayLink()
-            }
-            Button("Use ACP for now", role: .cancel) {
-                model.dismissPendingOpenClawGatewayLink()
-            }
-        } message: {
-            Text("You can chat now with ACP. Connect the Gateway to also use shared sessions and scheduled jobs.")
         }
     }
 

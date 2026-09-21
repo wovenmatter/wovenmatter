@@ -57,14 +57,28 @@ private final class AudioConversion: @unchecked Sendable {
     func convert(_ input: AVAudioPCMBuffer) throws -> Data? {
         let capacity = AVAudioFrameCount(ceil(Double(input.frameLength) * output.sampleRate / input.format.sampleRate)) + 32
         guard let buffer = AVAudioPCMBuffer(pcmFormat: output, frameCapacity: capacity) else { return nil }
-        var delivered = false
+        let source = AudioConversionInput(input)
         var error: NSError?
         let status = converter.convert(to: buffer, error: &error) { _, state in
-            if delivered { state.pointee = .noDataNow; return nil }
-            delivered = true; state.pointee = .haveData; return input
+            source.take(state)
         }
         if let error { throw error }
         guard status != .error, let samples = buffer.int16ChannelData?[0], buffer.frameLength > 0 else { return nil }
         return Data(bytes: samples, count: Int(buffer.frameLength) * MemoryLayout<Int16>.size)
+    }
+}
+
+/// Older SDKs mark the converter input block Sendable. Keep its one-shot buffer
+/// ownership synchronized instead of capturing mutable state or a raw buffer.
+private final class AudioConversionInput: @unchecked Sendable {
+    private let lock = NSLock()
+    private var buffer: AVAudioPCMBuffer?
+    init(_ buffer: AVAudioPCMBuffer) { self.buffer = buffer }
+    func take(_ status: UnsafeMutablePointer<AVAudioConverterInputStatus>) -> AVAudioBuffer? {
+        lock.withLock {
+            guard let value = buffer else { status.pointee = .noDataNow; return nil }
+            buffer = nil; status.pointee = .haveData
+            return value
+        }
     }
 }
