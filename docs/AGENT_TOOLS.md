@@ -1,13 +1,9 @@
 # Woven Matter agent tools
 
-## Product contract
+Woven Matter exposes app data and session actions through its bundled CLI.
+Conversations remain ordinary sessions in their existing folders.
 
-This work replaces the draft implementation in PR #40. The new branch starts at
-`main` (`a345811`) and retains the existing native harness integrations. All
-conversations remain ordinary sessions in their existing folders; there is no
-new parent/child hierarchy or sidebar grouping.
-
-One bundled `wovenmatter` CLI replaces `woven-note`. Every supported harness,
+The bundled `wovenmatter` CLI replaces `woven-note`. Every supported harness,
 locally and in managed remote workspaces, receives a session-bound invocation
 and compact discovery instructions. Commands call the owning app's services;
 agents do not receive unrestricted SQL or credentials. Capability checks are
@@ -26,7 +22,7 @@ The composer has a compact Tools dropdown with seven independent groups:
 | Timers | Create, inspect, update, pause, resume and remove persistent session follow-ups |
 | Usage data | Read recorded usage; no mutation or credential access |
 | Calendar | Read, create, update and delete events, subject to the configured access mode |
-| Library | Discover/read existing retained Library items; broader Library repair is a later iteration |
+| Library | Reports that retained items are unavailable; Library storage is not implemented yet |
 
 All groups initially default to enabled. General settings, below Conversation
 titles, defines defaults for newly opened sessions. Session controls enable or
@@ -113,9 +109,8 @@ General settings provides these independent limits:
 | Sessions managed by one coordinator | 4 | 1–16 |
 | Simultaneously running Woven Matter sessions | 16 | 1–48 |
 
-The explanatory copy is exactly: **Maximum sessions running simultaneously.**
-The count covers Woven Matter sessions, not provider-internal subagents. There
-is no configurable per-destination coordinator count: the fixed rule is one.
+The running-session count covers Woven Matter sessions, not provider-internal
+subagents. There is no configurable per-destination coordinator count: the fixed rule is one.
 At the active-session limit, a user send in another idle session is blocked with
 a pop-up before dispatch. No limit message is sent to a harness. Existing work
 and supported steering continue; there is no automatic global capacity queue.
@@ -133,43 +128,9 @@ edits, coalesced editor checkpoints, conflict-safe restore and count/byte budget
 Do not version externally linked data files. Reference retention remains separate
 from event journal retention and should be described honestly.
 
-## Implementation and acceptance
+## Retry behavior
 
-- [ ] Durable schema, migrations, access policies and immutable source attribution.
-- [ ] Unified local/remote CLI, discovery, per-session endpoints and revocation.
-- [ ] Complete observable transport capture for every harness with deterministic fixtures.
-- [ ] Notes discovery/editing and retained versions; Calendar, usage and Library access.
-- [ ] Session creation, messaging, exclusive coordination, grants, notifications and timers.
-- [ ] Composer controls, Settings defaults/limits, attachments, receipts and hover indicators.
-- [ ] Provider-free tests for migration from current main, access boundaries, retries,
-      competing coordinators, fanout, lifecycle, timer recovery, queue fallback and retention.
-- [ ] Required `scripts/test-changes.sh --all`, native Debug/Release verification,
-      local/remote CLI exercises, rendered narrow/wide UI review and exact-head hosted CI.
-- [ ] Full diff review and accurate PR handoff. No merge or release publication.
-
-PR #40 is reference material, not the final architecture. T3 Orchestrator V2
-(`1affc9a`) informs durable receipts, explicit context and app-owned scheduling;
-Herdr informs concise CLI discovery/control; Codex informs same-session wakeups
-and distinct read/start/steer operations. No source from those projects is copied.
-
-## Integration checkpoint
-
-The unified service is connected to app startup/shutdown and shared message
-admission, including native OpenCode. The old exposed `woven-note` entry point
-and resource have been removed. General defaults, composer controls, scoped
-notes/usage reads, creation, management access and persistent timer dispatch are
-wired. Native OpenCode prompts preserve original visible input and attribution
-separately from discovery, and agent deliveries explicitly request steering.
-
-Durable coordination observations produce completion, failure and needs-input
-notifications once per assignment. Notification-only turns do not trigger another
-completion notification. Finishing a turn leaves the assignment managed. Access
-approval requests return immediately, retain their result across retries, and
-cannot acquire a conflicting or disabled assignment after the user approves.
-Failed or interrupted creation releases the reserved fanout slot while retaining
-its target identity for recovery.
-
-Note create/edit/restore, timer mutations and Calendar mutations now commit a
+Note create/edit/restore, timer mutations and Calendar mutations commit a
 caller-bound request receipt with the write. Reusing the same request ID and
 payload acknowledges the original operation across restarts without repeating
 it, resetting a schedule, resurrecting a removed item or overwriting later user
@@ -179,33 +140,15 @@ contain `replayed: true` and the original revision, without an old document that
 could be adopted into the editor. Use `notes read` for the current document.
 Receipts retain hashes and acknowledgements, not extra note snapshots.
 
-The transcript now presents incoming source links and outgoing creation/message
-receipts; receipt history uses insertion-order pagination. Hover cards include
-permanent creation provenance and current coordination. Sidebar additions are
-limited to active coordination and timer indicators. Session controls include
-notification preferences, release/end coordination, and timer editing/pause/
-removal. Note version history includes previews and revision-checked restoration.
-Native inspection of the isolated Tools preview on 2026-09-19 confirmed the
-empty workspace and General tools defaults, the 1–16 coordinator and 1–48 running
-session menus, and both Calendar modes. A populated note recovery exercise
-confirmed version preview, restore confirmation, live editor restoration and
-retention of the replaced revision. Populated session activity, timer and
-management flows still require rendered verification.
+## Validation boundaries
 
-| Requirement | Implemented and checked | Remaining acceptance |
-| --- | --- | --- |
-| Unified CLI, seven capabilities, defaults, limits | Service routing, bound local/remote endpoints, access-policy and admission tests; bundled CLI and remote relay fixtures | Audit discovery and dispatch across all eight harnesses; composer proof |
-| History and attachments | Folder-first retrieval, bounded bodies, ID references, backend grants and revocation tests | Review all native imports, steering and scheduled output paths against the capture contract |
-| Notes and recovery | Bounded versions, revision-checked restore, durable mutation receipts and concurrent/reopen/revocation tests | Spreadsheet/HTML recovery and narrow-window acceptance |
-| Calendar, usage, Library | Calendar mode checks, CRUD and durable retry tests; recorded usage only; explicit unavailable response for the empty Library surface | App-facing acceptance; broader Library work remains a later iteration |
-| Session creation | Durable resolved configuration and target identity; transactional origin/title/folder/tools; confirmed native selections with retained progress; partial Gateway recovery; local/remote directory routing, native Hermes/OpenClaw cwd and OpenCode workspace identity fixtures | Actual ApplicationModel local/remote creation and launch-routing proof; final cross-harness audit |
-| Scoped management | Durable immediate pending response, user-only resolution, shutdown cancellation, conflict/capability checks and replay tests | Render approval sheet and failure feedback; exercise app-lifetime recovery |
-| Notifications | Durable completion/failure/input observations, epoch-based dedupe, revoked-assignment cancellation and notification-only loop tests | Review native turn/steering association and reconnect request identity across all harnesses |
-| Bidirectional activity | Incoming attribution, larger creation cards, compact receipts, links and paged history; native OpenCode commands retain separate incoming actions with sender/outcome without guessing provider message IDs | Render narrow/wide, navigation and selection, including incoming command actions |
-| Timers | Persistent exact-cadence definitions/occurrences, runtime scheduling, pause/revoke and durable mutation tests; preflight retry/backoff and no resend after possible acceptance; native editing controls | Render confirmation and icon lifecycle; verify all-harness steering/queue fallback |
-| Sidebar and folders | Existing peer/folder structure retained; provenance in hover card, active indicators only | Populated and empty native visual/accessibility proof |
-| Full validation | Required provider-free repository checks and unsigned Debug build passed; bundled CLI fixture passed | Final Release build, full-diff remediation, local/remote app exercises and exact-head hosted checks |
+`scripts/test-changes.sh --all` exercises provider-free transport fixtures,
+access policies, migrations, mutation retries, timer recovery, note retention,
+local sockets, the remote relay, and the bundled CLI. It also builds and validates
+an unsigned native app. The interactive hover fixture runs separately through
+`scripts/test-conversation-popover.sh`.
 
-This remains a draft. The table records implementation evidence separately from
-outstanding acceptance; unchecked product requirements are not waived by passing
-tests. No merge, installation or release publication is part of this checkpoint.
+Fixtures do not establish live provider compatibility or rendered UI behavior.
+Before release, check the session settings and local/remote workflows you use,
+including attachments, timer delivery, permission requests, and note recovery.
+Older imported history remains partial, and Library storage is unavailable.

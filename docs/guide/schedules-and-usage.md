@@ -17,6 +17,14 @@ work depends on the Mac and the relevant service staying available. Hermes
 result delivery supports text; if another Hermes Gateway owns the
 scheduler, its operator must restart it after first enabling delivery.
 
+## Session timers
+
+With **Timers** enabled, ask an agent to schedule a one-time or recurring follow-up
+in its conversation. Timers persist across app restarts, but fire only while
+WovenMatter is running. Missed recurring firings coalesce into one follow-up.
+Use the session controls to edit, pause, or remove a timer. Disabling Timers asks
+you to confirm pausing active timers.
+
 ## Calendar
 
 Use **Calendar** to add and view workspace events. A calendar event is separate

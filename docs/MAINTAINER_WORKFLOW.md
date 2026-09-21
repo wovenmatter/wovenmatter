@@ -23,8 +23,10 @@ rechecks one pull request.
 
 ## Builds and releases
 
-`scripts/build_and_run.sh` builds and launches the unsigned development app.
-Production releases are signed, notarized Apple Silicon builds from an exact
+`scripts/build_and_run.sh` builds and launches the development app, using an
+existing Apple Development identity when available. See [credential access](KEYCHAIN_ACCESS.md#development-builds)
+for identity selection and the ad-hoc fallback. Deterministic validation builds
+remain unsigned. Production releases are signed, notarized Apple Silicon builds from an exact
 accepted commit. Release, installation, deployment, and publication require an
 explicit request; they are separate from deterministic validation.
 

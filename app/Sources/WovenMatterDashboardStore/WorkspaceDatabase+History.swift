@@ -313,11 +313,13 @@ extension WorkspaceDatabase {
       }
       if let since = query.since {
         filters.append("e.recorded_at >= ?")
-        values.append(since)
+        guard let date = Self.date(since) else { throw WorkspaceToolError.invalid("--since requires an ISO 8601 date with a time zone.") }
+        values.append(Self.timestamp(date))
       }
       if let until = query.until {
         filters.append("e.recorded_at <= ?")
-        values.append(until)
+        guard let date = Self.date(until) else { throw WorkspaceToolError.invalid("--until requires an ISO 8601 date with a time zone.") }
+        values.append(Self.timestamp(date))
       }
       if let folderID = query.folderID {
         filters.append("e.conversation_id IN (SELECT id FROM dashboard_conversations WHERE folder_id=?)")
