@@ -392,8 +392,10 @@ private enum ReleaseUpdateState {
     var detail: String? {
         switch self {
         case .idle: "Check for the latest version of Woven Matter."
-        case .checking, .available, .downloading: nil
+        case .checking: "Checking for the latest version of Woven Matter…"
         case .current: "You’re up to date."
+        case .available: "Download and verify the signed update inside Woven Matter."
+        case .downloading: "Downloading the update…"
         case .ready: "Installing restarts Woven Matter."
         case .installing: "Woven Matter will restart."
         case .downloadFailed(_, let message), .installFailed(_, let message): message
