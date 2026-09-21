@@ -3,10 +3,11 @@ name: cut-release-wovenmatter
 description: Cut, prepare, verify, and publish a WovenMatter macOS release.
 ---
 
-A supplied or confirmed version authorizes publication. If omitted, recommend
-an unused semantic version and wait for confirmation before tagging. Stop at a
-private draft only when the user explicitly requests that limit; “prepare”
-alone does not imply it.
+A supplied or confirmed version authorizes building and verifying a private draft,
+not publication. If omitted, recommend an unused semantic version and wait for
+confirmation before tagging. Always pause for Trey's explicit manual approval
+of the exact release description before publishing. A release request, version
+confirmation, or approval of a previous release is not description approval.
 
 Before tagging or any release mutation, run `scripts/check-release-access.sh`.
 It verifies that existing GitHub API access matches the configured SSH
@@ -30,12 +31,33 @@ that exact commit. Never move or reuse a release tag; an existing private draft
 can be resumed at its original accepted commit.
 
 The tag-triggered `.github/workflows/release.yml` builds a signed, notarized
-Apple Silicon app and stages a private draft. Prepare user-facing release notes.
-After its successful run, verify and publish through
-`scripts/publish-release.sh vX.Y.Z EXPECTED_COMMIT_SHA`; use `--verify-only`
-when the user requested a draft. The script checks source, workflow, assets,
-checksums, signing, notarization, and Gatekeeper before publication. GitHub CLI
-authentication must match the repository's SSH account.
+Apple Silicon app and stages a private draft. After its successful run, verify
+through `scripts/publish-release.sh --verify-only vX.Y.Z EXPECTED_COMMIT_SHA`.
+The script checks source, workflow, assets, checksums, signing, notarization,
+and Gatekeeper. GitHub CLI authentication must match the repository's SSH account.
+
+Then write the release description from the material changes since the previous
+public release. Inspect the complete commit/PR range and underlying changes;
+do not simply repeat commit titles. Lead with a short explanation of the release.
+Highlight the biggest new capabilities, major new features, noticeable feature
+improvements, and meaningful fixes. Include required upgrade actions when
+applicable and a full changelog link comparing the previous release tag with the
+new tag. Keep implementation details out unless they materially affect users.
+Do not claim unverified functionality or pad the notes with internal maintenance.
+
+Save the description in a UTF-8 Markdown file and update the private draft with
+`gh release edit vX.Y.Z --notes-file /absolute/path/to/notes.md`. Present the full
+description to Trey along with the exact commit, validation result, and draft
+URL. Stop and wait for his explicit approval; leave the release private. Apply
+requested edits and show the revised description for approval. Any later change
+to the description or release commit requires fresh approval.
+
+Only after approval, publish with
+`scripts/publish-release.sh --approved-notes /absolute/path/to/notes.md vX.Y.Z EXPECTED_COMMIT_SHA`.
+This option attests that Trey approved that exact description for this release;
+never supply it preemptively. The script publishes the supplied text and repeats
+artifact verification. Its default invocation only verifies and leaves the draft
+private. Never bypass this gate with direct GitHub publication commands.
 
 Report the exact commit, validation result, and release URL with its verified
-draft or public state.
+public state after publication.

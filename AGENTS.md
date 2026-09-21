@@ -13,4 +13,7 @@
   Tests must not consume provider services. Container lifecycle tests use
   `scripts/test-container.sh` when in scope and Docker is available.
 - Release, installation, publication, and delivery require an explicit request.
+  Always build and verify a private draft, then present its user-facing release
+  description to Trey and wait for his explicit approval before publication.
+  Version confirmation alone does not authorize publication.
   For releases, use `.agents/skills/cut-release-wovenmatter/SKILL.md`.
