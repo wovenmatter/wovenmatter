@@ -478,6 +478,15 @@ public actor OpenCodeSessionCoordinator {
         let id = "msg_" + UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
         var files: [OpenCodeValue] = []
         for file in input.files {
+            // OpenCode reads `file:` URIs itself, so a staged container path
+            // replaces the in-band copy for remote workspaces.
+            if let remotePath = file.remotePath {
+                files.append(["uri": .string(URL(filePath: remotePath).absoluteString), "name": .string(file.fileName)])
+                continue
+            }
+            guard !link.connectionID.hasPrefix("remote-workspace:") else {
+                throw OpenCodeError.message("\(file.fileName) was not staged in the remote workspace.")
+            }
             let bytes = try Data(contentsOf: file.localURL)
             guard bytes.count <= AgentMessageAttachmentLimits.maximumFileBytes else { throw OpenCodeError.message("Attachment exceeds Woven Matter's size limit.") }
             files.append(["uri": .string("data:\(file.mimeType);base64," + bytes.base64EncodedString()), "name": .string(file.fileName)])

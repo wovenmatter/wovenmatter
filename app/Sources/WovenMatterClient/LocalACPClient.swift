@@ -1275,18 +1275,12 @@ public actor LocalACPClient {
         }
     }
 
-    private nonisolated static func promptBlocks(
+    nonisolated static func promptBlocks(
         _ input: AgentMessageInput,
         text: String? = nil
     ) throws -> ACPJSONValue {
-        var blocks: [ACPJSONValue] = []
-        let outboundText = text ?? input.transportText()
-        if !outboundText.isEmpty {
-            blocks.append(.object([
-                "type": .string("text"),
-                "text": .string(outboundText),
-            ]))
-        }
+        var fileBlocks: [ACPJSONValue] = []
+        var linkedPaths: [String] = []
         for file in input.files {
             let data: Data
             do {
@@ -1294,32 +1288,54 @@ public actor LocalACPClient {
             } catch {
                 throw AgentMessageAttachmentError.unreadableFile(file.fileName)
             }
+            // URIs must resolve where the agent runs: the staged container
+            // path for a remote workspace, the local blob otherwise.
+            let uri = file.remotePath.map { URL(filePath: $0).absoluteString }
+                ?? file.localURL.absoluteString
             if file.kind == .image {
-                blocks.append(.object([
+                fileBlocks.append(.object([
                     "type": .string("image"),
                     "mimeType": .string(file.mimeType),
                     "data": .string(data.base64EncodedString()),
                 ]))
             } else if file.mimeType.hasPrefix("text/"),
                       let text = String(data: data, encoding: .utf8) {
-                blocks.append(.object([
+                fileBlocks.append(.object([
                     "type": .string("resource"),
                     "resource": .object([
-                        "uri": .string(file.localURL.absoluteString),
+                        "uri": .string(uri),
                         "mimeType": .string(file.mimeType),
                         "text": .string(text),
                     ]),
                 ]))
             } else {
-                blocks.append(.object([
+                if let remotePath = file.remotePath { linkedPaths.append(remotePath) }
+                fileBlocks.append(.object([
                     "type": .string("resource_link"),
-                    "uri": .string(file.localURL.absoluteString),
+                    "uri": .string(uri),
                     "name": .string(file.fileName),
                     "mimeType": .string(file.mimeType),
                     "size": .integer(file.sizeBytes),
                 ]))
             }
         }
+        var outboundText = text ?? input.transportText()
+        // Some ACP adapters (Codex, Claude Code) reduce a resource link to an
+        // `@name` mention and drop its path, so linked files are also named
+        // in the text. Inlined images and text need no such help.
+        if !linkedPaths.isEmpty {
+            outboundText += (outboundText.isEmpty ? "" : "\n\n")
+                + "Attached files in this workspace:\n"
+                + linkedPaths.map { "- \($0)" }.joined(separator: "\n")
+        }
+        var blocks: [ACPJSONValue] = []
+        if !outboundText.isEmpty {
+            blocks.append(.object([
+                "type": .string("text"),
+                "text": .string(outboundText),
+            ]))
+        }
+        blocks.append(contentsOf: fileBlocks)
         return .array(blocks)
     }
 
@@ -1506,6 +1522,14 @@ public actor LocalACPClient {
             pendingNewSessionUpdates?.append(envelope)
             return
         }
+        if envelope.method == "session/request_permission",
+           pendingNewSessionUpdates == nil,
+           !belongsToActiveSession(envelope) {
+            // A child must not wait behind an unrelated parent approval. This
+            // settles only foreign requests; parent delivery keeps its barrier.
+            if let id = envelope.id { try respondWithCancelledPermission(id: id) }
+            return
+        }
         enqueueNotification(envelope)
     }
 
@@ -1530,6 +1554,7 @@ public actor LocalACPClient {
 
     private func handleNotification(_ envelope: ACPEnvelope) async throws {
         if envelope.method == "session/update" {
+            guard belongsToActiveSession(envelope) else { return }
             let update = envelope.params?["update"]
             switch update?["sessionUpdate"]?.stringValue {
             case "config_option_update", "available_commands_update", "current_mode_update":
@@ -1547,6 +1572,12 @@ public actor LocalACPClient {
                 try await activeEventHandler?(event)
             }
         } else if envelope.method == "session/request_permission" {
+            guard belongsToActiveSession(envelope) else {
+                // Multiplexed child requests must settle on the same connection,
+                // without exposing or authorizing them as this session's work.
+                if let id = envelope.id { try respondWithCancelledPermission(id: id) }
+                return
+            }
             try await respondToPermissionRequest(
                 envelope,
                 handler: activePermissionHandler
@@ -1943,7 +1974,7 @@ public actor LocalACPClient {
         pendingPermissionRequestIDs.remove(at: pendingIndex)
         let selected = selectedID.flatMap { candidate in
             options.first { $0.id == candidate }
-        } ?? options.first { $0.kind == "reject_once" }
+        }
 
         if let selected {
             try write(ACPEnvelope(

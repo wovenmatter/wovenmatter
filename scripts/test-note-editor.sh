@@ -21,6 +21,7 @@ xcrun swiftc \
   -I "$cache_root" -L "$cache_root" -lWovenMatterCore \
   -Xlinker -rpath -Xlinker "$cache_root" \
   "$repo_root/app/App/Views/NoteEditor.swift" \
+  "$repo_root/app/App/Services/DashboardNoteDocumentCache.swift" \
   "$repo_root/scripts/test-support/DashboardNoteEditorTests.swift" \
   -o "$cache_root/DashboardNoteEditorTests"
 "$cache_root/DashboardNoteEditorTests"
