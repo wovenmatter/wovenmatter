@@ -31,6 +31,7 @@
 		D45400000000000000000001 /* DashboardUsageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D45400000000000000000002 /* DashboardUsageView.swift */; };
 		D49000000000000000000001 /* ConversationMarkdown.swift in Sources */ = {isa = PBXBuildFile; fileRef = D49000000000000000000003 /* ConversationMarkdown.swift */; };
 		D49100000000000000000001 /* ConversationMarkdownDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = D49100000000000000000003 /* ConversationMarkdownDocument.swift */; };
+		D49300000000000000000001 /* ConversationMessageLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = D49300000000000000000003 /* ConversationMessageLayout.swift */; };
 		D49200000000000000000001 /* ConversationWorkTranscript.swift in Sources */ = {isa = PBXBuildFile; fileRef = D49200000000000000000003 /* ConversationWorkTranscript.swift */; };
 		A12000000000000000000005 /* remote-workspace.sh in Resources */ = {isa = PBXBuildFile; fileRef = A12000000000000000000006 /* remote-workspace.sh */; };
 		A12000000000000000000007 /* remote in Resources */ = {isa = PBXBuildFile; fileRef = A12000000000000000000008 /* remote */; };
@@ -88,6 +89,7 @@
 		D45400000000000000000002 /* DashboardUsageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardUsageView.swift; sourceTree = "<group>"; };
 		D49000000000000000000003 /* ConversationMarkdown.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationMarkdown.swift; sourceTree = "<group>"; };
 		D49100000000000000000003 /* ConversationMarkdownDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationMarkdownDocument.swift; sourceTree = "<group>"; };
+		D49300000000000000000003 /* ConversationMessageLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationMessageLayout.swift; sourceTree = "<group>"; };
 		D49200000000000000000003 /* ConversationWorkTranscript.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationWorkTranscript.swift; sourceTree = "<group>"; };
 		A12000000000000000000006 /* remote-workspace.sh */ = {isa = PBXFileReference; lastKnownFileType = text.script.sh; path = "../../../scripts/remote-workspace.sh"; sourceTree = "<group>"; };
 		A12000000000000000000008 /* remote */ = {isa = PBXFileReference; lastKnownFileType = folder; path = "../../../remote"; sourceTree = "<group>"; };
@@ -185,6 +187,7 @@
 				F10000000000000000000002 /* AgentDatabases.swift */,
 				A13000000000000000000002 /* RemoteWorkspacesModel.swift */,
 				D49100000000000000000003 /* ConversationMarkdownDocument.swift */,
+				D49300000000000000000003 /* ConversationMessageLayout.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -387,6 +390,7 @@
 				49BB9C77C988D34AA1B69E70 /* ApplicationModel.swift in Sources */,
 				D49000000000000000000001 /* ConversationMarkdown.swift in Sources */,
 				D49100000000000000000001 /* ConversationMarkdownDocument.swift in Sources */,
+				D49300000000000000000001 /* ConversationMessageLayout.swift in Sources */,
 				D49200000000000000000001 /* ConversationWorkTranscript.swift in Sources */,
 				D45300000000000000000001 /* DashboardCalendarView.swift in Sources */,
 				D45400000000000000000001 /* DashboardUsageView.swift in Sources */,

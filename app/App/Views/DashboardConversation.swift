@@ -45,6 +45,12 @@ struct DashboardConversationScrollState: Equatable {
     }
 }
 
+private struct DashboardConversationMessageRow: Identifiable {
+    let message: WorkspaceMessageRecord
+    let layout: ConversationMessageLayout.Row
+    var id: String { layout.id }
+}
+
 struct DashboardCloudConversation: View {
     @Environment(\.dashboardTheme) private var theme
     @Bindable var model: ApplicationModel
@@ -102,10 +108,28 @@ struct DashboardCloudConversation: View {
         let orderedMessages = openCodeOrder.isEmpty ? visibleMessages : visibleMessages.sorted {
             (openCodeOrder[$0.clientMessageID ?? ""] ?? 0) < (openCodeOrder[$1.clientMessageID ?? ""] ?? 0)
         }
+        let rows = orderedMessages.flatMap { message in
+            let presentation = messagePresentations[message.id]
+            let run = runsByAssistantMessageID[message.id]
+            let mediaCount: Int
+            if let openCode = workspaceOpenCode, openCode.links[message.conversationID] != nil,
+               let nativeMessage = openCode.snapshots[message.conversationID]?.messages.first(where: { $0["id"].text == message.clientMessageID }) {
+                mediaCount = OpenCodeMessageMedia.files(in: nativeMessage).count
+            } else { mediaCount = 0 }
+            return ConversationMessageLayout.rows(
+                messageID: message.id,
+                role: message.role,
+                content: message.content,
+                displayedBody: presentation?.displayedBody ?? message.content,
+                failedRunError: run?.status == "failed" ? run?.error : nil,
+                document: presentation?.document,
+                mediaCount: mediaCount
+            ).map { DashboardConversationMessageRow(message: message, layout: $0) }
+        }
         ZStack(alignment: .bottom) {
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(spacing: 32) {
+                    LazyVStack(spacing: 0) {
                         if conversation == nil {
                             DashboardConversationEmptyState(
                                 icon: .messageSquare,
@@ -131,6 +155,7 @@ struct DashboardCloudConversation: View {
                                let oldestMessageID = messages.first?.id {
                                 Color.clear
                                     .frame(height: 1)
+                                    .padding(.bottom, 32)
                                     .id(historyLoaderID(oldestMessageID: oldestMessageID))
                                     .accessibilityIdentifier("dashboard-history-loader")
                                     .task(id: historyLoaderID(oldestMessageID: oldestMessageID)) {
@@ -140,28 +165,40 @@ struct DashboardCloudConversation: View {
                                         )
                                     }
                             }
-                            ForEach(orderedMessages) { message in
+                            ForEach(rows) { row in
+                                let message = row.message
                                 let presentation = messagePresentations[message.id]
                                 let run = runsByAssistantMessageID[message.id]
-                                DashboardMessageRow(
-                                    message: message,
-                                    attachments: attachmentsByMessageID[message.id] ?? [],
-                                    references: referencesByMessageID[message.id] ?? [],
-                                    renderedDocument: presentation?.document,
-                                    run: run.flatMap {
-                                        DashboardRunDisplayPolicy.presentsStatus($0) ? $0 : nil
-                                    },
-                                    runPresentation: run.flatMap { runPresentations[$0.id] },
-                                    activities: run.map { activitiesByRunID[$0.id] ?? [] } ?? []
-                                )
-                                .id(message.id)
-                                if let openCode = workspaceOpenCode, openCode.links[message.conversationID] != nil {
-                                    OpenCodeMessageMedia(model: openCode, conversationID: message.conversationID, messageID: message.clientMessageID ?? "")
+                                // One real container per direct lazy child, even
+                                // when a provider's media row is currently empty.
+                                VStack(spacing: 0) {
+                                    if case .media(let index) = row.layout.content {
+                                        if let openCode = workspaceOpenCode {
+                                            OpenCodeMessageMedia(model: openCode, conversationID: message.conversationID, messageID: message.clientMessageID ?? "", fileIndex: index)
+                                        }
+                                    } else {
+                                        DashboardMessageRow(
+                                            message: message,
+                                            attachments: attachmentsByMessageID[message.id] ?? [],
+                                            references: referencesByMessageID[message.id] ?? [],
+                                            renderedDocument: presentation?.document,
+                                            run: run.flatMap {
+                                                DashboardRunDisplayPolicy.presentsStatus($0) ? $0 : nil
+                                            },
+                                            runPresentation: run.flatMap { runPresentations[$0.id] },
+                                            activities: run.map { activitiesByRunID[$0.id] ?? [] } ?? [],
+                                            layout: row.layout,
+                                            displayedBody: presentation?.displayedBody
+                                        )
+                                    }
                                 }
+                                .id(row.id)
+                                .padding(.top, row.id == rows.first?.id ? 0 : row.layout.spacingBefore)
                             }
                         }
                         Color.clear
                             .frame(height: bottomScrollClearance)
+                            .padding(.top, 32)
                             .id(chatEndID)
                     }
                     .frame(maxWidth: 768)
@@ -872,6 +909,12 @@ struct DashboardMessageRow: View {
     let run: WorkspaceRunRecord?
     let runPresentation: DashboardRunPresentation?
     let activities: [WorkspaceRunActivityRecord]
+    var layout: ConversationMessageLayout.Row? = nil
+    var displayedBody: String? = nil
+
+    private var isFirstMessagePart: Bool { layout?.isFirstMessagePart ?? true }
+    private var isLastMessagePart: Bool { layout?.isLastMessagePart ?? true }
+    private var assistantBody: String { displayedBody ?? transcript.body }
 
     private var transcript: AssistantTranscriptProjection {
         AssistantTranscriptProjection(messageID: message.id, content: message.content,
@@ -887,18 +930,31 @@ struct DashboardMessageRow: View {
             }
             .font(.system(size: 12))
             .foregroundStyle(DashboardPalette.mutedForeground)
+        } else if layout?.content == .fileChanges {
+            HStack {
+                ConversationChangedFilesCard(records: activities, topSpacing: {
+                    if showsAssistantBody { return 18 }
+                    guard run != nil else { return 0 }
+                    return ConversationWorkTranscript.hasVisibleActivities(
+                        in: activities, commentaryIDs: Set(transcript.commentary.map(\.id))
+                    ) ? 18 : 0
+                })
+                .frame(maxWidth: .infinity, alignment: .leading)
+                Spacer(minLength: 0)
+            }
+            .fixedSize(horizontal: false, vertical: true)
         } else {
             let isUser = message.role == "user"
             HStack {
                 if isUser { Spacer(minLength: 72) }
                 VStack(alignment: isUser ? .trailing : .leading, spacing: 18) {
-                    if !isUser, let run {
+                    if !isUser, isFirstMessagePart, let run {
                         ConversationWorkTranscript(
                             run: run,
                             presentation: runPresentation,
                             records: activities,
                             commentaryIDs: Set(transcript.commentary.map(\.id)),
-                            hasFinalReply: !transcript.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                            hasFinalReply: !assistantBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                         )
                     }
                     if isUser {
@@ -909,16 +965,14 @@ struct DashboardMessageRow: View {
                         )
                     } else if showsAssistantBody {
                         if let renderedDocument {
-                            ConversationMarkdown(
-                                document: renderedDocument,
-                                isStreaming: message.status == "streaming"
-                            )
+                            markdown(renderedDocument)
                             .padding(.horizontal, 4)
-                            .padding(.vertical, 2)
+                            .padding(.top, isFirstMessagePart ? 2 : 0)
+                            .padding(.bottom, isLastMessagePart ? 2 : 0)
                             .textSelection(.enabled)
                         } else {
                             Text(RemoteNoteEditEnvelope.redactingEnvelopes(
-                                in: transcript.body
+                                in: assistantBody
                             ))
                                 .font(.system(size: 15))
                                 .lineSpacing(4)
@@ -932,7 +986,7 @@ struct DashboardMessageRow: View {
                                 .textSelection(.enabled)
                         }
                     }
-                    if !isUser {
+                    if !isUser, layout == nil {
                         ConversationChangedFilesCard(records: activities)
                     }
                 }
@@ -943,11 +997,22 @@ struct DashboardMessageRow: View {
         }
     }
 
+    @ViewBuilder
+    private func markdown(_ document: ConversationMarkdownDocument) -> some View {
+        if let layout, case .markdownBlocks(let range, _) = layout.content,
+           document.blocks.indices.contains(range.lowerBound), range.upperBound <= document.blocks.count {
+            ConversationMarkdown(blocks: Array(document.blocks[range]), isStreaming: message.status == "streaming")
+        } else {
+            ConversationMarkdown(document: document, isStreaming: message.status == "streaming")
+        }
+    }
+
     private var showsAssistantBody: Bool {
-        guard !transcript.body.isEmpty else { return false }
-        guard run?.status == "failed", let error = run?.error else { return true }
-        return message.content.trimmingCharacters(in: .whitespacesAndNewlines)
-            != error.trimmingCharacters(in: .whitespacesAndNewlines)
+        ConversationMessageLayout.showsAssistantBody(
+            content: message.content,
+            displayedBody: assistantBody,
+            failedRunError: run?.status == "failed" ? run?.error : nil
+        )
     }
 }
 
