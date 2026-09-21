@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 
 struct ConversationMarkdownDocument: Sendable {
     static let safeExternalLinkSchemes = Set(["http", "https", "mailto", "tel"])
@@ -9,24 +10,29 @@ struct ConversationMarkdownDocument: Sendable {
     }
 
     struct InlineText: Sendable {
-        let attributed: AttributedString
         let rendered: AttributedString
 
         var plainText: String {
-            String(attributed.characters)
+            String(rendered.characters)
         }
 
         init(_ source: String) {
-            attributed = Self.render(source)
             let lines = source
                 .split(separator: "\n", omittingEmptySubsequences: false)
                 .map { Self.renderLine(String($0)) }
-            rendered = lines.enumerated().reduce(into: AttributedString()) { result, element in
+            var value = lines.enumerated().reduce(into: AttributedString()) { result, element in
                 if element.offset > 0 {
                     result.append(AttributedString("\n"))
                 }
                 result.append(element.element)
             }
+            // Code spans carry the transcript's monospace font and chip colors.
+            for run in value.runs where run.inlinePresentationIntent?.contains(.code) == true {
+                value[run.range].font = .system(size: 13.5, design: .monospaced)
+                value[run.range].foregroundColor = DashboardPalette.foreground.opacity(0.92)
+                value[run.range].backgroundColor = DashboardPalette.primary.opacity(0.075)
+            }
+            rendered = value
         }
 
         private static func render(_ source: String) -> AttributedString {

@@ -3,6 +3,7 @@ import Darwin
 import Foundation
 import SwiftUI
 import WovenMatterClient
+import WovenMatterCore
 
 /// Optional development variants have their own database and process lease.
 /// Release builds always use the established workspace directory.
@@ -117,7 +118,7 @@ final class WorkspaceProcessLease {
         let descriptor = fileURL.path.withCString {
             Darwin.open($0, O_CREAT | O_RDWR | O_CLOEXEC, S_IRUSR | S_IWUSR)
         }
-        guard descriptor >= 0 else { throw Self.currentPOSIXError() }
+        guard descriptor >= 0 else { throw POSIXError.current }
         guard Darwin.fchmod(descriptor, S_IRUSR | S_IWUSR) == 0 else {
             let chmodError = errno
             Darwin.close(descriptor)
@@ -314,7 +315,7 @@ final class WorkspaceProcessLease {
     private static func write(_ string: String, to descriptor: Int32) throws {
         guard Darwin.ftruncate(descriptor, 0) == 0,
               Darwin.lseek(descriptor, 0, SEEK_SET) == 0 else {
-            throw currentPOSIXError()
+            throw POSIXError.current
         }
         let data = Data(string.utf8)
         try data.withUnsafeBytes { rawBuffer in
@@ -326,18 +327,14 @@ final class WorkspaceProcessLease {
                     baseAddress.advanced(by: written),
                     rawBuffer.count - written
                 )
-                guard result > 0 else { throw currentPOSIXError() }
+                guard result > 0 else { throw POSIXError.current }
                 written += result
             }
         }
         guard Darwin.fsync(descriptor) == 0,
               Darwin.lseek(descriptor, 0, SEEK_SET) == 0 else {
-            throw currentPOSIXError()
+            throw POSIXError.current
         }
-    }
-
-    private static func currentPOSIXError() -> POSIXError {
-        POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
     }
 }
 
