@@ -1308,6 +1308,19 @@ public actor OpenClawGatewayCoordinator {
     return String(data: data, encoding: .utf8)
   }
 
+  public func sessionPreferences(
+    conversationID: String
+  ) async throws -> OpenClawSessionPreferences {
+    let descriptor = try database.openClawGatewaySession(conversationID: conversationID)
+    let value = try await client(agentID: descriptor.agentID)
+      .sessionPreferences(key: descriptor.sessionKey)
+    try database.updateOpenClawGatewaySessionPreferences(
+      conversationID: conversationID,
+      preferences: value
+    )
+    return value
+  }
+
   public func patchSession(
     conversationID: String,
     preferences: OpenClawSessionPreferences

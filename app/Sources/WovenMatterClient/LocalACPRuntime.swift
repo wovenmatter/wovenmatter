@@ -269,6 +269,10 @@ public struct LocalACPRuntimeAvailability: Equatable, Identifiable, Sendable {
 
     public var id: AgentRuntimeKind { runtimeKind }
     public var isReady: Bool { state == .ready }
+    public var needsCLIInstallation: Bool { state == .cliMissing }
+    public var needsAdapterInstallation: Bool {
+        state == .adapterMissing || state == .adapterOutdated
+    }
     public var compactDetail: String {
         switch state {
         case .ready:
