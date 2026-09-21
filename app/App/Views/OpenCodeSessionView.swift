@@ -42,12 +42,16 @@ struct OpenCodeMessageMedia: View {
     let model: OpenCodeModel
     let conversationID: String
     let messageID: String
+    var fileIndex: Int? = nil
     private var files: [OpenCodeValue] {
         guard let message = model.snapshots[conversationID]?.messages.first(where: { $0["id"].text == messageID }) else { return [] }
+        return Self.files(in: message)
+    }
+    static func files(in message: OpenCodeValue) -> [OpenCodeValue] {
         return message["files"].array + message["content"].array.flatMap { $0["state"]["content"].array.filter { $0["type"].text == "file" } }
     }
     var body: some View {
-        ForEach(Array(files.enumerated()), id: \.offset) { _, file in
+        ForEach(Array(files.enumerated()).filter { fileIndex == nil || $0.offset == fileIndex }, id: \.offset) { _, file in
             OpenCodeMediaItem(model: model, conversationID: conversationID, file: file)
         }
     }

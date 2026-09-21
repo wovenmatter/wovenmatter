@@ -2,12 +2,21 @@ import AppKit
 import SwiftUI
 
 struct ConversationMarkdown: View {
-    let document: ConversationMarkdownDocument
+    private let blocks: [ConversationMarkdownDocument.Block]
     let isStreaming: Bool
     @State private var pendingExternalURL: URL?
 
+    init(document: ConversationMarkdownDocument, isStreaming: Bool) {
+        self.init(blocks: document.blocks, isStreaming: isStreaming)
+    }
+
+    init(blocks: [ConversationMarkdownDocument.Block], isStreaming: Bool) {
+        self.blocks = blocks
+        self.isStreaming = isStreaming
+    }
+
     var body: some View {
-        ConversationMarkdownBlocks(blocks: document.blocks, isStreaming: isStreaming)
+        ConversationMarkdownBlocks(blocks: blocks, isStreaming: isStreaming)
             .environment(\.openURL, OpenURLAction { url in
                 guard ConversationMarkdownDocument.isSafeExternalLink(url) else {
                     return .discarded
