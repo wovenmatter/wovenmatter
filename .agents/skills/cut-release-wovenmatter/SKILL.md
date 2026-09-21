@@ -38,12 +38,23 @@ and Gatekeeper. GitHub CLI authentication must match the repository's SSH accoun
 
 Then write the release description from the material changes since the previous
 public release. Inspect the complete commit/PR range and underlying changes;
-do not simply repeat commit titles. Lead with a short explanation of the release.
-Highlight the biggest new capabilities, major new features, noticeable feature
-improvements, and meaningful fixes. Include required upgrade actions when
-applicable and a full changelog link comparing the previous release tag with the
-new tag. Keep implementation details out unless they materially affect users.
-Do not claim unverified functionality or pad the notes with internal maintenance.
+do not simply repeat commit titles. Use this structure for every release:
+
+1. A short opening explanation of the release and its biggest changes.
+2. **New capabilities** — bullet points describing major new features.
+3. **Improvements and fixes** — bullet points describing noticeable improvements
+   and meaningful fixes.
+4. A **Full changelog** link comparing the previous release tag with the new tag.
+5. **How to update** — the final section, using this exact copy:
+   "Go to Settings > General to check for and install the update."
+
+Write in plain, natural language and say concretely what users can now do or
+what works better. Keep implementation details out unless they materially affect
+users. Do not claim unverified functionality or pad the notes with internal
+maintenance. If a change requires an upgrade action, explain it in the relevant
+feature or improvement bullet; keep the final update instructions consistent.
+Distinguish agent tools from conversation permissions instead of referring to
+both with an ambiguous phrase such as "Full access."
 
 Save the description in a UTF-8 Markdown file and update the private draft with
 `gh release edit vX.Y.Z --notes-file /absolute/path/to/notes.md`. Present the full
