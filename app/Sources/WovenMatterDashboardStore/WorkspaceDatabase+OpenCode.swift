@@ -78,9 +78,14 @@ extension WorkspaceDatabase {
         try bind(id, at: 1, to: insert); try bind(nativeID, at: 2, to: insert)
         try bindNullable(runID, at: 3, to: insert)
         try bind(assistant ? "assistant" : message["type"].text == "user" ? "user" : "system", at: 4, to: insert)
-        try bind(OpenCodeSessionSnapshot.text(message), at: 5, to: insert)
+        let inputContext = try historyRowsUnlocked("SELECT visible_text,delivery_id FROM workspace_opencode_input_context WHERE id=? AND conversation_id=?", values: [nativeID, conversationID]).first?.objectValue
+        let visibleText = inputContext?["visible_text"]?.stringValue ?? OpenCodeSessionSnapshot.text(message)
+        try bind(visibleText, at: 5, to: insert)
         try bind(status, at: 6, to: insert); try bind(created, at: 7, to: insert); try bind(now, at: 8, to: insert)
         try bind(conversationID, at: 9, to: insert); try stepDone(insert)
+        if let deliveryID = inputContext?["delivery_id"]?.stringValue {
+          try toolsExecuteUnlocked("UPDATE workspace_session_deliveries SET message_id=?,status='accepted' WHERE id=? AND target_id=? AND (message_id IS NULL OR message_id=?)", [id, deliveryID, conversationID, id])
+        }
         if let runID {
           let runStatus = status == "streaming" ? "running" : message["error"].isNull ? "completed" : "failed"
           let run = try prepareUnlocked("""
@@ -119,13 +124,16 @@ extension WorkspaceDatabase {
       let update = try prepareUnlocked("UPDATE dashboard_conversations SET title=?, last_message_preview=?, last_message_at=MAX(?, COALESCE((SELECT imported_at FROM desktop_session_imports WHERE conversation_id=dashboard_conversations.id), '')), updated_at=? WHERE id=?")
       defer { sqlite3_finalize(update) }
       try bind(snapshot.info["title"].string ?? fallbackTitle, at: 1, to: update)
-      try bind(String(snapshot.messages.last.map(OpenCodeSessionSnapshot.text)?.prefix(240) ?? ""), at: 2, to: update)
+      let lastID = snapshot.messages.last?["id"].text ?? ""
+      let originalPreview = try historyRowsUnlocked("SELECT visible_text FROM workspace_opencode_input_context WHERE id=? AND conversation_id=?", values: [lastID, conversationID]).first?.objectValue?["visible_text"]?.stringValue
+      try bind(String((originalPreview ?? snapshot.messages.last.map(OpenCodeSessionSnapshot.text) ?? "").prefix(240)), at: 2, to: update)
       try bind(Self.timestamp(Date(timeIntervalSince1970: (snapshot.info["time"]["updated"].number ?? Date().timeIntervalSince1970 * 1000) / 1000)), at: 3, to: update)
       try bind(now, at: 4, to: update); try bind(conversationID, at: 5, to: update); try stepDone(update)
   }
 
-  public func saveOpenCodeSubmission(conversationID: String, id: String, payload: OpenCodeValue, status: String) throws {
+  public func saveOpenCodeSubmission(conversationID: String, id: String, payload: OpenCodeValue, status: String, visibleText: String? = nil, deliveryID: String? = nil) throws {
     try transaction {
+      if let deliveryID { try markToolDeliveryTransportStartedUnlocked(id: deliveryID) }
       let statement = try prepareUnlocked("""
         INSERT INTO desktop_opencode_submissions(id, conversation_id, payload_json, status) VALUES (?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET status=excluded.status
@@ -133,6 +141,20 @@ extension WorkspaceDatabase {
       defer { sqlite3_finalize(statement) }
       try bind(id, at: 1, to: statement); try bind(conversationID, at: 2, to: statement)
       try bind(payload.json, at: 3, to: statement); try bind(status, at: 4, to: statement); try stepDone(statement)
+      if let visibleText {
+        if let deliveryID {
+          guard !(try historyRowsUnlocked("SELECT 1 FROM workspace_session_deliveries WHERE id=? AND target_id=? AND status='sending'", values: [deliveryID, conversationID])).isEmpty else {
+            throw WorkspaceToolError.invalid("This delivery is not reserved for this session.")
+          }
+        }
+        try toolsExecuteUnlocked("INSERT OR IGNORE INTO workspace_opencode_input_context(id,conversation_id,visible_text,delivery_id) VALUES(?,?,?,?)", [id, conversationID, visibleText, deliveryID])
+      }
+      if status == "accepted" {
+        try toolsExecuteUnlocked("""
+          UPDATE workspace_session_deliveries SET status='accepted'
+          WHERE id=(SELECT delivery_id FROM workspace_opencode_input_context WHERE id=? AND conversation_id=?)
+          """, [id, conversationID])
+      }
     }
   }
   public func openCodeUncertainSubmissions(conversationID: String) throws -> [OpenCodeValue] {
@@ -146,4 +168,24 @@ extension WorkspaceDatabase {
       return values
     }
   }
+  /// Native snapshots remain verbatim in storage; only the presentation copy
+  /// replaces our injected discovery text with the user's original input.
+  public func openCodeDisplaySnapshot(_ snapshot: OpenCodeSessionSnapshot, conversationID: String) throws -> OpenCodeSessionSnapshot {
+    try withLock {
+      var result = snapshot
+      let rows = try historyRowsUnlocked("SELECT id,visible_text FROM workspace_opencode_input_context WHERE conversation_id=?", values: [conversationID])
+      let textByID = Dictionary(uniqueKeysWithValues: rows.compactMap { value -> (String, String)? in
+        guard let row = value.objectValue, let id = row["id"]?.stringValue, let text = row["visible_text"]?.stringValue else { return nil }
+        return (id, text)
+      })
+      for i in result.messages.indices {
+        if let text = textByID[result.messages[i]["id"].text], case .object(var message) = result.messages[i] {
+          message["text"] = .string(text)
+          result.messages[i] = .object(message)
+        }
+      }
+      return result
+    }
+  }
+
 }

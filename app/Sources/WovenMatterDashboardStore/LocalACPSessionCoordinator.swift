@@ -1391,7 +1391,7 @@ public actor LocalACPSessionCoordinator {
         systemPrompt: String?
     ) async throws -> (LocalACPSessionDriver, LocalACPInitializedSession) {
         // The launch descriptor is shared across conversations; permission is not.
-        let launch = LocalACPRuntimeLaunchConfiguration(
+        var launch = LocalACPRuntimeLaunchConfiguration(
             runtimeKind: launch.runtimeKind, executableURL: launch.executableURL,
             arguments: launch.arguments, environment: launch.environment,
             environmentKeysToRemove: launch.environmentKeysToRemove,
@@ -1399,6 +1399,9 @@ public actor LocalACPSessionCoordinator {
             processWorkingDirectoryURL: launch.processWorkingDirectoryURL,
             requestedPermission: descriptor.permission,
             wrappedCommand: launch.wrappedCommand
+        )
+        launch.historyRecorder = database.historyWireRecorder(
+            conversationID: descriptor.conversationID, harness: descriptor.runtimeKind.rawValue
         )
         let started = try clientFactory(launch, workspace.rootURL)
         do {

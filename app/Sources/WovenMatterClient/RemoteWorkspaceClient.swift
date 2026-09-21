@@ -86,7 +86,9 @@ public enum RemoteHarnessLaunchResolver {
     public static func resolve(
         configuration: RemoteWorkspaceConfiguration,
         runtimeKind: AgentRuntimeKind,
-        processWorkingDirectory: URL
+        processWorkingDirectory: URL,
+        workspaceRoot: URL = URL(fileURLWithPath: "/home/.woven-matter"),
+        workingDirectory: URL? = nil
     ) throws -> RemoteHarnessLaunchContext {
         let idPattern = /^[a-z0-9][a-z0-9-]{0,47}$/
         guard configuration.workspaceID.wholeMatch(of: idPattern) != nil else {
@@ -101,10 +103,10 @@ public enum RemoteHarnessLaunchResolver {
             hostName: configuration.hostName,
             userName: configuration.userName
         )
-        let remoteRoot = URL(
-            filePath: "/home/.woven-matter",
-            directoryHint: .isDirectory
-        )
+        let remoteRoot = workingDirectory ?? workspaceRoot
+        guard remoteRoot.isFileURL, remoteRoot.path.hasPrefix("/"), !remoteRoot.path.contains("\0") else {
+            throw WorkspaceToolError.invalid("The remote working directory must be an absolute path.")
+        }
         var command = [
             "docker", "exec", "--interactive",
             "--workdir", remoteRoot.path,
@@ -143,10 +145,11 @@ public enum RemoteHarnessLaunchResolver {
             ),
             workspace: LocalACPWorkspaceLaunchConfiguration(
                 rootURL: remoteRoot,
-                repositoriesURL: remoteRoot.appending(
+                repositoriesURL: workspaceRoot.appending(
                     path: "REPOS",
                     directoryHint: .isDirectory
-                )
+                ),
+                databasesURL: workspaceRoot.appending(path: "Databases", directoryHint: .isDirectory)
             )
         )
     }

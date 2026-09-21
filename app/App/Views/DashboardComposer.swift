@@ -29,6 +29,8 @@ struct DashboardComposer: View {
     @Binding var draft: String
     let attachedNoteTitle: String?
     let attachments: [AgentMessageAttachmentDraft]
+    let agentTools: WorkspaceAgentToolsModel?
+    let sessionID: String?
     let showsSessionControls: Bool
     let showsPermissionControl: Bool
     let sessionMetadataLoading: Bool
@@ -91,6 +93,12 @@ struct DashboardComposer: View {
                 }
                 .scrollIndicators(.never)
                 .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            if let agentTools, let sessionID, !agentTools.policy(for: sessionID).enabled.contains(.history),
+               attachments.contains(where: { if case .reference(let reference) = $0 { return reference.kind == .conversation }; return false }) {
+                Text("Conversation history is off. Attached sessions grant read-only access to those sessions only.")
+                    .font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
             if isCollapsed {
                 HStack(alignment: .bottom, spacing: 2) {
@@ -361,6 +369,28 @@ struct DashboardComposer: View {
         .help(accessibilityLabel)
     }
 
+    @ViewBuilder
+    private var toolsControl: some View {
+        if let agentTools, let sessionID {
+            Button {
+                onActivate()
+                focused = false
+                openMenu = openMenu == .tools ? nil : .tools
+            } label: {
+                HStack(spacing: 3) {
+                    Text("Tools").font(.system(size: 11.5, weight: .medium))
+                    Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold))
+                }.padding(.horizontal, 6).frame(height: 36)
+            }
+            .buttonStyle(DashboardComposerControlButtonStyle())
+            .accessibilityLabel("Session tools")
+            .accessibilityValue(openMenu == .tools ? "Expanded" : "Collapsed")
+            .popover(isPresented: Binding(get: { openMenu == .tools }, set: { if !$0, openMenu == .tools { openMenu = nil } })) {
+                WorkspaceSessionToolsMenu(tools: agentTools, sessionID: sessionID)
+            }
+        }
+    }
+
     private var regularControls: some View {
         HStack(spacing: 4) {
             attachmentControl
@@ -393,6 +423,7 @@ struct DashboardComposer: View {
                     permissionMenu(compact: false)
                 }
             }
+            toolsControl
 
             Spacer(minLength: 8)
             collapseControl
@@ -433,6 +464,7 @@ struct DashboardComposer: View {
                         permissionMenu(compact: true)
                     }
                 }
+                toolsControl
             }
 
             HStack(spacing: 4) {
@@ -446,6 +478,7 @@ struct DashboardComposer: View {
 
     private var collapsedControls: some View {
         HStack(spacing: 4) {
+            toolsControl
             collapseControl
             voiceControl
             sendControl
@@ -748,6 +781,7 @@ struct DashboardComposerClickAwayMonitor: NSViewRepresentable {
 }
 
 enum DashboardComposerMenuKind {
+    case tools
     case attachments
     case model
     case thinking

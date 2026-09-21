@@ -26,6 +26,7 @@ run_static_checks() {
   scripts/test-conversation-layout.sh
   scripts/test-note-editor.sh
   scripts/test-note-socket.sh
+  python3 scripts/test-support/test_wovenmatter_remote_tools.py
   scripts/test-remote-workspace.sh
   for file in remote/src/*.mjs remote/test/*.test.mjs; do
     node --check "$file"
@@ -57,6 +58,8 @@ run_app_build() {
     build
   scripts/validate-native-app.sh \
     "${derived_data}/Build/Products/Debug/Woven Matter Dev.app"
+  python3 scripts/test-support/test_wovenmatter_cli.py \
+    "${derived_data}/Build/Products/Debug/Woven Matter Dev.app/Contents/Resources/wovenmatter"
 }
 
 run_all() {

@@ -128,6 +128,10 @@ extension WorkspaceDatabase {
         SELECT json_object(
           'id', message.id, 'conversation_id', message.conversation_id,
           'client_message_id', message.client_message_id,
+          'sender_kind',(SELECT kind FROM workspace_session_deliveries WHERE message_id=message.id),
+          'sender_session_id',(SELECT source_id FROM workspace_session_deliveries WHERE message_id=message.id),
+          'sender_agent',(SELECT source_agent FROM workspace_session_deliveries WHERE message_id=message.id),
+          'sender_session_title',(SELECT source_title FROM workspace_session_deliveries WHERE message_id=message.id),
           'run_id', message.run_id, 'role', message.role,
           'governing_plane', message.governing_plane,
           'authority_device_id', message.authority_device_id,
@@ -216,6 +220,10 @@ extension WorkspaceDatabase {
         SELECT json_object(
           'id', message.id, 'conversation_id', message.conversation_id,
           'client_message_id', message.client_message_id,
+          'sender_kind',(SELECT kind FROM workspace_session_deliveries WHERE message_id=message.id),
+          'sender_session_id',(SELECT source_id FROM workspace_session_deliveries WHERE message_id=message.id),
+          'sender_agent',(SELECT source_agent FROM workspace_session_deliveries WHERE message_id=message.id),
+          'sender_session_title',(SELECT source_title FROM workspace_session_deliveries WHERE message_id=message.id),
           'run_id', message.run_id, 'role', message.role,
           'governing_plane', message.governing_plane,
           'authority_device_id', message.authority_device_id,

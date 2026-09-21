@@ -15,7 +15,7 @@ struct MessageInputTransportTests {
     #expect(input.transportText(deliveryText: "  override \n") == "  override \n")
   }
 
-  @Test("reference snapshots remain ordered and delivery text replaces only the prompt")
+  @Test("notes retain snapshots while conversation attachments send only a reference")
   func referenceContext() {
     let input = AgentMessageInput(text: "original", attachments: [
       .reference(AgentMessageReferenceDraft(
@@ -33,12 +33,13 @@ struct MessageInputTransportTests {
       </wovenmatter-reference>
 
       <wovenmatter-reference type="conversation" id="c" title="Chat title">
-      chat body
+      Read this attached session with wovenmatter history conversation c. This attachment grants read-only access to this session.
       </wovenmatter-reference>
       """
     #expect(input.transportText(deliveryText: "  delivered \n") == "delivered\n\n" + context)
     #expect(input.transportText(deliveryText: " \n") == context)
     #expect(input.textWithReferenceContext == "original\n\n" + context)
+    #expect(!input.textWithReferenceContext.contains("chat body"))
   }
 
   @Test("mappingFiles replaces only file drafts and preserves order and references")

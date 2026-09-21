@@ -315,42 +315,49 @@ extension WorkspaceDatabase {
     title: String = "Untitled Note",
     content: String = "",
     kind: NoteArtifactKind = .note,
-    createdAt: Date = Date()
+    createdAt: Date = Date(),
+    callerConversationID: String? = nil,
+    requestID: String? = nil
   ) throws -> String {
     try transaction {
-      let content = try (content.isEmpty
-        ? NoteDocument(kind: kind)
-        : NoteDocument.decode(content)).encoded()
-      let noteID = id.uuidString.lowercased()
-      let operatorID = try localMutationOperatorIDUnlocked()
-      try validateFolderUnlocked(id: folderID, operatorID: operatorID)
-      let timestamp = Self.timestamp(createdAt)
-      let position = try nextNotePositionUnlocked(
-        folderID: folderID,
-        operatorID: operatorID
-      )
+      if let callerConversationID { try requireToolUnlocked(.notes, sessionID: callerConversationID) }
+      return try performToolMutationUnlocked(callerID: callerConversationID, requestID: requestID,
+        operation: "notes.create", input: [folderID, title, content, kind.rawValue]) {
+        let content = try (content.isEmpty
+          ? NoteDocument(kind: kind)
+          : NoteDocument.decode(content)).encoded()
+        let noteID = id.uuidString.lowercased()
+        let operatorID = try localMutationOperatorIDUnlocked()
+        try validateFolderUnlocked(id: folderID, operatorID: operatorID)
+        let timestamp = Self.timestamp(createdAt)
+        let position = try nextNotePositionUnlocked(
+          folderID: folderID,
+          operatorID: operatorID
+        )
 
-      let note = try prepareUnlocked("""
-        INSERT INTO notes (
-          id, user_id, folder_id, title, content, snippet, is_pinned, position,
-          created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
-        """)
-      defer { sqlite3_finalize(note) }
-      try bind(noteID, at: 1, to: note)
-      try bind(operatorID, at: 2, to: note)
-      try bindNullable(folderID, at: 3, to: note)
-      try bind(title, at: 4, to: note)
-      try bind(content, at: 5, to: note)
-      try bind(Self.noteSnippet(content), at: 6, to: note)
-      guard sqlite3_bind_int64(note, 7, Int64(position)) == SQLITE_OK else {
-        throw bindError()
-      }
-      try bind(timestamp, at: 8, to: note)
-      try bind(timestamp, at: 9, to: note)
-      try stepDone(note)
+        let note = try prepareUnlocked("""
+          INSERT INTO notes (
+            id, user_id, folder_id, title, content, snippet, is_pinned, position,
+            created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
+          """)
+        defer { sqlite3_finalize(note) }
+        try bind(noteID, at: 1, to: note)
+        try bind(operatorID, at: 2, to: note)
+        try bindNullable(folderID, at: 3, to: note)
+        try bind(title, at: 4, to: note)
+        try bind(content, at: 5, to: note)
+        try bind(Self.noteSnippet(content), at: 6, to: note)
+        guard sqlite3_bind_int64(note, 7, Int64(position)) == SQLITE_OK else {
+          throw bindError()
+        }
+        try bind(timestamp, at: 8, to: note)
+        try bind(timestamp, at: 9, to: note)
+        try stepDone(note)
 
-      return noteID
+        try checkpointNoteUnlocked(id: noteID, source: "created", force: true)
+        return noteID
+      }.result
     }
   }
 
@@ -362,6 +369,7 @@ extension WorkspaceDatabase {
     updatedAt: Date = Date()
   ) throws -> Bool {
     try transaction {
+      try checkpointNoteUnlocked(id: id, source: "editor", force: false)
       let content = try NoteDocument.decode(content).encoded()
       let operatorID = try localMutationOperatorIDUnlocked()
       let update = try prepareUnlocked("""
@@ -373,7 +381,7 @@ extension WorkspaceDatabase {
       try bind(title, at: 1, to: update)
       try bind(content, at: 2, to: update)
       try bind(Self.noteSnippet(content), at: 3, to: update)
-      try bind(Self.timestamp(updatedAt), at: 4, to: update)
+      try bind(nextNoteRevisionUnlocked(id:id,now:updatedAt), at: 4, to: update)
       try bind(id, at: 5, to: update)
       try bind(operatorID, at: 6, to: update)
       try stepDone(update)
@@ -381,6 +389,7 @@ extension WorkspaceDatabase {
         throw WorkspaceNoteMutationError.noteNotFound
       }
 
+      try checkpointNoteUnlocked(id: id, source: "editor", force: false)
       return true
     }
   }
@@ -395,9 +404,10 @@ extension WorkspaceDatabase {
     updatedAt: Date = Date()
   ) throws -> Bool {
     try transaction {
+      try checkpointNoteUnlocked(id: id, source: "editor", force: false)
       let content = try NoteDocument.decode(content).encoded()
       let operatorID = try localMutationOperatorIDUnlocked()
-      let timestamp = Self.timestamp(updatedAt)
+      let timestamp = try nextNoteRevisionUnlocked(id:id,now:updatedAt)
       let update = try prepareUnlocked("""
         UPDATE notes
         SET title = ?, content = ?, snippet = ?, updated_at = ?
@@ -440,12 +450,14 @@ extension WorkspaceDatabase {
         try stepDone(insert)
       }
 
+      try checkpointNoteUnlocked(id: id, source: "editor", force: false)
       return true
     }
   }
 
-  public func readNoteForEditing(id: String) throws -> NoteEditingResponse {
+  public func readNoteForEditing(id: String, callerConversationID: String? = nil) throws -> NoteEditingResponse {
     try withLock {
+      if let callerConversationID { try requireToolUnlocked(.notes, sessionID: callerConversationID) }
       let operatorID = try localMutationOperatorIDUnlocked()
       let note = try noteForEditingUnlocked(id: id, operatorID: operatorID)
       return NoteEditingResponse(
@@ -458,9 +470,14 @@ extension WorkspaceDatabase {
     }
   }
 
-  public func applyNoteEdits(_ request: NoteEditingRequest) throws -> NoteEditingResponse {
+  public func applyNoteEdits(_ request: NoteEditingRequest, callerConversationID: String? = nil,
+                             requestID: String? = nil) throws -> NoteEditingResponse {
     try transaction {
-      try applyNoteEditsUnlocked(request)
+      if let callerConversationID { try requireToolUnlocked(.notes, sessionID: callerConversationID) }
+      return try performToolMutationUnlocked(callerID: callerConversationID, requestID: requestID,
+        operation: "notes.apply", input: request, receipt: noteMutationReceipt) {
+          try applyNoteEditsUnlocked(request)
+        }.result
     }
   }
 
@@ -478,6 +495,7 @@ extension WorkspaceDatabase {
         revision: note.revision, document: NoteDocument.decode(note.content)
       )
     }
+    try checkpointNoteUnlocked(id: request.noteID, source: "before-agent-edit", force: true)
     var document = NoteDocument.decode(note.content)
     if document.kind == .html,
        request.operations.contains(where: {
@@ -487,7 +505,7 @@ extension WorkspaceDatabase {
     }
     let updatedTitle = try document.apply(request.operations) ?? note.title
     let content = try document.encoded()
-    let revision = Self.timestamp(Date())
+    let revision = try nextNoteRevisionUnlocked(id:request.noteID)
     let update = try prepareUnlocked("""
       UPDATE notes SET title = ?, content = ?, snippet = ?, updated_at = ?
       WHERE id = ? AND user_id = ? AND deleted_at IS NULL
@@ -503,6 +521,7 @@ extension WorkspaceDatabase {
     guard changedRowCountUnlocked == 1 else {
       throw WorkspaceNoteMutationError.noteNotFound
     }
+    try checkpointNoteUnlocked(id: request.noteID, source: "agent", force: true)
     return NoteEditingResponse(
       success: true, noteID: request.noteID, title: updatedTitle,
       revision: revision, document: document
@@ -531,7 +550,7 @@ extension WorkspaceDatabase {
     return Int(sqlite3_column_int64(statement, 0))
   }
 
-  private func noteForEditingUnlocked(
+  func noteForEditingUnlocked(
     id: String,
     operatorID: String
   ) throws -> (title: String, content: String, revision: String) {
@@ -553,7 +572,7 @@ extension WorkspaceDatabase {
     )
   }
 
-  private static func noteSnippet(_ content: String) -> String {
+  static func noteSnippet(_ content: String) -> String {
     let content = NoteDocument.decode(content).plainText
     let replacements: [(String, String, String.CompareOptions)] = [
       (#"</p>\s*<p[^>]*>"#, " ", .regularExpression),

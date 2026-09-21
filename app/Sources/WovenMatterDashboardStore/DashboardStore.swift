@@ -102,10 +102,13 @@ public actor DashboardStore {
 
   public init(supportDirectory: URL) throws {
     try FileManager.default.createDirectory(at: supportDirectory, withIntermediateDirectories: true)
-    let database = try WorkspaceDatabase(url: supportDirectory.appending(path: "workspace.sqlite"))
+    // Complete usage DDL before opening the workspace owner and its recovery
+    // transaction. A second handle changing schema after workspace triggers are
+    // loaded can leave startup recovery with a stale schema on system SQLite.
     let usageRecorder = try UsageRunRecorder(
       databaseURL: supportDirectory.appending(path: "workspace.sqlite")
     )
+    let database = try WorkspaceDatabase(url: supportDirectory.appending(path: "workspace.sqlite"))
     let localProcessLease = try LocalACPProcessLease(
       fileURL: supportDirectory.appending(path: "local-acp-process.lock")
     )
@@ -337,8 +340,12 @@ public actor DashboardStore {
     try database.openClawGatewayConversationIDs()
   }
 
-  public func createOpenClawWorkspaceSession(agentID: UUID, sessionKey: String, cwd: URL) async throws {
-    try await openClawGateway.createWorkspaceSession(agentID: agentID, sessionKey: sessionKey, cwd: cwd)
+  public func createOpenClawWorkspaceSession(agentID: UUID, sessionKey: String, cwd: URL, recover: Bool = false) async throws {
+    try await openClawGateway.createWorkspaceSession(agentID: agentID, sessionKey: sessionKey, cwd: cwd, recover: recover)
+  }
+
+  public func confirmOpenClawCreationSelection(conversationID: String, model: String?, thinking: String?) async throws {
+    try await openClawGateway.confirmCreationSelection(conversationID: conversationID, model: model, thinking: thinking)
   }
 
   public func openClawNativeSessions(agentID: UUID, offset: Int = 0) async throws -> (sessions: [OpenClawGatewaySession], nextOffset: Int?) {
@@ -723,11 +730,19 @@ public actor DashboardStore {
   public func handleNoteEditingRequest(
     _ request: NoteEditingRequest
   ) throws -> NoteEditingResponse {
-    switch request.command {
-    case .read:
-      try database.readNoteForEditing(id: request.noteID)
-    case .apply:
-      try database.applyNoteEdits(request)
+    try database.recordHistory(WorkspaceHistoryEvent(harness:"woven-note",kind:"cli.request",
+      payload:String(decoding:try JSONEncoder().encode(request),as:UTF8.self)))
+    do {
+      let response: NoteEditingResponse = switch request.command {
+      case .read: try database.readNoteForEditing(id:request.noteID)
+      case .apply: try database.applyNoteEdits(request)
+      }
+      try database.recordHistory(WorkspaceHistoryEvent(harness:"woven-note",kind:"cli.response",
+        payload:String(decoding:try JSONEncoder().encode(response),as:UTF8.self)))
+      return response
+    } catch {
+      try database.recordHistory(WorkspaceHistoryEvent(harness:"woven-note",kind:"cli.error",payload:error.localizedDescription))
+      throw error
     }
   }
 
@@ -747,12 +762,14 @@ public actor DashboardStore {
   @discardableResult
   public func createLocalACPSession(
     runtimeKind: AgentRuntimeKind,
-    title: String
+    title: String,
+    requestedConversationID: UUID? = nil
   ) async throws -> String {
     try database.createLocalACPSession(
       runtimeKind: runtimeKind,
       title: title,
-      ownerDeviceID: try await deviceIdentity.id()
+      ownerDeviceID: try await deviceIdentity.id(),
+      requestedConversationID: requestedConversationID
     )
   }
 
@@ -761,14 +778,16 @@ public actor DashboardStore {
     runtimeKind: AgentRuntimeKind,
     remoteWorkspaceID: UUID,
     remoteWorkspaceName: String,
-    title: String
+    title: String,
+    requestedConversationID: UUID? = nil
   ) async throws -> String {
     try database.createRemoteACPSession(
       runtimeKind: runtimeKind,
       remoteWorkspaceID: remoteWorkspaceID,
       remoteWorkspaceName: remoteWorkspaceName,
       title: title,
-      ownerDeviceID: try await deviceIdentity.id()
+      ownerDeviceID: try await deviceIdentity.id(),
+      requestedConversationID: requestedConversationID
     )
   }
 

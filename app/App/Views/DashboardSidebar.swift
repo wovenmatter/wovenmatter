@@ -891,7 +891,8 @@ struct DashboardSidebarNavigationPage: View {
                                 title: conversation.title,
                                 hoverID: "recent-conversation:\(conversation.id)",
                                 selected: selectedConversationID == conversation.id,
-                                isRunningConversation: runningConversationIDs.contains(conversation.id)
+                                isRunningConversation: runningConversationIDs.contains(conversation.id),
+                                conversationID: conversation.id
                             ) {
                                 onSelectConversation(conversation.id)
                             }

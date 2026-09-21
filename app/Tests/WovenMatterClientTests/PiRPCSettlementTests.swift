@@ -1,9 +1,22 @@
 import Darwin
 import Foundation
 import Testing
+import WovenMatterCore
 @testable import WovenMatterClient
 
 struct PiRPCSettlementTests {
+  @Test func capturesUnknownNativeEventsAndOutboundPromptsBeforeProjection() async throws {
+    let capture=PiWireCapture()
+    let fixture=PiPipeFixture(recorder:{ direction,data in capture.append(direction,data) })
+    let server=Task { try await fixture.serve(settles:true) }
+    try await fixture.initialize()
+    #expect(try await fixture.client.prompt("capture this prompt") == .endTurn)
+    try await server.value
+    await fixture.client.shutdown()
+    #expect(capture.values.contains { $0.0 == "in" && $0.1.contains("future_native_event") })
+    #expect(capture.values.contains { $0.0 == "out" && $0.1.contains("capture this prompt") })
+  }
+
   @Test func acknowledgedPromptThenEOFThrows() async throws {
     let fixture = PiPipeFixture()
     let server = Task { try await fixture.serve(settles: false) }
@@ -140,9 +153,11 @@ private struct PiPipeFixture: Sendable {
   let commands = Pipe()
   let events = Pipe()
   let client: PiRPCClient
-  init() {
-    client = PiRPCClient(launch: LocalACPRuntimeLaunchConfiguration(runtimeKind: .pi,
-      executableURL: URL(filePath: "/nonexistent-test-pi"), arguments: []),
+  init(recorder: WorkspaceWireRecorder? = nil) {
+    var launch=LocalACPRuntimeLaunchConfiguration(runtimeKind:.pi,
+      executableURL:URL(filePath:"/nonexistent-test-pi"),arguments:[])
+    launch.historyRecorder=recorder
+    client = PiRPCClient(launch: launch,
       workingDirectory: URL(filePath: "/private/tmp"), input: commands.fileHandleForWriting,
       output: events.fileHandleForReading)
   }
@@ -200,7 +215,10 @@ private struct PiPipeFixture: Sendable {
       if type == "prompt" {
         for line in streamLines { output.append(Data("\(line)\n".utf8)) }
       }
-      if type == "prompt", settles { output.append(Data("{\"type\":\"agent_settled\"}\n".utf8)) }
+      if type == "prompt", settles {
+        output.append(Data("{\"type\":\"future_native_event\",\"customPayload\":\"preserve this\"}\n".utf8))
+        output.append(Data("{\"type\":\"agent_settled\"}\n".utf8))
+      }
       try events.fileHandleForWriting.write(contentsOf: output)
       if type == "prompt" {
         await hold?.pause()
@@ -411,5 +429,14 @@ struct PiHandledCommandTests {
     var bytes = try JSONSerialization.data(withJSONObject: object)
     bytes.append(10)
     try fixture.events.fileHandleForWriting.write(contentsOf: bytes)
+  }
+}
+
+private final class PiWireCapture: @unchecked Sendable {
+  private let lock=NSLock()
+  private var captured:[(String,String)]=[]
+  var values:[(String,String)] { lock.withLock { captured } }
+  func append(_ direction:String,_ data:Data) {
+    lock.withLock { captured.append((direction,String(decoding:data,as:UTF8.self))) }
   }
 }

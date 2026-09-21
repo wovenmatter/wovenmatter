@@ -188,7 +188,13 @@ final class ApplicationModel {
     private(set) var workspaceError: String?
     private(set) var folderMutationError: String?
     private(set) var noteMutationError: String?
-    private(set) var noteEditingSocketPath: String?
+    var agentTools: WorkspaceAgentToolsModel?
+    var activeSessionLimitPresented = false
+    var pendingSessionAccess: [WorkspaceCoordinationAccessRequest] = []
+    var sessionAccessError: String?
+    @ObservationIgnored var toolRuntimeTask: Task<Void, Never>?
+    @ObservationIgnored var toolCreationTasks: [String: Task<WovenMatterToolResponse, any Error>] = [:]
+    @ObservationIgnored private var toolSessionAdmission = WorkspaceSessionAdmission()
     private(set) var calendarMutationError: String?
     private(set) var isCreatingCalendarItem = false
     private(set) var noteDrafts: [String: DashboardNoteDraft] = [:]
@@ -268,8 +274,6 @@ final class ApplicationModel {
 
     private(set) var dashboardStore: DashboardStore?
     private var noteWriteBehind: DashboardNoteWriteBehind?
-    @ObservationIgnored
-    private var noteEditingService: WovenNoteService?
     private var dashboardStoreStarted = false
     private var dashboardStoreStartDeferredForNoteRecovery = false
     private var startupTask: Task<Void, Never>?
@@ -323,7 +327,6 @@ final class ApplicationModel {
     private static let initialConversationMessageLimit = 40
     private static let olderConversationMessageLimit = 40
     private static let maximumRetainedConversationCount = 50
-    static let maximumActiveTurnCount = 120
     private static let titleGenerationEnabledDefaultsKey =
         "wovenmatter.title-generation.enabled"
     private static let titleGenerationModelDefaultsKey =
@@ -456,27 +459,30 @@ final class ApplicationModel {
                 }
             )
             noteWriteBehind = writeBehind
-            let noteSocketURL = supportDirectory.appending(path: "woven-note.sock")
-            let noteEditingService = WovenNoteService(socketURL: noteSocketURL) {
-                [weak self, dashboardStore] request in
-                do {
-                    guard await self?.flushNoteDrafts() == true else {
-                        throw ApplicationModelError.noteDraftSaveFailed
-                    }
-                    let response = try await dashboardStore.handleNoteEditingRequest(request)
-                    await self?.adoptNoteEditingResponse(response)
+            toolRuntimeTask?.cancel()
+            agentTools?.stop()
+            agentTools = try WorkspaceAgentToolsModel(database: dashboardStore.database,
+                sessionHandler: { [weak self] caller, command, request in
+                    guard let self else { throw CancellationError() }
+                    return try await self.handleSessionTool(callerID: caller, command: command, request: request)
+                }, noteHandler: { [weak self] caller, request, requestID in
+                    guard let self else { throw CancellationError() }
+                    return try await self.handleAgentNote(callerID: caller, request: request, requestID: requestID)
+                }, noteRestoreHandler: { [weak self] caller, noteID, versionID, revision, requestID in
+                    guard let self else { throw CancellationError() }
+                    guard self.flushNoteDrafts() else { throw ApplicationModelError.noteDraftSaveFailed }
+                    let response = try dashboardStore.database.restoreNoteAssetVersion(noteID: noteID, versionID: versionID,
+                        expectedRevision: revision, callerConversationID: caller, requestID: requestID)
+                    await self.adoptNoteEditingResponse(response)
                     return response
-                } catch {
-                    return NoteEditingResponse(
-                        success: false,
-                        noteID: request.noteID,
-                        error: error.localizedDescription
-                    )
-                }
-            }
-            try noteEditingService.start()
-            self.noteEditingService = noteEditingService
-            noteEditingSocketPath = noteSocketURL.path
+                }, usageHandler: { [weak self] command in
+                    guard let self else { throw CancellationError() }
+                    return try await self.handleAgentUsage(command)
+                }, onMutation: { [weak self] in await self?.refreshWorkspace() })
+            configureSessionToolSelectionAdapter()
+            try dashboardStore.database.recoverToolDeliveries()
+            try dashboardStore.database.recoverToolSessionCreations()
+            try dashboardStore.database.cancelPendingCoordinationAccess()
             await refreshLocalACPWorkspace()
             await refreshBuzzWorkspaces()
             await refreshOpenClawGateways()
@@ -499,6 +505,7 @@ final class ApplicationModel {
             recoverPendingRemoteNoteEdits(store: dashboardStore)
             await refreshWorkspace()
             state = .ready
+            startAgentToolRuntime()
             startDashboardStoreIfReady()
             Task { [weak self] in
                 await self?.refreshDatabases()
@@ -777,7 +784,8 @@ final class ApplicationModel {
                 thinkingOptionMetadata: configuration.thinkingOptionMetadata,
                 permission: configuration.permission,
                 permissionOptions: configuration.permissionOptions,
-                permissionOptionMetadata: configuration.permissionOptionMetadata
+                permissionOptionMetadata: configuration.permissionOptionMetadata,
+                workingDirectory: configuration.workingDirectory
             )
             return
         }
@@ -1387,23 +1395,7 @@ final class ApplicationModel {
         noteDrafts[note.id] ?? .initial(for: note)
     }
 
-    func noteCLIEnvironment(noteID: String) -> [String: String] {
-        guard let noteEditingSocketPath,
-              let cliURL = Bundle.main.resourceURL?.appending(path: "woven-note") else {
-            return [:]
-        }
-        var environment = [
-            "WOVEN_NOTE_ID": noteID,
-            "WOVEN_NOTE_SOCKET": noteEditingSocketPath,
-            "WOVEN_NOTE_CLI": cliURL.path,
-        ]
-        if let databasesURL = localACPWorkspaceLaunchConfiguration?.databasesURL {
-            environment["WOVEN_DATABASES_DIR"] = databasesURL.path
-        }
-        return environment
-    }
-
-    private func adoptNoteEditingResponse(_ response: NoteEditingResponse) async {
+    func adoptNoteEditingResponse(_ response: NoteEditingResponse) async {
         guard adoptNoteEditingResponseDraft(response) else { return }
         await refreshWorkspace()
     }
@@ -1707,211 +1699,6 @@ final class ApplicationModel {
         refreshLocalACPRuntimesNow()
     }
 
-    private struct AgentNoteBinding {
-        enum Transport {
-            case local(environment: [String: String])
-            case mediated(nonce: String, structureJSON: String)
-        }
-
-        let context: AgentNoteContext
-        let kind: NoteArtifactKind
-        let transport: Transport
-    }
-
-    private func makeAgentNoteBinding(
-        _ note: WorkspaceNoteRecord?,
-        store: DashboardStore,
-        mediated: Bool
-    ) async throws -> AgentNoteBinding? {
-        guard let note else { return nil }
-        guard flushNoteDrafts() else {
-            throw ApplicationModelError.noteDraftSaveFailed
-        }
-        let response = try await store.handleNoteEditingRequest(
-            NoteEditingRequest(command: .read, noteID: note.id)
-        )
-        guard response.success,
-              let title = response.title,
-              let revision = response.revision,
-              let document = response.document else {
-            throw ApplicationModelError.noteContextUnavailable
-        }
-        let transport: AgentNoteBinding.Transport
-        let remoteNonce: String?
-        if mediated {
-            let nonce = UUID().uuidString.lowercased()
-            remoteNonce = nonce
-            transport = .mediated(
-                nonce: nonce,
-                structureJSON: Self.redactedNoteStructure(document)
-            )
-        } else {
-            remoteNonce = nil
-            let environment = noteCLIEnvironment(noteID: note.id)
-            guard environment["WOVEN_NOTE_CLI"] != nil,
-                  environment["WOVEN_NOTE_SOCKET"] != nil else {
-                throw ApplicationModelError.noteContextUnavailable
-            }
-            transport = .local(environment: environment)
-        }
-        return AgentNoteBinding(
-            context: AgentNoteContext(
-                noteID: note.id,
-                title: title,
-                folderID: note.folderID,
-                revision: revision,
-                remoteEditNonce: remoteNonce,
-                artifactKind: mediated ? document.kind : nil
-            ),
-            kind: document.kind,
-            transport: transport
-        )
-    }
-
-    private func noteAwarePrompt(
-        _ content: String,
-        binding: AgentNoteBinding?
-    ) -> String {
-        guard let binding else { return content }
-        switch binding.transport {
-        case .local(let environment):
-            return localNoteAwarePrompt(content, binding: binding, environment: environment)
-        case .mediated(let nonce, let structureJSON):
-            return mediatedNoteAwarePrompt(
-                content,
-                binding: binding,
-                nonce: nonce,
-                structureJSON: structureJSON
-            )
-        }
-    }
-
-    private func localNoteAwarePrompt(
-        _ content: String,
-        binding: AgentNoteBinding,
-        environment: [String: String]
-    ) -> String {
-        let exports = [
-            "WOVEN_NOTE_CLI",
-            "WOVEN_NOTE_SOCKET",
-            "WOVEN_NOTE_ID",
-            "WOVEN_DATABASES_DIR",
-        ]
-            .compactMap { key in
-                environment[key].map { "export \(key)=\(Self.shellQuote($0))" }
-            }
-            .joined(separator: "\n")
-        let editingGuidance: String
-        switch binding.kind {
-        case .note:
-            editingGuidance = """
-            This is a regular note. Preserve its prose. Databases attach to individual tables:
-            "$WOVEN_NOTE_CLI" append --text "Text" --revision REVISION
-            "$WOVEN_NOTE_CLI" table create --rows 3 --columns 3 --header --revision REVISION
-            "$WOVEN_NOTE_CLI" table set-cell --table-id TABLE_ID --row 0 --column 0 --text "Value" --revision REVISION
-            "$WOVEN_NOTE_CLI" link --source-id SOURCE --database-id DATABASE --path data.json --table-id TABLE_ID --revision REVISION
-            """
-        case .spreadsheet:
-            editingGuidance = """
-            This note is an editable spreadsheet. Read it to obtain its table ID, then use table operations to populate cells. The whole spreadsheet may link to database data:
-            "$WOVEN_NOTE_CLI" table set-cell --table-id TABLE_ID --row 0 --column 0 --text "Value" --revision REVISION
-            "$WOVEN_NOTE_CLI" link --source-id SOURCE --database-id DATABASE --path data.json --revision REVISION
-            """
-        case .html:
-            editingGuidance = """
-            This note is an HTML artifact. The user owns its title; render the artifact body with:
-            "$WOVEN_NOTE_CLI" set-html --file artifact.html --revision REVISION
-            Link database data with:
-            "$WOVEN_NOTE_CLI" link --source-id SOURCE --database-id DATABASE --path data.json --revision REVISION
-            Linked JSON is available to the rendered page as window.wovenMatterData.
-            """
-        }
-        return """
-        \(content)
-
-        <woven-matter-note>
-        The open Woven Matter note "\(binding.context.title)" is attached to this run. You may read and edit it with the local CLI. Use the current revision returned by `read` when applying related changes. Changes appear immediately in the open editor.
-
-        \(exports)
-        "$WOVEN_NOTE_CLI" read
-
-        \(editingGuidance)
-        "$WOVEN_NOTE_CLI" apply --file operations.json --revision REVISION
-        Read the artifact first, preserve unrelated content, and use the CLI rather than editing Woven Matter's SQLite store directly. Database folders themselves are available under "$WOVEN_DATABASES_DIR".
-        </woven-matter-note>
-        """
-    }
-
-    private func mediatedNoteAwarePrompt(
-        _ content: String,
-        binding: AgentNoteBinding,
-        nonce: String,
-        structureJSON: String
-    ) -> String {
-        let begin = RemoteNoteEditEnvelope.beginMarker(nonce: nonce)
-        let end = RemoteNoteEditEnvelope.endMarker(nonce: nonce)
-        let kindGuidance: String
-        switch binding.kind {
-        case .note:
-            kindGuidance = "Preserve prose. Database links belong on individual tables."
-        case .spreadsheet:
-            kindGuidance = "Edit cells using the table ID below; an artifact-level database link is allowed."
-        case .html:
-            kindGuidance = "The user owns the title. You may replace the HTML body and set an artifact-level database link, but must not emit setTitle."
-        }
-        return """
-        \(content)
-
-        <woven-matter-note>
-        The open Woven Matter \(binding.kind.displayName.lowercased()) "\(binding.context.title)" is attached to this remote run. \(kindGuidance)
-        For privacy, only its structural map is attached; existing prose, cell values, and HTML are not sent:
-        \(structureJSON)
-
-        If and only if you want to edit the artifact, append exactly one revision-checked JSON envelope after your normal response, without a Markdown code fence:
-        \(begin)
-        {"version":1,"nonce":"\(nonce)","noteID":"\(binding.context.noteID)","expectedRevision":"\(binding.context.revision)","operations":[{"type":"appendText","text":"Example","style":"paragraph"}]}
-        \(end)
-        Use only NoteEditOperation JSON. The envelope is limited to 1 MiB and 128 operations. Woven Matter applies it only after this run completes successfully and only if the note revision still matches. Never attempt to access Woven Matter's SQLite store directly.
-        </woven-matter-note>
-        """
-    }
-
-    private nonisolated static func redactedNoteStructure(_ document: NoteDocument) -> String {
-        let blocks: [[String: Any]] = document.blocks.map { block in
-            switch block {
-            case .richText(let richText):
-                return [
-                    "id": richText.id,
-                    "type": "richText",
-                    "style": richText.style.rawValue,
-                ]
-            case .table(let table):
-                return [
-                    "id": table.id,
-                    "type": "table",
-                    "rows": table.rows.count,
-                    "columns": table.columns.count,
-                    "headerRows": table.headerRowCount,
-                ]
-            }
-        }
-        let object: [String: Any] = [
-            "version": NoteDocument.currentVersion,
-            "kind": document.kind.rawValue,
-            "blocks": blocks,
-            "hasArtifactDatabaseLink": document.databaseLink != nil,
-        ]
-        guard let data = try? JSONSerialization.data(
-            withJSONObject: object,
-            options: [.sortedKeys]
-        ) else { return "{}" }
-        return String(decoding: data, as: UTF8.self)
-    }
-
-    private static func shellQuote(_ value: String) -> String {
-        "'\(value.replacingOccurrences(of: "'", with: "'\\''"))'"
-    }
-
     @discardableResult
     func sendAgentMessage(
         conversation: WorkspaceConversationRecord,
@@ -1959,19 +1746,11 @@ final class ApplicationModel {
     func conversationAttachmentDraft(
         _ conversation: WorkspaceConversationRecord
     ) async throws -> AgentMessageAttachmentDraft {
-        guard let dashboardStore else {
-            throw ApplicationModelError.dashboardStoreUnavailable
-        }
-        let content = try await dashboardStore.conversationContent(id: conversation.id)
-        let preview = DashboardConversationReferencePreview.make(
-            messages: content.messages,
-            limit: AgentMessageAttachmentLimits.maximumReferenceCharacters
-        )
         return .reference(AgentMessageReferenceDraft(
             kind: .conversation,
             resourceID: conversation.id,
             titleSnapshot: conversation.title,
-            contentSnapshot: preview,
+            contentSnapshot: "",
             revisionSnapshot: conversation.lastMessageAt ?? "",
             folderIDSnapshot: conversation.folderID,
             folderTitleSnapshot: conversation.folderID.flatMap { folderID in
@@ -1987,130 +1766,98 @@ final class ApplicationModel {
         input: AgentMessageInput,
         note: WorkspaceNoteRecord? = nil
     ) async -> Bool {
-        let conversationState = ensureConversationState(id: conversation.id)
-        do { try await applyPendingSessionSelections(conversationID: conversation.id) }
-        catch { conversationState.setError(error.localizedDescription); return false }
-        if conversation.localRuntimeKind == .hermes, conversation.remoteWorkspaceID == nil,
-           !buzzBoundLocalACPConversationIDs.contains(conversation.id) {
-            do { try requireLocalHermesLink(conversationID: conversation.id, openSettings: true) }
-            catch { conversationState.setError(error.localizedDescription); return false }
-        }
-        guard !usesLocallyInstalledRuntime(conversation) || installingLocalACPRuntimeKinds.isEmpty else {
-            conversationState.setError("Wait for runtime installation or update to finish before sending a message.")
-            return false
-        }
-        let normalized = AgentMessageInput(
-            text: input.text.trimmingCharacters(in: .whitespacesAndNewlines),
-            attachments: input.attachments
-        )
-        guard normalized.hasContent, let dashboardStore else {
-            conversationState.setError(
-                ApplicationModelError.localACPRuntimeUnavailable.localizedDescription
-            )
-            return false
-        }
-        if conversation.localRuntimeKind == .opencode {
-            do {
-                guard let openCode = openCodeModel(for: conversation.id) else { throw OpenCodeError.message("This workspace's OpenCode connection is unavailable.") }
-                try await openCode.send(conversation.id, input: normalized)
-                conversationState.setError(nil)
-                return true
-            } catch { conversationState.setError(error.localizedDescription); return false }
-        }
-        guard !loadingLocalACPSessionIDs.contains(conversation.id),
-              !updatingLocalACPSessionIDs.contains(conversation.id) else {
-            conversationState.setError(
-                ApplicationModelError.localSessionConfigurationInProgress
-                    .localizedDescription
-            )
-            return false
-        }
-        let isSteeringActiveTurn = localRunningConversationIDs.contains(
-            conversation.id
-        )
-        if !isSteeringActiveTurn {
-            guard localRunningConversationIDs.count
-                    < Self.maximumActiveTurnCount else {
-                conversationState.setError(
-                    ApplicationModelError.activeTurnLimitReached.localizedDescription
-                )
+        let state = ensureConversationState(id: conversation.id)
+        do {
+            guard try await dispatchAgentMessage(conversation: conversation, input: input, note: note) else {
+                activeSessionLimitPresented = true
                 return false
             }
-            localRunningConversationIDs.insert(conversation.id)
-        }
-
-        conversationState.setError(nil)
-        localRunError = nil
-        do {
-            let usesOpenClawGateway = isOpenClawGatewayConversation(conversation.id)
-            let usesMediatedNoteEditing = usesOpenClawGateway
-            let noteBinding = canAgentEditOpenNote(conversation)
-                && !(isSteeringActiveTurn && usesMediatedNoteEditing)
-                ? try await makeAgentNoteBinding(
-                    note,
-                    store: dashboardStore,
-                    mediated: usesMediatedNoteEditing
-                ) : nil
-            let deliveryContent = noteAwarePrompt(
-                normalized.text,
-                binding: noteBinding
-            )
-            if isSteeringActiveTurn {
-                if usesOpenClawGateway {
-                    do {
-                        _ = try await dashboardStore.sendActiveOpenClawGatewayPrompt(
-                            conversationID: conversation.id,
-                            input: normalized,
-                            deliveryContent: deliveryContent
-                        )
-                    } catch LocalACPSessionDatabaseError.steeringUnsupported {
-                        throw ApplicationModelError.steeringUnavailable
-                    }
-                    return true
-                }
-                let staged = try await remoteWorkspaces.stagingFiles(of: normalized, in: conversation.remoteWorkspaceID)
-                do {
-                    _ = try await dashboardStore.sendActiveLocalACPPrompt(
-                        conversationID: conversation.id,
-                        input: staged,
-                        deliveryContent: deliveryContent
-                    )
-                } catch LocalACPSessionDatabaseError.steeringUnsupported {
-                    throw ApplicationModelError.steeringUnavailable
-                }
-                return true
-            }
-            if usesOpenClawGateway {
-                _ = try await acceptOpenClawGatewayMessage(
-                    conversation: conversation,
-                    input: normalized,
-                    deliveryContent: deliveryContent,
-                    noteContext: noteBinding?.context,
-                    store: dashboardStore
-                )
-            } else {
-                _ = try await acceptLocalAgentMessage(
-                    conversation: conversation,
-                    input: normalized,
-                    deliveryContent: deliveryContent,
-                    noteContext: noteBinding?.context,
-                    store: dashboardStore
-                )
-            }
-            scheduleConversationTitleGeneration(
-                conversation: conversation,
-                firstPrompt: normalized.previewText
-            )
+            state.setError(nil)
             return true
-        } catch {
-            if !isSteeringActiveTurn {
-                localRunningConversationIDs.remove(conversation.id)
-            }
-            await refreshWorkspaceIfChanged()
-            await refreshConversation(id: conversation.id)
-            conversationState.setError(error.localizedDescription)
-            return false
+        } catch LocalACPSessionDatabaseError.steeringUnsupported {
+            state.setError(ApplicationModelError.steeringUnavailable.localizedDescription)
+        } catch { state.setError(error.localizedDescription) }
+        return false
+    }
+
+    /// Both user and CLI delivery use this admission point. A false result means
+    /// no dispatch occurred; callers decide whether to show the user limit alert.
+    func dispatchAgentMessage(
+        conversation: WorkspaceConversationRecord,
+        input: AgentMessageInput,
+        note: WorkspaceNoteRecord? = nil
+    ) async throws -> Bool {
+        guard let dashboardStore, let agentTools else { throw ApplicationModelError.dashboardStoreUnavailable }
+        try await applyPendingSessionSelections(conversationID: conversation.id)
+        guard !loadingLocalACPSessionIDs.contains(conversation.id),
+              !updatingLocalACPSessionIDs.contains(conversation.id) else {
+            throw ApplicationModelError.localSessionConfigurationInProgress
         }
+        let decision = toolSessionAdmission.begin(conversation.id, running: runningToolSessionIDs,
+            limit: agentTools.settings.maximumRunningSessions)
+        if decision == .atCapacity { return false }
+        if decision == .preparing { throw ApplicationModelError.localSessionConfigurationInProgress }
+        let steering = decision == .steer
+        defer { toolSessionAdmission.finish(conversation.id) }
+        if conversation.localRuntimeKind == .hermes, conversation.remoteWorkspaceID == nil,
+           !buzzBoundLocalACPConversationIDs.contains(conversation.id) {
+            try requireLocalHermesLink(conversationID: conversation.id)
+        }
+        guard !usesLocallyInstalledRuntime(conversation) || installingLocalACPRuntimeKinds.isEmpty else {
+            throw WorkspaceToolError.invalid("Wait for runtime installation or update to finish before sending a message.")
+        }
+        let normalized = AgentMessageInput(text: input.text.trimmingCharacters(in: .whitespacesAndNewlines),
+            attachments: input.attachments, historyDeliveryID: input.historyDeliveryID)
+        guard normalized.hasContent else { throw WorkspaceToolError.invalid("A message is required.") }
+        for reference in normalized.references where reference.kind == .conversation {
+            try dashboardStore.database.attachConversationReference(sourceID: conversation.id, targetID: reference.resourceID)
+        }
+        var context: AgentNoteContext?
+        if let note, agentTools.policy(for: conversation.id).enabled.contains(.notes) {
+            guard flushNoteDrafts() else { throw ApplicationModelError.noteDraftSaveFailed }
+            let response = try dashboardStore.database.readNoteForEditing(id: note.id, callerConversationID: conversation.id)
+            guard let revision = response.revision else { throw ApplicationModelError.noteContextUnavailable }
+            context = AgentNoteContext(noteID: note.id, title: response.title ?? note.title, folderID: note.folderID, revision: revision)
+        }
+        let remote = conversation.remoteWorkspaceID.flatMap { remoteWorkspaces.configuration(id: $0) }
+        if conversation.remoteWorkspaceID != nil, remote == nil { throw ApplicationModelError.remoteHarnessUnavailable }
+        let discovery = try await agentTools.discovery(sessionID: conversation.id, remote: remote, noteID: context?.noteID)
+        let deliveryContent = discovery + "\n\n" + normalized.text
+        try Task.checkCancellation()
+        if let deliveryID = normalized.historyDeliveryID {
+            try dashboardStore.database.validateClaimedToolDelivery(id: deliveryID)
+        }
+        if !steering { localRunningConversationIDs.insert(conversation.id) }
+        do {
+            if conversation.localRuntimeKind == .opencode {
+                guard let openCode = openCodeModel(for: conversation.id) else { throw OpenCodeError.message("This workspace's OpenCode connection is unavailable.") }
+                try await openCode.send(conversation.id, input: normalized, discovery: discovery)
+            } else if steering {
+                if isOpenClawGatewayConversation(conversation.id) {
+                    _ = try await dashboardStore.sendActiveOpenClawGatewayPrompt(conversationID: conversation.id, input: normalized, deliveryContent: deliveryContent)
+                } else {
+                    let staged = try await remoteWorkspaces.stagingFiles(of: normalized, in: conversation.remoteWorkspaceID)
+                    _ = try await dashboardStore.sendActiveLocalACPPrompt(conversationID: conversation.id, input: staged, deliveryContent: deliveryContent)
+                }
+            } else if isOpenClawGatewayConversation(conversation.id) {
+                _ = try await acceptOpenClawGatewayMessage(conversation: conversation, input: normalized,
+                    deliveryContent: deliveryContent, noteContext: context, store: dashboardStore)
+            } else {
+                _ = try await acceptLocalAgentMessage(conversation: conversation, input: normalized,
+                    deliveryContent: deliveryContent, noteContext: context, store: dashboardStore)
+            }
+        } catch {
+            if !steering { localRunningConversationIDs.remove(conversation.id) }
+            throw error
+        }
+        scheduleConversationTitleGeneration(conversation: conversation, firstPrompt: normalized.previewText)
+        return true
+    }
+
+    var runningToolSessionIDs: Set<String> {
+        localRunningConversationIDs.union(openCodeInstances.flatMap { instance in
+            instance.snapshots.filter { $0.value.active }.map(\.key)
+        })
     }
 
     private func processPendingRemoteNoteEdit(
@@ -2160,7 +1907,7 @@ final class ApplicationModel {
 
     func canAgentEditOpenNote(_ conversation: WorkspaceConversationRecord?) -> Bool {
         guard let conversation else { return false }
-        return conversation.localRuntimeKind != nil && conversation.localRuntimeKind != .opencode
+        return conversation.localRuntimeKind != nil && agentTools?.policy(for: conversation.id).enabled.contains(.notes) == true
     }
 
     private func acceptOpenClawGatewayMessage(
@@ -2315,7 +2062,8 @@ final class ApplicationModel {
                 thinkingOptionMetadata: configuration.thinkingOptionMetadata,
                 permission: configuration.permission,
                 permissionOptions: configuration.permissionOptions,
-                permissionOptionMetadata: configuration.permissionOptionMetadata
+                permissionOptionMetadata: configuration.permissionOptionMetadata,
+                workingDirectory: configuration.workingDirectory
             )
             if let metadata = localACPSessionMetadata[conversation.id] {
                 recordConfirmedSessionSelections(conversationID: conversation.id, metadata: metadata)
@@ -2406,7 +2154,8 @@ final class ApplicationModel {
                         thinkingOptionMetadata: configuration.thinkingOptionMetadata,
                         permission: configuration.permission,
                         permissionOptions: configuration.permissionOptions,
-                        permissionOptionMetadata: configuration.permissionOptionMetadata
+                        permissionOptionMetadata: configuration.permissionOptionMetadata,
+                        workingDirectory: configuration.workingDirectory
                     )
                 if let metadata = localACPSessionMetadata[conversation.id] {
                     recordConfirmedSessionSelections(conversationID: conversation.id, metadata: metadata)
@@ -2419,8 +2168,47 @@ final class ApplicationModel {
         }
     }
 
+    /// Reads the retained usage index without refreshing providers or credentials.
+    func recordedUsageSamples(from start: Date, to end: Date, limit: Int, offset: Int) async throws -> [UsageSample] {
+        try await usage.recordedUsageSamples(from: start, to: end, limit: limit, offset: offset)
+    }
+
+    func defaultToolWorkingDirectory(workspaceID: UUID?) throws -> String {
+        if let workspaceID {
+            guard let workspace = remoteWorkspaces.configuration(id: workspaceID) else { throw ApplicationModelError.remoteHarnessUnavailable }
+            return remoteWorkspaces.remoteWorkspaceRoot(for: workspace)
+        }
+        guard let workspace = localACPWorkspaceLaunchConfiguration else { throw ApplicationModelError.localACPRuntimeUnavailable }
+        return workspace.rootURL.path
+    }
+
+    func prepareCreatedOpenClawSession(_ target: WorkspaceConversationRecord,
+                                       configuration: WorkspaceSessionCreationConfiguration) async throws {
+        guard let store = dashboardStore, let agentID = target.agentID.flatMap(UUID.init(uuidString:)),
+              isOpenClawGatewayLinked(agentID: agentID) else {
+            throw WorkspaceToolError.invalid("Connect OpenClaw in this workspace's settings before creating its sessions.")
+        }
+        let descriptor = try? store.database.openClawGatewaySession(conversationID: target.id)
+        let key = descriptor?.sessionKey ?? "agent:main:wovenmatter:\(target.id)"
+        let directory: URL
+        if let path = configuration.nativeWorkingDirectory { directory = URL(fileURLWithPath: path) }
+        else if let workspaceID = target.remoteWorkspaceID, let workspace = remoteWorkspaces.configuration(id: workspaceID) {
+            directory = URL(fileURLWithPath: remoteWorkspaces.remoteWorkspaceRoot(for: workspace))
+        } else if let workspace = localACPWorkspaceLaunchConfiguration { directory = workspace.rootURL }
+        else { throw ApplicationModelError.localACPRuntimeUnavailable }
+        try await store.createOpenClawWorkspaceSession(agentID: agentID, sessionKey: key, cwd: directory, recover: true)
+        if descriptor == nil {
+            try await store.attachOpenClawGatewaySession(conversationID: target.id, agentID: agentID, sessionKey: key)
+        }
+        openClawGatewayConversationIDs.insert(target.id)
+    }
+
     func createLocalACPSession(
-        runtimeKind: AgentRuntimeKind
+        runtimeKind: AgentRuntimeKind,
+        requestedConversationID: UUID? = nil,
+        nativeWorkingDirectory: URL? = nil,
+        initialTitle: String? = nil,
+        nativeWorkspaceID: String? = nil
     ) async -> String? {
         if runtimeKind == .hermes {
             do { try requireLocalHermesLink(openSettings: true) }
@@ -2430,7 +2218,7 @@ final class ApplicationModel {
             do {
                 guard let openCode else { throw OpenCodeError.message("OpenCode is still starting.") }
                 guard let workspace = localACPWorkspaceLaunchConfiguration else { throw ApplicationModelError.localACPRuntimeUnavailable }
-                let id = try await openCode.create(workspace: workspace.rootURL)
+                let id = try await openCode.create(workspace: nativeWorkingDirectory ?? workspace.rootURL, requestedConversationID: requestedConversationID, title: initialTitle, nativeWorkspaceID: nativeWorkspaceID)
                 await refreshWorkspace()
                 return id
             } catch { localRunError = error.localizedDescription; return nil }
@@ -2442,21 +2230,23 @@ final class ApplicationModel {
             return nil
         }
         let capturedDefaults = sessionSelectionPreferences.defaults(harness: runtimeKind.rawValue,
-            workspace: "local:" + creationWorkspace.rootURL.standardizedFileURL.path)
+            workspace: "local:" + (nativeWorkingDirectory ?? creationWorkspace.rootURL).standardizedFileURL.path)
         do {
             guard let dashboardStore else {
                 throw ApplicationModelError.dashboardStoreUnavailable
             }
             let openClawAgent = runtimeKind == .openclaw
                 ? localCLIAgents.first(where: { $0.runtimeKind == .openclaw }) : nil
-            let gatewayKey = Self.openClawSessionKey(conversationID: UUID().uuidString.lowercased())
+            let gatewayKey = Self.openClawSessionKey(conversationID: (requestedConversationID ?? UUID()).uuidString.lowercased())
             if let agent = openClawAgent, isOpenClawGatewayLinked(agentID: agent.id),
                let workspace = localACPWorkspaceLaunchConfiguration {
-                try await dashboardStore.createOpenClawWorkspaceSession(agentID: agent.id, sessionKey: gatewayKey, cwd: workspace.rootURL)
+                try await dashboardStore.createOpenClawWorkspaceSession(agentID: agent.id, sessionKey: gatewayKey,
+                    cwd: nativeWorkingDirectory ?? workspace.rootURL, recover: requestedConversationID != nil)
             }
             let conversationID = try await dashboardStore.createLocalACPSession(
                 runtimeKind: runtimeKind,
-                title: "New \(runtimeKind.displayName) chat"
+                title: "New \(runtimeKind.displayName) chat",
+                requestedConversationID: requestedConversationID
             )
             if runtimeKind == .openclaw,
                let agent = localCLIAgents.first(where: { $0.runtimeKind == .openclaw }),
@@ -2487,7 +2277,11 @@ final class ApplicationModel {
     }
 
     func createRemoteACPSession(
-        target: RemoteHarnessChatTarget
+        target: RemoteHarnessChatTarget,
+        requestedConversationID: UUID? = nil,
+        nativeWorkingDirectory: URL? = nil,
+        initialTitle: String? = nil,
+        nativeWorkspaceID: String? = nil
     ) async -> String? {
         guard remoteWorkspaces.isHarnessReady(
             target.harness.id,
@@ -2506,7 +2300,7 @@ final class ApplicationModel {
                 }
                 try await instance.connectLocal()
                 let directory = remoteWorkspaces.remoteWorkspaceRoot(for: target.configuration)
-                let id = try await instance.create(workspace: URL(fileURLWithPath: directory))
+                let id = try await instance.create(workspace: nativeWorkingDirectory ?? URL(fileURLWithPath: directory), requestedConversationID: requestedConversationID, title: initialTitle, nativeWorkspaceID: nativeWorkspaceID)
                 await refreshWorkspace()
                 return id
             }
@@ -2518,7 +2312,8 @@ final class ApplicationModel {
                 runtimeKind: target.harness.id,
                 remoteWorkspaceID: target.configuration.id,
                 remoteWorkspaceName: target.configuration.name,
-                title: "New \(target.harness.displayName) chat"
+                title: "New \(target.harness.displayName) chat",
+                requestedConversationID: requestedConversationID
             )
             if target.harness.id == .openclaw {
                 let agentID = try await dashboardStore.ensureRemoteHarnessAgent(
@@ -2557,6 +2352,8 @@ final class ApplicationModel {
         isBuzzWorkspaceSession: Bool
     ) throws -> RemoteHarnessLaunchContext? {
         if isBuzzWorkspaceSession { return nil }
+        let savedDirectory = try dashboardStore?.database.toolSessionCreationConfiguration(targetID: conversation.id)?.nativeWorkingDirectory
+        let inheritedRoot = savedDirectory.map { URL(fileURLWithPath: $0) }
         if let remoteWorkspaceID = conversation.remoteWorkspaceID {
             guard let configuration = remoteWorkspaces.configuration(
                 id: remoteWorkspaceID
@@ -2570,21 +2367,34 @@ final class ApplicationModel {
                     throw HermesGatewayError.message("Connect Hermes in this remote workspace's settings first.")
                 }
                 let encoded = try JSONEncoder().encode(connection).base64EncodedString()
-                let root = URL(fileURLWithPath: remoteWorkspaces.remoteWorkspaceRoot(for: configuration))
+                let workspaceRoot = URL(fileURLWithPath: remoteWorkspaces.remoteWorkspaceRoot(for: configuration))
+                let root = inheritedRoot ?? workspaceRoot
                 return RemoteHarnessLaunchContext(launch: LocalACPRuntimeLaunchConfiguration(runtimeKind: .hermes,
                     executableURL: URL(fileURLWithPath: "/usr/bin/ssh"), arguments: [], environment: ["WOVENMATTER_HERMES_CONNECTION": encoded],
-                    processWorkingDirectoryURL: processDirectory), workspace: LocalACPWorkspaceLaunchConfiguration(rootURL: root, repositoriesURL: root.appending(path: "REPOS")))
+                    processWorkingDirectoryURL: processDirectory), workspace: LocalACPWorkspaceLaunchConfiguration(rootURL: root, repositoriesURL: workspaceRoot.appending(path: "REPOS"), databasesURL: workspaceRoot.appending(path: "Databases")))
             }
             return try RemoteHarnessLaunchResolver.resolve(
                 configuration: configuration,
                 runtimeKind: runtimeKind,
-                processWorkingDirectory: processDirectory
+                processWorkingDirectory: processDirectory,
+                workspaceRoot: URL(fileURLWithPath: remoteWorkspaces.remoteWorkspaceRoot(for: configuration)),
+                workingDirectory: inheritedRoot
             )
         }
         if runtimeKind == .hermes { try requireLocalHermesLink(conversationID: conversation.id) }
         guard let launch = localACPLaunchConfigurations[runtimeKind],
               let workspace = localACPWorkspaceLaunchConfiguration else {
             throw ApplicationModelError.localACPRuntimeUnavailable
+        }
+        if let inheritedRoot {
+            var scopedLaunch = LocalACPRuntimeLaunchConfiguration(runtimeKind: launch.runtimeKind,
+                executableURL: launch.executableURL, arguments: launch.arguments, environment: launch.environment,
+                environmentKeysToRemove: launch.environmentKeysToRemove,
+                environmentKeyPrefixesToRemove: launch.environmentKeyPrefixesToRemove,
+                processWorkingDirectoryURL: inheritedRoot)
+            scopedLaunch.historyRecorder = launch.historyRecorder
+            return .init(launch: scopedLaunch, workspace: .init(rootURL: inheritedRoot,
+                repositoriesURL: workspace.repositoriesURL, databasesURL: workspace.databasesURL))
         }
         return RemoteHarnessLaunchContext(
             launch: launch,
@@ -3176,6 +2986,12 @@ final class ApplicationModel {
     }
 
     func shutdownLocalACPSessions() {
+        toolRuntimeTask?.cancel()
+        agentTools?.stop()
+        for task in toolCreationTasks.values { task.cancel() }
+        toolCreationTasks.removeAll()
+        try? dashboardStore?.database.cancelPendingCoordinationAccess()
+        pendingSessionAccess.removeAll()
         for task in applyingSessionSelectionTasks.values { task.cancel() }
         applyingSessionSelectionTasks.removeAll()
         let permissionIDs = pendingLocalACPPermissions.map(\.id)

@@ -437,6 +437,17 @@ public actor LocalUsageService {
     openRouterDetail = "The new credential has not been checked yet."
   }
 
+  /// Agent reads use only the existing index. They never refresh a provider,
+  /// inspect credentials, ingest transcripts or change usage preferences.
+  public func recordedSamples(from start: Date, to end: Date, limit: Int = 101, offset: Int = 0) throws -> [UsageSample] {
+    guard start <= end, start.timeIntervalSince1970.isFinite, end.timeIntervalSince1970.isFinite,
+          (1...201).contains(limit), offset >= 0 else { throw WorkspaceToolError.invalid("Invalid usage range or pagination.") }
+    guard let store = openUsageStore() else {
+      throw WorkspaceToolError.invalid(usageStoreFailure ?? "The recorded usage index is unavailable.")
+    }
+    return try store.samples(in: DateInterval(start: start, end: end), limit: limit, offset: offset)
+  }
+
   public func deleteOpenRouterAPIKey() throws {
     try credentialStore.deleteOpenRouterAPIKey()
     openRouterAPIKey = nil

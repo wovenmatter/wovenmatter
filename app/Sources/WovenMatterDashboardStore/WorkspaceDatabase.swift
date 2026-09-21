@@ -31,6 +31,8 @@ public final class WorkspaceDatabase: @unchecked Sendable {
       try execute("PRAGMA foreign_keys = ON")
       try execute("PRAGMA busy_timeout = 5000")
       try migrate()
+      try migrateWorkspaceHistory()
+      try migrateAgentTools()
     } catch {
       sqlite3_close(database)
       connection = nil

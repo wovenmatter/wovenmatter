@@ -610,6 +610,10 @@ extension WorkspaceDatabase {
       message.transcriptIdentity.map { ($0, message.id) }
     }, by: { $0.0 })
     for message in history.messages.reversed() {
+      let rawDigest = SHA256.hash(data: message.raw).map { String(format: "%02x", $0) }.joined()
+      try recordHistoryUnlocked(.init(id: "openclaw-import:\(conversationID):\(rawDigest)",
+        conversationID: conversationID, harness: "openclaw", kind: "import.message",
+        payload: String(decoding: message.raw, as: UTF8.self), completeness: "native-export"))
       let digest = SHA256.hash(data: Data((conversationID + ":" + message.id).utf8))
         .map { String(format: "%02x", $0) }.joined()
       // Only a unique native record projection can supersede earlier content.

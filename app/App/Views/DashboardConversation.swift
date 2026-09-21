@@ -51,6 +51,25 @@ private struct DashboardConversationMessageRow: Identifiable {
     var id: String { layout.id }
 }
 
+private enum DashboardConversationDisplayRow: Identifiable {
+    case message(DashboardConversationMessageRow)
+    case receipt(WorkspaceSessionDelivery)
+    case incomingCommand(WorkspaceSessionDelivery)
+
+    var id: String {
+        switch self {
+        case .message(let row): row.id
+        case .receipt(let receipt): WorkspaceConversationTimelineItem.receipt(receipt).id
+        case .incomingCommand(let receipt): WorkspaceConversationTimelineItem.incomingCommand(receipt).id
+        }
+    }
+
+    var spacingBefore: Double {
+        if case .message(let row) = self { return row.layout.spacingBefore }
+        return 32
+    }
+}
+
 struct DashboardCloudConversation: View {
     @Environment(\.dashboardTheme) private var theme
     @Bindable var model: ApplicationModel
@@ -84,6 +103,7 @@ struct DashboardCloudConversation: View {
     private var workspaceOpenCode: OpenCodeModel? {
         conversation.flatMap { model.openCodeModel(for: $0.id) }
     }
+    @State private var toolObservationToken = UUID()
     @State private var scrollState = DashboardConversationScrollState()
     @State private var transcriptOwnsScroll = false
     @State private var isPrependingHistory = false
@@ -108,7 +128,15 @@ struct DashboardCloudConversation: View {
         let orderedMessages = openCodeOrder.isEmpty ? visibleMessages : visibleMessages.sorted {
             (openCodeOrder[$0.clientMessageID ?? ""] ?? 0) < (openCodeOrder[$1.clientMessageID ?? ""] ?? 0)
         }
-        let rows = orderedMessages.flatMap { message in
+        let timeline = WorkspaceConversationTimelineItem.weave(messages: orderedMessages,
+            receipts: conversation.flatMap { model.agentTools?.receipts[$0.id] } ?? [], sessionID: conversation?.id ?? "")
+        let rows = timeline.flatMap { item -> [DashboardConversationDisplayRow] in
+            let message: WorkspaceMessageRecord
+            switch item {
+            case .receipt(let receipt): return [.receipt(receipt)]
+            case .incomingCommand(let receipt): return [.incomingCommand(receipt)]
+            case .message(let value): message = value
+            }
             let presentation = messagePresentations[message.id]
             let run = runsByAssistantMessageID[message.id]
             let mediaCount: Int
@@ -124,7 +152,7 @@ struct DashboardCloudConversation: View {
                 failedRunError: run?.status == "failed" ? run?.error : nil,
                 document: presentation?.document,
                 mediaCount: mediaCount
-            ).map { DashboardConversationMessageRow(message: message, layout: $0) }
+            ).map { .message(DashboardConversationMessageRow(message: message, layout: $0)) }
         }
         ZStack(alignment: .bottom) {
             ScrollViewReader { proxy in
@@ -138,7 +166,7 @@ struct DashboardCloudConversation: View {
                                     ? "Choose New chat for a direct local workspace session, or select a synced conversation."
                                     : "Choose a synced conversation from Workspace."
                             )
-                        } else if visibleMessages.isEmpty {
+                        } else if timeline.isEmpty {
                             DashboardConversationEmptyState(
                                 icon: conversation?.localRuntimeKind == nil
                                     ? (agent.map { dashboardAgentGlyph($0) }
@@ -165,35 +193,47 @@ struct DashboardCloudConversation: View {
                                         )
                                     }
                             }
+                            if let sessionID = conversation?.id, model.agentTools?.hasOlderReceipts.contains(sessionID) == true {
+                                Button("Load earlier session activity") {
+                                    model.agentTools?.loadOlderReceipts(sessionID: sessionID)
+                                }
+                                .buttonStyle(SettingsQuietButtonStyle())
+                                .padding(.bottom, 32)
+                            }
                             ForEach(rows) { row in
-                                let message = row.message
-                                let presentation = messagePresentations[message.id]
-                                let run = runsByAssistantMessageID[message.id]
-                                // One real container per direct lazy child, even
-                                // when a provider's media row is currently empty.
                                 VStack(spacing: 0) {
-                                    if case .media(let index) = row.layout.content {
-                                        if let openCode = workspaceOpenCode {
-                                            OpenCodeMessageMedia(model: openCode, conversationID: message.conversationID, messageID: message.clientMessageID ?? "", fileIndex: index)
+                                    switch row {
+                                    case .receipt(let receipt):
+                                        WorkspaceOutgoingReceipt(receipt: receipt)
+                                    case .incomingCommand(let receipt):
+                                        WorkspaceIncomingCommandReceipt(receipt: receipt)
+                                    case .message(let fragment):
+                                        let message = fragment.message
+                                        let presentation = messagePresentations[message.id]
+                                        let run = runsByAssistantMessageID[message.id]
+                                        if case .media(let index) = fragment.layout.content {
+                                            if let openCode = workspaceOpenCode {
+                                                OpenCodeMessageMedia(model: openCode, conversationID: message.conversationID, messageID: message.clientMessageID ?? "", fileIndex: index)
+                                            }
+                                        } else {
+                                            DashboardMessageRow(
+                                                message: message,
+                                                attachments: attachmentsByMessageID[message.id] ?? [],
+                                                references: referencesByMessageID[message.id] ?? [],
+                                                renderedDocument: presentation?.document,
+                                                run: run.flatMap {
+                                                    DashboardRunDisplayPolicy.presentsStatus($0) ? $0 : nil
+                                                },
+                                                runPresentation: run.flatMap { runPresentations[$0.id] },
+                                                activities: run.map { activitiesByRunID[$0.id] ?? [] } ?? [],
+                                                layout: fragment.layout,
+                                                displayedBody: presentation?.displayedBody
+                                            )
                                         }
-                                    } else {
-                                        DashboardMessageRow(
-                                            message: message,
-                                            attachments: attachmentsByMessageID[message.id] ?? [],
-                                            references: referencesByMessageID[message.id] ?? [],
-                                            renderedDocument: presentation?.document,
-                                            run: run.flatMap {
-                                                DashboardRunDisplayPolicy.presentsStatus($0) ? $0 : nil
-                                            },
-                                            runPresentation: run.flatMap { runPresentations[$0.id] },
-                                            activities: run.map { activitiesByRunID[$0.id] ?? [] } ?? [],
-                                            layout: row.layout,
-                                            displayedBody: presentation?.displayedBody
-                                        )
                                     }
                                 }
                                 .id(row.id)
-                                .padding(.top, row.id == rows.first?.id ? 0 : row.layout.spacingBefore)
+                                .padding(.top, row.id == rows.first?.id ? 0 : row.spacingBefore)
                             }
                         }
                         Color.clear
@@ -208,6 +248,7 @@ struct DashboardCloudConversation: View {
                     .scrollTargetLayout()
                 }
                 .scrollIndicators(.never)
+                .onDisappear { model.agentTools?.observeSession(nil, token: toolObservationToken) }
                 .environment(\.conversationTranscriptInteraction) {
                     transcriptOwnsScroll = true
                     scrollInteractionRevision += 1
@@ -268,6 +309,7 @@ struct DashboardCloudConversation: View {
                     draft = draft.isEmpty ? text : draft + "\n" + text
                 }
                 .onChange(of: conversation?.id, initial: true) { _, conversationID in
+                    model.agentTools?.observeSession(conversationID, token: toolObservationToken)
                     isUserScrolling = false
                     transcriptOwnsScroll = false
                     scrollInteractionRevision += 1
@@ -406,6 +448,8 @@ struct DashboardCloudConversation: View {
                         draft: $draft,
                         attachedNoteTitle: attachedNoteTitle,
                         attachments: attachments,
+                        agentTools: model.agentTools,
+                        sessionID: conversation?.id,
                         showsSessionControls: conversation.map {
                             model.isOpenClawGatewayConversation($0.id) || $0.localRuntimeKind != nil
                         } ?? false,
@@ -1016,6 +1060,7 @@ struct DashboardMessageRow: View {
                         )
                     }
                     if isUser {
+                        WorkspaceIncomingAgentHeader(message: message)
                         ConversationUserMessage(
                             content: message.content,
                             attachments: attachments,

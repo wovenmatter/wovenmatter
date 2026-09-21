@@ -115,7 +115,10 @@ public struct AgentMessageInput: Equatable, Sendable {
   public let text: String
   public private(set) var attachments: [AgentMessageAttachmentDraft]
 
-  public init(text: String, attachments: [AgentMessageAttachmentDraft] = []) {
+  public let historyDeliveryID: String?
+
+  public init(text: String, attachments: [AgentMessageAttachmentDraft] = [], historyDeliveryID: String? = nil) {
+    self.historyDeliveryID = historyDeliveryID
     self.text = text
     self.attachments = attachments
   }
@@ -157,9 +160,8 @@ public struct AgentMessageInput: Equatable, Sendable {
     return result
   }
 
-  /// References are immutable snapshots and are materialized for transports
-  /// that do not have a first-class reference primitive. File bytes remain
-  /// separate so a transport cannot silently degrade them into prompt text.
+  /// Notes retain their attachment snapshots. Conversation attachments carry
+  /// only an ID and metadata; transcript access is enforced by the app service.
   public var textWithReferenceContext: String {
     transportText()
   }
@@ -175,7 +177,7 @@ public struct AgentMessageInput: Equatable, Sendable {
       let label = reference.kind == .note ? "Note" : "Conversation"
       sections.append("""
         <wovenmatter-reference type="\(label.lowercased())" id="\(reference.resourceID)" title="\(reference.titleSnapshot)">
-        \(reference.contentSnapshot)
+        \(reference.kind == .conversation ? "Read this attached session with wovenmatter history conversation " + reference.resourceID + ". This attachment grants read-only access to this session." : reference.contentSnapshot)
         </wovenmatter-reference>
         """)
     }

@@ -141,6 +141,7 @@ public struct LocalACPSlashCommand: Codable, Equatable, Identifiable, Sendable {
 }
 
 public struct LocalACPSessionConfiguration: Equatable, Sendable {
+    public var workingDirectory: String?
     public let model: String?
     public let thinking: String?
     public let modelOptions: [String]
@@ -164,7 +165,8 @@ public struct LocalACPSessionConfiguration: Equatable, Sendable {
         thinkingOptionMetadata: [String: SessionOptionMetadata] = [:],
         permission: String? = nil,
         permissionOptions: [String] = [],
-        permissionOptionMetadata: [String: SessionOptionMetadata] = [:]
+        permissionOptionMetadata: [String: SessionOptionMetadata] = [:],
+        workingDirectory: String? = nil
     ) {
         self.model = model
         self.thinking = thinking
@@ -173,6 +175,7 @@ public struct LocalACPSessionConfiguration: Equatable, Sendable {
         self.slashCommands = slashCommands
         self.modelOptionMetadata = modelOptionMetadata
         self.thinkingOptionMetadata = thinkingOptionMetadata
+        self.workingDirectory = workingDirectory
         self.permission = permission
         self.permissionOptions = Self.unique(permissionOptions)
         self.permissionOptionMetadata = permissionOptionMetadata
@@ -193,7 +196,8 @@ public struct LocalACPSessionConfiguration: Equatable, Sendable {
             thinkingOptionMetadata: thinkingOptionMetadata,
             permission: permission ?? self.permission,
             permissionOptions: permissionOptions,
-            permissionOptionMetadata: permissionOptionMetadata
+            permissionOptionMetadata: permissionOptionMetadata,
+            workingDirectory: workingDirectory
         )
     }
 
@@ -538,6 +542,7 @@ public actor LocalACPClient {
     private var pendingRequests: [Int64: PendingRequest] = [:]
     private var readerTask: Task<Void, Never>?
     private var notificationTask: Task<Void, any Error>?
+    private let historyRecorder: WorkspaceWireRecorder?
     private var activeEventHandler: EventHandler?
     private var activePermissionHandler: PermissionHandler?
     private var activeInteractionHandler: InteractionHandler?
@@ -556,8 +561,10 @@ public actor LocalACPClient {
         cursor: ACPLineCursor,
         runtimeKind: AgentRuntimeKind,
         workingDirectory: URL,
-        requestedPermission: String?
+        requestedPermission: String?,
+        historyRecorder: WorkspaceWireRecorder? = nil
     ) {
+        self.historyRecorder = historyRecorder
         self.requestedPermission = requestedPermission
         self.cursorPermission = requestedPermission ?? "normal"
         self.process = process
@@ -620,7 +627,8 @@ public actor LocalACPClient {
             cursor: ACPLineCursor(handle: stdout.fileHandleForReading),
             runtimeKind: launch.runtimeKind,
             workingDirectory: workingDirectory,
-            requestedPermission: preparedLaunch.explicitPermission
+            requestedPermission: preparedLaunch.explicitPermission,
+            historyRecorder: launch.historyRecorder
         )
     }
 
@@ -1492,6 +1500,7 @@ public actor LocalACPClient {
     }
 
     private func receive(_ data: Data) throws {
+        try historyRecorder?("in", data)
         let envelope = try Self.decodeEnvelope(data)
         if envelope.method == nil,
            let id = envelope.id?.integerValue,
@@ -1549,7 +1558,6 @@ public actor LocalACPClient {
             let update = envelope.params?["update"]
             switch update?["sessionUpdate"]?.stringValue {
             case "config_option_update", "available_commands_update", "current_mode_update":
-                guard belongsToActiveSession(envelope) else { return }
                 let previousConfiguration = configuration
                 captureSessionConfiguration(from: update)
                 if previousConfiguration != configuration { await configurationHandler?(configuration) }
@@ -2107,6 +2115,7 @@ public actor LocalACPClient {
     private func write(_ envelope: ACPEnvelope) throws {
         guard !closed else { throw LocalACPClientError.processExited }
         var data = try JSONEncoder().encode(envelope)
+        try historyRecorder?("out", data)
         data.append(0x0A)
         try input.write(contentsOf: data)
     }

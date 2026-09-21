@@ -2,12 +2,24 @@ import Darwin
 import Foundation
 import WovenMatterCore
 
-final class WovenNoteService: @unchecked Sendable {
-    typealias Handler = @Sendable (NoteEditingRequest) async -> NoteEditingResponse
+protocol WovenSocketResponse: Encodable, Sendable {
+    static func socketError(_ error: any Error) -> Self
+}
+
+extension NoteEditingResponse: WovenSocketResponse {
+    static func socketError(_ error: any Error) -> Self {
+        Self(success: false, noteID: "", error: error.localizedDescription)
+    }
+}
+
+typealias WovenNoteService = WovenSocketService<NoteEditingRequest, NoteEditingResponse>
+
+final class WovenSocketService<Request: Decodable & Sendable, Response: WovenSocketResponse>: @unchecked Sendable {
+    typealias Handler = @Sendable (Request) async -> Response
 
     let socketURL: URL
     private let handler: Handler
-    private let queue = DispatchQueue(label: "com.wovenmatter.note-service")
+    private let queue = DispatchQueue(label: "com.wovenmatter.socket-service")
     private let lock = NSLock()
     private let maximumConnections: Int
     private let ioTimeout: TimeInterval
@@ -102,14 +114,14 @@ final class WovenNoteService: @unchecked Sendable {
                     connection.close()
                     self?.removeConnection(id)
                 }
-                let response: NoteEditingResponse
+                let response: Response
                 do {
                     let data = try await socketIO { try readMessage(from: client, timeout: timeout) }
                     try Task.checkCancellation()
-                    let request = try JSONDecoder().decode(NoteEditingRequest.self, from: data)
+                    let request = try JSONDecoder().decode(Request.self, from: data)
                     response = await handler(request)
                 } catch {
-                    response = NoteEditingResponse(success: false, noteID: "", error: error.localizedDescription)
+                    response = Response.socketError(error)
                 }
                 guard !Task.isCancelled else { return }
                 try? await socketIO {
@@ -126,7 +138,7 @@ final class WovenNoteService: @unchecked Sendable {
 
 // The worker owns close; stop only shuts down the socket to wake pending I/O.
 // Keeping both operations under this lock prevents shutdown of a reused descriptor.
-private final class WovenNoteConnection: @unchecked Sendable {
+final class WovenNoteConnection: @unchecked Sendable {
     private let lock = NSLock()
     private var descriptor: Int32
     private var task: Task<Void, Never>?
@@ -162,7 +174,7 @@ private final class WovenNoteConnection: @unchecked Sendable {
 }
 
 // Bounded socket waits run on dispatch workers, never the cooperative executor.
-private func socketIO<T: Sendable>(_ operation: @escaping @Sendable () throws -> T) async throws -> T {
+func socketIO<T: Sendable>(_ operation: @escaping @Sendable () throws -> T) async throws -> T {
     try await withCheckedThrowingContinuation { continuation in
         DispatchQueue.global(qos: .utility).async {
             continuation.resume(with: Result { try operation() })
@@ -486,7 +498,7 @@ private extension NoteEditingRequest {
     }
 }
 
-private enum WovenNoteCLIError: LocalizedError {
+enum WovenNoteCLIError: LocalizedError {
     case missingNoteID
     case missingEnvironment(String)
     case missingArgument(String)
@@ -506,7 +518,7 @@ private enum WovenNoteCLIError: LocalizedError {
     }
 }
 
-private enum WovenNoteSocketError: LocalizedError {
+enum WovenNoteSocketError: LocalizedError {
     case pathTooLong
     case requestTooLarge
     case timedOut
@@ -522,7 +534,7 @@ private enum WovenNoteSocketError: LocalizedError {
     }
 }
 
-private func unixAddress(path: String) throws -> sockaddr_un {
+func unixAddress(path: String) throws -> sockaddr_un {
     var address = sockaddr_un()
     address.sun_family = sa_family_t(AF_UNIX)
     let bytes = Array(path.utf8CString)
@@ -535,7 +547,7 @@ private func unixAddress(path: String) throws -> sockaddr_un {
     return address
 }
 
-private func configureSocket(_ descriptor: Int32) throws {
+func configureSocket(_ descriptor: Int32) throws {
     var enabled: Int32 = 1
     guard setsockopt(descriptor, SOL_SOCKET, SO_NOSIGPIPE, &enabled, socklen_t(MemoryLayout<Int32>.size)) == 0,
           fcntl(descriptor, F_SETFD, FD_CLOEXEC) == 0 else {
@@ -547,7 +559,7 @@ private func configureSocket(_ descriptor: Int32) throws {
     }
 }
 
-private func waitForSocket(_ descriptor: Int32, events: Int32, deadline: TimeInterval) throws {
+func waitForSocket(_ descriptor: Int32, events: Int32, deadline: TimeInterval) throws {
     while true {
         let remaining = deadline - ProcessInfo.processInfo.systemUptime
         guard remaining > 0 else { throw WovenNoteSocketError.timedOut }
@@ -563,7 +575,7 @@ private func waitForSocket(_ descriptor: Int32, events: Int32, deadline: TimeInt
     }
 }
 
-private func readMessage(from descriptor: Int32, timeout: TimeInterval) throws -> Data {
+func readMessage(from descriptor: Int32, timeout: TimeInterval, maximumBytes: Int = 4 * 1_024 * 1_024) throws -> Data {
     let deadline = ProcessInfo.processInfo.systemUptime + timeout
     var data = Data()
     var buffer = [UInt8](repeating: 0, count: 16_384)
@@ -576,11 +588,11 @@ private func readMessage(from descriptor: Int32, timeout: TimeInterval) throws -
             throw WovenNoteSocketError.system(errno)
         }
         data.append(contentsOf: buffer.prefix(count))
-        guard data.count <= 4 * 1_024 * 1_024 else { throw WovenNoteSocketError.requestTooLarge }
+        guard data.count <= maximumBytes else { throw WovenNoteSocketError.requestTooLarge }
     }
 }
 
-private func writeMessage(_ data: Data, to descriptor: Int32, timeout: TimeInterval) throws {
+func writeMessage(_ data: Data, to descriptor: Int32, timeout: TimeInterval) throws {
     let deadline = ProcessInfo.processInfo.systemUptime + timeout
     try data.withUnsafeBytes { bytes in
         guard let base = bytes.baseAddress else { return }

@@ -60,6 +60,11 @@ final class ApplicationUsageModel {
     private static let credentialAccessDisclosureDefaultsKey =
         "wovenmatter.credential-access.disclosure-acknowledged"
 
+    /// Reads retained samples without refreshing providers or credentials.
+    func recordedUsageSamples(from start: Date, to end: Date, limit: Int, offset: Int) async throws -> [UsageSample] {
+        try await localUsageService.recordedSamples(from: start, to: end, limit: limit, offset: offset)
+    }
+
     init(applicationDefaults: UserDefaults) {
         self.applicationDefaults = applicationDefaults
         isOpenRouterCredentialConfigured = applicationDefaults.bool(
