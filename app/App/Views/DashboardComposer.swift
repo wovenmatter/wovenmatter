@@ -5,6 +5,8 @@ import WovenMatterClient
 import WovenMatterCore
 
 struct DashboardPanelControlButton: View {
+    static let size: CGFloat = 36
+
     let glyph: DashboardLucideGlyph
     let accessibilityLabel: String
     let help: String
@@ -13,7 +15,7 @@ struct DashboardPanelControlButton: View {
     var body: some View {
         Button(action: action) {
             DashboardLucideIcon(glyph: glyph, size: 18)
-                .frame(width: 36, height: 36)
+                .frame(width: Self.size, height: Self.size)
                 .contentShape(Rectangle())
         }
         .buttonStyle(DashboardIconButtonStyle())
