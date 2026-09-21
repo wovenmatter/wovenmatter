@@ -17,6 +17,11 @@ final class DashboardScrollHoverCoordinator: @unchecked Sendable {
 
     func recordHover(_ hovering: Bool, token: String, update: @escaping (Bool) -> Void) {
         if hovering {
+            // Entry can arrive before the previous row's exit. Clear it before
+            // transferring ownership so its preview and pending delay end now.
+            if hoveredToken != token {
+                hoveredUpdate?(false)
+            }
             hoveredToken = token
             hoveredUpdate = update
             if !isScrolling { update(true) }

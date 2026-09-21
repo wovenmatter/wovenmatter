@@ -10,8 +10,13 @@ fi
 cache_root="$(mktemp -d "${TMPDIR:-/tmp}/wovenmatter-popover-tests.XXXXXX")"
 app_path="$cache_root/PopoverFixture.app"
 mkdir -p "$app_path/Contents/MacOS" "$cache_root/ModuleCache"
+# Compile the actual scroll coordinator without the rest of the app and its
+# provider dependencies. The coordinator is a complete top-level declaration.
+sed -n '/^final class DashboardScrollHoverCoordinator:/,/^}/p' \
+  "$repo_root/app/App/Views/WorkspaceView.swift" > "$cache_root/ScrollHoverCoordinator.swift"
 xcrun swiftc -module-cache-path "$cache_root/ModuleCache" \
   "$repo_root/app/App/Views/DashboardConversationPopover.swift" \
+  "$cache_root/ScrollHoverCoordinator.swift" \
   "$repo_root/scripts/test-support/DashboardConversationPopoverTests.swift" \
   -o "$app_path/Contents/MacOS/PopoverFixture"
 cat > "$app_path/Contents/Info.plist" <<'PLIST'
