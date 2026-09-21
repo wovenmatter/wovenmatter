@@ -166,6 +166,8 @@ private actor UsageCompletionGate<Value: Sendable> {
 
 private struct UsageNoCredentials: UsageCredentialStoring {
   func hasOpenRouterAPIKey() throws -> Bool { false }
+  func authorizeOpenRouterAPIKey() throws -> String? { try loadOpenRouterAPIKey() }
+
   func loadOpenRouterAPIKey() throws -> String? { nil }
   func saveOpenRouterAPIKey(_ key: String) throws {}
   func deleteOpenRouterAPIKey() throws {}

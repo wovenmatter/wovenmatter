@@ -14,6 +14,7 @@ private struct UsageLimitsRefreshKey: Hashable, Sendable {
     let enabledProviders: [String]
     let allowsCredentialAccess: Bool
     let keychainInteraction: String
+    let interactiveProvider: String?
     let selectedCodexWorkspaceID: String?
 }
 
@@ -26,8 +27,9 @@ final class ApplicationUsageModel {
     private(set) var localUsageError: String?
     private(set) var isRefreshingUsageAnalytics = false
     private(set) var isRefreshingUsageLimits = false
+    private(set) var isAuthorizingUsageCredential = false
     var isRefreshingLocalUsage: Bool {
-        isRefreshingUsageAnalytics || isRefreshingUsageLimits
+        isRefreshingUsageAnalytics || isRefreshingUsageLimits || isAuthorizingUsageCredential
     }
     private(set) var isOpenRouterCredentialConfigured = false
     private(set) var signingInUsageProviders: Set<ProviderKind> = []
@@ -78,7 +80,8 @@ final class ApplicationUsageModel {
         range: UsageTimeRange,
         refreshLimits: Bool = false,
         reason: UsageRefreshReason = .manual,
-        explicitCredentialAccess: Bool = false
+        explicitCredentialAccess: Bool = false,
+        interactiveProvider: ProviderKind? = nil
     ) async {
         localUsageError = nil
         prepareUsageSnapshot(range: range)
@@ -95,7 +98,7 @@ final class ApplicationUsageModel {
             let keychainInteraction = UsageKeychainInteraction.resolve(
                 refreshReason: reason,
                 disclosureAcknowledged: hasAcknowledgedCredentialAccessDisclosure,
-                explicitUserAction: explicitCredentialAccess
+                explicitUserAction: explicitCredentialAccess && interactiveProvider != nil
             )
             async let analyticsRefresh: Void = refreshUsageAnalytics(
                 range: range,
@@ -105,7 +108,8 @@ final class ApplicationUsageModel {
             async let limitsRefresh: Void = refreshUsageLimits(
                 reason: reason,
                 force: policy == .force,
-                keychainInteraction: keychainInteraction
+                keychainInteraction: keychainInteraction,
+                interactiveProvider: interactiveProvider
             )
             _ = await (analyticsRefresh, limitsRefresh)
         } else {
@@ -193,7 +197,8 @@ final class ApplicationUsageModel {
     private func refreshUsageLimits(
         reason: UsageRefreshReason,
         force: Bool,
-        keychainInteraction: UsageKeychainInteraction
+        keychainInteraction: UsageKeychainInteraction,
+        interactiveProvider: ProviderKind?
     ) async {
         let enabledProviders = enabledUsageProviders
         let allowsCredentialAccess = isOpenRouterCredentialConfigured
@@ -204,6 +209,7 @@ final class ApplicationUsageModel {
             enabledProviders: enabledProviders.map(\.rawValue).sorted(),
             allowsCredentialAccess: allowsCredentialAccess,
             keychainInteraction: keychainInteraction.rawValue,
+            interactiveProvider: interactiveProvider?.rawValue,
             selectedCodexWorkspaceID: requestedCodexWorkspaceID
         )
         let requestID = UUID()
@@ -220,6 +226,7 @@ final class ApplicationUsageModel {
                     enabledProviders: enabledProviders,
                     allowCredentialAccess: allowsCredentialAccess,
                     keychainInteraction: keychainInteraction,
+                    interactiveProvider: interactiveProvider,
                     selectedCodexWorkspaceID: requestedCodexWorkspaceID
                 )
             }
@@ -279,6 +286,9 @@ final class ApplicationUsageModel {
     }
 
     func saveOpenRouterAPIKey(_ value: String, range: UsageTimeRange) async {
+        guard !isAuthorizingUsageCredential else { return }
+        isAuthorizingUsageCredential = true
+        defer { isAuthorizingUsageCredential = false }
         do {
             acknowledgeCredentialAccessDisclosure()
             enableUsageProviderPreference(.openRouter)
@@ -299,6 +309,9 @@ final class ApplicationUsageModel {
     }
 
     func deleteOpenRouterAPIKey(range: UsageTimeRange) async {
+        guard !isAuthorizingUsageCredential else { return }
+        isAuthorizingUsageCredential = true
+        defer { isAuthorizingUsageCredential = false }
         do {
             try await localUsageService.deleteOpenRouterAPIKey()
             isOpenRouterCredentialConfigured = false
@@ -326,6 +339,28 @@ final class ApplicationUsageModel {
         )
     }
 
+    // Global recovery shares the same authorization guard as usage actions.
+    // ApplicationModel owns the cross-domain sequence; this owner retains the
+    // only LocalUsageService and its credential/cache state.
+    func beginCredentialAuthorization() -> Bool {
+        guard !isAuthorizingUsageCredential else { return false }
+        isAuthorizingUsageCredential = true
+        return true
+    }
+
+    func endCredentialAuthorization() {
+        isAuthorizingUsageCredential = false
+    }
+
+    func authorizeSavedCredentials() async throws {
+        if isOpenRouterCredentialConfigured, enabledUsageProviders.contains(.openRouter) {
+            try await localUsageService.authorizeOpenRouterCredentialAccess()
+        }
+        if enabledUsageProviders.contains(.claude) {
+            try await localUsageService.authorizeClaudeCredentialAccess()
+        }
+    }
+
     func isUsageProviderEnabled(_ provider: ProviderKind) -> Bool {
         enabledUsageProviders.contains(provider)
     }
@@ -334,13 +369,17 @@ final class ApplicationUsageModel {
         _ provider: ProviderKind,
         range: UsageTimeRange
     ) async {
+        guard !isAuthorizingUsageCredential else { return }
+        isAuthorizingUsageCredential = true
+        defer { isAuthorizingUsageCredential = false }
         acknowledgeCredentialAccessDisclosure()
         enableUsageProviderPreference(provider)
         await refreshLocalUsage(
             range: range,
             refreshLimits: true,
             reason: .credentialChanged,
-            explicitCredentialAccess: provider == .claude
+            explicitCredentialAccess: [.codex, .claude, .grok, .cursor].contains(provider),
+            interactiveProvider: provider == .openRouter ? nil : provider
         )
     }
 
@@ -348,13 +387,25 @@ final class ApplicationUsageModel {
         _ provider: ProviderKind,
         range: UsageTimeRange
     ) async {
-        guard enabledUsageProviders.contains(provider) else { return }
+        guard enabledUsageProviders.contains(provider),
+              !isAuthorizingUsageCredential else { return }
+        isAuthorizingUsageCredential = true
+        defer { isAuthorizingUsageCredential = false }
         acknowledgeCredentialAccessDisclosure()
+        if provider == .openRouter {
+            do {
+                try await localUsageService.authorizeOpenRouterCredentialAccess()
+            } catch {
+                localUsageError = error.localizedDescription
+                return
+            }
+        }
         await refreshLocalUsage(
             range: range,
             refreshLimits: true,
             reason: .credentialChanged,
-            explicitCredentialAccess: provider == .claude
+            explicitCredentialAccess: [.codex, .claude, .grok, .cursor].contains(provider),
+            interactiveProvider: provider == .openRouter ? nil : provider
         )
     }
 
@@ -439,7 +490,8 @@ final class ApplicationUsageModel {
                     range: currentUsageRange,
                     refreshLimits: true,
                     reason: .credentialChanged,
-                    explicitCredentialAccess: provider == .claude
+                    explicitCredentialAccess: [.codex, .claude, .grok, .cursor].contains(provider),
+                    interactiveProvider: provider == .openRouter ? nil : provider
                 )
             } catch {
                 localUsageError = error.localizedDescription

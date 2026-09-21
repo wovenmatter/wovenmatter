@@ -29,6 +29,7 @@ struct OpenClawGatewayUpgradeTests {
     #expect(await second.connectParams?.objectValue?["device"]?.objectValue?["id"] == identity?.objectValue?["device"]?.objectValue?["id"])
     #expect(await second.connectParams?.objectValue?["auth"]?.objectValue?["deviceToken"] == .string("fixture-device-token"))
     #expect(await second.connectParams?.objectValue?["auth"]?.objectValue?["token"] == nil)
+    #expect(store.saveCount == 1)
     await reopened.disconnect()
   }
 
@@ -151,6 +152,8 @@ struct OpenClawGatewayUpgradeTests {
 private final class GatewayMemoryCredentials: OpenClawGatewayCredentialStore, @unchecked Sendable {
   private let lock = NSLock()
   private var records: [String: OpenClawGatewayCredentials] = [:]
+  private var saves = 0
+  var saveCount: Int { lock.withLock { saves } }
   func credentials(for scope: String) throws -> OpenClawGatewayCredentials {
     lock.withLock {
       if let value = records[scope] { return value }
@@ -158,7 +161,7 @@ private final class GatewayMemoryCredentials: OpenClawGatewayCredentialStore, @u
       records[scope] = value; return value
     }
   }
-  func save(_ value: OpenClawGatewayCredentials, for scope: String) throws { lock.withLock { records[scope] = value } }
+  func save(_ value: OpenClawGatewayCredentials, for scope: String) throws { lock.withLock { records[scope] = value; saves += 1 } }
 }
 
 private actor GatewayEventRecorder {
