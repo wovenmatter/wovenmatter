@@ -54,13 +54,26 @@ The draft contains the disk image, its checksum file, and `latest-mac.json`.
 asset set, checksums, manifest, signature, notarization, and Gatekeeper before
 publishing. The default invocation and `--verify-only` both leave the draft private.
 
-After the build and verification, the release agent writes a short, user-facing
-explanation of the material changes since the previous public release: major new
-capabilities, noticeable improvements, meaningful fixes, and any required upgrade
-actions, followed by a full changelog comparison link. Omit implementation details
-unless they materially affect users. Save the exact text in a Markdown file,
-update the private draft, and present the complete description to Trey. Pause for
-edits or explicit approval; changed descriptions or release commits need new approval.
+After the build and verification, the release agent writes a user-facing
+description of the material changes since the previous public release. Use this
+structure for every release:
+
+1. A short opening explanation of the release and its biggest changes.
+2. **New capabilities**, with bullet points for major new features.
+3. **Improvements and fixes**, with bullet points for noticeable improvements
+   and meaningful fixes.
+4. A **Full changelog** comparison link.
+5. **How to update** as the final section, with the exact text:
+   "Go to Settings > General to check for and install the update."
+
+Use plain, natural language that explains what users can now do or what works
+better. Omit implementation details unless they materially affect users. Put any
+required upgrade action in the relevant feature or improvement bullet, keeping
+the final update instructions consistent. Describe agent tools and conversation
+permissions separately; do not blur them with an ambiguous "Full access" label.
+Save the exact text in a Markdown file, update the private draft, and present the
+complete description to Trey. Pause for edits or explicit approval; changed
+descriptions or release commits need new approval.
 
 Only after that approval, run
 `scripts/publish-release.sh --approved-notes /absolute/path/to/notes.md vX.Y.Z EXPECTED_COMMIT_SHA`.
