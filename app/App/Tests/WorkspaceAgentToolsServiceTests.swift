@@ -100,7 +100,7 @@ extension WorkspaceAgentToolsServiceTests {
         try forwarder.submit(id: slow, request: fixture.request(slow: true))
         await fixture.gate.waitUntilPaused()
         try forwarder.submit(id: fast, request: fixture.request(slow: false))
-        let fastFinished = await Task.detached { waitForRelaySignal(fastReply) }.value
+        let fastFinished = await waitForRelaySignal(fastReply)
         #expect(fastFinished, "The fast request was held behind a stalled request")
         await fixture.gate.release()
         await forwarder.waitUntilIdle()
@@ -155,8 +155,15 @@ extension WorkspaceAgentToolsServiceTests {
     }
 }
 
-private func waitForRelaySignal(_ signal: DispatchSemaphore) -> Bool {
-    signal.wait(timeout: .now() + 3) == .success
+private func waitForRelaySignal(_ signal: DispatchSemaphore) async -> Bool {
+    await withCheckedContinuation { continuation in
+        DispatchQueue(label: "relay-fixture-reply").async {
+            // Never occupy the cooperative executor while the reply handler
+            // needs it. Allow CI scheduling latency, but still require the fast
+            // reply before the deliberately held slow request is released.
+            continuation.resume(returning: signal.wait(timeout: .now() + 30) == .success)
+        }
+    }
 }
 
 private final class RelayForwarderReference: @unchecked Sendable {
