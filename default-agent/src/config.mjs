@@ -1,5 +1,6 @@
 import { mkdir, readFile, writeFile, rename } from 'node:fs/promises';
 import { dirname } from 'node:path';
+import { localServers } from './local-servers.mjs';
 
 export const providers = ['openai-codex', 'openai', 'openrouter', 'opencode-go', 'xai'];
 export const providerNames = { 'openai-codex': 'OpenAI · ChatGPT subscription', openai: 'OpenAI · API key', openrouter: 'OpenRouter', 'opencode-go': 'OpenCode Go', xai: 'Grok subscription' };
@@ -16,7 +17,9 @@ export async function writePrivateJSON(path, value) {
 export function validateConfig(input) {
   if (!input || typeof input !== 'object') throw new Error('Invalid Default Agent settings.');
   const uniqueStrings = (value) => Array.isArray(value) && value.length <= 2000 && value.every(v => typeof v === 'string' && v.length < 512) ? [...new Set(value)] : [];
-  return { providers: uniqueStrings(input.providers ?? providers).filter(p => providers.includes(p)),
+  const customServers = localServers(input.customServers);
+  const supported = [...providers, ...customServers.map(s => s.id)];
+  return { customServers, providers: uniqueStrings(input.providers ?? providers).filter(p => supported.includes(p)),
     models: uniqueStrings(input.models), defaultModel: typeof input.defaultModel === 'string' ? input.defaultModel : null,
     fallbackModels: uniqueStrings(input.fallbackModels), searchProvider: 'exa' };
 }

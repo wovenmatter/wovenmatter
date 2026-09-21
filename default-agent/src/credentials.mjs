@@ -12,7 +12,9 @@ export class Credentials extends InMemoryCredentialStore {
     return stored.owned?.[provider] ?? stored.shared?.[provider];
   }
   async list() {
-    const values = await Promise.all(providers.map(async providerId => {
+    const stored = this.vault ? await this.vault.read() : { shared: this.supplied, owned: this.owned };
+    const custom = Object.keys({ ...stored.shared, ...stored.owned }).filter(id => /^local-server-[a-f0-9-]{36}$/.test(id));
+    const values = await Promise.all([...providers, ...custom].map(async providerId => {
       const credential = await this.read(providerId);
       return credential ? { providerId, type: credential.type } : null;
     }));
@@ -27,8 +29,9 @@ export class Credentials extends InMemoryCredentialStore {
       let next;
       const update = async stored => {
         const current = stored.owned?.[provider] ?? stored.shared?.[provider];
-        if (!this.signingIn && current?.borrowed) throw new Error('Authentication required. Reconnect Woven Matter or sign in in Settings → Default Agent.');
+        if (!this.signingIn && current?.borrowed) throw new Error('Authentication required. Reconnect Woven Matter or sign in in Settings → Connections.');
         next = await fn(current) ?? current;
+        if (!this.signingIn && next && current?.displayName && !next.displayName) next = { ...next, displayName: current.displayName };
         return { ...stored, owned: { ...stored.owned, ...(next ? { [provider]: next } : {}) } };
       };
       if (this.vault) await this.vault.modify(update);

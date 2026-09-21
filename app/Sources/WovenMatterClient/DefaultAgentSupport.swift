@@ -17,7 +17,7 @@ public enum DefaultAgentSupport {
         let executable = root?.appending(path: "bin/node")
         let ready = executable.map { FileManager.default.isExecutableFile(atPath: $0.path) } ?? false
         return LocalACPRuntimeResolution(availability: .init(runtimeKind: .defaultAgent, displayName: "Default Agent", state: ready ? .ready : .executableUnavailable,
-            detail: ready ? "Built into Woven Matter. Configure connections in Settings → Default Agent." : "The bundled Default Agent helper is missing. Rebuild or reinstall Woven Matter.", executablePath: executable?.path),
+            detail: ready ? "Built into Woven Matter. Manage connections in Settings → Connections." : "The bundled Default Agent helper is missing. Rebuild or reinstall Woven Matter.", executablePath: executable?.path),
             launchConfiguration: ready ? .init(runtimeKind: .defaultAgent, executableURL: executable!, arguments: [root!.appending(path: "src/main.mjs").path]) : nil)
     }
     public static let credentialsChanged = Notification.Name("wovenmatter.default-agent.credentials-changed")
@@ -38,10 +38,14 @@ public enum DefaultAgentSupport {
                 credentials[id] = .init(type: "api_key", key: key)
             }
         }
+        for server in LocalModelServerStore.servers {
+            if let key = try key(server.id), !key.isEmpty { credentials[server.id] = .init(type: "api_key", key: key) }
+        }
         for id in ["openai-codex", "xai"] {
             if let value = try oauth(id, scope: keyScope) ?? (keyScope == "global" ? nil : oauth(id)) { credentials[id] = value.borrowing() }
         }
-        let config = workspace == "global" ? scope.global : scope.resolved(workspace)
+        var config = workspace == "global" ? scope.global : scope.resolved(workspace)
+        config.customServers = LocalModelServerStore.servers
         return DefaultAgentPayload(config: config, credentials: credentials, workspace: workspace)
     }
     public static func oauth(_ provider: String, scope: String = "global", keychain: KeychainAccess = .init()) throws -> DefaultAgentCredential? {
@@ -94,6 +98,15 @@ public enum DefaultAgentSupport {
         if status == errSecItemNotFound { return nil }
         guard status == errSecSuccess, let data = result as? Data else { throw DefaultAgentError.message("The provider key could not be read from Keychain (\(status)).") }
         return String(data: data, encoding: .utf8)
+    }
+    public static func hasKey(_ provider: String, scope: String = "global", keychain: KeychainAccess = .init()) throws -> Bool {
+        var query = keyQuery(provider, scope: scope)
+        query[kSecReturnAttributes as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        let (status, _) = keychain.copyMatching(query)
+        if status == errSecItemNotFound { return false }
+        guard status == errSecSuccess else { throw DefaultAgentError.message("The connection could not be checked in Keychain (\(status)).") }
+        return true
     }
     public static func saveKey(_ key: String, provider: String, scope: String = "global", notify: Bool = true, keychain: KeychainAccess = .init()) throws {
         credentialLock.lock(); defer { credentialLock.unlock() }

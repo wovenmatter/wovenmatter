@@ -863,13 +863,11 @@ struct DashboardUsageView: View {
                             .lineLimit(1)
                     }
                     Spacer()
-                    UsageStatusPill(
-                        text: account.isStale ? "Stale" : account.status.title,
-                        color: account.status.color
-                    )
+                    ConnectionsLink(title: account.isStale ? "Stale" : account.status.title)
                 }
 
                 if account.provider == .codex,
+                   account.accountScopeID?.hasPrefix("wovenmatter.shared.") != true,
                    model.codexUsageWorkspaces.count > 1 {
                     codexWorkspaceSelector
                 }
@@ -980,39 +978,8 @@ struct DashboardUsageView: View {
                         .buttonStyle(DashboardIconButtonStyle())
                         .font(.system(size: 10.5, weight: .medium))
                         .disabled(model.isRefreshingLocalUsage)
-                    } else if account.provider == .codex,
-                              model.codexUsageWorkspaces.count > 1,
-                              account.status != .available,
-                              account.status != .signedIn {
-                        Button(
-                            model.signingInUsageProviders.contains(.codex)
-                                ? "Reconnecting…"
-                                : "Reconnect"
-                        ) {
-                            model.reconnectSelectedCodexUsageWorkspace()
-                        }
-                        .buttonStyle(DashboardIconButtonStyle())
-                        .font(.system(size: 10.5, weight: .medium))
-                        .disabled(
-                            model.signingInUsageProviders.contains(.codex)
-                                || model.isRefreshingLocalUsage
-                        )
-                    } else if account.provider != .openRouter,
-                              account.status != .available,
-                              account.status != .signedIn {
-                        Button(
-                            model.signingInUsageProviders.contains(account.provider)
-                                ? "Signing in…"
-                                : "Sign in"
-                        ) {
-                            model.signInUsageProvider(account.provider)
-                        }
-                        .buttonStyle(DashboardIconButtonStyle())
-                        .font(.system(size: 10.5, weight: .medium))
-                        .disabled(
-                            model.signingInUsageProviders.contains(account.provider)
-                                || model.isRefreshingLocalUsage
-                        )
+                    } else {
+                        ConnectionsLink(title: "Manage connection")
                     }
                     if model.isUsageProviderEnabled(account.provider) {
                         Button("Disable") {

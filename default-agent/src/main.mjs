@@ -5,6 +5,8 @@ import { resolve, join } from 'node:path';
 import { DefaultAgentEngine } from './engine.mjs';
 import { CredentialVault, sharedCredentials } from './vault.mjs';
 import { signInStatuses } from './sign-in-status.mjs';
+import { probeServer } from './local-servers.mjs';
+import { grokAccountProfile } from './account-profile.mjs';
 
 const send = (value, flushed) => process.stdout.write(JSON.stringify(value) + '\n', flushed);
 const remote = process.argv.includes('--remote');
@@ -38,6 +40,10 @@ async function remoteRequest(path, body, canUnlock = true) {
 async function invoke(message) {
   const update = value => send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: message.params?.sessionId, update: value } });
   if (control) {
+    if (message.action === 'probe-server') {
+      try { return await probeServer(message.url, message.key); }
+      catch (error) { return { url: '', models: [], error: error.message }; }
+    }
     payload = message;
     if (payload.unlockKey) {
       vault = new CredentialVault(directory);
@@ -54,10 +60,14 @@ async function invoke(message) {
       const controller = new AbortController();
       process.stdin.on('end', () => controller.abort());
       e.credentials.signingIn = true;
-      const credential = await e.runtime.login(message.provider, 'oauth', { signal: controller.signal,
+      let credential = await e.runtime.login(message.provider, 'oauth', { signal: controller.signal,
         notify: notification => send({ notification }),
         prompt: prompt => new Promise((resolve, reject) => { const id = crypto.randomUUID(); pendingPrompts.set(id, resolve); send({ prompt: { ...prompt, signal: undefined }, id }); controller.signal.addEventListener('abort', () => reject(new Error('Sign-in cancelled.')), { once: true }); }) }).finally(() => { e.credentials.signingIn = false; });
       // SDK login persists through the app-owned credential store.
+      if (message.provider === 'xai' && credential) {
+        const profile = await grokAccountProfile(credential);
+        if (profile.displayName) credential = await e.credentials.modify(message.provider, current => ({ ...current, ...profile }));
+      }
       return { connected: Boolean(credential), ...(!vault ? { credential, provider: message.provider } : {}) };
     }
     if (message.action === 'sign-in-status') return { statuses: [...(await e.status()).providers.map(p => ({ ...p, name: 'Default Agent · ' + p.name })), ...await signInStatuses(message.harnesses ?? [])] };

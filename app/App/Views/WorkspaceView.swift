@@ -248,6 +248,10 @@ struct WorkspaceView: View {
         .onAppear {
             selectDefaults()
         }
+        .overlay(alignment: .top) { DictationFeedback().padding(.top, 12) }
+        .onChange(of: destination) { _, value in
+            if value != .workspace { DictationModel.shared.leaveWorkspace() }
+        }
         .onChange(of: allAgents.map(\.id)) { _, _ in selectDefaults() }
         .onChange(of: model.workspaceOverview?.conversations.map(\.id) ?? []) { _, ids in
             selectDefaults()
@@ -331,6 +335,13 @@ struct WorkspaceView: View {
         }
         .onChange(of: model.pendingDefaultAgentSettingsScope) { _, scope in
             if scope != nil { openUtility(.settings) }
+        }
+        .onChange(of: model.pendingConnectionsScope) { _, scope in
+            if scope != nil { openUtility(.settings) }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .init("wovenmatter.open-connections"))) { event in
+            model.pendingConnectionsScope = event.object as? String ?? "global"
+            openUtility(.settings)
         }
         .onChange(of: model.pendingHermesSettingsAgentID) { _, agentID in
             if agentID != nil {

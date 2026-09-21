@@ -33,6 +33,7 @@ struct SettingsGeneralView: View {
         ) {
             appearanceCard
             releaseUpdateCard
+            dictationCard
             conversationTitlesCard
             if let tools = model.agentTools { WorkspaceToolDefaultsCard(tools: tools) }
             credentialAccessCard
@@ -84,6 +85,22 @@ struct SettingsGeneralView: View {
                 .disabled(model.isAuthorizingUsageCredential || model.isReconnectingSavedCredentials)
             }
         }
+    }
+    private var dictationCard: some View {
+        @Bindable var dictation = DictationModel.shared
+        return SettingsCard(title: "Dictation", detail: "Dictate into conversations and notes using your Grok subscription.") {
+            Toggle("Enable dictation", isOn: $dictation.enabled)
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(dictation.accountLabel).font(.callout)
+                    Text(dictation.availability).font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                ConnectionsLink()
+            }
+            Text("Audio is sent to Grok while recording. Transcripts are inserted for review; nothing is sent to an agent automatically. Turning this off keeps your Grok account connected.")
+                .font(.caption).foregroundStyle(.secondary)
+        }.task { await dictation.refreshAvailability() }
     }
 
     private var releaseUpdateCard: some View {

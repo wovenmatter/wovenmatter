@@ -253,6 +253,7 @@ final class ApplicationModel {
     private(set) var conversationStatesByID: [String: DashboardConversationState] = [:]
     // Usage owns its observable state; these projections preserve the application API.
     private let usage: ApplicationUsageModel
+    func sharedConnectionsChanged() async { await usage.sharedConnectionsChanged() }
     var localUsage: LocalUsageSnapshot? { usage.localUsage }
     var localUsageError: String? { usage.localUsageError }
     var isRefreshingUsageAnalytics: Bool { usage.isRefreshingUsageAnalytics }
@@ -2655,6 +2656,8 @@ final class ApplicationModel {
     }
 
     var pendingDefaultAgentSettingsScope: String?
+    var pendingConnectionsScope: String?
+    let connections = DefaultAgentSettingsModel()
     private(set) var pendingHermesSettingsAgentID: UUID?
     private(set) var hermesGatewayConnections: [UUID: HermesGatewayConnection] = [:]
     private(set) var hermesCronJobs: [UUID: [HermesValue]] = [:]

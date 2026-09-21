@@ -8,6 +8,7 @@ public struct DefaultAgentSettings: Codable, Equatable, Sendable {
     public var defaultModel: String?
     public var fallbackModels: [String] = []
     public var searchProvider = "exa"
+    public var customServers: [LocalModelServer]?
     public init() {}
 }
 

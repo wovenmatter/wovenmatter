@@ -28,7 +28,7 @@ fi
 output="${1:-$agent_root}"
 if [ "$output" != "$agent_root" ]; then
   mkdir -p "$output"
-  rsync -a --delete --exclude=/bin --exclude=/test --exclude=.DS_Store "$agent_root/" "$output/"
+  rsync -a --delete --exclude=/bin --exclude=/test --exclude=/.build --exclude=.DS_Store "$agent_root/" "$output/"
 fi
 mkdir -p "$output/bin"
 cp "$cache/bin/node" "$output/bin/node"

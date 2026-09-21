@@ -1,6 +1,9 @@
-# Default Agent credential ownership
+# Shared provider credential ownership
 
-The Mac coordinator owns shared OAuth renewal. Local SDK conversation helpers
+The Mac `ProviderAccountCoordinator` owns shared OAuth renewal for Default
+Agent, Usage, and Dictation. Connections is the shared account-management page.
+App-wide consumers use global accounts; Default Agent can use workspace
+overrides. Subscription credentials and separately billed API keys stay distinct. Local SDK conversation helpers
 receive access-only credentials over private JSON-RPC pipes; refresh helpers
 receive owned credentials through a private control pipe and return replacements.
 The coordinator serializes renewal, persists replacements to Keychain, and only
@@ -52,3 +55,10 @@ launches/container settings disable core dumps. No extra broker, cloud KMS, or
 hardware key service is required. Losing the Mac key requires an explicit reset
 and re-sign-in for independent remote accounts. This feature is not a SOC 2 or
 FIPS certification claim.
+
+Grok dictation uses the same in-memory access snapshot as other app consumers;
+it never creates a second credential file or passes credentials to a remote
+workspace for speech capture. An early HTTP 401 can trigger a single coordinated
+renewal. Account labels are display metadata, not proof of entitlement. Dictation
+being disabled does not remove the shared sign-in. Local model server keys use
+the same Keychain and encrypted remote vault, with a separate identity per server.

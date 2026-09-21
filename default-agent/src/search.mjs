@@ -2,9 +2,9 @@ import { Type } from 'typebox';
 export function searchTools(key, fetchRequest = fetch) {
   async function request(endpoint, body, signal) {
     const currentKey = typeof key === 'function' ? await key() : key;
-    if (!currentKey) throw new Error('Add an Exa API key in Settings → Default Agent → Search.');
+    if (!currentKey) throw new Error('Add an Exa API key in Settings → Connections → Exa.');
     const response = await fetchRequest(`https://api.exa.ai/${endpoint}`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': currentKey }, body: JSON.stringify(body), signal: AbortSignal.any([signal ?? new AbortController().signal, AbortSignal.timeout(30000)]) });
-    if (!response.ok) throw new Error(`Exa request failed (HTTP ${response.status}). Check the search key and available credits in Settings → Default Agent.`);
+    if (!response.ok) throw new Error(`Exa request failed (HTTP ${response.status}). Check the search key and available credits in Settings → Connections.`);
     const data = await response.json();
     return { content: [{ type: 'text', text: JSON.stringify({ results: (data.results ?? []).slice(0, 10).map(r => ({ title: r.title, url: r.url, publishedDate: r.publishedDate, text: r.text?.slice(0, 16000), highlights: r.highlights })) }) }], details: {} };
   }

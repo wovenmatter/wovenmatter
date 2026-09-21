@@ -62,14 +62,15 @@ export class CredentialVault {
 
 export function sharedCredentials(input = {}) {
   const result = {};
-  for (const id of ['openai', 'openrouter', 'opencode-go', 'exa']) {
+  for (const id of ['openai', 'openrouter', 'opencode-go', 'exa', ...Object.keys(input).filter(id => /^local-server-[a-f0-9-]{36}$/.test(id)).slice(0, 12)]) {
     if (input[id]?.type === 'api_key' && typeof input[id].key === 'string') result[id] = { type: 'api_key', key: input[id].key };
   }
   for (const id of ['openai-codex', 'xai']) {
     const c = input[id];
     if (c?.type === 'oauth' && typeof c.access === 'string' && Number.isFinite(c.expires)) {
       result[id] = { type: 'oauth', access: c.access, expires: c.expires, refresh: '', borrowed: true,
-        ...(typeof c.accountId === 'string' ? { accountId: c.accountId } : {}) };
+        ...(typeof c.accountId === 'string' ? { accountId: c.accountId } : {}),
+        ...(typeof c.displayName === 'string' ? { displayName: c.displayName } : {}) };
     }
   }
   return result;

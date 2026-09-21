@@ -5,17 +5,22 @@ your local agent workspace, or choose the Default Agent in a remote workspace.
 It includes Pi's file and shell tools, Woven Matter's existing note/workspace
 integration, and web search. You do not need to install Pi or Node.
 
-Open **Settings → Default Agent** to configure it:
+Open **Settings → Connections** to connect providers:
 
 - **OpenAI:** connect a ChatGPT subscription, an OpenAI API key, or both.
 - **OpenRouter / OpenCode Go:** add an API key. The global OpenRouter key is
-  shared with Usage.
+  shared with Usage and Default Agent.
 - **Grok subscription:** sign in here independently of the Grok Build harness.
 - **Web search:** add an Exa key. Chat and workspace tools work without it.
-- **Models:** choose a default, show or hide models, change their selector order,
-  and choose an ordered list of fallback models.
+- **Local Model Server:** connect up to 12 OpenAI Responses-compatible servers.
+  Their models appear in the existing Default Agent model picker.
 
-Use **All workspaces** for shared settings. Choose a particular workspace and
+Open **Settings → Default Agent** to choose a default, show or hide models,
+change their selector order, and choose an ordered list of fallback models.
+
+See [Connections and dictation](connections-and-dictation.md) for account and microphone setup.
+
+Use **All workspaces** for shared Default Agent settings. Choose a particular workspace and
 turn off **Use settings from All workspaces** to override its preferences.
 Workspace-specific API keys override the global keys; otherwise global keys
 are reused. Changes synchronize to connected workspaces automatically. **Apply to workspaces** retries synchronization immediately.
@@ -34,7 +39,9 @@ running. Reopening the conversation recovers the completed response; reconnectin
 to an unfinished response waits for that remote turn to finish. A container or
 service restart interrupts active work and requires an explicit retry.
 
-Default Agent owns its provider connections. Signing in here does not sign in
+Connections owns shared provider accounts for Default Agent, Usage, and
+Dictation. Subscription connections remain distinct from separately billed API
+keys. Signing in here does not sign in
 Codex, Claude Code, external Pi, or the other installed harnesses, and their
 credential files are not imported.
 
@@ -46,7 +53,7 @@ expiry-aware background check keep those workspaces current. Ordinary message
 submissions check cached state; opening conversation history does not refresh
 authentication. Token lifetimes come from each provider, not a fixed number of days.
 
-Use **Sign in** with a remote workspace selected for an independent subscription
+In Connections, use **Sign in** with a remote workspace selected for an independent subscription
 connection there. **Use shared sign-in** removes that independent connection and
 returns to shared credentials. An active remote helper can keep working while
 the Mac is offline. If borrowed access expires, it waits before the next model
@@ -63,7 +70,7 @@ the key in memory; after a helper/container restart, reconnect Woven Matter to
 unlock it. Updates do not restart active sessions.
 
 If the Mac's workspace key is lost, use **Reset workspace credentials** on that
-workspace's Default Agent settings page. This removes independent remote
+workspace in Connections. This removes independent remote
 sign-ins and restores shared connections. Files and conversations remain.
 Existing Default Agent plaintext stores migrate after secure storage succeeds;
 older backups may still contain previous plaintext copies.

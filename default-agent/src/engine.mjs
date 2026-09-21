@@ -5,6 +5,7 @@ import { Credentials } from './credentials.mjs';
 import { accessFailure, emptyConfig, modelRef, providerNames, providers, validateConfig } from './config.mjs';
 import { searchTools } from './search.mjs';
 import { providerFetch } from './transport.mjs';
+import { registerLocalServers } from './local-servers.mjs';
 
 export class DefaultAgentEngine {
   constructor({ cwd, directory, config = {}, credentials = {}, vault, requestCredentials }) {
@@ -14,6 +15,7 @@ export class DefaultAgentEngine {
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
     this.credentials = await new Credentials(this.supplied, this.vault).initialize();
     this.runtime = await ModelRuntime.create({ credentials: this.credentials, modelsPath: null, modelsStorePath: join(this.directory, 'models.json'), refreshOnCreate: false });
+    registerLocalServers(this.runtime, this.config.customServers);
     const resolveAuth = this.runtime.getAuth.bind(this.runtime);
     this.runtime.getAuth = async (model, options = {}) => {
       const provider = typeof model === 'string' ? model : model.provider;
@@ -46,14 +48,20 @@ export class DefaultAgentEngine {
     return this;
   }
   async apply(payload) {
-    if (payload.config) this.config = validateConfig(payload.config);
+    if (payload.config) {
+      const config = validateConfig(payload.config);
+      for (const server of this.config.customServers) if (!config.customServers.some(s => s.id === server.id)) this.runtime.unregisterProvider(server.id);
+      this.config = config;
+      registerLocalServers(this.runtime, config.customServers);
+    }
     if (payload.credentials) { this.supplied = payload.credentials; await this.credentials.replace(payload.credentials); }
   }
   catalog() {
-    return this.runtime.getModels().filter(m => this.config.providers.includes(m.provider)).map(m => ({ id: modelRef(m), name: m.name, provider: m.provider, providerName: providerNames[m.provider] }));
+    return this.runtime.getModels().filter(m => this.config.providers.includes(m.provider)).map(m => ({ id: modelRef(m), name: m.name, provider: m.provider, providerName: this.providerName(m.provider) }));
   }
+  providerName(id) { return providerNames[id] ?? this.config.customServers.find(s => s.id === id)?.url ?? id; }
   async status() {
-    return { providers: await Promise.all(providers.map(async id => { const c = await this.credentials.read(id); const expired = c?.type === 'oauth' && c.expires <= Date.now(); return { id, name: providerNames[id], connected: Boolean(c) && !expired, state: !c || expired ? 'sign_in_required' : 'credentials_present', detail: expired ? 'Access expired. Reconnect Woven Matter or sign in.' : c ? 'Credentials stored; provider access has not been verified.' : 'No credentials stored.' }; })), models: this.catalog(), searchConfigured: Boolean((await this.credentials.read('exa'))?.key) };
+    return { providers: await Promise.all([...providers, ...this.config.customServers.map(s => s.id)].map(async id => { const c = await this.credentials.read(id); const expired = c?.type === 'oauth' && c.expires <= Date.now(); return { id, name: this.providerName(id), connected: Boolean(c) && !expired, state: !c || expired ? 'sign_in_required' : 'credentials_present', detail: expired ? 'Access expired. Reconnect Woven Matter or sign in.' : c ? 'Credentials stored; provider access has not been verified.' : 'No credentials stored.' }; })), models: this.catalog(), searchConfigured: Boolean((await this.credentials.read('exa'))?.key) };
   }
   modelOptions() {
     const all = this.catalog();
@@ -88,7 +96,7 @@ export class DefaultAgentEngine {
     const settingsManager = SettingsManager.inMemory({ retry: { enabled: false }, compaction: { enabled: true } });
     const loader = new DefaultResourceLoader({ cwd: this.cwd, agentDir: this.directory, settingsManager,
       noExtensions: true, noThemes: true,
-      appendSystemPrompt: ['You are Default Agent in Woven Matter. Work in the supplied agent workspace. Use the Woven Matter CLI and workspace instructions for notes and databases. Use web_search and web_read for current information and cite source URLs. If search is not configured, direct the user to Settings → Default Agent. Never claim a tool succeeded when it failed.'] });
+      appendSystemPrompt: ['You are Default Agent in Woven Matter. Work in the supplied agent workspace. Use the Woven Matter CLI and workspace instructions for notes and databases. Use web_search and web_read for current information and cite source URLs. If search is not configured, direct the user to Settings → Connections. Never claim a tool succeeded when it failed.'] });
     await loader.reload();
     const { session } = await createAgentSession({ cwd: this.cwd, agentDir: this.directory, modelRuntime: this.runtime, model, sessionManager: manager, settingsManager, resourceLoader: loader,
       tools: ['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls', 'web_search', 'web_read'], customTools: searchTools(async () => (await this.credentials.read('exa'))?.key) });
@@ -137,7 +145,7 @@ export class DefaultAgentEngine {
           await record.session.setModel(model);
           if (record.selected !== reference) {
             record.selected = reference;
-            emit({ sessionUpdate: 'config_option_update', ...this.configuration(record, `Switched to ${model.name} · ${providerNames[model.provider]}. ${reason}`) });
+            emit({ sessionUpdate: 'config_option_update', ...this.configuration(record, `Switched to ${model.name} · ${this.providerName(model.provider)}. ${reason}`) });
           }
           await record.session.prompt(text);
           const last = record.session.messages.at(-1);
@@ -150,7 +158,7 @@ export class DefaultAgentEngine {
           record.session.agent.state.messages = beforeMessages;
         }
       }
-      throw new Error('No configured connection has access. Open Settings → Default Agent to sign in or update an API key.');
+      throw new Error('No configured connection has access. Open Settings → Connections to sign in or update an API key.');
     } finally { unsubscribe(); record.busy = false; }
   }
   async handle(method, params = {}, emit = () => {}) {

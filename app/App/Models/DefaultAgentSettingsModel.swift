@@ -25,6 +25,12 @@ final class DefaultAgentSettingsModel {
     var catalog: [Model] = []
     var providers: [Provider] = []
     var searchConfigured = false
+    var accountLabels: [String: String] = [:]
+    func connectionLabel(_ id: String) -> String {
+        if let provider = providers.first(where: { $0.id == id }), !provider.connected { return "Connect account" }
+        if let label = accountLabels[id] { return label }
+        return providers.first { $0.id == id }?.connected == true ? "Credentials present" : "Connect account"
+    }
     var busy = false
     var error: String?
     var notice: String?
@@ -43,7 +49,7 @@ final class DefaultAgentSettingsModel {
 
     var configuration: DefaultAgentSettings {
         get { scope == "global" ? settings.global : settings.resolved(scope) }
-        set { if scope == "global" { settings.global = newValue } else { settings.workspaces[scope] = newValue }; DefaultAgentSupport.settings = settings }
+        set { settings = DefaultAgentSupport.settings; if scope == "global" { settings.global = newValue } else { settings.workspaces[scope] = newValue }; DefaultAgentSupport.settings = settings }
     }
     var inherits: Bool { scope != "global" && settings.workspaces[scope] == nil }
     var keyScope: String { inherits ? "global" : scope }
@@ -51,6 +57,7 @@ final class DefaultAgentSettingsModel {
         configuration.models.isEmpty ? catalog : configuration.models.compactMap { id in catalog.first { $0.id == id } }
     }
     func setInherits(_ value: Bool) {
+        settings = DefaultAgentSupport.settings
         if value { settings.workspaces.removeValue(forKey: scope) }
         else { settings.workspaces[scope] = settings.global }
         DefaultAgentSupport.settings = settings
@@ -90,7 +97,7 @@ final class DefaultAgentSettingsModel {
         if enabled { value.fallbackModels.append(id) }
         configuration = value
     }
-    func changeScope(_ scope: String) { cancel(); self.scope = scope; catalog = []; providers = []; notice = nil; error = nil }
+    func changeScope(_ scope: String) { cancel(); settings = DefaultAgentSupport.settings; self.scope = scope; catalog = []; providers = []; accountLabels = [:]; notice = nil; error = nil }
     func cancel() {
         generation = UUID()
         operationTask?.cancel(); operationTask = nil
@@ -114,6 +121,7 @@ final class DefaultAgentSettingsModel {
         operationTask = Task { [self] in
         do {
             let prepared = try await DefaultAgentCredentialCoordinator.shared.prepare(scope)
+            accountLabels = prepared.credentials.compactMapValues { $0.accountLabel }
             if login != nil {
                 let lease = try await DefaultAgentCredentialCoordinator.shared.beginSignIn()
                 guard generation == runID, !Task.isCancelled else {
@@ -174,6 +182,7 @@ final class DefaultAgentSettingsModel {
                     do {
                         let credential = try JSONDecoder().decode(DefaultAgentCredential.self, from: JSONSerialization.data(withJSONObject: raw))
                         try DefaultAgentSupport.saveOAuth(credential, provider: provider, scope: activeKeyScope)
+                        accountLabels[provider] = credential.accountLabel
                     } catch { self.error = "Sign-in completed but could not be saved in Keychain. Try again."; busy = false; finishSignIn(); continue }
                 }
                 finishSignIn()
@@ -182,7 +191,7 @@ final class DefaultAgentSettingsModel {
                     providers = status.providers; catalog = status.models; searchConfigured = status.searchConfigured
                 } else if result["reset"] as? Bool == true { notice = "Workspace credentials reset. Shared connections are available; sign in again for independent workspace accounts." }
                 else if result["disconnected"] as? Bool == true { notice = "Workspace sign-in removed. Shared credentials will be used when available." }
-                else { notice = "Signed in. Refresh connections to see available models." }
+                else { notice = "Connected. This account is shared with the features that use it." }
                 busy = false; signInURL = nil; signInCode = nil; prompt = nil
             }
             if let error = object["error"] as? String { self.error = error; busy = false; finishSignIn() }

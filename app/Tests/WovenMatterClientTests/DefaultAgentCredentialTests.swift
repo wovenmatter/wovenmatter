@@ -58,6 +58,24 @@ struct DefaultAgentCredentialTests {
         _ = try await coordinator.prepare("local")
         #expect(await fixture.count() == 2)
     }
+    @Test @MainActor func rejectedAccessSharesOneRenewalAcrossConsumers() async throws {
+        let fixture = RejectedCredentialFixture()
+        let coordinator = ProviderAccountCoordinator(
+            refresh: { await fixture.snapshot($0) },
+            renewRejected: { try await fixture.renew($0, access: $1) }, version: { 0 })
+        _ = try await coordinator.prepare("global")
+        try await withThrowingTaskGroup(of: String?.self) { group in
+            for _ in 0..<12 {
+                group.addTask { try await coordinator.renewRejectedAccess(provider: "xai", access: "old")?.access }
+            }
+            for try await access in group { #expect(access == "new") }
+        }
+        #expect(await fixture.renewals == 1)
+        #expect(try await coordinator.prepare("local").credentials["xai"]?.access == "new")
+        // A late failure from the former token cannot refresh the new account.
+        #expect(try await coordinator.renewRejectedAccess(provider: "xai", access: "old")?.access == "new")
+        #expect(await fixture.renewals == 1)
+    }
     @Test func borrowedExportsNeverContainRefreshTokens() throws {
         let data = Data(#"{"type":"oauth","access":"fixture-access","refresh":"owner-secret","expires":9000000000000,"accountId":"fixture-account"}"#.utf8)
         let credential = try JSONDecoder().decode(DefaultAgentCredential.self, from: data)
@@ -136,5 +154,23 @@ extension DefaultAgentCredentialTests {
         coordinator.endSignIn(new)
         _ = try await coordinator.prepare("local")
         #expect(await fixture.count() == 2)
+    }
+}
+
+private actor RejectedCredentialFixture {
+    var access = "old"
+    private(set) var renewals = 0
+    func snapshot(_ scopes: [String]) -> [String: DefaultAgentPayload] {
+        var credential = DefaultAgentCredential(type: "oauth")
+        credential.access = access; credential.expires = 9_000_000_000_000
+        return Dictionary(uniqueKeysWithValues: scopes.map {
+            ($0, DefaultAgentPayload(config: .init(), credentials: ["xai": credential], workspace: $0))
+        })
+    }
+    func renew(_ provider: String, access: String) async throws {
+        #expect(provider == "xai"); #expect(access == "old")
+        renewals += 1
+        try await Task.sleep(for: .milliseconds(20))
+        self.access = "new"
     }
 }

@@ -14,6 +14,7 @@ work across sessions, and organize your conversations, notes, and data.
 
 - [Workspaces and storage](guide/workspaces.md) — shared roots, saved conversations, and where your data lives.
 - [Default Agent](guide/default-agent.md) — built-in tools, provider connections, and fallback models.
+- [Connections and dictation](guide/connections-and-dictation.md) — shared accounts, Grok dictation, and local model servers.
 - [Remote workspaces](guide/remote-workspaces.md) — work with agents on other Linux machines.
 - [Notes and data](guide/notes-and-data.md) — work beside a note and use spreadsheets, HTML, and database folders.
 - [Scheduled work and usage](guide/schedules-and-usage.md) — follow Cron Jobs, Calendar events, and provider usage.
