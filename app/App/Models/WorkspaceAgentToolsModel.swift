@@ -262,11 +262,30 @@ final class WorkspaceAgentToolsModel {
             case .calendar: result = try calendar(command, callerID: callerID, requestID: request.requestID)
             case .usage: result = try await usageHandler(command)
             case .library:
-                // Main has no retained Library table yet. Never fabricate records
-                // or silently expose conversation history through this capability.
-                if command.action == "read" { throw WorkspaceToolError.invalid("There are no retained Library items in this workspace yet.") }
-                result = .init(result: .object(["items": .array([]), "available": .bool(false),
-                    "detail": .string("The Library does not store items yet.")]))
+                var query = LibraryQuery()
+                query.search = command.options["search"] ?? ""
+                if let workspace = command.options["workspace"] { query.workspaces = Set(workspace.split(separator: ",").map { String($0).lowercased() }) }
+                if let harness = command.options["harness"] { query.harnesses = Set(harness.split(separator: ",").map(String.init)) }
+                if let kind = command.options["kind"] {
+                    guard let value = LibraryItemKind(rawValue: kind) else { throw WorkspaceToolError.invalid("Use file, link, or photo.") }
+                    query.kind = value
+                }
+                if let sender = command.options["sender"] {
+                    guard let value = LibrarySender(rawValue: sender) else { throw WorkspaceToolError.invalid("Use me or agent.") }
+                    query.sender = value
+                }
+                func date(_ value: String?) throws -> Date? {
+                    guard let value else { return nil }
+                    guard let parsed = ISO8601DateFormatter().date(from: value) else { throw WorkspaceToolError.invalid("Use an ISO8601 date.") }
+                    return parsed
+                }
+                query.since = try date(command.options["since"]); query.until = try date(command.options["until"])
+                let limit = command.options["limit"].flatMap(Int.init) ?? 100
+                let offset = command.options["offset"].flatMap(Int.init) ?? 0
+                guard (1...200).contains(limit), offset >= 0 else { throw WorkspaceToolError.invalid("Invalid pagination.") }
+                result = .init(result: try database.queryAgentLibrary(callerID: callerID,
+                    id: command.action == "read" ? try command.required("id", allowPositional: true) : nil,
+                    query: query, limit: limit, offset: offset))
             }
             // History queries persist reference IDs in the database's query
             // path. Re-journaling their full response recursively copies history.

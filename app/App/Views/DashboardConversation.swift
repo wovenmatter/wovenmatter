@@ -113,6 +113,7 @@ struct DashboardCloudConversation: View {
     @State private var bottomStackHeight: CGFloat = 0
     @State private var scrollInteractionRevision = 0
     @State private var isUserScrolling = false
+    @State private var libraryHighlightID: String?
 
     var body: some View {
         let runsByAssistantMessageID = self.runsByAssistantMessageID
@@ -233,6 +234,7 @@ struct DashboardCloudConversation: View {
                                     }
                                 }
                                 .id(row.id)
+                                .background(row.id == libraryHighlightID ? theme.palette.themeWhisper : Color.clear)
                                 .padding(.top, row.id == rows.first?.id ? 0 : row.spacingBefore)
                             }
                         }
@@ -248,6 +250,29 @@ struct DashboardCloudConversation: View {
                     .scrollTargetLayout()
                 }
                 .scrollIndicators(.never)
+                .task(id: [model.libraryMessageTarget?.id, conversation?.id]) {
+                    guard let item = model.libraryMessageTarget, item.conversationID == conversation?.id else { return }
+                    pendingBottomConversationID = nil
+                    bottomPositionRevision += 1
+                    scrollInteractionRevision += 1
+                    transcriptOwnsScroll = true
+                    scrollState.setNearBottom(false)
+                    await model.refreshConversation(id: item.conversationID)
+                    while !Task.isCancelled,
+                          model.conversationState(for: item.conversationID)?.content?.messages.contains(where: { $0.id == item.messageID }) != true {
+                        guard await model.loadOlderConversationMessages(id: item.conversationID) else { break }
+                    }
+                    guard !Task.isCancelled, conversation?.id == item.conversationID else { return }
+                    await Task.yield()
+                    try? await Task.sleep(for: .milliseconds(100))
+                    libraryHighlightID = item.messageID
+                    scrollPositionID = nil
+                    scrollWithoutAnimation(proxy, to: item.messageID, anchor: .top)
+                    pendingBottomConversationID = nil
+                    try? await Task.sleep(for: .seconds(2))
+                    libraryHighlightID = nil
+                    if model.libraryMessageTarget?.id == item.id { model.libraryMessageTarget = nil }
+                }
                 .onDisappear { model.agentTools?.observeSession(nil, token: toolObservationToken) }
                 .environment(\.conversationTranscriptInteraction) {
                     transcriptOwnsScroll = true
@@ -277,6 +302,7 @@ struct DashboardCloudConversation: View {
                 } action: { oldGeometry, newGeometry in
                     let followedBottomBeforeGrowth = oldGeometry.contentHeight != newGeometry.contentHeight
                         && scrollState.isNearBottom && !isUserScrolling && !isPrependingHistory
+                        && model.libraryMessageTarget?.conversationID != conversation?.id
                     let isPositioningConversation = pendingBottomConversationID == conversation?.id
                         && newestPresentedMessageIdentity != nil
                     scrollState.setNearBottom(newGeometry.isNearBottom && !transcriptOwnsScroll)
@@ -311,15 +337,16 @@ struct DashboardCloudConversation: View {
                 .onChange(of: conversation?.id, initial: true) { _, conversationID in
                     model.agentTools?.observeSession(conversationID, token: toolObservationToken)
                     isUserScrolling = false
-                    transcriptOwnsScroll = false
+                    transcriptOwnsScroll = model.libraryMessageTarget?.conversationID == conversationID
                     scrollInteractionRevision += 1
                     scrollState.conversationChanged(to: conversationID)
-                    pendingBottomConversationID = conversationID
+                    if transcriptOwnsScroll { scrollState.setNearBottom(false) }
+                    pendingBottomConversationID = model.libraryMessageTarget?.conversationID == conversationID ? nil : conversationID
                     bottomPositionRevision += 1
                     scrollPositionID = nil
                 }
                 .onChange(of: newestPresentedMessageIdentity, initial: true) { _, identity in
-                    guard identity != nil else { return }
+                    guard identity != nil, model.libraryMessageTarget?.conversationID != conversation?.id else { return }
                     let action = scrollState.contentChanged(
                         conversationID: conversation?.id,
                         hasMessages: !visibleMessages.isEmpty,

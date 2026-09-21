@@ -168,7 +168,10 @@ public struct OpenClawGatewayHistoryMessage: Codable, Equatable, Sendable {
         return (block["thinking"]?.stringValue ?? block["text"]?.stringValue).map { "**Thinking**\n\n" + $0 }
       case "toolCall", "tool_use": return nil
       case "image", "audio", "video", "file":
-        return "[Attachment: \(block["alt"]?.stringValue ?? block["fileName"]?.stringValue ?? block["type"]?.stringValue ?? "file") — open in OpenClaw Control UI]"
+        let label = block["alt"]?.stringValue ?? block["fileName"]?.stringValue ?? block["type"]?.stringValue ?? "Attachment"
+        let source = block["url"]?.stringValue ?? block["path"]?.stringValue ?? block["source"]?.objectValue?["url"]?.stringValue
+        if let source { return "[" + label.replacingOccurrences(of: "]", with: "") + "](" + source + ")" }
+        return "[Attachment: " + label + " — open in OpenClaw Control UI]"
       default: return nil
       }
     }.joined(separator: "\n\n")

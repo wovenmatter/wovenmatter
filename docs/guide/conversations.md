@@ -72,7 +72,14 @@ longer available, choose a supported value before continuing the conversation.
 Use **Tools** in the composer to control Notes, Conversation history, Session
 management, Timers, Usage data, Calendar, and Library independently. General
 settings supplies defaults for new sessions. Calendar can be Full access or Read
-only; Usage data is always read-only. Library does not retain items yet.
+only; Usage data and Library are read-only tools. Library lets an agent find
+exchanged files, links, and photos and identify their source messages.
+
+Use the plus button to **Attach or upload photos or files**, **Attach notes**,
+or **Attach conversation**. You can also drop files onto the composer or paste
+a screenshot. Attachments remain drafts until you send the message. Files and
+photos appear in [Library](notes-and-data.md#library) after sending; note and
+conversation references stay attached to the message.
 
 Attaching a conversation grants read-only access to that session even when
 Conversation history is disabled. Session management lets an agent create or

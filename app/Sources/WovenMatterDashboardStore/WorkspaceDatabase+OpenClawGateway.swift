@@ -738,6 +738,9 @@ extension WorkspaceDatabase {
         try bind(value, at: Int32(index + 1), to: row)
       }
       try stepDone(row)
+      if let payload = try? JSONDecoder().decode(GatewayJSONValue.self, from: message.raw) {
+        try captureGatewayLibraryFilesUnlocked(payload, messageID: id, conversationID: conversationID)
+      }
     }
     try reconcileOpenClawActivitiesUnlocked(conversationID: conversationID, changed: history.messages, liveRunIDs: liveRunIDs)
     let touch = try prepareUnlocked("""

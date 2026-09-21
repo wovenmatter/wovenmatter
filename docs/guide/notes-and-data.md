@@ -4,6 +4,39 @@ Open a note beside your conversation to work on it with your agent. Keep a
 research summary in view, develop a plan, or organize reference material without
 scrolling back through the chat. Notes and conversations can share the same folders.
 
+## Library
+
+**Library** collects files, links, and photos, including screenshots, exchanged
+in new messages after the feature becomes available. Existing conversation
+history is not added. An item appears when you send an attachment or link, or
+when an agent hands back a file, image, link, or citation. Files only mentioned
+in internal tool activity are not collected. Notes and conversation references
+remain message attachments and do not appear as Library files.
+
+Combine workspace, agent type, individual agent, sender, and item-type filters.
+Workspace and agent filters allow multiple selections, all, or none. Date
+filters include Today, Last 7 days, Last 30 days, Last 90 days, and All time.
+Search by title, link, or conversation, and sort newest or oldest first. Each
+item shows its sender, workspace, and sent date and time.
+
+Choose **Open** to open the link, photo, or file, or **Show in conversation** to
+jump to its source message. Archived conversations show a read-only source
+message. Separate exchanges have separate entries, even when they share a URL
+or file. Deleting a source message, clearing its conversation, or deleting the
+conversation removes its Library entries. Archiving keeps them.
+
+Web URLs stay links. Uploaded files reuse existing attachment storage. Files
+handed back from a local workspace or a connected remote container are saved
+as local snapshots, up to 25 MB each, so they remain available after the
+workspace disconnects or the original changes. Remote reads use the existing
+workspace connection and are restricted to its working folder and temporary
+output folders. Unavailable files show the reason and a **Retry** action;
+reconnect the workspace or ask the agent for a smaller file when needed.
+
+File bytes live on disk, outside SQLite. Identical saved content shares one
+stored copy; unreferenced Library copies are cleaned up after a short grace
+period. Original workspace files are not deleted or edited by the Library.
+
 ## Work beside a note
 
 The **New Note** picker offers **Note**, **Spreadsheet**, and **HTML**. Each is

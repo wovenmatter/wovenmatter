@@ -123,8 +123,10 @@ struct WorkspaceView: View {
     @State private var attachmentDraftsByConversation: [String: [AgentMessageAttachmentDraft]] = [:]
     @State private var submittingConversationIDs: Set<String> = []
     @State private var showsAttachmentImporter = false
+    @State private var archivedLibrarySource: WorkspaceLibraryItem?
     @State private var attachmentPicker: DashboardAttachmentPickerKind?
     @State private var attachmentTargetPanelID: DashboardChatPanelID?
+    @State private var attachmentTargetConversationID: String?
     @State private var notice: String?
     @State private var noticeTask: Task<Void, Never>?
     @State private var showsNewChatChooser = false
@@ -276,6 +278,9 @@ struct WorkspaceView: View {
             model.persistMacSurfaceProfileFromUserDefaults()
         }
         .onDisappear { noticeTask?.cancel() }
+        .sheet(item: $archivedLibrarySource) { item in
+            DashboardLibrarySourceSheet(item: item, model: model)
+        }
         .fileImporter(
             isPresented: $showsAttachmentImporter,
             allowedContentTypes: [.data],
@@ -283,8 +288,8 @@ struct WorkspaceView: View {
         ) { result in
             switch result {
             case .success(let urls):
-                if let panelID = attachmentTargetPanelID {
-                    _ = attachFiles(urls, to: panelID)
+                if let conversationID = attachmentTargetConversationID {
+                    _ = attachFiles(urls, conversationID: conversationID)
                 }
                 attachmentTargetPanelID = nil
             case .failure(let error):
@@ -302,21 +307,19 @@ struct WorkspaceView: View {
                     }
                 },
                 onSelectNote: { note in
-                    if let panelID = attachmentTargetPanelID {
-                        appendAttachment(model.noteAttachmentDraft(note), to: panelID)
+                    if let conversationID = attachmentTargetConversationID {
+                        appendAttachment(model.noteAttachmentDraft(note), conversationID: conversationID)
                     }
                     attachmentPicker = nil
                     attachmentTargetPanelID = nil
                 },
                 onSelectConversation: { conversation in
+                    let targetConversationID = attachmentTargetConversationID
                     attachmentPicker = nil
                     Task { @MainActor in
                         do {
-                            if let panelID = attachmentTargetPanelID {
-                                appendAttachment(
-                                    try await model.conversationAttachmentDraft(conversation),
-                                    to: panelID
-                                )
+                            if let conversationID = targetConversationID {
+                                appendAttachment(try await model.conversationAttachmentDraft(conversation), conversationID: conversationID)
                             }
                         } catch {
                             showNotice(error.localizedDescription)
@@ -654,10 +657,15 @@ struct WorkspaceView: View {
                         }
                     )
                 case .library:
-                    DashboardUnavailableUtility(
-                        icon: .libraryBigControl,
-                        title: "Library"
-                    )
+                    DashboardLibrarySurface(model: model) { item in
+                        if model.workspaceOverview?.conversations.contains(where: { $0.id == item.conversationID }) == true {
+                            model.libraryMessageTarget = item
+                            destination = .workspace
+                            selectConversation(item.conversationID)
+                        } else {
+                            archivedLibrarySource = item
+                        }
+                    }
                 case .databases:
                     DashboardDatabasesView(model: model)
                 case .usage:
@@ -1073,6 +1081,7 @@ struct WorkspaceView: View {
         }
         activatePanel(panelID)
         attachmentTargetPanelID = panelID
+        attachmentTargetConversationID = chatPanels.panel(id: panelID)?.conversationID
         switch action {
         case .upload: showsAttachmentImporter = true
         case .note: attachmentPicker = .note
@@ -1085,17 +1094,31 @@ struct WorkspaceView: View {
         _ urls: [URL],
         to panelID: DashboardChatPanelID
     ) -> Bool {
-        guard chatPanels.panel(id: panelID)?.conversationID != nil else { return false }
+        guard let conversationID = chatPanels.panel(id: panelID)?.conversationID else { return false }
+        return attachFiles(urls, conversationID: conversationID)
+    }
+
+    @discardableResult
+    private func attachFiles(_ urls: [URL], conversationID: String) -> Bool {
         Task { @MainActor in
             let scoped = urls.filter { $0.startAccessingSecurityScopedResource() }
-            defer { scoped.forEach { $0.stopAccessingSecurityScopedResource() } }
+            defer {
+                scoped.forEach { $0.stopAccessingSecurityScopedResource() }
+                for url in urls {
+                    let folder = url.deletingLastPathComponent()
+                    if folder.deletingLastPathComponent().standardizedFileURL == FileManager.default.temporaryDirectory.standardizedFileURL,
+                       folder.lastPathComponent.hasPrefix("wovenmatter-paste-") {
+                        try? FileManager.default.removeItem(at: folder)
+                    }
+                }
+            }
             do {
                 let files = urls.map { url in
                     let type = UTType(filenameExtension: url.pathExtension)
                     return (url: url, mimeType: type?.preferredMIMEType ?? "application/octet-stream")
                 }
                 for attachment in try await model.stageMessageAttachments(files) {
-                    appendAttachment(attachment, to: panelID)
+                    appendAttachment(attachment, conversationID: conversationID)
                 }
             } catch {
                 showNotice(error.localizedDescription)
@@ -1106,9 +1129,8 @@ struct WorkspaceView: View {
 
     private func appendAttachment(
         _ attachment: AgentMessageAttachmentDraft,
-        to panelID: DashboardChatPanelID
+        conversationID: String
     ) {
-        guard let conversationID = chatPanels.panel(id: panelID)?.conversationID else { return }
         var current = attachmentDraftsByConversation[conversationID] ?? []
         let duplicate = current.contains { existing in
             switch (existing, attachment) {

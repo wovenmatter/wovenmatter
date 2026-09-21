@@ -842,6 +842,9 @@ public actor OpenClawGatewayCoordinator {
         active.liveToolCallIDs.insert(activity.id)
       }
     }
+    if projection.terminalState != nil, let payload = event.payload, let assistantMessageID {
+      try? database.captureGatewayLibraryFiles(payload, messageID: assistantMessageID, conversationID: active.conversationID)
+    }
     if let terminal = projection.terminalState {
       active.assistantSource.finish(runID: remoteRunID)
       active.terminalStatesByRemoteRunID[remoteRunID] = terminal

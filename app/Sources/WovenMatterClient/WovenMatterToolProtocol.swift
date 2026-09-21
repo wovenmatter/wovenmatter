@@ -75,7 +75,7 @@ public struct WovenMatterToolCommand: Sendable {
     ]
     guard allowedActions[group]?.contains(action) == true else { throw WorkspaceToolError.invalid("Unknown \(domain) command '\(action)'.") }
     let booleanFlags: Set<String> = ["all-workspace", "independent", "no-notify", "paused", "all-day", "json", "header"]
-    let valueFlags: Set<String> = ["id", "session", "conversation", "note-id", "folder", "workspace", "directory", "harness", "model", "thinking", "title", "text", "purpose", "request-id", "search", "run", "kind", "since", "until", "after", "before", "limit", "offset", "characters", "at", "every", "starts-at", "ends-at", "description", "enabled", "revision", "version", "file", "html", "style", "block-id", "table-id", "row", "column", "rows", "columns", "source-id", "database-id", "path", "query"]
+    let valueFlags: Set<String> = ["id", "session", "conversation", "note-id", "folder", "workspace", "directory", "harness", "model", "thinking", "title", "text", "purpose", "request-id", "search", "run", "kind", "sender", "since", "until", "after", "before", "limit", "offset", "characters", "at", "every", "starts-at", "ends-at", "description", "enabled", "revision", "version", "file", "html", "style", "block-id", "table-id", "row", "column", "rows", "columns", "source-id", "database-id", "path", "query"]
     var positional: [String] = [], options: [String: String] = [:]
     var indices: [String: Int] = [:], operationArguments = Array(arguments.prefix(2))
     var wantsHelp = false
@@ -198,7 +198,7 @@ public struct WovenMatterToolCommand: Sendable {
       Calendar access is set in General settings; read-only mode rejects mutations.
       Mutation retries accept --request-id UUID and preserve later edits or removal.
       """
-    case .library: "list | read ITEM_ID\nOnly existing retained items are available. The Library UI is still under development."
+    case .library: "list [--search TEXT --workspace ID[,ID] --harness NAME[,NAME] --kind file|link|photo --sender me|agent --since ISO8601 --until ISO8601 --offset N --limit 1...200] | read ITEM_ID\nFiles, links, and photos from new exchanges. Results include source message IDs, original locations, and retention status. File contents are kept on disk; remote original paths belong to their source workspace."
     }
     return "Usage: wovenmatter \(group.rawValue) COMMAND [OPTIONS]\n\n" + body + "\n"
   }
