@@ -470,14 +470,6 @@ struct DashboardCloudConversation: View {
                                 model.updateLocalACPSession(conversation: conversation, permission: selection)
                             }
                         },
-                        onSaveDefault: { field, workspaceOnly in
-                            guard let conversation else { return }
-                            model.saveSessionDefault(conversation: conversation, field: field, workspaceOnly: workspaceOnly)
-                        },
-                        onClearDefault: { field, workspaceOnly in
-                            guard let conversation else { return }
-                            model.clearSessionDefault(conversation: conversation, field: field, workspaceOnly: workspaceOnly)
-                        },
                         onAttachmentAction: onAttachmentAction,
                         onRemoveAttachment: onRemoveAttachment,
                         onDropFiles: onDropFiles,
