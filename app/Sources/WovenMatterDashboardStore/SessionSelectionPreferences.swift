@@ -219,10 +219,26 @@ public final class SessionSelectionPreferences {
     harness: String,
     workspace: String?
   ) -> SessionSelections {
-    let harnessDefaults = document.harnessDefaults[harness] ?? SessionSelections()
+    let harnessDefaults = (document.harnessDefaults[harness] ?? SessionSelections())
+      .overlaying(Self.productDefaults(harness: harness))
     guard let workspace else { return harnessDefaults }
     return (document.workspaceDefaults[workspace]?[harness] ?? SessionSelections())
       .overlaying(harnessDefaults)
+  }
+
+  /// The app's starting policy for new conversations, below explicit user
+  /// defaults. Never written as an override or applied to imported sessions.
+  private static func productDefaults(harness: String) -> SessionSelections {
+    let permission: String?
+    switch AgentRuntimeKind(rawValue: harness) {
+    case .codex: permission = "agent-full-access"
+    case .claudeCode, .grokBuild: permission = "bypassPermissions"
+    case .openclaw, .hermes, .opencode: permission = "full"
+    // Cursor's existing internal value means Full access, not smart review.
+    case .cursor: permission = "auto"
+    case .pi, nil: permission = nil
+    }
+    return SessionSelections(permission: permission)
   }
 
   private func setDefaults(

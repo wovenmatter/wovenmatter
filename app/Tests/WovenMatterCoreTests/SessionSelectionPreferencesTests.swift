@@ -5,6 +5,67 @@ import WovenMatterDashboardStore
 
 @MainActor
 struct SessionSelectionPreferencesTests {
+  @Test("new conversations capture Full access without writing a user default", arguments: [
+    ("codex", "agent-full-access"), ("claude_code", "bypassPermissions"),
+    ("grok_build", "bypassPermissions"), ("openclaw", "full"),
+    ("hermes", "full"), ("opencode", "full"), ("cursor", "auto")
+  ])
+  func newConversationFullAccess(harness: String, permission: String) throws {
+    try withPreferences { preferences, defaults in
+      #expect(preferences.defaults(harness: harness) == SessionSelections(permission: permission))
+      #expect(preferences.defaults(harness: harness, workspace: "remote:fixture")
+        == SessionSelections(permission: permission))
+      #expect(preferences.storedDefaults(harness: harness).isEmpty)
+      #expect(defaults.data(forKey: SessionSelectionPreferences.storageKey) == nil)
+      let captured = preferences.captureConversation(
+        id: "new", harness: harness, workspace: "remote:fixture",
+        nativeFallback: SessionSelections(model: "native-model", permission: "native-policy"))
+      #expect(captured.selections == SessionSelections(model: "native-model", permission: permission))
+      #expect(captured.desiredSelections == SessionSelections(permission: permission))
+      #expect(captured.requiresApplication)
+      let reopened = SessionSelectionPreferences(defaults: defaults)
+      #expect(reopened.conversation(id: "new") == captured)
+      let imported = reopened.captureExistingConversation(
+        id: "imported", harness: harness, workspace: "remote:fixture",
+        selections: SessionSelections(permission: "native-policy"))
+      #expect(imported.selections.permission == "native-policy")
+      #expect(imported.desiredSelections.isEmpty)
+      #expect(!imported.requiresApplication)
+    }
+  }
+
+  @Test("user permission choices override Full access and reset restores inheritance")
+  func fullAccessDefaultCanBeOverridden() throws {
+    try withPreferences { preferences, defaults in
+      preferences.saveDefaults(SessionSelections(model: "chosen-model", permission: "read-only"), harness: "codex")
+      preferences.saveDefault(.permission, from: SessionSelections(permission: "agent"), harness: "codex", workspace: "project")
+      #expect(preferences.defaults(harness: "codex", workspace: "other").permission == "read-only")
+      #expect(preferences.captureConversation(id: "workspace", harness: "codex", workspace: "project").desiredSelections.permission == "agent")
+      #expect(preferences.captureConversation(id: "explicit", harness: "codex", workspace: "project",
+        selections: SessionSelections(permission: "read-only")).desiredSelections.permission == "read-only")
+      preferences.removeDefault(.permission, harness: "codex", workspace: "project")
+      #expect(preferences.defaults(harness: "codex", workspace: "project").permission == "read-only")
+      preferences.removeDefault(.permission, harness: "codex")
+      #expect(preferences.defaults(harness: "codex", workspace: "project")
+        == SessionSelections(model: "chosen-model", permission: "agent-full-access"))
+      let reopened = SessionSelectionPreferences(defaults: defaults)
+      #expect(reopened.conversation(id: "workspace")?.desiredSelections.permission == "agent")
+      #expect(reopened.conversation(id: "explicit")?.desiredSelections.permission == "read-only")
+      reopened.updateConversation(id: "workspace", selections: SessionSelections(permission: "read-only"))
+      #expect(preferences.conversation(id: "workspace")?.desiredSelections.permission == "read-only")
+    }
+  }
+
+  @Test("Pi and unknown harnesses retain native defaults", arguments: ["pi", "future-harness"])
+  func noPermissionDefaultForUnsupportedHarnesses(harness: String) throws {
+    try withPreferences { preferences, _ in
+      #expect(preferences.defaults(harness: harness).isEmpty)
+      let captured = preferences.captureConversation(id: "new", harness: harness, workspace: "project")
+      #expect(captured.selections.isEmpty)
+      #expect(captured.desiredSelections.isEmpty)
+    }
+  }
+
   @Test("new sessions resolve each field in conversation, workspace, harness, native order")
   func fieldwisePrecedence() throws {
     try withPreferences { preferences, _ in
@@ -203,7 +264,8 @@ struct SessionSelectionPreferencesTests {
       preferences.captureConversation(
         id: "session", harness: "codex", workspace: "project",
         selections: SessionSelections(model: "reasoning-model", thinking: "high", tools: []),
-        nativeFallback: SessionSelections(permission: "native-policy")
+        nativeFallback: SessionSelections(permission: "native-policy"),
+        capturedDefaults: SessionSelections()
       )
       let confirmed = preferences.replaceConfirmedSelections(
         id: "session", selections: SessionSelections(model: "no-effort-model", permission: "native-policy", tools: [])
@@ -261,7 +323,7 @@ struct SessionSelectionPreferencesTests {
     }
   }
 
-  @Test("malformed and unknown-version storage falls back to native settings without a write")
+  @Test("malformed storage reads use product defaults without rewriting saved data")
   func corruptStorageIsSafe() throws {
     try withPreferences { preferences, defaults in
       let invalidDocuments = [
@@ -272,15 +334,16 @@ struct SessionSelectionPreferencesTests {
       defaults.set("unrelated setting", forKey: "legacy-preference")
       for data in invalidDocuments {
         defaults.set(data, forKey: SessionSelectionPreferences.storageKey)
-        #expect(preferences.defaults(harness: "codex", workspace: "project").isEmpty)
+        #expect(preferences.defaults(harness: "codex", workspace: "project")
+          == SessionSelections(permission: "agent-full-access"))
         #expect(preferences.conversation(id: "session") == nil)
         #expect(defaults.data(forKey: SessionSelectionPreferences.storageKey) == data)
         let captured = preferences.captureConversation(
           id: "session", harness: "codex", workspace: "project",
           nativeFallback: SessionSelections(model: "native", permission: "read-only")
         )
-        #expect(captured.selections == SessionSelections(model: "native", permission: "read-only"))
-        #expect(captured.desiredSelections.isEmpty)
+        #expect(captured.selections == SessionSelections(model: "native", permission: "agent-full-access"))
+        #expect(captured.desiredSelections == SessionSelections(permission: "agent-full-access"))
       }
       #expect(defaults.string(forKey: "legacy-preference") == "unrelated setting")
     }

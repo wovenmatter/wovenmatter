@@ -60,8 +60,6 @@ struct WorkspaceToolDefaultsCard: View {
 struct WorkspaceSessionToolsMenu: View {
     @Bindable var tools: WorkspaceAgentToolsModel
     let sessionID: String
-    var onSaveDefault: ((Bool) -> Void)? = nil
-    var onClearDefault: ((Bool) -> Void)? = nil
     @State private var confirmsTimerPause = false
     @State private var error: String?
 
@@ -71,15 +69,6 @@ struct WorkspaceSessionToolsMenu: View {
             error = nil
         } catch WorkspaceToolError.timerPauseConfirmation { confirmsTimerPause = true }
         catch { self.error = error.localizedDescription }
-    }
-
-    private func defaultRow(_ label: String, action: @escaping () -> Void) -> some View {
-        DashboardComposerPopoverRow(action: action) {
-            Text(label).font(.system(size: 11.5))
-                .frame(maxWidth: .infinity, minHeight: 30, alignment: .leading)
-                .padding(.horizontal, 8)
-        }
-        .accessibilityLabel("\(label), tools")
     }
 
     var body: some View {
@@ -97,21 +86,6 @@ struct WorkspaceSessionToolsMenu: View {
                     }
                 }
                 WorkspaceSessionManagementControls(tools: tools, sessionID: sessionID)
-                if onSaveDefault != nil || onClearDefault != nil {
-                    Divider()
-                    Text("Defaults apply to new chats.")
-                        .font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
-                    VStack(spacing: 2) {
-                        if let onSaveDefault {
-                            defaultRow("Use for new chats in this workspace") { onSaveDefault(true) }
-                            defaultRow("Use for new chats with this harness") { onSaveDefault(false) }
-                        }
-                        if let onClearDefault {
-                            defaultRow("Reset workspace default") { onClearDefault(true) }
-                            defaultRow("Reset harness default") { onClearDefault(false) }
-                        }
-                    }
-                }
                 if let error = error ?? tools.error { Text(error).font(.system(size: 11.5)).foregroundStyle(DashboardPalette.mutedForeground) }
             }.padding(16)
         }.scrollIndicators(.never)
