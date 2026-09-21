@@ -1513,6 +1513,14 @@ public actor LocalACPClient {
             pendingNewSessionUpdates?.append(envelope)
             return
         }
+        if envelope.method == "session/request_permission",
+           pendingNewSessionUpdates == nil,
+           !belongsToActiveSession(envelope) {
+            // A child must not wait behind an unrelated parent approval. This
+            // settles only foreign requests; parent delivery keeps its barrier.
+            if let id = envelope.id { try respondWithCancelledPermission(id: id) }
+            return
+        }
         enqueueNotification(envelope)
     }
 
@@ -1537,6 +1545,7 @@ public actor LocalACPClient {
 
     private func handleNotification(_ envelope: ACPEnvelope) async throws {
         if envelope.method == "session/update" {
+            guard belongsToActiveSession(envelope) else { return }
             let update = envelope.params?["update"]
             switch update?["sessionUpdate"]?.stringValue {
             case "config_option_update", "available_commands_update", "current_mode_update":
@@ -1554,6 +1563,12 @@ public actor LocalACPClient {
                 try await activeEventHandler?(event)
             }
         } else if envelope.method == "session/request_permission" {
+            guard belongsToActiveSession(envelope) else {
+                // Multiplexed child requests must settle on the same connection,
+                // without exposing or authorizing them as this session's work.
+                if let id = envelope.id { try respondWithCancelledPermission(id: id) }
+                return
+            }
             try await respondToPermissionRequest(
                 envelope,
                 handler: activePermissionHandler
@@ -1950,7 +1965,7 @@ public actor LocalACPClient {
         pendingPermissionRequestIDs.remove(at: pendingIndex)
         let selected = selectedID.flatMap { candidate in
             options.first { $0.id == candidate }
-        } ?? options.first { $0.kind == "reject_once" }
+        }
 
         if let selected {
             try write(ACPEnvelope(
