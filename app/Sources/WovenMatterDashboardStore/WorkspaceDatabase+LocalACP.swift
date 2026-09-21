@@ -11,6 +11,7 @@ public struct LocalACPSessionDescriptor: Equatable, Sendable {
   public let acpSessionID: String?
   public let model: String?
   public let thinking: String?
+  public let permission: String?
   public let buzzWorkspaceLinkID: UUID?
   public let buzzAgentID: String?
   public let remoteWorkspaceID: UUID?
@@ -22,6 +23,7 @@ public struct LocalACPSessionDescriptor: Equatable, Sendable {
     acpSessionID: String?,
     model: String? = nil,
     thinking: String? = nil,
+    permission: String? = nil,
     buzzWorkspaceLinkID: UUID? = nil,
     buzzAgentID: String? = nil,
     remoteWorkspaceID: UUID? = nil
@@ -32,6 +34,7 @@ public struct LocalACPSessionDescriptor: Equatable, Sendable {
     self.acpSessionID = acpSessionID
     self.model = model
     self.thinking = thinking
+    self.permission = permission
     self.buzzWorkspaceLinkID = buzzWorkspaceLinkID
     self.buzzAgentID = buzzAgentID
     self.remoteWorkspaceID = remoteWorkspaceID
@@ -438,7 +441,7 @@ extension WorkspaceDatabase {
         SELECT session.conversation_id, session.runtime_kind,
           session.title, session.acp_session_id, session.model,
           session.thinking, session.buzz_workspace_link_id,
-          session.buzz_agent_id, session.remote_workspace_id
+          session.buzz_agent_id, session.remote_workspace_id, session.permission
         FROM desktop_local_acp_sessions AS session
         JOIN dashboard_conversations AS conversation
           ON conversation.id = session.conversation_id
@@ -459,6 +462,7 @@ extension WorkspaceDatabase {
         acpSessionID: optionalText(statement, column: 3),
         model: optionalText(statement, column: 4),
         thinking: optionalText(statement, column: 5),
+        permission: optionalText(statement, column: 9),
         buzzWorkspaceLinkID: optionalText(statement, column: 6)
           .flatMap(UUID.init(uuidString:)),
         buzzAgentID: optionalText(statement, column: 7),
@@ -545,19 +549,21 @@ extension WorkspaceDatabase {
     conversationID: String,
     model: String?,
     thinking: String?,
+    permission: String? = nil,
     updatedAt: Date = Date()
   ) throws {
     try transaction {
       let statement = try prepareUnlocked("""
         UPDATE desktop_local_acp_sessions
-        SET model = ?, thinking = ?, revision = revision + 1, updated_at = ?
+        SET model = ?, thinking = ?, permission = COALESCE(?, permission), revision = revision + 1, updated_at = ?
         WHERE conversation_id = ?
         """)
       defer { sqlite3_finalize(statement) }
       try bindNullable(model, at: 1, to: statement)
       try bindNullable(thinking, at: 2, to: statement)
-      try bind(Self.timestamp(updatedAt), at: 3, to: statement)
-      try bind(conversationID, at: 4, to: statement)
+      try bindNullable(permission, at: 3, to: statement)
+      try bind(Self.timestamp(updatedAt), at: 4, to: statement)
+      try bind(conversationID, at: 5, to: statement)
       try stepDone(statement)
       guard changedRowCountUnlocked == 1 else {
         throw LocalACPSessionDatabaseError.sessionNotFound

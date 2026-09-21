@@ -195,7 +195,7 @@ extension WorkspaceDatabase {
         authority_agent_id TEXT,
         revision INTEGER NOT NULL DEFAULT 1,
         title TEXT NOT NULL,
-        acp_session_id TEXT, model TEXT, thinking TEXT,
+        acp_session_id TEXT, model TEXT, thinking TEXT, permission TEXT,
         buzz_workspace_link_id TEXT, buzz_agent_id TEXT,
         remote_workspace_id TEXT,
         created_at TEXT NOT NULL, updated_at TEXT NOT NULL
@@ -402,6 +402,9 @@ extension WorkspaceDatabase {
     var columns: Set<String> = []
     while sqlite3_step(statement) == SQLITE_ROW {
       if let name = optionalText(statement, column: 1) { columns.insert(name) }
+    }
+    if !columns.contains("permission") {
+      try executeUnlocked("ALTER TABLE desktop_local_acp_sessions ADD COLUMN permission TEXT")
     }
     if !columns.contains("remote_workspace_id") {
       try executeUnlocked(

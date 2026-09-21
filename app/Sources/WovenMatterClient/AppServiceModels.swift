@@ -32,6 +32,9 @@ public struct LocalACPSessionMetadata: Codable, Equatable, Sendable {
     public let sessionKey: String
     public let model: String?
     public let thinking: String?
+    public let permission: String?
+    public let permissionOptions: [String]?
+    public let permissionOptionMetadata: [String: SessionOptionMetadata]?
     public let modelOptions: [String]?
     public let excludedModels: [String]?
     public let allowedModels: [String]?
@@ -50,11 +53,17 @@ public struct LocalACPSessionMetadata: Codable, Equatable, Sendable {
         thinkingLevels: [String]? = nil,
         slashCommands: [LocalACPSlashCommand] = [],
         modelOptionMetadata: [String: SessionOptionMetadata]? = nil,
-        thinkingOptionMetadata: [String: SessionOptionMetadata]? = nil
+        thinkingOptionMetadata: [String: SessionOptionMetadata]? = nil,
+        permission: String? = nil,
+        permissionOptions: [String]? = nil,
+        permissionOptionMetadata: [String: SessionOptionMetadata]? = nil
     ) {
         self.sessionKey = sessionKey
         self.model = model
         self.thinking = thinking
+        self.permission = permission
+        self.permissionOptions = permissionOptions
+        self.permissionOptionMetadata = permissionOptionMetadata
         self.modelOptions = modelOptions
         self.allowedModels = allowedModels
         self.excludedModels = excludedModels

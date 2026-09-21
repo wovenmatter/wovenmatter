@@ -300,6 +300,20 @@ public struct LocalACPRuntimeAvailability: Equatable, Identifiable, Sendable {
     }
 }
 
+/// A shell-quoted remote command retained as tokens so harness launch settings
+/// can be changed without parsing shell text or modifying SSH's own arguments.
+public struct LocalACPRuntimeWrappedCommand: Sendable {
+    public let argumentIndex: Int
+    public let command: [String]
+    public let harnessArgumentsStartIndex: Int
+
+    public init(argumentIndex: Int, command: [String], harnessArgumentsStartIndex: Int) {
+        self.argumentIndex = argumentIndex
+        self.command = command
+        self.harnessArgumentsStartIndex = harnessArgumentsStartIndex
+    }
+}
+
 public struct LocalACPRuntimeLaunchConfiguration: Sendable {
     public let runtimeKind: AgentRuntimeKind
     public let executableURL: URL
@@ -308,6 +322,8 @@ public struct LocalACPRuntimeLaunchConfiguration: Sendable {
     public let environmentKeysToRemove: [String]
     public let environmentKeyPrefixesToRemove: [String]
     public let processWorkingDirectoryURL: URL?
+    public let requestedPermission: String?
+    public let wrappedCommand: LocalACPRuntimeWrappedCommand?
 
     public init(
         runtimeKind: AgentRuntimeKind,
@@ -316,7 +332,9 @@ public struct LocalACPRuntimeLaunchConfiguration: Sendable {
         environment: [String: String] = [:],
         environmentKeysToRemove: [String] = [],
         environmentKeyPrefixesToRemove: [String] = [],
-        processWorkingDirectoryURL: URL? = nil
+        processWorkingDirectoryURL: URL? = nil,
+        requestedPermission: String? = nil,
+        wrappedCommand: LocalACPRuntimeWrappedCommand? = nil
     ) {
         self.runtimeKind = runtimeKind
         self.executableURL = executableURL
@@ -325,6 +343,8 @@ public struct LocalACPRuntimeLaunchConfiguration: Sendable {
         self.environmentKeysToRemove = environmentKeysToRemove
         self.environmentKeyPrefixesToRemove = environmentKeyPrefixesToRemove
         self.processWorkingDirectoryURL = processWorkingDirectoryURL
+        self.requestedPermission = requestedPermission
+        self.wrappedCommand = wrappedCommand
     }
 }
 
