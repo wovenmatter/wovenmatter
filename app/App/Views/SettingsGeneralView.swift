@@ -394,7 +394,7 @@ private enum ReleaseUpdateState {
         case .idle: "Check for the latest version of Woven Matter."
         case .checking: "Checking for the latest version of Woven Matter…"
         case .current: "You’re up to date."
-        case .available: "Download and verify the signed update inside Woven Matter."
+        case .available: "Download and verify the signed update."
         case .downloading: "Downloading the update…"
         case .ready: "Installing restarts Woven Matter."
         case .installing: "Woven Matter will restart."
