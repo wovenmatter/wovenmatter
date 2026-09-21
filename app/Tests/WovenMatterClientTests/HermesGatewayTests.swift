@@ -29,6 +29,37 @@ struct HermesGatewayTests {
         await client.shutdown()
     }
 
+    @Test func remoteWorkspaceAttachesTheStagedPathWithoutUploadingBytes() async throws {
+        let transport = HermesTransportFixture()
+        let client = try makeClient(transport, environment: remoteHermesEnvironment())
+        _ = try await client.initializeSession(workingDirectory: URL(fileURLWithPath: "/tmp"), existingSessionID: nil, title: nil, systemPrompt: nil)
+        let remotePath = "/home/.woven-matter/.wovenmatter/attachments/h/notes.txt"
+        let file = AgentFileAttachmentDraft(kind: .file, fileName: "notes.txt", mimeType: "text/plain",
+            sizeBytes: 1, contentHash: "h", localURL: URL(fileURLWithPath: "/tmp/notes.txt"), remotePath: remotePath)
+        let input = AgentMessageInput(text: "Inspect this", attachments: [.file(file)])
+        let turn = Task { try await client.prompt(input, onEvent: nil, onPermission: nil, onInteraction: nil) }
+        try await transport.waitForSubmit()
+        #expect(await transport.calls.first { $0.0 == "file.attach" }?.1["path"] == .string(remotePath))
+        #expect(await transport.calls.contains { $0.0 == "prompt.submit" })
+        await transport.complete()
+        #expect(try await turn.value == .endTurn)
+        await client.shutdown()
+    }
+
+    @Test func remoteWorkspaceRefusesAnUnstagedFileBeforeSubmitting() async throws {
+        let transport = HermesTransportFixture()
+        let client = try makeClient(transport, environment: remoteHermesEnvironment())
+        _ = try await client.initializeSession(workingDirectory: URL(fileURLWithPath: "/tmp"), existingSessionID: nil, title: nil, systemPrompt: nil)
+        let file = AgentFileAttachmentDraft(kind: .file, fileName: "notes.txt", mimeType: "text/plain",
+            sizeBytes: 1, contentHash: "h", localURL: URL(fileURLWithPath: "/tmp/notes.txt"))
+        await #expect(throws: HermesGatewayError.self) {
+            try await client.prompt(AgentMessageInput(text: "Inspect this", attachments: [.file(file)]),
+                onEvent: nil, onPermission: nil, onInteraction: nil)
+        }
+        #expect(await !transport.calls.contains { $0.0 == "file.attach" || $0.0 == "prompt.submit" })
+        await client.shutdown()
+    }
+
     @Test func attachmentsUseNativeSchemasAndRollBackImagesWhenStagingFails() async throws {
         let transport = HermesTransportFixture()
         let client = makeClient(transport)
@@ -220,10 +251,15 @@ struct HermesGatewayTests {
         await client.shutdown()
     }
 
-    private func makeClient(_ transport: HermesTransportFixture) -> HermesGatewayClient {
+    private func makeClient(_ transport: HermesTransportFixture, environment: [String: String] = [:]) -> HermesGatewayClient {
         HermesGatewayClient(launch: LocalACPRuntimeLaunchConfiguration(runtimeKind: .hermes,
-            executableURL: URL(fileURLWithPath: "/fixture/not-executed"), arguments: [], environment: [:]),
+            executableURL: URL(fileURLWithPath: "/fixture/not-executed"), arguments: [], environment: environment),
             transport: transport, home: "/tmp/hermes-fixture")
+    }
+
+    private func remoteHermesEnvironment() throws -> [String: String] {
+        let connection = HermesGatewayConnection(home: "/tmp/hermes-fixture", port: 9, token: "fixture", pid: 1)
+        return ["WOVENMATTER_HERMES_CONNECTION": try JSONEncoder().encode(connection).base64EncodedString()]
     }
 }
 

@@ -573,6 +573,11 @@ final class OpenCodeModel {
             try await applySessionSelections(id, selections: captured.desiredSelections)
             sessionPreferences.markApplied(id: id)
         }
+        var input = input
+        if let configuration = remoteConfiguration, !input.files.isEmpty {
+            guard let remoteWorkspaces else { throw OpenCodeError.message("This remote workspace is unavailable.") }
+            input = try await remoteWorkspaces.stagingFiles(of: input, in: configuration.id)
+        }
         if let command = OpenCodeComposerMetadata.invocation(input.text, commands: commands[id] ?? []) {
             try await coordinator.command(link, name: command.name,
                 input: AgentMessageInput(text: command.arguments, attachments: input.attachments))
