@@ -68,7 +68,7 @@ async function invoke(message) {
         const profile = await grokAccountProfile(credential);
         if (profile.displayName) credential = await e.credentials.modify(message.provider, current => ({ ...current, ...profile }));
       }
-      return { connected: Boolean(credential), ...(!vault ? { credential, provider: message.provider } : {}) };
+      return { ...(await e.status()), connected: Boolean(credential), ...(!vault ? { credential, provider: message.provider } : {}) };
     }
     if (message.action === 'sign-in-status') return { statuses: [...(await e.status()).providers.map(p => ({ ...p, name: 'Default Agent · ' + p.name })), ...await signInStatuses(message.harnesses ?? [])] };
     if (message.action === 'refresh') {

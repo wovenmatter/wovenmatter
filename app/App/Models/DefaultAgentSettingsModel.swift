@@ -62,9 +62,12 @@ final class DefaultAgentSettingsModel {
         else { settings.workspaces[scope] = settings.global }
         DefaultAgentSupport.settings = settings
     }
-    func saveKey(_ key: String, provider: String) {
-        do { try DefaultAgentSupport.saveKey(key.trimmingCharacters(in: .whitespacesAndNewlines), provider: provider, scope: keyScope); notice = "Key saved."; error = nil }
-        catch { self.error = error.localizedDescription }
+    @discardableResult func saveKey(_ key: String, provider: String) -> Bool {
+        do {
+            try DefaultAgentSupport.saveKey(key.trimmingCharacters(in: .whitespacesAndNewlines), provider: provider, scope: keyScope)
+            notice = key.isEmpty ? "Key removed." : "Key saved."; error = nil
+            return true
+        } catch { self.error = error.localizedDescription; return false }
     }
     func signOut(_ provider: String, remote: RemoteWorkspaceConfiguration?) {
         if let remote { refresh(remote: remote, login: provider, action: "logout"); return }
@@ -186,6 +189,7 @@ final class DefaultAgentSettingsModel {
                     } catch { self.error = "Sign-in completed but could not be saved in Keychain. Try again."; busy = false; finishSignIn(); continue }
                 }
                 finishSignIn()
+                if result["connected"] as? Bool == true { notice = "Connected. This account is shared with the features that use it." }
                 if result["credential"] != nil || result["connected"] != nil || result["reset"] != nil || result["disconnected"] != nil { DefaultAgentSupport.changed() }
                 if let data = try? JSONSerialization.data(withJSONObject: result), let status = try? JSONDecoder().decode(Status.self, from: data) {
                     providers = status.providers; catalog = status.models; searchConfigured = status.searchConfigured

@@ -98,10 +98,11 @@ struct SettingsConnectionsView: View {
             SecureField("API key", text: Binding(get: { keyDrafts[id] ?? "" }, set: { keyDrafts[id] = $0 }))
                 .settingsInput().accessibilityLabel("\(id) API key")
             Button("Save key") {
-                agent.saveKey(keyDrafts[id] ?? "", provider: id); keyDrafts[id] = nil
+                guard agent.saveKey(keyDrafts[id] ?? "", provider: id) else { return }
+                keyDrafts[id] = nil
                 agent.refresh(remote: remote); synchronize()
             }.disabled((keyDrafts[id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            Button("Remove") { agent.saveKey("", provider: id); agent.refresh(remote: remote); synchronize() }
+            Button("Remove") { if agent.saveKey("", provider: id) { agent.refresh(remote: remote); synchronize() } }
         }.buttonStyle(SettingsQuietButtonStyle()).disabled(!editable || agent.busy)
     }
     @ViewBuilder private var signInSection: some View {
