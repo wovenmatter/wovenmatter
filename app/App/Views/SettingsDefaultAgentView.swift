@@ -137,6 +137,7 @@ struct SettingsSignInStatusCard: View {
     let statuses: [AgentSignInStatus]
     let checking: Bool
     let error: String?
+    var scope = "global"
     let refresh: () -> Void
     var body: some View {
         SettingsCard(title: "Sign-in status", detail: "Check Default Agent connections and independently installed harnesses.") {
@@ -151,8 +152,8 @@ struct SettingsSignInStatusCard: View {
                     HStack {
                         Text(status.name).font(.callout)
                         Spacer()
-                        if ProviderConnectionID(rawValue: status.id) != nil {
-                            ConnectionsLink(title: status.label)
+                        if ProviderConnectionID(rawValue: status.id) != nil || status.id.hasPrefix("local-server-") {
+                            ConnectionsLink(title: status.label, scope: scope)
                         } else { Text(status.label).font(.caption).foregroundStyle(.secondary) }
                     }
                     Text(status.detail).font(.caption).foregroundStyle(.secondary)

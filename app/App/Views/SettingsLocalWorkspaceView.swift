@@ -18,7 +18,7 @@ struct SettingsLocalWorkspaceView: View {
         ) {
             SettingsWorkspaceSidebarVisibilityControl(.localWorkspace)
             workspaceCard
-            SettingsSignInStatusCard(statuses: model.localSignInStatuses, checking: model.checkingLocalSignIn, error: model.localSignInError) {
+            SettingsSignInStatusCard(statuses: model.localSignInStatuses, checking: model.checkingLocalSignIn, error: model.localSignInError, scope: "local") {
                 Task { await model.refreshLocalSignInStatus() }
             }
             runtimesCard
