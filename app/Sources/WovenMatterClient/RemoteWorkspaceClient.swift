@@ -1153,63 +1153,83 @@ public struct RemoteWorkspaceServiceClient: Sendable {
 
 public actor RemoteWorkspaceCredentialStore {
     private let service = "com.wovenmatter.remote-workspaces"
+    private let keychain: KeychainAccess
+    private var cachedTokens: [UUID: String] = [:]
+    private var blocked: [UUID: OSStatus] = [:]
 
-    public init() {}
+    public init() { keychain = KeychainAccess() }
+    init(keychain: KeychainAccess) { self.keychain = keychain }
 
     public func token(for id: UUID) throws -> String? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: id.uuidString,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-        ]
-        var item: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &item)
-        if status == errSecItemNotFound { return nil }
-        guard status == errSecSuccess, let data = item as? Data else {
+        if let status = blocked[id] { throw RemoteWorkspaceClientError.keychain(status) }
+        if let token = cachedTokens[id] { return token }
+        return try loadToken(for: id, allowInteraction: false)
+    }
+
+    /// An explicit saved-credential action authorizes one read for this app session.
+    public func authorizeToken(for id: UUID) throws -> String? {
+        if blocked[id] == nil, let token = cachedTokens[id] { return token }
+        return try loadToken(for: id, allowInteraction: true)
+    }
+
+    public func clearCachedTokens() {
+        cachedTokens.removeAll()
+        blocked.removeAll()
+    }
+
+    private func loadToken(for id: UUID, allowInteraction: Bool) throws -> String? {
+        var query = query(for: id)
+        query[kSecReturnData as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        let (status, item) = keychain.copyMatching(query, allowInteraction: allowInteraction)
+        if status == errSecItemNotFound {
+            cachedTokens[id] = nil
+            blocked[id] = nil
+            return nil
+        }
+        guard status == errSecSuccess else {
+            blocked[id] = status
             throw RemoteWorkspaceClientError.keychain(status)
         }
-        return String(data: data, encoding: .utf8)
+        guard let data = item as? Data, let token = String(data: data, encoding: .utf8), !token.isEmpty else {
+            blocked[id] = errSecDecode
+            throw RemoteWorkspaceClientError.keychain(errSecDecode)
+        }
+        cachedTokens[id] = token
+        blocked[id] = nil
+        return token
     }
 
     public func save(token: String, for id: UUID) throws {
-        let account = id.uuidString
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-        ]
+        let query = query(for: id)
         let attributes: [String: Any] = [
             kSecValueData as String: Data(token.utf8),
-            kSecAttrAccessible as String:
-                kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
         ]
-        let updated = SecItemUpdate(
-            query as CFDictionary,
-            attributes as CFDictionary
-        )
-        if updated == errSecSuccess { return }
-        guard updated == errSecItemNotFound else {
-            throw RemoteWorkspaceClientError.keychain(updated)
+        var status = keychain.update(query, attributes, allowInteraction: true)
+        if status == errSecItemNotFound {
+            var item = query
+            attributes.forEach { item[$0.key] = $0.value }
+            status = keychain.add(item, allowInteraction: true)
         }
-        var item = query
-        attributes.forEach { item[$0.key] = $0.value }
-        let status = SecItemAdd(item as CFDictionary, nil)
-        guard status == errSecSuccess else {
-            throw RemoteWorkspaceClientError.keychain(status)
-        }
+        guard status == errSecSuccess else { throw RemoteWorkspaceClientError.keychain(status) }
+        cachedTokens[id] = token
+        blocked[id] = nil
     }
 
-    public func deleteToken(for id: UUID) throws {
-        let status = SecItemDelete([
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: id.uuidString,
-        ] as CFDictionary)
+    public func deleteToken(for id: UUID, allowInteraction: Bool = true) throws {
+        let status = keychain.delete(query(for: id), allowInteraction: allowInteraction)
         guard status == errSecSuccess || status == errSecItemNotFound else {
             throw RemoteWorkspaceClientError.keychain(status)
         }
+        cachedTokens[id] = nil
+        blocked[id] = nil
+    }
+
+    private func query(for id: UUID) -> [String: Any] {
+        [kSecClass as String: kSecClassGenericPassword,
+         kSecAttrService as String: service,
+         kSecAttrAccount as String: id.uuidString]
     }
 }
 

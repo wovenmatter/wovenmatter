@@ -180,6 +180,9 @@ public actor OpenClawGatewayCoordinator {
   }
 
   private static func shouldRetryConnection(_ error: any Error) -> Bool {
+    // A denied or locked Keychain is not a transient Gateway failure. Repeating
+    // the handshake cannot authorize it; only a deliberate reconnect can.
+    if (error as NSError).domain == NSOSStatusErrorDomain { return false }
     guard let gatewayError = error as? OpenClawGatewayClientError else {
       return true
     }
@@ -194,6 +197,19 @@ public actor OpenClawGatewayCoordinator {
 
   public func disconnect(agentID: UUID) async {
     await invalidateConnection(agentID: agentID)?.disconnect()
+  }
+
+  /// Called only by the user's Link/Reconnect/Restart action, never by restore,
+  /// monitoring, history, or cron refreshes.
+  public func authorizeCredentials(for link: OpenClawGatewayLink) throws {
+    _ = try OpenClawGatewayKeychain.shared.authorizeCredentials(
+      for: Self.credentialScope(for: link)
+    )
+  }
+
+  static func credentialScope(for link: OpenClawGatewayLink) -> String {
+    "gateway-agent:\(link.agentID.uuidString.lowercased())"
+      + (link.location == .remoteWorkspace ? "" : ":\(link.endpoint.url.absoluteString)")
   }
 
   public func shutdown() async {
@@ -1880,8 +1896,7 @@ public actor OpenClawGatewayCoordinator {
         endpoint: transport.endpoint,
         requestHeaders: transport.headers,
         password: transport.password,
-        credentialScope: "gateway-agent:\(agentID.uuidString.lowercased())"
-          + (link.location == .remoteWorkspace ? "" : ":\(link.endpoint.url.absoluteString)"),
+        credentialScope: Self.credentialScope(for: link),
         eventHandler: { [weak self] event in
           await self?.handleGatewayEvent(event, agentID: agentID, generation: generation)
         },

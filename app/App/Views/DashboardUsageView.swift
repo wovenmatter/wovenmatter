@@ -979,6 +979,7 @@ struct DashboardUsageView: View {
                         }
                         .buttonStyle(DashboardIconButtonStyle())
                         .font(.system(size: 10.5, weight: .medium))
+                        .disabled(model.isRefreshingLocalUsage)
                     } else if account.provider == .codex,
                               model.codexUsageWorkspaces.count > 1,
                               account.status != .available,
@@ -1010,6 +1011,7 @@ struct DashboardUsageView: View {
                         .font(.system(size: 10.5, weight: .medium))
                         .disabled(
                             model.signingInUsageProviders.contains(account.provider)
+                                || model.isRefreshingLocalUsage
                         )
                     }
                     if model.isUsageProviderEnabled(account.provider) {

@@ -187,6 +187,10 @@ public actor DashboardStore {
     }) ?? link
   }
 
+  public func authorizeOpenClawGatewayCredentials(_ link: OpenClawGatewayLink) async throws {
+    try await openClawGateway.authorizeCredentials(for: link)
+  }
+
   public func unlinkOpenClawGateway(agentID: UUID) async throws {
     await openClawGateway.disconnect(agentID: agentID)
     await localOpenClawGateways.release(agentID: agentID)

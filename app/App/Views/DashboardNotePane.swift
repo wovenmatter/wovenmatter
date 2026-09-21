@@ -21,6 +21,7 @@ struct DashboardNotePane: View {
     let onClose: () -> Void
     @FocusState private var titleFocused: Bool
     @State private var editorController = DashboardNoteEditorController()
+    @State private var documentCache = DashboardNoteDocumentCache()
     @State private var showsFormatting = false
     @State private var linkedDataJSON: String?
     @State private var linkedDataError: String?
@@ -40,9 +41,9 @@ struct DashboardNotePane: View {
 
     private var document: Binding<NoteDocument> {
         Binding(
-            get: { NoteDocument.decode(model.noteDraft(for: note).content) },
+            get: { documentCache.value(noteID: note.id, source: model.noteDraft(for: note).content) },
             set: { updated in
-                guard let content = try? updated.encoded() else { return }
+                guard let content = try? documentCache.encode(updated, noteID: note.id) else { return }
                 model.updateNoteDraft(note: note, content: content)
             }
         )

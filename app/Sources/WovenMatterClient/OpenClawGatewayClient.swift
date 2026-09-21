@@ -264,7 +264,8 @@ public actor OpenClawGatewayClient {
     }
     let negotiated = try Self.capabilities(from: hello)
     guard generation == attempt, !Task.isCancelled else { throw CancellationError() }
-    if let deviceToken = hello.objectValue?["auth"]?.objectValue?["deviceToken"]?.stringValue {
+    if let deviceToken = hello.objectValue?["auth"]?.objectValue?["deviceToken"]?.stringValue,
+       deviceToken != credentials.deviceToken {
       credentials.deviceToken = deviceToken
       try credentialStore.save(credentials, for: credentialScope)
     }

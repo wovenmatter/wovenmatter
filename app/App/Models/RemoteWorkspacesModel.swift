@@ -45,6 +45,7 @@ final class RemoteWorkspacesModel {
     private(set) var harnesses: [UUID: [RemoteHarnessStatus]] = [:]
     var onRuntimeMaintenanceChanged: (@MainActor () async -> Void)?
     private var credentialEpoch = UUID()
+    private var authorizingWorkspaceIDs: Set<UUID> = []
     private var workspaceEpochs: [UUID: UUID] = [:]
     private var invalidatingWorkspaceIDs: Set<UUID> = []
     private var workspaceRoots: [UUID: String] = [:]
@@ -86,13 +87,53 @@ final class RemoteWorkspacesModel {
     }
 
     func enableCredentialAccess() {
-        guard !isCredentialAccessEnabled else {
-            refreshAll()
-            return
-        }
+        guard !isCredentialAccessEnabled else { return }
         isCredentialAccessEnabled = true
         defaults.set(true, forKey: credentialAccessDefaultsKey)
-        refreshAll()
+        let authorizationEpoch = credentialEpoch
+        let requestedWorkspaces = workspaces
+        // Enabling access is an explicit action. Subsequent automatic refreshes
+        // only use credentials that are already available without a prompt.
+        Task {
+            do {
+                for workspace in requestedWorkspaces {
+                    guard isCredentialAccessEnabled, credentialEpoch == authorizationEpoch else {
+                        throw CancellationError()
+                    }
+                    try await authorizeCredentialAccess(for: workspace)
+                }
+                guard isCredentialAccessEnabled, credentialEpoch == authorizationEpoch else { return }
+                refreshAll()
+            } catch is CancellationError {
+                // Disabling access while authorization is pending wins.
+            } catch {
+                guard isCredentialAccessEnabled, credentialEpoch == authorizationEpoch else { return }
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    func authorizeCredentialAccess(for configuration: RemoteWorkspaceConfiguration) async throws {
+        let identity = try requestIdentity(configuration)
+        // A second button or Gateway using the same workspace must not queue
+        // another system prompt behind an authorization already in progress.
+        guard authorizingWorkspaceIDs.insert(configuration.id).inserted else {
+            throw CancellationError()
+        }
+        defer { authorizingWorkspaceIDs.remove(configuration.id) }
+        guard let token = try await credentials.authorizeToken(for: configuration.id), !token.isEmpty else {
+            throw RemoteWorkspaceClientError.invalidResponse("The workspace API token is missing from Keychain.")
+        }
+        try requireCurrent(identity)
+    }
+
+    func reconnect(_ configuration: RemoteWorkspaceConfiguration) {
+        guard isCredentialAccessEnabled else { return }
+        performBusy(configuration) {
+            try await self.authorizeCredentialAccess(for: configuration)
+            self.statuses[configuration.id] = try await self.sshClient.status(configuration: configuration)
+            await self.refreshService(configuration)
+        }
     }
 
     func disableCredentialAccess() {
@@ -114,6 +155,7 @@ final class RemoteWorkspacesModel {
         let activeTunnels = Array(tunnels.values)
         tunnels.removeAll()
         Task {
+            await credentials.clearCachedTokens()
             for tunnel in activeTunnels { await tunnel.stop() }
         }
     }
@@ -645,7 +687,7 @@ final class RemoteWorkspacesModel {
                 )
                 try await provision(configuration)
             } catch {
-                try? await credentials.deleteToken(for: configuration.id)
+                try? await credentials.deleteToken(for: configuration.id, allowInteraction: false)
                 errorMessage = error.localizedDescription
             }
         }
@@ -689,7 +731,7 @@ final class RemoteWorkspacesModel {
                 )
                 try await provision(pending.configuration)
             } catch {
-                try? await credentials.deleteToken(for: pending.configuration.id)
+                try? await credentials.deleteToken(for: pending.configuration.id, allowInteraction: false)
                 errorMessage = error.localizedDescription
             }
         }
