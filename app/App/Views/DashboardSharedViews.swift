@@ -200,6 +200,7 @@ struct DashboardRailRow: View {
     var showsPin = false
     var selected = false
     var isRunningConversation = false
+    var conversationID: String? = nil
     var iconColor: Color? = nil
     var pinMenuTitle: String? = nil
     var onTogglePin: (() -> Void)? = nil
@@ -241,6 +242,7 @@ struct DashboardRailRow: View {
                 Text(title)
                     .lineLimit(1)
                 Spacer(minLength: 4)
+                if let conversationID { WorkspaceSessionIndicators(sessionID: conversationID) }
                 if showsPin {
                     DashboardLucideIcon(glyph: .pin, size: 11)
                         .foregroundStyle(DashboardPalette.foreground)
@@ -369,10 +371,10 @@ struct DashboardEmptyListRow: View {
 }
 
 struct DashboardConversationRow: View {
+    @Environment(\.workspaceApplicationModel) private var appModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var hovered = false
     @State private var hoverCardTask: Task<Void, Never>?
-    @FocusState private var focused: Bool
     let presentation: DashboardConversationRowPresentation
     let selected: Bool
     let isRunning: Bool
@@ -397,14 +399,13 @@ struct DashboardConversationRow: View {
             time: presentation.time
         )
 
-        // AppKit focuses a Button on mouse-down. Keep the popover state stable
-        // until this native action receives the matching mouse-up.
         Button {
+            // Opening a chat must not present or pin its hover preview. A fresh
+            // hover entry is required before the usual delay can start again.
+            hoverCardTask?.cancel()
+            hoverCardTask = nil
+            detailCardState.completePrimaryAction()
             action()
-            detailCardState.completePrimaryAction(
-                conversationID: conversation.id,
-                hovered: hovered
-            )
         } label: {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
@@ -413,6 +414,7 @@ struct DashboardConversationRow: View {
                         .foregroundStyle(DashboardPalette.foreground)
                         .lineLimit(1)
                     Spacer(minLength: 4)
+                    WorkspaceSessionIndicators(sessionID: conversation.id)
                     if conversation.unread {
                         Circle()
                             .fill(DashboardPalette.foreground)
@@ -457,27 +459,25 @@ struct DashboardConversationRow: View {
             .contentShape(RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius, style: .continuous))
         }
         .buttonStyle(DashboardRailButtonStyle())
-        .focused($focused)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibility.label)
-        .accessibilityValue(accessibility.value)
+        .accessibilityValue(accessibility.value
+            + (appModel?.agentTools?.relationships[conversation.id]?.coordinatorID != nil ? ", actively coordinated" : "")
+            + (appModel?.agentTools?.timers.contains(where: { $0.sessionID == conversation.id && !$0.isPaused }) == true ? ", active timer" : ""))
         .accessibilityHint(accessibility.hint)
         .dashboardScrollAwareHover($hovered, token: "conversation:\(conversation.id)")
         .onChange(of: hovered) { _, isHovered in
             hoverCardTask?.cancel()
+            hoverCardTask = nil
             if isHovered {
                 hoverCardTask = Task { @MainActor in
                     try? await Task.sleep(for: .milliseconds(500))
                     guard !Task.isCancelled, hovered, !Self.isMouseButtonPressed else { return }
                     detailCardState.setHovered(true, conversationID: conversation.id)
                 }
-            } else if !Self.isMouseButtonPressed {
+            } else {
                 detailCardState.setHovered(false, conversationID: conversation.id)
             }
-        }
-        .onChange(of: focused) { _, isFocused in
-            guard !Self.isMouseButtonPressed else { return }
-            detailCardState.setFocused(isFocused, conversationID: conversation.id)
         }
         .background {
             DashboardConversationPopover(isPresented: detailCardPresented) {
@@ -589,6 +589,8 @@ struct DashboardConversationHoverCard: View {
                     hoverRow(icon: .panelTop, text: workspace)
                 }
             }
+
+            WorkspaceSessionProvenance(sessionID: presentation.id)
 
             if !presentation.preview.isEmpty {
                 Divider().opacity(0.35)

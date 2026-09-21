@@ -891,7 +891,8 @@ struct DashboardSidebarNavigationPage: View {
                                 title: conversation.title,
                                 hoverID: "recent-conversation:\(conversation.id)",
                                 selected: selectedConversationID == conversation.id,
-                                isRunningConversation: runningConversationIDs.contains(conversation.id)
+                                isRunningConversation: runningConversationIDs.contains(conversation.id),
+                                conversationID: conversation.id
                             ) {
                                 onSelectConversation(conversation.id)
                             }
@@ -1943,50 +1944,6 @@ struct DashboardBuzzWorkspaceAgentContext: Equatable, Sendable {
     }
 }
 
-struct DashboardConversationDetailCardState: Equatable, Sendable {
-    private(set) var focusedConversationID: String?
-    private(set) var hoveredConversationID: String?
-
-    var presentedConversationID: String? {
-        hoveredConversationID ?? focusedConversationID
-    }
-
-    mutating func setFocused(_ focused: Bool, conversationID: String) {
-        if focused {
-            focusedConversationID = conversationID
-        } else if focusedConversationID == conversationID {
-            focusedConversationID = nil
-        }
-    }
-
-    mutating func setHovered(_ hovered: Bool, conversationID: String) {
-        if hovered {
-            hoveredConversationID = conversationID
-        } else if hoveredConversationID == conversationID {
-            hoveredConversationID = nil
-        }
-    }
-
-    mutating func remove(conversationID: String) {
-        if focusedConversationID == conversationID {
-            focusedConversationID = nil
-        }
-        if hoveredConversationID == conversationID {
-            hoveredConversationID = nil
-        }
-    }
-
-    mutating func dismiss() {
-        focusedConversationID = nil
-        hoveredConversationID = nil
-    }
-
-    mutating func completePrimaryAction(conversationID: String, hovered: Bool) {
-        focusedConversationID = conversationID
-        hoveredConversationID = hovered ? conversationID : nil
-    }
-}
-
 struct DashboardConversationRowAccessibility: Equatable, Sendable {
     let label: String
     let value: String
@@ -2021,7 +1978,7 @@ struct DashboardConversationRowAccessibility: Equatable, Sendable {
         return DashboardConversationRowAccessibility(
             label: title,
             value: details.joined(separator: ". "),
-            hint: "Focus shows chat details. Press to open the chat."
+            hint: "Press to open the chat."
         )
     }
 }

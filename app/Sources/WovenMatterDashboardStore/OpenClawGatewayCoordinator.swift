@@ -180,6 +180,9 @@ public actor OpenClawGatewayCoordinator {
   }
 
   private static func shouldRetryConnection(_ error: any Error) -> Bool {
+    // A denied or locked Keychain is not a transient Gateway failure. Repeating
+    // the handshake cannot authorize it; only a deliberate reconnect can.
+    if (error as NSError).domain == NSOSStatusErrorDomain { return false }
     guard let gatewayError = error as? OpenClawGatewayClientError else {
       return true
     }
@@ -194,6 +197,19 @@ public actor OpenClawGatewayCoordinator {
 
   public func disconnect(agentID: UUID) async {
     await invalidateConnection(agentID: agentID)?.disconnect()
+  }
+
+  /// Called only by the user's Link/Reconnect/Restart action, never by restore,
+  /// monitoring, history, or cron refreshes.
+  public func authorizeCredentials(for link: OpenClawGatewayLink) throws {
+    _ = try OpenClawGatewayKeychain.shared.authorizeCredentials(
+      for: Self.credentialScope(for: link)
+    )
+  }
+
+  static func credentialScope(for link: OpenClawGatewayLink) -> String {
+    "gateway-agent:\(link.agentID.uuidString.lowercased())"
+      + (link.location == .remoteWorkspace ? "" : ":\(link.endpoint.url.absoluteString)")
   }
 
   public func shutdown() async {
@@ -1421,7 +1437,12 @@ public actor OpenClawGatewayCoordinator {
       thinkingLevels: thinking,
       slashCommands: commands,
       modelOptionMetadata: modelOptionMetadata,
-      thinkingOptionMetadata: thinkingOptionMetadata
+      thinkingOptionMetadata: thinkingOptionMetadata,
+      permission: session["permissionMode"]?.stringValue ?? "default",
+      permissionOptions: OpenClawSessionPermissions.options,
+      permissionOptionMetadata: OpenClawSessionPermissions.metadata,
+      workingDirectory: session["execCwd"]?.stringValue ?? session["spawnedCwd"]?.stringValue
+        ?? session["spawnedWorkspaceDir"]?.stringValue
     )
   }
 
@@ -1877,8 +1898,8 @@ public actor OpenClawGatewayCoordinator {
         endpoint: transport.endpoint,
         requestHeaders: transport.headers,
         password: transport.password,
-        credentialScope: "gateway-agent:\(agentID.uuidString.lowercased())"
-          + (link.location == .remoteWorkspace ? "" : ":\(link.endpoint.url.absoluteString)"),
+        credentialScope: Self.credentialScope(for: link),
+        historyRecorder: database.historyWireRecorder(agentID: agentID.uuidString.lowercased(), harness: "openclaw"),
         eventHandler: { [weak self] event in
           await self?.handleGatewayEvent(event, agentID: agentID, generation: generation)
         },
@@ -2028,9 +2049,20 @@ public actor OpenClawGatewayCoordinator {
     }
   }
 
-  public func createWorkspaceSession(agentID: UUID, sessionKey: String, cwd: URL) async throws {
+  public func createWorkspaceSession(agentID: UUID, sessionKey: String, cwd: URL, recover: Bool = false) async throws {
     let socket = try await client(agentID: agentID)
     let generation = connectionGenerations[agentID]
+    if recover {
+      let description = try await socket.request("sessions.describe", params: .object(["key": .string(sessionKey)]))
+      guard generation == connectionGenerations[agentID], !Task.isCancelled else { throw CancellationError() }
+      guard let session = description.objectValue?["session"] else { throw OpenClawGatewayClientError.malformedFrame }
+      if session != .null {
+        guard session.objectValue?["key"]?.stringValue == sessionKey else { throw OpenClawGatewayClientError.malformedFrame }
+        // Keyed creation can rewrite cwd on an existing session. Adopt its
+        // current configuration after an interrupted creation without patching it.
+        return
+      }
+    }
     let receipt = try await socket.request("sessions.create", params: .object([
       "key": .string(sessionKey), "cwd": .string(cwd.path)
     ]))
@@ -2038,6 +2070,15 @@ public actor OpenClawGatewayCoordinator {
     guard receipt.objectValue?["key"]?.stringValue == sessionKey,
           receipt.objectValue?["entry"]?.objectValue?["spawnedCwd"]?.stringValue == cwd.path else {
       throw OpenClawGatewayClientError.rejected("OpenClaw did not confirm this session's working directory.")
+    }
+  }
+
+  public func confirmCreationSelection(conversationID: String, model: String?, thinking: String?) async throws {
+    let selected = try await patchSession(conversationID: conversationID,
+      preferences: .init(model: model, thinkingLevel: thinking))
+    guard model.map({ selected.model == $0 }) ?? true,
+          thinking.map({ selected.thinkingLevel == $0 }) ?? true else {
+      throw OpenClawGatewayClientError.rejected("OpenClaw did not confirm the requested model and thinking level.")
     }
   }
 

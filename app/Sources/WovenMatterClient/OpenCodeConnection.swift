@@ -1,4 +1,5 @@
 import Foundation
+import WovenMatterCore
 
 public struct OpenCodeConnection: Equatable, Sendable {
     public static let supportedVersion = "0.0.0-beta-19278"
@@ -86,6 +87,7 @@ private final class OpenCodeSessionDelegate: NSObject, URLSessionTaskDelegate, S
 public struct OpenCodeHTTPClient: Sendable {
     public let connection: OpenCodeConnection
     private let session: URLSession
+    private var historyRecorder: WorkspaceWireRecorder?
     public init(connection: OpenCodeConnection, session: URLSession? = nil) {
         self.connection = connection
         let config = URLSessionConfiguration.ephemeral
@@ -96,6 +98,20 @@ public struct OpenCodeHTTPClient: Sendable {
     }
     public static func segment(_ value: String) -> String {
         value.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? ""
+    }
+    public func recording(_ recorder: @escaping WorkspaceWireRecorder) -> Self {
+        var copy = self
+        copy.historyRecorder = recorder
+        return copy
+    }
+    private func record(_ direction: String, method: String, path: String,
+                        query: [String: String], data: Data, status: Int? = nil) throws {
+        guard let historyRecorder else { return }
+        // Headers and endpoint credentials are deliberately absent. The original
+        // body and SSE framing are retained verbatim, including unknown fields.
+        let frame = WorkspaceHTTPObservation(method: method, path: path, query: query,
+            status: status, body: String(decoding: data, as: UTF8.self))
+        try historyRecorder(direction, JSONEncoder().encode(frame))
     }
     public func request(_ method: String = "GET", _ path: String,
                         query: [String: String] = [:], body: OpenCodeValue? = nil) throws -> URLRequest {
@@ -118,18 +134,19 @@ public struct OpenCodeHTTPClient: Sendable {
     }
     public func call(_ method: String = "GET", _ path: String,
                      query: [String: String] = [:], body: OpenCodeValue? = nil) async throws -> OpenCodeValue {
-        let (bytes, response) = try await session.bytes(for: request(method, path, query: query, body: body))
+        let request = try request(method, path, query: query, body: body)
+        try record("out", method: method, path: path, query: query, data: request.httpBody ?? Data())
+        let (bytes, response) = try await session.bytes(for: request)
         defer { bytes.task.cancel() }
-        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
-            bytes.task.cancel()
-            throw OpenCodeError.http((response as? HTTPURLResponse)?.statusCode ?? 0)
-        }
         var data = Data()
         for try await byte in bytes {
             try Task.checkCancellation()
             guard data.count < 32 * 1_024 * 1_024 else { bytes.task.cancel(); throw OpenCodeError.message("OpenCode response exceeds the 32 MB limit. Use a smaller page or file.") }
             data.append(byte)
         }
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        try record("in", method: method, path: path, query: query, data: data, status: status)
+        guard (200...299).contains(status) else { throw OpenCodeError.http(status) }
         return data.isEmpty ? .null : try OpenCodeValue.decode(data)
     }
     public func readFile(path: String, query: [String: String]) async throws -> (Data, String) {
@@ -165,6 +182,7 @@ public struct OpenCodeHTTPClient: Sendable {
         // HTTP snapshots retain their short timeout; stream silence is not a
         // connection failure. A closed socket still triggers normal recovery.
         request.timeoutInterval = 86_400
+        try record("out", method: "GET", path: path, query: query, data: Data())
         let (bytes, response) = try await session.bytes(for: request)
         defer { bytes.task.cancel() }
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
@@ -174,10 +192,22 @@ public struct OpenCodeHTTPClient: Sendable {
             throw OpenCodeError.malformedStream
         }
         var parser = OpenCodeSSEParser()
-        for try await byte in bytes {
-            try Task.checkCancellation()
-            for value in try parser.append(byte) { try await receive(value) }
+        var raw = Data()
+        do {
+            for try await byte in bytes {
+                try Task.checkCancellation()
+                raw.append(byte)
+                if byte == 10 || raw.count >= 16_384 {
+                    try record("in", method: "GET", path: path, query: query, data: raw, status: http.statusCode)
+                    raw.removeAll(keepingCapacity: true)
+                }
+                for value in try parser.append(byte) { try await receive(value) }
+            }
+        } catch {
+            if !raw.isEmpty { try record("in", method: "GET", path: path, query: query, data: raw, status: http.statusCode) }
+            throw error
         }
+        if !raw.isEmpty { try record("in", method: "GET", path: path, query: query, data: raw, status: http.statusCode) }
         // A partial frame is never accepted or acknowledged at EOF.
         if parser.hasPartialFrame { throw OpenCodeError.malformedStream }
     }

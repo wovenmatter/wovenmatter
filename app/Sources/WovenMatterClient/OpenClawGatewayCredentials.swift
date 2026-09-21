@@ -22,9 +22,19 @@ public final class OpenClawGatewayKeychain: OpenClawGatewayCredentialStore, @unc
   public static let shared = OpenClawGatewayKeychain()
   private let lock = NSLock()
   private let service: String
+  private let keychain: KeychainAccess
+  private var cached: [String: OpenClawGatewayCredentials] = [:]
+  private var blocked: [String: OSStatus] = [:]
+  private var pending: [String: OpenClawGatewayCredentials] = [:]
 
   public init(service: String? = nil) {
     self.service = service ?? Self.serviceName(bundleIdentifier: Bundle.main.bundleIdentifier)
+    keychain = KeychainAccess()
+  }
+
+  init(service: String, keychain: KeychainAccess) {
+    self.service = service
+    self.keychain = keychain
   }
 
   static func serviceName(bundleIdentifier: String?) -> String {
@@ -37,42 +47,77 @@ public final class OpenClawGatewayKeychain: OpenClawGatewayCredentialStore, @unc
 
   public func credentials(for scope: String) throws -> OpenClawGatewayCredentials {
     try lock.withLock {
-      var query = query(scope)
-      query[kSecReturnData as String] = true
-      query[kSecMatchLimit as String] = kSecMatchLimitOne
-      var result: CFTypeRef?
-      let status = SecItemCopyMatching(query as CFDictionary, &result)
-      if status == errSecSuccess, let data = result as? Data {
-        let stored = try JSONDecoder().decode(OpenClawGatewayCredentials.self, from: data)
-        _ = try Curve25519.Signing.PrivateKey(rawRepresentation: stored.privateKey)
-        return stored
-      }
-      guard status == errSecItemNotFound else { throw failure(status) }
-      let created = OpenClawGatewayCredentials(
-        privateKey: Curve25519.Signing.PrivateKey().rawRepresentation
-      )
-      try saveUnlocked(created, scope: scope)
-      return created
+      if let status = blocked[scope] { throw failure(status) }
+      if let value = cached[scope] { return value }
+      return try loadUnlocked(scope, allowInteraction: false)
     }
   }
 
-  public func save(_ credentials: OpenClawGatewayCredentials, for scope: String) throws {
-    try lock.withLock { try saveUnlocked(credentials, scope: scope) }
+  /// Only an explicit user credential-retry action may request system UI.
+  public func authorizeCredentials(for scope: String) throws -> OpenClawGatewayCredentials {
+    try lock.withLock {
+      if let value = pending[scope] {
+        try saveUnlocked(value, scope: scope, allowInteraction: true)
+        return value
+      }
+      if blocked[scope] == nil, let value = cached[scope] { return value }
+      return try loadUnlocked(scope, allowInteraction: true)
+    }
   }
 
-  private func saveUnlocked(_ credentials: OpenClawGatewayCredentials, scope: String) throws {
+  private func loadUnlocked(_ scope: String, allowInteraction: Bool) throws -> OpenClawGatewayCredentials {
+    var query = query(scope)
+    query[kSecReturnData as String] = true
+    query[kSecMatchLimit as String] = kSecMatchLimitOne
+    let (status, result) = keychain.copyMatching(query, allowInteraction: allowInteraction)
+    if status == errSecSuccess {
+      guard let data = result as? Data,
+            let stored = try? JSONDecoder().decode(OpenClawGatewayCredentials.self, from: data),
+            (try? Curve25519.Signing.PrivateKey(rawRepresentation: stored.privateKey)) != nil else {
+        blocked[scope] = errSecDecode
+        throw failure(errSecDecode)
+      }
+      cached[scope] = stored
+      blocked[scope] = nil
+      return stored
+    }
+    guard status == errSecItemNotFound else {
+      blocked[scope] = status
+      throw failure(status)
+    }
+    // A denied read is never interpreted as a missing identity.
+    let created = OpenClawGatewayCredentials(privateKey: Curve25519.Signing.PrivateKey().rawRepresentation)
+    try saveUnlocked(created, scope: scope, allowInteraction: allowInteraction)
+    return created
+  }
+
+  public func save(_ credentials: OpenClawGatewayCredentials, for scope: String) throws {
+    try lock.withLock {
+      if let status = blocked[scope] { throw failure(status) }
+      guard cached[scope] != credentials else { return }
+      try saveUnlocked(credentials, scope: scope, allowInteraction: false)
+    }
+  }
+
+  private func saveUnlocked(_ credentials: OpenClawGatewayCredentials, scope: String, allowInteraction: Bool) throws {
     let data = try JSONEncoder().encode(credentials)
-    let update = [kSecValueData as String: data]
-    let status = SecItemUpdate(query(scope) as CFDictionary, update as CFDictionary)
+    var status = keychain.update(query(scope), [kSecValueData as String: data], allowInteraction: allowInteraction)
     if status == errSecItemNotFound {
       var item = query(scope)
       item[kSecValueData as String] = data
       item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-      let added = SecItemAdd(item as CFDictionary, nil)
-      guard added == errSecSuccess else { throw failure(added) }
-    } else if status != errSecSuccess {
+      status = keychain.add(item, allowInteraction: allowInteraction)
+    }
+    guard status == errSecSuccess else {
+      // Retain the same identity/token in memory for an explicit retry. Never
+      // repeatedly rewrite it or generate a replacement after denied access.
+      pending[scope] = credentials
+      blocked[scope] = status
       throw failure(status)
     }
+    cached[scope] = credentials
+    pending[scope] = nil
+    blocked[scope] = nil
   }
 
   private func query(_ scope: String) -> [String: Any] {
@@ -82,7 +127,7 @@ public final class OpenClawGatewayKeychain: OpenClawGatewayCredentialStore, @unc
 
   private func failure(_ status: OSStatus) -> NSError {
     NSError(domain: NSOSStatusErrorDomain, code: Int(status), userInfo: [
-      NSLocalizedDescriptionKey: "OpenClaw device credentials could not be accessed in Keychain (\(status))."
+      NSLocalizedDescriptionKey: "OpenClaw device credentials are unavailable from Keychain (\(status)). Use Reconnect in OpenClaw settings; automatic reconnect will not request access."
     ])
   }
 }

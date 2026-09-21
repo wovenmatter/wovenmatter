@@ -4,6 +4,19 @@ import WovenMatterCore
 @testable import WovenMatterClient
 
 struct HermesGatewayTests {
+    @Test func importedNativeDirectorySurvivesConfigurationRefresh() async throws {
+        let transport = HermesTransportFixture()
+        let client = makeClient(transport)
+        let identity = HermesGatewayClient.identity(home: "/tmp/hermes-fixture", storedID: "stored", imported: true)
+        let initialized = try await client.initializeSession(workingDirectory: URL(fileURLWithPath: "/different/app/workspace"),
+            existingSessionID: identity, title: nil, systemPrompt: nil)
+        #expect(initialized.configuration.workingDirectory == "/native/imported project")
+        let updated = try await client.setSessionConfiguration(model: nil, thinking: nil)
+        #expect(updated.workingDirectory == "/native/imported project")
+        #expect(await !transport.calls.contains { $0.0 == "session.cwd.set" })
+        await client.shutdown()
+    }
+
     @Test func pinnedIdentityCannotResumeOnAnotherProfileOrWorkspace() async throws {
         let transport = HermesTransportFixture()
         let client = makeClient(transport)
@@ -22,10 +35,42 @@ struct HermesGatewayTests {
         let client = makeClient(transport)
         let created = try await client.initializeSession(workingDirectory: URL(fileURLWithPath: "/tmp"),
             existingSessionID: nil, title: "A conversation", systemPrompt: nil)
+        #expect(created.configuration.workingDirectory == "/tmp")
         _ = try await client.initializeSession(workingDirectory: URL(fileURLWithPath: "/tmp"),
             existingSessionID: created.sessionID, title: "A conversation", systemPrompt: nil)
         #expect(await transport.calls.first { $0.0 == "session.create" }?.1["title"] == "A conversation")
         #expect(await transport.calls.first { $0.0 == "session.resume" }?.1["defer_history"] == .bool(true))
+        await client.shutdown()
+    }
+
+    @Test func remoteWorkspaceAttachesTheStagedPathWithoutUploadingBytes() async throws {
+        let transport = HermesTransportFixture()
+        let client = try makeClient(transport, environment: remoteHermesEnvironment())
+        _ = try await client.initializeSession(workingDirectory: URL(fileURLWithPath: "/tmp"), existingSessionID: nil, title: nil, systemPrompt: nil)
+        let remotePath = "/home/.woven-matter/.wovenmatter/attachments/h/notes.txt"
+        let file = AgentFileAttachmentDraft(kind: .file, fileName: "notes.txt", mimeType: "text/plain",
+            sizeBytes: 1, contentHash: "h", localURL: URL(fileURLWithPath: "/tmp/notes.txt"), remotePath: remotePath)
+        let input = AgentMessageInput(text: "Inspect this", attachments: [.file(file)])
+        let turn = Task { try await client.prompt(input, onEvent: nil, onPermission: nil, onInteraction: nil) }
+        try await transport.waitForSubmit()
+        #expect(await transport.calls.first { $0.0 == "file.attach" }?.1["path"] == .string(remotePath))
+        #expect(await transport.calls.contains { $0.0 == "prompt.submit" })
+        await transport.complete()
+        #expect(try await turn.value == .endTurn)
+        await client.shutdown()
+    }
+
+    @Test func remoteWorkspaceRefusesAnUnstagedFileBeforeSubmitting() async throws {
+        let transport = HermesTransportFixture()
+        let client = try makeClient(transport, environment: remoteHermesEnvironment())
+        _ = try await client.initializeSession(workingDirectory: URL(fileURLWithPath: "/tmp"), existingSessionID: nil, title: nil, systemPrompt: nil)
+        let file = AgentFileAttachmentDraft(kind: .file, fileName: "notes.txt", mimeType: "text/plain",
+            sizeBytes: 1, contentHash: "h", localURL: URL(fileURLWithPath: "/tmp/notes.txt"))
+        await #expect(throws: HermesGatewayError.self) {
+            try await client.prompt(AgentMessageInput(text: "Inspect this", attachments: [.file(file)]),
+                onEvent: nil, onPermission: nil, onInteraction: nil)
+        }
+        #expect(await !transport.calls.contains { $0.0 == "file.attach" || $0.0 == "prompt.submit" })
         await client.shutdown()
     }
 
@@ -220,10 +265,15 @@ struct HermesGatewayTests {
         await client.shutdown()
     }
 
-    private func makeClient(_ transport: HermesTransportFixture) -> HermesGatewayClient {
+    private func makeClient(_ transport: HermesTransportFixture, environment: [String: String] = [:]) -> HermesGatewayClient {
         HermesGatewayClient(launch: LocalACPRuntimeLaunchConfiguration(runtimeKind: .hermes,
-            executableURL: URL(fileURLWithPath: "/fixture/not-executed"), arguments: [], environment: [:]),
+            executableURL: URL(fileURLWithPath: "/fixture/not-executed"), arguments: [], environment: environment),
             transport: transport, home: "/tmp/hermes-fixture")
+    }
+
+    private func remoteHermesEnvironment() throws -> [String: String] {
+        let connection = HermesGatewayConnection(home: "/tmp/hermes-fixture", port: 9, token: "fixture", pid: 1)
+        return ["WOVENMATTER_HERMES_CONNECTION": try JSONEncoder().encode(connection).base64EncodedString()]
     }
 }
 
@@ -266,7 +316,7 @@ private actor HermesTransportFixture: HermesGatewayTransport {
             if rejectFile { throw HermesGatewayError.rpc(code: 5028, message: "File could not be staged") }
             return ["attached": .bool(true), "ref_text": "@file:file.txt"]
         case "session.create", "session.resume":
-            return ["session_id": "live", "stored_session_id": "stored", "running": .bool(running)]
+            return ["session_id": "live", "stored_session_id": "stored", "running": .bool(running), "info": ["cwd": "/native/imported project"]]
         case "session.events.since": return replay ?? ["latest_seq": .number(Double(sequence)), "epoch": .string(epoch ?? "")]
         case "prompt.submit":
             running = true

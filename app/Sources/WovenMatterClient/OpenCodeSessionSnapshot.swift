@@ -9,7 +9,7 @@ public enum OpenCodeComposerMetadata {
         return model["providerID"].text.isEmpty ? id : model["providerID"].text + "/" + id
     }
 
-    public static func metadata(session: OpenCodeValue, models: [OpenCodeValue], defaultModel: OpenCodeValue = .null, hiddenModels: Set<String> = [], commands: [OpenCodeValue] = []) -> LocalACPSessionMetadata {
+    public static func metadata(session: OpenCodeValue, models: [OpenCodeValue], defaultModel: OpenCodeValue = .null, hiddenModels: Set<String> = [], commands: [OpenCodeValue] = [], approvalMode: String = "normal") -> LocalACPSessionMetadata {
         let selected = modelKey(session["model"]).isEmpty ? defaultModel : session["model"]
         let key = modelKey(selected)
         let option = models.first { modelKey($0) == key }
@@ -37,7 +37,10 @@ public enum OpenCodeComposerMetadata {
             thinkingLevels: variants.isEmpty ? [] : ["default"] + variants,
             slashCommands: slashCommands(commands),
             modelOptionMetadata: modelMetadata,
-            thinkingOptionMetadata: thinkingMetadata)
+            thinkingOptionMetadata: thinkingMetadata,
+            permission: OpenCodePermissionHandling.normalized(approvalMode),
+            permissionOptions: OpenCodePermissionHandling.options,
+            permissionOptionMetadata: OpenCodePermissionHandling.metadata)
     }
 
     public static func slashCommands(_ commands: [OpenCodeValue]) -> [LocalACPSlashCommand] {
@@ -91,6 +94,8 @@ public struct OpenCodeSessionSnapshot: Codable, Equatable, Sendable {
     public var info: OpenCodeValue = .null
     public var messages: [OpenCodeValue] = []
     public var permissions: [OpenCodeValue] = []
+    /// Woven Matter's local request handling, separate from native session.info.
+    public var approvalMode: String?
     public var forms: [OpenCodeValue] = []
     public var inbox: [OpenCodeValue] = []
     public var active = false

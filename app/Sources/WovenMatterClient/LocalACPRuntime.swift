@@ -277,7 +277,7 @@ public struct LocalACPRuntimeAvailability: Equatable, Identifiable, Sendable {
     public var compactDetail: String {
         switch state {
         case .ready:
-            runtimeKind == .hermes ? "Ready through native Gateway" : "Ready through ACP"
+            runtimeKind == .hermes ? "Installed with native Gateway" : "Installed with ACP"
         case .authenticationRequired:
             "Needs sign-in — see Settings"
         case .cliMissing, .adapterMissing, .adapterOutdated,
@@ -301,7 +301,22 @@ public struct LocalACPRuntimeAvailability: Equatable, Identifiable, Sendable {
     }
 }
 
+/// A shell-quoted remote command retained as tokens so harness launch settings
+/// can be changed without parsing shell text or modifying SSH's own arguments.
+public struct LocalACPRuntimeWrappedCommand: Sendable {
+    public let argumentIndex: Int
+    public let command: [String]
+    public let harnessArgumentsStartIndex: Int
+
+    public init(argumentIndex: Int, command: [String], harnessArgumentsStartIndex: Int) {
+        self.argumentIndex = argumentIndex
+        self.command = command
+        self.harnessArgumentsStartIndex = harnessArgumentsStartIndex
+    }
+}
+
 public struct LocalACPRuntimeLaunchConfiguration: Sendable {
+    public var historyRecorder: WorkspaceWireRecorder? = nil
     public let runtimeKind: AgentRuntimeKind
     public let executableURL: URL
     public let arguments: [String]
@@ -309,6 +324,8 @@ public struct LocalACPRuntimeLaunchConfiguration: Sendable {
     public let environmentKeysToRemove: [String]
     public let environmentKeyPrefixesToRemove: [String]
     public let processWorkingDirectoryURL: URL?
+    public let requestedPermission: String?
+    public let wrappedCommand: LocalACPRuntimeWrappedCommand?
 
     public init(
         runtimeKind: AgentRuntimeKind,
@@ -317,7 +334,9 @@ public struct LocalACPRuntimeLaunchConfiguration: Sendable {
         environment: [String: String] = [:],
         environmentKeysToRemove: [String] = [],
         environmentKeyPrefixesToRemove: [String] = [],
-        processWorkingDirectoryURL: URL? = nil
+        processWorkingDirectoryURL: URL? = nil,
+        requestedPermission: String? = nil,
+        wrappedCommand: LocalACPRuntimeWrappedCommand? = nil
     ) {
         self.runtimeKind = runtimeKind
         self.executableURL = executableURL
@@ -326,6 +345,8 @@ public struct LocalACPRuntimeLaunchConfiguration: Sendable {
         self.environmentKeysToRemove = environmentKeysToRemove
         self.environmentKeyPrefixesToRemove = environmentKeyPrefixesToRemove
         self.processWorkingDirectoryURL = processWorkingDirectoryURL
+        self.requestedPermission = requestedPermission
+        self.wrappedCommand = wrappedCommand
     }
 }
 
@@ -343,6 +364,38 @@ public struct LocalACPRuntimeResolution: Sendable {
 }
 
 public enum LocalACPRuntimeVerifier {
+    public typealias Verification = @Sendable (
+        LocalACPRuntimeDefinition, LocalACPRuntimeResolution, URL
+    ) async -> LocalACPRuntimeResolution
+
+    /// Discovery can establish installed executables without starting a provider
+    /// session. Reuse this process's last account check until an explicit action
+    /// requests another check for that runtime; user-started sessions still use
+    /// the discovered launch configuration normally.
+    public static func refresh(
+        definition: LocalACPRuntimeDefinition,
+        resolution: LocalACPRuntimeResolution,
+        workingDirectory: URL,
+        credentialCheckRuntimeKinds: Set<AgentRuntimeKind> = [],
+        previousResolution: LocalACPRuntimeResolution? = nil,
+        verification: Verification = { definition, resolution, directory in
+            await verify(definition: definition, resolution: resolution, workingDirectory: directory)
+        }
+    ) async -> LocalACPRuntimeResolution {
+        guard credentialCheckRuntimeKinds.contains(definition.runtimeKind), !Task.isCancelled else {
+            guard resolution.launchConfiguration != nil,
+                  let previousResolution,
+                  previousResolution.availability.executablePath == resolution.availability.executablePath
+            else { return resolution }
+            return LocalACPRuntimeResolution(
+                availability: previousResolution.availability,
+                launchConfiguration: previousResolution.launchConfiguration == nil
+                    ? nil : resolution.launchConfiguration
+            )
+        }
+        return await verification(definition, resolution, workingDirectory)
+    }
+
     public static func verify(
         definition: LocalACPRuntimeDefinition,
         resolution: LocalACPRuntimeResolution,

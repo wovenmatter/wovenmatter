@@ -12,6 +12,7 @@ struct SettingsGeneralView: View {
     @AppStorage(DashboardTheme.storageKey) private var storedTheme = DashboardTheme.green.rawValue
     @AppStorage(DashboardSidebarStyle.storageKey) private var storedSidebarStyle = DashboardSidebarStyle.defaultStyle.rawValue
     @State private var releaseUpdateState: ReleaseUpdateState = .idle
+    @State private var showsCredentialDisclosure = false
     private let releaseUpdateInstaller = WovenMatterReleaseUpdateInstaller()
 
     private var sidebarStyleBinding: Binding<DashboardSidebarStyle> {
@@ -31,14 +32,57 @@ struct SettingsGeneralView: View {
             onBack: onBack
         ) {
             appearanceCard
+            credentialAccessCard
             releaseUpdateCard
             conversationTitlesCard
+            if let tools = model.agentTools { WorkspaceToolDefaultsCard(tools: tools) }
         }
         .onChange(of: storedTheme) { _, _ in
             model.persistMacSurfaceProfileFromUserDefaults()
         }
         .onChange(of: storedSidebarStyle) { _, _ in
             model.persistMacSurfaceProfileFromUserDefaults()
+        }
+        .sheet(isPresented: $showsCredentialDisclosure) {
+            CredentialAccessDisclosureView(
+                purpose: "Use saved credentials across the Woven Matter features you enable.",
+                onEnable: {
+                    showsCredentialDisclosure = false
+                    Task { await model.reconnectSavedCredentials() }
+                },
+                onCancel: { showsCredentialDisclosure = false }
+            )
+        }
+    }
+
+    private var credentialAccessCard: some View {
+        SettingsCard(
+            title: "Credential access",
+            detail: "One saved permission for Woven Matter. Enabled features reuse credentials quietly."
+        ) {
+            HStack(alignment: .center, spacing: 16) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(model.hasAcknowledgedCredentialAccessDisclosure ? "Enabled" : "Not enabled")
+                        .font(.system(size: 13, weight: .medium))
+                    Text(model.credentialAccessStatus
+                         ?? "Automatic refreshes never request permission. Reconnect here if access to a saved credential changes.")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(DashboardPalette.mutedForeground)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 12)
+                Button(model.isReconnectingSavedCredentials ? "Reconnecting…"
+                       : model.hasAcknowledgedCredentialAccessDisclosure
+                         ? "Reconnect saved credentials" : "Enable credential access") {
+                    if model.hasAcknowledgedCredentialAccessDisclosure {
+                        Task { await model.reconnectSavedCredentials() }
+                    } else {
+                        showsCredentialDisclosure = true
+                    }
+                }
+                .buttonStyle(SettingsQuietButtonStyle())
+                .disabled(model.isAuthorizingUsageCredential || model.isReconnectingSavedCredentials)
+            }
         }
     }
 

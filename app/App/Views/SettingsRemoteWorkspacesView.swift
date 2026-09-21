@@ -183,10 +183,10 @@ struct SettingsRemoteWorkspacesView: View {
 
     private var credentialAccessCard: some View {
         SettingsCard(
-            title: "Credential access",
+            title: "Remote workspace access",
             detail: model.isCredentialAccessEnabled
-                ? "Uses saved Keychain tokens to reconnect."
-                : "Enable access to saved Keychain tokens to reconnect."
+                ? "Connect to your configured remote workspaces. Background checks stay silent."
+                : "Enable connections to your configured remote workspaces using saved credentials."
         ) {
             HStack {
                 SettingsPill(
@@ -200,7 +200,7 @@ struct SettingsRemoteWorkspacesView: View {
                     }
                     .buttonStyle(SettingsQuietButtonStyle())
                 } else {
-                    Button("Enable credential access") {
+                    Button("Enable remote workspaces") {
                         if credentialDisclosureAcknowledged {
                             model.enableCredentialAccess()
                         } else {
@@ -278,7 +278,8 @@ struct SettingsRemoteWorkspacesView: View {
                     tone: status?.running == true ? .neutral : .warning
                 )
                 .fixedSize(horizontal: true, vertical: false)
-                Button("Refresh") { model.refresh(workspace) }
+                Button("Reconnect") { model.reconnect(workspace) }
+                    .help("Allow access to this workspace's saved Keychain token and reconnect.")
                 if let status {
                     Button("Start") { model.lifecycle(.start, configuration: workspace) }
                         .disabled(status.running)
@@ -308,7 +309,7 @@ struct SettingsRemoteWorkspacesView: View {
                     storageWarning(warning)
                 }
             } else {
-                SettingsEmpty("Refresh to load this workspace's current status.")
+                SettingsEmpty("Reconnect to load this workspace's current status.")
             }
         }
     }

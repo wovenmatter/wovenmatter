@@ -56,6 +56,11 @@ public enum GatewayJSONValue: Codable, Equatable, Sendable {
     guard case .number(let value) = self else { return nil }
     return Int(exactly: value)
   }
+
+  public var doubleValue: Double? {
+    if case .number(let value) = self { return value }
+    return nil
+  }
 }
 
 public struct OpenClawGatewayEvent: Equatable, Sendable {
@@ -118,6 +123,7 @@ public actor OpenClawGatewayClient {
   private let endpoint: OpenClawGatewayEndpoint
   private let requestHeaders: [String: String]
   private let password: String?
+  private let historyRecorder: WorkspaceWireRecorder?
   private let eventHandler: EventHandler
   private let disconnectHandler: DisconnectHandler
   private let connectionHandler: ConnectionHandler
@@ -145,10 +151,12 @@ public actor OpenClawGatewayClient {
     password: String? = nil,
     credentialScope: String? = nil,
     credentialStore: any OpenClawGatewayCredentialStore = OpenClawGatewayKeychain.shared,
+    historyRecorder: WorkspaceWireRecorder? = nil,
     eventHandler: @escaping EventHandler = { _ in },
     disconnectHandler: @escaping DisconnectHandler = { _ in },
     connectionHandler: @escaping ConnectionHandler = {}
   ) {
+    self.historyRecorder = historyRecorder
     self.endpoint = endpoint
     self.requestHeaders = requestHeaders
     self.password = password
@@ -165,11 +173,13 @@ public actor OpenClawGatewayClient {
     endpoint: OpenClawGatewayEndpoint,
     credentialStore: any OpenClawGatewayCredentialStore,
     handshakeTimeout: Duration = .seconds(15),
+    historyRecorder: WorkspaceWireRecorder? = nil,
     socketFactory: @escaping @Sendable (URLRequest) -> any OpenClawGatewaySocket,
     eventHandler: @escaping EventHandler = { _ in }
   ) {
     self.endpoint = endpoint
     self.requestHeaders = [:]
+    self.historyRecorder = historyRecorder
     self.password = nil
     self.credentialScope = endpoint.url.absoluteString
     self.credentialStore = credentialStore
@@ -264,7 +274,8 @@ public actor OpenClawGatewayClient {
     }
     let negotiated = try Self.capabilities(from: hello)
     guard generation == attempt, !Task.isCancelled else { throw CancellationError() }
-    if let deviceToken = hello.objectValue?["auth"]?.objectValue?["deviceToken"]?.stringValue {
+    if let deviceToken = hello.objectValue?["auth"]?.objectValue?["deviceToken"]?.stringValue,
+       deviceToken != credentials.deviceToken {
       credentials.deviceToken = deviceToken
       try credentialStore.save(credentials, for: credentialScope)
     }
@@ -453,7 +464,8 @@ public actor OpenClawGatewayClient {
         guard !value.contains("/"), let provider, !provider.isEmpty else { return value }
         return provider + "/" + value
       },
-      thinkingLevel: object["thinkingLevel"]?.stringValue
+      thinkingLevel: object["thinkingLevel"]?.stringValue,
+      permissionMode: object["permissionMode"]?.stringValue ?? "default"
     )
   }
 
@@ -461,11 +473,11 @@ public actor OpenClawGatewayClient {
     key: String,
     preferences: OpenClawSessionPreferences
   ) async throws -> OpenClawSessionPreferences {
-    var params: [String: GatewayJSONValue] = ["key": .string(key)]
-    if let model = preferences.model { params["model"] = .string(model) }
-    if let thinking = preferences.thinkingLevel { params["thinkingLevel"] = .string(thinking) }
-    _ = try await request("sessions.patch", params: .object(params))
-    return try await sessionPreferences(key: key)
+    let params = try OpenClawSessionPermissions.patchParameters(key: key, preferences: preferences)
+    _ = try await request("sessions.patch", params: params)
+    let description = try await request("sessions.describe", params: .object(["key": .string(key)]))
+    try OpenClawSessionPermissions.confirm(preferences.permissionMode, description: description)
+    return Self.sessionPreferences(from: description)
   }
 
   private func receiveLoop(from socket: any OpenClawGatewaySocket, generation attempt: UUID) async {
@@ -510,11 +522,14 @@ public actor OpenClawGatewayClient {
     if let limit = capabilities?.maximumPayloadBytes, data.count > limit {
       throw OpenClawGatewayClientError.rejected("Request exceeds the Gateway payload limit.")
     }
+    // Never retain the authentication handshake in the history journal.
+    if frame.method != "connect" { try historyRecorder?("out", data) }
     try await socket.send(data)
   }
 
   private func receiveFrame(from socket: any OpenClawGatewaySocket) async throws -> Frame {
     let data = try await socket.receive()
+    if capabilities != nil { try historyRecorder?("in", data) }
     return try JSONDecoder().decode(Frame.self, from: data)
   }
 

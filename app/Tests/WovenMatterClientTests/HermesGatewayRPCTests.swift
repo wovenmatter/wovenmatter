@@ -7,7 +7,9 @@ struct HermesGatewayRPCTests {
     @Test func routesServerRequestsAndRequiresAFreshReplayEpochOnReconnect() async throws {
         let server = try HermesWireFixture()
         let port = try await server.start()
-        let client = HermesGatewayRPC(connection: HermesGatewayConnection(home: "/tmp/hermes-wire", port: port, token: "fixture", pid: 1))
+        let capture = HermesWireCapture()
+        let client = HermesGatewayRPC(connection: HermesGatewayConnection(home: "/tmp/hermes-wire", port: port, token: "private-fixture-token", pid: 1),
+            historyRecorder: { capture.append($0, $1) })
         await client.setHandlers(event: nil, request: { frame in
             try? await client.respond(id: frame["id"].text, result: ["value": "fixture-answer"])
         })
@@ -16,6 +18,10 @@ struct HermesGatewayRPCTests {
             #expect(await client.epoch == "wire-epoch")
             let answer = try await client.call("fixture.ask")
             #expect(answer == ["value": "fixture-answer"])
+            let captured = capture.values
+            #expect(captured.contains { $0.0 == "in" && $0.1.contains("srq-fixture") })
+            #expect(captured.contains { $0.0 == "out" && $0.1.contains("fixture-answer") })
+            #expect(!captured.contains { $0.1.contains("private-fixture-token") })
             await client.disconnect()
             // A server missing gateway.ready must not reuse a previous socket's epoch.
             await #expect(throws: (any Error).self) { try await client.connect() }
@@ -26,6 +32,15 @@ struct HermesGatewayRPCTests {
             throw error
         }
         await server.stop()
+    }
+}
+
+private final class HermesWireCapture: @unchecked Sendable {
+    private let lock = NSLock()
+    private var entries: [(String, String)] = []
+    var values: [(String, String)] { lock.withLock { entries } }
+    func append(_ direction: String, _ data: Data) {
+        lock.withLock { entries.append((direction, String(decoding: data, as: UTF8.self))) }
     }
 }
 

@@ -86,7 +86,9 @@ public enum RemoteHarnessLaunchResolver {
     public static func resolve(
         configuration: RemoteWorkspaceConfiguration,
         runtimeKind: AgentRuntimeKind,
-        processWorkingDirectory: URL
+        processWorkingDirectory: URL,
+        workspaceRoot: URL = URL(fileURLWithPath: "/home/.woven-matter"),
+        workingDirectory: URL? = nil
     ) throws -> RemoteHarnessLaunchContext {
         let idPattern = /^[a-z0-9][a-z0-9-]{0,47}$/
         guard configuration.workspaceID.wholeMatch(of: idPattern) != nil else {
@@ -100,10 +102,10 @@ public enum RemoteHarnessLaunchResolver {
             hostName: configuration.hostName,
             userName: configuration.userName
         )
-        let remoteRoot = URL(
-            filePath: "/home/.woven-matter",
-            directoryHint: .isDirectory
-        )
+        let remoteRoot = workingDirectory ?? workspaceRoot
+        guard remoteRoot.isFileURL, remoteRoot.path.hasPrefix("/"), !remoteRoot.path.contains("\0") else {
+            throw WorkspaceToolError.invalid("The remote working directory must be an absolute path.")
+        }
         var command = [
             "docker", "exec", "--interactive",
             "--workdir", remoteRoot.path,
@@ -117,6 +119,7 @@ public enum RemoteHarnessLaunchResolver {
             .definition(for: runtimeKind)?.environment.sorted(by: { $0.key < $1.key }) ?? [] {
             command.append("\(key)=\(value)")
         }
+        var harnessArgumentsStartIndex = command.count
         if runtimeKind == .defaultAgent {
             command.append(contentsOf: ["node", "/opt/wovenmatter/default-agent/src/main.mjs", "--remote"])
         } else if let harness {
@@ -126,28 +129,32 @@ public enum RemoteHarnessLaunchResolver {
                 "woven-runtime",
             ])
             command.append(harness.command)
+            harnessArgumentsStartIndex = command.count
             command.append(contentsOf: harness.arguments)
         }
         let remoteCommand = command.map(shellQuote).joined(separator: " ")
+        let sshArguments = [
+            "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", destination, remoteCommand,
+        ]
         return RemoteHarnessLaunchContext(
             launch: LocalACPRuntimeLaunchConfiguration(
                 runtimeKind: runtimeKind,
                 executableURL: URL(fileURLWithPath: "/usr/bin/ssh"),
-                arguments: [
-                    "-T",
-                    "-o", "BatchMode=yes",
-                    "-o", "ConnectTimeout=10",
-                    destination,
-                    remoteCommand,
-                ],
-                processWorkingDirectoryURL: processWorkingDirectory
+                arguments: sshArguments,
+                processWorkingDirectoryURL: processWorkingDirectory,
+                wrappedCommand: LocalACPRuntimeWrappedCommand(
+                    argumentIndex: sshArguments.count - 1,
+                    command: command,
+                    harnessArgumentsStartIndex: harnessArgumentsStartIndex
+                )
             ),
             workspace: LocalACPWorkspaceLaunchConfiguration(
                 rootURL: remoteRoot,
-                repositoriesURL: remoteRoot.appending(
+                repositoriesURL: workspaceRoot.appending(
                     path: "REPOS",
                     directoryHint: .isDirectory
-                )
+                ),
+                databasesURL: workspaceRoot.appending(path: "Databases", directoryHint: .isDirectory)
             )
         )
     }
@@ -733,10 +740,19 @@ public actor RemoteWorkspaceSSHClient {
         return cleanHost
     }
 
-    private static func runSSH(
+    static func runSSH(destination: String, command: String, input: Data?) throws -> Data {
+        try runSSH(destination: destination, command: command, input: input, timeLimit: nil)
+    }
+
+    static func runAttachmentSSH(destination: String, command: String, input: Data?) throws -> Data {
+        try runSSH(destination: destination, command: command, input: input, timeLimit: 60)
+    }
+
+    static func runSSH(
         destination: String,
         command: String,
-        input: Data?
+        input: Data?,
+        timeLimit: TimeInterval?
     ) throws -> Data {
         let result = try RemoteWorkspaceProcess.run(
             executable: "/usr/bin/ssh",
@@ -748,7 +764,8 @@ public actor RemoteWorkspaceSSHClient {
                 destination,
                 command,
             ],
-            input: input
+            input: input,
+            timeLimit: timeLimit
         )
         guard result.status == 0 else {
             throw RemoteWorkspaceClientError.commandFailed(result.output)
@@ -1160,63 +1177,83 @@ public struct RemoteWorkspaceServiceClient: Sendable {
 
 public actor RemoteWorkspaceCredentialStore {
     private let service = "com.wovenmatter.remote-workspaces"
+    private let keychain: KeychainAccess
+    private var cachedTokens: [UUID: String] = [:]
+    private var blocked: [UUID: OSStatus] = [:]
 
-    public init() {}
+    public init() { keychain = KeychainAccess() }
+    init(keychain: KeychainAccess) { self.keychain = keychain }
 
     public func token(for id: UUID) throws -> String? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: id.uuidString,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-        ]
-        var item: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &item)
-        if status == errSecItemNotFound { return nil }
-        guard status == errSecSuccess, let data = item as? Data else {
+        if let status = blocked[id] { throw RemoteWorkspaceClientError.keychain(status) }
+        if let token = cachedTokens[id] { return token }
+        return try loadToken(for: id, allowInteraction: false)
+    }
+
+    /// An explicit saved-credential action authorizes one read for this app session.
+    public func authorizeToken(for id: UUID) throws -> String? {
+        if blocked[id] == nil, let token = cachedTokens[id] { return token }
+        return try loadToken(for: id, allowInteraction: true)
+    }
+
+    public func clearCachedTokens() {
+        cachedTokens.removeAll()
+        blocked.removeAll()
+    }
+
+    private func loadToken(for id: UUID, allowInteraction: Bool) throws -> String? {
+        var query = query(for: id)
+        query[kSecReturnData as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        let (status, item) = keychain.copyMatching(query, allowInteraction: allowInteraction)
+        if status == errSecItemNotFound {
+            cachedTokens[id] = nil
+            blocked[id] = nil
+            return nil
+        }
+        guard status == errSecSuccess else {
+            blocked[id] = status
             throw RemoteWorkspaceClientError.keychain(status)
         }
-        return String(data: data, encoding: .utf8)
+        guard let data = item as? Data, let token = String(data: data, encoding: .utf8), !token.isEmpty else {
+            blocked[id] = errSecDecode
+            throw RemoteWorkspaceClientError.keychain(errSecDecode)
+        }
+        cachedTokens[id] = token
+        blocked[id] = nil
+        return token
     }
 
     public func save(token: String, for id: UUID) throws {
-        let account = id.uuidString
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-        ]
+        let query = query(for: id)
         let attributes: [String: Any] = [
             kSecValueData as String: Data(token.utf8),
-            kSecAttrAccessible as String:
-                kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
         ]
-        let updated = SecItemUpdate(
-            query as CFDictionary,
-            attributes as CFDictionary
-        )
-        if updated == errSecSuccess { return }
-        guard updated == errSecItemNotFound else {
-            throw RemoteWorkspaceClientError.keychain(updated)
+        var status = keychain.update(query, attributes, allowInteraction: true)
+        if status == errSecItemNotFound {
+            var item = query
+            attributes.forEach { item[$0.key] = $0.value }
+            status = keychain.add(item, allowInteraction: true)
         }
-        var item = query
-        attributes.forEach { item[$0.key] = $0.value }
-        let status = SecItemAdd(item as CFDictionary, nil)
-        guard status == errSecSuccess else {
-            throw RemoteWorkspaceClientError.keychain(status)
-        }
+        guard status == errSecSuccess else { throw RemoteWorkspaceClientError.keychain(status) }
+        cachedTokens[id] = token
+        blocked[id] = nil
     }
 
-    public func deleteToken(for id: UUID) throws {
-        let status = SecItemDelete([
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: id.uuidString,
-        ] as CFDictionary)
+    public func deleteToken(for id: UUID, allowInteraction: Bool = true) throws {
+        let status = keychain.delete(query(for: id), allowInteraction: allowInteraction)
         guard status == errSecSuccess || status == errSecItemNotFound else {
             throw RemoteWorkspaceClientError.keychain(status)
         }
+        cachedTokens[id] = nil
+        blocked[id] = nil
+    }
+
+    private func query(for id: UUID) -> [String: Any] {
+        [kSecClass as String: kSecClassGenericPassword,
+         kSecAttrService as String: service,
+         kSecAttrAccount as String: id.uuidString]
     }
 }
 
@@ -1252,7 +1289,7 @@ public enum RemoteWorkspaceClientError: LocalizedError, Equatable, Sendable {
     }
 }
 
-private enum RemoteWorkspaceProcess {
+enum RemoteWorkspaceProcess {
     struct Result {
         let data: Data
         let status: Int32
@@ -1265,7 +1302,8 @@ private enum RemoteWorkspaceProcess {
     static func run(
         executable: String,
         arguments: [String],
-        input: Data? = nil
+        input: Data? = nil,
+        timeLimit: TimeInterval? = nil
     ) throws -> Result {
         let process = Process()
         let fileManager = FileManager.default
@@ -1317,6 +1355,23 @@ private enum RemoteWorkspaceProcess {
             try? fileManager.removeItem(at: errorURL)
         }
         try process.run()
+        if let timeLimit {
+            let deadline = ProcessInfo.processInfo.systemUptime + timeLimit
+            while process.isRunning {
+                if Task.isCancelled || ProcessInfo.processInfo.systemUptime >= deadline {
+                    process.terminate()
+                    let grace = ProcessInfo.processInfo.systemUptime + 1
+                    while process.isRunning, ProcessInfo.processInfo.systemUptime < grace {
+                        Thread.sleep(forTimeInterval: 0.02)
+                    }
+                    if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+                    process.waitUntilExit()
+                    try Task.checkCancellation()
+                    throw RemoteWorkspaceClientError.commandFailed("Attachment transfer timed out. Please try again.")
+                }
+                Thread.sleep(forTimeInterval: 0.02)
+            }
+        }
         process.waitUntilExit()
         try outputHandle.close()
         try errorHandle.close()

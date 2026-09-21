@@ -45,6 +45,31 @@ struct DashboardConversationScrollState: Equatable {
     }
 }
 
+private struct DashboardConversationMessageRow: Identifiable {
+    let message: WorkspaceMessageRecord
+    let layout: ConversationMessageLayout.Row
+    var id: String { layout.id }
+}
+
+private enum DashboardConversationDisplayRow: Identifiable {
+    case message(DashboardConversationMessageRow)
+    case receipt(WorkspaceSessionDelivery)
+    case incomingCommand(WorkspaceSessionDelivery)
+
+    var id: String {
+        switch self {
+        case .message(let row): row.id
+        case .receipt(let receipt): WorkspaceConversationTimelineItem.receipt(receipt).id
+        case .incomingCommand(let receipt): WorkspaceConversationTimelineItem.incomingCommand(receipt).id
+        }
+    }
+
+    var spacingBefore: Double {
+        if case .message(let row) = self { return row.layout.spacingBefore }
+        return 32
+    }
+}
+
 struct DashboardCloudConversation: View {
     @Environment(\.dashboardTheme) private var theme
     @Bindable var model: ApplicationModel
@@ -78,6 +103,7 @@ struct DashboardCloudConversation: View {
     private var workspaceOpenCode: OpenCodeModel? {
         conversation.flatMap { model.openCodeModel(for: $0.id) }
     }
+    @State private var toolObservationToken = UUID()
     @State private var scrollState = DashboardConversationScrollState()
     @State private var transcriptOwnsScroll = false
     @State private var isPrependingHistory = false
@@ -102,10 +128,36 @@ struct DashboardCloudConversation: View {
         let orderedMessages = openCodeOrder.isEmpty ? visibleMessages : visibleMessages.sorted {
             (openCodeOrder[$0.clientMessageID ?? ""] ?? 0) < (openCodeOrder[$1.clientMessageID ?? ""] ?? 0)
         }
+        let timeline = WorkspaceConversationTimelineItem.weave(messages: orderedMessages,
+            receipts: conversation.flatMap { model.agentTools?.receipts[$0.id] } ?? [], sessionID: conversation?.id ?? "")
+        let rows = timeline.flatMap { item -> [DashboardConversationDisplayRow] in
+            let message: WorkspaceMessageRecord
+            switch item {
+            case .receipt(let receipt): return [.receipt(receipt)]
+            case .incomingCommand(let receipt): return [.incomingCommand(receipt)]
+            case .message(let value): message = value
+            }
+            let presentation = messagePresentations[message.id]
+            let run = runsByAssistantMessageID[message.id]
+            let mediaCount: Int
+            if let openCode = workspaceOpenCode, openCode.links[message.conversationID] != nil,
+               let nativeMessage = openCode.snapshots[message.conversationID]?.messages.first(where: { $0["id"].text == message.clientMessageID }) {
+                mediaCount = OpenCodeMessageMedia.files(in: nativeMessage).count
+            } else { mediaCount = 0 }
+            return ConversationMessageLayout.rows(
+                messageID: message.id,
+                role: message.role,
+                content: message.content,
+                displayedBody: presentation?.displayedBody ?? message.content,
+                failedRunError: run?.status == "failed" ? run?.error : nil,
+                document: presentation?.document,
+                mediaCount: mediaCount
+            ).map { .message(DashboardConversationMessageRow(message: message, layout: $0)) }
+        }
         ZStack(alignment: .bottom) {
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(spacing: 32) {
+                    LazyVStack(spacing: 0) {
                         if conversation == nil {
                             DashboardConversationEmptyState(
                                 icon: .messageSquare,
@@ -114,7 +166,7 @@ struct DashboardCloudConversation: View {
                                     ? "Choose New chat for a direct local workspace session, or select a synced conversation."
                                     : "Choose a synced conversation from Workspace."
                             )
-                        } else if visibleMessages.isEmpty {
+                        } else if timeline.isEmpty {
                             DashboardConversationEmptyState(
                                 icon: conversation?.localRuntimeKind == nil
                                     ? (agent.map { dashboardAgentGlyph($0) }
@@ -131,6 +183,7 @@ struct DashboardCloudConversation: View {
                                let oldestMessageID = messages.first?.id {
                                 Color.clear
                                     .frame(height: 1)
+                                    .padding(.bottom, 32)
                                     .id(historyLoaderID(oldestMessageID: oldestMessageID))
                                     .accessibilityIdentifier("dashboard-history-loader")
                                     .task(id: historyLoaderID(oldestMessageID: oldestMessageID)) {
@@ -140,28 +193,52 @@ struct DashboardCloudConversation: View {
                                         )
                                     }
                             }
-                            ForEach(orderedMessages) { message in
-                                let presentation = messagePresentations[message.id]
-                                let run = runsByAssistantMessageID[message.id]
-                                DashboardMessageRow(
-                                    message: message,
-                                    attachments: attachmentsByMessageID[message.id] ?? [],
-                                    references: referencesByMessageID[message.id] ?? [],
-                                    renderedDocument: presentation?.document,
-                                    run: run.flatMap {
-                                        DashboardRunDisplayPolicy.presentsStatus($0) ? $0 : nil
-                                    },
-                                    runPresentation: run.flatMap { runPresentations[$0.id] },
-                                    activities: run.map { activitiesByRunID[$0.id] ?? [] } ?? []
-                                )
-                                .id(message.id)
-                                if let openCode = workspaceOpenCode, openCode.links[message.conversationID] != nil {
-                                    OpenCodeMessageMedia(model: openCode, conversationID: message.conversationID, messageID: message.clientMessageID ?? "")
+                            if let sessionID = conversation?.id, model.agentTools?.hasOlderReceipts.contains(sessionID) == true {
+                                Button("Load earlier session activity") {
+                                    model.agentTools?.loadOlderReceipts(sessionID: sessionID)
                                 }
+                                .buttonStyle(SettingsQuietButtonStyle())
+                                .padding(.bottom, 32)
+                            }
+                            ForEach(rows) { row in
+                                VStack(spacing: 0) {
+                                    switch row {
+                                    case .receipt(let receipt):
+                                        WorkspaceOutgoingReceipt(receipt: receipt)
+                                    case .incomingCommand(let receipt):
+                                        WorkspaceIncomingCommandReceipt(receipt: receipt)
+                                    case .message(let fragment):
+                                        let message = fragment.message
+                                        let presentation = messagePresentations[message.id]
+                                        let run = runsByAssistantMessageID[message.id]
+                                        if case .media(let index) = fragment.layout.content {
+                                            if let openCode = workspaceOpenCode {
+                                                OpenCodeMessageMedia(model: openCode, conversationID: message.conversationID, messageID: message.clientMessageID ?? "", fileIndex: index)
+                                            }
+                                        } else {
+                                            DashboardMessageRow(
+                                                message: message,
+                                                attachments: attachmentsByMessageID[message.id] ?? [],
+                                                references: referencesByMessageID[message.id] ?? [],
+                                                renderedDocument: presentation?.document,
+                                                run: run.flatMap {
+                                                    DashboardRunDisplayPolicy.presentsStatus($0) ? $0 : nil
+                                                },
+                                                runPresentation: run.flatMap { runPresentations[$0.id] },
+                                                activities: run.map { activitiesByRunID[$0.id] ?? [] } ?? [],
+                                                layout: fragment.layout,
+                                                displayedBody: presentation?.displayedBody
+                                            )
+                                        }
+                                    }
+                                }
+                                .id(row.id)
+                                .padding(.top, row.id == rows.first?.id ? 0 : row.spacingBefore)
                             }
                         }
                         Color.clear
                             .frame(height: bottomScrollClearance)
+                            .padding(.top, 32)
                             .id(chatEndID)
                     }
                     .frame(maxWidth: 768)
@@ -171,6 +248,7 @@ struct DashboardCloudConversation: View {
                     .scrollTargetLayout()
                 }
                 .scrollIndicators(.never)
+                .onDisappear { model.agentTools?.observeSession(nil, token: toolObservationToken) }
                 .environment(\.conversationTranscriptInteraction) {
                     transcriptOwnsScroll = true
                     scrollInteractionRevision += 1
@@ -231,6 +309,7 @@ struct DashboardCloudConversation: View {
                     draft = draft.isEmpty ? text : draft + "\n" + text
                 }
                 .onChange(of: conversation?.id, initial: true) { _, conversationID in
+                    model.agentTools?.observeSession(conversationID, token: toolObservationToken)
                     isUserScrolling = false
                     transcriptOwnsScroll = false
                     scrollInteractionRevision += 1
@@ -360,6 +439,11 @@ struct DashboardCloudConversation: View {
                             help: "Remove panel",
                             action: onClosePanel
                         )
+                    } else if showsAddPanel {
+                        Color.clear
+                            .frame(width: DashboardPanelControlButton.size, height: DashboardPanelControlButton.size)
+                            .allowsHitTesting(false)
+                            .accessibilityHidden(true)
                     }
                     DashboardComposer(
                         placeholder: dashboardComposerPlaceholder(
@@ -369,8 +453,22 @@ struct DashboardCloudConversation: View {
                         draft: $draft,
                         attachedNoteTitle: attachedNoteTitle,
                         attachments: attachments,
+                        agentTools: model.agentTools,
+                        sessionID: conversation?.id,
                         showsSessionControls: conversation.map {
                             model.isOpenClawGatewayConversation($0.id) || $0.localRuntimeKind != nil
+                        } ?? false,
+                        showsPermissionControl: conversation.map {
+                            model.isOpenClawGatewayConversation($0.id)
+                                || ($0.localRuntimeKind != nil && $0.localRuntimeKind != .pi)
+                        } ?? false,
+                        sessionMetadataLoading: conversation.map {
+                            if $0.localRuntimeKind == .opencode { return workspaceOpenCode?.metadata($0.id) == nil }
+                            if model.isOpenClawGatewayConversation($0.id) {
+                                return model.openClawGatewaySessionMetadata[$0.id] == nil
+                            }
+                            return model.loadingLocalACPSessionIDs.contains($0.id)
+                                || model.localACPSessionMetadata[$0.id] == nil
                         } ?? false,
                         sessionMetadata: conversation.flatMap {
                             if $0.localRuntimeKind == .opencode { return workspaceOpenCode?.metadata($0.id) }
@@ -388,6 +486,7 @@ struct DashboardCloudConversation: View {
                             }
                             if model.isOpenClawGatewayConversation($0.id) {
                                 return model.localRunningConversationIDs.contains($0.id)
+                                    || model.updatingLocalACPSessionIDs.contains($0.id)
                             }
                             if $0.localRuntimeKind != nil {
                                 return model.loadingLocalACPSessionIDs.contains($0.id)
@@ -443,6 +542,25 @@ struct DashboardCloudConversation: View {
                                 return
                             }
                         },
+                        onSelectPermission: { selection in
+                            guard let conversation else { return }
+                            if conversation.localRuntimeKind == .opencode {
+                                workspaceOpenCode?.updateSelection(conversation.id, permission: selection)
+                                return
+                            }
+                            if model.isOpenClawGatewayConversation(conversation.id) {
+                                model.patchOpenClawGatewaySession(
+                                    conversationID: conversation.id,
+                                    model: nil,
+                                    thinkingLevel: nil,
+                                    permission: selection
+                                )
+                                return
+                            }
+                            if let runtimeKind = conversation.localRuntimeKind, runtimeKind != .pi {
+                                model.updateLocalACPSession(conversation: conversation, permission: selection)
+                            }
+                        },
                         onAttachmentAction: onAttachmentAction,
                         onRemoveAttachment: onRemoveAttachment,
                         onDropFiles: onDropFiles,
@@ -457,6 +575,11 @@ struct DashboardCloudConversation: View {
                             help: "Add panel",
                             action: onAddPanel
                         )
+                    } else if showsClosePanel {
+                        Color.clear
+                            .frame(width: DashboardPanelControlButton.size, height: DashboardPanelControlButton.size)
+                            .allowsHitTesting(false)
+                            .accessibilityHidden(true)
                     }
                 }
             }
@@ -618,9 +741,17 @@ struct DashboardLocalPermissionCard: View {
     let onSelect: (String) -> Void
     let onCancel: () -> Void
 
+    private var allowOnce: LocalACPPermissionOption? {
+        permission.options.first { $0.kind == "allow_once" }
+    }
+
+    private var otherOptions: [LocalACPPermissionOption] {
+        permission.options.filter { $0.id != allowOnce?.id }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Permission requested")
+            Text("Approval needed")
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(DashboardPalette.mutedForeground)
                 .textCase(.uppercase)
@@ -628,18 +759,9 @@ struct DashboardLocalPermissionCard: View {
             Text(permission.title)
                 .font(.system(size: 13, weight: .medium))
                 .fixedSize(horizontal: false, vertical: true)
-            HStack(spacing: 8) {
-                ForEach(permission.options) { option in
-                    if option.kind.hasPrefix("allow") {
-                        Button(option.name) { onSelect(option.id) }
-                            .buttonStyle(DashboardPrimaryButtonStyle())
-                    } else {
-                        Button(option.name) { onSelect(option.id) }
-                            .buttonStyle(DashboardQuietButtonStyle())
-                    }
-                }
-                Button("Cancel", role: .cancel, action: onCancel)
-                    .buttonStyle(DashboardQuietButtonStyle())
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) { actions }
+                VStack(alignment: .leading, spacing: 8) { actions }
             }
         }
         .padding(13)
@@ -650,6 +772,33 @@ struct DashboardLocalPermissionCard: View {
             DashboardShapes.card
                 .stroke(theme.palette.border, lineWidth: 1)
         }
+    }
+
+    @ViewBuilder
+    private var actions: some View {
+        if let option = allowOnce {
+            Button("Allow once") { onSelect(option.id) }
+                .buttonStyle(DashboardPrimaryButtonStyle())
+                .help(option.name)
+                .accessibilityLabel(option.name)
+        }
+        if !otherOptions.isEmpty {
+            Menu(allowOnce == nil ? "Choose response" : "More options") {
+                // Keep the provider's complete labels: persistent choices may
+                // apply only to a domain, command, or project, not every tool.
+                ForEach(otherOptions) { option in
+                    Button(option.name) { onSelect(option.id) }
+                }
+            }
+            .menuStyle(.borderlessButton)
+            .font(.system(size: 12.5, weight: .medium))
+            .foregroundStyle(DashboardPalette.foreground)
+            .fixedSize()
+            .padding(.horizontal, 8)
+            .accessibilityLabel("Other permission responses")
+        }
+        Button("Cancel", role: .cancel, action: onCancel)
+            .buttonStyle(DashboardQuietButtonStyle())
     }
 }
 
@@ -867,6 +1016,12 @@ struct DashboardMessageRow: View {
     let run: WorkspaceRunRecord?
     let runPresentation: DashboardRunPresentation?
     let activities: [WorkspaceRunActivityRecord]
+    var layout: ConversationMessageLayout.Row? = nil
+    var displayedBody: String? = nil
+
+    private var isFirstMessagePart: Bool { layout?.isFirstMessagePart ?? true }
+    private var isLastMessagePart: Bool { layout?.isLastMessagePart ?? true }
+    private var assistantBody: String { displayedBody ?? transcript.body }
 
     private var transcript: AssistantTranscriptProjection {
         AssistantTranscriptProjection(messageID: message.id, content: message.content,
@@ -882,21 +1037,35 @@ struct DashboardMessageRow: View {
             }
             .font(.system(size: 12))
             .foregroundStyle(DashboardPalette.mutedForeground)
+        } else if layout?.content == .fileChanges {
+            HStack {
+                ConversationChangedFilesCard(records: activities, topSpacing: {
+                    if showsAssistantBody { return 18 }
+                    guard run != nil else { return 0 }
+                    return ConversationWorkTranscript.hasVisibleActivities(
+                        in: activities, commentaryIDs: Set(transcript.commentary.map(\.id))
+                    ) ? 18 : 0
+                })
+                .frame(maxWidth: .infinity, alignment: .leading)
+                Spacer(minLength: 0)
+            }
+            .fixedSize(horizontal: false, vertical: true)
         } else {
             let isUser = message.role == "user"
             HStack {
                 if isUser { Spacer(minLength: 72) }
                 VStack(alignment: isUser ? .trailing : .leading, spacing: 18) {
-                    if !isUser, let run {
+                    if !isUser, isFirstMessagePart, let run {
                         ConversationWorkTranscript(
                             run: run,
                             presentation: runPresentation,
                             records: activities,
                             commentaryIDs: Set(transcript.commentary.map(\.id)),
-                            hasFinalReply: !transcript.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                            hasFinalReply: !assistantBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                         )
                     }
                     if isUser {
+                        WorkspaceIncomingAgentHeader(message: message)
                         ConversationUserMessage(
                             content: message.content,
                             attachments: attachments,
@@ -904,16 +1073,14 @@ struct DashboardMessageRow: View {
                         )
                     } else if showsAssistantBody {
                         if let renderedDocument {
-                            ConversationMarkdown(
-                                document: renderedDocument,
-                                isStreaming: message.status == "streaming"
-                            )
+                            markdown(renderedDocument)
                             .padding(.horizontal, 4)
-                            .padding(.vertical, 2)
+                            .padding(.top, isFirstMessagePart ? 2 : 0)
+                            .padding(.bottom, isLastMessagePart ? 2 : 0)
                             .textSelection(.enabled)
                         } else {
                             Text(RemoteNoteEditEnvelope.redactingEnvelopes(
-                                in: transcript.body
+                                in: assistantBody
                             ))
                                 .font(.system(size: 15))
                                 .lineSpacing(4)
@@ -927,7 +1094,7 @@ struct DashboardMessageRow: View {
                                 .textSelection(.enabled)
                         }
                     }
-                    if !isUser {
+                    if !isUser, layout == nil {
                         ConversationChangedFilesCard(records: activities)
                     }
                 }
@@ -938,11 +1105,22 @@ struct DashboardMessageRow: View {
         }
     }
 
+    @ViewBuilder
+    private func markdown(_ document: ConversationMarkdownDocument) -> some View {
+        if let layout, case .markdownBlocks(let range, _) = layout.content,
+           document.blocks.indices.contains(range.lowerBound), range.upperBound <= document.blocks.count {
+            ConversationMarkdown(blocks: Array(document.blocks[range]), isStreaming: message.status == "streaming")
+        } else {
+            ConversationMarkdown(document: document, isStreaming: message.status == "streaming")
+        }
+    }
+
     private var showsAssistantBody: Bool {
-        guard !transcript.body.isEmpty else { return false }
-        guard run?.status == "failed", let error = run?.error else { return true }
-        return message.content.trimmingCharacters(in: .whitespacesAndNewlines)
-            != error.trimmingCharacters(in: .whitespacesAndNewlines)
+        ConversationMessageLayout.showsAssistantBody(
+            content: message.content,
+            displayedBody: assistantBody,
+            failedRunError: run?.status == "failed" ? run?.error : nil
+        )
     }
 }
 

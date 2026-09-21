@@ -216,6 +216,17 @@ struct RuntimeBoundaryTests {
     #expect(launch.launch.arguments.last?.contains("flock --shared --nonblock 9") == true)
     #expect(launch.launch.arguments.last?.contains("/home/.wovenmatter/runtime-operation.lock") == true)
     #expect(launch.launch.arguments.last?.contains("Runtime maintenance is in progress") == true)
+    for runtime in AgentRuntimeKind.allCases {
+      let directory = URL(fileURLWithPath: "/home/projects/a quoted ' directory")
+      let inherited = try RemoteHarnessLaunchResolver.resolve(configuration: configuration, runtimeKind: runtime,
+        processWorkingDirectory: URL(fileURLWithPath: "/private/tmp"),
+        workspaceRoot: URL(fileURLWithPath: "/home/shared"), workingDirectory: directory)
+      #expect(inherited.workspace.rootURL == directory)
+      #expect(inherited.workspace.repositoriesURL.path == "/home/shared/REPOS")
+      #expect(inherited.workspace.databasesURL.path == "/home/shared/Databases")
+      #expect(inherited.launch.processWorkingDirectoryURL?.path == "/private/tmp")
+      #expect(inherited.launch.arguments.last?.contains("'--workdir' '/home/projects/a quoted '\\'' directory'") == true)
+    }
 
     let deleteRecorder = SSHRecorder(response: #"{"deleted":true}"#)
     let deleteClient = RemoteWorkspaceSSHClient(
