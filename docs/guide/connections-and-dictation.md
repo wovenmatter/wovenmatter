@@ -49,7 +49,8 @@ Connect discovers models and verifies the Responses endpoint with a small test
 request. Available models then appear in Default Agent's model preferences and
 conversation selector. Reconnect after loading different models to refresh the
 catalog. A failed check leaves an existing saved connection intact. Editing a
-saved server URL requires entering its key again.
+server address requires a new connection, keeping existing sessions and keys
+bound to their original server.
 
 A remote workspace must be able to reach the server address itself. `localhost`
 refers to the machine/container running that agent; use a reachable network

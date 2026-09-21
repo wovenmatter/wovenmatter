@@ -33,6 +33,10 @@ private struct LocalModelServerConnectionRow: View {
         VStack(alignment: .leading, spacing: 8) {
             TextField("Server URL", text: $url).settingsInput()
                 .accessibilityLabel("Local model server URL")
+                .disabled(server != nil)
+            if server != nil {
+                Text("Add a new connection to use a different server URL.").font(.caption).foregroundStyle(.secondary)
+            }
             SecureField(server == nil ? "API key" : "API key · leave empty to keep saved key", text: $key)
                 .settingsInput().accessibilityLabel("Local model server API key")
             HStack {
@@ -59,9 +63,6 @@ private struct LocalModelServerConnectionRow: View {
         Task {
             defer { busy = false }
             do {
-                if let server, enteredKey.isEmpty, enteredURL != server.url {
-                    throw DefaultAgentError.message("Enter the API key again to connect to a different server URL.")
-                }
                 let savedKey = enteredKey.isEmpty ? try server.flatMap { try DefaultAgentSupport.key($0.id) } : enteredKey
                 guard let savedKey, !savedKey.isEmpty else { throw DefaultAgentError.message("Enter the server API key.") }
                 _ = try await LocalModelServerStore.connect(url: enteredURL, key: savedKey, replacing: server)

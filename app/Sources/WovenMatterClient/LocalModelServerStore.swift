@@ -15,6 +15,12 @@ public enum LocalModelServerStore {
         }
     }
     public static func connect(url: String, key: String, replacing existing: LocalModelServer? = nil) async throws -> LocalModelServer {
+        // Active SDK sessions retain their model's endpoint. Keep a server's
+        // identity bound to that endpoint so a new host's key can never be used
+        // by an older session still addressing the previous host.
+        if let existing, url.trimmingCharacters(in: .whitespacesAndNewlines) != existing.url {
+            throw DefaultAgentError.message("Add a new connection to use a different server URL.")
+        }
         guard existing != nil || servers.count < maximumServers else { throw DefaultAgentError.message("You can connect up to 12 local model servers.") }
         struct Request: Encodable { let action = "probe-server"; let url: String; let key: String }
         struct Result: Decodable { let url: String; let models: [String]; let error: String? }
