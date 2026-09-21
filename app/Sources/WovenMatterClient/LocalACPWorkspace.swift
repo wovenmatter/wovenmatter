@@ -72,6 +72,14 @@ public enum LocalACPWorkspaceProvisioner {
     public static let rootDirectoryName = ".woven-matter"
     public static let repositoriesDirectoryName = "REPOS"
     public static let databasesDirectoryName = "Databases"
+    public static let knowledgeDirectories = [
+        "GUIDES",
+        "PLANS",
+        "RESEARCH",
+        "WORK_LOGS",
+        "OUTBOX",
+        ".scratch",
+    ]
 
     public static func ensureWorkspace(
         at rootURL: URL,

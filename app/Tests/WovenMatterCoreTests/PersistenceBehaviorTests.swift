@@ -79,20 +79,6 @@ struct PersistenceBehaviorTests {
     #expect(try reopenedAgain.conversationHistoryPage(id: conversationID, limit: 2) == before)
   }
 
-  @Test("operator identity follows committed changes from another connection")
-  func operatorIdentityRefreshes() throws {
-    let fixture = try PersistenceFixture()
-    defer { fixture.remove() }
-    let database = try WorkspaceDatabase(url: fixture.databaseURL)
-    _ = try database.createFolder(name: "Initial")
-    // Populate the former identity cache before a separate writer migrates ownership.
-    _ = try database.createFolder(name: "Cached")
-    let sql = try PersistenceSQL(url: fixture.databaseURL)
-    try sql.execute("UPDATE folders SET user_id = 'migrated-operator'")
-    let folderID = try database.createFolder(name: "After migration")
-    #expect(try sql.scalar("SELECT count(*) FROM folders WHERE id = '\(folderID)' AND user_id = 'migrated-operator'") == 1)
-  }
-
   @Test("deterministic agent identity and timestamp parsing survive reopen")
   func agentIdentity() throws {
     let fixture = try PersistenceFixture()

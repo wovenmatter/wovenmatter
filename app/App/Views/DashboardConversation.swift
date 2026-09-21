@@ -50,9 +50,13 @@ struct DashboardCloudConversation: View {
     @Bindable var model: ApplicationModel
     let agent: WorkspaceAgent?
     let conversation: WorkspaceConversationRecord?
-    /// Observed directly so that a streaming update in this pane does not
-    /// invalidate sibling panes or the parent workspace body.
-    let conversationState: DashboardConversationState?
+    let messages: [WorkspaceMessageRecord]
+    let messageAttachments: [WorkspaceMessageAttachmentRecord]
+    let messageReferences: [WorkspaceMessageReferenceRecord]
+    let messagePresentations: [String: DashboardMessagePresentation]
+    let activeRuns: [WorkspaceRunRecord]
+    let runActivities: [WorkspaceRunActivityRecord]
+    let runPresentations: [String: DashboardRunPresentation]
     let attachedNoteTitle: String?
     @Binding var draft: String
     let attachments: [AgentMessageAttachmentDraft]
@@ -85,7 +89,19 @@ struct DashboardCloudConversation: View {
     @State private var isUserScrolling = false
 
     var body: some View {
-        let rows = transcriptRows
+        let runsByAssistantMessageID = self.runsByAssistantMessageID
+        let activitiesByRunID = self.activitiesByRunID
+        let attachmentsByMessageID = Dictionary(grouping: messageAttachments, by: \.messageID)
+        let referencesByMessageID = Dictionary(grouping: messageReferences, by: \.messageID)
+        let visibleMessages = messages.filter { record in
+            DashboardRunDisplayPolicy.presentsMessage(record, run: runsByAssistantMessageID[record.id])
+                && (conversation?.localRuntimeKind != .opencode || workspaceOpenCode?.links[record.conversationID] == nil
+                    || workspaceOpenCode?.snapshots[record.conversationID]?.messages.contains(where: { $0["id"].text == record.clientMessageID && OpenCodeSessionSnapshot.presentsMessage($0) }) == true)
+        }
+        let openCodeOrder = Dictionary((conversation.flatMap { workspaceOpenCode?.snapshots[$0.id]?.messages } ?? []).enumerated().map { ($0.element["id"].text, $0.offset) }, uniquingKeysWith: { first, _ in first })
+        let orderedMessages = openCodeOrder.isEmpty ? visibleMessages : visibleMessages.sorted {
+            (openCodeOrder[$0.clientMessageID ?? ""] ?? 0) < (openCodeOrder[$1.clientMessageID ?? ""] ?? 0)
+        }
         ZStack(alignment: .bottom) {
             ScrollViewReader { proxy in
                 ScrollView {
@@ -98,7 +114,7 @@ struct DashboardCloudConversation: View {
                                     ? "Choose New chat for a direct local workspace session, or select a synced conversation."
                                     : "Choose a synced conversation from Workspace."
                             )
-                        } else if rows.isEmpty {
+                        } else if visibleMessages.isEmpty {
                             DashboardConversationEmptyState(
                                 icon: conversation?.localRuntimeKind == nil
                                     ? (agent.map { dashboardAgentGlyph($0) }
@@ -112,7 +128,7 @@ struct DashboardCloudConversation: View {
                         } else {
                             if scrollState.positionedConversationID == conversation?.id,
                                (conversationState?.hasOlderMessages == true || conversation.flatMap { workspaceOpenCode?.isLocalSession($0.id) == true ? workspaceOpenCode?.snapshots[$0.id]?.olderCursor : nil } != nil),
-                               let oldestMessageID = conversationState?.oldestMessageID {
+                               let oldestMessageID = messages.first?.id {
                                 Color.clear
                                     .frame(height: 1)
                                     .id(historyLoaderID(oldestMessageID: oldestMessageID))
@@ -124,15 +140,23 @@ struct DashboardCloudConversation: View {
                                         )
                                     }
                             }
-                            let openCodeMedia = workspaceOpenCode.flatMap { openCode in
-                                conversation.flatMap { openCode.links[$0.id] != nil ? openCode : nil }
-                            }
-                            ForEach(rows) { row in
-                                DashboardMessageRow(row: row)
-                                    .equatable()
-                                    .id(row.id)
-                                if let openCodeMedia {
-                                    OpenCodeMessageMedia(model: openCodeMedia, conversationID: row.message.conversationID, messageID: row.message.clientMessageID ?? "")
+                            ForEach(orderedMessages) { message in
+                                let presentation = messagePresentations[message.id]
+                                let run = runsByAssistantMessageID[message.id]
+                                DashboardMessageRow(
+                                    message: message,
+                                    attachments: attachmentsByMessageID[message.id] ?? [],
+                                    references: referencesByMessageID[message.id] ?? [],
+                                    renderedDocument: presentation?.document,
+                                    run: run.flatMap {
+                                        DashboardRunDisplayPolicy.presentsStatus($0) ? $0 : nil
+                                    },
+                                    runPresentation: run.flatMap { runPresentations[$0.id] },
+                                    activities: run.map { activitiesByRunID[$0.id] ?? [] } ?? []
+                                )
+                                .id(message.id)
+                                if let openCode = workspaceOpenCode, openCode.links[message.conversationID] != nil {
+                                    OpenCodeMessageMedia(model: openCode, conversationID: message.conversationID, messageID: message.clientMessageID ?? "")
                                 }
                             }
                         }
@@ -219,7 +243,7 @@ struct DashboardCloudConversation: View {
                     guard identity != nil else { return }
                     let action = scrollState.contentChanged(
                         conversationID: conversation?.id,
-                        hasMessages: !rows.isEmpty,
+                        hasMessages: !visibleMessages.isEmpty,
                         isPrependingHistory: isPrependingHistory
                     )
                     switch action {
@@ -467,25 +491,9 @@ struct DashboardCloudConversation: View {
         return nil
     }
 
-    /// Rows to draw. OpenCode sessions additionally filter and order by the
-    /// live backend snapshot, which is the only per-render work left here.
-    private var transcriptRows: [DashboardTranscriptRow] {
-        let rows = conversationState?.rows ?? []
-        guard let conversation, let openCode = workspaceOpenCode else { return rows }
-        let snapshot = openCode.snapshots[conversation.id]?.messages ?? []
-        var visible = rows
-        if conversation.localRuntimeKind == .opencode, openCode.links[conversation.id] != nil {
-            let presented = Set(snapshot.filter(OpenCodeSessionSnapshot.presentsMessage).map { $0["id"].text })
-            visible = rows.filter { $0.message.clientMessageID.map(presented.contains) == true }
-        }
-        let order = Dictionary(
-            snapshot.enumerated().map { ($0.element["id"].text, $0.offset) },
-            uniquingKeysWith: { first, _ in first }
-        )
-        guard !order.isEmpty else { return visible }
-        return visible.sorted {
-            (order[$0.message.clientMessageID ?? ""] ?? 0) < (order[$1.message.clientMessageID ?? ""] ?? 0)
-        }
+    private var conversationState: DashboardConversationState? {
+        guard let conversation else { return nil }
+        return model.conversationState(for: conversation.id)
     }
 
     private var localPermission: PendingLocalACPPermission? {
@@ -512,9 +520,40 @@ struct DashboardCloudConversation: View {
         ))
     }
 
+    private var runsByAssistantMessageID: [String: WorkspaceRunRecord] {
+        activeRuns.reduce(into: [:]) {
+            if let assistantMessageID = $1.assistantMessageID {
+                $0[assistantMessageID] = $1
+            }
+        }
+    }
+
+    private var activitiesByRunID: [String: [WorkspaceRunActivityRecord]] {
+        Dictionary(grouping: runActivities, by: \.runID)
+    }
+
+    private var visibleMessages: [WorkspaceMessageRecord] {
+        let runsByAssistantMessageID = self.runsByAssistantMessageID
+        return messages.filter {
+            DashboardRunDisplayPolicy.presentsMessage(
+                $0,
+                run: runsByAssistantMessageID[$0.id]
+            )
+        }
+    }
+
     private var newestPresentedMessageIdentity: String? {
-        guard conversation != nil else { return nil }
-        return conversationState?.newestRowIdentity
+        guard let conversation,
+              let message = visibleMessages.last,
+              let presentation = messagePresentations[message.id],
+              presentation.source == message.content else { return nil }
+        return [
+            conversation.id,
+            message.id,
+            message.updatedAt ?? "",
+            message.status ?? "",
+            String(message.content.utf8.count)
+        ].joined(separator: ":")
     }
 
     private func historyLoaderID(oldestMessageID: String) -> String {
@@ -815,12 +854,19 @@ func dashboardNonemptyString(_ value: String?) -> String? {
     return trimmed
 }
 
-struct DashboardMessageRow: View, Equatable {
-    let row: DashboardTranscriptRow
+struct DashboardMessageRow: View {
+    let message: WorkspaceMessageRecord
+    let attachments: [WorkspaceMessageAttachmentRecord]
+    let references: [WorkspaceMessageReferenceRecord]
+    let renderedDocument: ConversationMarkdownDocument?
+    let run: WorkspaceRunRecord?
+    let runPresentation: DashboardRunPresentation?
+    let activities: [WorkspaceRunActivityRecord]
 
-    private var message: WorkspaceMessageRecord { row.message }
-    private var run: WorkspaceRunRecord? { row.run }
-    private var activities: [WorkspaceRunActivityRecord] { row.activities }
+    private var transcript: AssistantTranscriptProjection {
+        AssistantTranscriptProjection(messageID: message.id, content: message.content,
+            activities: activities.map(\.activity))
+    }
 
     var body: some View {
         if message.role == "system" {
@@ -839,20 +885,20 @@ struct DashboardMessageRow: View, Equatable {
                     if !isUser, let run {
                         ConversationWorkTranscript(
                             run: run,
-                            presentation: row.runPresentation,
+                            presentation: runPresentation,
                             records: activities,
-                            commentaryIDs: row.presentation?.commentaryIDs ?? [],
-                            hasFinalReply: row.presentation?.hasFinalReply ?? false
+                            commentaryIDs: Set(transcript.commentary.map(\.id)),
+                            hasFinalReply: !transcript.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                         )
                     }
                     if isUser {
                         ConversationUserMessage(
                             content: message.content,
-                            attachments: row.attachments,
-                            references: row.references
+                            attachments: attachments,
+                            references: references
                         )
                     } else if showsAssistantBody {
-                        if let renderedDocument = row.presentation?.document {
+                        if let renderedDocument {
                             ConversationMarkdown(
                                 document: renderedDocument,
                                 isStreaming: message.status == "streaming"
@@ -862,7 +908,7 @@ struct DashboardMessageRow: View, Equatable {
                             .textSelection(.enabled)
                         } else {
                             Text(RemoteNoteEditEnvelope.redactingEnvelopes(
-                                in: row.presentation?.displayedBody ?? message.content
+                                in: transcript.body
                             ))
                                 .font(.system(size: 15))
                                 .lineSpacing(4)
@@ -888,9 +934,7 @@ struct DashboardMessageRow: View, Equatable {
     }
 
     private var showsAssistantBody: Bool {
-        guard let presentation = row.presentation, !presentation.displayedBody.isEmpty else {
-            return false
-        }
+        guard !transcript.body.isEmpty else { return false }
         guard run?.status == "failed", let error = run?.error else { return true }
         return message.content.trimmingCharacters(in: .whitespacesAndNewlines)
             != error.trimmingCharacters(in: .whitespacesAndNewlines)

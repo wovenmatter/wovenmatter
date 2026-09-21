@@ -9,60 +9,12 @@ struct DashboardMessagePresentation: Sendable {
     let status: String?
     let createdAt: String
     let document: ConversationMarkdownDocument?
-    /// Activity identifiers that the assistant transcript treats as commentary.
-    let commentaryIDs: Set<String>
-    let hasFinalReply: Bool
 }
 
 struct DashboardRunPresentation: Sendable {
     let source: WorkspaceRunRecord
     let startedAt: Date?
     let completedDuration: String?
-}
-
-/// Which runs and placeholder messages the transcript shows.
-struct DashboardRunDisplayPolicy {
-    static func presentsStatus(_ run: WorkspaceRunRecord) -> Bool {
-        run.status != "queued" && run.status != "accepted"
-    }
-
-    static func presentsMessage(
-        _ message: WorkspaceMessageRecord,
-        run: WorkspaceRunRecord?
-    ) -> Bool {
-        guard message.role == "assistant", message.content.isEmpty else { return true }
-        guard let run else { return true }
-        return presentsStatus(run)
-    }
-}
-
-/// One rendered transcript entry. Rows are built once per data change so the
-/// view body only iterates; equality is by record identity and content.
-struct DashboardTranscriptRow: Identifiable, Equatable, Sendable {
-    let message: WorkspaceMessageRecord
-    let attachments: [WorkspaceMessageAttachmentRecord]
-    let references: [WorkspaceMessageReferenceRecord]
-    /// The run that produced this assistant reply, when its status is shown.
-    let run: WorkspaceRunRecord?
-    let runPresentation: DashboardRunPresentation?
-    let activities: [WorkspaceRunActivityRecord]
-    let presentation: DashboardMessagePresentation?
-
-    var id: String { message.id }
-
-    static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.message == rhs.message
-            && lhs.run == rhs.run
-            && lhs.activities == rhs.activities
-            && lhs.attachments == rhs.attachments
-            && lhs.references == rhs.references
-            && lhs.presentation?.displayedBody == rhs.presentation?.displayedBody
-            && lhs.presentation?.status == rhs.presentation?.status
-            && lhs.presentation?.commentaryIDs == rhs.presentation?.commentaryIDs
-            && lhs.presentation?.hasFinalReply == rhs.presentation?.hasFinalReply
-            && lhs.runPresentation?.startedAt == rhs.runPresentation?.startedAt
-            && lhs.runPresentation?.completedDuration == rhs.runPresentation?.completedDuration
-    }
 }
 
 struct DashboardConversationWindow: Equatable, Sendable {
@@ -292,50 +244,15 @@ struct DashboardConversationPresentation: Sendable {
     let window: DashboardConversationWindow
     let messagesByID: [String: DashboardMessagePresentation]
     let runsByID: [String: DashboardRunPresentation]
-    let rows: [DashboardTranscriptRow]
 
-    init(
-        window: DashboardConversationWindow,
-        messagesByID: [String: DashboardMessagePresentation],
-        runsByID: [String: DashboardRunPresentation]
-    ) {
-        self.window = window
-        self.messagesByID = messagesByID
-        self.runsByID = runsByID
-        self.rows = Self.rows(window: window, messagesByID: messagesByID, runsByID: runsByID)
-    }
-
-    private static func rows(
-        window: DashboardConversationWindow,
-        messagesByID: [String: DashboardMessagePresentation],
-        runsByID: [String: DashboardRunPresentation]
-    ) -> [DashboardTranscriptRow] {
-        var runsByAssistantMessageID: [String: WorkspaceRunRecord] = [:]
-        for run in window.runs {
-            if let assistantMessageID = run.assistantMessageID {
-                runsByAssistantMessageID[assistantMessageID] = run
-            }
-        }
-        let activitiesByRunID = Dictionary(grouping: window.activities, by: \.runID)
-        let attachmentsByMessageID = Dictionary(grouping: window.attachments, by: \.messageID)
-        let referencesByMessageID = Dictionary(grouping: window.references, by: \.messageID)
-        var rows: [DashboardTranscriptRow] = []
-        rows.reserveCapacity(window.messages.count)
-        for message in window.messages {
-            let run = runsByAssistantMessageID[message.id]
-            guard DashboardRunDisplayPolicy.presentsMessage(message, run: run) else { continue }
-            let shownRun = run.flatMap { DashboardRunDisplayPolicy.presentsStatus($0) ? $0 : nil }
-            rows.append(DashboardTranscriptRow(
-                message: message,
-                attachments: attachmentsByMessageID[message.id] ?? [],
-                references: referencesByMessageID[message.id] ?? [],
-                run: shownRun,
-                runPresentation: run.flatMap { runsByID[$0.id] },
-                activities: run.map { activitiesByRunID[$0.id] ?? [] } ?? [],
-                presentation: messagesByID[message.id]
-            ))
-        }
-        return rows
+    var content: WorkspaceConversationContent {
+        WorkspaceConversationContent(
+            conversationID: window.conversationID,
+            messages: window.messages,
+            runs: window.runs,
+            attachments: window.attachments,
+            references: window.references
+        )
     }
 }
 
@@ -343,13 +260,13 @@ struct DashboardConversationPresentation: Sendable {
 @Observable
 final class DashboardConversationState {
     let conversationID: String
-    private(set) var rows: [DashboardTranscriptRow] = []
+    private(set) var content: WorkspaceConversationContent?
+    private(set) var messagePresentations: [String: DashboardMessagePresentation] = [:]
+    private(set) var runPresentations: [String: DashboardRunPresentation] = [:]
+    private(set) var runActivities: [WorkspaceRunActivityRecord] = []
     private(set) var hasOlderMessages = false
     private(set) var isLoadingOlderMessages = false
     private(set) var error: String?
-    /// Identity of the newest presented row whose rendering matches its
-    /// source. Changes exactly when the transcript tail changes.
-    private(set) var newestRowIdentity: String?
     @ObservationIgnored var presentation: DashboardConversationPresentation?
     @ObservationIgnored var lastAccessSequence: UInt64 = 0
     @ObservationIgnored private var refreshGeneration: UInt64 = 0
@@ -358,32 +275,21 @@ final class DashboardConversationState {
         self.conversationID = conversationID
     }
 
-    var oldestMessageID: String? { presentation?.window.messages.first?.id }
-
     func apply(_ presentation: DashboardConversationPresentation) {
         self.presentation = presentation
-        rows = presentation.rows
-        if hasOlderMessages != presentation.window.hasOlderMessages {
-            hasOlderMessages = presentation.window.hasOlderMessages
-        }
-        let identity: String? = presentation.rows.last.flatMap { row in
-            guard let rendered = row.presentation, rendered.source == row.message.content else {
-                return nil
-            }
-            return [
-                conversationID, row.id, row.message.updatedAt ?? "", row.message.status ?? "",
-                String(row.message.content.utf8.count),
-            ].joined(separator: ":")
-        }
-        if newestRowIdentity != identity { newestRowIdentity = identity }
+        content = presentation.content
+        messagePresentations = presentation.messagesByID
+        runPresentations = presentation.runsByID
+        runActivities = presentation.window.activities
+        hasOlderMessages = presentation.window.hasOlderMessages
     }
 
     func setLoadingOlderMessages(_ loading: Bool) {
-        if isLoadingOlderMessages != loading { isLoadingOlderMessages = loading }
+        isLoadingOlderMessages = loading
     }
 
     func setError(_ error: String?) {
-        if self.error != error { self.error = error }
+        self.error = error
     }
 
     func beginRefresh() -> UInt64 {

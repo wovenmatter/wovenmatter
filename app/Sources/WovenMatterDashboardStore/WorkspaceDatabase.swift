@@ -6066,7 +6066,8 @@ public final class WorkspaceDatabase: @unchecked Sendable {
       );
       CREATE INDEX IF NOT EXISTS desktop_cache_conversations_user_last
         ON dashboard_conversations(user_id, is_archived, deleted_at, last_message_at DESC);
-      DROP INDEX IF EXISTS desktop_cache_messages_conversation_created;
+      CREATE INDEX IF NOT EXISTS desktop_cache_messages_conversation_created
+        ON dashboard_messages(conversation_id, created_at);
       CREATE INDEX IF NOT EXISTS desktop_cache_messages_conversation_created_id
         ON dashboard_messages(conversation_id, created_at, id);
       CREATE INDEX IF NOT EXISTS desktop_cache_attachments_message_created_id
