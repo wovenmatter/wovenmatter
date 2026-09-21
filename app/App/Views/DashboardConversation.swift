@@ -355,6 +355,11 @@ struct DashboardCloudConversation: View {
                             help: "Remove panel",
                             action: onClosePanel
                         )
+                    } else if showsAddPanel {
+                        Color.clear
+                            .frame(width: DashboardPanelControlButton.size, height: DashboardPanelControlButton.size)
+                            .allowsHitTesting(false)
+                            .accessibilityHidden(true)
                     }
                     DashboardComposer(
                         placeholder: dashboardComposerPlaceholder(
@@ -452,6 +457,11 @@ struct DashboardCloudConversation: View {
                             help: "Add panel",
                             action: onAddPanel
                         )
+                    } else if showsClosePanel {
+                        Color.clear
+                            .frame(width: DashboardPanelControlButton.size, height: DashboardPanelControlButton.size)
+                            .allowsHitTesting(false)
+                            .accessibilityHidden(true)
                     }
                 }
             }
