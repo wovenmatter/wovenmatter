@@ -108,7 +108,7 @@ extension ApplicationModel {
                     catch { agentTools?.error = error.localizedDescription }
                 }
             }
-            for delivery in try database.sessionDeliveries(queuedOnly: true) {
+            for delivery in try database.sessionDeliveries(queuedOnly: true, includeCalendar: false) {
                 guard !Task.isCancelled else { return }
                 // Initial sends try steering. A deferred send waits for an idle
                 // target instead of repeatedly trying an unsupported operation.
@@ -361,7 +361,7 @@ extension ApplicationModel {
                 throw WorkspaceToolError.invalid("Enable OpenCode in Local agent workspace before running this task.")
             }
             let sent = try await dispatchAgentMessage(conversation: target,
-                input: .init(text: claimed.text, historyDeliveryID: claimed.id))
+                input: .init(text: claimed.text, historyDeliveryID: claimed.id), allowSteering: claimed.kind != .calendar)
             guard sent else {
                 if claimed.kind == .calendar {
                     try database.setToolDeliveryStatus(id: claimed.id, status: "queued")

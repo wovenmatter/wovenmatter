@@ -5,7 +5,7 @@ struct DashboardCalendarEventSheet: View {
     enum EditScope: String, CaseIterable { case series, detach }
     @Environment(\.dismiss) private var dismiss
     @Bindable var model: ApplicationModel
-    let selection: DashboardCalendarSelection
+    @State private var selection: DashboardCalendarSelection
     let onOpenSession: (String) -> Void
     @State private var draft: WorkspaceCalendarDraft
     @State private var editing: Bool
@@ -13,17 +13,20 @@ struct DashboardCalendarEventSheet: View {
     @State private var showsDelete = false
 
     init(model: ApplicationModel, selection: DashboardCalendarSelection, onOpenSession: @escaping (String) -> Void) {
-        self.model = model; self.selection = selection; self.onOpenSession = onOpenSession
+        self.model = model; self.onOpenSession = onOpenSession
+        _selection = State(initialValue: selection)
         _draft = State(initialValue: selection.draft)
         _editing = State(initialValue: selection.occurrence == nil)
     }
     private var event: WorkspaceCalendarItemRecord? { selection.occurrence?.event }
+    private var isPastRun: Bool { selection.occurrence?.recordedRun != nil }
     private var isSeries: Bool { event?.calendar.recurrence != nil }
     private var calendar: Calendar {
         var value = Calendar(identifier: .gregorian); value.timeZone = TimeZone(identifier: draft.timeZoneID) ?? .current
         return value
     }
     private var run: WorkspaceCalendarRun? {
+        if let recorded = selection.occurrence?.recordedRun { return recorded }
         guard let event else { return nil }
         let runs = model.calendarRuns.filter { $0.eventID == event.id && $0.status != "cancelled" }
         return runs.last { $0.scheduledAt == selection.occurrence?.startsAt } ?? (isSeries ? nil : runs.last)
@@ -96,8 +99,8 @@ struct DashboardCalendarEventSheet: View {
             }
             DatePicker("Starts", selection: $draft.startsAt, displayedComponents: draft.allDay ? [.date] : [.date, .hourAndMinute])
             DatePicker("Ends", selection: endDate, in: draft.startsAt..., displayedComponents: draft.allDay ? [.date] : [.date, .hourAndMinute])
-            Picker("Time zone", selection: $draft.timeZoneID) {
-                ForEach(TimeZone.knownTimeZoneIdentifiers, id: \.self) { Text($0.replacingOccurrences(of: "_", with: " ")).tag($0) }
+            Picker("Time zone", selection: Binding(get: { draft.timeZoneID }, set: { draft = draft.changingTimeZone(to: $0) })) {
+                ForEach(Array(Set(TimeZone.knownTimeZoneIdentifiers + [draft.timeZoneID])).sorted(), id: \.self) { Text($0.replacingOccurrences(of: "_", with: " ")).tag($0) }
             }
             if !isSeries || scope == .series {
                 Toggle("Repeat", isOn: Binding(get: { draft.recurrence != nil }, set: { draft.recurrence = $0 ? .init(unit: .week) : nil }))
@@ -139,7 +142,11 @@ struct DashboardCalendarEventSheet: View {
 
     private var information: some View {
         VStack(alignment: .leading, spacing: 16) {
-            LabeledContent("Type", value: draft.task == nil ? "Event" : "Scheduled task")
+            if isPastRun {
+                Text("This run used an earlier schedule. View the event to change its current schedule.")
+                    .foregroundStyle(DashboardPalette.mutedForeground)
+            }
+            LabeledContent("Type", value: isPastRun ? "Past run" : draft.task == nil ? "Event" : "Scheduled task")
             LabeledContent("Starts", value: dateLabel(draft.startsAt))
             if let end = draft.endsAt { LabeledContent("Ends", value: dateLabel(draft.allDay ? calendar.date(byAdding: .day, value: -1, to: end) ?? end : end)) }
             LabeledContent("Time zone", value: draft.timeZoneID)
@@ -185,7 +192,7 @@ struct DashboardCalendarEventSheet: View {
     private var footer: some View {
         HStack {
             if event != nil && !editing {
-                Button("Delete", role: .destructive) { showsDelete = true }.buttonStyle(DashboardQuietButtonStyle())
+                if !isPastRun { Button("Delete", role: .destructive) { showsDelete = true }.buttonStyle(DashboardQuietButtonStyle()) }
                 Button("Copy event") { DashboardCalendarClipboard.copy(draft) }
                     .buttonStyle(DashboardQuietButtonStyle()).keyboardShortcut("c", modifiers: .command)
             }
@@ -201,6 +208,8 @@ struct DashboardCalendarEventSheet: View {
                     }
                 }.buttonStyle(DashboardPrimaryButtonStyle()).keyboardShortcut(.defaultAction)
                     .disabled(model.isCreatingCalendarItem || (try? draft.validated()) == nil)
+            } else if isPastRun {
+                Button("View event") { viewCurrentEvent() }.buttonStyle(DashboardPrimaryButtonStyle())
             } else {
                 Button("Edit") {
                     draft = event.map(WorkspaceCalendarDraft.init) ?? selection.draft
@@ -209,6 +218,22 @@ struct DashboardCalendarEventSheet: View {
             }
         }
     }
+    private func viewCurrentEvent() {
+        guard let eventID = event?.id, let event = model.calendarItems.first(where: { $0.id == eventID }),
+              let start = event.startDate else { return }
+        let index = event.calendar.recurrence == nil ? 0 : selection.occurrence?.index ?? 0
+        let current = WorkspaceCalendarSchedule.occurrence(event, index: index)
+            ?? WorkspaceCalendarSchedule.next(event, after: Date()).flatMap { date in
+                WorkspaceCalendarSchedule.index(onOrBefore: date, start: start,
+                    recurrence: event.calendar.recurrence, timeZoneID: event.calendar.timeZoneID)
+                    .flatMap { WorkspaceCalendarSchedule.occurrence(event, index: $0) }
+            }
+        guard let current else { return }
+        selection = .init(draft: current.draft, occurrence: current)
+        draft = current.draft
+        model.clearCalendarMutationError()
+    }
+
     private func dateLabel(_ date: Date) -> String {
         let format = DateFormatter()
         format.timeZone = calendar.timeZone

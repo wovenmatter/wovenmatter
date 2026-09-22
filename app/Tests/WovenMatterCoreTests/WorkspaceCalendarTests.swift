@@ -29,7 +29,7 @@ struct WorkspaceCalendarTests {
     _ = try db.prepareCalendarDelivery(runID: run.id, now: now)
     #expect(try db.claimToolDelivery(id: run.id, now: now) != nil)
     try db.setToolDeliveryStatus(id: run.id, status: "accepted")
-    try db.settleCalendarRuns(now: now)
+    try db.settleCalendarRuns()
   }
 
   @Test func recurrencePreservesWallClockAndMonthAnchor() throws {
@@ -58,6 +58,10 @@ struct WorkspaceCalendarTests {
     var viewer = Calendar(identifier: .gregorian); viewer.timeZone = TimeZone(identifier: "America/Los_Angeles")!
     let occurrence = try #require(WorkspaceCalendarSchedule.occurrence(event, index: 0))
     #expect(occurrence.displayInterval(in: viewer).start == date("2026-09-20T07:00:00Z"))
+    let movedZone = occurrence.draft.changingTimeZone(to: "America/Los_Angeles")
+    #expect(movedZone.startsAt == date("2026-09-20T07:00:00Z"))
+    #expect(movedZone.endsAt == date("2026-09-23T07:00:00Z"))
+    #expect(movedZone.changingTimeZone(to: "UTC").startsAt == date("2026-09-20T00:00:00Z"))
     #expect(occurrence.draft.copied(to: date("2026-09-25T07:00:00Z"), calendar: viewer).startsAt == date("2026-09-25T04:00:00Z"))
     var invalid = draft; invalid.task = task()
     #expect(throws: (any Error).self) { try invalid.validated() }
@@ -175,7 +179,7 @@ struct WorkspaceCalendarTests {
     let reopened = try WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
     try reopened.recoverToolDeliveries()
     #expect(try reopened.calendarRuns().first?.status == "uncertain")
-    try reopened.settleCalendarRuns(now: start)
+    try reopened.settleCalendarRuns()
     #expect(try reopened.dueCalendarRuns(now: start).isEmpty)
     let next = try #require(reopened.dueCalendarRuns(now: start.addingTimeInterval(5 * 86_400)).first)
     #expect(next.id != run.id)
@@ -196,7 +200,7 @@ extension WorkspaceCalendarTests {
     try db.setToolDeliveryStatus(id: run.id, status: "accepted")
     let event = try #require(db.calendarItems().first)
     let detachedID = try db.saveCalendarEvent(id: id, draft: WorkspaceCalendarDraft(event), creating: false, detaching: 0, now: start)
-    try db.settleCalendarRuns(now: start)
+    try db.settleCalendarRuns()
     let saved = try #require(db.calendarRuns().first)
     #expect(saved.eventID == detachedID && saved.sessionID == run.sessionID)
     #expect(try db.dueCalendarRuns(now: start).isEmpty)
@@ -213,7 +217,7 @@ extension WorkspaceCalendarTests {
     try db.setToolDeliveryStatus(id: run.id, status: "accepted")
     let reopened = try WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
     let now = start.addingTimeInterval(5 * 86_400)
-    try reopened.settleCalendarRuns(now: now)
+    try reopened.settleCalendarRuns()
     let next = try #require(reopened.dueCalendarRuns(now: now).first)
     #expect(next.scheduledAt == now && next.id != run.id)
     try accept(next, in: reopened, now: now)
@@ -281,5 +285,172 @@ extension WorkspaceCalendarTests {
     #expect(retry.error == "Workspace offline")
     try await CalendarTaskRunner.tick(database: db, now: start.addingTimeInterval(31), isRunning: { _ in false }, hasCapacity: { true }, prepare: create, dispatch: dispatch)
     #expect(try db.calendarRuns().allSatisfy { $0.status == "accepted" })
+  }
+}
+
+extension WorkspaceCalendarTests {
+  @Test @MainActor func busyBacklogDoesNotStarveReadyTasks() async throws {
+    let (db, directory) = try fixture(); defer { try? FileManager.default.removeItem(at: directory) }
+    let start = date("2026-09-01T13:00:00Z")
+    for _ in 0..<20 { _ = try insert(db, start: start) }
+    let readyID = try insert(db, start: start.addingTimeInterval(1))
+    let now = start.addingTimeInterval(2)
+    let runs = try db.dueCalendarRuns(now: now)
+    let busy = Set(runs.filter { $0.eventID != readyID }.map(\.sessionID))
+    var delivered: [String] = []
+    try await CalendarTaskRunner.tick(database: db, now: now, isRunning: { busy.contains($0) }, hasCapacity: { true }, prepare: { run in
+      _ = try db.createLocalACPSession(runtimeKind: .codex, title: "Ready", ownerDeviceID: UUID(), requestedConversationID: UUID(uuidString: run.sessionID))
+    }, dispatch: { delivery in
+      delivered.append(delivery.id)
+      _ = try db.claimToolDelivery(id: delivery.id, now: now)
+      try db.setToolDeliveryStatus(id: delivery.id, status: "accepted")
+    })
+    #expect(delivered == runs.filter { $0.eventID == readyID }.map(\.id))
+  }
+
+  @Test @MainActor func queuedRetryReappliesSettingsAndHonorsTransportBackoff() async throws {
+    let (db, directory) = try fixture(); defer { try? FileManager.default.removeItem(at: directory) }
+    let start = date("2026-09-01T13:00:00Z")
+    _ = try insert(db, start: start)
+    let run = try #require(db.dueCalendarRuns(now: start).first)
+    _ = try db.createLocalACPSession(runtimeKind: .codex, title: "Task", ownerDeviceID: UUID(), requestedConversationID: UUID(uuidString: run.sessionID))
+    _ = try db.prepareCalendarDelivery(runID: run.id, now: start)
+    _ = try db.claimToolDelivery(id: run.id, now: start)
+    try db.failToolDeliveryAttempt(id: run.id, now: start)
+    #expect(try db.dueCalendarRuns(now: start.addingTimeInterval(29)).isEmpty)
+    try db.setSessionTools(.init(enabled: []), sessionID: run.sessionID)
+    var preparations = 0
+    let now = start.addingTimeInterval(31)
+    try await CalendarTaskRunner.tick(database: db, now: now, isRunning: { _ in false }, hasCapacity: { true }, prepare: { retry in
+      preparations += 1
+      #expect(retry.id == run.id && retry.sessionID == run.sessionID)
+      try db.setSessionTools(retry.task.configuration.tools, sessionID: retry.sessionID)
+    }, dispatch: { delivery in
+      #expect(try db.sessionTools(delivery.targetID).enabled == [.notes, .calendar])
+      _ = try db.claimToolDelivery(id: delivery.id, now: now)
+      try db.setToolDeliveryStatus(id: delivery.id, status: "accepted")
+    })
+    #expect(preparations == 1)
+    #expect(try db.calendarRuns().first?.status == "accepted")
+  }
+
+  @Test func invalidOccurrenceRemovalAndDeletedIDReuseDoNotMutateEvents() throws {
+    let (db, directory) = try fixture(); defer { try? FileManager.default.removeItem(at: directory) }
+    let start = date("2026-09-01T13:00:00Z")
+    let id = try insert(db, start: start)
+    #expect(throws: (any Error).self) { try db.deleteCalendarEvent(id: id, occurrence: 2) }
+    let event = try #require(db.calendarItems().first)
+    #expect(event.id == id)
+    try db.deleteCalendarEvent(id: id)
+    #expect(throws: (any Error).self) {
+      try db.saveCalendarEvent(id: id, draft: WorkspaceCalendarDraft(event), creating: true)
+    }
+    #expect(try db.calendarItems().isEmpty)
+  }
+
+  @Test func pastRunsRemainDistinctFromChangedOccurrencesAndKeepTheirSavedSettings() throws {
+    let (db, directory) = try fixture(); defer { try? FileManager.default.removeItem(at: directory) }
+    let start = date("2026-09-01T13:00:00Z")
+    let id = try insert(db, start: start, repeatRule: .init(unit: .day))
+    let run = try #require(db.dueCalendarRuns(now: start).first)
+    try accept(run, in: db, now: start)
+    var draft = WorkspaceCalendarDraft(try #require(db.calendarItems().first))
+    draft.title = "New schedule"; draft.startsAt = start.addingTimeInterval(3_600)
+    draft.task?.prompt = "New instructions"
+    try db.saveCalendarEvent(id: id, draft: draft, creating: false, now: start.addingTimeInterval(3_601))
+    let entries = WorkspaceCalendarSchedule.visibleOccurrences(events: try db.calendarItems(), runs: try db.calendarRuns(),
+      in: .init(start: start.addingTimeInterval(-1), end: start.addingTimeInterval(86_400)))
+    #expect(entries.count == 2)
+    let past = try #require(entries.first { $0.recordedRun != nil })
+    #expect(past.title == "Review" && past.draft.task?.prompt == "Review the project")
+    #expect(past.recordedRun?.sessionID == run.sessionID)
+    let current = try #require(entries.first { $0.recordedRun == nil })
+    #expect(current.title == "New schedule" && current.draft.task?.prompt == "New instructions")
+    // Detaching the live occurrence does not steal an earlier run's session link.
+    let detached = try db.saveCalendarEvent(id: id, draft: current.draft, creating: false, detaching: current.index,
+      now: start.addingTimeInterval(3_601))
+    #expect(try db.calendarRuns().first?.eventID == id)
+    #expect(detached != id)
+  }
+}
+
+extension WorkspaceCalendarTests {
+  @Test func deletingCompletedOccurrenceHidesItsEntryAndPreservesExecutionHistory() throws {
+    let (db, directory) = try fixture(); defer { try? FileManager.default.removeItem(at: directory) }
+    let start = date("2026-09-01T13:00:00Z")
+    let id = try insert(db, start: start, repeatRule: .init(unit: .day))
+    let run = try #require(db.dueCalendarRuns(now: start).first)
+    try accept(run, in: db, now: start)
+    try db.deleteCalendarEvent(id: id, occurrence: 0)
+    let reopened = try WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+    let entries = WorkspaceCalendarSchedule.visibleOccurrences(events: try reopened.calendarItems(), runs: try reopened.calendarRuns(),
+      in: .init(start: start.addingTimeInterval(-1), end: start.addingTimeInterval(1)))
+    #expect(entries.isEmpty)
+    #expect(try reopened.calendarRunsUnlocked(eventID: id).first?.status == "accepted")
+    #expect(try reopened.toolDelivery(id: run.id)?.status == "accepted")
+    #expect(try reopened.workspaceOverview().conversations.contains { $0.id == run.sessionID })
+    #expect(try reopened.dueCalendarRuns(now: start).isEmpty)
+    #expect(try reopened.dueCalendarRuns(now: start.addingTimeInterval(86_400)).count == 1)
+  }
+
+  @Test func calendarBacklogDoesNotDisplaceOtherDeliveryKinds() throws {
+    let (db, directory) = try fixture(); defer { try? FileManager.default.removeItem(at: directory) }
+    let start = date("2026-09-01T13:00:00Z")
+    _ = try insert(db, start: start)
+    let run = try #require(db.dueCalendarRuns(now: start).first)
+    _ = try db.createLocalACPSession(runtimeKind: .codex, title: "Task", ownerDeviceID: UUID(), requestedConversationID: UUID(uuidString: run.sessionID))
+    _ = try db.prepareCalendarDelivery(runID: run.id, now: start)
+    let source = try db.createLocalACPSession(runtimeKind: .codex, title: "Sender", ownerDeviceID: UUID())
+    let delivery = try db.reserveToolDelivery(sourceID: source, targetID: run.sessionID, text: "Regular message", requestID: UUID().uuidString.lowercased())
+    #expect(try db.sessionDeliveries(queuedOnly: true, limit: 1, includeCalendar: false).map(\.id) == [delivery.id])
+  }
+
+  @Test func legacyEventsMigrateWithoutLosingContentOrAgentAttribution() throws {
+    let (db, directory) = try fixture(); defer { try? FileManager.default.removeItem(at: directory) }
+    let caller = try db.createLocalACPSession(runtimeKind: .codex, title: "Planner", ownerDeviceID: UUID())
+    let start = date("2026-09-01T13:00:00Z")
+    let id = try db.saveAgentCalendar(callerID: caller, creating: true, title: "Legacy event", details: "Preserve this description",
+      startsAt: start, endsAt: start.addingTimeInterval(3_600), allDay: false)
+    // Recreate the pre-feature schema around an existing native event.
+    try db.transaction {
+      try db.executeUnlocked("""
+        DROP TABLE workspace_calendar_runs;
+        DROP TABLE workspace_calendar_sessions;
+        DROP INDEX workspace_calendar_due;
+        ALTER TABLE dashboard_calendar_items DROP COLUMN calendar_json;
+        ALTER TABLE dashboard_calendar_items DROP COLUMN next_fire_at;
+        ALTER TABLE dashboard_calendar_items DROP COLUMN task_session_id;
+        ALTER TABLE dashboard_calendar_items DROP COLUMN deleted_at;
+        """)
+    }
+    let migrated = try WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+    let event = try #require(migrated.calendarItems().first)
+    #expect(event.id == id && event.title == "Legacy event" && event.details == "Preserve this description")
+    #expect(event.startDate == start && event.endDate == start.addingTimeInterval(3_600))
+    #expect(event.calendar.createdBy.sessionID == caller && event.calendar.createdBy.agent == "codex")
+    #expect(event.calendar.task == nil && event.calendar.recurrence == nil)
+    #expect(try migrated.dueCalendarRuns(now: start.addingTimeInterval(86_400)).isEmpty)
+    let reopened = try WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+    #expect(try reopened.calendarItems().first == event)
+  }
+}
+
+extension WorkspaceCalendarTests {
+  @Test func replacingCancelledSlotUsesTheNewOccurrenceIdentity() throws {
+    let (db, directory) = try fixture(); defer { try? FileManager.default.removeItem(at: directory) }
+    let start = date("2026-09-01T13:00:00Z")
+    let id = try insert(db, start: start, repeatRule: .init(unit: .day))
+    let cancelled = try #require(db.dueCalendarRuns(now: start).first)
+    try db.deleteCalendarEvent(id: id, occurrence: 0)
+    var draft = WorkspaceCalendarDraft(try #require(db.calendarItems().first))
+    draft.startsAt = start.addingTimeInterval(-86_400)
+    try db.saveCalendarEvent(id: id, draft: draft, creating: false, now: start)
+    let replacement = try #require(db.dueCalendarRuns(now: start).first)
+    #expect(replacement.id != cancelled.id)
+    #expect(replacement.scheduledAt == cancelled.scheduledAt)
+    #expect(replacement.occurrenceIndex == 1)
+    #expect(try db.calendarRuns().first?.id == replacement.id)
+    try accept(replacement, in: db, now: start)
+    #expect(try db.dueCalendarRuns(now: start).isEmpty)
   }
 }

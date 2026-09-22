@@ -38,13 +38,18 @@ extension WorkspaceDatabase {
           id TEXT PRIMARY KEY, event_id TEXT NOT NULL REFERENCES dashboard_calendar_items(id),
           scheduled_at TEXT NOT NULL, occurrence_index INTEGER NOT NULL, session_id TEXT NOT NULL,
           task_json TEXT NOT NULL, title TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending',
-          prepared INTEGER NOT NULL DEFAULT 0, error TEXT, retry_after REAL, coalesced_through REAL NOT NULL,
+          error TEXT, retry_after REAL, coalesced_through REAL NOT NULL, hidden_at TEXT,
           UNIQUE(event_id,scheduled_at));
         CREATE INDEX IF NOT EXISTS workspace_calendar_due ON dashboard_calendar_items(next_fire_at) WHERE deleted_at IS NULL;
         CREATE INDEX IF NOT EXISTS workspace_calendar_run_event ON workspace_calendar_runs(event_id);
         CREATE INDEX IF NOT EXISTS workspace_calendar_pending_runs ON workspace_calendar_runs(status) WHERE status='pending';
         CREATE TABLE IF NOT EXISTS workspace_calendar_sessions(id TEXT PRIMARY KEY, configuration_json TEXT NOT NULL);
         """)
+      let runColumns = Set(try historyRowsUnlocked("PRAGMA table_info(workspace_calendar_runs)", values: [])
+        .compactMap { $0.objectValue?["name"]?.stringValue })
+      if !runColumns.contains("hidden_at") {
+        try executeUnlocked("ALTER TABLE workspace_calendar_runs ADD COLUMN hidden_at TEXT")
+      }
       for operation in ["INSERT", "UPDATE", "DELETE"] {
         try executeUnlocked("""
           CREATE TRIGGER IF NOT EXISTS workspace_calendar_runs_revision_\(operation.lowercased())
@@ -107,7 +112,8 @@ extension WorkspaceDatabase {
       return try performToolMutationUnlocked(callerID: callerID, requestID: requestID,
         operation: creating ? "calendar.create" : occurrence == nil ? "calendar.update" : "calendar.detach", input: input) {
         let existing = try calendarItemsUnlocked().first { $0.id == id }
-        guard creating ? existing == nil : existing != nil else { throw WorkspaceToolError.invalid("Calendar event not found or already exists.") }
+        let idExists = try !historyRowsUnlocked("SELECT 1 FROM dashboard_calendar_items WHERE id=?", values: [id]).isEmpty
+        guard creating ? !idExists : existing != nil else { throw WorkspaceToolError.invalid("Calendar event not found or already exists.") }
         if let expectedRevision, existing?.calendar.revision != expectedRevision {
           throw WorkspaceToolError.invalid("This event changed. Reopen it before saving your changes.")
         }
@@ -197,11 +203,15 @@ extension WorkspaceDatabase {
         input: requestInput ?? [id, occurrence.map(String.init) ?? "", expectedRevision.map(String.init) ?? ""].joined(separator: ":")) {
         guard let event = try calendarItemsUnlocked().first(where: { $0.id == id }) else { throw WorkspaceToolError.invalid("Calendar event not found.") }
         if let expectedRevision, expectedRevision != event.calendar.revision { throw WorkspaceToolError.invalid("This event changed. Reopen it before deleting.") }
-        if let occurrence, event.calendar.recurrence != nil {
+        if let occurrence {
+          guard event.calendar.recurrence != nil else { throw WorkspaceToolError.invalid("This event is not recurring.") }
           guard let value = WorkspaceCalendarSchedule.occurrence(event, index: occurrence) else { throw WorkspaceToolError.invalid("Occurrence not found.") }
           var details = event.calendar
           details.excludedOccurrences.insert(occurrence); details.editedBy = try calendarAuthorUnlocked(callerID); details.revision += 1
           try cancelCalendarRunsUnlocked(eventID: id, scheduledAt: value.startsAt)
+          // Hide the removed occurrence without rewriting its delivery outcome.
+          try toolsExecuteUnlocked("UPDATE workspace_calendar_runs SET hidden_at=? WHERE event_id=? AND scheduled_at=?",
+            [Self.timestamp(now), id, Self.timestamp(value.startsAt)])
           try toolsExecuteUnlocked("UPDATE dashboard_calendar_items SET calendar_json=?,updated_at=? WHERE id=?", [try toolsJSON(details), Self.timestamp(now), id])
         } else {
           try cancelCalendarRunsUnlocked(eventID: id)
@@ -224,13 +234,13 @@ extension WorkspaceDatabase {
     }
   }
 
-  public func calendarRuns() throws -> [WorkspaceCalendarRun] { try withLock { try calendarRunsUnlocked() } }
+  public func calendarRuns() throws -> [WorkspaceCalendarRun] { try withLock { try calendarRunsUnlocked(visibleOnly: true) } }
 
-  func calendarRunsUnlocked(eventID: String? = nil, unfinishedOnly: Bool = false) throws -> [WorkspaceCalendarRun] {
+  func calendarRunsUnlocked(eventID: String? = nil, unfinishedOnly: Bool = false, visibleOnly: Bool = false) throws -> [WorkspaceCalendarRun] {
     let rows = try historyRowsUnlocked("""
       SELECT r.*,coalesce(d.status,r.status) AS delivery_status FROM workspace_calendar_runs r
       LEFT JOIN workspace_session_deliveries d ON d.id=r.id
-      WHERE 1=1 \(eventID == nil ? "" : "AND r.event_id=?") \(unfinishedOnly ? "AND r.status='pending'" : "") ORDER BY r.scheduled_at,r.id
+      WHERE \(visibleOnly ? "r.hidden_at IS NULL" : "1=1") \(eventID == nil ? "" : "AND r.event_id=?") \(unfinishedOnly ? "AND r.status='pending'" : "") ORDER BY r.scheduled_at,r.id
       """, values: eventID.map { [$0] } ?? [])
     return try rows.map { value in
       guard let r = value.objectValue, let id = r["id"]?.stringValue, let eventID = r["event_id"]?.stringValue,
@@ -239,7 +249,7 @@ extension WorkspaceDatabase {
       return WorkspaceCalendarRun(id: id, eventID: eventID, occurrenceIndex: r["occurrence_index"]?.intValue ?? 0,
         scheduledAt: scheduled, sessionID: sessionID, task: try JSONDecoder().decode(WorkspaceCalendarTask.self, from: Data(json.utf8)),
         status: r["delivery_status"]?.stringValue ?? "pending", error: r["error"]?.stringValue,
-        prepared: r["prepared"]?.intValue == 1, title: r["title"]?.stringValue ?? "Scheduled task")
+        title: r["title"]?.stringValue ?? "Scheduled task")
     }
   }
 
@@ -268,7 +278,8 @@ extension WorkspaceDatabase {
         try toolsExecuteUnlocked("""
           INSERT INTO workspace_calendar_runs(id,event_id,scheduled_at,occurrence_index,session_id,task_json,title,coalesced_through)
           VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(event_id,scheduled_at) DO UPDATE SET
-            id=excluded.id,session_id=excluded.session_id,task_json=excluded.task_json,title=excluded.title,status='pending',prepared=0,error=NULL,retry_after=NULL,
+            id=excluded.id,occurrence_index=excluded.occurrence_index,session_id=excluded.session_id,
+            task_json=excluded.task_json,title=excluded.title,status='pending',error=NULL,retry_after=NULL,hidden_at=NULL,
             coalesced_through=excluded.coalesced_through
           WHERE workspace_calendar_runs.status='cancelled'
           """, [id, event.id, Self.timestamp(occurrence.startsAt), String(index), sessionID, try toolsJSON(task), event.title, String(now.timeIntervalSince1970)])
@@ -278,8 +289,11 @@ extension WorkspaceDatabase {
           try toolsExecuteUnlocked("UPDATE dashboard_calendar_items SET task_session_id=? WHERE id=?", [sessionID, event.id])
         }
       }
-      let eligible = Set(try historyRowsUnlocked("SELECT id FROM workspace_calendar_runs WHERE status='pending' AND (retry_after IS NULL OR retry_after<=?)",
-        values: [String(now.timeIntervalSince1970)]).compactMap { $0.objectValue?["id"]?.stringValue })
+      let eligible = Set(try historyRowsUnlocked("""
+        SELECT r.id FROM workspace_calendar_runs r LEFT JOIN workspace_session_deliveries d ON d.id=r.id
+        WHERE r.status='pending' AND (r.retry_after IS NULL OR r.retry_after<=?)
+          AND (d.retry_after IS NULL OR d.retry_after<=?)
+        """, values: [String(now.timeIntervalSince1970), String(now.timeIntervalSince1970)]).compactMap { $0.objectValue?["id"]?.stringValue })
       return eligible.isEmpty ? [] : try calendarRunsUnlocked(unfinishedOnly: true).filter { $0.isPending && eligible.contains($0.id) }
     }
   }
@@ -303,7 +317,7 @@ extension WorkspaceDatabase {
       guard try calendarRunAuthorizedUnlocked(runID), let run = try calendarRunsUnlocked(unfinishedOnly: true).first(where: { $0.id == runID }) else {
         throw WorkspaceToolError.invalid("This calendar task was changed or removed.")
       }
-      try toolsExecuteUnlocked("UPDATE workspace_calendar_runs SET prepared=1,error=NULL,retry_after=NULL,coalesced_through=? WHERE id=?", [String(now.timeIntervalSince1970), runID])
+      try toolsExecuteUnlocked("UPDATE workspace_calendar_runs SET error=NULL,retry_after=NULL,coalesced_through=? WHERE id=?", [String(now.timeIntervalSince1970), runID])
       return try reserveToolDeliveryUnlocked(sourceID: run.sessionID, targetID: run.sessionID, text: run.task.prompt,
         requestID: run.id, kind: .calendar, purpose: run.title)
     }
@@ -316,11 +330,9 @@ extension WorkspaceDatabase {
     }
   }
 
-  public func settleCalendarRuns(now: Date = Date()) throws {
+  public func settleCalendarRuns() throws {
     try transaction {
       for run in try calendarRunsUnlocked(unfinishedOnly: true) where ["accepted", "cancelled", "uncertain", "failed"].contains(run.status) {
-        guard let stored = try historyRowsUnlocked("SELECT status FROM workspace_calendar_runs WHERE id=?", values: [run.id]).first?.objectValue?["status"]?.stringValue,
-              stored == "pending" else { continue }
         try toolsExecuteUnlocked("UPDATE workspace_calendar_runs SET status=?,error=NULL WHERE id=?", [run.status, run.id])
         let through = try historyRowsUnlocked("SELECT coalesced_through FROM workspace_calendar_runs WHERE id=?", values: [run.id])
           .first?.objectValue?["coalesced_through"]?.doubleValue.map(Date.init(timeIntervalSince1970:)) ?? run.scheduledAt

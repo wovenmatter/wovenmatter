@@ -14,7 +14,8 @@ else
   objects=("$build_dir"/WovenMatterCore.build/*.swift.o "$build_dir"/WovenMatterClient.build/*.swift.o "$build_dir"/WovenMatterDashboardStore.build/*.swift.o)
 fi
 app_path="$cache_root/CalendarPreview.app"
-mkdir -p "$app_path/Contents/MacOS" "$app_path/Contents/Resources"
+mkdir -p "$app_path/Contents/MacOS" "$app_path/Contents/Resources/harnesses"
+cp "$repo_root/harnesses/catalog.json" "$app_path/Contents/Resources/harnesses/catalog.json"
 xcrun swiftc -swift-version 6 -parse-as-library -target "$(uname -m)-apple-macos26.0" \
   -module-cache-path "$cache_root/ModuleCache" -I "$module_dir" \
   "$repo_root/app/App/Views/DashboardDesign.swift" \

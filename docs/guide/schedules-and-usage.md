@@ -56,8 +56,10 @@ confirmed is marked for inspection rather than automatically sent again.
 Future recurring occurrences continue on their schedule. These app-owned
 tasks are separate from the agent-service schedules in **Cron Jobs**.
 
-After a task sends, click its event and choose **Open session**. Deleting an
-event does not delete its sessions. Each event shows who created it and who
+After a task sends, click its event and choose **Open session**. If a later edit
+moves the schedule, the original **Past run** keeps its saved prompt and session
+link; choose **View event** to edit the current schedule. Deleting an event or
+occurrence removes its calendar entry without deleting its sessions. Each event shows who created it and who
 last edited it, including the agent for changes made through Calendar tools.
 
 ## Usage

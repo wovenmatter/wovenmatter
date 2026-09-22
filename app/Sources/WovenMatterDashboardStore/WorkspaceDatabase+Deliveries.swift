@@ -163,10 +163,11 @@ extension WorkspaceDatabase {
     try withLock { try deliveryUnlocked(id) }
   }
 
-  public func sessionDeliveries(sessionID: String? = nil, queuedOnly: Bool = false, limit: Int = 200, beforeID: String? = nil, outgoingOnly: Bool = false, activityOnly: Bool = false) throws -> [WorkspaceSessionDelivery] {
+  public func sessionDeliveries(sessionID: String? = nil, queuedOnly: Bool = false, limit: Int = 200, beforeID: String? = nil, outgoingOnly: Bool = false, activityOnly: Bool = false, includeCalendar: Bool = true) throws -> [WorkspaceSessionDelivery] {
     try withLock {
       var sql = "SELECT rowid AS sequence,* FROM workspace_session_deliveries WHERE 1=1"
       var values: [String?] = []
+      if !includeCalendar { sql += " AND kind!='calendar'" }
       if let sessionID {
         if activityOnly {
           sql += " AND ((source_id=? AND kind IN ('message','created')) OR (target_id=? AND native_command IS NOT NULL))"

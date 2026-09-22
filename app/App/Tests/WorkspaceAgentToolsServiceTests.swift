@@ -478,6 +478,8 @@ extension WorkspaceAgentToolsServiceTests {
         #expect(independent.calendar.recurrence == nil)
         #expect(independent.calendar.task?.prompt == "Review changes")
         #expect(independent.calendar.task?.configuration.tools.enabled == [.notes])
+        #expect(try await !request(["calendar", "remove", detachedID, "--occurrence", "1"]).success)
+        #expect(try await request(["calendar", "read", detachedID]).success)
         #expect(try database.calendarEvent(id: id, callerID: caller).calendar.excludedOccurrences == [1])
         let copyID = UUID().uuidString.lowercased()
         let copy = ["calendar", "copy", detachedID, "--starts-at", "2026-09-20T13:00:00Z"]

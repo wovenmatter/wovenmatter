@@ -9,6 +9,7 @@ struct DashboardCalendarTaskFields: View {
     let recurring: Bool
     @State private var metadata: LocalACPSessionMetadata?
     @State private var loading = false
+    @State private var refreshID = 0
     @State private var error: String?
 
     private var catalogKey: String {
@@ -37,6 +38,9 @@ struct DashboardCalendarTaskFields: View {
             Text("Session").font(.system(size: 14, weight: .semibold))
             Picker("Work location", selection: workspace) {
                 Text("Local workspace").tag("local")
+                if let id = task.configuration.workspaceID, model.remoteWorkspaces.configuration(id: id) == nil {
+                    Text("Unavailable workspace").tag(id.uuidString)
+                }
                 ForEach(model.remoteWorkspaces.workspaces) { configuration in
                     Text(configuration.name).tag(configuration.id.uuidString)
                 }
@@ -48,6 +52,9 @@ struct DashboardCalendarTaskFields: View {
             }
             Picker("Session folder", selection: choice(\.folderID)) {
                 Text("All Workspace").tag("")
+                if let id = task.configuration.folderID, model.workspaceOverview?.folders.contains(where: { $0.id == id }) != true {
+                    Text("Unavailable folder").tag(id)
+                }
                 ForEach(model.workspaceOverview?.folders ?? []) { Text($0.name).tag($0.id) }
             }
             TextField("Working directory", text: choice(\.nativeWorkingDirectory))
@@ -56,7 +63,7 @@ struct DashboardCalendarTaskFields: View {
                 Text("Session settings").font(.system(size: 12, weight: .medium))
                 Spacer()
                 if loading { ProgressView().controlSize(.small) }
-                Button("Refresh") { Task { await loadMetadata() } }.buttonStyle(DashboardQuietButtonStyle()).disabled(loading)
+                Button("Refresh") { refreshID += 1 }.buttonStyle(DashboardQuietButtonStyle()).disabled(loading)
             }
             optionPicker("Model", selection: choice(\.model), choices: metadata?.selectableModels ?? [], metadata: metadata?.modelOptionMetadata ?? [:])
             optionPicker("Thinking", selection: choice(\.thinking), choices: metadata?.selectableThinkingLevels ?? [], metadata: metadata?.thinkingOptionMetadata ?? [:])
@@ -85,10 +92,7 @@ struct DashboardCalendarTaskFields: View {
                 .accessibilityLabel("Scheduled task prompt")
         }
         .font(.system(size: 12.5))
-        .task(id: catalogKey) {
-            do { try await Task.sleep(for: .milliseconds(400)) } catch { return }
-            await loadMetadata()
-        }
+        .task(id: catalogKey + "|" + String(refreshID)) { await loadMetadata() }
     }
 
     private func optionPicker(_ title: String, selection: Binding<String>, choices: [String], metadata: [String: SessionOptionMetadata]) -> some View {
@@ -111,9 +115,10 @@ struct DashboardCalendarTaskFields: View {
 
     private func loadMetadata() async {
         let key = catalogKey
-        loading = true; error = nil
-        defer { if key == catalogKey { loading = false } }
+        loading = true; error = nil; metadata = nil
+        defer { if !Task.isCancelled, key == catalogKey { loading = false } }
         do {
+            try await Task.sleep(for: .milliseconds(400))
             let value = try await model.calendarTaskMetadata(task)
             guard !Task.isCancelled, key == catalogKey else { return }
             metadata = value

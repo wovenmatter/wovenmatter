@@ -121,6 +121,23 @@ public struct WorkspaceCalendarDraft: Codable, Equatable, Sendable {
     return value
   }
 
+  /// All-day events name calendar dates, so changing their zone must not move
+  /// them to the previous or following day. Timed events retain their instant.
+  public func changingTimeZone(to identifier: String) -> Self {
+    var value = self
+    value.timeZoneID = identifier
+    guard allDay, let sourceZone = TimeZone(identifier: timeZoneID),
+          let targetZone = TimeZone(identifier: identifier) else { return value }
+    var source = Calendar(identifier: .gregorian); source.timeZone = sourceZone
+    var target = Calendar(identifier: .gregorian); target.timeZone = targetZone
+    func remap(_ date: Date) -> Date {
+      target.date(from: source.dateComponents([.year, .month, .day], from: date)) ?? date
+    }
+    value.startsAt = remap(startsAt)
+    value.endsAt = endsAt.map(remap)
+    return value
+  }
+
   /// Copying an occurrence always creates a new, independent event.
   public func copied(to day: Date, calendar: Calendar = .autoupdatingCurrent) -> Self {
     var value = self
@@ -143,15 +160,21 @@ public struct WorkspaceCalendarOccurrence: Identifiable, Equatable, Sendable {
   public let index: Int
   public let startsAt: Date
   public let endsAt: Date?
-  public init(event: WorkspaceCalendarItemRecord, index: Int, startsAt: Date, endsAt: Date?) {
+  /// A past send whose date no longer belongs to the current schedule.
+  public let recordedRun: WorkspaceCalendarRun?
+  public var title: String { recordedRun?.title ?? event.title }
+  public var allDay: Bool { recordedRun == nil && event.allDay }
+  public var recurrence: WorkspaceCalendarRecurrence? { recordedRun == nil ? event.calendar.recurrence : nil }
+  public init(event: WorkspaceCalendarItemRecord, index: Int, startsAt: Date, endsAt: Date?, recordedRun: WorkspaceCalendarRun? = nil) {
     self.event = event; self.index = index; self.startsAt = startsAt; self.endsAt = endsAt
+    self.recordedRun = recordedRun
   }
   public var id: String { event.id + ":" + WorkspaceCalendarSchedule.timestamp(startsAt) }
   /// All-day entries retain their calendar dates when the viewer travels.
   /// Timed events keep their absolute instant and display in the viewer's zone.
   public func displayInterval(in calendar: Calendar) -> DateInterval {
     func displayDate(_ date: Date) -> Date {
-      guard event.allDay else { return date }
+      guard allDay else { return date }
       var source = Calendar(identifier: .gregorian)
       source.timeZone = TimeZone(identifier: event.calendar.timeZoneID) ?? .current
       return calendar.date(from: source.dateComponents([.year, .month, .day], from: date)) ?? date
@@ -162,6 +185,12 @@ public struct WorkspaceCalendarOccurrence: Identifiable, Equatable, Sendable {
   public var draft: WorkspaceCalendarDraft {
     var result = WorkspaceCalendarDraft(event)
     result.startsAt = startsAt; result.endsAt = endsAt
+    if let recordedRun {
+      result.title = recordedRun.title
+      result.task = recordedRun.task
+      result.allDay = false
+      result.recurrence = nil
+    }
     return result
   }
 }
@@ -175,15 +204,14 @@ public struct WorkspaceCalendarRun: Codable, Equatable, Identifiable, Sendable {
   public var task: WorkspaceCalendarTask
   public var status: String
   public var error: String?
-  public var prepared: Bool
   public var title: String
   public var isPending: Bool { ["pending", "queued", "sending"].contains(status) }
   public init(id: String, eventID: String, occurrenceIndex: Int, scheduledAt: Date,
               sessionID: String, task: WorkspaceCalendarTask, status: String = "pending",
-              error: String? = nil, prepared: Bool = false, title: String) {
+              error: String? = nil, title: String) {
     self.id = id; self.eventID = eventID; self.occurrenceIndex = occurrenceIndex; self.scheduledAt = scheduledAt
     self.sessionID = sessionID; self.task = task; self.status = status; self.error = error
-    self.prepared = prepared; self.title = title
+    self.title = title
   }
   public var statusLabel: String {
     switch status {
@@ -257,6 +285,26 @@ public enum WorkspaceCalendarSchedule {
       index += 1
     }
     return result
+  }
+
+  /// Preserve actual sends at their original dates after schedule edits, but
+  /// never give a historical row the identity of a different live occurrence.
+  public static func visibleOccurrences(events: [WorkspaceCalendarItemRecord], runs: [WorkspaceCalendarRun],
+                                         in range: DateInterval) -> [WorkspaceCalendarOccurrence] {
+    let expanded = DateInterval(start: range.start.addingTimeInterval(-86_400), end: range.end.addingTimeInterval(86_400))
+    var result = events.flatMap { occurrences($0, in: $0.allDay ? expanded : range) }
+    var ids = Set(result.map(\.id))
+    let eventsByID = Dictionary(uniqueKeysWithValues: events.map { ($0.id, $0) })
+    for run in runs where run.status != "cancelled" && run.scheduledAt >= range.start && run.scheduledAt < range.end {
+      guard let event = eventsByID[run.eventID] else { continue }
+      let value = WorkspaceCalendarOccurrence(event: event, index: run.occurrenceIndex,
+        startsAt: run.scheduledAt, endsAt: nil, recordedRun: run)
+      if ids.insert(value.id).inserted { result.append(value) }
+    }
+    return result.sorted {
+      if $0.allDay != $1.allDay { return $0.allDay }
+      return $0.startsAt == $1.startsAt ? $0.id < $1.id : $0.startsAt < $1.startsAt
+    }
   }
 
   public static func next(_ event: WorkspaceCalendarItemRecord, after date: Date) -> Date? {

@@ -49,6 +49,13 @@ func dashboardParsedDate(_ value: String) -> Date? {
             _ = try! database.claimToolDelivery(id: run.id)
             try! database.setToolDeliveryStatus(id: run.id, status: "accepted")
             try! database.settleCalendarRuns()
+            let event = try! database.calendarItems().first { $0.id == id }!
+            var changed = WorkspaceCalendarDraft(event)
+            changed.title = "Daily release review"
+            changed.startsAt = start.addingTimeInterval(10800)
+            changed.endsAt = start.addingTimeInterval(12600)
+            changed.task?.prompt = "Review the release checklist and report any blockers."
+            try! database.saveCalendarEvent(id: id, draft: changed, creating: false, now: start.addingTimeInterval(10801))
         }
         refresh()
     }

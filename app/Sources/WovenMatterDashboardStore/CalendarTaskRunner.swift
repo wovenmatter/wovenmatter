@@ -9,14 +9,18 @@ public enum CalendarTaskRunner {
       isRunning: (String) -> Bool, hasCapacity: () -> Bool,
       prepare: (WorkspaceCalendarRun) async throws -> Void,
       dispatch: (WorkspaceSessionDelivery) async throws -> Void) async throws {
-    try database.settleCalendarRuns(now: now)
-    for run in try database.dueCalendarRuns(now: now).prefix(20) {
+    try database.settleCalendarRuns()
+    var attempts = 0
+    for run in try database.dueCalendarRuns(now: now) {
       try Task.checkCancellation()
       if isRunning(run.sessionID) { continue }
-      guard hasCapacity() else { break }
+      guard hasCapacity(), attempts < 20 else { break }
+      attempts += 1
       do {
         guard try database.isCalendarRunActive(run.id) else { continue }
-        if !run.prepared { try await prepare(run) }
+        // Reapply saved settings on every attempt: the user may have changed
+        // the session while this delivery was queued or the app was closed.
+        try await prepare(run)
         try Task.checkCancellation()
         guard try database.isCalendarRunActive(run.id) else { continue }
         // Preparation awaits a native connection. The user may have started
@@ -30,6 +34,6 @@ public enum CalendarTaskRunner {
         try database.deferCalendarRun(run.id, error: error.localizedDescription, now: now)
       }
     }
-    try database.settleCalendarRuns(now: now)
+    try database.settleCalendarRuns()
   }
 }

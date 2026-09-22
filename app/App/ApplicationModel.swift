@@ -1789,7 +1789,8 @@ final class ApplicationModel {
     func dispatchAgentMessage(
         conversation: WorkspaceConversationRecord,
         input: AgentMessageInput,
-        note: WorkspaceNoteRecord? = nil
+        note: WorkspaceNoteRecord? = nil,
+        allowSteering: Bool = true
     ) async throws -> Bool {
         guard let dashboardStore, let agentTools else { throw ApplicationModelError.dashboardStoreUnavailable }
         try await applyPendingSessionSelections(conversationID: conversation.id)
@@ -1797,6 +1798,9 @@ final class ApplicationModel {
               !updatingLocalACPSessionIDs.contains(conversation.id) else {
             throw ApplicationModelError.localSessionConfigurationInProgress
         }
+        // A scheduled task waits for an idle turn even if another send started
+        // during asynchronous settings preparation.
+        guard allowSteering || !runningToolSessionIDs.contains(conversation.id) else { return false }
         let decision = toolSessionAdmission.begin(conversation.id, running: runningToolSessionIDs,
             limit: agentTools.settings.maximumRunningSessions)
         if decision == .atCapacity { return false }
