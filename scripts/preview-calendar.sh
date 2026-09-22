@@ -20,6 +20,7 @@ xcrun swiftc -swift-version 6 -parse-as-library -target "$(uname -m)-apple-macos
   -module-cache-path "$cache_root/ModuleCache" -I "$module_dir" \
   "$repo_root/app/App/Views/DashboardDesign.swift" \
   "$repo_root/app/App/Views/DashboardCalendarView.swift" \
+  "$repo_root/app/App/Views/DashboardCalendarColors.swift" \
   "$repo_root/app/App/Views/DashboardCalendarEventSheet.swift" \
   "$repo_root/app/App/Views/DashboardCalendarFormControls.swift" \
   "$repo_root/app/App/Views/DashboardCalendarTaskFields.swift" \

@@ -83,19 +83,11 @@ enum DashboardCalendarEntryStyle: CaseIterable {
         case .recurringTask: "Recurring scheduled task"
         }
     }
-
-    var color: Color {
-        switch self {
-        case .event: DashboardPalette.calendarEvent
-        case .task: DashboardPalette.calendarTask
-        case .recurringEvent: DashboardPalette.calendarRecurringEvent
-        case .recurringTask: DashboardPalette.calendarRecurringTask
-        }
-    }
 }
 
 struct DashboardCalendarSurface: View {
     @Environment(\.dashboardTheme) private var theme
+    private var colors = DashboardCalendarColors()
     @Bindable var model: ApplicationModel
     var onOpenSession: (String) -> Void = { _ in }
     @State private var displayedMonth = Date()
@@ -184,18 +176,25 @@ struct DashboardCalendarSurface: View {
     private var legend: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Legend").font(.system(size: 11, weight: .medium))
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 190), alignment: .leading)], alignment: .leading, spacing: 10) {
-                ForEach(DashboardCalendarEntryStyle.allCases, id: \.self) { style in
-                    HStack(spacing: 8) {
-                        Circle().fill(style.color).frame(width: 7, height: 7)
-                            .accessibilityHidden(true)
-                        Text(style.title).font(.system(size: 11.5))
-                    }
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) {
+                    legendItems
+                }
+                .fixedSize(horizontal: true, vertical: false)
+                LazyVGrid(columns: [GridItem(.flexible(), alignment: .leading), GridItem(.flexible(), alignment: .leading)], alignment: .leading, spacing: 8) {
+                    legendItems
                 }
             }
         }
         .foregroundStyle(DashboardPalette.mutedForeground)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 16)
+    }
+
+    private var legendItems: some View {
+        ForEach(DashboardCalendarEntryStyle.allCases, id: \.self) { style in
+            DashboardCalendarLegendItem(style: style, selection: colors.selection(for: style))
+        }
     }
 
     private func dayCell(_ day: DashboardCalendarMonthLayout.Day, occurrences: [WorkspaceCalendarOccurrence]) -> some View {
@@ -213,7 +212,7 @@ struct DashboardCalendarSurface: View {
                 let style = DashboardCalendarEntryStyle(occurrence.draft)
                 Button { open(occurrence) } label: {
                     HStack(spacing: 4) {
-                        Circle().fill(style.color).frame(width: 5, height: 5)
+                        Circle().fill(colors.color(for: style)).frame(width: 5, height: 5)
                         Text(occurrence.title).font(.system(size: 10.5, weight: .medium)).lineLimit(1)
                     }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
                 }.buttonStyle(.plain)
@@ -251,7 +250,7 @@ struct DashboardCalendarSurface: View {
                     let style = DashboardCalendarEntryStyle(occurrence.draft)
                     Button { open(occurrence) } label: {
                         HStack(spacing: 12) {
-                            Circle().fill(style.color).frame(width: 7, height: 7)
+                            Circle().fill(colors.color(for: style)).frame(width: 7, height: 7)
                             Text(occurrence.allDay ? "All day" : occurrence.startsAt.formatted(date: .omitted, time: .shortened))
                                 .font(.system(size: 11.5)).frame(width: 75, alignment: .leading)
                             VStack(alignment: .leading, spacing: 3) {
@@ -261,7 +260,7 @@ struct DashboardCalendarSurface: View {
                             }
                             Spacer()
                             if let repeatRule = occurrence.recurrence {
-                                Text(repeatRule.label).font(.system(size: 11)).foregroundStyle(style.color)
+                                Text(repeatRule.label).font(.system(size: 11)).foregroundStyle(colors.color(for: style))
                             }
                             if let run = model.calendarRuns.last(where: { $0.eventID == occurrence.event.id && $0.scheduledAt == occurrence.startsAt }) {
                                 Text(run.statusLabel).font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
