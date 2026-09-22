@@ -22,7 +22,7 @@ The composer has a compact Tools dropdown with seven independent groups:
 | Timers | Create, inspect, update, pause, resume and remove persistent session follow-ups |
 | Usage data | Read recorded usage; no mutation or credential access |
 | Calendar | Read, create, edit, copy, detach and delete events and scheduled tasks, subject to the configured access mode |
-| Library | Reports that retained items are unavailable; Library storage is not implemented yet |
+| Library | List and read exchanged-item metadata, original links, retention status, and source message IDs |
 
 All groups initially default to enabled. General settings, below Conversation
 titles, defines defaults for newly opened sessions. Session controls enable or
@@ -185,4 +185,12 @@ an unsigned native app. The interactive hover fixture runs separately through
 Fixtures do not establish live provider compatibility or rendered UI behavior.
 Before release, check the session settings and local/remote workflows you use,
 including attachments, timer delivery, permission requests, and note recovery.
-Older imported history remains partial, and Library storage is unavailable.
+Older imported history remains partial. Library collects newly exchanged items
+after activation; it does not backfill existing conversations or imported history.
+
+With Library enabled, `wovenmatter library list` supports `--workspace`, `--harness`,
+`--sender me|agent`, `--kind file|link|photo`, `--since`, `--until`, `--search`,
+`--limit`, and `--offset`. Workspace and harness filters accept comma-separated
+values. `wovenmatter library read --id <item-id>` returns the item's metadata and
+original source, not file bytes or a grant to read its conversation. Conversation
+history retains its separate access check.

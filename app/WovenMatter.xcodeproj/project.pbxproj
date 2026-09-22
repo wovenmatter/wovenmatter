@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A71B00000000000000000101 /* LibraryModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A71B00000000000000000102 /* LibraryModel.swift */; };
+		A71B00000000000000000001 /* DashboardLibraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A71B00000000000000000002 /* DashboardLibraryView.swift */; };
 		D472AB9160464F1FAB826C52 /* WorkspaceNoteRecovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = D472AB9160464F1FAB826C51 /* WorkspaceNoteRecovery.swift */; };
 		D472AB9160464F1FAB826C42 /* WorkspaceSessionManagement.swift in Sources */ = {isa = PBXBuildFile; fileRef = D472AB9160464F1FAB826C41 /* WorkspaceSessionManagement.swift */; };
 		D472AB9160464F1FAB826C32 /* WorkspaceSessionActivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = D472AB9160464F1FAB826C31 /* WorkspaceSessionActivity.swift */; };
@@ -79,6 +81,8 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		A71B00000000000000000102 /* LibraryModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryModel.swift; sourceTree = "<group>"; };
+		A71B00000000000000000002 /* DashboardLibraryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardLibraryView.swift; sourceTree = "<group>"; };
 		D472AB9160464F1FAB826C51 /* WorkspaceNoteRecovery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WorkspaceNoteRecovery.swift"; sourceTree = "<group>"; };
 		D472AB9160464F1FAB826C41 /* WorkspaceSessionManagement.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WorkspaceSessionManagement.swift"; sourceTree = "<group>"; };
 		D472AB9160464F1FAB826C31 /* WorkspaceSessionActivity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WorkspaceSessionActivity.swift"; sourceTree = "<group>"; };
@@ -214,6 +218,7 @@
 				B88F25850147F01B163EDF7E /* ApplicationModel+Calendar.swift */,
 				20E807F893654CD4A1F24D40 /* WorkspaceAgentToolsModel.swift */,
 				7C678F616FB535F772A00598 /* WorkspaceAgentToolsModel+Calendar.swift */,
+				A71B00000000000000000102 /* LibraryModel.swift */,
 				87BA82494C4524C032235AAF /* DashboardConversationReferencePreview.swift */,
 				C06300000000000000000002 /* ApplicationUsageModel.swift */,
 				FC6A850ACFC17DE4433439A7 /* DashboardConversationState.swift */,
@@ -250,6 +255,7 @@
 				D45300000000000000000002 /* DashboardCalendarView.swift */,
 				D6DCB1F7BFAF35416DF437EE /* DashboardCalendarTaskFields.swift */,
 				8AA41DB8B4A4AF41CCC355A1 /* DashboardCalendarEventSheet.swift */,
+				A71B00000000000000000002 /* DashboardLibraryView.swift */,
 				D45400000000000000000002 /* DashboardUsageView.swift */,
 				D45100000000000000000002 /* DashboardDesign.swift */,
 				A11C00000000000000000004 /* WorkspaceView.swift */,
@@ -433,6 +439,7 @@
 				A13EC094A3DEA4F302868640 /* ApplicationModel+Calendar.swift in Sources */,
 				5C84BF439B9047118002DD70 /* WorkspaceAgentToolsModel.swift in Sources */,
 				E9A58E7B05C5C2726FA4EE82 /* WorkspaceAgentToolsModel+Calendar.swift in Sources */,
+				A71B00000000000000000101 /* LibraryModel.swift in Sources */,
 				E10100000000000000000001 /* WovenNoteService.swift in Sources */,
 				0D0C4EE8248E4F63A87CF7B4 /* WovenMatterRemoteToolBridge.swift in Sources */,
 				A76B232332644C4E91ECB1DC /* WovenMatterToolService.swift in Sources */,
@@ -445,6 +452,7 @@
 				D45300000000000000000001 /* DashboardCalendarView.swift in Sources */,
 				22101ADAF84DA8CEE85A4AB8 /* DashboardCalendarTaskFields.swift in Sources */,
 				F4743517D41721ACB550EE94 /* DashboardCalendarEventSheet.swift in Sources */,
+				A71B00000000000000000001 /* DashboardLibraryView.swift in Sources */,
 				D45400000000000000000001 /* DashboardUsageView.swift in Sources */,
 				D45100000000000000000001 /* DashboardDesign.swift in Sources */,
 				A11C00000000000000000003 /* WorkspaceView.swift in Sources */,

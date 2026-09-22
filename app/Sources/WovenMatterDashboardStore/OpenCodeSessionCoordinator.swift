@@ -518,7 +518,7 @@ public actor OpenCodeSessionCoordinator {
         var promptPayload: [String: OpenCodeValue] = ["id": .string(id), "text": .string(deliveryText), "files": .array(files)]
         if input.historyDeliveryID != nil { promptPayload["delivery"] = .string("steer") }
         let payload = OpenCodeValue.object(promptPayload)
-        try database.saveOpenCodeSubmission(conversationID: link.conversationID, id: id, payload: payload, status: "sending", visibleText: input.text, deliveryID: input.historyDeliveryID)
+        try database.saveOpenCodeSubmission(conversationID: link.conversationID, id: id, payload: payload, status: "sending", visibleText: input.text, deliveryID: input.historyDeliveryID, input: input)
         do {
             let result = try await client.call("POST", "/api/session/\(OpenCodeHTTPClient.segment(link.sessionID))/prompt", body: payload)
             guard result["data"]["id"].text == id else { throw OpenCodeError.uncertain(id) }

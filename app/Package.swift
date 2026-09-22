@@ -71,7 +71,8 @@ let package = Package(
       sources: [
         "Models/WorkspaceAgentToolsModel.swift", "Models/WorkspaceAgentToolsModel+Calendar.swift", "Services/WovenMatterToolService.swift",
         "Services/WovenNoteService.swift", "Services/WovenMatterRemoteToolBridge.swift",
-        "Tests/WorkspaceAgentToolsServiceTests.swift"
+        "Tests/WorkspaceAgentToolsServiceTests.swift",
+        "Models/LibraryModel.swift", "Tests/LibraryModelTests.swift"
       ]
     )
   ]
