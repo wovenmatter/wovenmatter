@@ -454,3 +454,24 @@ extension WorkspaceCalendarTests {
     #expect(try db.dueCalendarRuns(now: start).isEmpty)
   }
 }
+
+extension WorkspaceCalendarTests {
+  @Test func editingAnUncreatedRecurringSessionUpdatesItsInsertionSettings() throws {
+    let (db, directory) = try fixture(); defer { try? FileManager.default.removeItem(at: directory) }
+    let start = date("2026-09-01T13:00:00Z")
+    let id = try insert(db, start: start, repeatRule: .init(unit: .day))
+    let original = try #require(db.dueCalendarRuns(now: start).first)
+    let folder = try db.createFolder(name: "Updated destination")
+    var draft = WorkspaceCalendarDraft(try #require(db.calendarItems().first))
+    draft.title = "Updated task"
+    draft.task?.configuration.folderID = folder
+    draft.task?.configuration.tools = .init(enabled: [.notes])
+    try db.saveCalendarEvent(id: id, draft: draft, creating: false, now: start)
+    let replacement = try #require(db.dueCalendarRuns(now: start).first)
+    #expect(replacement.sessionID == original.sessionID && replacement.id != original.id)
+    try accept(replacement, in: db, now: start)
+    let session = try #require(db.workspaceOverview().conversations.first { $0.id == replacement.sessionID })
+    #expect(session.folderID == folder && session.title == "Updated task")
+    #expect(try db.sessionTools(session.id).enabled == [.notes])
+  }
+}

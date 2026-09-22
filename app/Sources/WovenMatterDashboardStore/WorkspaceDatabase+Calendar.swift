@@ -283,8 +283,12 @@ extension WorkspaceDatabase {
             coalesced_through=excluded.coalesced_through
           WHERE workspace_calendar_runs.status='cancelled'
           """, [id, event.id, Self.timestamp(occurrence.startsAt), String(index), sessionID, try toolsJSON(task), event.title, String(now.timeIntervalSince1970)])
-        try toolsExecuteUnlocked("INSERT OR IGNORE INTO workspace_calendar_sessions(id,configuration_json) VALUES(?,?)",
-          [sessionID, try toolsJSON(task.configuration)])
+        // A series can keep its session ID through an edit before that session
+        // is created. Its insertion settings must follow the newly reserved run.
+        try toolsExecuteUnlocked("""
+          INSERT INTO workspace_calendar_sessions(id,configuration_json) VALUES(?,?)
+          ON CONFLICT(id) DO UPDATE SET configuration_json=excluded.configuration_json
+          """, [sessionID, try toolsJSON(task.configuration)])
         if task.sessionMode == .same && event.calendar.recurrence != nil {
           try toolsExecuteUnlocked("UPDATE dashboard_calendar_items SET task_session_id=? WHERE id=?", [sessionID, event.id])
         }
