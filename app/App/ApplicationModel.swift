@@ -2947,13 +2947,13 @@ final class ApplicationModel {
         pendingWorkspaceFolderChange = nil
         configureWorkspaceFolder(
             pending.folder, destination: pending.destination,
-            backUpExistingContents: true, copyExistingContents: copyContents
+            recovery: copyContents ? .copyAndBackUp : .backUp
         )
     }
 
     private func configureWorkspaceFolder(
         _ folder: LocalACPWorkspaceFolder, destination: URL?,
-        backUpExistingContents: Bool = false, copyExistingContents: Bool = false
+        recovery: LocalACPWorkspaceFolderRecovery = .requireConfirmation
     ) {
         guard !workspaceFolderChangeInProgress else { return }
         workspaceFolderChangeInProgress = true
@@ -2961,20 +2961,18 @@ final class ApplicationModel {
         Task {
             defer { workspaceFolderChangeInProgress = false }
             do {
-                let recovery: LocalACPWorkspaceFolderChangeResult
+                let result: LocalACPWorkspaceFolderChangeResult
                 switch folder {
                 case .repositories:
-                    recovery = try await localACPWorkspaceStore.configureRepositories(
-                        destination, backUpExistingContents: backUpExistingContents,
-                        copyExistingContents: copyExistingContents
+                    result = try await localACPWorkspaceStore.configureRepositories(
+                        destination, recovery: recovery
                     )
                 case .databases:
-                    recovery = try await localACPWorkspaceStore.configureDatabases(
-                        destination, backUpExistingContents: backUpExistingContents,
-                        copyExistingContents: copyExistingContents
+                    result = try await localACPWorkspaceStore.configureDatabases(
+                        destination, recovery: recovery
                     )
                 }
-                workspaceFolderRecovery = recovery
+                workspaceFolderRecovery = result
                 localRunError = nil
                 await refreshLocalACPWorkspace()
                 await refreshDatabases()

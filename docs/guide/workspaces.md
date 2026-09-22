@@ -42,6 +42,9 @@ contents into the selected destination. **Keep backup only** preserves the origi
 folder without copying. Neither option overwrites an existing destination item;
 name conflicts remain in the backup and are listed afterward. Use **Open backup**
 to review or move those files. Cancelling keeps the current folder in use.
+If a copy fails, the original folder stays in use. Completed copies may remain
+in the destination, but an incomplete repository is not left under its final name;
+you can fix the reported error and retry.
 
 The repositories folder is named `Repos`. Older `REPOS` folders are renamed while
 preserving their contents or link destination; on case-sensitive filesystems the

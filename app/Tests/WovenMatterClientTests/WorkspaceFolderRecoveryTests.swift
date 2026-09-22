@@ -87,7 +87,7 @@ struct WorkspaceFolderRecoveryTests {
         #expect((try FileManager.default.contentsOfDirectory(atPath: f.workspace.path)).filter { $0.contains("Backup") }.isEmpty)
 
         let change = try await store.configureRepositories(
-            destination, backUpExistingContents: true, copyExistingContents: copyContents
+            destination, recovery: copyContents ? .copyAndBackUp : .backUp
         )
         let backup = try #require(change.backupURL)
         #expect(f.repos.resolvingSymlinksInPath() == destination)
@@ -141,7 +141,7 @@ struct WorkspaceFolderRecoveryTests {
             try await store.configureDatabases(destination)
             Issue.record("Expected a confirmation requirement")
         } catch { #expect(error as? LocalACPWorkspaceError == .defaultDatabasesNotEmpty) }
-        let result = try await store.configureDatabases(destination, backUpExistingContents: true, copyExistingContents: true)
+        let result = try await store.configureDatabases(destination, recovery: .copyAndBackUp)
         let backup = try #require(result.backupURL)
         #expect(try Data(contentsOf: backup.appending(path: "important.sqlite")) == Data("data".utf8))
         #expect(try Data(contentsOf: destination.appending(path: "important.sqlite")) == Data("data".utf8))
@@ -184,7 +184,7 @@ struct WorkspaceFolderRecoveryTests {
         defer { try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: unreadable.path) }
         let destination = try f.directory("destination")
         do {
-            try await store.configureRepositories(destination, backUpExistingContents: true, copyExistingContents: true)
+            try await store.configureRepositories(destination, recovery: .copyAndBackUp)
             Issue.record("Expected copying the unreadable source to fail")
         } catch {
             guard case .copyFailed = error as? LocalACPWorkspaceError else {
@@ -197,6 +197,80 @@ struct WorkspaceFolderRecoveryTests {
         #expect((await store.resolve()).availability.isReady)
     }
 
+    @Test("startup never applies a stale destination to an existing link or directory")
+    func startupDoesNotReplaceExistingFolders() async throws {
+        let f = try Fixture()
+        defer { f.remove() }
+        let current = try f.directory("current")
+        let stale = try f.directory("stale")
+        let store = f.store("startup")
+        try await store.configureRepositories(current)
+        _ = try LocalACPWorkspaceProvisioner.ensureWorkspace(at: f.workspace, repositoriesURL: stale)
+        #expect(f.repos.resolvingSymlinksInPath() == current)
+        try await store.configureRepositories(nil)
+        try Data("work".utf8).write(to: f.repos.appending(path: "repository"))
+        _ = try LocalACPWorkspaceProvisioner.ensureWorkspace(at: f.workspace, repositoriesURL: stale)
+        #expect(!LocalACPWorkspaceProvisioner.isSymbolicLink(f.repos))
+        #expect(try Data(contentsOf: f.repos.appending(path: "repository")) == Data("work".utf8))
+    }
+
+    @Test("startup does not change external folder permissions")
+    func externalPermissions() async throws {
+        let f = try Fixture()
+        defer { f.remove() }
+        let external = try f.directory("external")
+        let store = f.store("permissions")
+        try await store.configureRepositories(external)
+        try FileManager.default.setAttributes([.posixPermissions: 0o750], ofItemAtPath: external.path)
+        #expect((await store.resolve()).availability.isReady)
+        let mode = try FileManager.default.attributesOfItem(atPath: external.path)[.posixPermissions] as? NSNumber
+        #expect(mode?.intValue == 0o750)
+    }
+
+    @Test("a malformed database path cannot block repository repair")
+    func independentRepairWithFileObstruction() async throws {
+        let f = try Fixture()
+        defer { f.remove() }
+        let store = f.store("obstruction")
+        _ = await store.resolve()
+        let databases = f.workspace.appending(path: "Databases")
+        try FileManager.default.removeItem(at: databases)
+        try Data("keep".utf8).write(to: databases)
+        let external = try f.directory("external")
+        try await store.configureRepositories(external)
+        #expect(f.repos.resolvingSymlinksInPath() == external)
+        #expect(try Data(contentsOf: databases) == Data("keep".utf8))
+    }
+
+    @Test("a failed repository copy does not leave a partial destination")
+    func partialRepositoryCopy() async throws {
+        guard geteuid() != 0 else { return }
+        let f = try Fixture()
+        defer { f.remove() }
+        let store = f.store("partial-copy")
+        _ = await store.resolve()
+        let repo = f.repos.appending(path: "repository")
+        try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
+        try Data("readable".utf8).write(to: repo.appending(path: "first"))
+        let unreadable = repo.appending(path: "unreadable")
+        try Data("secret".utf8).write(to: unreadable)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: unreadable.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: unreadable.path) }
+        let destination = try f.directory("destination")
+        do {
+            try await store.configureRepositories(destination, recovery: .copyAndBackUp)
+            Issue.record("Expected the repository copy to fail")
+        } catch { #expect(error is LocalACPWorkspaceError) }
+        #expect(!FileManager.default.fileExists(atPath: destination.appending(path: "repository").path))
+        #expect((try FileManager.default.contentsOfDirectory(atPath: destination.path)).isEmpty)
+        #expect(!LocalACPWorkspaceProvisioner.isSymbolicLink(f.repos))
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: unreadable.path)
+        let retry = try await store.configureRepositories(destination, recovery: .copyAndBackUp)
+        #expect(retry.skippedItemNames.isEmpty)
+        #expect(try Data(contentsOf: destination.appending(path: "repository/first")) == Data("readable".utf8))
+        #expect(try Data(contentsOf: destination.appending(path: "repository/unreadable")) == Data("secret".utf8))
+    }
+
     @Test("a destination inside the folder being replaced cannot move itself into a backup")
     func rejectNestedDestination() async throws {
         let f = try Fixture()
@@ -206,15 +280,78 @@ struct WorkspaceFolderRecoveryTests {
         let nested = f.repos.appending(path: "nested")
         try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
         do {
-            try await store.configureRepositories(nested, backUpExistingContents: true, copyExistingContents: true)
+            try await store.configureRepositories(nested, recovery: .copyAndBackUp)
             Issue.record("Expected an invalid destination")
         } catch { #expect(error as? LocalACPWorkspaceError == .repositoriesDirectoryContainsWorkspace) }
         #expect(FileManager.default.fileExists(atPath: nested.path))
         #expect(!LocalACPWorkspaceProvisioner.isSymbolicLink(f.repos))
     }
+
+    @Test("saved destinations seed missing folders but never override existing folders")
+    func savedDestinationMigration() async throws {
+        let f = try Fixture()
+        defer { f.remove() }
+        let external = try f.directory("external")
+        let store = f.store("legacy-preferences", repositories: external, databases: external)
+        let resolution = await store.resolve()
+        #expect(resolution.availability.isReady)
+        #expect(resolution.launchConfiguration?.repositoriesURL == external)
+        #expect(resolution.launchConfiguration?.databasesURL == external)
+        #expect(resolution.availability.usesExternalRepositories)
+        #expect(resolution.availability.usesExternalDatabases)
+        try await f.store("other-build").configureRepositories(nil)
+        let refreshed = await store.resolve()
+        #expect(refreshed.availability.isReady)
+        #expect(!refreshed.availability.usesExternalRepositories)
+    }
+
+    @Test("copying preserves symlinks and never replaces a dangling destination link")
+    func copySymbolicLinks() async throws {
+        let f = try Fixture()
+        defer { f.remove() }
+        let store = f.store("copy-links")
+        _ = await store.resolve()
+        let destination = try f.directory("destination")
+        try FileManager.default.createSymbolicLink(atPath: f.repos.appending(path: "shortcut").path, withDestinationPath: "missing")
+        try Data("keep".utf8).write(to: f.repos.appending(path: "conflict"))
+        let existing = destination.appending(path: "conflict")
+        try FileManager.default.createSymbolicLink(atPath: existing.path, withDestinationPath: "unavailable")
+        let result = try await store.configureRepositories(destination, recovery: .copyAndBackUp)
+        #expect(result.skippedItemNames == ["conflict"])
+        #expect(try FileManager.default.destinationOfSymbolicLink(atPath: existing.path) == "unavailable")
+        #expect(try FileManager.default.destinationOfSymbolicLink(atPath: destination.appending(path: "shortcut").path) == "missing")
+        let backup = try #require(result.backupURL)
+        #expect(try Data(contentsOf: backup.appending(path: "conflict")) == Data("keep".utf8))
+    }
+
+    @Test("simultaneous builds serialize initialization and folder changes")
+    func concurrentBuilds() async throws {
+        let f = try Fixture()
+        defer { f.remove() }
+        let first = try f.directory("first")
+        let second = try f.directory("second")
+        let stores = (0..<8).map { f.store("concurrent-\($0)") }
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            for (index, store) in stores.enumerated() {
+                group.addTask {
+                    for _ in 0..<3 {
+                        try await store.configureRepositories(index.isMultiple(of: 2) ? first : second)
+                        let resolution = await store.resolve()
+                        #expect(resolution.availability.isReady)
+                        #expect([first, second].contains(resolution.launchConfiguration?.repositoriesURL))
+                    }
+                }
+            }
+            try await group.waitForAll()
+        }
+        let instructions = try String(contentsOf: f.workspace.appending(path: "AGENTS.md"), encoding: .utf8)
+        #expect(instructions.components(separatedBy: "<!-- BEGIN WOVEN MATTER MANAGED -->").count == 2)
+        #expect(LocalACPWorkspaceProvisioner.isSymbolicLink(f.repos))
+    }
 }
 
-private struct Fixture {
+private final class Fixture {
+    private var suites: [String] = []
     let home: URL
     var workspace: URL { home.appending(path: ".woven-matter") }
     var repos: URL { workspace.appending(path: "Repos") }
@@ -227,12 +364,19 @@ private struct Fixture {
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
     }
-    func store(_ name: String) -> LocalACPWorkspaceConfigurationStore {
-        LocalACPWorkspaceConfigurationStore(homeDirectory: home, defaultsSuiteName: "workspace-recovery-\(home.lastPathComponent)-\(name)")
+    func store(_ name: String, repositories: URL? = nil, databases: URL? = nil) -> LocalACPWorkspaceConfigurationStore {
+        let suite = "workspace-recovery-\(home.lastPathComponent)-\(name)"
+        suites.append(suite)
+        if repositories != nil || databases != nil {
+            let paths = ["repositoriesPath": repositories?.path, "databasesPath": databases?.path].compactMapValues { $0 }
+            UserDefaults(suiteName: suite)?.set(
+                try? JSONEncoder().encode(paths), forKey: "wovenmatter.local-agent-workspace.folders"
+            )
+        }
+        return LocalACPWorkspaceConfigurationStore(homeDirectory: home, defaultsSuiteName: suite)
     }
     func remove() {
-        for name in ["production", "development", "fresh", "default", "recovery", "broken", "databases", "migration", "nested", "copy-failure"] {
-            let suite = "workspace-recovery-\(home.lastPathComponent)-\(name)"
+        for suite in suites {
             UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite)
         }
         try? FileManager.default.removeItem(at: home)

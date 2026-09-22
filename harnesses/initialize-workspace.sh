@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-workspace_root="${1:?usage: initialize-workspace.sh WORKSPACE_ROOT}"
+workspace_root="${1:?usage: initialize-workspace.sh WORKSPACE_ROOT [--skip-linked-folders]}"
 managed_begin='<!-- BEGIN WOVEN MATTER MANAGED -->'
 managed_end='<!-- END WOVEN MATTER MANAGED -->'
 
@@ -26,11 +26,15 @@ if "$has_legacy_repos" && ! "$has_repos"; then
 fi
 
 # Keep even an unavailable link intact so Settings can repair its destination.
-for folder in Repos Databases; do
-  if [ ! -L "$workspace_root/$folder" ]; then
-    mkdir -p "$workspace_root/$folder"
-  fi
-done
+# The local app manages these folders under its workspace lock, independently
+# of one another. Remote workspaces use this script to create both defaults.
+if [ "${2:-}" != --skip-linked-folders ]; then
+  for folder in Repos Databases; do
+    if [ ! -L "$workspace_root/$folder" ]; then
+      mkdir -p "$workspace_root/$folder"
+    fi
+  done
+fi
 mkdir -p \
   "$workspace_root/GUIDES" \
   "$workspace_root/PLANS" \
@@ -77,5 +81,10 @@ if [ ! -e "$workspace_root/CLAUDE.md" ] && [ ! -L "$workspace_root/CLAUDE.md" ];
   ln -s AGENTS.md "$workspace_root/CLAUDE.md"
 fi
 
-chmod 700 "$workspace_root" "$workspace_root"/* "$workspace_root/.scratch" 2>/dev/null || true
+chmod 700 "$workspace_root"
+for folder in Repos Databases GUIDES PLANS RESEARCH WORK_LOGS OUTBOX .scratch; do
+  if [ -d "$workspace_root/$folder" ] && [ ! -L "$workspace_root/$folder" ]; then
+    chmod 700 "$workspace_root/$folder"
+  fi
+done
 chmod 600 "$agents_file"
