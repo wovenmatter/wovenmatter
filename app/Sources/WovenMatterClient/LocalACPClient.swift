@@ -576,6 +576,7 @@ public actor LocalACPClient {
     private let historyRecorder: WorkspaceWireRecorder?
     private var activeEventHandler: EventHandler?
     private var activePermissionHandler: PermissionHandler?
+    private var resumePermissionHandler: PermissionHandler?
     private var activeInteractionHandler: InteractionHandler?
     private var activePromptRequestCount = 0
     // ACP does not provide an identifier for thought chunks. Keep one stable
@@ -960,6 +961,10 @@ public actor LocalACPClient {
 
     public func sessionConfiguration() -> LocalACPSessionConfiguration {
         configuration
+    }
+
+    public func setResumePermissionHandler(_ handler: @escaping PermissionHandler) {
+        resumePermissionHandler = handler
     }
 
     public func setConfigurationHandler(_ handler: @escaping @Sendable (LocalACPSessionConfiguration) async -> Void) async {
@@ -1434,6 +1439,7 @@ public actor LocalACPClient {
         }
         guard !closed else { return }
         closed = true
+        dismissBuiltInPermissions()
         readerTask?.cancel()
         readerTask = nil
         notificationTask?.cancel()
@@ -1637,7 +1643,7 @@ public actor LocalACPClient {
             }
             try await respondToPermissionRequest(
                 envelope,
-                handler: activePermissionHandler
+                handler: activePermissionHandler ?? (runtimeKind == .defaultAgent ? resumePermissionHandler : nil)
             )
         } else if envelope.method == "cursor/ask_question" {
             try await respondToCursorQuestion(
@@ -1674,7 +1680,17 @@ public actor LocalACPClient {
     }
 
     private func readerFailed(_ error: any Error) {
+        dismissBuiltInPermissions()
         failPendingRequests(with: error)
+    }
+
+    private func dismissBuiltInPermissions() {
+        for (id, task) in builtInPermissionTasks {
+            pendingPermissionRequestIDs.removeAll { $0.stringValue == id }
+            task.cancel()
+        }
+        builtInPermissionTasks.removeAll()
+        cancelledBuiltInPermissions.removeAll()
     }
 
     private func failPendingRequests(with error: any Error) {

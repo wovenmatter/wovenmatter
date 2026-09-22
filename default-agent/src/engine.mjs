@@ -101,12 +101,12 @@ export class DefaultAgentEngine {
   persistOptions(record) {
     record.manager.appendCustomEntry('woven-built-in-options', { selected: record.selected, permission: record.permission, thinking: record.session.thinkingLevel });
   }
-  async approve(record, name, input, signal) {
+  async approve(record, name, input, signal, toolCallId) {
     signal?.throwIfAborted();
     if (record.permission === 'full') return true;
     if (!record.requestPermission && !this.requestPermission) return false;
     return (record.requestPermission ?? this.requestPermission)({ sessionId: record.session.sessionId,
-      toolCall: { toolCallId: crypto.randomUUID(), title: name, kind: name.toLowerCase() === 'bash' ? 'execute' : 'other', rawInput: input },
+      toolCall: { toolCallId, title: name, kind: name.toLowerCase() === 'bash' ? 'execute' : 'other', rawInput: input },
       options: [{ optionId: 'allow', name: 'Allow once', kind: 'allow_once' }, { optionId: 'deny', name: 'Deny', kind: 'reject_once' }] }, signal);
   }
   async create(id) {
@@ -143,7 +143,7 @@ export class DefaultAgentEngine {
     const record = { manager, selected, busy: false, permission: options.permission ?? 'normal' };
     const guardedTools = createCodingTools(this.cwd).map(tool => ({ ...tool, label: tool.label ?? tool.name,
       execute: async (id, input, signal, onUpdate) => {
-        if (['bash', 'write', 'edit'].includes(tool.name) && !await this.approve(record, tool.name, input, signal)) throw new Error('The user declined this tool.');
+        if (['bash', 'write', 'edit'].includes(tool.name) && !await this.approve(record, tool.name, input, signal, id)) throw new Error('The user declined this tool.');
         return tool.execute(id, input, signal, onUpdate);
       } }));
     const { session } = await createAgentSession({ cwd: this.cwd, agentDir: this.directory, modelRuntime: this.runtime, model, thinkingLevel: options.thinking, sessionManager: manager, settingsManager, resourceLoader: loader,

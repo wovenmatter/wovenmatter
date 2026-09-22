@@ -415,6 +415,9 @@ final class ApplicationModel {
             )
             let dashboardStore = try DashboardStore(supportDirectory: supportDirectory)
             self.dashboardStore = dashboardStore
+            await dashboardStore.setLocalACPResumePermissionHandler { [weak self] conversationID, request in
+                await self?.requestLocalACPPermission(conversationID: conversationID, request: request)
+            }
             try await dashboardStore.prepareLocalWorkspace()
             let openCode = OpenCodeModel(store: dashboardStore, ownerDeviceID: try await dashboardStore.dashboardDeviceID(), defaults: applicationDefaults)
             openCode.applyInitialSessionTools = { [weak self] id, tools in

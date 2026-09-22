@@ -937,6 +937,12 @@ public actor DashboardStore {
     )
   }
 
+  public func setLocalACPResumePermissionHandler(
+    _ handler: @escaping LocalACPSessionCoordinator.ResumePermissionHandler
+  ) async {
+    await localSessions.setResumePermissionHandler(handler)
+  }
+
   public func localACPSessionConfiguration(
     conversationID: String,
     launch: LocalACPRuntimeLaunchConfiguration?,

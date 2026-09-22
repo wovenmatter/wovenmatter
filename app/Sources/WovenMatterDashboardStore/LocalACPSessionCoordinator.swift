@@ -27,6 +27,7 @@ struct LocalACPSessionDriver: Sendable {
     ) async throws -> LocalACPActiveInputReceipt)?
     let cancel: @Sendable () async throws -> Void
     let setRunID: (@Sendable (String) async throws -> Void)?
+    let setResumePermissionHandler: (@Sendable (@escaping LocalACPClient.PermissionHandler) async -> Void)?
     let shutdown: @Sendable () async -> Void
 
     init(
@@ -54,7 +55,8 @@ struct LocalACPSessionDriver: Sendable {
         ) async throws -> LocalACPActiveInputReceipt)? = nil,
         cancel: @escaping @Sendable () async throws -> Void,
         shutdown: @escaping @Sendable () async -> Void,
-        setRunID: (@Sendable (String) async throws -> Void)? = nil
+        setRunID: (@Sendable (String) async throws -> Void)? = nil,
+        setResumePermissionHandler: (@Sendable (@escaping LocalACPClient.PermissionHandler) async -> Void)? = nil
     ) {
         self.initializeSession = initializeSession
         self.prompt = prompt
@@ -65,6 +67,7 @@ struct LocalACPSessionDriver: Sendable {
         self.activeInput = activeInput
         self.cancel = cancel
         self.setRunID = setRunID
+        self.setResumePermissionHandler = setResumePermissionHandler
         self.shutdown = shutdown
     }
 
@@ -188,7 +191,10 @@ struct LocalACPSessionDriver: Sendable {
             shutdown: {
                 await client.shutdown()
             },
-            setRunID: { value in try await client.setDefaultAgentRunID(value) }
+            setRunID: { value in try await client.setDefaultAgentRunID(value) },
+            setResumePermissionHandler: { handler in
+                await client.setResumePermissionHandler(handler)
+            }
         )
     }
 }
@@ -196,6 +202,10 @@ struct LocalACPSessionDriver: Sendable {
 public actor LocalACPSessionCoordinator {
     public typealias PermissionHandler = @Sendable (
         LocalACPPermissionRequest
+    ) async -> String?
+    public typealias ResumePermissionHandler = @Sendable (
+        _ conversationID: String,
+        _ request: LocalACPPermissionRequest
     ) async -> String?
     public typealias InteractionHandler = LocalACPClient.InteractionHandler
     public typealias ChangeHandler = @Sendable (DashboardConversationChange) -> Void
@@ -256,6 +266,7 @@ public actor LocalACPSessionCoordinator {
     private let maximumRetainedSessionCount: Int
     private let onChange: ChangeHandler?
     private let onUsage: (@Sendable (UsageRunRecorder.Observation) async -> Void)?
+    private var resumePermissionHandler: ResumePermissionHandler?
     private var activeSessions: [String: ActiveSession] = [:]
     private var runTasks: [String: Task<Void, any Error>] = [:]
     private var runIDsByConversation: [String: String] = [:]
@@ -319,6 +330,10 @@ public actor LocalACPSessionCoordinator {
             onUsage: onUsage,
             clientFactory: Self.defaultClientFactory
         )
+    }
+
+    public func setResumePermissionHandler(_ handler: @escaping ResumePermissionHandler) {
+        resumePermissionHandler = handler
     }
 
     @discardableResult
@@ -1464,7 +1479,16 @@ public actor LocalACPSessionCoordinator {
             ? descriptor.acpSessionID
             : nil
         return try await withTaskCancellationHandler {
-            try await client.initializeSession(
+            // Loading a Built-in session can resume a remote run that is
+            // waiting for approval, before any new prompt handler exists.
+            if descriptor.runtimeKind == .defaultAgent,
+               let handler = resumePermissionHandler {
+                await client.setResumePermissionHandler? { request in
+                    await handler(descriptor.conversationID, request)
+                }
+            }
+            try Task.checkCancellation()
+            return try await client.initializeSession(
                 workspace.rootURL,
                 sessionID,
                 descriptor.title,

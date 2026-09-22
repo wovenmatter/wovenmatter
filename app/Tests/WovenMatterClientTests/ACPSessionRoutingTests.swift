@@ -30,6 +30,47 @@ struct ACPSessionRoutingTests {
         #expect(configuration.permissionOptionMetadata["full"]?.name == "Full Access")
         await client.shutdown()
     }
+
+    @Test @MainActor func builtInReconnectDeliversApprovalWhileLoadingHistory() async throws {
+        let fixture = try SessionRoutingFixture(bootstrapFrames: [permission(id: "resumed-approval")])
+        defer { fixture.remove() }
+        let client = try fixture.client(runtimeKind: .defaultAgent, accountCoordinator: fixtureAccounts())
+        defer { Task { await client.shutdown() } }
+        let approvals = RoutingPermissions()
+        await client.setResumePermissionHandler { request in
+            await approvals.record(request)
+            return "allow-exact-id"
+        }
+        let initialized = try await client.initializeSession(
+            workingDirectory: fixture.root, existingSessionID: "parent", title: nil)
+        #expect(initialized.loadedExistingSession)
+        #expect(await approvals.values().count == 1)
+        #expect(await approvals.values().first?.options.contains(where: { $0.id == "allow-exact-id" }) == true)
+        await client.shutdown()
+    }
+
+    @Test @MainActor func disconnectDismissesAnApprovalDuringBuiltInResume() async throws {
+        let fixture = try SessionRoutingFixture(bootstrapFrames: [permission(id: "resumed-approval")])
+        defer { fixture.remove() }
+        let client = try fixture.client(runtimeKind: .defaultAgent, accountCoordinator: fixtureAccounts())
+        defer { Task { await client.shutdown() } }
+        let events = AsyncStream<String>.makeStream()
+        await client.setResumePermissionHandler { _ in
+            events.continuation.yield("opened")
+            try? await Task.sleep(for: .seconds(30))
+            events.continuation.yield("closed")
+            return nil
+        }
+        let loading = Task { try await client.initializeSession(
+            workingDirectory: fixture.root, existingSessionID: "parent", title: nil) }
+        var iterator = events.stream.makeAsyncIterator()
+        #expect(await iterator.next() == "opened")
+        await client.shutdown()
+        #expect(await iterator.next() == "closed")
+        _ = try? await loading.value
+        events.continuation.finish()
+    }
+
     @Test @MainActor func builtInRemoteApprovalCancellationBypassesTheNotificationBarrier() async throws {
         let fixture = try SessionRoutingFixture(promptFrames: [
             permission(id: "remote-approval"),

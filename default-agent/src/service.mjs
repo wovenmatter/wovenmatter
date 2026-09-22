@@ -68,9 +68,9 @@ export function createDefaultAgentService({ cwd, directory }) {
           const saved = await readJSON(join(directory, file));
           if (saved.sessionID === message.params.sessionId && saved.snapshot) recoveredRuns.push(saved.snapshot);
         }
-        result._meta = { recoveredRuns };
         const record = await e.create(message.params.sessionId);
         Object.assign(result, e.configuration(record));
+        result._meta = { ...result._meta, recoveredRuns };
       }
       return { result };
     }

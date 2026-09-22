@@ -92,6 +92,7 @@ test('real Pi tool wrappers deny mutations and allow them only after host approv
   await assert.rejects(tools.get('edit').execute('edit-denied', { path: 'note.txt', edits: [{ oldText: 'original', newText: 'changed' }] }, signal), /declined/);
   assert.equal(await readFile(join(root, 'note.txt'), 'utf8'), 'original');
   assert.deepEqual(requests.map(request => request.toolCall.title), ['write', 'bash', 'write', 'edit']);
+  assert.deepEqual(requests.map(request => request.toolCall.toolCallId), ['write-denied', 'bash-denied', 'write-allowed', 'edit-denied']);
   assert.ok(requests.every(request => request.sessionId === record.session.sessionId));
   await engine.select(record, 'full', 'permission_mode');
   await tools.get('edit').execute('edit-full', { path: 'note.txt', edits: [{ oldText: 'original', newText: 'changed' }] }, signal);
@@ -143,6 +144,10 @@ test('remote approvals replay on reconnect, cancel safely, and reject stale deci
   await service.invoke({ method: 'woven/permission', params: { id: pending.id, result: { outcome: { outcome: 'selected', optionId: 'allow' } } } });
   assert.equal((await pollUntil(service, first.id, page => page.done)).error, null);
   assert.equal(await readFile(join(root, 'file-1.txt'), 'utf8'), 'approved');
+  const loaded = await service.invoke({ method: 'session/load', params: { sessionId: record.session.sessionId } });
+  assert.equal(loaded.result._meta.engine, 'claude');
+  assert.equal(loaded.result._meta.recoveredRuns.length, 1);
+  assert.equal(loaded.result._meta.recoveredRuns[0].runID, first.id);
 
   const second = await submit();
   const cancelled = second.page.pendingPermissions[0];
