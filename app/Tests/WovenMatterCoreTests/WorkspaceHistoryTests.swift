@@ -47,6 +47,51 @@ struct WorkspaceHistoryTests {
     let ordinary = #"{"path":"/workspace/example/a.swift","text":"preserved"}"#
     #expect(WorkspaceHistoryPrivacy.redactingToolEndpoints(ordinary) == ordinary)
   }
+  @Test func nestedHTTPHistoryRedactsSessionEndpoints() throws {
+    let (db, url) = try database()
+    defer { try? FileManager.default.removeItem(at: url) }
+    let owner = String(repeating: "a", count: 32), endpoint = String(repeating: "b", count: 32)
+    for path in ["/private/tmp/wmtools-\(owner)/\(endpoint).sock", "/home/.wmt/\(owner)/\(endpoint)/wovenmatter"] {
+      // HTTP observations wrap the original JSON response as a JSON string.
+      let body = String(decoding: try JSONEncoder().encode(["text": "Use " + path, "other": "preserved"]), as: UTF8.self)
+      let frame = WorkspaceHTTPObservation(method: "GET", path: "/api/session/ses_a/message", query: [:], status: 200, body: body)
+      try db.openCodeHistoryRecorder(connectionID: "local")("in", JSONEncoder().encode(frame))
+    }
+    let payloads = rows(try db.queryHistory(.init(command: "events", harness: "opencode")))
+    #expect(payloads.count == 2)
+    for row in payloads {
+      let payload = try #require(row.objectValue?["payload"]?.stringValue)
+      #expect(!payload.contains(owner))
+      #expect(!payload.contains(endpoint))
+      let frame = try JSONDecoder().decode([String: GatewayJSONValue].self, from: Data(payload.utf8))
+      let body = try #require(frame["body"]?.stringValue)
+      let decoded = try JSONDecoder().decode([String: String].self, from: Data(body.utf8))
+      #expect(decoded["other"] == "preserved")
+      #expect(decoded["text"] == "Use [Woven Matter session tool endpoint]")
+    }
+  }
+
+  @Test func historyDateBoundsCompareInstantsInsteadOfDateSpellings() throws {
+    let (db, url) = try database()
+    defer { try? FileManager.default.removeItem(at: url) }
+    let caller = try db.createLocalACPSession(runtimeKind: .pi, title: "Dates", ownerDeviceID: UUID())
+    try db.recordHistory(.init(id: "dated", conversationID: caller, harness: "pi", kind: "wire.in", payload: "dated event"))
+    try db.transaction {
+      try db.toolsExecuteUnlocked("UPDATE workspace_history_events SET recorded_at=? WHERE id=?", ["2026-09-21T12:00:00.000Z", "dated"])
+    }
+    for boundary in ["2026-09-21T12:00:00Z", "2026-09-21T08:00:00-04:00", "2026-09-21T14:00:00.000+02:00"] {
+      var query = WorkspaceHistoryQuery(command: "events", conversationID: caller, kind: "wire.in")
+      query.since = boundary
+      query.until = boundary
+      #expect(rows(try db.queryAgentHistory(query, callerID: caller)).count == 1)
+    }
+    var query = WorkspaceHistoryQuery(command: "events", conversationID: caller, kind: "wire.in")
+    query.since = "2026-09-21T09:00:00-04:00"
+    #expect(rows(try db.queryHistory(query)).isEmpty)
+    query.since = "not-a-date"
+    #expect(throws: (any Error).self) { try db.queryHistory(query) }
+  }
+
   private func database() throws -> (WorkspaceDatabase, URL) {
     let url = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
     try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)

@@ -95,7 +95,7 @@ public struct SessionSelectionSnapshot: Codable, Equatable, Sendable {
     case harness, workspace, selections, desiredSelections, requiresApplication
   }
 
-  public init(from decoder: Decoder) throws {
+  public init(from decoder: any Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
     harness = try container.decode(String.self, forKey: .harness)
     workspace = try container.decode(String.self, forKey: .workspace)

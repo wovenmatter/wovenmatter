@@ -16,8 +16,8 @@ workspace and harness defaults are retained. New conversations use this order:
 4. WovenMatter's starting default: **Full access** for permissions on supported
    harnesses; the harness's own default for other selections.
 
-New conversations start with Full access unless you choose or save a different
-permission policy. Existing and imported conversations keep their current policy.
+New conversations start with Full access unless you choose a different policy
+or have a previously saved default. Existing and imported conversations keep their current policy.
 Pi has no permission setting.
 
 Existing conversations keep their selections when defaults change. Defaults are
@@ -67,6 +67,19 @@ Only supported choices appear. A harness may also offer more specific policies:
 Wait for a settings change to finish before sending. If a saved choice is no
 longer available, choose a supported value before continuing the conversation.
 
+## App tools and session access
+
+Use **Tools** in the composer to control Notes, Conversation history, Session
+management, Timers, Usage data, Calendar, and Library independently. General
+settings supplies defaults for new sessions. Calendar can be Full access or Read
+only; Usage data is always read-only. Library does not retain items yet.
+
+Attaching a conversation grants read-only access to that session even when
+Conversation history is disabled. Session management lets an agent create or
+message other sessions. Managing an existing session without history or an
+attachment grant asks for your approval. You can end coordination from the
+session controls; answering permission requests remains your responsibility.
+
 ## Work across sessions in parallel
 
 Run multiple sessions with the same harness or across different harnesses. Use
@@ -94,9 +107,10 @@ retain their original working directory where supplied by the harness.
 
 ## Attachments and connections
 
-Attachment support depends on the harness. Add files to the workspace where the
-agent is working before referring to their paths. Entering a Mac path does not
-upload that file to a remote workspace.
+Use the attachment picker to add files or references. Supported file attachments
+are copied into managed remote workspaces when you send them. Attachment support
+still depends on the harness. Entering a Mac path in message text does not upload
+that file to a remote workspace.
 
 If a connection drops while sending, review the conversation status before
 retrying. The agent may have accepted the request even if the app did not receive

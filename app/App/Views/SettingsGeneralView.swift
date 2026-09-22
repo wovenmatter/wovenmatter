@@ -32,10 +32,10 @@ struct SettingsGeneralView: View {
             onBack: onBack
         ) {
             appearanceCard
-            credentialAccessCard
             releaseUpdateCard
             conversationTitlesCard
             if let tools = model.agentTools { WorkspaceToolDefaultsCard(tools: tools) }
+            credentialAccessCard
         }
         .onChange(of: storedTheme) { _, _ in
             model.persistMacSurfaceProfileFromUserDefaults()
@@ -380,19 +380,22 @@ private enum ReleaseUpdateState {
         case .available(let manifest),
              .downloading(let manifest),
              .downloadFailed(let manifest, _):
-            "Woven Matter \(manifest.version) is available"
+            "Woven Matter v\(manifest.version) is available"
         case .ready(let release),
              .installing(let release),
              .installFailed(let release, _):
-            "Woven Matter \(release.manifest.version) is ready"
-        default: "Woven Matter \(currentVersion)"
+            "Woven Matter v\(release.manifest.version) is ready"
+        default: "Woven Matter v\(currentVersion)"
         }
     }
 
     var detail: String? {
         switch self {
-        case .idle, .checking, .available, .downloading: nil
+        case .idle: "Check for the latest version of Woven Matter."
+        case .checking: "Checking for the latest version of Woven Matter…"
         case .current: "You’re up to date."
+        case .available: "Download and verify the signed update."
+        case .downloading: "Downloading the update…"
         case .ready: "Installing restarts Woven Matter."
         case .installing: "Woven Matter will restart."
         case .downloadFailed(_, let message), .installFailed(_, let message): message
