@@ -135,14 +135,22 @@ struct RemoteAttachmentStagingTests {
     defer { task.cancel() }
     // Cancellation before Task.detached starts only measures executor latency.
     // Wait for the real child, then verify cancellation and process cleanup.
-    let deadline = ContinuousClock.now.advanced(by: .seconds(30))
-    var processID: pid_t?
-    while processID == nil, ContinuousClock.now < deadline {
-      processID = (try? String(contentsOf: marker, encoding: .utf8))
-        .flatMap { pid_t($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
-      if processID == nil { try await Task.sleep(for: .milliseconds(20)) }
+    // The blocking subprocess occupies a cooperative worker. Observe and cancel
+    // it from Dispatch so cancellation is not delayed until the child exits on
+    // a small CI runner with no free cooperative worker.
+    let processID: pid_t? = await withCheckedContinuation { continuation in
+      DispatchQueue.global(qos: .userInitiated).async {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(30))
+        var processID: pid_t?
+        while processID == nil, ContinuousClock.now < deadline {
+          processID = (try? String(contentsOf: marker, encoding: .utf8))
+            .flatMap { pid_t($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+          if processID == nil { Thread.sleep(forTimeInterval: 0.02) }
+        }
+        task.cancel()
+        continuation.resume(returning: processID)
+      }
     }
-    task.cancel()
     await #expect(throws: CancellationError.self) { try await task.value }
     let pid = try #require(processID)
     #expect(pid > 0)

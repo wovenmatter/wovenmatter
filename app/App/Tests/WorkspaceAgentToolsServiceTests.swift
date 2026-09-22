@@ -29,7 +29,7 @@ struct WorkspaceAgentToolsServiceTests {
         let endpoint = try service.endpoint(for: caller)
         func request(_ arguments: [String]) async throws -> WovenMatterToolResponse {
             let data = try JSONEncoder().encode(WovenMatterToolRequest(arguments: arguments))
-            let response = try await Task.detached { try WovenMatterCommandLine.forward(data, to: endpoint) }.value
+            let response = try await runBlockingToolFixture { try WovenMatterCommandLine.forward(data, to: endpoint) }
             return try JSONDecoder().decode(WovenMatterToolResponse.self, from: response)
         }
         // Repeat through the actual bound socket handler: both this request and
@@ -100,7 +100,7 @@ extension WorkspaceAgentToolsServiceTests {
         try forwarder.submit(id: slow, request: fixture.request(slow: true))
         await fixture.gate.waitUntilPaused()
         try forwarder.submit(id: fast, request: fixture.request(slow: false))
-        let fastFinished = await Task.detached { waitForRelaySignal(fastReply) }.value
+        let fastFinished = try await runBlockingToolFixture { waitForRelaySignal(fastReply) }
         #expect(fastFinished, "The fast request was held behind a stalled request")
         await fixture.gate.release()
         await forwarder.waitUntilIdle()
@@ -152,6 +152,17 @@ extension WorkspaceAgentToolsServiceTests {
         await broken.waitUntilIdle()
         #expect(output.errors.count == 1)
         #expect(throws: (any Error).self) { try broken.submit(id: UUID().uuidString, request: fixture.request(slow: false)) }
+    }
+}
+
+// Socket reads and semaphore waits must not occupy Swift's cooperative workers:
+// the server tasks being tested need those workers to produce their responses.
+private func runBlockingToolFixture<T: Sendable>(_ body: @escaping @Sendable () throws -> T) async throws -> T {
+    try await withCheckedThrowingContinuation { continuation in
+        DispatchQueue.global(qos: .userInitiated).async {
+            do { continuation.resume(returning: try body()) }
+            catch { continuation.resume(throwing: error) }
+        }
     }
 }
 
@@ -420,7 +431,7 @@ extension WorkspaceAgentToolsServiceTests {
         let endpoint = try fixture.model.endpoint(for: fixture.caller)
         func request(_ arguments: [String]) async throws -> WovenMatterToolResponse {
             let data = try JSONEncoder().encode(WovenMatterToolRequest(arguments: ["library"] + arguments))
-            let response = try await Task.detached { try WovenMatterCommandLine.forward(data, to: endpoint) }.value
+            let response = try await runBlockingToolFixture { try WovenMatterCommandLine.forward(data, to: endpoint) }
             return try JSONDecoder().decode(WovenMatterToolResponse.self, from: response)
         }
         let listed = try await request(["list", "--since", item.sentAt, "--sender", "me", "--workspace", "local"])
