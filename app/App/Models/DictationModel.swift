@@ -34,18 +34,24 @@ final class DictationModel {
     @ObservationIgnored private var destination: DictationEditorTicket?
     @ObservationIgnored weak var activeEditor: DictationEditor?
 
-    init(preferences: UserDefaults = .standard,
-         permission: @escaping () async -> Bool = DictationModel.microphonePermission,
-         credential: @escaping () async throws -> DefaultAgentCredential = { try await ProviderAccountCoordinator.shared.grokDictationCredential() },
-         renewCredential: @escaping (DefaultAgentCredential) async throws -> DefaultAgentCredential? = {
-             guard let access = $0.access else { return nil }
-             return try await ProviderAccountCoordinator.shared.renewRejectedAccess(provider: "xai", access: access)
-         },
-         makeAudio: @escaping () -> any DictationCapturing = { DictationAudioCapture() },
-         makeClient: @escaping () -> any GrokSpeechTransport = { GrokSpeechClient() }) {
-        self.permission = permission; self.credential = credential
+    init(
+        preferences: UserDefaults = .standard,
+        permission: @escaping () async -> Bool = DictationModel.microphonePermission,
+        credential: @escaping () async throws -> DefaultAgentCredential = {
+            try await ProviderAccountCoordinator.shared.grokDictationCredential()
+        },
+        renewCredential: @escaping (DefaultAgentCredential) async throws -> DefaultAgentCredential? = {
+            guard let access = $0.access else { return nil }
+            return try await ProviderAccountCoordinator.shared.renewRejectedAccess(provider: "xai", access: access)
+        },
+        makeAudio: @escaping () -> any DictationCapturing = { DictationAudioCapture() },
+        makeClient: @escaping () -> any GrokSpeechTransport = { GrokSpeechClient() }
+    ) {
+        self.permission = permission
+        self.credential = credential
         self.renewCredential = renewCredential
-        self.makeAudio = makeAudio; self.makeClient = makeClient
+        self.makeAudio = makeAudio
+        self.makeClient = makeClient
         self.preferences = preferences
         self.enabled = preferences.bool(forKey: "wovenmatter.dictation.enabled")
     }
@@ -73,48 +79,84 @@ final class DictationModel {
 
     func toggle(editor: DictationEditor) {
         activeEditor = editor
-        if isRecording { stop(editor: editor); return }
-        guard phase == .idle else { return }
-        guard enabled else { error = "Enable dictation in Settings → General."; return }
-        guard retainedTranscript == nil else {
-            error = "Insert or discard the previous transcript before starting another recording."; return
+        if isRecording {
+            stop(editor: editor)
+            return
         }
-        guard editor.ticket() != nil else { error = "Place the cursor in an editable text input first."; return }
+        guard phase == .idle else { return }
+        guard enabled else {
+            error = "Enable dictation in Settings → General."
+            return
+        }
+        guard retainedTranscript == nil else {
+            error = "Insert or discard the previous transcript before starting another recording."
+            return
+        }
+        guard editor.ticket() != nil else {
+            error = "Place the cursor in an editable text input first."
+            return
+        }
         generation = UUID()
         let id = generation
-        phase = .connecting; error = nil; preview = ""; destination = nil
+        phase = .connecting
+        error = nil
+        preview = ""
+        destination = nil
         task = Task {
             do {
                 let allowed = await permission()
                 guard generation == id, !Task.isCancelled else { return }
                 guard allowed else {
-                    throw DictationError.message("Microphone access is disabled. Enable it for Woven Matter in macOS Settings → Privacy & Security → Microphone.")
+                    throw DictationError.message(
+                        "Microphone access is disabled. Enable it for Woven Matter in macOS Settings → Privacy & Security → Microphone."
+                    )
                 }
                 let credential = try await credential()
                 guard generation == id, !Task.isCancelled else { return }
                 accountLabel = credential.accountLabel ?? "Grok subscription"
-                var speech = makeClient(); client = speech
-                do { try await speech.connect(credential: credential) }
-                catch GrokSpeechError.signInRequired {
+                var speech = makeClient()
+                client = speech
+                do { try await speech.connect(credential: credential) } catch GrokSpeechError.signInRequired {
                     await speech.cancel()
-                    guard let renewed = try await renewCredential(credential) else { throw GrokSpeechError.signInRequired }
                     guard generation == id, !Task.isCancelled else { return }
-                    speech = makeClient(); client = speech
+                    guard let renewed = try await renewCredential(credential) else {
+                        throw GrokSpeechError.signInRequired
+                    }
+                    guard generation == id, !Task.isCancelled else { return }
+                    speech = makeClient()
+                    client = speech
                     try await speech.connect(credential: renewed)
                 }
-                guard generation == id, !Task.isCancelled else { await speech.cancel(); return }
-                let capture = makeAudio(); audio = capture
+                guard generation == id, !Task.isCancelled else {
+                    await speech.cancel()
+                    return
+                }
+                let capture = makeAudio()
+                audio = capture
                 let stream = try capture.start()
                 phase = .recording
                 writer = Task {
                     do {
-                        for try await chunk in stream { try Task.checkCancellation(); try await speech.send(chunk) }
+                        for try await chunk in stream {
+                            try Task.checkCancellation()
+                            try await speech.send(chunk)
+                        }
                         try Task.checkCancellation()
                         try await speech.finish()
-                    } catch { await speech.cancel(); throw error }
+                    } catch {
+                        // Report capture/send failures directly. Cancelling the
+                        // socket otherwise turns them into a generic read error.
+                        if generation == id, !Task.isCancelled {
+                            self.error = error.localizedDescription
+                            finishSession()
+                        }
+                        await speech.cancel()
+                        throw error
+                    }
                 }
                 while generation == id, !Task.isCancelled {
                     guard let event = try await speech.next(timeout: .seconds(60)) else { continue }
+                    guard generation == id, !Task.isCancelled else { return }
                     switch event {
                     case .ready: break
                     case .partial(let text): preview = text
@@ -122,13 +164,16 @@ final class DictationModel {
                     case .done(let text, _):
                         guard phase == .finishing else { throw GrokSpeechError.incomplete }
                         try await writer?.value
+                        guard generation == id, !Task.isCancelled else { return }
                         let transcript = text.trimmingCharacters(in: .whitespacesAndNewlines)
                         if !transcript.isEmpty, destination?.insert(transcript) != true {
                             retainedTranscript = transcript
-                            error = "The destination changed or closed. Your transcript is ready to insert when you return to an editor."
+                            error =
+                                "The destination changed or closed. Your transcript is ready to insert when you return to an editor."
                         }
                         availability = "Dictation worked with \(accountLabel)."
-                        finishSession(); return
+                        finishSession()
+                        return
                     }
                 }
             } catch {
@@ -141,10 +186,18 @@ final class DictationModel {
     }
 
     func stop(editor: DictationEditor) {
-        if phase == .connecting { cancel(); return }
+        if phase == .connecting {
+            cancel()
+            return
+        }
         guard phase == .recording else { return }
-        guard let ticket = editor.ticket() else { error = "Place the cursor in the destination text input, then stop recording."; return }
-        destination = ticket; phase = .finishing; audio?.stop()
+        guard let ticket = editor.ticket() else {
+            error = "Place the cursor in the destination text input, then stop recording."
+            return
+        }
+        destination = ticket
+        phase = .finishing
+        audio?.stop()
         let id = generation
         finishingTimeout = Task {
             try? await Task.sleep(for: .seconds(20))
@@ -155,31 +208,47 @@ final class DictationModel {
     }
     func leaveWorkspace() {
         guard isRecording else { return }
-        if let editor = activeEditor { stop(editor: editor) }
-        else { cancel() }
+        if let editor = activeEditor { stop(editor: editor) } else { cancel() }
         // An editor may have closed or started IME composition while navigating.
         // Leaving the workspace must always stop microphone capture.
         if isRecording { cancel() }
     }
     func insertRetained(into editor: DictationEditor) {
         guard let transcript = retainedTranscript, editor.ticket()?.insert(transcript) == true else {
-            error = "Place the cursor in an editable text input first."; return
+            error = "Place the cursor in an editable text input first."
+            return
         }
-        retainedTranscript = nil; error = nil
+        retainedTranscript = nil
+        error = nil
     }
-    func cancel() { retainedTranscript = nil; error = nil; finishSession() }
+    func cancel() {
+        retainedTranscript = nil
+        error = nil
+        finishSession()
+    }
     private func finishSession() {
         generation = UUID()
-        audio?.stop(); audio = nil
-        writer?.cancel(); writer = nil
-        finishingTimeout?.cancel(); finishingTimeout = nil
-        task?.cancel(); task = nil
-        if let client { Task { await client.cancel() } }; client = nil
-        destination = nil; phase = .idle; preview = ""
+        audio?.stop()
+        audio = nil
+        writer?.cancel()
+        writer = nil
+        finishingTimeout?.cancel()
+        finishingTimeout = nil
+        task?.cancel()
+        task = nil
+        if let client { Task { await client.cancel() } }
+        client = nil
+        destination = nil
+        phase = .idle
+        preview = ""
     }
 }
 
 private enum DictationError: LocalizedError {
     case message(String)
-    var errorDescription: String? { switch self { case .message(let text): text } }
+    var errorDescription: String? {
+        switch self {
+        case .message(let text): text
+        }
+    }
 }

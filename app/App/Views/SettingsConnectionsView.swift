@@ -18,13 +18,22 @@ struct SettingsConnectionsView: View {
     }
     var body: some View {
         SettingsPage(title: "Connections", detail: "Shared accounts for Default Agent, Usage, and Dictation.", reservesRailControlSpace: reservesRailControlSpace, onBack: onBack) {
-            Picker("Connections for", selection: Binding(get: { agent.scope }, set: { agent.changeScope($0); agent.refresh(remote: remote) })) {
+            Picker("Connections for", selection: Binding(get: { agent.scope }, set: {
+                keyDrafts.removeAll()
+                answer = ""
+                agent.changeScope($0)
+                agent.refresh(remote: remote)
+            })) {
                 Text("Woven Matter · shared").tag("global")
                 Text("Local workspace overrides").tag("local")
                 ForEach(model.remoteWorkspaces.workspaces) { workspace in Text(workspace.name).tag(workspace.id.uuidString.lowercased()) }
             }
             if agent.scope != "global" {
-                Toggle("Use global workspace defaults", isOn: Binding(get: { agent.inherits }, set: { agent.setInherits($0) }))
+                Toggle("Use global workspace defaults", isOn: Binding(get: { agent.inherits }, set: {
+                    keyDrafts.removeAll()
+                    agent.setInherits($0)
+                    agent.refresh(remote: remote)
+                }))
                 Text("Dictation and app-wide Usage use the shared accounts. Workspace overrides apply to Default Agent.").font(.callout).foregroundStyle(.secondary)
             }
             connectionsSection
@@ -100,9 +109,9 @@ struct SettingsConnectionsView: View {
             Button("Save key") {
                 guard agent.saveKey(keyDrafts[id] ?? "", provider: id) else { return }
                 keyDrafts[id] = nil
-                agent.refresh(remote: remote); synchronize()
+                agent.refresh(remote: remote)
             }.disabled((keyDrafts[id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            Button("Remove") { if agent.saveKey("", provider: id) { agent.refresh(remote: remote); synchronize() } }
+            Button("Remove") { if agent.saveKey("", provider: id) { agent.refresh(remote: remote) } }
         }.buttonStyle(SettingsQuietButtonStyle()).disabled(!editable || agent.busy)
     }
     @ViewBuilder private var signInSection: some View {
@@ -126,15 +135,6 @@ struct SettingsConnectionsView: View {
             Text("Web search").font(.headline)
             HStack { Text("Exa"); Spacer(); Text(agent.searchConfigured ? "Key configured" : "Add a key to enable search").font(.callout).foregroundStyle(.secondary) }
             keyEntry("exa")
-        }
-    }
-    private func synchronize() {
-        Task {
-            await DictationModel.shared.refreshAvailability()
-            for workspace in model.remoteWorkspaces.workspaces {
-                do { try await model.remoteWorkspaces.synchronizeDefaultAgent(workspace) }
-                catch { agent.error = "\(workspace.name): \(error.localizedDescription)" }
-            }
         }
     }
 }

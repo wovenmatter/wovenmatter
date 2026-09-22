@@ -5,6 +5,14 @@ import { localServers } from './local-servers.mjs';
 export const providers = ['openai-codex', 'openai', 'openrouter', 'opencode-go', 'xai'];
 export const providerNames = { 'openai-codex': 'OpenAI · ChatGPT subscription', openai: 'OpenAI · API key', openrouter: 'OpenRouter', 'opencode-go': 'OpenCode Go', xai: 'Grok subscription' };
 export const emptyConfig = { providers, models: [], defaultModel: null, fallbackModels: [], searchProvider: 'exa' };
+
+// Only app-authored messages may cross the helper boundary. SDK/provider
+// exceptions can include response bodies, URLs, or credentials.
+export class DefaultAgentError extends Error {}
+export function operationErrorMessage(error) {
+  return error instanceof DefaultAgentError ? error.message
+    : 'Default Agent could not complete this operation. Check its connections and workspace unlock state in Settings → Connections.';
+}
 export async function readJSON(path, fallback = {}) {
   try { return JSON.parse(await readFile(path, 'utf8')); } catch (e) { if (e.code === 'ENOENT') return fallback; throw e; }
 }

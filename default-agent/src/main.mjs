@@ -1,7 +1,8 @@
 import { unlink } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
 import { homedir } from 'node:os';
-import { resolve, join } from 'node:path';
+import { join } from 'node:path';
+import { DefaultAgentError, operationErrorMessage } from './config.mjs';
 import { DefaultAgentEngine } from './engine.mjs';
 import { CredentialVault, sharedCredentials } from './vault.mjs';
 import { signInStatuses } from './sign-in-status.mjs';
@@ -100,7 +101,7 @@ async function invoke(message) {
     const page = await remoteRequest(`runs/${response.operationID}?after=${cursor}`);
     for (const event of page.updates) update(event);
     cursor = page.cursor;
-    if (page.done) { if (page.error) throw new Error(page.error); return page.result; }
+    if (page.done) { if (page.error) throw new DefaultAgentError(page.error); return page.result; }
     await new Promise(resolve => setTimeout(resolve, 150));
   }
 }
@@ -116,6 +117,13 @@ lines.on('line', line => {
     return;
   }
   if (message.answerTo) { pendingPrompts.get(message.answerTo)?.(message.answer); pendingPrompts.delete(message.answerTo); return; }
-  invoke(message).then(result => { if (control) send({ result }, () => process.exit(0)); else if (message.id !== undefined) send({ jsonrpc: '2.0', id: message.id, result }); }, error => { const text = 'Default Agent could not complete this operation. Check its connections and workspace unlock state in Settings → Default Agent.'; if (control) send({ error: text }, () => process.exit(1)); else if (message.id !== undefined) send({ jsonrpc: '2.0', id: message.id, error: { code: -32000, message: text } }); });
+  invoke(message).then(result => {
+    if (control) send({ result }, () => process.exit(0));
+    else if (message.id !== undefined) send({ jsonrpc: '2.0', id: message.id, result });
+  }, error => {
+    const messageText = operationErrorMessage(error);
+    if (control) send({ error: messageText }, () => process.exit(1));
+    else if (message.id !== undefined) send({ jsonrpc: '2.0', id: message.id, error: { code: -32000, message: messageText } });
+  });
 });
 lines.on('close', () => { if (!control) process.exit(0); });

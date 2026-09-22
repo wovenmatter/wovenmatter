@@ -3,22 +3,26 @@
 The native app adds `AgentRuntimeKind.defaultAgent`; the eight external harnesses
 remain in the installation catalog. Local discovery resolves only the app-bundled
 Node executable and `default-agent/src/main.mjs`. The helper imports the pinned
-Pi SDK directly and exposes ACP to reuse the native conversation, tools, notes,
-permissions, persistence, and model-control presentation. It never invokes the
+Pi SDK directly and exposes ACP to reuse the native conversation, tool activity,
+notes, persistence, and model-control presentation. It never invokes the
 external `pi` command.
 
 `default-agent/package-lock.json` pins the SDK dependency graph. The macOS build
 prepares Node 24.18.0 with pinned archive SHA-256 checks and includes its license.
 The workspace image uses its pinned Node base and installs the same locked SDK.
 Node receives its own JIT entitlement when the app is signed. SDK dependencies
-and runtime binaries are build products, not checked into Git.
+and runtime binaries are build products, not checked into Git. Remote deployment
+archives include only the helper's source and package manifests; local binaries,
+dependencies, tests, and build caches are not uploaded.
 
 `DefaultAgentSettingsScope` stores non-secret preferences and per-workspace
-replacements. API keys and owned OAuth credentials use macOS Keychain. Connections is the central account management surface for Default Agent, Usage,
-and Dictation. Global OpenRouter keeps its existing shared Keychain item. Local helpers receive access-only
-credentials over private pipes. `ProviderAccountCoordinator` owns renewal and saves rotated
-credentials before publishing new snapshots. External harness sign-ins are separate
-and their credential stores are never imported. Ordinary message checks compare
+replacements. API keys and owned OAuth credentials use macOS Keychain.
+Connections is the central account management surface for Default Agent, Usage,
+and Dictation. Global OpenRouter keeps its existing shared Keychain item. Local
+helpers receive access-only credentials over private pipes.
+`ProviderAccountCoordinator` owns renewal and saves rotated credentials before
+publishing new snapshots. External harness sign-ins are separate and their
+credential stores are never imported. Ordinary message checks compare
 cached revisions and deadlines without Keychain or network access.
 
 Remote configuration travels over the existing authenticated workspace service
@@ -64,6 +68,9 @@ binary audio, finishes with `audio.done`, and inserts only `transcript.done`.
 There is no API-key billing fallback. A bounded audio queue, connection/final
 response deadlines, cancellation, and generation fencing prevent runaway
 recordings or late insertion. Neither audio nor transcript previews are saved.
+Cancellation is checked again after each suspended response, including a final
+transcript arriving after a newer recording starts. Capture/send failures retain
+their specific error instead of being masked by socket cancellation.
 
 Each native editor exposes a `DictationEditor` bridge. Stop captures its logical
 identity, current text, and UTF-16 selection. Insertion uses AppKit's native text

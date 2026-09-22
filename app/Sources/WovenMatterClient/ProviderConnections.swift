@@ -1,12 +1,12 @@
 import Foundation
 
-/// Compatibility for the Default Agent transport. All app features share this
-/// same coordinator, including its refresh lock, cache and sign-out fencing.
-public typealias DefaultAgentCredentialCoordinator = ProviderAccountCoordinator
-
 public enum ProviderConnectionID: String, CaseIterable, Identifiable, Sendable {
-    case chatGPT = "openai-codex", openAI = "openai", grok = "xai"
-    case openRouter = "openrouter", openCodeGo = "opencode-go", exa
+    case chatGPT = "openai-codex"
+    case openAI = "openai"
+    case grok = "xai"
+    case openRouter = "openrouter"
+    case openCodeGo = "opencode-go"
+    case exa
     public var id: String { rawValue }
     public var name: String {
         switch self {
@@ -32,7 +32,8 @@ extension DefaultAgentCredential {
         var encoded = String(parts[1]).replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
         encoded += String(repeating: "=", count: (4 - encoded.count % 4) % 4)
         guard let data = Data(base64Encoded: encoded),
-              let claims = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return accountId }
+            let claims = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return accountId }
         let profile = claims["https://api.openai.com/profile"] as? [String: Any]
         return (claims["email"] as? String) ?? (profile?["email"] as? String)
             ?? (claims["name"] as? String) ?? accountId ?? (claims["sub"] as? String)
@@ -48,8 +49,9 @@ extension ProviderAccountCoordinator {
 
     public func grokDictationCredential() async throws -> DefaultAgentCredential {
         guard let credential = try await appCredentials()[ProviderConnectionID.grok.rawValue],
-              credential.type == "oauth", let token = credential.access, !token.isEmpty,
-              (credential.expires ?? 0) > Date().timeIntervalSince1970 * 1000 else {
+            credential.type == "oauth", let token = credential.access, !token.isEmpty,
+            (credential.expires ?? 0) > Date().timeIntervalSince1970 * 1000
+        else {
             throw GrokSpeechError.signInRequired
         }
         return credential

@@ -1,15 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
 import { CredentialVault } from '../src/vault.mjs';
 import { createDefaultAgentService } from '../src/service.mjs';
 import { signInStatuses } from '../src/sign-in-status.mjs';
-const temporary = () => mkdtemp('/tmp/woven-default-agent-test-');
+async function temporary(t) {
+  const directory = await mkdtemp('/tmp/woven-default-agent-test-');
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  return directory;
+}
 
-test('active sessions survive credential and settings updates and use the latest search key', async () => {
-  const directory = await temporary(), key = randomBytes(32).toString('base64');
+test('active sessions survive credential and settings updates and use the latest search key', async t => {
+  const directory = await temporary(t), key = randomBytes(32).toString('base64');
   const service = createDefaultAgentService({ cwd: directory, directory });
   assert.equal((await service.status()).locked, true);
   const base = { workspace: 'fixture', unlockKey: key, config: {} };
@@ -35,8 +39,8 @@ test('active sessions survive credential and settings updates and use the latest
   await assert.rejects(restarted.engine(), /locked/);
 });
 
-test('tampering fails closed and repeated writes never reuse the GCM nonce', async () => {
-  const directory = await temporary(), vault = new CredentialVault(directory);
+test('tampering fails closed and repeated writes never reuse the GCM nonce', async t => {
+  const directory = await temporary(t), vault = new CredentialVault(directory);
   await vault.unlock('fixture', randomBytes(32).toString('base64'));
   const initial = JSON.parse(await readFile(vault.path, 'utf8'));
   await vault.modify(async value => ({ ...value, shared: { secret: 'fixture' } }));
@@ -47,8 +51,8 @@ test('tampering fails closed and repeated writes never reuse the GCM nonce', asy
   await assert.rejects(vault.read(), /decrypted/);
 });
 
-test('expired borrowed auth waits between model requests and resumes without replaying a turn', async () => {
-  const directory = await temporary(), service = createDefaultAgentService({ cwd: directory, directory });
+test('expired borrowed auth waits between model requests and resumes without replaying a turn', async t => {
+  const directory = await temporary(t), service = createDefaultAgentService({ cwd: directory, directory });
   const base = { workspace: 'fixture', unlockKey: randomBytes(32).toString('base64'), config: {} };
   await service.configure({ ...base, revision: 'old', credentials: { xai: { type: 'oauth', access: 'expired', expires: 0 } } });
   const engine = await service.engine();
@@ -80,8 +84,8 @@ test('status checks never start login and do not equate a timeout with sign-out'
   assert.ok(!calls.some(args => args.includes('prompt')));
 });
 
-test('a rejected unlock never replaces a live workspace key', async () => {
-  const directory = await temporary(), vault = new CredentialVault(directory);
+test('a rejected unlock never replaces a live workspace key', async t => {
+  const directory = await temporary(t), vault = new CredentialVault(directory);
   await vault.unlock('fixture', randomBytes(32).toString('base64'));
   await vault.modify(async value => ({ ...value, shared: { exa: { type: 'api_key', key: 'still-usable' } } }));
   const rejected = assert.rejects(vault.unlock('fixture', randomBytes(32).toString('base64')), /decrypted/);
@@ -90,8 +94,8 @@ test('a rejected unlock never replaces a live workspace key', async () => {
   assert.equal((await vault.read()).shared.exa.key, 'still-usable');
 });
 
-test('an expired borrowed request remains cancellable without attempting OAuth refresh', async () => {
-  const directory = await temporary(), service = createDefaultAgentService({ cwd: directory, directory });
+test('an expired borrowed request remains cancellable without attempting OAuth refresh', async t => {
+  const directory = await temporary(t), service = createDefaultAgentService({ cwd: directory, directory });
   await service.configure({ workspace: 'fixture', unlockKey: randomBytes(32).toString('base64'), config: {},
     credentials: { xai: { type: 'oauth', access: 'expired', expires: 0 } } });
   const engine = await service.engine(), controller = new AbortController();

@@ -820,13 +820,14 @@ public actor RemoteWorkspaceSSHClient {
         let result = try RemoteWorkspaceProcess.run(
             executable: "/usr/bin/tar",
             arguments: [
-                "-czf", "-",
+                "--no-mac-metadata", "-czf", "-",
+                "--exclude=.DS_Store",
                 "--exclude=remote/test",
                 "--exclude=remote/.env.example",
                 "--exclude=remote/compose.yaml",
                 "-C", root.path,
-                "--exclude=default-agent/node_modules", "--exclude=default-agent/bin", "--exclude=default-agent/test",
-                "remote", "harnesses", "default-agent",
+                "remote", "harnesses",
+                "default-agent/package.json", "default-agent/package-lock.json", "default-agent/src",
             ]
         )
         guard result.status == 0 else {

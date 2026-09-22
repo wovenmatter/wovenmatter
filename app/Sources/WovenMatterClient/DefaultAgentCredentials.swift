@@ -11,7 +11,10 @@ public struct DefaultAgentCredential: Codable, Equatable, Sendable {
     public var accountId: String?
     public var displayName: String?
     public var borrowed: Bool = false
-    public init(type: String, key: String? = nil) { self.type = type; self.key = key }
+    public init(type: String, key: String? = nil) {
+        self.type = type
+        self.key = key
+    }
     enum CodingKeys: String, CodingKey { case type, key, access, refresh, expires, accountId, displayName, borrowed }
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -24,7 +27,12 @@ public struct DefaultAgentCredential: Codable, Equatable, Sendable {
         displayName = try c.decodeIfPresent(String.self, forKey: .displayName)
         borrowed = try c.decodeIfPresent(Bool.self, forKey: .borrowed) ?? false
     }
-    public func borrowing() -> Self { var copy = self; copy.refresh = ""; copy.borrowed = true; return copy }
+    public func borrowing() -> Self {
+        var copy = self
+        copy.refresh = ""
+        copy.borrowed = true
+        return copy
+    }
 }
 public struct DefaultAgentPayload: Codable, Sendable {
     public var config: DefaultAgentSettings
@@ -33,9 +41,15 @@ public struct DefaultAgentPayload: Codable, Sendable {
     public var unlockKey: String?
     public var revision: String?
     public init(config: DefaultAgentSettings, credentials: [String: DefaultAgentCredential], workspace: String) {
-        self.config = config; self.credentials = credentials; self.workspace = workspace
+        self.config = config
+        self.credentials = credentials
+        self.workspace = workspace
     }
-    public func data() throws -> Data { let encoder = JSONEncoder(); encoder.outputFormatting = .sortedKeys; return try encoder.encode(self) }
+    public func data() throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
+        return try encoder.encode(self)
+    }
 }
 public struct AgentSignInStatus: Codable, Identifiable, Sendable {
     public let id: String
@@ -84,11 +98,16 @@ public final class ProviderAccountCoordinator {
     private var timer: Task<Void, Never>?
     private var signInID: UUID?
     public private(set) var lastError: String?
-    public init(refresh: @escaping Refresh = ProviderAccountCoordinator.refreshStored,
-                renewRejected: @escaping RenewRejected = ProviderAccountCoordinator.renewRejectedStored,
-                version: @escaping @Sendable () -> UInt64 = { DefaultAgentSupport.revision },
-                clock: @escaping @Sendable () -> Date = Date.init) {
-        self.refresh = refresh; self.renewRejected = renewRejected; self.version = version; self.clock = clock
+    public init(
+        refresh: @escaping Refresh = ProviderAccountCoordinator.refreshStored,
+        renewRejected: @escaping RenewRejected = ProviderAccountCoordinator.renewRejectedStored,
+        version: @escaping @Sendable () -> UInt64 = { DefaultAgentSupport.revision },
+        clock: @escaping @Sendable () -> Date = Date.init
+    ) {
+        self.refresh = refresh
+        self.renewRejected = renewRejected
+        self.version = version
+        self.clock = clock
     }
     public func start() {
         guard timer == nil else { return }
@@ -100,7 +119,10 @@ public final class ProviderAccountCoordinator {
             }
         }
     }
-    public func invalidate() { cachedVersion = nil; nextCheck = .distantPast }
+    public func invalidate() {
+        cachedVersion = nil
+        nextCheck = .distantPast
+    }
     private func clearPending(_ id: UUID) {
         if pending?.id == id { pending = nil }
     }
@@ -112,20 +134,31 @@ public final class ProviderAccountCoordinator {
     public func beginSignIn() async throws -> UUID {
         try await waitForPending()
         try Task.checkCancellation()
-        guard signInID == nil else { throw DefaultAgentError.message("Finish the current sign-in in Connections first.") }
-        let id = UUID(); signInID = id
+        guard signInID == nil else {
+            throw DefaultAgentError.message("Finish the current sign-in in Connections first.")
+        }
+        let id = UUID()
+        signInID = id
         return id
     }
-    public func endSignIn(_ id: UUID) { guard signInID == id else { return }; signInID = nil; invalidate() }
+    public func endSignIn(_ id: UUID) {
+        guard signInID == id else { return }
+        signInID = nil
+        invalidate()
+    }
     public func prepare(_ workspace: String) async throws -> DefaultAgentPayload {
         knownScopes.insert(workspace)
-        if pending != nil { try await waitForPending(); return try await prepare(workspace) }
+        if pending != nil {
+            try await waitForPending()
+            return try await prepare(workspace)
+        }
         if cachedVersion == version(), clock() < nextCheck, let value = cached[workspace] { return value }
         if signInID != nil {
             if let value = cached[workspace] { return value }
             throw DefaultAgentError.message("Finish sign-in in Connections before connecting this workspace.")
         }
-        let scopes = Array(knownScopes), revision = version()
+        let scopes = Array(knownScopes)
+        let revision = version()
         let task = Task {
             let values = try await refresh(scopes)
             guard !Task.isCancelled else { throw CancellationError() }
@@ -135,20 +168,27 @@ public final class ProviderAccountCoordinator {
                 value.revision = SHA256.hash(data: try value.data()).map { String(format: "%02x", $0) }.joined()
                 prepared[scope] = value
             }
-            cached = prepared; cachedVersion = revision
+            cached = prepared
+            cachedVersion = revision
             let now = clock()
             let expiry = prepared.values.flatMap { $0.credentials.values }.compactMap(\.expires).min()
             // A near-expiry token after an unsuccessful renewal gets backoff;
             // healthy credentials do not spawn a helper on ordinary sends.
-            nextCheck = expiry.map { max(now.addingTimeInterval(30), Date(timeIntervalSince1970: $0 / 1000 - 300)) } ?? now.addingTimeInterval(300)
+            nextCheck =
+                expiry.map { max(now.addingTimeInterval(30), Date(timeIntervalSince1970: $0 / 1000 - 300)) }
+                ?? now.addingTimeInterval(300)
             nextCheck = min(nextCheck, now.addingTimeInterval(300))
             lastError = nil
             NotificationCenter.default.post(name: .init("wovenmatter.default-agent.snapshot-ready"), object: nil)
         }
         let operationID = UUID()
         pending = (operationID, task)
-        do { try await task.value; clearPending(operationID) } catch {
-            clearPending(operationID); lastError = error.localizedDescription
+        do {
+            try await task.value
+            clearPending(operationID)
+        } catch {
+            clearPending(operationID)
+            lastError = error.localizedDescription
             // Preserve still-valid access on transient control/Keychain failures.
             nextCheck = clock().addingTimeInterval(30)
             if let existing = cached[workspace], cachedVersion == version() { return existing }
@@ -169,22 +209,38 @@ public final class ProviderAccountCoordinator {
         }
         let operationID = UUID()
         pending = (operationID, operation)
-        do { try await operation.value; clearPending(operationID) }
-        catch { clearPending(operationID); lastError = error.localizedDescription; throw error }
+        do {
+            try await operation.value
+            clearPending(operationID)
+        } catch {
+            clearPending(operationID)
+            lastError = error.localizedDescription
+            throw error
+        }
         return try await prepare("global").credentials[provider]
     }
     nonisolated public static func renewRejectedStored(provider: String, access: String) async throws {
         guard ["openai-codex", "xai"].contains(provider),
-              let original = try DefaultAgentSupport.oauth(provider), original.access == access else { return }
+            let original = try DefaultAgentSupport.oauth(provider), original.access == access
+        else { return }
         var expired = original
-        expired.expires = 0 // Force the SDK renewal without changing the saved credential.
-        struct Request: Encodable { let action = "refresh"; let credentials: [String: DefaultAgentCredential] }
-        struct Result: Decodable { let credentials: [String: DefaultAgentCredential]; let errors: [String: String] }
-        let response = try await DefaultAgentControl.run(JSONEncoder().encode(Request(credentials: [provider: expired])))
+        expired.expires = 0  // Force the SDK renewal without changing the saved credential.
+        struct Request: Encodable {
+            let action = "refresh"
+            let credentials: [String: DefaultAgentCredential]
+        }
+        struct Result: Decodable {
+            let credentials: [String: DefaultAgentCredential]
+            let errors: [String: String]
+        }
+        let response = try await DefaultAgentControl.run(
+            JSONEncoder().encode(Request(credentials: [provider: expired])))
         let result = try JSONDecoder().decode(Result.self, from: response)
         guard result.errors[provider] == nil, let renewed = result.credentials[provider],
-              (renewed.expires ?? 0) > Date().timeIntervalSince1970 * 1000 else {
-            throw DefaultAgentError.message("This subscription could not be renewed. Reconnect it in Settings → Connections.")
+            (renewed.expires ?? 0) > Date().timeIntervalSince1970 * 1000
+        else {
+            throw DefaultAgentError.message(
+                "This subscription could not be renewed. Reconnect it in Settings → Connections.")
         }
         try DefaultAgentSupport.saveRenewedOAuth(renewed, replacing: original, provider: provider, scope: "global")
     }
@@ -195,10 +251,19 @@ public final class ProviderAccountCoordinator {
         var issues: [String: [String: String]] = [:]
         for scope in keyScopes {
             var owned: [String: DefaultAgentCredential] = [:]
-            for id in ["openai-codex", "xai"] { if let c = try DefaultAgentSupport.oauth(id, scope: scope) { owned[id] = c } }
-            guard owned.values.contains(where: { ($0.expires ?? 0) <= Date().timeIntervalSince1970 * 1000 + 300000 }) else { continue }
-            struct Request: Encodable { let action = "refresh"; let credentials: [String: DefaultAgentCredential] }
-            struct Result: Decodable { let credentials: [String: DefaultAgentCredential]; let errors: [String: String] }
+            for id in ["openai-codex", "xai"] {
+                if let c = try DefaultAgentSupport.oauth(id, scope: scope) { owned[id] = c }
+            }
+            guard owned.values.contains(where: { ($0.expires ?? 0) <= Date().timeIntervalSince1970 * 1000 + 300000 })
+            else { continue }
+            struct Request: Encodable {
+                let action = "refresh"
+                let credentials: [String: DefaultAgentCredential]
+            }
+            struct Result: Decodable {
+                let credentials: [String: DefaultAgentCredential]
+                let errors: [String: String]
+            }
             let response = try await DefaultAgentControl.run(try JSONEncoder().encode(Request(credentials: owned)))
             let result = try JSONDecoder().decode(Result.self, from: response)
             issues[scope] = result.errors

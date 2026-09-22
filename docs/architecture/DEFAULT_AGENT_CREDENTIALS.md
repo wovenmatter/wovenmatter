@@ -3,7 +3,8 @@
 The Mac `ProviderAccountCoordinator` owns shared OAuth renewal for Default
 Agent, Usage, and Dictation. Connections is the shared account-management page.
 App-wide consumers use global accounts; Default Agent can use workspace
-overrides. Subscription credentials and separately billed API keys stay distinct. Local SDK conversation helpers
+overrides. Subscription credentials and separately billed API keys stay distinct.
+Local SDK conversation helpers
 receive access-only credentials over private JSON-RPC pipes; refresh helpers
 receive owned credentials through a private control pipe and return replacements.
 The coordinator serializes renewal, persists replacements to Keychain, and only
@@ -15,7 +16,8 @@ revision/deadline and workspace request identity entirely in app memory. Stale
 snapshots and concurrent sends share one renewal/sync task. Launch, activation,
 wake and reconnection trigger checks; the background timer checks the deadline
 without spawning helpers on each tick. Transient failures retain existing
-credentials and retry with a delay. Explicitly revoked refresh credentials are
+credentials and retry with a delay. A failed early renewal does not interrupt
+access that is still valid. Explicitly revoked refresh credentials are
 excluded from borrowed exports. An expired access token is never renewed remotely
 unless that workspace owns an independent sign-in.
 
@@ -34,6 +36,8 @@ model/search request reads current credentials. A remote run whose borrowed toke
 expires waits between model requests; cancellation still works. Initial turn
 admission can select an explicitly configured fallback. Once output or tools
 have begun, authentication/usage errors never cause a whole-turn replay.
+Cancelling a turn also cancels its credential preparation, so a pending auth
+check cannot start a model request after Stop.
 
 After a service restart, a locked response prompts the SSH bridge to request
 an unlock snapshot from the Mac before retrying admission. Durable operation IDs
@@ -45,6 +49,10 @@ Agent reports credential presence/expiry, not provider validation. External
 harness status commands have deadlines and bounded captured output; raw output
 is never returned to the UI. Ambiguous failures remain unknown. No test consumes
 provider inference, OAuth, or search services.
+
+Control responses and HTTP error inspection are bounded while reading. Only
+app-authored operation errors reach the UI or remote completion journals; raw
+SDK/provider exceptions are replaced with a generic connection error.
 
 ## Protection boundary
 

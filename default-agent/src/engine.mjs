@@ -2,7 +2,7 @@ import { mkdir, readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createAgentSession, DefaultResourceLoader, ModelRuntime, SessionManager, SettingsManager } from '@earendil-works/pi-coding-agent';
 import { Credentials } from './credentials.mjs';
-import { accessFailure, emptyConfig, modelRef, providerNames, providers, validateConfig } from './config.mjs';
+import { accessFailure, DefaultAgentError, emptyConfig, modelRef, providerNames, providers, validateConfig } from './config.mjs';
 import { searchTools } from './search.mjs';
 import { providerFetch } from './transport.mjs';
 import { registerLocalServers } from './local-servers.mjs';
@@ -22,7 +22,11 @@ export class DefaultAgentEngine {
       let credential = await this.credentials.read(provider);
       if (credential?.borrowed) {
         if (credential.expires <= Date.now() + 60000 && this.requestCredentials) {
-          await this.apply(await this.requestCredentials());
+          try { await this.apply(await this.requestCredentials()); }
+          catch (error) {
+            // An early renewal failure must not discard access that still works.
+            if (credential.expires <= Date.now()) throw error;
+          }
           credential = await this.credentials.read(provider);
         }
         // Borrowers do not call refresh. Keep valid access usable during a
@@ -117,8 +121,10 @@ export class DefaultAgentEngine {
     return this.configuration(record);
   }
   async prompt(record, text, emit) {
-    if (record.busy) throw new Error('This Default Agent session already has an active turn.');
+    if (record.busy) throw new DefaultAgentError('This Default Agent session already has an active turn.');
     record.busy = true;
+    const controller = new AbortController();
+    record.promptController = controller;
     const beforeMessages = [...record.session.messages];
     const beforeLeaf = record.manager.getLeafId();
     let visible = false;
@@ -133,6 +139,7 @@ export class DefaultAgentEngine {
       const attempts = [...new Set([record.selected, ...this.config.fallbackModels].filter(Boolean))];
       let reason;
       for (let index = 0; index < attempts.length; index++) {
+        controller.signal.throwIfAborted();
         const reference = attempts[index];
         if (!this.config.providers.includes(reference.split('/')[0])) { reason = 'The previous connection is disabled in Settings → Default Agent.'; continue; }
         record.httpAccessFailure = undefined;
@@ -141,8 +148,11 @@ export class DefaultAgentEngine {
           if (!model) throw new Error('Model is no longer available. Select a model in Settings → Default Agent.');
           if (!await this.credentials.read(model.provider)) throw new Error('Authentication required.');
           // Explicit auth deadlines also cover refresh; no provider requests happen during discovery.
-          if (!await this.runtime.getAuth(model, { signal: AbortSignal.timeout(30000), allowWait: false })) throw new Error('Authentication required.');
+          const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(30000)]);
+          if (!await this.runtime.getAuth(model, { signal, allowWait: false })) throw new Error('Authentication required.');
+          controller.signal.throwIfAborted();
           await record.session.setModel(model);
+          controller.signal.throwIfAborted();
           if (record.selected !== reference) {
             record.selected = reference;
             emit({ sessionUpdate: 'config_option_update', ...this.configuration(record, `Switched to ${model.name} · ${this.providerName(model.provider)}. ${reason}`) });
@@ -152,14 +162,22 @@ export class DefaultAgentEngine {
           if (last?.role === 'assistant' && last.stopReason === 'error') throw new Error(last.errorMessage ?? 'The model request failed.');
           return { stopReason: last?.stopReason === 'aborted' ? 'cancelled' : 'end_turn' };
         } catch (error) {
+          if (controller.signal.aborted) return { stopReason: 'cancelled' };
           reason = record.httpAccessFailure !== undefined ? record.httpAccessFailure : accessFailure(error);
-          if (!reason || visible) throw new Error(reason ?? 'The model request failed. Retry or check Settings → Default Agent.');
+          if (!reason || visible) throw new DefaultAgentError(reason ?? 'The model request failed. Retry or check Settings → Connections.');
           if (beforeLeaf) record.manager.branch(beforeLeaf); else record.manager.resetLeaf();
           record.session.agent.state.messages = beforeMessages;
         }
       }
-      throw new Error('No configured connection has access. Open Settings → Connections to sign in or update an API key.');
-    } finally { unsubscribe(); record.busy = false; }
+      throw new DefaultAgentError('No configured connection has access. Open Settings → Connections to sign in or update an API key.');
+    } catch (error) {
+      if (controller.signal.aborted) return { stopReason: 'cancelled' };
+      throw error;
+    } finally {
+      unsubscribe();
+      record.busy = false;
+      record.promptController = undefined;
+    }
   }
   async handle(method, params = {}, emit = () => {}) {
     if (method === 'initialize') return { protocolVersion: 1, agentInfo: { name: 'wovenmatter-default-agent', version: '0.1.0' }, agentCapabilities: { loadSession: true, promptCapabilities: { image: false } }, authMethods: [] };
@@ -170,7 +188,11 @@ export class DefaultAgentEngine {
     }
     const record = this.sessions.get(params.sessionId) ?? await this.create(params.sessionId);
     if (method === 'session/set_config_option') return this.select(record, params.value);
-    if (method === 'session/cancel') { await record.session.abort(); return {}; }
+    if (method === 'session/cancel') {
+      record.promptController?.abort();
+      await record.session.abort();
+      return {};
+    }
     if (method === 'session/prompt') return this.prompt(record, (params.prompt ?? []).filter(p => p.type === 'text').map(p => p.text).join('\n'), emit);
     throw new Error('Unsupported Default Agent operation.');
   }

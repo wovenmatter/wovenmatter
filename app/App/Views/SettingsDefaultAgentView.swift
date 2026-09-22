@@ -49,7 +49,10 @@ struct SettingsDefaultAgentView: View {
                 ForEach(model.remoteWorkspaces.workspaces) { workspace in Text(workspace.name).tag(workspace.id.uuidString.lowercased()) }
             }.frame(maxWidth: 440, alignment: .leading)
             if agent.scope != "global" {
-                Toggle("Use settings from All workspaces", isOn: Binding(get: { agent.inherits }, set: { agent.setInherits($0) }))
+                Toggle("Use settings from All workspaces", isOn: Binding(get: { agent.inherits }, set: {
+                    agent.setInherits($0)
+                    agent.refresh(remote: remote)
+                }))
                 Text(agent.inherits ? "Providers, keys, search, and model preferences follow your global settings. Subscription sign-ins can also be connected in this workspace." : "This workspace has its own preferences. Saved API keys are reused unless replaced here.").font(.callout).foregroundStyle(.secondary)
             }
         }
@@ -63,6 +66,7 @@ struct SettingsDefaultAgentView: View {
                         config.providers.removeAll { $0 == provider.id }
                         if enabled { config.providers.append(provider.id) }
                         agent.configuration = config
+                        agent.refresh(remote: remote)
                     })).disabled(!editable)
                     Spacer()
                     ConnectionsLink(title: agent.connectionLabel(provider.id), scope: agent.scope)
@@ -73,6 +77,7 @@ struct SettingsDefaultAgentView: View {
                     Toggle(server.name, isOn: Binding(get: { agent.configuration.providers.contains(server.id) }, set: { enabled in
                         var config = agent.configuration; config.providers.removeAll { $0 == server.id }
                         if enabled { config.providers.append(server.id) }; agent.configuration = config
+                        agent.refresh(remote: remote)
                     })).disabled(!editable)
                     Spacer()
                     ConnectionsLink(title: "Manage server")

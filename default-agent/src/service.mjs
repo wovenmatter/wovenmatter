@@ -1,11 +1,11 @@
 import { CredentialVault, sharedCredentials } from './vault.mjs';
 import { join } from 'node:path';
 import { appendFile, readFile, readdir } from 'node:fs/promises';
-import { readJSON, validateConfig, writePrivateJSON } from './config.mjs';
+import { operationErrorMessage, readJSON, validateConfig, writePrivateJSON } from './config.mjs';
 
 // Owned by the workspace service. Requests only attach to runs; disconnecting a
 // reader never cancels the SDK session. Journals support replay after reconnect.
-export function createDefaultAgentService({ cwd, directory, discover = false }) {
+export function createDefaultAgentService({ cwd, directory }) {
   let enginePromise;
   const vault = new CredentialVault(directory);
   const epoch = crypto.randomUUID();
@@ -80,7 +80,7 @@ export function createDefaultAgentService({ cwd, directory, discover = false }) 
     let journalError;
     const publish = update => { operation.updates.push(update); journal = journal.then(() => appendFile(path, JSON.stringify(update) + '\n', { mode: 0o600 })).catch(error => { journalError = error; }); };
     // Intentionally not awaited by the HTTP request.
-    operation.completion = e.handle(message.method, message.params, publish).then(result => { operation.result = result; }, error => { operation.error = error.message; }).finally(async () => {
+    operation.completion = e.handle(message.method, message.params, publish).then(result => { operation.result = result; }, error => { operation.error = operationErrorMessage(error); }).finally(async () => {
       try {
         await journal;
         if (journalError) throw journalError;

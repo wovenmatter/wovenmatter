@@ -94,8 +94,7 @@ enum ProviderLimitCollector {
           if let sharedCredentials, [.codex, .grok, .openCodeGo, .openRouter].contains(provider) {
             return await sharedAccount(provider, credentials: sharedCredentials, now: now)
           }
-          return await {
-          switch provider {
+          return switch provider {
           case .codex, .claude, .grok, .cursor:
             await credentialSensitiveAccount(
               provider: provider,
@@ -162,7 +161,6 @@ enum ProviderLimitCollector {
           case .unknown:
             unavailable(.unknown, detail: "This provider is unavailable.", now: now)
           }
-          }()
         }
       }
       var accounts: [UsageLimitAccount] = []

@@ -84,7 +84,7 @@ final class RemoteWorkspacesModel {
         let identity: RemoteWorkspaceRequestIdentity
     }
     private var defaultAgentAcknowledgments: [UUID: DefaultAgentAcknowledgment] = [:]
-    private var defaultAgentSyncTasks: [UUID: Task<Void, any Error>] = [:]
+    private var defaultAgentSyncTasks: [UUID: (id: UUID, task: Task<Void, any Error>)] = [:]
     private var defaultAgentObservers: [any NSObjectProtocol] = []
     private(set) var signInStatuses: [UUID: [AgentSignInStatus]] = [:]
     private(set) var checkingSignIn: Set<UUID> = []
@@ -92,7 +92,7 @@ final class RemoteWorkspacesModel {
 
     func startDefaultAgentMaintenance() {
         guard defaultAgentObservers.isEmpty else { return }
-        DefaultAgentCredentialCoordinator.shared.start()
+        ProviderAccountCoordinator.shared.start()
         for name in [DefaultAgentSupport.credentialsChanged, Notification.Name("wovenmatter.default-agent.snapshot-ready")] {
             defaultAgentObservers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                 Task { @MainActor in await self?.relayDefaultAgentCredentials() }
@@ -100,20 +100,20 @@ final class RemoteWorkspacesModel {
         }
         defaultAgentObservers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in
-                DefaultAgentCredentialCoordinator.shared.invalidate()
+                ProviderAccountCoordinator.shared.invalidate()
                 self?.defaultAgentAcknowledgments.removeAll()
                 await self?.relayDefaultAgentCredentials()
             }
         })
         defaultAgentObservers.append(NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in
-                DefaultAgentCredentialCoordinator.shared.invalidate()
+                ProviderAccountCoordinator.shared.invalidate()
                 await self?.relayDefaultAgentCredentials()
             }
         })
     }
     private func relayDefaultAgentCredentials() async {
-        _ = try? await DefaultAgentCredentialCoordinator.shared.prepare("local")
+        _ = try? await ProviderAccountCoordinator.shared.prepare("local")
         guard isCredentialAccessEnabled else { return }
         for workspace in workspaces where tunnels[workspace.id] != nil {
             do { try await ensureDefaultAgent(workspace) }
@@ -1131,17 +1131,27 @@ final class RemoteWorkspacesModel {
     }
 
     func synchronizeDefaultAgent(_ configuration: RemoteWorkspaceConfiguration) async throws {
-        if let pending = defaultAgentSyncTasks[configuration.id] { try await pending.value }
+        try await waitForDefaultAgentSync(configuration.id)
         defaultAgentAcknowledgments.removeValue(forKey: configuration.id)
         try await ensureDefaultAgent(configuration)
     }
+    private func clearDefaultAgentSync(_ workspaceID: UUID, operationID: UUID) {
+        if defaultAgentSyncTasks[workspaceID]?.id == operationID {
+            defaultAgentSyncTasks[workspaceID] = nil
+        }
+    }
+    private func waitForDefaultAgentSync(_ workspaceID: UUID) async throws {
+        guard let pending = defaultAgentSyncTasks[workspaceID] else { return }
+        defer { clearDefaultAgentSync(workspaceID, operationID: pending.id) }
+        try await pending.task.value
+    }
     func ensureDefaultAgent(_ configuration: RemoteWorkspaceConfiguration) async throws {
         let identity = try requestIdentity(configuration)
-        let payload = try await DefaultAgentCredentialCoordinator.shared.prepare(configuration.id.uuidString.lowercased())
+        let payload = try await ProviderAccountCoordinator.shared.prepare(configuration.id.uuidString.lowercased())
         try requireCurrent(identity)
         if let ack = defaultAgentAcknowledgments[configuration.id], ack.revision == payload.revision, ack.identity == identity { return }
-        if let pending = defaultAgentSyncTasks[configuration.id] {
-            try await pending.value
+        if defaultAgentSyncTasks[configuration.id] != nil {
+            try await waitForDefaultAgentSync(configuration.id)
             return try await ensureDefaultAgent(configuration)
         }
         let task = Task {
@@ -1154,10 +1164,11 @@ final class RemoteWorkspacesModel {
             }
             defaultAgentAcknowledgments[configuration.id] = .init(revision: receipt.revision, identity: identity)
         }
-        defaultAgentSyncTasks[configuration.id] = task
-        do { try await task.value; defaultAgentSyncTasks[configuration.id] = nil }
+        let operationID = UUID()
+        defaultAgentSyncTasks[configuration.id] = (operationID, task)
+        do { try await task.value; clearDefaultAgentSync(configuration.id, operationID: operationID) }
         catch {
-            defaultAgentSyncTasks[configuration.id] = nil
+            clearDefaultAgentSync(configuration.id, operationID: operationID)
             defaultAgentAcknowledgments.removeValue(forKey: configuration.id)
             throw error
         }

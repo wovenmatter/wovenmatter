@@ -522,7 +522,7 @@ public actor LocalACPClient {
     }
     private func prepareDefaultAgent() async throws {
         guard runtimeKind == .defaultAgent, !defaultAgentRemote else { return }
-        let payload = try await DefaultAgentCredentialCoordinator.shared.prepare("local")
+        let payload = try await ProviderAccountCoordinator.shared.prepare("local")
         guard payload.revision != defaultAgentCredentialRevision else { return }
         let parameters = try JSONDecoder().decode(ACPJSONValue.self, from: payload.data())
         let result = try await request(method: "woven/configure", params: parameters)
@@ -1586,7 +1586,7 @@ public actor LocalACPClient {
     private func handleNotification(_ envelope: ACPEnvelope) async throws {
         if envelope.method == "woven/credentials", runtimeKind == .defaultAgent {
             do {
-                let payload = try await DefaultAgentCredentialCoordinator.shared.prepare(defaultAgentScope)
+                let payload = try await ProviderAccountCoordinator.shared.prepare(defaultAgentScope)
                 try write(ACPEnvelope(id: envelope.id, result: JSONDecoder().decode(ACPJSONValue.self, from: payload.data())))
             } catch {
                 try write(ACPEnvelope(id: envelope.id, error: .init(code: -32000, message: "Default Agent credentials are unavailable.")))
