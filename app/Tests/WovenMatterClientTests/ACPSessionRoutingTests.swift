@@ -5,6 +5,53 @@ import WovenMatterCore
 
 @Suite(.timeLimit(.minutes(1)))
 struct ACPSessionRoutingTests {
+    @Test @MainActor func composerReceivesDistinctBillingModelsThinkingAndPermissions() async throws {
+        let models = ["claude-subscription/sonnet", "anthropic/sonnet", "openai-codex/fixture"]
+        let fixture = try SessionRoutingFixture(bootstrapFrames: [
+            update("config_option_update", fields: ["configOptions": [
+                ["id": "model", "category": "model", "currentValue": models[0],
+                 "options": models.map { ["value": $0, "name": $0] }],
+                ["id": "thinking", "category": "thought_level", "currentValue": "high",
+                 "options": [["value": "off"], ["value": "high"]]],
+                ["id": "permission_mode", "currentValue": "normal",
+                 "options": [["value": "normal", "name": "Ask Before Changes"], ["value": "full", "name": "Full Access"]]],
+            ]]),
+        ])
+        defer { fixture.remove() }
+        let client = try fixture.client(runtimeKind: .defaultAgent, accountCoordinator: fixtureAccounts())
+        defer { Task { await client.shutdown() } }
+        let configuration = try await client.initializeSession(
+            workingDirectory: fixture.root, existingSessionID: nil, title: nil
+        ).configuration
+        #expect(configuration.model == "claude-subscription/sonnet")
+        #expect(configuration.modelOptions == models)
+        #expect(configuration.thinking == "high" && configuration.thinkingOptions == ["off", "high"])
+        #expect(configuration.permission == "normal" && configuration.permissionOptions == ["normal", "full"])
+        #expect(configuration.permissionOptionMetadata["full"]?.name == "Full Access")
+        await client.shutdown()
+    }
+    @Test @MainActor func builtInRemoteApprovalCancellationBypassesTheNotificationBarrier() async throws {
+        let fixture = try SessionRoutingFixture(promptFrames: [
+            permission(id: "remote-approval"),
+            ["jsonrpc": "2.0", "method": "woven/permission_cancel", "params": ["requestID": "remote-approval"]],
+            update("agent_message_chunk", text: "settled elsewhere"),
+        ], permissionResponseCount: 1)
+        defer { fixture.remove() }
+        let client = try fixture.client(runtimeKind: .defaultAgent, accountCoordinator: fixtureAccounts())
+        defer { Task { await client.shutdown() } }
+        _ = try await client.initializeSession(workingDirectory: fixture.root, existingSessionID: nil, title: nil)
+        let events = RoutingEvents()
+        let result = try await client.prompt("fixture", onEvent: { await events.record($0) }, onPermission: { _ in
+            // A cancelled handler must not hold later updates behind its barrier.
+            try? await Task.sleep(for: .seconds(30))
+            return nil
+        })
+        #expect(result == .endTurn)
+        #expect(await events.values() == [.assistantChunk("settled elsewhere")])
+        #expect(try fixture.permissionResponses().first?["result"] != nil)
+        await client.shutdown()
+    }
+
     @Test func childSessionsDoNotInterruptParentTextReasoningToolsOrConfiguration() async throws {
         let frames: [[String: Any]] = [
             update("agent_thought_chunk", text: "parent thought one"),
@@ -282,6 +329,7 @@ private struct SessionRoutingFixture {
           request=$(printf '%s' "$request" | sed 's#\\\\/#/#g')
           id=$(printf '%s' "$request" | sed -n 's/.*"id":\\([0-9][0-9]*\\).*/\\1/p')
           case "$request" in
+            *'"method":"woven/configure"'*) respond "$id" '{}' ;;
             *'"method":"initialize"'*) respond "$id" '\(initialize)' ;;
             *'"method":"session/load"'*)
               \(missingLoadedSession ? "printf '{\"jsonrpc\":\"2.0\",\"id\":%s,\"error\":{\"code\":-32002,\"message\":\"Missing session\"}}\\n' \"$id\"" : try emit(bootstrapFrames) + "\nrespond \"$id\" '{\"sessionId\":\"parent\"}'") ;;
@@ -303,8 +351,8 @@ private struct SessionRoutingFixture {
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
     }
 
-    func client() throws -> LocalACPClient {
-        try LocalACPClient.start(launch: .init(runtimeKind: .grokBuild, executableURL: executable, arguments: []), workingDirectory: root)
+    func client(runtimeKind: AgentRuntimeKind = .grokBuild, accountCoordinator: ProviderAccountCoordinator? = nil) throws -> LocalACPClient {
+        try LocalACPClient.start(launch: .init(runtimeKind: runtimeKind, executableURL: executable, arguments: []), workingDirectory: root, accountCoordinator: accountCoordinator)
     }
 
     func permissionResponses() throws -> [[String: Any]] {
@@ -315,4 +363,10 @@ private struct SessionRoutingFixture {
     }
 
     func remove() { try? FileManager.default.removeItem(at: root) }
+}
+
+@MainActor private func fixtureAccounts() -> ProviderAccountCoordinator {
+    ProviderAccountCoordinator(refresh: { scopes in
+        Dictionary(uniqueKeysWithValues: scopes.map { ($0, DefaultAgentPayload(config: .init(), credentials: [:], workspace: $0)) })
+    }, version: { 0 })
 }

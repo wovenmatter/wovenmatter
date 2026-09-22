@@ -16,7 +16,7 @@ test('active sessions survive credential and settings updates and use the latest
   const directory = await temporary(t), key = randomBytes(32).toString('base64');
   const service = createDefaultAgentService({ cwd: directory, directory });
   assert.equal((await service.status()).locked, true);
-  const base = { workspace: 'fixture', unlockKey: key, config: {} };
+  const base = { workspace: 'fixture', unlockKey: key, config: { providers: ['openai', 'xai'] } };
   await service.configure({ ...base, revision: 'first', credentials: { exa: { type: 'api_key', key: 'old-search-secret' } } });
   const engine = await service.engine(), record = await engine.create();
   record.busy = true;

@@ -52,7 +52,7 @@ public enum GrokSpeechEvent: Equatable, Sendable {
 }
 
 /// A native, subscription-only STT socket. No environment keys, model fallback,
-/// audio files, or Default Agent/remote process is involved.
+/// audio files, or Built-in/remote process is involved.
 public protocol GrokSpeechTransport: Sendable {
     func connect(credential: DefaultAgentCredential) async throws
     func send(_ audio: Data) async throws

@@ -1,16 +1,18 @@
 # Connections and dictation
 
 Open **Settings → Connections**, immediately below General, to manage shared
-accounts. Account/status links in Usage, Default Agent, and General lead here.
+accounts. Account/status links in Usage, Built-in, and General lead here.
 
 Connect ChatGPT or Grok subscriptions, or add OpenAI, OpenRouter, and OpenCode Go
-API keys. OpenAI's selector lets you configure both the ChatGPT subscription and
-the separately billed API key. Add Exa for Default Agent web search. Keys are
+API keys. Claude offers separate subscription and API-key connections. Its
+subscription uses the bundled Claude runtime’s own sign-in; each remote workspace
+has an independent, memory-only Claude login. See [Claude setup](default-agent.md). OpenAI's selector lets you configure both the ChatGPT subscription and
+the separately billed API key. Add Exa for Built-in web search. Keys are
 stored in macOS Keychain. Shared remote credentials use the encrypted storage
-described in [Default Agent](default-agent.md#credential-storage).
+described in [Built-in](default-agent.md#credential-storage).
 
 The shared account selection applies across the app. Workspace overrides apply
-to Default Agent; app-wide Usage and Dictation use the shared accounts. External
+to Built-in; app-wide Usage and Dictation use the shared accounts. External
 harnesses still own their separate sign-ins. Disabling a feature keeps its shared
 connection. Disconnecting that connection affects the features using it.
 
@@ -46,7 +48,7 @@ At the bottom of Connections, enter a **Server URL** and **API key**, then click
 No advanced settings are needed. Add up to 12 servers.
 
 Connect discovers models and verifies the Responses endpoint with a small test
-request. Available models then appear in Default Agent's model preferences and
+request. Available models then appear in Built-in's model preferences and
 conversation selector. Reconnect after loading different models to refresh the
 catalog. A failed check leaves an existing saved connection intact. Editing a
 server address requires a new connection, keeping existing sessions and keys

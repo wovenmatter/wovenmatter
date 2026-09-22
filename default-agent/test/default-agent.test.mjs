@@ -48,10 +48,10 @@ test('configuration preserves provider identities, model order, and explicit fal
 });
 test('real SDK loads the complete selected tool set and resumes an empty draft without a Pi install', async t => {
   const directory = await temporary(t);
-  const engine = await new DefaultAgentEngine({ cwd: directory, directory }).initialize();
+  const engine = await new DefaultAgentEngine({ cwd: directory, directory, config: { providers: ['openai'] } }).initialize();
   const record = await engine.create();
   assert.deepEqual(new Set(record.session.getActiveToolNames()), new Set(['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls', 'web_search', 'web_read']));
-  const second = await new DefaultAgentEngine({ cwd: directory, directory }).initialize();
+  const second = await new DefaultAgentEngine({ cwd: directory, directory, config: { providers: ['openai'] } }).initialize();
   const resumed = await second.create(record.session.sessionId);
   assert.equal(resumed.session.sessionId, record.session.sessionId);
   await assert.rejects(engine.prompt(record, 'No provider should be consumed', () => {}), /No configured connection/);
@@ -60,7 +60,7 @@ function fixtureEngine({ errors = [], connected = ['openai-codex', 'openrouter']
   const engine = new DefaultAgentEngine({ cwd: '/tmp', directory: '/tmp', config: { defaultModel: 'openai-codex/primary', fallbackModels: ['openrouter/fallback'] } });
   const selected = [];
   let listener;
-  const record = { selected: 'openai-codex/primary', busy: false, manager: { getLeafId: () => 'before', branch: () => {} }, session: { messages: [], agent: { state: { messages: [] } }, subscribe(fn) { listener = fn; return () => {}; }, async setModel(m) { selected.push(m.provider); }, async prompt() { if (visible) listener({ type: 'tool_execution_start', toolCallId: 't', toolName: 'bash', args: {} }); if (errors.length) throw new Error(errors.shift()); } } };
+  const record = { selected: 'openai-codex/primary', busy: false, manager: { getLeafId: () => 'before', branch: () => {}, appendCustomEntry: () => {} }, session: { messages: [], agent: { state: { messages: [] } }, subscribe(fn) { listener = fn; return () => {}; }, async setModel(m) { selected.push(m.provider); }, async prompt() { if (visible) listener({ type: 'tool_execution_start', toolCallId: 't', toolName: 'bash', args: {} }); if (errors.length) throw new Error(errors.shift()); } } };
   engine.resolveModel = ref => { const [provider, id] = ref.split('/'); return { provider, id, name: id }; };
   engine.credentials = { read: async p => connected.includes(p) ? { type: 'api_key', key: 'fixture' } : undefined };
   engine.runtime = { getAuth: async () => ({}), getModels: () => [] };

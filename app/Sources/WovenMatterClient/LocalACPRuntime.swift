@@ -80,7 +80,7 @@ public struct LocalACPRuntimeReadinessProbe: Equatable, Sendable {
 public enum LocalACPRuntimeCatalog {
     public static let definitions: [LocalACPRuntimeDefinition] = {
         guard let catalog = try? HarnessCatalog.loadBundled() else { return [] }
-        return [LocalACPRuntimeDefinition(runtimeKind: .defaultAgent, displayName: "Default Agent", commandName: "woven-default-agent", arguments: [], underlyingCLIName: nil, cliInstallerSource: nil, cliInstallerInterpreter: nil, adapterPackage: nil, adapterDescription: "Built into Woven Matter.")] + catalog.harnesses.map { harness in
+        return [LocalACPRuntimeDefinition(runtimeKind: .defaultAgent, displayName: "Built-in", commandName: "woven-default-agent", arguments: [], underlyingCLIName: nil, cliInstallerSource: nil, cliInstallerInterpreter: nil, adapterPackage: nil, adapterDescription: "Built into Woven Matter.")] + catalog.harnesses.map { harness in
             LocalACPRuntimeDefinition(
                 runtimeKind: harness.id,
                 displayName: harness.displayName,

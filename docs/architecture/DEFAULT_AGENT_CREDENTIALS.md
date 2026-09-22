@@ -1,8 +1,7 @@
 # Shared provider credential ownership
 
-The Mac `ProviderAccountCoordinator` owns shared OAuth renewal for Default
-Agent, Usage, and Dictation. Connections is the shared account-management page.
-App-wide consumers use global accounts; Default Agent can use workspace
+The Mac `ProviderAccountCoordinator` owns shared OAuth renewal for Built-in, Usage, and Dictation. Connections is the shared account-management page.
+App-wide consumers use global accounts; Built-in can use workspace
 overrides. Subscription credentials and separately billed API keys stay distinct.
 Local SDK conversation helpers
 receive access-only credentials over private JSON-RPC pipes; refresh helpers
@@ -28,8 +27,9 @@ authentication tag, and workspace/version associated data. Writes are private,
 atomic and serialized across helper processes. Failed decryption never falls
 back to plaintext. Independent sign-ins take precedence over shared credentials.
 Configuration, operation journals and wire histories do not contain credential
-payloads. API keys and OAuth tokens are not launch arguments or tool environment
-variables. Default Agent credential IPC is excluded from wire recording.
+payloads. App-managed OAuth tokens are not launch arguments or tool environment
+variables. Claude API mode supplies its selected API key to the native runtime
+through its process environment, never command arguments. Built-in credential IPC is excluded from wire recording.
 
 A credential update changes the store without replacing SDK sessions. The next
 model/search request reads current credentials. A remote run whose borrowed token
@@ -44,8 +44,7 @@ an unlock snapshot from the Mac before retrying admission. Durable operation IDs
 prevent replay of an already accepted run. Workspace request identities fence
 late desktop responses when a destination or credential consent changes.
 
-Read-only status checks are separate from synchronization and login. Default
-Agent reports credential presence/expiry, not provider validation. External
+Read-only status checks are separate from synchronization and login. Built-in reports credential presence/expiry, not provider validation. External
 harness status commands have deadlines and bounded captured output; raw output
 is never returned to the UI. Ambiguous failures remain unknown. No test consumes
 provider inference, OAuth, or search services.
@@ -70,3 +69,18 @@ workspace for speech capture. An early HTTP 401 can trigger a single coordinated
 renewal. Account labels are display metadata, not proof of entitlement. Dictation
 being disabled does not remove the shared sign-in. Local model server keys use
 the same Keychain and encrypted remote vault, with a separate identity per server.
+
+## Native Claude subscription exception
+
+Claude subscription authentication belongs exclusively to Anthropic’s unmodified
+runtime. Connections exposes native sign-in and status, with no token import,
+copy, refresh, or borrowed-access route. The app’s OAuth coordinator does not own
+this account. API-key mode uses the existing app-managed secret store and stays
+separate from subscription mode.
+
+The Mac native credential directory is read-only, preventing plaintext fallback
+when native Keychain access fails. A separate config directory holds non-secret
+runtime settings. Remote native state uses private tmpfs and is not included in
+the persistent workspace volume. Container restarts require a new native sign-in;
+Mac reconnection cannot restore Claude subscription credentials. Account extra
+usage remains controlled by Anthropic’s account settings.

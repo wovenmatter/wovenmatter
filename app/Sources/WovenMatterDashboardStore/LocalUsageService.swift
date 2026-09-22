@@ -94,7 +94,8 @@ struct UsageLimitsRequest: Sendable {
   let codexWorkspaceCount: Int
   let now: Date
 
-  func collect(sharedCredentials: [String: DefaultAgentCredential]? = nil) async -> [UsageLimitAccount] {
+  func collect(sharedCredentials: [String: DefaultAgentCredential]? = nil,
+               claudeStatus: BuiltInClaudeSignIn.Status? = nil) async -> [UsageLimitAccount] {
     await ProviderLimitCollector.collect(
       homeDirectory: homeDirectory,
       openRouterAPIKey: openRouterAPIKey,
@@ -104,6 +105,7 @@ struct UsageLimitsRequest: Sendable {
       codexWorkspaceSource: codexWorkspaceSource,
       codexWorkspaceCount: codexWorkspaceCount,
       sharedCredentials: sharedCredentials,
+      claudeStatus: claudeStatus,
       now: now
     )
   }
@@ -162,7 +164,9 @@ public actor LocalUsageService {
     usesSharedConnections = true
     limitCollector = { request in
       let credentials = request.allowCredentialAccess ? ((try? await ProviderAccountCoordinator.shared.appCredentials()) ?? [:]) : [:]
-      return await request.collect(sharedCredentials: credentials)
+      let claudeStatus = request.allowCredentialAccess && request.enabledProviders.contains(.claude)
+        ? try? await BuiltInClaudeSignIn.status() : nil
+      return await request.collect(sharedCredentials: credentials, claudeStatus: claudeStatus)
     }
     openRouterActivityFetcher = { try await OpenRouterActivityClient.fetch(apiKey: $0) }
     databaseURL = usageDatabaseURL ?? homeDirectory.appending(

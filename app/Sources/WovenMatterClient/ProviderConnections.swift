@@ -4,6 +4,8 @@ public enum ProviderConnectionID: String, CaseIterable, Identifiable, Sendable {
     case chatGPT = "openai-codex"
     case openAI = "openai"
     case grok = "xai"
+    case claudeSubscription = "claude-subscription"
+    case claudeAPI = "anthropic"
     case openRouter = "openrouter"
     case openCodeGo = "opencode-go"
     case exa
@@ -13,12 +15,14 @@ public enum ProviderConnectionID: String, CaseIterable, Identifiable, Sendable {
         case .chatGPT: "ChatGPT subscription"
         case .openAI: "OpenAI API key"
         case .grok: "Grok subscription"
+        case .claudeSubscription: "Claude subscription"
+        case .claudeAPI: "Claude API key"
         case .openRouter: "OpenRouter"
         case .openCodeGo: "OpenCode Go"
         case .exa: "Exa search"
         }
     }
-    public var isSubscription: Bool { self == .chatGPT || self == .grok }
+    public var isSubscription: Bool { self == .chatGPT || self == .grok || self == .claudeSubscription }
 }
 
 extension DefaultAgentCredential {
@@ -42,7 +46,7 @@ extension DefaultAgentCredential {
 
 extension ProviderAccountCoordinator {
     /// App-wide consumers always resolve global connections, independently of
-    /// Default Agent model enablement or a remote workspace's overrides.
+    /// Built-in model enablement or a remote workspace's overrides.
     public func appCredentials() async throws -> [String: DefaultAgentCredential] {
         try await prepare("global").credentials
     }

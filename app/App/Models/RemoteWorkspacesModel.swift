@@ -117,7 +117,7 @@ final class RemoteWorkspacesModel {
         guard isCredentialAccessEnabled else { return }
         for workspace in workspaces where tunnels[workspace.id] != nil {
             do { try await ensureDefaultAgent(workspace) }
-            catch { signInErrors[workspace.id] = "Default Agent credentials could not synchronize. Reconnect this workspace to retry." }
+            catch { signInErrors[workspace.id] = "Built-in credentials could not synchronize. Reconnect this workspace to retry." }
         }
     }
     func refreshSignInStatus(_ configuration: RemoteWorkspaceConfiguration) async {
@@ -1160,7 +1160,7 @@ final class RemoteWorkspacesModel {
             let receipt = try await client.configureDefaultAgent(payload.data())
             try requireCurrent(identity)
             guard receipt.saved, receipt.revision == payload.revision else {
-                throw DefaultAgentError.message("The workspace did not acknowledge the current Default Agent credentials.")
+                throw DefaultAgentError.message("The workspace did not acknowledge the current Built-in credentials.")
             }
             defaultAgentAcknowledgments[configuration.id] = .init(revision: receipt.revision, identity: identity)
         }

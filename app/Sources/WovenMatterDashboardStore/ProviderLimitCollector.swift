@@ -82,6 +82,7 @@ enum ProviderLimitCollector {
     codexWorkspaceSource: CodexWorkspaceSource? = nil,
     codexWorkspaceCount: Int = 0,
     sharedCredentials: [String: DefaultAgentCredential]? = nil,
+    claudeStatus: BuiltInClaudeSignIn.Status? = nil,
     now: Date
   ) async -> [UsageLimitAccount] {
     let enabled = await withTaskGroup(
@@ -91,6 +92,14 @@ enum ProviderLimitCollector {
       for provider in ProviderKind.supportedAccounts
         where enabledProviders.contains(provider) {
         group.addTask {
+          if sharedCredentials != nil, provider == .claude {
+            return UsageLimitAccount(provider: .claude, accountLabel: claudeStatus?.account ?? "Claude subscription",
+              status: claudeStatus?.connected == true ? .signedIn : (claudeStatus?.state == "sign_in_required" ? .needsCredential : .unavailable),
+              source: "Built-in Claude runtime", detail: claudeStatus?.connected == true
+                ? "Claude manages this sign-in. Check subscription limits and extra usage in your Claude account. API keys are billed separately."
+                : "Manage Claude subscription sign-in and API keys in Settings → Connections.", observedAt: now,
+              dashboardURL: ProviderDashboardURL.claude)
+          }
           if let sharedCredentials, [.codex, .grok, .openCodeGo, .openRouter].contains(provider) {
             return await sharedAccount(provider, credentials: sharedCredentials, now: now)
           }

@@ -31,7 +31,7 @@ private final class CredentialRevisionFixture: @unchecked Sendable {
     func advance() { lock.withLock { value += 1 } }
 }
 
-@Suite("Default Agent credential coordination")
+@Suite("Built-in credential coordination")
 struct DefaultAgentCredentialTests {
     @Test func controlResponsesAreBoundedDuringRead() throws {
         let pipe = Pipe()

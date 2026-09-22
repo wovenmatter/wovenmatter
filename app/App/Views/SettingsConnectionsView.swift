@@ -8,6 +8,7 @@ struct SettingsConnectionsView: View {
     var reservesRailControlSpace = false
     let onBack: () -> Void
     @State private var openAIMethod = "openai-codex"
+    @State private var claudeMethod = "claude-subscription"
     @State private var keyDrafts: [String: String] = [:]
     @State private var answer = ""
     @State private var confirmingCredentialReset = false
@@ -17,7 +18,7 @@ struct SettingsConnectionsView: View {
         model.remoteWorkspaces.workspaces.first { $0.id.uuidString.lowercased() == agent.scope }
     }
     var body: some View {
-        SettingsPage(title: "Connections", detail: "Shared accounts for Default Agent, Usage, and Dictation.", reservesRailControlSpace: reservesRailControlSpace, onBack: onBack) {
+        SettingsPage(title: "Connections", detail: "Shared accounts for Built-in, Usage, and Dictation.", reservesRailControlSpace: reservesRailControlSpace, onBack: onBack) {
             Picker("Connections for", selection: Binding(get: { agent.scope }, set: {
                 keyDrafts.removeAll()
                 answer = ""
@@ -34,12 +35,12 @@ struct SettingsConnectionsView: View {
                     agent.setInherits($0)
                     agent.refresh(remote: remote)
                 }))
-                Text("Dictation and app-wide Usage use the shared accounts. Workspace overrides apply to Default Agent.").font(.callout).foregroundStyle(.secondary)
+                Text("Dictation and app-wide Usage use the shared accounts. Workspace overrides apply to Built-in.").font(.callout).foregroundStyle(.secondary)
             }
             connectionsSection
             searchSection
             SettingsCard(title: "Other usage accounts", detail: "These accounts remain owned by their independently installed harnesses.") {
-                ForEach([ProviderKind.claude, .cursor]) { provider in
+                ForEach([ProviderKind.cursor]) { provider in
                     HStack {
                         Text(provider.displayName)
                         Spacer()
@@ -66,10 +67,10 @@ struct SettingsConnectionsView: View {
         }
         .task { agent.changeScope(initialScope); agent.refresh(remote: remote) }
         .onDisappear { agent.cancel() }
-        .confirmationDialog("Reset Default Agent credentials in this workspace?", isPresented: $confirmingCredentialReset) {
+        .confirmationDialog("Reset Built-in credentials in this workspace?", isPresented: $confirmingCredentialReset) {
             Button("Reset credentials", role: .destructive) { agent.refresh(remote: remote, action: "reset") }
         } message: {
-            Text("Independent workspace sign-ins will be removed. Shared keys and sign-ins from this Mac will be restored. Files and conversations are kept.")
+            Text("Encrypted workspace credentials will be reset and shared connections restored. Claude’s separate native sign-in, files, and conversations are kept.")
         }
     }
     private var connectionsSection: some View {
@@ -81,11 +82,44 @@ struct SettingsConnectionsView: View {
             }.pickerStyle(.segmented).frame(maxWidth: 420)
             Text("Both OpenAI connections can be enabled at the same time.").font(.callout).foregroundStyle(.secondary)
             providerRow(openAIMethod, title: "OpenAI")
+            claudeSection
             providerRow("openrouter", title: "OpenRouter")
             providerRow("opencode-go", title: "OpenCode Go")
             providerRow("xai", title: "Grok subscription")
             signInSection
         }
+    }
+    private var claudeSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Picker("Claude connection", selection: $claudeMethod) {
+                Text("Claude subscription").tag("claude-subscription")
+                Text("Claude API key").tag("anthropic")
+            }.pickerStyle(.segmented).frame(maxWidth: 420)
+            if claudeMethod == "anthropic" {
+                providerRow("anthropic", title: "Claude")
+                Text(
+                    "API usage is billed separately. Selecting a subscription model never uses this key automatically."
+                )
+                .font(.callout).foregroundStyle(.secondary)
+            } else {
+                HStack {
+                    Text("Claude").font(.headline)
+                    Spacer()
+                    Text(agent.connectionLabel("claude-subscription")).font(.callout).foregroundStyle(.secondary)
+                    Button("Sign in with Claude") { agent.signInClaude(remote: remote) }
+                    Button("Sign out") { agent.signOut("claude-subscription", remote: remote) }
+                }.buttonStyle(SettingsQuietButtonStyle()).disabled(agent.busy)
+                Text(
+                    remote == nil
+                        ? "Sign in through Anthropic’s bundled runtime in Terminal. Claude owns this Mac’s sign-in and refresh; API keys remain separate."
+                        : "Sign in through Anthropic’s runtime in this workspace. Subscription credentials stay in memory and require sign-in again after a container restart."
+                )
+                .font(.callout).foregroundStyle(.secondary)
+                if let detail = agent.providers.first(where: { $0.id == "claude-subscription" })?.detail {
+                    Text(detail).font(.caption).foregroundStyle(.secondary)
+                }
+            }
+        }.padding(.vertical, 4)
     }
     @ViewBuilder private func providerRow(_ id: String, title: String) -> some View {
         VStack(alignment: .leading, spacing: 8) {

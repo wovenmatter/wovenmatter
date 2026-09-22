@@ -25,9 +25,9 @@ allowing you the freedom to work across the harnesses and models of your choice.
 [Getting started](docs/guide/getting-started.md) · [Documentation](docs/README.md) ·
 [Website](https://wovenmatter.com)
 
-Default Agent is built in for local and remote workspaces. Connect your providers,
+The **Built-in** agent is ready in local and remote workspaces. Connect your providers,
 choose models and fallbacks, and add an Exa search key in Settings.
-See [Default Agent](docs/guide/default-agent.md).
+See [Built-in](docs/guide/default-agent.md).
 
 ## Your agents, working in the same place
 

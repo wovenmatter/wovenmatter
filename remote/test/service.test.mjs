@@ -821,7 +821,7 @@ test('database routes require authentication and ignore client-supplied workspac
   assert.equal((await request('/v1/databases/data', 'POST', { databaseID: '../Sales', relativePath: 'data.json' })).status, 400)
 })
 
-test('Default Agent credential routes require authentication, unlock explicitly, and keep files encrypted', async context => {
+test('Built-in credential routes require authentication, unlock explicitly, and keep files encrypted', async context => {
   const root = await temporaryFixture(context, 'wovenmatter-credentials-api-');
   const home = resolve(root, 'home'); await mkdir(home);
   const service = await startService({ workspace: root, home, catalog: catalogPath, token: 'credential-test-token' });

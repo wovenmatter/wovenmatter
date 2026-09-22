@@ -182,7 +182,7 @@ struct SettingsLocalWorkspaceView: View {
                     SettingsInset {
                         HStack {
                             VStack(alignment: .leading, spacing: 4) {
-                                Text("Default Agent").font(.system(size: 13, weight: .medium))
+                                Text("Built-in").font(.system(size: 13, weight: .medium))
                                 Text("Built into Woven Matter.").font(.callout).foregroundStyle(.secondary)
                             }
                             Spacer()

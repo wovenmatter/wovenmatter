@@ -35,7 +35,7 @@ actor UsageRunRecorder {
       throw UsageStoreError.step("Woven usage sequence is exhausted")
     }
     sequence = next.partialValue
-    let route = Self.route(for: observation.runtimeKind)
+    let route = Self.route(for: observation.runtimeKind, model: observation.model)
     let event = UsageIngestionEvent(
       id: "\(observation.sessionID):\(observation.runID)",
       sequence: sequence,
@@ -79,9 +79,21 @@ actor UsageRunRecorder {
   }
 
   private static func route(
-    for runtime: AgentRuntimeKind
+    for runtime: AgentRuntimeKind, model: String?
   ) -> (provider: ProviderKind, billingProvider: String, billingRoute: String) {
-    switch runtime {
+    if runtime == .defaultAgent {
+      switch model?.split(separator: "/").first {
+      case "claude-subscription": return (.claude, "Anthropic", "Claude subscription")
+      case "anthropic": return (.claude, "Anthropic", "Claude API key")
+      case "openai-codex": return (.codex, "OpenAI", "ChatGPT subscription")
+      case "openai": return (.codex, "OpenAI", "OpenAI API key")
+      case "xai": return (.grok, "xAI", "Grok subscription")
+      case "openrouter": return (.openRouter, "OpenRouter", "API key")
+      case "opencode-go": return (.openCodeGo, "OpenCode", "OpenCode Go API key")
+      default: break
+      }
+    }
+    return switch runtime {
     case .codex: (.codex, "OpenAI", "Codex subscription")
     case .claudeCode: (.claude, "Anthropic", "Claude account")
     case .grokBuild: (.grok, "xAI", "Grok account")

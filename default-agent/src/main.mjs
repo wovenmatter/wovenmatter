@@ -8,11 +8,18 @@ import { CredentialVault, sharedCredentials } from './vault.mjs';
 import { signInStatuses } from './sign-in-status.mjs';
 import { probeServer } from './local-servers.mjs';
 import { grokAccountProfile } from './account-profile.mjs';
+import { nativeClaudeLogin } from './claude-runtime.mjs';
+import { PermissionRequests, RemotePermissionRequests } from './permissions.mjs';
 
 const send = (value, flushed) => process.stdout.write(JSON.stringify(value) + '\n', flushed);
 const remote = process.argv.includes('--remote');
 const control = process.argv.includes('--control');
 const directory = process.env.WOVEN_DEFAULT_AGENT_DIRECTORY ?? join(homedir(), '.wovenmatter', 'default-agent');
+if (process.argv.includes('--claude-login')) process.exit(await nativeClaudeLogin(directory));
+const permissions = new PermissionRequests();
+const requestPermission = (params, signal) => permissions.request(params, signal,
+  (id, value) => send({ jsonrpc: '2.0', id, method: 'session/request_permission', params: value }),
+  id => send({ jsonrpc: '2.0', method: 'woven/permission_cancel', params: { requestID: id } }));
 let payload = {};
 let instance;
 let vault;
@@ -20,7 +27,7 @@ const pendingCredentials = new Map();
 async function requestCredentials() {
   const id = 'credentials-' + crypto.randomUUID();
   return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => { pendingCredentials.delete(id); reject(new Error('Default Agent credential connection timed out.')); }, 30000);
+    const timeout = setTimeout(() => { pendingCredentials.delete(id); reject(new Error('Built-in credential connection timed out.')); }, 30000);
     pendingCredentials.set(id, { resolve: value => { clearTimeout(timeout); resolve(value); }, reject });
     send({ jsonrpc: '2.0', id, method: 'woven/credentials', params: {} });
   });
@@ -35,10 +42,11 @@ async function remoteRequest(path, body, canUnlock = true) {
     await remoteRequest('configuration', await requestCredentials(), false);
     return remoteRequest(path, body, false);
   }
-  if (!response.ok) throw new Error(`Default Agent workspace service failed (HTTP ${response.status}).`);
+  if (!response.ok) throw new Error(`Built-in workspace service failed (HTTP ${response.status}).`);
   return response.json();
 }
 async function invoke(message) {
+  if (message.method === 'session/cancel') permissions.cancelSession(message.params?.sessionId);
   const update = value => send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: message.params?.sessionId, update: value } });
   if (control) {
     if (message.action === 'probe-server') {
@@ -52,11 +60,16 @@ async function invoke(message) {
       await vault.unlock(payload.workspace, payload.unlockKey);
     }
     const e = await engine();
+    if (message.action === 'claude-status') return e.claude.status();
     if (message.action === 'reset') {
       await vault.modify(async stored => ({ ...stored, shared: sharedCredentials(payload.credentials) }));
       return { reset: true };
     }
-    if (message.action === 'logout') { await e.credentials.delete(message.provider); return { disconnected: true }; }
+    if (message.action === 'logout') {
+      if (message.provider === 'claude-subscription') await e.claude.signOut();
+      else await e.credentials.delete(message.provider);
+      return { disconnected: true };
+    }
     if (message.action === 'login') {
       const controller = new AbortController();
       process.stdin.on('end', () => controller.abort());
@@ -71,7 +84,7 @@ async function invoke(message) {
       }
       return { ...(await e.status()), connected: Boolean(credential), ...(!vault ? { credential, provider: message.provider } : {}) };
     }
-    if (message.action === 'sign-in-status') return { statuses: [...(await e.status()).providers.map(p => ({ ...p, name: 'Default Agent · ' + p.name })), ...await signInStatuses(message.harnesses ?? [])] };
+    if (message.action === 'sign-in-status') return { statuses: [...(await e.status()).providers.map(p => ({ ...p, name: 'Built-in · ' + p.name })), ...await signInStatuses(message.harnesses ?? [])] };
     if (message.action === 'refresh') {
       const errors = {};
       for (const provider of ['openai-codex', 'xai']) {
@@ -92,27 +105,39 @@ async function invoke(message) {
       const record = [...current.sessions.values()][0];
       return record ? current.configuration(record) : {};
     }
-    return (await engine()).handle(message.method, message.params, update);
+    return (await engine()).handle(message.method, message.params, update, requestPermission);
   }
   const response = await remoteRequest('rpc', { ...message, operationID: message.method === 'session/prompt' ? (message.params?._meta?.wovenRunID ?? crypto.randomUUID()) : undefined });
   if (!response.operationID) return response.result;
   let cursor = 0;
-  while (true) {
-    const page = await remoteRequest(`runs/${response.operationID}?after=${cursor}`);
-    for (const event of page.updates) update(event);
-    cursor = page.cursor;
-    if (page.done) { if (page.error) throw new DefaultAgentError(page.error); return page.result; }
-    await new Promise(resolve => setTimeout(resolve, 150));
-  }
+  const remotePermissions = new RemotePermissionRequests(requestPermission, (id, allowed) =>
+    remoteRequest('rpc', { method: 'woven/permission', params: { id, result: { outcome: { outcome: 'selected', optionId: allowed ? 'allow' : 'deny' } } } }));
+  try {
+    while (true) {
+      const page = await remoteRequest(`runs/${response.operationID}?after=${cursor}`);
+      remotePermissions.update(page);
+      for (const event of page.updates) {
+        if (event.sessionUpdate !== 'woven_permission') update(event);
+      }
+      cursor = page.cursor;
+      if (page.done) {
+        if (response.loadingSessionID) return (await remoteRequest('rpc', { method: 'session/load', params: { sessionId: response.loadingSessionID } })).result;
+        if (page.error) throw new DefaultAgentError(page.error);
+        return page.result;
+      }
+      await new Promise(resolve => setTimeout(resolve, 150));
+    }
+  } finally { remotePermissions.close(); }
 }
 const pendingPrompts = new Map();
 const lines = createInterface({ input: process.stdin });
 lines.on('line', line => {
   let message;
   try { message = JSON.parse(line); } catch { return; }
+  if (permissions.pending.has(message.id)) { permissions.resolve(message.id, message.result); return; }
   if (pendingCredentials.has(message.id)) {
     const pending = pendingCredentials.get(message.id); pendingCredentials.delete(message.id);
-    if (message.error) pending.reject(new Error('Default Agent credentials are unavailable.'));
+    if (message.error) pending.reject(new Error('Built-in credentials are unavailable.'));
     else pending.resolve(message.result);
     return;
   }

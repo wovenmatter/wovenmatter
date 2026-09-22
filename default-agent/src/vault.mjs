@@ -19,7 +19,7 @@ export class CredentialVault {
     candidate.key = key; candidate.workspace = workspace;
     try {
       await candidate.modify(async value => {
-        // Migrate only Default Agent-owned stores, never external harness auth.
+        // Migrate only Built-in-owned stores, never external harness auth.
         const config = await readJSON(join(this.directory, 'configuration.json'));
         const owned = await readJSON(join(this.directory, 'oauth.json'));
         return { shared: sharedCredentials(config.credentials), owned, ...value };
@@ -32,7 +32,7 @@ export class CredentialVault {
     } catch (e) { key.fill(0); throw e; }
   }
   async read() {
-    if (!this.key) throw Object.assign(new Error('Default Agent credentials are locked. Reconnect Woven Matter to unlock this workspace.'), { statusCode: 423 });
+    if (!this.key) throw Object.assign(new Error('Built-in credentials are locked. Reconnect Woven Matter to unlock this workspace.'), { statusCode: 423 });
     const stored = await readJSON(this.path, null);
     if (!stored) return {};
     try {
@@ -43,7 +43,7 @@ export class CredentialVault {
       decipher.setAAD(Buffer.from('wovenmatter/default-agent/v1/' + this.workspace));
       decipher.setAuthTag(tag);
       return JSON.parse(Buffer.concat([decipher.update(Buffer.from(stored.data, 'base64')), decipher.final()]).toString('utf8'));
-    } catch { throw new Error('Default Agent credential store could not be decrypted. Check the workspace key or reset its credentials.'); }
+    } catch { throw new Error('Built-in credential store could not be decrypted. Check the workspace key or reset its credentials.'); }
   }
   async modify(fn) {
     await mkdir(this.directory, { recursive: true, mode: 0o700 });

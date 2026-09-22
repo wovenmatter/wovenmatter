@@ -20,7 +20,7 @@ struct SettingsDefaultAgentView: View {
         return modelSearch.isEmpty ? all : all.filter { $0.name.localizedCaseInsensitiveContains(modelSearch) || $0.providerName.localizedCaseInsensitiveContains(modelSearch) }
     }
     var body: some View {
-        SettingsPage(title: "Default Agent", detail: "A built-in agent for every workspace.", reservesRailControlSpace: reservesRailControlSpace, onBack: onBack) {
+        SettingsPage(title: "Built-in Agent", detail: "A built-in agent for every workspace.", reservesRailControlSpace: reservesRailControlSpace, onBack: onBack) {
             scopeSection
             connectionsSection
             searchSection
@@ -145,7 +145,7 @@ struct SettingsSignInStatusCard: View {
     var scope = "global"
     let refresh: () -> Void
     var body: some View {
-        SettingsCard(title: "Sign-in status", detail: "Check Default Agent connections and independently installed harnesses.") {
+        SettingsCard(title: "Sign-in status", detail: "Check Built-in connections and independently installed harnesses.") {
             HStack {
                 Button(checking ? "Checking sign-in status…" : "Refresh sign-in status", action: refresh)
                     .buttonStyle(SettingsQuietButtonStyle()).disabled(checking)

@@ -2,6 +2,7 @@ import { CredentialVault, sharedCredentials } from './vault.mjs';
 import { join } from 'node:path';
 import { appendFile, readFile, readdir } from 'node:fs/promises';
 import { operationErrorMessage, readJSON, validateConfig, writePrivateJSON } from './config.mjs';
+import { PermissionRequests } from './permissions.mjs';
 
 // Owned by the workspace service. Requests only attach to runs; disconnecting a
 // reader never cancels the SDK session. Journals support replay after reconnect.
@@ -13,6 +14,7 @@ export function createDefaultAgentService({ cwd, directory }) {
   let generation = 0;
   const operations = new Map();
   const admissions = new Map();
+  const permissions = new PermissionRequests();
   async function engine() {
     if (!enginePromise) enginePromise = (async () => {
       await vault.read();
@@ -49,13 +51,17 @@ export function createDefaultAgentService({ cwd, directory }) {
     return pending;
   }
   async function invokeOperation(message) {
+    if (message.method === 'woven/permission') {
+      permissions.resolve(message.params?.id, message.params?.result);
+      return { result: {} };
+    }
     const e = await engine();
     if (message.method !== 'session/prompt') {
       const result = await e.handle(message.method, message.params);
       if (message.method === 'session/load') {
         // Reattach to work still running in this workspace; never submit it again.
-        for (const operation of operations.values()) {
-          if (operation.sessionID === message.params.sessionId && !operation.done) await operation.completion;
+        for (const [id, operation] of operations) {
+          if (operation.sessionID === message.params.sessionId && !operation.done) return { operationID: id, loadingSessionID: operation.sessionID };
         }
         const recoveredRuns = [];
         for (const file of (await readdir(directory)).filter(f => /^run-[0-9a-f-]+\.json$/.test(f))) {
@@ -80,7 +86,8 @@ export function createDefaultAgentService({ cwd, directory }) {
     let journalError;
     const publish = update => { operation.updates.push(update); journal = journal.then(() => appendFile(path, JSON.stringify(update) + '\n', { mode: 0o600 })).catch(error => { journalError = error; }); };
     // Intentionally not awaited by the HTTP request.
-    operation.completion = e.handle(message.method, message.params, publish).then(result => { operation.result = result; }, error => { operation.error = operationErrorMessage(error); }).finally(async () => {
+    operation.completion = e.handle(message.method, message.params, publish, (params, signal) => permissions.request(params, signal,
+      (id, value) => publish({ sessionUpdate: 'woven_permission', id, params: value }))).then(result => { operation.result = result; }, error => { operation.error = operationErrorMessage(error); }).finally(async () => {
       try {
         await journal;
         if (journalError) throw journalError;
@@ -96,7 +103,7 @@ export function createDefaultAgentService({ cwd, directory }) {
   async function poll(id, after = 0) {
     if (!/^[0-9a-f-]{36}$/i.test(id) || !Number.isSafeInteger(after) || after < 0) throw new Error('Invalid operation cursor.');
     const operation = operations.get(id);
-    if (operation) return { updates: operation.updates.slice(after, after + 200), cursor: Math.min(operation.updates.length, after + 200), done: operation.done && after + 200 >= operation.updates.length, result: operation.result, error: operation.error };
+    if (operation) return { updates: operation.updates.slice(after, after + 200), pendingPermissions: [...permissions.pending.keys()], cursor: Math.min(operation.updates.length, after + 200), done: operation.done && after + 200 >= operation.updates.length, result: operation.result, error: operation.error };
     const completion = await readJSON(join(directory, `run-${id}.json`), null);
     if (!completion) throw new Error('This run was interrupted when the workspace service stopped.');
     let updates = []; try { updates = (await readFile(join(directory, `run-${id}.jsonl`), 'utf8')).trim().split('\n').filter(Boolean).map(JSON.parse); } catch (error) { if (error.code !== 'ENOENT') throw error; }

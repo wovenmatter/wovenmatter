@@ -3,7 +3,7 @@ import Testing
 import WovenMatterCore
 @testable import WovenMatterDashboardStore
 
-@Suite("Default Agent settings and recovery")
+@Suite("Built-in settings and recovery")
 struct DefaultAgentTests {
     @Test func workspaceOverridesRemainIndependent() throws {
         var settings = DefaultAgentSettingsScope()

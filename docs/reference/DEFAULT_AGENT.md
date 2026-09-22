@@ -1,4 +1,4 @@
-# Default Agent implementation
+# Built-in implementation
 
 The native app adds `AgentRuntimeKind.defaultAgent`; the eight external harnesses
 remain in the installation catalog. Local discovery resolves only the app-bundled
@@ -17,7 +17,7 @@ dependencies, tests, and build caches are not uploaded.
 
 `DefaultAgentSettingsScope` stores non-secret preferences and per-workspace
 replacements. API keys and owned OAuth credentials use macOS Keychain.
-Connections is the central account management surface for Default Agent, Usage,
+Connections is the central account management surface for Built-in, Usage,
 and Dictation. Global OpenRouter keeps its existing shared Keychain item. Local
 helpers receive access-only credentials over private pipes.
 `ProviderAccountCoordinator` owns renewal and saves rotated credentials before
@@ -37,8 +37,7 @@ Remote SDK sessions and accepted operations are owned by
 the workspace service, not an SSH reader. The helper inside `docker exec` only
 attaches to those operations. Accepted native run UUIDs make duplicate submissions
 idempotent; journals and completion snapshots recover results after disconnect.
-Snapshots reconcile only exact run/conversation identities belonging to Default
-Agent. Service restarts do not replay accepted work.
+Snapshots reconcile only exact run/conversation identities belonging to Built-in. Service restarts do not replay accepted work.
 
 Search is an explicit Exa adapter, with a separate credential slot and bounded
 results. Model providers are independent of search providers. Adding a search
@@ -53,10 +52,10 @@ real remote-host disconnect remain separate acceptance checks.
 ## Connections, dictation, and custom servers
 
 The app-owned coordinator supplies access-only snapshots to Usage, native Grok
-STT, and the Default Agent transports. Concurrent refreshes coalesce. An STT or
+STT, and the Built-in transports. Concurrent refreshes coalesce. An STT or
 Usage HTTP 401 can request one early renewal through the same lock, with a
 compare-and-swap Keychain save so sign-out or a replacement account wins. Global
-connections serve app-wide consumers; workspace overrides serve Default Agent.
+connections serve app-wide consumers; workspace overrides serve Built-in.
 Usage does not restore persisted quotas belonging to a previous shared account
 or an independently signed-in harness.
 
@@ -93,3 +92,42 @@ Live acceptance remains required: Woven Matter's issued Grok OAuth token must
 actually be accepted by STT, and the account's usage must be checked before/after
 user-driven dictation. xAI source support alone does not establish subscription
 entitlement, included allowance, or billing attribution for a particular account.
+
+## Claude model backend
+
+The pinned Claude Agent SDK bundles Anthropic’s signed, unmodified Claude Code
+runtime. Pi remains the owner of the agent loop, tool execution, approvals,
+history, and compaction. Claude acts as a model client with native tools, skills,
+settings, and session persistence disabled for model requests. This follows the
+host-loop design of [Nous’s Hermes Claude subscription plugin](https://hermes-agent.nousresearch.com/docs/plugins/claude-subscription-directsdk).
+
+A per-request loopback relay admits one upstream generation and captures its
+stream. Native recovery attempts are rejected locally so they cannot replace the
+first response or trigger extra model calls. Native authorization headers pass
+through memory only; the relay never logs or persists them. Structured assistant
+replay relies on the pinned SDK transport and is covered by a real-runtime test
+against a synthetic local endpoint. Model metadata uses a conservative 200K
+context budget; token counts do not establish monetary charges.
+
+`claude-subscription` and `anthropic` are distinct provider identities, so their
+models, credentials, and fallback choices cannot silently exchange billing modes.
+The model selector includes native runtime model discovery. Native account status
+is metadata only; the app neither reads credential files nor receives refresh
+credentials from Claude. The Usage page uses that status rather than reading the
+native subscription token to fetch quota information.
+
+The Connections button opens the bundled runtime’s own interactive sign-in in
+Terminal, locally or through the workspace’s existing SSH/docker-exec route.
+No authentication UI is driven by automated tests. On macOS,
+`CLAUDE_SECURESTORAGE_CONFIG_DIR` targets a private, read-only directory: the pinned
+runtime uses its path to identify the native Keychain entry, and its disk fallback
+cannot write there. Runtime settings use a separate writable config directory.
+This native storage contract must be rechecked when updating the runtime pin.
+Linux uses a private, verified tmpfs directory for native state. Host swap and
+memory snapshots remain outside the file-storage guarantee.
+
+The composer’s permission setting gates Pi write/edit/shell tools; approvals use
+ACP locally and a cancellable request queue through the remote service. Remote
+reconnection can reattach to a pending approval without replaying a tool. Thinking
+levels are advertised from the selected model’s supported levels. Existing stored
+runtime IDs, session paths, and preference keys remain unchanged by the rename.

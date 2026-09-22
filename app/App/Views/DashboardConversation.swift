@@ -360,7 +360,7 @@ struct DashboardCloudConversation: View {
 
             VStack(spacing: 8) {
                 if let conversation, conversation.localRuntimeKind == .defaultAgent {
-                    Button("Default Agent settings") {
+                    Button("Built-in Agent settings") {
                         model.pendingDefaultAgentSettingsScope = conversation.remoteWorkspaceID?.uuidString.lowercased() ?? "local"
                     }.buttonStyle(DashboardQuietButtonStyle())
                 }

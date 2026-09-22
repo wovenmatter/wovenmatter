@@ -18,6 +18,7 @@ final class DefaultAgentSettingsModel {
         let connected: Bool
         let state: String?
         let detail: String?
+        let account: String?
     }
     struct Status: Decodable {
         let providers: [Provider]
@@ -33,6 +34,7 @@ final class DefaultAgentSettingsModel {
     func connectionLabel(_ id: String) -> String {
         if let provider = providers.first(where: { $0.id == id }), !provider.connected { return "Connect account" }
         if let label = accountLabels[id] { return label }
+        if let account = providers.first(where: { $0.id == id })?.account { return account }
         return providers.first { $0.id == id }?.connected == true ? "Credentials present" : "Connect account"
     }
     var busy = false
@@ -78,6 +80,7 @@ final class DefaultAgentSettingsModel {
             try DefaultAgentSupport.saveKey(
                 key.trimmingCharacters(in: .whitespacesAndNewlines), provider: provider, scope: keyScope)
             notice = key.isEmpty ? "Key removed." : "Key saved."
+            if provider == "anthropic", !key.isEmpty { enableProvider(provider) }
             error = nil
             return true
         } catch {
@@ -86,6 +89,10 @@ final class DefaultAgentSettingsModel {
         }
     }
     func signOut(_ provider: String, remote: RemoteWorkspaceConfiguration?) {
+        if provider == "claude-subscription" {
+            refresh(remote: remote, login: provider, action: "logout")
+            return
+        }
         if let remote {
             refresh(remote: remote, login: provider, action: "logout")
             return
@@ -93,6 +100,39 @@ final class DefaultAgentSettingsModel {
         do {
             try DefaultAgentSupport.saveKey("", provider: "oauth." + provider, scope: keyScope)
             refresh()
+        } catch { self.error = error.localizedDescription }
+    }
+    private func enableProvider(_ id: String) {
+        var config = configuration
+        if !config.providers.contains(id) {
+            config.providers.append(id)
+            configuration = config
+        }
+    }
+    func signInClaude(remote: RemoteWorkspaceConfiguration?) {
+        do {
+            let command = try BuiltInClaudeSignIn.command(remote: remote)
+            let directory = FileManager.default.temporaryDirectory.appending(path: "wovenmatter-native-sign-in")
+            try FileManager.default.createDirectory(
+                at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+            let script = directory.appending(path: "Claude-\(UUID().uuidString).command")
+            let contents = "#!/bin/sh\nulimit -c 0\n" + command + "\n"
+            try contents.write(to: script, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: script.path)
+            let configuration = NSWorkspace.OpenConfiguration()
+            NSWorkspace.shared.open(
+                [script], withApplicationAt: URL(fileURLWithPath: "/System/Applications/Utilities/Terminal.app"),
+                configuration: configuration
+            ) { [weak self] _, failure in
+                if failure != nil {
+                    Task { @MainActor [weak self] in
+                        self?.error = "Could not open Claude sign-in in Terminal. Try again."
+                    }
+                }
+            }
+            enableProvider("claude-subscription")
+            notice =
+                "Complete Claude’s sign-in in Terminal, then refresh connections here. Claude manages this workspace’s subscription credentials."
         } catch { self.error = error.localizedDescription }
     }
     func move(_ id: String, by offset: Int) {
@@ -231,7 +271,7 @@ final class DefaultAgentSettingsModel {
                         self.busy = false
                         if child.terminationStatus != 0 { self.finishSignIn() }
                         if child.terminationStatus != 0 && self.error == nil {
-                            self.error = "Default Agent setup did not complete. Try again."
+                            self.error = "Built-in setup did not complete. Try again."
                         }
                     }
                 }
@@ -252,7 +292,7 @@ final class DefaultAgentSettingsModel {
             var data = try JSONSerialization.data(withJSONObject: value)
             data.append(0x0a)
             try input?.write(contentsOf: data)
-        } catch { self.error = "Default Agent helper disconnected." }
+        } catch { self.error = "Built-in helper disconnected." }
     }
     private func receive(_ data: Data) {
         outputBuffer.append(data)

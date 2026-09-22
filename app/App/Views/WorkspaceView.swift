@@ -232,7 +232,7 @@ struct WorkspaceView: View {
                     }
                 }
                 .background(theme.palette.workspace)
-                .alert("Default Agent switched models", isPresented: Binding(get: { model.defaultAgentFallbackNotice != nil }, set: { if !$0 { model.defaultAgentFallbackNotice = nil } })) {
+                .alert("Built-in switched models", isPresented: Binding(get: { model.defaultAgentFallbackNotice != nil }, set: { if !$0 { model.defaultAgentFallbackNotice = nil } })) {
                     Button("OK") { model.defaultAgentFallbackNotice = nil }
                 } message: { Text(model.defaultAgentFallbackNotice ?? "") }
 

@@ -514,15 +514,20 @@ public actor LocalACPClient {
     private var initialSystemPromptInFlight = false
     private var defaultAgentRunID: String?
     private var defaultAgentRemote = false
+    private let accountCoordinator: ProviderAccountCoordinator?
     private var defaultAgentScope = "local"
     private var defaultAgentCredentialRevision: String?
     public func setDefaultAgentRunID(_ value: String) async throws {
         defaultAgentRunID = value
         try await prepareDefaultAgent()
     }
+    private func prepareCredentialPayload(_ scope: String) async throws -> DefaultAgentPayload {
+        let coordinator = if let accountCoordinator { accountCoordinator } else { await ProviderAccountCoordinator.shared }
+        return try await coordinator.prepare(scope)
+    }
     private func prepareDefaultAgent() async throws {
         guard runtimeKind == .defaultAgent, !defaultAgentRemote else { return }
-        let payload = try await ProviderAccountCoordinator.shared.prepare("local")
+        let payload = try await prepareCredentialPayload("local")
         guard payload.revision != defaultAgentCredentialRevision else { return }
         let parameters = try JSONDecoder().decode(ACPJSONValue.self, from: payload.data())
         let result = try await request(method: "woven/configure", params: parameters)
@@ -551,6 +556,8 @@ public actor LocalACPClient {
     private let requestedPermission: String?
     private var sessionCancellationRequested = false
     private var pendingPermissionRequestIDs: [ACPJSONValue] = []
+    private var builtInPermissionTasks: [String: Task<String?, Never>] = [:]
+    private var cancelledBuiltInPermissions: Set<String> = []
     private struct PendingCursorRequest {
         let id: ACPJSONValue
         let method: String
@@ -586,8 +593,10 @@ public actor LocalACPClient {
         runtimeKind: AgentRuntimeKind,
         workingDirectory: URL,
         requestedPermission: String?,
-        historyRecorder: WorkspaceWireRecorder? = nil
+        historyRecorder: WorkspaceWireRecorder? = nil,
+        accountCoordinator: ProviderAccountCoordinator?
     ) {
+        self.accountCoordinator = accountCoordinator
         self.historyRecorder = historyRecorder
         self.requestedPermission = requestedPermission
         self.cursorPermission = requestedPermission ?? "normal"
@@ -602,7 +611,8 @@ public actor LocalACPClient {
 
     public static func start(
         launch: LocalACPRuntimeLaunchConfiguration,
-        workingDirectory: URL
+        workingDirectory: URL,
+        accountCoordinator: ProviderAccountCoordinator? = nil
     ) throws -> LocalACPClient {
         guard launch.runtimeKind != .opencode else {
             throw OpenCodeError.message("OpenCode v1 ACP is no longer supported. Create a new OpenCode v2 server session.")
@@ -654,7 +664,8 @@ public actor LocalACPClient {
             runtimeKind: launch.runtimeKind,
             workingDirectory: workingDirectory,
             requestedPermission: preparedLaunch.explicitPermission,
-            historyRecorder: launch.historyRecorder
+            historyRecorder: launch.historyRecorder,
+            accountCoordinator: accountCoordinator
         )
     }
 
@@ -1399,6 +1410,7 @@ public actor LocalACPClient {
     public func cancel() throws {
         guard let sessionID else { return }
         sessionCancellationRequested = true
+        for task in builtInPermissionTasks.values { task.cancel() }
         let pending = pendingPermissionRequestIDs
         pendingPermissionRequestIDs.removeAll()
         for id in pending {
@@ -1533,6 +1545,14 @@ public actor LocalACPClient {
     private func receive(_ data: Data) throws {
         if runtimeKind != .defaultAgent { try historyRecorder?("in", data) }
         let envelope = try Self.decodeEnvelope(data)
+        if runtimeKind == .defaultAgent, envelope.method == "woven/permission_cancel",
+           let id = envelope.params?["requestID"]?.stringValue {
+            // This must bypass the notification barrier held by the dialog.
+            // Cancelling its task also removes the app's pending approval UI.
+            if let task = builtInPermissionTasks[id] { task.cancel() }
+            else { cancelledBuiltInPermissions.insert(id) }
+            return
+        }
         if envelope.method == nil,
            let id = envelope.id?.integerValue,
            let pending = pendingRequests.removeValue(forKey: id) {
@@ -1586,10 +1606,10 @@ public actor LocalACPClient {
     private func handleNotification(_ envelope: ACPEnvelope) async throws {
         if envelope.method == "woven/credentials", runtimeKind == .defaultAgent {
             do {
-                let payload = try await ProviderAccountCoordinator.shared.prepare(defaultAgentScope)
+                let payload = try await prepareCredentialPayload(defaultAgentScope)
                 try write(ACPEnvelope(id: envelope.id, result: JSONDecoder().decode(ACPJSONValue.self, from: payload.data())))
             } catch {
-                try write(ACPEnvelope(id: envelope.id, error: .init(code: -32000, message: "Default Agent credentials are unavailable.")))
+                try write(ACPEnvelope(id: envelope.id, error: .init(code: -32000, message: "Built-in credentials are unavailable.")))
             }
         } else if envelope.method == "session/update" {
             guard belongsToActiveSession(envelope) else { return }
@@ -1717,6 +1737,10 @@ public actor LocalACPClient {
             )
         }
         if let configOptions = value["configOptions"]?.arrayValue {
+            if runtimeKind == .defaultAgent, value["_meta"]?["engineUsed"]?.boolValue == true,
+               let engine = value["_meta"]?["engine"]?.stringValue, ["pi", "claude"].contains(engine) {
+                UserDefaults.standard.set(engine, forKey: DefaultAgentSupport.lastEngineKey)
+            }
             let parsed = configurationOptions(from: configOptions)
             let hadModelOption = modelConfigurationID != nil
             let hadPermissionOption = permissionConfigurationID != nil
@@ -2003,6 +2027,17 @@ public actor LocalACPClient {
            options.filter({ $0.kind == "allow_once" }).count == 1,
            let allowOnce = options.first(where: { $0.kind == "allow_once" }) {
             selectedID = allowOnce.id
+        } else if runtimeKind == .defaultAgent, let requestID = id.stringValue {
+            if cancelledBuiltInPermissions.remove(requestID) != nil {
+                selectedID = nil
+            } else {
+                let task = Task { await handler?(request) }
+                builtInPermissionTasks[requestID] = task
+                selectedID = await withTaskCancellationHandler {
+                    await task.value
+                } onCancel: { task.cancel() }
+                builtInPermissionTasks.removeValue(forKey: requestID)
+            }
         } else {
             selectedID = await handler?(request)
         }

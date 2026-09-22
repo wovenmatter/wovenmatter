@@ -216,7 +216,7 @@ struct SettingsView: View {
                     action: { section = .connections("global") }
                 )
                 SettingsDestinationRow(
-                    title: "Default Agent",
+                    title: "Built-in Agent",
                     detail: "Providers, search, and models across your workspaces.",
                     icon: { DashboardLucideIcon(glyph: .terminal, size: 15) },
                     action: { section = .defaultAgent("global", .landing) }

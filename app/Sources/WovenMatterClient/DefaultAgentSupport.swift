@@ -3,6 +3,10 @@ import Security
 import WovenMatterCore
 
 public enum DefaultAgentSupport {
+    public static let lastEngineKey = "wovenmatter.built-in.last-engine"
+    public static func sidebarName(engine: String) -> String {
+        engine == "claude" ? "Built-in Claude SDK" : "Built-in Pi SDK"
+    }
     public static let settingsKey = "wovenmatter.default-agent.settings.v1"
     public static var settings: DefaultAgentSettingsScope {
         get {
@@ -32,11 +36,11 @@ public enum DefaultAgentSupport {
         let ready = executable.map { FileManager.default.isExecutableFile(atPath: $0.path) } ?? false
         return LocalACPRuntimeResolution(
             availability: .init(
-                runtimeKind: .defaultAgent, displayName: "Default Agent",
+                runtimeKind: .defaultAgent, displayName: "Built-in",
                 state: ready ? .ready : .executableUnavailable,
                 detail: ready
                     ? "Built into Woven Matter. Manage connections in Settings → Connections."
-                    : "The bundled Default Agent helper is missing. Rebuild or reinstall Woven Matter.",
+                    : "The bundled Built-in helper is missing. Rebuild or reinstall Woven Matter.",
                 executablePath: executable?.path),
             launchConfiguration: ready
                 ? .init(
@@ -56,7 +60,7 @@ public enum DefaultAgentSupport {
         let scope = settings
         let keyScope = workspace == "global" || scope.workspaces[workspace] == nil ? "global" : workspace
         var credentials: [String: DefaultAgentCredential] = [:]
-        for id in ["openai", "openrouter", "opencode-go", "exa"] {
+        for id in ["openai", "openrouter", "opencode-go", "anthropic", "exa"] {
             if let key = try key(id, scope: keyScope) ?? (keyScope == "global" ? nil : key(id, scope: "global")),
                 !key.isEmpty
             {

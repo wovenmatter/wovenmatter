@@ -1,7 +1,7 @@
 import Foundation
 
 public struct DefaultAgentSettings: Codable, Equatable, Sendable {
-    public static let providerIDs = ["openai-codex", "openai", "openrouter", "opencode-go", "xai"]
+    public static let providerIDs = ["openai-codex", "openai", "openrouter", "opencode-go", "xai", "claude-subscription", "anthropic"]
     public var providers: [String] = Self.providerIDs
     /// Empty means the full supported catalog, otherwise this is also selector order.
     public var models: [String] = []

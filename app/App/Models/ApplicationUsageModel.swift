@@ -472,7 +472,7 @@ final class ApplicationUsageModel {
     }
 
     func signInUsageProvider(_ provider: ProviderKind) {
-        if [.codex, .grok, .openRouter, .openCodeGo].contains(provider) {
+        if [.codex, .claude, .grok, .openRouter, .openCodeGo].contains(provider) {
             NotificationCenter.default.post(name: .init("wovenmatter.open-connections"), object: "global")
             return
         }
