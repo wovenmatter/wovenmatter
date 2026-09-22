@@ -128,7 +128,7 @@ struct DashboardCalendarSurface: View {
     }
 
     private func monthCard(_ occurrences: [WorkspaceCalendarOccurrence]) -> some View {
-        DashboardCard(showsBackground: false) {
+        DashboardCard(showsBorder: false, showsBackground: false) {
             VStack(spacing: 14) {
                 HStack(spacing: 8) {
                     Text(layout.monthStart.formatted(.dateTime.month(.wide).year())).font(.system(size: 16, weight: .semibold))
@@ -191,7 +191,7 @@ struct DashboardCalendarSurface: View {
     }
 
     private func selectedDayCard(_ occurrences: [WorkspaceCalendarOccurrence]) -> some View {
-        DashboardCard(showsBackground: false) {
+        DashboardCard(showsBorder: false, showsBackground: false) {
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
                     Text(selectedDate.formatted(.dateTime.weekday(.wide).month(.wide).day())).font(.system(size: 15, weight: .semibold))
