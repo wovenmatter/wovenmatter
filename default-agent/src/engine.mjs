@@ -188,7 +188,9 @@ export class DefaultAgentEngine {
     const beforeLeaf = record.manager.getLeafId();
     let visible = false;
     const usage = { inputTokens: 0, outputTokens: 0, cachedReadTokens: 0, cachedWriteTokens: 0 };
+    let messageSequence = 0;
     const unsubscribe = record.session.subscribe(event => {
+      if (event.type === 'message_start') messageSequence += 1;
       if (event.type === 'message_end' && event.message?.role === 'assistant' && event.message.usage) {
         const value = event.message.usage;
         usage.inputTokens += value.input ?? 0; usage.outputTokens += value.output ?? 0;
@@ -196,7 +198,7 @@ export class DefaultAgentEngine {
       }
       if (event.type === 'message_update') {
         const update = event.assistantMessageEvent;
-        if (update.type === 'text_delta' || update.type === 'thinking_delta') { visible = true; emit({ sessionUpdate: update.type === 'text_delta' ? 'agent_message_chunk' : 'agent_thought_chunk', content: { type: 'text', text: update.delta } }); }
+        if (update.type === 'text_delta' || update.type === 'thinking_delta') { visible = true; emit({ sessionUpdate: update.type === 'text_delta' ? 'agent_message_chunk' : 'agent_thought_chunk', content: { type: 'text', text: update.delta }, ...(update.type === 'thinking_delta' ? { _meta: { wovenThoughtID: `built-in-${messageSequence}-${update.contentIndex ?? 0}` } } : {}) }); }
       } else if (event.type === 'tool_execution_start') { visible = true; emit({ sessionUpdate: 'tool_call', toolCallId: event.toolCallId, title: event.toolName, kind: event.toolName === 'bash' ? 'execute' : 'other', status: 'in_progress', rawInput: event.args }); }
       else if (event.type === 'tool_execution_end') emit({ sessionUpdate: 'tool_call_update', toolCallId: event.toolCallId, status: event.isError ? 'failed' : 'completed', content: (event.result?.content ?? []).filter(c => c.type === 'text').map(c => ({ type: 'content', content: c })) });
     });

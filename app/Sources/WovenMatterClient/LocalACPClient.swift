@@ -2270,7 +2270,10 @@ public actor LocalACPClient {
         case "agent_thought_chunk":
             guard let text = update["content"]?["text"]?.stringValue else { return nil }
             let reasoningID: String
-            if let activeReasoningPhaseID {
+            if runtimeKind == .defaultAgent, let blockID = update["_meta"]?["wovenThoughtID"]?.stringValue {
+                reasoningID = blockID
+                activeReasoningPhaseID = blockID
+            } else if let activeReasoningPhaseID {
                 reasoningID = activeReasoningPhaseID
             } else {
                 reasoningPhaseSequence += 1

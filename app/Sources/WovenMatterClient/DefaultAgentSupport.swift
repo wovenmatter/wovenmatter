@@ -5,7 +5,7 @@ import WovenMatterCore
 public enum DefaultAgentSupport {
     public static let lastEngineKey = "wovenmatter.built-in.last-engine"
     public static func sidebarName(engine: String) -> String {
-        engine == "claude" ? "Built-in Claude SDK" : "Built-in Pi SDK"
+        engine == "claude" ? "Built-in Claude SDK" : "Built-in Pi sdk"
     }
     public static let settingsKey = "wovenmatter.default-agent.settings.v1"
     public static var settings: DefaultAgentSettingsScope {

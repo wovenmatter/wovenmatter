@@ -437,7 +437,7 @@ struct DashboardComposer: View {
     }
 
     private var compactControls: some View {
-        VStack(alignment: .trailing, spacing: 4) {
+        HStack(spacing: 4) {
             HStack(spacing: 4) {
                 attachmentControl
                 if showsSessionControls {
@@ -471,13 +471,12 @@ struct DashboardComposer: View {
                 toolsControl
             }
 
-            HStack(spacing: 4) {
-                collapseControl
-                voiceControl
-                sendControl
-            }
+            Spacer(minLength: 8)
+            collapseControl
+            voiceControl
+            sendControl
         }
-        .frame(maxWidth: .infinity, alignment: .trailing)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var collapsedControls: some View {
@@ -677,7 +676,7 @@ struct DashboardComposer: View {
             focused = false
             openMenu = openMenu == kind ? nil : kind
         } label: {
-            DashboardComposerSessionLabel(icon: icon, title: title)
+            DashboardComposerSessionLabel(icon: icon, title: title, maximumTitleWidth: kind == .model ? 90 : (kind == .thinking ? 40 : 80))
         }
         .buttonStyle(DashboardComposerControlButtonStyle())
         .disabled(unavailable)
@@ -844,6 +843,7 @@ struct DashboardDraftAttachmentChip: View {
 struct DashboardComposerSessionLabel: View {
     let icon: DashboardLucideGlyph
     let title: String
+    var maximumTitleWidth: CGFloat = 120
 
     var body: some View {
         HStack(spacing: 8) {
@@ -851,6 +851,7 @@ struct DashboardComposerSessionLabel: View {
             Text(title)
                 .lineLimit(1)
                 .truncationMode(.middle)
+                .frame(maxWidth: maximumTitleWidth)
             DashboardLucideIcon(glyph: .chevronDown, size: 14)
         }
         .font(.system(size: 12, weight: .medium))
