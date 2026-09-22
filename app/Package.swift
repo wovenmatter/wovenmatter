@@ -66,12 +66,13 @@ let package = Package(
         "Info.plist", "Assets.xcassets", "Resources", "Views", "Services/DashboardNoteDrafts.swift",
         "Models/ApplicationModel+AgentTools.swift", "Models/AgentDatabases.swift",
         "Models/ConversationMarkdownDocument.swift", "Models/DashboardConversationReferencePreview.swift",
-        "Models/DashboardConversationState.swift", "Models/OpenCodeModel.swift", "Models/RemoteWorkspacesModel.swift", "Models/LibraryModel.swift"
+        "Models/DashboardConversationState.swift", "Models/OpenCodeModel.swift", "Models/RemoteWorkspacesModel.swift"
       ],
       sources: [
         "Models/WorkspaceAgentToolsModel.swift", "Services/WovenMatterToolService.swift",
         "Services/WovenNoteService.swift", "Services/WovenMatterRemoteToolBridge.swift",
-        "Tests/WorkspaceAgentToolsServiceTests.swift"
+        "Tests/WorkspaceAgentToolsServiceTests.swift",
+        "Models/LibraryModel.swift", "Tests/LibraryModelTests.swift"
       ]
     )
   ]

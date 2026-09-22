@@ -125,7 +125,6 @@ struct WorkspaceView: View {
     @State private var showsAttachmentImporter = false
     @State private var archivedLibrarySource: WorkspaceLibraryItem?
     @State private var attachmentPicker: DashboardAttachmentPickerKind?
-    @State private var attachmentTargetPanelID: DashboardChatPanelID?
     @State private var attachmentTargetConversationID: String?
     @State private var notice: String?
     @State private var noticeTask: Task<Void, Never>?
@@ -291,9 +290,9 @@ struct WorkspaceView: View {
                 if let conversationID = attachmentTargetConversationID {
                     _ = attachFiles(urls, conversationID: conversationID)
                 }
-                attachmentTargetPanelID = nil
+                attachmentTargetConversationID = nil
             case .failure(let error):
-                attachmentTargetPanelID = nil
+                attachmentTargetConversationID = nil
                 showNotice(error.localizedDescription)
             }
         }
@@ -302,19 +301,18 @@ struct WorkspaceView: View {
                 kind: kind,
                 notes: model.workspaceOverview?.notes ?? [],
                 conversations: (model.workspaceOverview?.conversations ?? []).filter {
-                    $0.id != attachmentTargetPanelID.flatMap {
-                        chatPanels.panel(id: $0)?.conversationID
-                    }
+                    $0.id != attachmentTargetConversationID
                 },
                 onSelectNote: { note in
                     if let conversationID = attachmentTargetConversationID {
                         appendAttachment(model.noteAttachmentDraft(note), conversationID: conversationID)
                     }
                     attachmentPicker = nil
-                    attachmentTargetPanelID = nil
+                    attachmentTargetConversationID = nil
                 },
                 onSelectConversation: { conversation in
                     let targetConversationID = attachmentTargetConversationID
+                    attachmentTargetConversationID = nil
                     attachmentPicker = nil
                     Task { @MainActor in
                         do {
@@ -324,7 +322,6 @@ struct WorkspaceView: View {
                         } catch {
                             showNotice(error.localizedDescription)
                         }
-                        attachmentTargetPanelID = nil
                     }
                 }
             )
@@ -657,7 +654,9 @@ struct WorkspaceView: View {
                         }
                     )
                 case .library:
-                    DashboardLibrarySurface(model: model) { item in
+                    DashboardLibrarySurface(library: model.library, configuredWorkspaces: model.remoteWorkspaces.workspaces.map {
+                        (id: $0.id.uuidString.lowercased(), name: $0.name)
+                    }) { item in
                         if model.workspaceOverview?.conversations.contains(where: { $0.id == item.conversationID }) == true {
                             model.libraryMessageTarget = item
                             destination = .workspace
@@ -1080,7 +1079,6 @@ struct WorkspaceView: View {
             return
         }
         activatePanel(panelID)
-        attachmentTargetPanelID = panelID
         attachmentTargetConversationID = chatPanels.panel(id: panelID)?.conversationID
         switch action {
         case .upload: showsAttachmentImporter = true
@@ -1379,7 +1377,7 @@ struct DashboardWorkspaceSurface: View {
             }
         }
         .task(id: conversation?.id) {
-            guard let conversation else { return }
+            guard let conversation, model.libraryMessageTarget?.conversationID != conversation.id else { return }
             await model.refreshConversation(id: conversation.id)
         }
     }

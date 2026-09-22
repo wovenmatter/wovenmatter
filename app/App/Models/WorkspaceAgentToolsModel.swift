@@ -261,31 +261,7 @@ final class WorkspaceAgentToolsModel {
             case .timers: result = try timer(command, callerID: callerID, requestID: request.requestID)
             case .calendar: result = try calendar(command, callerID: callerID, requestID: request.requestID)
             case .usage: result = try await usageHandler(command)
-            case .library:
-                var query = LibraryQuery()
-                query.search = command.options["search"] ?? ""
-                if let workspace = command.options["workspace"] { query.workspaces = Set(workspace.split(separator: ",").map { String($0).lowercased() }) }
-                if let harness = command.options["harness"] { query.harnesses = Set(harness.split(separator: ",").map(String.init)) }
-                if let kind = command.options["kind"] {
-                    guard let value = LibraryItemKind(rawValue: kind) else { throw WorkspaceToolError.invalid("Use file, link, or photo.") }
-                    query.kind = value
-                }
-                if let sender = command.options["sender"] {
-                    guard let value = LibrarySender(rawValue: sender) else { throw WorkspaceToolError.invalid("Use me or agent.") }
-                    query.sender = value
-                }
-                func date(_ value: String?) throws -> Date? {
-                    guard let value else { return nil }
-                    guard let parsed = ISO8601DateFormatter().date(from: value) else { throw WorkspaceToolError.invalid("Use an ISO8601 date.") }
-                    return parsed
-                }
-                query.since = try date(command.options["since"]); query.until = try date(command.options["until"])
-                let limit = command.options["limit"].flatMap(Int.init) ?? 100
-                let offset = command.options["offset"].flatMap(Int.init) ?? 0
-                guard (1...200).contains(limit), offset >= 0 else { throw WorkspaceToolError.invalid("Invalid pagination.") }
-                result = .init(result: try database.queryAgentLibrary(callerID: callerID,
-                    id: command.action == "read" ? try command.required("id", allowPositional: true) : nil,
-                    query: query, limit: limit, offset: offset))
+            case .library: result = try library(command, callerID: callerID)
             }
             // History queries persist reference IDs in the database's query
             // path. Re-journaling their full response recursively copies history.
@@ -383,6 +359,31 @@ final class WorkspaceAgentToolsModel {
             creating: creating, title: command.required("title"), details: command.options["description"], startsAt: Self.date(command.required("starts-at")),
             endsAt: command.options["ends-at"].map(Self.date), allDay: command.options["all-day"] != nil, requestID: requestID)
         return .init(result: .object(["id": .string(id)]))
+    }
+
+    private func library(_ command: WovenMatterToolCommand, callerID: String) throws -> WovenMatterToolResponse {
+        var query = LibraryQuery()
+        query.search = command.options["search"] ?? ""
+        if let workspace = command.options["workspace"] {
+            query.workspaces = Set(workspace.split(separator: ",").map { String($0).lowercased() })
+        }
+        if let harness = command.options["harness"] {
+            query.harnesses = Set(harness.split(separator: ",").map(String.init))
+        }
+        if let kind = command.options["kind"] {
+            guard let value = LibraryItemKind(rawValue: kind) else { throw WorkspaceToolError.invalid("Use file, link, or photo.") }
+            query.kind = value
+        }
+        if let sender = command.options["sender"] {
+            guard let value = LibrarySender(rawValue: sender) else { throw WorkspaceToolError.invalid("Use me or agent.") }
+            query.sender = value
+        }
+        query.since = try command.options["since"].map(Self.date)
+        query.until = try command.options["until"].map(Self.date)
+        return .init(result: try database.queryAgentLibrary(callerID: callerID,
+            id: command.action == "read" ? try command.required("id", allowPositional: true) : nil,
+            query: query, limit: command.integer("limit", default: 100, range: 1...200),
+            offset: command.integer("offset", default: 0, range: 0...Int.max)))
     }
 
     static func date(_ raw: String) throws -> Date {

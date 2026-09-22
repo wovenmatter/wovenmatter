@@ -2,7 +2,6 @@ import AppKit
 import Foundation
 import Observation
 import WovenMatterCore
-import WovenMatterClient
 import WovenMatterDashboardStore
 
 @MainActor @Observable
@@ -11,63 +10,97 @@ final class LibraryModel {
     private(set) var facets: [LibraryFacet] = []
     private(set) var hasMore = false
     private(set) var loading = false
+    private(set) var today = Calendar.autoupdatingCurrent.startOfDay(for: Date())
     private(set) var revision: Int64 = -1
     var error: String?
+    private(set) var loadError: String?
+
+    private static let pageSize = 100
     private var query = LibraryQuery()
     private var requestID = UUID()
     private var service: LibraryService?
     private var syncTask: Task<Void, Never>?
     private var locations: [LibraryLocation] = []
-    private var workspaces: [WovenMatterClient.RemoteWorkspaceConfiguration] = []
+    private var remoteWorkspace: LibraryService.RemoteWorkspaceLookup = { _ in nil }
+
+    init(service: LibraryService? = nil) {
+        self.service = service
+    }
 
     isolated deinit { syncTask?.cancel() }
 
-    func stop() { syncTask?.cancel(); syncTask = nil }
+    func dismissError() {
+        error = nil
+        loadError = nil
+    }
 
-    func synchronize(store: DashboardStore, locations: [LibraryLocation], workspaces: [WovenMatterClient.RemoteWorkspaceConfiguration]) {
-        service = store.library
+    func stop() {
+        syncTask?.cancel()
+        syncTask = nil
+    }
+
+    func synchronize(
+        service: LibraryService, locations: [LibraryLocation],
+        remoteWorkspace: @escaping LibraryService.RemoteWorkspaceLookup
+    ) {
+        self.service = service
         self.locations = locations
-        self.workspaces = workspaces
+        self.remoteWorkspace = remoteWorkspace
         guard syncTask == nil else { return }
         syncTask = Task { [weak self] in
             while !Task.isCancelled {
+                guard self != nil else { return }
                 await self?.synchronizeOnce()
-                do { try await Task.sleep(for: .seconds(5)) }
-                catch { return }
+                do { try await Task.sleep(for: .seconds(5)) } catch { return }
             }
         }
     }
+
     private func synchronizeOnce() async {
         guard let service else { return }
+        today = Calendar.autoupdatingCurrent.startOfDay(for: Date())
         do {
-            try await service.synchronize(locations: locations, workspaces: workspaces)
+            try await service.synchronize(locations: locations, remoteWorkspace: remoteWorkspace)
             revision = try await service.revision()
-        } catch is CancellationError {}
-        catch { self.error = error.localizedDescription }
+        } catch is CancellationError {
+            return
+        } catch {
+            self.error = error.localizedDescription
+        }
     }
+
     func load(query: LibraryQuery, more: Bool = false, preserveCount: Bool = false) async {
         guard let service else { return }
         if more && (loading || !hasMore || self.query != query) { return }
-        let pageCount = preserveCount && self.query == query ? max(1, (items.count + 99) / 100) : 1
-        let identity = UUID(); requestID = identity; self.query = query; loading = true
+        let sameQuery = self.query == query
+        let count =
+            more
+            ? items.count + Self.pageSize
+            : preserveCount && sameQuery ? max(Self.pageSize, items.count) : Self.pageSize
+        if !sameQuery {
+            items = []
+            hasMore = false
+        }
+
+        let identity = UUID()
+        requestID = identity
+        self.query = query
+        loading = true
         defer { if identity == requestID { loading = false } }
-        let offset = more ? items.count : 0
         do {
-            async let choices = service.facets()
-            var rows: [WorkspaceLibraryItem] = []
-            for pageIndex in 0..<pageCount {
-                let page = try await service.items(query: query, offset: offset + pageIndex * 100)
-                rows += page.prefix(100)
-                if pageIndex == pageCount - 1, page.count > 100 { rows.append(page[100]) }
-                if page.count <= 100 { break }
-            }
-            let facets = try await choices
+            // Reload the visible prefix in one snapshot. Appending an offset page
+            // can duplicate or skip exchanges when the catalog changes meanwhile.
+            let page = try await service.page(query: query, count: count)
             guard identity == requestID, !Task.isCancelled else { return }
-            let limit = pageCount * 100
-            self.items = more ? items + rows.prefix(limit) : Array(rows.prefix(limit))
-            self.facets = facets; hasMore = rows.count > limit; error = nil
-        } catch { if identity == requestID { self.error = error.localizedDescription } }
+            items = page.items
+            facets = page.facets
+            hasMore = page.hasMore
+            loadError = nil
+        } catch {
+            if identity == requestID, !Task.isCancelled { loadError = error.localizedDescription }
+        }
     }
+
     func open(_ item: WorkspaceLibraryItem) {
         Task {
             do {
@@ -76,13 +109,13 @@ final class LibraryModel {
             } catch { self.error = error.localizedDescription }
         }
     }
+
     func retry(_ item: WorkspaceLibraryItem) {
         Task {
             do {
                 try await service?.retry(id: item.id)
                 await synchronizeOnce()
-            }
-            catch { self.error = error.localizedDescription }
+            } catch { self.error = error.localizedDescription }
         }
     }
 }

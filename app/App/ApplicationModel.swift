@@ -954,12 +954,12 @@ final class ApplicationModel {
                     ?? remote.map { remoteWorkspaces.remoteWorkspaceRoot(for: $0) }
                     ?? localACPWorkspaceLaunchConfiguration?.rootURL.path
                     ?? FileManager.default.homeDirectoryForCurrentUser.appending(path: ".woven-matter").path
-                return LibraryLocation(conversationID: conversation.id, name: remote?.name ?? "Local workspace", root: root)
+                let name = remote?.name ?? (conversation.remoteWorkspaceID == nil ? "Local workspace" : "Remote workspace")
+                return LibraryLocation(conversationID: conversation.id, name: name, root: root)
             }
-            library.synchronize(store: dashboardStore, locations: libraryLocations,
-                workspaces: remoteWorkspaces.isCredentialAccessEnabled ? remoteWorkspaces.workspaces.filter {
-                    remoteWorkspaces.statuses[$0.id]?.running == true
-                } : [])
+            library.synchronize(service: dashboardStore.library, locations: libraryLocations) { [weak remoteWorkspaces] id in
+                await remoteWorkspaces?.libraryConfiguration(id: id)
+            }
             let reconciledRunning = try await dashboardStore
                 .activeAgentConversationIDs()
             if localRunningConversationIDs != reconciledRunning {

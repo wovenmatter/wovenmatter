@@ -127,7 +127,7 @@ public actor DashboardStore {
       changes.continuation.yield($0)
     }
     self.database = database
-    self.library = LibraryService(database: database, supportDirectory: supportDirectory)
+    self.library = LibraryService(database: database)
     self.deviceIdentity = identity
     self.conversationChanges = changes.stream
     self.messageAttachments = try MessageAttachmentStore(supportDirectory: supportDirectory)
