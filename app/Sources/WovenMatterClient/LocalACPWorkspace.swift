@@ -1,4 +1,9 @@
 import Foundation
+#if canImport(Darwin)
+import Darwin
+#else
+import Glibc
+#endif
 
 public struct LocalACPWorkspaceAvailability: Equatable, Sendable {
     public enum State: String, Equatable, Sendable {
@@ -68,189 +73,213 @@ public struct LocalACPWorkspaceResolution: Sendable {
     }
 }
 
+public enum LocalACPWorkspaceFolder: Sendable {
+    case repositories
+    case databases
+
+    public var directoryName: String {
+        switch self {
+        case .repositories: "Repos"
+        case .databases: "Databases"
+        }
+    }
+
+    var nonemptyError: LocalACPWorkspaceError {
+        self == .repositories ? .defaultRepositoriesNotEmpty : .defaultDatabasesNotEmpty
+    }
+
+    var unavailableError: LocalACPWorkspaceError {
+        self == .repositories ? .repositoriesDirectoryUnavailable : .databasesDirectoryUnavailable
+    }
+
+    var containsWorkspaceError: LocalACPWorkspaceError {
+        self == .repositories ? .repositoriesDirectoryContainsWorkspace : .databasesDirectoryContainsWorkspace
+    }
+}
+
+public struct LocalACPWorkspaceFolderChangeResult: Sendable {
+    public let backupURL: URL?
+    public let skippedItemNames: [String]
+}
+
 public enum LocalACPWorkspaceProvisioner {
     public static let rootDirectoryName = ".woven-matter"
-    public static let repositoriesDirectoryName = "REPOS"
+    public static let repositoriesDirectoryName = "Repos"
     public static let databasesDirectoryName = "Databases"
     public static let knowledgeDirectories = [
-        "GUIDES",
-        "PLANS",
-        "RESEARCH",
-        "WORK_LOGS",
-        "OUTBOX",
-        ".scratch",
+        "GUIDES", "PLANS", "RESEARCH", "WORK_LOGS", "OUTBOX", ".scratch",
     ]
 
+    /// Finds the legacy spelling before the initializer has migrated it.
+    public static func directoryURL(for folder: LocalACPWorkspaceFolder, at root: URL) -> URL {
+        let preferred = root.appending(path: folder.directoryName, directoryHint: .isDirectory)
+        if folder == .repositories, !itemExists(preferred) {
+            let legacy = root.appending(path: "REPOS", directoryHint: .isDirectory)
+            if itemExists(legacy) { return legacy }
+        }
+        return preferred
+    }
+
+    /// Startup preserves existing links. Only configureDirectory may reset one.
     public static func ensureWorkspace(
         at rootURL: URL,
         repositoriesURL: URL?,
         databasesURL: URL? = nil
     ) throws -> URL {
-        let fileManager = FileManager.default
+        let root = try prepareWorkspace(at: rootURL)
+        _ = try reconcileDirectory(
+            .databases, at: root, externalURL: databasesURL,
+            explicitlySelected: false, backUpExistingContents: false
+        )
+        return try reconcileDirectory(
+            .repositories, at: root, externalURL: repositoriesURL,
+            explicitlySelected: false, backUpExistingContents: false
+        ).directory
+    }
+
+    /// Explicit user changes affect only the selected folder, so an unavailable
+    /// second folder cannot prevent recovery. Returns any preserved default folder.
+    @discardableResult
+    public static func configureDirectory(
+        _ folder: LocalACPWorkspaceFolder,
+        at rootURL: URL,
+        externalURL: URL?,
+        backUpExistingContents: Bool = false,
+        copyExistingContents: Bool = false
+    ) throws -> LocalACPWorkspaceFolderChangeResult {
+        let root = try prepareWorkspace(at: rootURL)
+        let result = try reconcileDirectory(
+            folder, at: root, externalURL: externalURL,
+            explicitlySelected: true, backUpExistingContents: backUpExistingContents,
+            copyExistingContents: copyExistingContents
+        )
+        return LocalACPWorkspaceFolderChangeResult(backupURL: result.backup, skippedItemNames: result.skippedItems)
+    }
+
+    private static func prepareWorkspace(at rootURL: URL) throws -> URL {
         let root = rootURL.standardizedFileURL
-        if try isSymbolicLink(root) {
-            throw LocalACPWorkspaceError.workspaceRootIsSymbolicLink
-        }
-        try fileManager.createDirectory(
-            at: root,
-            withIntermediateDirectories: true
-        )
+        if isSymbolicLink(root) { throw LocalACPWorkspaceError.workspaceRootIsSymbolicLink }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         try setOwnerOnlyDirectoryPermissions(root)
-
         try SharedWorkspaceInitializer.run(at: root)
-        _ = try reconcileDatabases(
-            at: root.appending(
-                path: databasesDirectoryName,
-                directoryHint: .isDirectory
-            ),
-            workspaceRoot: root,
-            externalDatabasesURL: databasesURL
-        )
-        return try reconcileRepositories(
-            at: root.appending(
-                path: repositoriesDirectoryName,
-                directoryHint: .isDirectory
-            ),
-            workspaceRoot: root,
-            externalRepositoriesURL: repositoriesURL
-        )
-    }
-
-    private static func reconcileRepositories(
-        at repositoriesLink: URL,
-        workspaceRoot: URL,
-        externalRepositoriesURL: URL?
-    ) throws -> URL {
-        try reconcileDirectory(
-            at: repositoriesLink,
-            externalURL: externalRepositoriesURL,
-            nonemptyDirectoryError: .defaultRepositoriesNotEmpty
-        ) { try validateRepositoriesDirectory($0, workspaceRoot: workspaceRoot) }
-    }
-
-    private static func reconcileDatabases(
-        at databasesLink: URL,
-        workspaceRoot: URL,
-        externalDatabasesURL: URL?
-    ) throws -> URL {
-        try reconcileDirectory(
-            at: databasesLink,
-            externalURL: externalDatabasesURL,
-            nonemptyDirectoryError: .defaultDatabasesNotEmpty
-        ) { try validateDatabasesDirectory($0, workspaceRoot: workspaceRoot) }
+        return root
     }
 
     private static func reconcileDirectory(
-        at link: URL,
+        _ folder: LocalACPWorkspaceFolder,
+        at root: URL,
         externalURL: URL?,
-        nonemptyDirectoryError: LocalACPWorkspaceError,
-        validateTarget: (URL) throws -> URL
-    ) throws -> URL {
+        explicitlySelected: Bool,
+        backUpExistingContents: Bool,
+        copyExistingContents: Bool = false
+    ) throws -> (directory: URL, backup: URL?, skippedItems: [String]) {
         let fileManager = FileManager.default
+        let link = directoryURL(for: folder, at: root)
+        let previousDestination = fileManager.destinationOfSymbolicLinkIfPresent(at: link)
         guard let externalURL else {
-            if try isSymbolicLink(link) {
-                try fileManager.removeItem(at: link)
-            }
-            try fileManager.createDirectory(
-                at: link,
-                withIntermediateDirectories: true
-            )
-            try setOwnerOnlyDirectoryPermissions(link)
-            return link
-        }
-
-        let target = try validateTarget(externalURL)
-        if fileManager.fileExists(atPath: link.path)
-            || (try? isSymbolicLink(link)) == true {
-            if try isSymbolicLink(link) {
-                let destination = try fileManager.destinationOfSymbolicLink(
-                    atPath: link.path
-                )
-                let destinationURL = URL(
-                    fileURLWithPath: destination,
-                    relativeTo: link.deletingLastPathComponent()
-                ).standardizedFileURL
-                if destinationURL.resolvingSymlinksInPath() == target {
-                    return target
+            if let previousDestination {
+                if !explicitlySelected {
+                    return (try validateTarget(link, folder: folder, workspaceRoot: root), nil, [])
                 }
                 try fileManager.removeItem(at: link)
+                do {
+                    try fileManager.createDirectory(at: link, withIntermediateDirectories: false)
+                } catch {
+                    try fileManager.createSymbolicLink(atPath: link.path, withDestinationPath: previousDestination)
+                    throw error
+                }
             } else {
-                guard try isEmptyDirectory(link) else {
-                    throw nonemptyDirectoryError
-                }
-                try fileManager.removeItem(at: link)
+                try fileManager.createDirectory(at: link, withIntermediateDirectories: true)
             }
+            try setOwnerOnlyDirectoryPermissions(link)
+            return (link, nil, [])
         }
-        try fileManager.createSymbolicLink(
-            at: link,
-            withDestinationURL: target
-        )
-        return target
+
+        // Selecting the populated default itself is valid, and must never make
+        // a self-referencing link or require the user to empty it.
+        if previousDestination == nil,
+           externalURL.standardizedFileURL.resolvingSymlinksInPath() == link.resolvingSymlinksInPath() {
+            return (link, nil, [])
+        }
+        let target = try validateTarget(externalURL, folder: folder, workspaceRoot: root)
+        if previousDestination != nil, link.resolvingSymlinksInPath() == target {
+            return (target, nil, [])
+        }
+
+        var backup: URL?
+        var skippedItems: [String] = []
+        if let previousDestination {
+            try fileManager.removeItem(at: link)
+            do {
+                try fileManager.createSymbolicLink(at: link, withDestinationURL: target)
+            } catch {
+                try fileManager.createSymbolicLink(atPath: link.path, withDestinationPath: previousDestination)
+                throw error
+            }
+        } else {
+            if itemExists(link) {
+                let contents = try fileManager.contentsOfDirectory(atPath: link.path)
+                guard contents.isEmpty || backUpExistingContents else { throw folder.nonemptyError }
+                if copyExistingContents {
+                    for item in try fileManager.contentsOfDirectory(at: link, includingPropertiesForKeys: nil).sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
+                        let destination = target.appending(path: item.lastPathComponent)
+                        if itemExists(destination) {
+                            skippedItems.append(item.lastPathComponent)
+                            continue
+                        }
+                        // copyItem refuses an existing destination. Keep the full
+                        // source backup even after successful copies.
+                        do {
+                            try fileManager.copyItem(at: item, to: destination)
+                        } catch {
+                            throw LocalACPWorkspaceError.copyFailed(error.localizedDescription)
+                        }
+                    }
+                }
+                // Move the whole folder before linking; never recursively delete
+                // a directory that an agent could still be writing into.
+                let saved = root.appending(path: "\(folder.directoryName) Backup \(UUID().uuidString)")
+                try fileManager.moveItem(at: link, to: saved)
+                backup = saved
+            }
+            do {
+                try fileManager.createSymbolicLink(at: link, withDestinationURL: target)
+            } catch {
+                if let backup { try fileManager.moveItem(at: backup, to: link) }
+                throw error
+            }
+            // rmdir removes only an empty directory, including under concurrent writes.
+            if let saved = backup, saved.path.withCString({ rmdir($0) }) == 0 { backup = nil }
+        }
+        return (target, backup, skippedItems)
     }
 
-    private static func validateRepositoriesDirectory(
-        _ url: URL,
-        workspaceRoot: URL
+    private static func validateTarget(
+        _ url: URL, folder: LocalACPWorkspaceFolder, workspaceRoot: URL
     ) throws -> URL {
-        let fileManager = FileManager.default
         let target = url.standardizedFileURL.resolvingSymlinksInPath()
         var isDirectory: ObjCBool = false
-        guard fileManager.fileExists(
-            atPath: target.path,
-            isDirectory: &isDirectory
-        ), isDirectory.boolValue else {
-            throw LocalACPWorkspaceError.repositoriesDirectoryUnavailable
-        }
+        guard FileManager.default.fileExists(atPath: target.path, isDirectory: &isDirectory),
+              isDirectory.boolValue else { throw folder.unavailableError }
         let root = workspaceRoot.standardizedFileURL.resolvingSymlinksInPath()
-        if root == target || root.path.hasPrefix(target.path + "/") {
-            throw LocalACPWorkspaceError.repositoriesDirectoryContainsWorkspace
+        let current = directoryURL(for: folder, at: root)
+        if root == target || root.path.hasPrefix(target.path + "/")
+            || (!isSymbolicLink(current) && target.path.hasPrefix(current.resolvingSymlinksInPath().path + "/")) {
+            throw folder.containsWorkspaceError
         }
         return target
     }
 
-    private static func validateDatabasesDirectory(
-        _ url: URL,
-        workspaceRoot: URL
-    ) throws -> URL {
-        let fileManager = FileManager.default
-        let target = url.standardizedFileURL.resolvingSymlinksInPath()
-        var isDirectory: ObjCBool = false
-        guard fileManager.fileExists(
-            atPath: target.path,
-            isDirectory: &isDirectory
-        ), isDirectory.boolValue else {
-            throw LocalACPWorkspaceError.databasesDirectoryUnavailable
-        }
-        let root = workspaceRoot.standardizedFileURL.resolvingSymlinksInPath()
-        if root == target || root.path.hasPrefix(target.path + "/") {
-            throw LocalACPWorkspaceError.databasesDirectoryContainsWorkspace
-        }
-        return target
+    static func itemExists(_ url: URL) -> Bool {
+        FileManager.default.fileExists(atPath: url.path) || isSymbolicLink(url)
     }
 
-    private static func isEmptyDirectory(_ url: URL) throws -> Bool {
-        let contents = try FileManager.default.contentsOfDirectory(
-            at: url,
-            includingPropertiesForKeys: nil,
-            options: [.skipsSubdirectoryDescendants]
-        )
-        return contents.isEmpty
-    }
-
-    private static func isSymbolicLink(_ url: URL) throws -> Bool {
-        guard FileManager.default.fileExists(atPath: url.path)
-            || FileManager.default.destinationOfSymbolicLinkIfPresent(at: url) != nil
-        else {
-            return false
-        }
-        return try url.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink == true
+    static func isSymbolicLink(_ url: URL) -> Bool {
+        FileManager.default.destinationOfSymbolicLinkIfPresent(at: url) != nil
     }
 
     private static func setOwnerOnlyDirectoryPermissions(_ url: URL) throws {
-        try FileManager.default.setAttributes(
-            [.posixPermissions: 0o700],
-            ofItemAtPath: url.path
-        )
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: url.path)
     }
 }
 
@@ -258,11 +287,6 @@ public actor LocalACPWorkspaceConfigurationStore {
     private struct StoredConfiguration: Codable, Sendable {
         let repositoriesPath: String?
         let databasesPath: String?
-
-        init(repositoriesPath: String?, databasesPath: String? = nil) {
-            self.repositoriesPath = repositoriesPath
-            self.databasesPath = databasesPath
-        }
     }
 
     private let defaults: UserDefaults
@@ -274,186 +298,107 @@ public actor LocalACPWorkspaceConfigurationStore {
         defaultsSuiteName: String? = nil,
         storageKey: String = "wovenmatter.local-agent-workspace.folders"
     ) {
-        self.defaults = defaultsSuiteName.flatMap(UserDefaults.init(suiteName:))
-            ?? .standard
+        self.defaults = defaultsSuiteName.flatMap(UserDefaults.init(suiteName:)) ?? .standard
         self.storageKey = storageKey
         self.homeDirectory = homeDirectory
     }
 
+    private var root: URL {
+        homeDirectory.standardizedFileURL.resolvingSymlinksInPath()
+            .appending(path: LocalACPWorkspaceProvisioner.rootDirectoryName, directoryHint: .isDirectory)
+    }
+
     public func setUpWorkspace(in homeDirectory: URL) throws {
-        let selectedHome = homeDirectory.standardizedFileURL.resolvingSymlinksInPath()
-        let expectedHome = self.homeDirectory
-            .standardizedFileURL
-            .resolvingSymlinksInPath()
-        guard selectedHome == expectedHome else {
+        guard homeDirectory.standardizedFileURL.resolvingSymlinksInPath()
+                == self.homeDirectory.standardizedFileURL.resolvingSymlinksInPath() else {
             throw LocalACPWorkspaceError.selectHomeDirectory
         }
-        let root = selectedHome.appending(
-            path: LocalACPWorkspaceProvisioner.rootDirectoryName,
-            directoryHint: .isDirectory
-        )
-        let stored = try load()
+        let folders = currentFolders()
         _ = try LocalACPWorkspaceProvisioner.ensureWorkspace(
-            at: root,
-            repositoriesURL: stored?.repositoriesPath.map {
-                URL(fileURLWithPath: $0, isDirectory: true)
-            },
-            databasesURL: stored?.databasesPath.map {
-                URL(fileURLWithPath: $0, isDirectory: true)
-            }
+            at: root, repositoriesURL: folders.repositories, databasesURL: folders.databases
         )
     }
 
-    public func configureRepositories(_ repositoriesURL: URL?) throws {
-        let home = homeDirectory
-            .standardizedFileURL
-            .resolvingSymlinksInPath()
-        let root = home.appending(
-            path: LocalACPWorkspaceProvisioner.rootDirectoryName,
-            directoryHint: .isDirectory
-        )
-        let repositories = repositoriesURL.map {
-            $0.standardizedFileURL.resolvingSymlinksInPath()
-        }
-        let stored = try load()
-        _ = try LocalACPWorkspaceProvisioner.ensureWorkspace(
-            at: root,
-            repositoriesURL: repositories,
-            databasesURL: stored?.databasesPath.map {
-                URL(fileURLWithPath: $0, isDirectory: true)
-            }
-        )
-        try save(StoredConfiguration(
-            repositoriesPath: repositories?.path,
-            databasesPath: stored?.databasesPath
-        ))
+    @discardableResult
+    public func configureRepositories(_ repositoriesURL: URL?, backUpExistingContents: Bool = false, copyExistingContents: Bool = false) throws -> LocalACPWorkspaceFolderChangeResult {
+        try configure(.repositories, externalURL: repositoriesURL, backUpExistingContents: backUpExistingContents, copyExistingContents: copyExistingContents)
     }
 
-    public func configureDatabases(_ databasesURL: URL?) throws {
-        let home = homeDirectory.standardizedFileURL.resolvingSymlinksInPath()
-        let root = home.appending(
-            path: LocalACPWorkspaceProvisioner.rootDirectoryName,
-            directoryHint: .isDirectory
+    @discardableResult
+    public func configureDatabases(_ databasesURL: URL?, backUpExistingContents: Bool = false, copyExistingContents: Bool = false) throws -> LocalACPWorkspaceFolderChangeResult {
+        try configure(.databases, externalURL: databasesURL, backUpExistingContents: backUpExistingContents, copyExistingContents: copyExistingContents)
+    }
+
+    private func configure(
+        _ folder: LocalACPWorkspaceFolder, externalURL: URL?, backUpExistingContents: Bool, copyExistingContents: Bool
+    ) throws -> LocalACPWorkspaceFolderChangeResult {
+        let backup = try LocalACPWorkspaceProvisioner.configureDirectory(
+            folder, at: root, externalURL: externalURL, backUpExistingContents: backUpExistingContents, copyExistingContents: copyExistingContents
         )
-        let databases = databasesURL.map {
-            $0.standardizedFileURL.resolvingSymlinksInPath()
+        // Preferences remain a migration fallback only. The shared filesystem is
+        // authoritative, including changes made by another app build or in Finder.
+        let folders = currentFolders()
+        let stored = StoredConfiguration(
+            repositoriesPath: folders.repositories?.path,
+            databasesPath: folders.databases?.path
+        )
+        defaults.set(try JSONEncoder().encode(stored), forKey: storageKey)
+        return backup
+    }
+
+    private func currentFolders() -> (repositories: URL?, databases: URL?) {
+        let stored = defaults.data(forKey: storageKey).flatMap {
+            try? JSONDecoder().decode(StoredConfiguration.self, from: $0)
         }
-        let stored = try load()
-        _ = try LocalACPWorkspaceProvisioner.ensureWorkspace(
-            at: root,
-            repositoriesURL: stored?.repositoriesPath.map {
-                URL(fileURLWithPath: $0, isDirectory: true)
-            },
-            databasesURL: databases
+        func existingTarget(_ folder: LocalACPWorkspaceFolder, fallback: String?) -> URL? {
+            let path = LocalACPWorkspaceProvisioner.directoryURL(for: folder, at: root)
+            if let destination = FileManager.default.destinationOfSymbolicLinkIfPresent(at: path) {
+                return URL(fileURLWithPath: destination, relativeTo: path.deletingLastPathComponent())
+                    .standardizedFileURL.resolvingSymlinksInPath()
+            }
+            if LocalACPWorkspaceProvisioner.itemExists(path) { return nil }
+            return fallback.map { URL(fileURLWithPath: $0, isDirectory: true) }
+        }
+        return (
+            existingTarget(.repositories, fallback: stored?.repositoriesPath),
+            existingTarget(.databases, fallback: stored?.databasesPath)
         )
-        try save(StoredConfiguration(
-            repositoriesPath: stored?.repositoriesPath,
-            databasesPath: databases?.path
-        ))
     }
 
     public func resolve() -> LocalACPWorkspaceResolution {
+        let folders = currentFolders()
+        let repositories = folders.repositories
+            ?? LocalACPWorkspaceProvisioner.directoryURL(for: .repositories, at: root)
+        let databases = folders.databases
+            ?? LocalACPWorkspaceProvisioner.directoryURL(for: .databases, at: root)
         do {
-            guard let stored = try load() else {
-                return try resolveDefaultWorkspace()
-            }
-            let home = homeDirectory
-                .standardizedFileURL
-                .resolvingSymlinksInPath()
-            let root = home.appending(
-                path: LocalACPWorkspaceProvisioner.rootDirectoryName,
-                directoryHint: .isDirectory
+            let resolvedRepositories = try LocalACPWorkspaceProvisioner.ensureWorkspace(
+                at: root, repositoriesURL: folders.repositories, databasesURL: folders.databases
             )
-            let externalRepositories = stored.repositoriesPath.map {
-                URL(
-                    fileURLWithPath: $0,
-                    isDirectory: true
-                )
-            }
-            let externalDatabases = stored.databasesPath.map {
-                URL(fileURLWithPath: $0, isDirectory: true)
-            }
-            let repositories = try LocalACPWorkspaceProvisioner.ensureWorkspace(
-                at: root,
-                repositoriesURL: externalRepositories,
-                databasesURL: externalDatabases
-            )
-            let databases = externalDatabases?.resolvingSymlinksInPath()
-                ?? root.appending(path: LocalACPWorkspaceProvisioner.databasesDirectoryName)
             return LocalACPWorkspaceResolution(
                 availability: LocalACPWorkspaceAvailability(
-                    state: .ready,
-                    detail: "Direct chats share \(root.path).",
-                    rootPath: root.path,
-                    repositoriesPath: repositories.path,
+                    state: .ready, detail: "Direct chats share \(root.path).",
+                    rootPath: root.path, repositoriesPath: resolvedRepositories.path,
                     databasesPath: databases.path,
-                    usesExternalRepositories: externalRepositories != nil,
-                    usesExternalDatabases: externalDatabases != nil
+                    usesExternalRepositories: folders.repositories != nil,
+                    usesExternalDatabases: folders.databases != nil
                 ),
                 launchConfiguration: LocalACPWorkspaceLaunchConfiguration(
-                    rootURL: root,
-                    repositoriesURL: repositories,
-                    databasesURL: databases
+                    rootURL: root, repositoriesURL: resolvedRepositories, databasesURL: databases
                 )
             )
         } catch {
             return LocalACPWorkspaceResolution(
                 availability: LocalACPWorkspaceAvailability(
-                    state: .invalidConfiguration,
-                    detail: error.localizedDescription,
-                    rootPath: nil,
-                    repositoriesPath: nil,
-                    databasesPath: nil,
-                    usesExternalRepositories: false
+                    state: .invalidConfiguration, detail: error.localizedDescription,
+                    rootPath: root.path, repositoriesPath: repositories.path,
+                    databasesPath: databases.path,
+                    usesExternalRepositories: folders.repositories != nil,
+                    usesExternalDatabases: folders.databases != nil
                 ),
                 launchConfiguration: nil
             )
         }
-    }
-
-    private func resolveDefaultWorkspace() throws -> LocalACPWorkspaceResolution {
-        let home = homeDirectory
-            .standardizedFileURL
-            .resolvingSymlinksInPath()
-        let root = home.appending(
-            path: LocalACPWorkspaceProvisioner.rootDirectoryName,
-            directoryHint: .isDirectory
-        )
-        let repositories = try LocalACPWorkspaceProvisioner.ensureWorkspace(
-            at: root,
-            repositoriesURL: nil,
-            databasesURL: nil
-        )
-        let databases = root.appending(
-            path: LocalACPWorkspaceProvisioner.databasesDirectoryName,
-            directoryHint: .isDirectory
-        )
-        return LocalACPWorkspaceResolution(
-            availability: LocalACPWorkspaceAvailability(
-                state: .ready,
-                detail: "Direct chats share \(root.path).",
-                rootPath: root.path,
-                repositoriesPath: repositories.path,
-                databasesPath: databases.path,
-                usesExternalRepositories: false,
-                usesExternalDatabases: false
-            ),
-            launchConfiguration: LocalACPWorkspaceLaunchConfiguration(
-                rootURL: root,
-                repositoriesURL: repositories,
-                databasesURL: databases
-            )
-        )
-    }
-
-    private func load() throws -> StoredConfiguration? {
-        guard let data = defaults.data(forKey: storageKey) else { return nil }
-        return try JSONDecoder().decode(StoredConfiguration.self, from: data)
-    }
-
-    private func save(_ configuration: StoredConfiguration) throws {
-        let data = try JSONEncoder().encode(configuration)
-        defaults.set(data, forKey: storageKey)
     }
 }
 
@@ -509,6 +454,7 @@ public enum LocalACPWorkspaceError: LocalizedError, Equatable, Sendable {
     case databasesDirectoryUnavailable
     case databasesDirectoryContainsWorkspace
     case defaultDatabasesNotEmpty
+    case copyFailed(String)
     case initializerUnavailable
     case initializerFailed(String)
 
@@ -521,15 +467,17 @@ public enum LocalACPWorkspaceError: LocalizedError, Equatable, Sendable {
         case .repositoriesDirectoryUnavailable:
             "The selected repositories folder is not an accessible directory."
         case .repositoriesDirectoryContainsWorkspace:
-            "Choose a repositories folder outside ~/.woven-matter and its parent directories."
+            "The repositories folder cannot contain the workspace or be inside the Repos folder it would replace."
         case .defaultRepositoriesNotEmpty:
-            "The default REPOS folder already contains files. Move them before pointing REPOS elsewhere."
+            "The default Repos folder contains files. Back them up before changing the folder."
         case .databasesDirectoryUnavailable:
             "The selected databases folder is not an accessible directory."
         case .databasesDirectoryContainsWorkspace:
-            "Choose a databases folder outside ~/.woven-matter and its parent directories."
+            "The databases folder cannot contain the workspace or be inside the Databases folder it would replace."
         case .defaultDatabasesNotEmpty:
-            "The default Databases folder already contains files. Move them before pointing Databases elsewhere."
+            "The default Databases folder contains files. Back them up before changing the folder."
+        case .copyFailed(let detail):
+            "Could not finish copying files. Your original folder is still in use and its contents are preserved. Some files may already have been copied to the selected folder. \(detail)"
         case .initializerUnavailable:
             "The shared Woven Matter workspace initializer is unavailable."
         case .initializerFailed(let detail):

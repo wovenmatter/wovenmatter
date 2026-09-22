@@ -218,7 +218,7 @@ struct RuntimeBoundaryTests {
         processWorkingDirectory: URL(fileURLWithPath: "/private/tmp"),
         workspaceRoot: URL(fileURLWithPath: "/home/shared"), workingDirectory: directory)
       #expect(inherited.workspace.rootURL == directory)
-      #expect(inherited.workspace.repositoriesURL.path == "/home/shared/REPOS")
+      #expect(inherited.workspace.repositoriesURL.path == "/home/shared/Repos")
       #expect(inherited.workspace.databasesURL.path == "/home/shared/Databases")
       #expect(inherited.launch.processWorkingDirectoryURL?.path == "/private/tmp")
       #expect(inherited.launch.arguments.last?.contains("'--workdir' '/home/projects/a quoted '\\'' directory'") == true)
