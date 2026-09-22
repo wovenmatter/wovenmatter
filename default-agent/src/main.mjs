@@ -7,8 +7,9 @@ import { DefaultAgentEngine } from './engine.mjs';
 import { CredentialVault, sharedCredentials } from './vault.mjs';
 import { signInStatuses } from './sign-in-status.mjs';
 import { probeServer } from './local-servers.mjs';
+import { preferredSignInAnswer } from './sign-in-interaction.mjs';
 import { grokAccountProfile } from './account-profile.mjs';
-import { nativeClaudeLogin } from './claude-runtime.mjs';
+import { nativeClaudeLogin, inlineClaudeLogin } from './claude-runtime.mjs';
 import { PermissionRequests, RemotePermissionRequests } from './permissions.mjs';
 
 const send = (value, flushed) => process.stdout.write(JSON.stringify(value) + '\n', flushed);
@@ -33,7 +34,7 @@ async function requestCredentials() {
   });
 }
 async function engine() {
-  return instance ??= new DefaultAgentEngine({ cwd: process.cwd(), directory, config: payload.config, credentials: payload.credentials, vault,
+  return instance ??= new DefaultAgentEngine({ cwd: process.cwd(), directory, config: payload.config, credentials: payload.credentials, credentialAccounts: payload.credentialAccounts, vault,
     requestCredentials: !remote && !control ? requestCredentials : undefined }).initialize();
 }
 async function remoteRequest(path, body, canUnlock = true) {
@@ -60,29 +61,41 @@ async function invoke(message) {
       await vault.unlock(payload.workspace, payload.unlockKey);
     }
     const e = await engine();
-    if (message.action === 'claude-status') return e.claude.status();
+    if (message.action === 'claude-status') return e.claude.status(message.profile ?? (await e.credentials.read('claude-subscription'))?.accountId);
     if (message.action === 'reset') {
       await vault.modify(async stored => ({ ...stored, shared: sharedCredentials(payload.credentials) }));
       return { reset: true };
     }
     if (message.action === 'logout') {
-      if (message.provider === 'claude-subscription') await e.claude.signOut();
+      if (message.provider === 'claude-subscription') await e.claude.signOut(message.profile);
       else await e.credentials.delete(message.provider);
       return { disconnected: true };
     }
     if (message.action === 'login') {
       const controller = new AbortController();
-      process.stdin.on('end', () => controller.abort());
+      const abortLogin = () => controller.abort();
+      process.stdin.once('end', abortLogin);
+      process.once('SIGTERM', abortLogin);
+      const loginTimeout = setTimeout(abortLogin, 10 * 60 * 1000);
+      try {
+      if (message.provider === 'claude-subscription') {
+        const status = await inlineClaudeLogin(e.claude, message.profile, { signal: controller.signal, notify: notification => send({ notification }) });
+        return { ...status, provider: message.provider, nativeProfile: message.profile };
+      }
       e.credentials.signingIn = true;
       let credential = await e.runtime.login(message.provider, 'oauth', { signal: controller.signal,
         notify: notification => send({ notification }),
-        prompt: prompt => new Promise((resolve, reject) => { const id = crypto.randomUUID(); pendingPrompts.set(id, resolve); send({ prompt: { ...prompt, signal: undefined }, id }); controller.signal.addEventListener('abort', () => reject(new Error('Sign-in cancelled.')), { once: true }); }) }).finally(() => { e.credentials.signingIn = false; });
+        prompt: prompt => {
+          const preferred = preferredSignInAnswer(message.provider, prompt);
+          if (preferred) return Promise.resolve(preferred);
+          return new Promise((resolve, reject) => { const id = crypto.randomUUID(); pendingPrompts.set(id, resolve); send({ prompt: { ...prompt, signal: undefined }, id }); controller.signal.addEventListener('abort', () => reject(new Error('Sign-in cancelled.')), { once: true }); }); } }).finally(() => { e.credentials.signingIn = false; });
       // SDK login persists through the app-owned credential store.
       if (message.provider === 'xai' && credential) {
         const profile = await grokAccountProfile(credential);
         if (profile.displayName) credential = await e.credentials.modify(message.provider, current => ({ ...current, ...profile }));
       }
       return { ...(await e.status()), connected: Boolean(credential), ...(!vault ? { credential, provider: message.provider } : {}) };
+      } finally { clearTimeout(loginTimeout); process.stdin.removeListener('end', abortLogin); process.removeListener('SIGTERM', abortLogin); }
     }
     if (message.action === 'sign-in-status') return { statuses: [...(await e.status()).providers.map(p => ({ ...p, name: 'Built-in · ' + p.name })), ...await signInStatuses(message.harnesses ?? [])] };
     if (message.action === 'refresh') {

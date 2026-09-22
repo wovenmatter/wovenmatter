@@ -1,15 +1,29 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { InMemoryCredentialStore } from '@earendil-works/pi-ai';
 import { providers } from './config.mjs';
 
 // Local sessions use access-only credentials supplied over private IPC. Only
 // control operations own local refresh tokens; their results go back to Keychain.
 export class Credentials extends InMemoryCredentialStore {
-  constructor(supplied = {}, vault) { super(); this.supplied = supplied; this.vault = vault; this.owned = {}; }
+  constructor(supplied = {}, vault, accounts = {}) { super(); this.supplied = supplied; this.vault = vault; this.owned = {}; this.accounts = accounts; this.context = new AsyncLocalStorage(); }
   async initialize() { return this; }
-  async replace(supplied) { this.supplied = supplied; }
+  async replace(supplied, accounts) { this.supplied = supplied; if (accounts) this.accounts = accounts; }
+  async candidates(provider) {
+    const vault = this.vault ? await this.vault.read() : undefined;
+    const entries = (vault ? vault.accounts : this.accounts)?.[provider] ?? [];
+    const owned = vault?.owned?.[provider] ?? this.owned[provider];
+    if (owned) return [{ id: 'default', label: 'Workspace account', credential: owned }, ...entries];
+    return entries.length ? entries : [{ id: 'default', label: 'Current account', credential: await this.read(provider) }];
+  }
+  runWithAccount(provider, account, operation) { return this.context.run({ provider, id: account.id, fallback: account.credential }, operation); }
   async read(provider) {
+    const context = this.context.getStore();
+    if (context?.provider === provider && context.id !== 'default') {
+      const accounts = this.vault ? (await this.vault.read()).accounts : this.accounts;
+      return accounts?.[provider]?.find(a => a.id === context.id)?.credential;
+    }
     const stored = this.vault ? await this.vault.read() : { shared: this.supplied, owned: this.owned };
-    return stored.owned?.[provider] ?? stored.shared?.[provider];
+    return stored.owned?.[provider] ?? stored.shared?.[provider] ?? stored.accounts?.[provider]?.[0]?.credential;
   }
   async list() {
     const stored = this.vault ? await this.vault.read() : { shared: this.supplied, owned: this.owned };

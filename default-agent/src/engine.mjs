@@ -12,16 +12,21 @@ import { registerClaudeProviders } from './claude-provider.mjs';
 const builtInInstructions = 'You are Built-in in Woven Matter. Work in the supplied agent workspace. Use the wovenmatter CLI and workspace instructions for notes and databases. Use web_search and web_read for current information and cite source URLs. If search is not configured, direct the user to Settings → Connections. Never claim a tool succeeded when it failed.';
 
 export class DefaultAgentEngine {
-  constructor({ cwd, directory, config = {}, credentials = {}, vault, requestCredentials, claude, requestPermission }) {
-    this.cwd = cwd; this.directory = directory; this.config = validateConfig({ ...emptyConfig, ...config }); this.supplied = credentials; this.vault = vault; this.requestCredentials = requestCredentials; this.sessions = new Map();
+  constructor({ cwd, directory, config = {}, credentials = {}, credentialAccounts = {}, vault, requestCredentials, claude, requestPermission }) {
+    this.cwd = cwd; this.directory = directory; this.config = validateConfig({ ...emptyConfig, ...config }); this.supplied = credentials; this.credentialAccounts = credentialAccounts; this.vault = vault; this.requestCredentials = requestCredentials; this.sessions = new Map();
     this.claude = claude ?? new ClaudeRuntime(directory); this.requestPermission = requestPermission;
   }
   async initialize() {
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
     await this.claude.loadModels();
-    this.credentials = await new Credentials(this.supplied, this.vault).initialize();
+    this.credentials = await new Credentials(this.supplied, this.vault, this.credentialAccounts).initialize();
     this.runtime = await ModelRuntime.create({ credentials: this.credentials, modelsPath: null, modelsStorePath: join(this.directory, 'models.json'), refreshOnCreate: false });
     registerLocalServers(this.runtime, this.config.customServers);
+    const xaiModels = this.runtime.getModels().filter(model => model.provider === 'xai');
+    if (xaiModels.length) this.runtime.registerProvider('xai-api', {
+      name: 'xAI API key', baseUrl: 'https://api.x.ai/v1', api: 'openai-completions', authHeader: true,
+      models: xaiModels.map(({ provider, api, baseUrl, ...model }) => model),
+    });
     registerClaudeProviders(this.runtime, this.claude, this.credentials);
     const resolveAuth = this.runtime.getAuth.bind(this.runtime);
     this.runtime.getAuth = async (model, options = {}) => {
@@ -66,22 +71,33 @@ export class DefaultAgentEngine {
       this.config = config;
       registerLocalServers(this.runtime, config.customServers);
     }
-    if (payload.credentials) { this.supplied = payload.credentials; await this.credentials.replace(payload.credentials); }
+    if (payload.credentials) { this.supplied = payload.credentials; await this.credentials.replace(payload.credentials, payload.credentialAccounts); }
+    for (const record of this.sessions.values()) if (!record.busy) this.normalizeSelection(record);
   }
   catalog() {
     return this.runtime.getModels().filter(m => this.config.providers.includes(m.provider)).map(m => ({ id: modelRef(m), name: m.name, provider: m.provider, providerName: this.providerName(m.provider) }));
   }
   providerName(id) { return providerNames[id] ?? this.config.customServers.find(s => s.id === id)?.url ?? id; }
   async status() {
-    const subscription = await this.claude.status();
+    const subscription = await this.claude.status((await this.credentials.read('claude-subscription'))?.accountId);
     if (subscription.connected || await this.credentials.read('anthropic')) {
-      try { await this.claude.discover(subscription.connected ? undefined : (await this.credentials.read('anthropic'))?.key); registerClaudeProviders(this.runtime, this.claude, this.credentials); } catch { /* Keep the bundled aliases available when discovery is offline. */ }
+      try { const discover = async () => this.claude.discover(subscription.connected ? undefined : (await this.credentials.read('anthropic'))?.key); if (this.claude.withProfile) await this.claude.withProfile((await this.credentials.read('claude-subscription'))?.accountId, discover); else await discover(); registerClaudeProviders(this.runtime, this.claude, this.credentials); } catch { /* Keep the bundled aliases available when discovery is offline. */ }
     }
     return { providers: await Promise.all([...providers, ...this.config.customServers.map(s => s.id)].map(async id => { if (id === 'claude-subscription') return { id, name: this.providerName(id), ...subscription }; const c = await this.credentials.read(id); const expired = c?.type === 'oauth' && c.expires <= Date.now(); return { id, name: this.providerName(id), connected: Boolean(c) && !expired, state: !c || expired ? 'sign_in_required' : 'credentials_present', detail: expired ? 'Access expired. Reconnect Woven Matter or sign in.' : c ? 'Credentials stored; provider access has not been verified.' : 'No credentials stored.' }; })), models: this.catalog(), searchConfigured: Boolean((await this.credentials.read('exa'))?.key) };
   }
   modelOptions() {
     const all = this.catalog();
-    return this.config.models.length ? this.config.models.flatMap(id => all.filter(m => m.id === id)) : all;
+    const ids = [...this.config.models];
+    const defaultModel = [this.config.defaultModel, this.implicitDefaultModel, all[0]?.id].find(id => all.some(m => m.id === id));
+    if (defaultModel && !ids.includes(defaultModel)) ids.unshift(defaultModel);
+    return ids.flatMap(id => all.filter(m => m.id === id));
+  }
+  normalizeSelection(record) {
+    const visible = this.modelOptions();
+    if (!visible.some(m => m.id === record.selected)) {
+      record.selected = visible[0]?.id;
+      this.persistOptions(record);
+    }
   }
   thinkingLevels(record) {
     return record.session.getAvailableThinkingLevels?.() ?? [];
@@ -130,10 +146,13 @@ export class DefaultAgentEngine {
     const saved = manager.buildSessionContext?.().model;
     const options = manager.getEntries().filter(e => e.type === 'custom' && e.customType === 'woven-built-in-options').at(-1)?.data ?? {};
     const connected = new Set((await this.credentials.list()).map(c => c.providerId));
-    if (!options.selected && !saved && !this.config.defaultModel && this.config.providers.includes('claude-subscription') && !this.modelOptions().some(m => connected.has(m.provider))) {
+    const hasDefault = this.catalog().some(m => m.id === this.config.defaultModel);
+    if (!options.selected && !saved && !hasDefault && this.config.providers.includes('claude-subscription') && !this.catalog().some(m => connected.has(m.provider))) {
       if ((await this.claude.status()).connected) connected.add('claude-subscription');
     }
-    const selected = options.selected ?? (saved ? `${saved.provider}/${saved.modelId}` : null) ?? this.config.defaultModel ?? this.modelOptions().find(m => connected.has(m.provider))?.id ?? this.modelOptions()[0]?.id;
+    if (!hasDefault) this.implicitDefaultModel = this.catalog().find(m => connected.has(m.provider))?.id ?? this.catalog()[0]?.id;
+    const visible = this.modelOptions();
+    const selected = [options.selected, saved ? `${saved.provider}/${saved.modelId}` : null, this.config.defaultModel].find(id => visible.some(m => m.id === id)) ?? visible[0]?.id;
     const model = this.resolveModel(selected);
     const settingsManager = SettingsManager.inMemory({ retry: { enabled: false }, compaction: { enabled: true } });
     const loader = new DefaultResourceLoader({ cwd: this.cwd, agentDir: this.directory, settingsManager,
@@ -172,14 +191,22 @@ export class DefaultAgentEngine {
     }
     if (option !== 'model') throw new DefaultAgentError('Unknown session option.');
     const model = this.resolveModel(reference);
-    if (!model || !this.modelOptions().some(m => m.id === reference)) throw new Error('This model is not enabled in Settings → Built-in Agent.');
-    await record.session.setModel(model);
+    if (!model || !this.modelOptions().some(m => m.id === reference)) throw new DefaultAgentError('This model is not enabled in Settings → Built-in Agent.');
+    const accounts = await this.credentials.candidates(model.provider);
+    const account = accounts.find(a => a.credential && (a.credential.type !== 'oauth' || a.credential.expires > Date.now()));
+    if (!account && model.provider !== 'claude-subscription') throw new DefaultAgentError(`Connect ${this.providerName(model.provider)} in Settings → Connections before choosing this model.`);
+    try {
+      const select = () => record.session.setModel(model);
+      await this.credentials.runWithAccount(model.provider, account ?? accounts[0], () => model.provider === 'claude-subscription' && this.claude.withProfile
+        ? this.claude.withProfile(account?.credential?.accountId, select) : select());
+    } catch { throw new DefaultAgentError(`This ${this.providerName(model.provider)} connection is unavailable. Check its account in Settings → Connections.`); }
     record.selected = reference;
     this.persistOptions(record);
     return this.configuration(record);
   }
   async prompt(record, text, emit, requestPermission) {
     if (record.busy) throw new DefaultAgentError('This Built-in session already has an active turn.');
+    this.normalizeSelection(record);
     record.busy = true;
     const controller = new AbortController();
     record.promptController = controller;
@@ -203,14 +230,21 @@ export class DefaultAgentEngine {
       else if (event.type === 'tool_execution_end') emit({ sessionUpdate: 'tool_call_update', toolCallId: event.toolCallId, status: event.isError ? 'failed' : 'completed', content: (event.result?.content ?? []).filter(c => c.type === 'text').map(c => ({ type: 'content', content: c })) });
     });
     try {
-      const attempts = [...new Set([record.selected, ...this.config.fallbackModels].filter(Boolean))];
+      const enabled = new Set(this.modelOptions().map(model => model.id));
+      const references = [...new Set([record.selected, ...this.config.fallbackModels].filter(id => enabled.has(id)))];
+      const attempts = [];
+      for (const reference of references) {
+        const provider = reference.split('/')[0];
+        for (const account of await this.credentials.candidates(provider)) attempts.push({ reference, account, provider });
+      }
       let reason;
       for (let index = 0; index < attempts.length; index++) {
         controller.signal.throwIfAborted();
-        const reference = attempts[index];
+        const { reference, account, provider } = attempts[index];
         if (!this.config.providers.includes(reference.split('/')[0])) { reason = 'The previous connection is disabled in Settings → Built-in Agent.'; continue; }
         record.httpAccessFailure = undefined;
         try {
+          const run = async () => {
           const model = this.resolveModel(reference);
           if (!model) throw new Error('Model is no longer available. Select a model in Settings → Built-in Agent.');
           if (isClaude(reference)) {
@@ -224,7 +258,7 @@ export class DefaultAgentEngine {
           controller.signal.throwIfAborted();
           if (record.session.model?.provider !== model.provider || record.session.model?.id !== model.id) await record.session.setModel(model);
           controller.signal.throwIfAborted();
-          let fallbackReason;
+          let fallbackReason = reason ? `Switched to ${account.label} · ${this.providerName(model.provider)}. ${reason}` : undefined;
           if (record.selected !== reference) {
             record.selected = reference;
             fallbackReason = `Switched to ${model.name} · ${this.providerName(model.provider)}. ${reason}`;
@@ -237,6 +271,9 @@ export class DefaultAgentEngine {
           const last = record.session.messages.at(-1);
           if (last?.role === 'assistant' && last.stopReason === 'error') throw new Error(last.errorMessage ?? 'The model request failed.');
           return { stopReason: last?.stopReason === 'aborted' ? 'cancelled' : 'end_turn', usage };
+          };
+          return await this.credentials.runWithAccount(provider, account, () => provider === 'claude-subscription' && this.claude.withProfile
+            ? this.claude.withProfile(account.credential?.accountId, run) : run());
         } catch (error) {
           if (controller.signal.aborted) return { stopReason: 'cancelled' };
           reason = record.httpAccessFailure !== undefined ? record.httpAccessFailure : (error.accessReason ?? accessFailure(error));

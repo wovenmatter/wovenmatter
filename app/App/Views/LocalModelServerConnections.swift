@@ -6,7 +6,7 @@ struct LocalModelServerConnections: View {
     @State private var servers = LocalModelServerStore.servers
     @State private var adding = false
     var body: some View {
-        SettingsCard(title: "Local Model Server", detail: "Connect OpenAI Responses-compatible servers on this Mac or your Tailscale network.") {
+        SettingsCard(title: "Local models", detail: "Connect OpenAI Responses-compatible servers on this Mac or your Tailscale network.") {
             ForEach(servers) { server in
                 LocalModelServerConnectionRow(server: server, changed: reload)
                 Divider()

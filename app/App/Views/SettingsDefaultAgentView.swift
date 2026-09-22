@@ -9,6 +9,9 @@ struct SettingsDefaultAgentView: View {
     let onBack: () -> Void
     @State private var agent = DefaultAgentSettingsModel()
     @State private var modelSearch = ""
+    @State private var connectionFilter = ""
+    @State private var labFilter = ""
+    @State private var subscriptionOnly = false
     @State private var syncError: String?
 
     private var remote: RemoteWorkspaceConfiguration? {
@@ -17,7 +20,12 @@ struct SettingsDefaultAgentView: View {
     private var editable: Bool { !agent.inherits }
     private var visibleCatalog: [DefaultAgentSettingsModel.Model] {
         let all = agent.orderedModels + agent.catalog.filter { candidate in !agent.orderedModels.contains { $0.id == candidate.id } }
-        return modelSearch.isEmpty ? all : all.filter { $0.name.localizedCaseInsensitiveContains(modelSearch) || $0.providerName.localizedCaseInsensitiveContains(modelSearch) }
+        return all.filter { item in
+            (modelSearch.isEmpty || item.name.localizedCaseInsensitiveContains(modelSearch) || item.providerName.localizedCaseInsensitiveContains(modelSearch) || item.id.localizedCaseInsensitiveContains(modelSearch))
+                && (connectionFilter.isEmpty || item.provider == connectionFilter)
+                && (labFilter.isEmpty || DefaultAgentModelCatalog.lab(id: item.id, name: item.name) == labFilter)
+                && (!subscriptionOnly || ["openai-codex", "claude-subscription", "xai"].contains(item.provider))
+        }
     }
     var body: some View {
         SettingsPage(title: "Built-in Agent", detail: "A built-in agent for every workspace.", reservesRailControlSpace: reservesRailControlSpace, onBack: onBack) {
@@ -95,7 +103,7 @@ struct SettingsDefaultAgentView: View {
             Text("Models").font(.headline)
             Picker("Default model", selection: Binding(get: { agent.configuration.defaultModel ?? "" }, set: { var config = agent.configuration; config.defaultModel = $0.isEmpty ? nil : $0; agent.configuration = config })) {
                 Text("First available model").tag("")
-                ForEach(agent.orderedModels) { item in Text("\(item.name) · \(item.providerName)").tag(item.id) }
+                ForEach(agent.catalog) { item in Text("\(item.name) · \(item.providerName)").tag(item.id) }
             }.disabled(!editable)
             Text("Fallbacks run in the numbered order when a connection loses sign-in or available usage. Switching updates the model selector and shows a notification.").font(.callout).foregroundStyle(.secondary)
             ForEach(agent.configuration.fallbackModels, id: \.self) { id in
@@ -106,19 +114,53 @@ struct SettingsDefaultAgentView: View {
                     Button("Later") { agent.moveFallback(id, by: 1) }
                 }.buttonStyle(SettingsQuietButtonStyle()).disabled(!editable)
             }
+            Text("Your default model is always available in the composer. Turn on any other models you want to include.")
+                .font(.callout).foregroundStyle(.secondary)
             TextField("Find a model or provider", text: $modelSearch).textFieldStyle(.roundedBorder)
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 12) { modelFilters }
+                VStack(alignment: .leading, spacing: 8) { modelFilters }
+            }
+            if visibleCatalog.isEmpty { Text("No models match these filters.").font(.callout).foregroundStyle(.secondary) }
             LazyVStack(spacing: 8) {
                 ForEach(visibleCatalog) { item in modelRow(item) }
             }
         }
     }
+    @ViewBuilder private var modelFilters: some View {
+        Picker("Connection", selection: $connectionFilter) {
+            Text("All connection types").tag("")
+            ForEach(Array(Set(agent.catalog.map(\.provider))).sorted(), id: \.self) { provider in
+                Text(connectionName(provider)).tag(provider)
+            }
+        }
+        Picker("Lab", selection: $labFilter) {
+            Text("All labs").tag("")
+            ForEach(Array(Set(agent.catalog.map { DefaultAgentModelCatalog.lab(id: $0.id, name: $0.name) })).sorted(), id: \.self) { lab in Text(lab).tag(lab) }
+        }
+        Toggle("Subscriptions only", isOn: $subscriptionOnly).fixedSize()
+    }
+    private func connectionName(_ provider: String) -> String {
+        switch provider {
+        case "openai-codex": "ChatGPT subscription"
+        case "openai": "OpenAI API key"
+        case "claude-subscription": "Claude subscription"
+        case "anthropic": "Claude API key"
+        case "xai": "Grok subscription"
+        case "xai-api": "xAI API key"
+        case "openrouter": "OpenRouter"
+        case "opencode-go": "OpenCode Go"
+        default: LocalModelServerStore.servers.first { $0.id == provider }.map { "Local · \($0.name)" } ?? provider
+        }
+    }
     private func modelRow(_ item: DefaultAgentSettingsModel.Model) -> some View {
-        let visible = agent.configuration.models.isEmpty || agent.configuration.models.contains(item.id)
+        let isDefault = item.id == agent.effectiveDefaultModel
+        let visible = isDefault || agent.configuration.models.contains(item.id)
         let fallback = agent.configuration.fallbackModels.firstIndex(of: item.id)
         return HStack(spacing: 10) {
             Toggle(isOn: Binding(get: { visible }, set: { agent.setVisible(item.id, visible: $0) })) {
-                VStack(alignment: .leading, spacing: 2) { Text(item.name).font(.callout); Text(item.providerName).font(.caption).foregroundStyle(.secondary) }
-            }
+                VStack(alignment: .leading, spacing: 2) { Text(item.name).font(.callout); Text(isDefault ? "\(item.providerName) · Default" : item.providerName).font(.caption).foregroundStyle(.secondary) }
+            }.disabled(isDefault)
             Spacer(minLength: 8)
             Toggle(fallback.map { "Fallback \($0 + 1)" } ?? "Fallback", isOn: Binding(get: { fallback != nil }, set: { agent.setFallback(item.id, enabled: $0) })).fixedSize().disabled(!visible)
             Button { agent.move(item.id, by: -1) } label: { Image(systemName: "chevron.up") }.accessibilityLabel("Move \(item.name) earlier")

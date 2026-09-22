@@ -266,6 +266,11 @@ final class ApplicationModel {
     var signingInUsageProviders: Set<ProviderKind> { usage.signingInUsageProviders }
     var hasAcknowledgedCredentialAccessDisclosure: Bool { usage.hasAcknowledgedCredentialAccessDisclosure }
     var enabledUsageProviders: Set<ProviderKind> { usage.enabledUsageProviders }
+    var usageConnectionChoices: [UsageConnectionChoice] { usage.usageConnectionChoices }
+    var selectedUsageConnections: [String: String] { usage.selectedUsageConnections }
+    func selectUsageConnection(_ id: String, provider: ProviderKind, range: UsageTimeRange) async {
+        await usage.selectUsageConnection(id, provider: provider, range: range)
+    }
     var codexUsageWorkspaces: [CodexUsageWorkspace] { usage.codexUsageWorkspaces }
     var selectedCodexUsageWorkspaceID: String? { usage.selectedCodexUsageWorkspaceID }
     private var currentUsageRange: UsageTimeRange { usage.currentUsageRange }

@@ -62,7 +62,7 @@ export class CredentialVault {
 
 export function sharedCredentials(input = {}) {
   const result = {};
-  for (const id of ['openai', 'openrouter', 'opencode-go', 'exa', ...Object.keys(input).filter(id => /^local-server-[a-f0-9-]{36}$/.test(id)).slice(0, 12)]) {
+  for (const id of ['openai', 'anthropic', 'xai-api', 'openrouter', 'opencode-go', 'exa', ...Object.keys(input).filter(id => /^local-server-[a-f0-9-]{36}$/.test(id)).slice(0, 12)]) {
     if (input[id]?.type === 'api_key' && typeof input[id].key === 'string') result[id] = { type: 'api_key', key: input[id].key };
   }
   for (const id of ['openai-codex', 'xai']) {
@@ -72,6 +72,32 @@ export function sharedCredentials(input = {}) {
         ...(typeof c.accountId === 'string' ? { accountId: c.accountId } : {}),
         ...(typeof c.displayName === 'string' ? { displayName: c.displayName } : {}) };
     }
+  }
+  // Only the native profile identifier is shared; Claude keeps its own tokens.
+  const native = input['claude-subscription'];
+  if (native?.type === 'native' && typeof native.accountId === 'string' && /^[a-zA-Z0-9-]{1,64}$/.test(native.accountId)) {
+    result['claude-subscription'] = { type: 'native', accountId: native.accountId };
+  }
+  return result;
+}
+
+// Account ordering and credentials are encrypted alongside the canonical slot.
+export function sharedAccounts(input = {}) {
+  const result = {};
+  for (const provider of ['openai', 'openai-codex', 'anthropic', 'xai', 'xai-api', 'openrouter', 'opencode-go', 'exa']) {
+    if (!Array.isArray(input[provider])) continue;
+    const entries = input[provider].slice(0, 4).flatMap(account => {
+      const credential = sharedCredentials({ [provider]: account?.credential })[provider];
+      return credential && typeof account.id === 'string' && typeof account.label === 'string'
+        ? [{ id: account.id, label: account.label, credential }] : [];
+    });
+    if (entries.length) result[provider] = entries;
+  }
+  // Native profile names are identifiers, never native token material.
+  for (const provider of ['claude-subscription', 'cursor']) {
+    if (!Array.isArray(input[provider])) continue;
+    result[provider] = input[provider].slice(0, 4).filter(a => typeof a.id === 'string' && typeof a.label === 'string' && a.credential?.type === 'native' && typeof a.credential.accountId === 'string')
+      .map(a => ({ id: a.id, label: a.label, credential: { type: 'native', accountId: a.credential.accountId } }));
   }
   return result;
 }

@@ -64,22 +64,54 @@ public struct CodexUsageWorkspacePreferences {
   }
 }
 
+/// A display selection for Usage; it never changes inference account preferences.
+public struct UsageConnectionChoice: Equatable, Identifiable, Sendable {
+  public let provider: ProviderKind
+  public let connectionID: String
+  public let accountID: String
+  public let label: String
+  public let preferred: Bool
+  public var id: String { connectionID + ":" + accountID }
+
+  public static func connectionTypes(for provider: ProviderKind) -> [(String, String)] {
+    switch provider {
+    case .codex: [("openai-codex", "ChatGPT"), ("openai", "API key")]
+    case .claude: [("claude-subscription", "Claude"), ("anthropic", "API key")]
+    case .grok: [("xai", "Grok"), ("xai-api", "API key")]
+    case .openRouter: [("openrouter", "API key")]
+    case .openCodeGo: [("opencode-go", "API key")]
+    case .cursor: [("cursor", "Cursor")]
+    case .unknown: []
+    }
+  }
+
+  public static func resolve(_ choices: [Self], selectedID: String?) -> Self? {
+    choices.first { $0.id == selectedID } ?? choices.first { $0.preferred } ?? choices.first
+  }
+}
+
 public struct LocalUsageLimitsSnapshot: Equatable, Sendable {
   public let accounts: [UsageLimitAccount]
   public let hasOpenRouterCredential: Bool
   public let codexWorkspaces: [CodexUsageWorkspace]
   public let selectedCodexWorkspaceID: String?
+  public let connectionChoices: [UsageConnectionChoice]
+  public let selectedConnections: [String: String]
 
   public init(
     accounts: [UsageLimitAccount],
     hasOpenRouterCredential: Bool,
     codexWorkspaces: [CodexUsageWorkspace] = [],
-    selectedCodexWorkspaceID: String? = nil
+    selectedCodexWorkspaceID: String? = nil,
+    connectionChoices: [UsageConnectionChoice] = [],
+    selectedConnections: [String: String] = [:]
   ) {
     self.accounts = accounts
     self.hasOpenRouterCredential = hasOpenRouterCredential
     self.codexWorkspaces = codexWorkspaces
     self.selectedCodexWorkspaceID = selectedCodexWorkspaceID
+    self.connectionChoices = connectionChoices
+    self.selectedConnections = selectedConnections
   }
 }
 
@@ -93,6 +125,7 @@ struct UsageLimitsRequest: Sendable {
   let codexWorkspaceSource: CodexWorkspaceSource?
   let codexWorkspaceCount: Int
   let now: Date
+  var selectedConnections: [ProviderKind: UsageConnectionChoice] = [:]
 
   func collect(sharedCredentials: [String: DefaultAgentCredential]? = nil,
                claudeStatus: BuiltInClaudeSignIn.Status? = nil) async -> [UsageLimitAccount] {
@@ -105,6 +138,7 @@ struct UsageLimitsRequest: Sendable {
       codexWorkspaceSource: codexWorkspaceSource,
       codexWorkspaceCount: codexWorkspaceCount,
       sharedCredentials: sharedCredentials,
+      selectedConnections: selectedConnections,
       claudeStatus: claudeStatus,
       now: now
     )
@@ -140,6 +174,7 @@ public actor LocalUsageService {
     providers: Set<ProviderKind>,
     codexWorkspaceID: String?,
     connectionRevision: UInt64,
+    selectedConnections: [String: String],
     accounts: [UsageLimitAccount]
   )?
   private var importOutcomes: [String: ImportOutcome] = [:]
@@ -163,9 +198,18 @@ public actor LocalUsageService {
     credentialStore = UsageCredentialStore(service: credentialService)
     usesSharedConnections = true
     limitCollector = { request in
-      let credentials = request.allowCredentialAccess ? ((try? await ProviderAccountCoordinator.shared.appCredentials()) ?? [:]) : [:]
+      var credentials = request.allowCredentialAccess ? ((try? await ProviderAccountCoordinator.shared.appCredentials()) ?? [:]) : [:]
+      if request.allowCredentialAccess {
+        for choice in request.selectedConnections.values {
+          if let credential = try? ProviderConnectionAccounts.credential(choice.accountID, provider: choice.connectionID, scope: "global") {
+            credentials[choice.connectionID] = credential.borrowing()
+          } else {
+            credentials.removeValue(forKey: choice.connectionID)
+          }
+        }
+      }
       let claudeStatus = request.allowCredentialAccess && request.enabledProviders.contains(.claude)
-        ? try? await BuiltInClaudeSignIn.status() : nil
+        ? try? await BuiltInClaudeSignIn.status(profile: credentials["claude-subscription"]?.accountId) : nil
       return await request.collect(sharedCredentials: credentials, claudeStatus: claudeStatus)
     }
     openRouterActivityFetcher = { try await OpenRouterActivityClient.fetch(apiKey: $0) }
@@ -252,9 +296,27 @@ public actor LocalUsageService {
     keychainInteraction: UsageKeychainInteraction = .noninteractive,
     interactiveProvider: ProviderKind? = nil,
     selectedCodexWorkspaceID: String? = nil,
+    selectedConnections: [String: String] = [:],
     now: Date = Date()
   ) async throws -> LocalUsageLimitsSnapshot {
     try Task.checkCancellation()
+    var connectionChoices: [UsageConnectionChoice] = []
+    if usesSharedConnections && allowCredentialAccess {
+      for provider in ProviderKind.supportedAccounts where enabledProviders.contains(provider) {
+        for (type, title) in UsageConnectionChoice.connectionTypes(for: provider) {
+          for account in (try? ProviderConnectionAccounts.list(provider: type, scope: "global")) ?? [] {
+            connectionChoices.append(UsageConnectionChoice(provider: provider, connectionID: type,
+              accountID: account.id, label: "\(title) · \(account.label)", preferred: account.isSelected))
+          }
+        }
+      }
+    }
+    var resolvedConnections: [ProviderKind: UsageConnectionChoice] = [:]
+    for provider in enabledProviders {
+      resolvedConnections[provider] = UsageConnectionChoice.resolve(
+        connectionChoices.filter { $0.provider == provider }, selectedID: selectedConnections[provider.rawValue])
+    }
+    let selectionIDs = Dictionary(uniqueKeysWithValues: resolvedConnections.map { ($0.key.rawValue, $0.value.id) })
     let connectionRevision = DefaultAgentSupport.revision
     let generation = UUID()
     limitsGeneration = generation
@@ -271,6 +333,7 @@ public actor LocalUsageService {
       && refreshReason != .credentialChanged
     if let cachedLimits,
        cachedLimits.providers == enabledProviders,
+       cachedLimits.selectedConnections == selectionIDs,
        (!usesSharedConnections || cachedLimits.connectionRevision == connectionRevision),
        cachedLimits.codexWorkspaceID == resolvedCodexWorkspaceID,
        (!refresh || (mayReuseFreshLimits
@@ -280,7 +343,7 @@ public actor LocalUsageService {
       // Shared account switches must never inherit a previous account or harness
       // snapshot. Their live limits are cheap to re-fetch; keep only this session
       // cache, fenced by the shared connection revision.
-      let sharedProviders: Set<ProviderKind> = usesSharedConnections ? [.codex, .grok, .openRouter, .openCodeGo] : []
+      let sharedProviders: Set<ProviderKind> = usesSharedConnections ? Set(ProviderKind.supportedAccounts) : []
       let persistent = (try? openUsageStore()?.usageLimitAccounts(
         providers: enabledProviders.subtracting(sharedProviders),
         accountScopes: resolvedCodexWorkspaceID.map { [.codex: $0] } ?? [:]
@@ -307,7 +370,8 @@ public actor LocalUsageService {
           interactiveProvider: interactiveProvider,
           codexWorkspaceSource: selectedCodexSource,
           codexWorkspaceCount: codexSources.count,
-          now: now
+          now: now,
+          selectedConnections: resolvedConnections
         ))
         guard limitsGeneration == generation, !Task.isCancelled,
               !usesSharedConnections || connectionRevision == DefaultAgentSupport.revision else {
@@ -333,7 +397,7 @@ public actor LocalUsageService {
           return prior.retainingLastGood(after: account)
         }
         try? openUsageStore()?.saveUsageLimitAccounts(accounts, storedAt: now)
-        cachedLimits = (now, enabledProviders, resolvedCodexWorkspaceID, connectionRevision, accounts)
+        cachedLimits = (now, enabledProviders, resolvedCodexWorkspaceID, connectionRevision, selectionIDs, accounts)
       } else {
         let placeholders = ProviderLimitCollector.placeholderAccounts(
           enabledProviders: enabledProviders,
@@ -351,7 +415,9 @@ public actor LocalUsageService {
         && enabledProviders.contains(.openRouter)
         && (openRouterAPIKey != nil || (try? credentialStore.hasOpenRouterAPIKey()) == true),
       codexWorkspaces: codexSources.map(\.workspace),
-      selectedCodexWorkspaceID: resolvedCodexWorkspaceID
+      selectedCodexWorkspaceID: resolvedCodexWorkspaceID,
+      connectionChoices: connectionChoices,
+      selectedConnections: selectionIDs
     )
   }
 

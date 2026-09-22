@@ -82,6 +82,7 @@ enum ProviderLimitCollector {
     codexWorkspaceSource: CodexWorkspaceSource? = nil,
     codexWorkspaceCount: Int = 0,
     sharedCredentials: [String: DefaultAgentCredential]? = nil,
+    selectedConnections: [ProviderKind: UsageConnectionChoice] = [:],
     claudeStatus: BuiltInClaudeSignIn.Status? = nil,
     now: Date
   ) async -> [UsageLimitAccount] {
@@ -92,8 +93,12 @@ enum ProviderLimitCollector {
       for provider in ProviderKind.supportedAccounts
         where enabledProviders.contains(provider) {
         group.addTask {
+          let choice = selectedConnections[provider]
+          if let choice, ["openai", "anthropic", "xai-api"].contains(choice.connectionID) {
+            return apiKeyAccount(provider, choice: choice, present: sharedCredentials?[choice.connectionID]?.key != nil, now: now)
+          }
           if sharedCredentials != nil, provider == .claude {
-            return UsageLimitAccount(provider: .claude, accountLabel: claudeStatus?.account ?? "Claude subscription",
+            return UsageLimitAccount(provider: .claude, accountScopeID: choice.map { "wovenmatter.shared." + $0.id }, accountLabel: claudeStatus?.account ?? choice?.label ?? "Claude subscription",
               status: claudeStatus?.connected == true ? .signedIn : (claudeStatus?.state == "sign_in_required" ? .needsCredential : .unavailable),
               source: "Built-in Claude runtime", detail: claudeStatus?.connected == true
                 ? "Claude manages this sign-in. Check subscription limits and extra usage in your Claude account. API keys are billed separately."
@@ -101,7 +106,7 @@ enum ProviderLimitCollector {
               dashboardURL: ProviderDashboardURL.claude)
           }
           if let sharedCredentials, [.codex, .grok, .openCodeGo, .openRouter].contains(provider) {
-            return await sharedAccount(provider, credentials: sharedCredentials, now: now)
+            return await sharedAccount(provider, credentials: sharedCredentials, now: now, choice: choice)
           }
           return switch provider {
           case .codex, .claude, .grok, .cursor:
@@ -529,7 +534,19 @@ enum ProviderLimitCollector {
     }
   }
 
-  private static func sharedAccount(_ provider: ProviderKind, credentials: [String: DefaultAgentCredential], now: Date, mayRenew: Bool = true) async -> UsageLimitAccount {
+  static func apiKeyAccount(_ provider: ProviderKind, choice: UsageConnectionChoice, present: Bool, now: Date) -> UsageLimitAccount {
+    UsageLimitAccount(provider: provider, accountScopeID: "wovenmatter.shared.\(choice.id)",
+      accountLabel: choice.label, status: present ? .unavailable : .needsCredential,
+      source: "Woven Matter Connections",
+      detail: present
+        ? "API key saved. This connection does not expose subscription usage limits here. Check API billing and limits in the provider dashboard."
+        : "This key is no longer available. Choose another account or update it in Connections.",
+      observedAt: now, dashboardURL: provider == .codex ? URL(string: "https://platform.openai.com/usage")
+        : provider == .claude ? URL(string: "https://platform.claude.com/settings/usage")
+        : URL(string: "https://console.x.ai/"))
+  }
+
+  private static func sharedAccount(_ provider: ProviderKind, credentials: [String: DefaultAgentCredential], now: Date, mayRenew: Bool = true, choice: UsageConnectionChoice? = nil) async -> UsageLimitAccount {
     let id: String
     switch provider {
     case .codex: id = "openai-codex"
@@ -558,20 +575,20 @@ enum ProviderLimitCollector {
       case .openRouter: account = await openRouter(apiKey: token, now: now)
       default: return unavailable(provider, detail: "Usage is unavailable.", now: now)
       }
-      return UsageLimitAccount(provider: account.provider, accountScopeID: "wovenmatter.shared.\(id)",
-        accountLabel: credential.accountLabel ?? account.accountLabel, status: account.status,
+      return UsageLimitAccount(provider: account.provider, accountScopeID: "wovenmatter.shared.\(choice?.id ?? id)",
+        accountLabel: choice?.label ?? credential.accountLabel ?? account.accountLabel, status: account.status,
         quotaWindows: account.quotaWindows, balance: account.balance, providerBudget: account.providerBudget,
         details: account.details, history: account.history, source: "Woven Matter shared connection · \(account.source)",
         detail: account.detail, observedAt: account.observedAt, dashboardURL: account.dashboardURL)
     } catch {
       let rejected = (error as? SharedAccountHTTPError)?.status == 401
-      if rejected, mayRenew, credential.type == "oauth",
+      if rejected, mayRenew, choice == nil || choice?.preferred == true, credential.type == "oauth",
          let renewed = try? await ProviderAccountCoordinator.shared.renewRejectedAccess(provider: id, access: token) {
         var updated = credentials; updated[id] = renewed
-        return await sharedAccount(provider, credentials: updated, now: now, mayRenew: false)
+        return await sharedAccount(provider, credentials: updated, now: now, mayRenew: false, choice: choice)
       }
-      return UsageLimitAccount(provider: provider, accountScopeID: "wovenmatter.shared.\(id)",
-        accountLabel: credential.accountLabel ?? provider.displayName, status: rejected ? .needsCredential : .unavailable,
+      return UsageLimitAccount(provider: provider, accountScopeID: "wovenmatter.shared.\(choice?.id ?? id)",
+        accountLabel: choice?.label ?? credential.accountLabel ?? provider.displayName, status: rejected ? .needsCredential : .unavailable,
         source: "Woven Matter Connections", detail: rejected ? "Reconnect this account in Settings → Connections." : "Usage could not be checked. Manage or refresh this account in Connections.", observedAt: now)
     }
   }

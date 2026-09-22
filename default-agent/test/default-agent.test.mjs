@@ -7,7 +7,7 @@ import { searchTools } from '../src/search.mjs';
 import { DefaultAgentEngine } from '../src/engine.mjs';
 import { createDefaultAgentService } from '../src/service.mjs';
 import { Credentials } from '../src/credentials.mjs';
-import { CredentialVault } from '../src/vault.mjs';
+import { CredentialVault, sharedAccounts, sharedCredentials } from '../src/vault.mjs';
 import { randomBytes } from 'node:crypto';
 import { providerFetch } from '../src/transport.mjs';
 
@@ -57,13 +57,13 @@ test('real SDK loads the complete selected tool set and resumes an empty draft w
   await assert.rejects(engine.prompt(record, 'No provider should be consumed', () => {}), /No configured connection/);
 });
 function fixtureEngine({ errors = [], connected = ['openai-codex', 'openrouter'], visible = false, streamEvents = [] } = {}) {
-  const engine = new DefaultAgentEngine({ cwd: '/tmp', directory: '/tmp', config: { defaultModel: 'openai-codex/primary', fallbackModels: ['openrouter/fallback'] } });
+  const engine = new DefaultAgentEngine({ cwd: '/tmp', directory: '/tmp', config: { defaultModel: 'openai-codex/primary', models: ['openrouter/fallback'], fallbackModels: ['openrouter/fallback'] } });
   const selected = [];
   let listener;
   const record = { selected: 'openai-codex/primary', busy: false, manager: { getLeafId: () => 'before', branch: () => {}, appendCustomEntry: () => {} }, session: { messages: [], agent: { state: { messages: [] } }, subscribe(fn) { listener = fn; return () => {}; }, async setModel(m) { selected.push(m.provider); }, async prompt() { for (const event of streamEvents) listener(event); if (visible) listener({ type: 'tool_execution_start', toolCallId: 't', toolName: 'bash', args: {} }); if (errors.length) throw new Error(errors.shift()); } } };
   engine.resolveModel = ref => { const [provider, id] = ref.split('/'); return { provider, id, name: id }; };
-  engine.credentials = { read: async p => connected.includes(p) ? { type: 'api_key', key: 'fixture' } : undefined };
-  engine.runtime = { getAuth: async () => ({}), getModels: () => [] };
+  engine.credentials = new Credentials(Object.fromEntries(connected.map(p => [p, { type: 'api_key', key: 'fixture' }])));
+  engine.runtime = { getAuth: async () => ({}), getModels: () => [{ provider: 'openai-codex', id: 'primary', name: 'Primary' }, { provider: 'openrouter', id: 'fallback', name: 'Fallback' }] };
   return { engine, record, selected };
 }
 test('signed-out subscription falls back to configured API provider and updates selector with a reason', async () => {
@@ -218,4 +218,74 @@ test('reasoning block identity survives interleaved answer prefixes and changes 
   assert.equal(thoughts[0]._meta.wovenThoughtID, thoughts[1]._meta.wovenThoughtID);
   assert.notEqual(thoughts[1]._meta.wovenThoughtID, thoughts[2]._meta.wovenThoughtID);
   assert.equal(events.filter(event => event.sessionUpdate === 'agent_message_chunk').map(event => event.content.text).join(''), 'Tiananmen');
+});
+
+test('account fallback follows priority without changing another session credential', async () => {
+  const { engine, record } = fixtureEngine({ errors: ['insufficient_quota'] });
+  engine.config.fallbackModels = [];
+  engine.credentials.accounts = { 'openai-codex': [
+    { id: 'first', label: 'First', credential: { type: 'api_key', key: 'first-secret' } },
+    { id: 'second', label: 'Second', credential: { type: 'api_key', key: 'second-secret' } },
+  ] };
+  const used = []; const events = [];
+  engine.runtime.getAuth = async () => { used.push((await engine.credentials.read('openai-codex')).key); return {}; };
+  await engine.prompt(record, 'hello', event => events.push(event));
+  assert.deepEqual(used, ['first-secret', 'second-secret']);
+  assert.match(events.at(-1)._meta.fallbackReason, /Second/);
+  assert.equal((await engine.credentials.read('openai-codex')).key, 'fixture');
+});
+test('account contexts isolate overlapping asynchronous requests', async () => {
+  const credentials = new Credentials({}, undefined, { openai: [
+    { id: 'a', credential: { type: 'api_key', key: 'a' } },
+    { id: 'b', credential: { type: 'api_key', key: 'b' } },
+  ] });
+  const accounts = await credentials.candidates('openai');
+  const values = await Promise.all(accounts.map(account => credentials.runWithAccount('openai', account, async () => {
+    await new Promise(resolve => setTimeout(resolve, account.id === 'a' ? 10 : 1));
+    return (await credentials.read('openai')).key;
+  })));
+  assert.deepEqual(values, ['a', 'b']);
+});
+
+test('account backups are encrypted and borrowed tokens never export renewal secrets', async t => {
+  const directory = await temporary(t);
+  const vault = new CredentialVault(directory);
+  await vault.unlock('accounts-test', randomBytes(32).toString('base64'));
+  const accounts = sharedAccounts({
+    'openai-codex': [{ id: 'account', label: 'Work', credential: { type: 'oauth', access: 'borrowed-access', refresh: 'never-export', expires: Date.now() + 10000 } }],
+    anthropic: [{ id: 'key', label: 'API key', credential: { type: 'api_key', key: 'private-api-key' } }],
+  });
+  assert.equal(accounts['openai-codex'][0].credential.refresh, '');
+  await vault.modify(async () => ({ accounts, owned: { 'openai-codex': { type: 'oauth', access: 'workspace-owned' } } }));
+  const disk = await readFile(vault.path, 'utf8');
+  assert.ok(!disk.includes('borrowed-access') && !disk.includes('private-api-key') && !disk.includes('never-export'));
+  const credentials = new Credentials({}, vault);
+  const candidates = await credentials.candidates('openai-codex');
+  assert.equal(candidates[0].credential.access, 'workspace-owned');
+  assert.equal(candidates[1].credential.access, 'borrowed-access');
+});
+test('account fallback never retries throttling or a turn with visible output', async () => {
+  for (const [error, visible] of [['429 Too Many Requests', false], ['insufficient_quota', true]]) {
+    const { engine, record } = fixtureEngine({ errors: [error], visible });
+    engine.config.fallbackModels = [];
+    engine.credentials.accounts = { 'openai-codex': ['one', 'two'].map(id => ({ id, label: id, credential: { type: 'api_key', key: id } })) };
+    let attempts = 0; engine.runtime.getAuth = async () => { attempts++; return {}; };
+    await assert.rejects(engine.prompt(record, 'hello', () => {}));
+    assert.equal(attempts, 1);
+  }
+});
+
+
+test('hidden fallback models are never attempted', async () => {
+  const { engine, record, selected } = fixtureEngine({ errors: ['insufficient_quota'] });
+  engine.config.models = [];
+  await assert.rejects(engine.prompt(record, 'hello', () => {}));
+  assert.deepEqual(selected, ['openai-codex']);
+  assert.equal(record.selected, 'openai-codex/primary');
+});
+
+test('native profile sharing includes only an identifier, never native credentials', () => {
+  assert.deepEqual(sharedCredentials({ 'claude-subscription': { type: 'native', accountId: 'profile-1', access: 'must-not-share', refresh: 'must-not-share' } }),
+    { 'claude-subscription': { type: 'native', accountId: 'profile-1' } });
+  assert.deepEqual(sharedCredentials({ 'claude-subscription': { type: 'native', accountId: '../outside' } }), {});
 });

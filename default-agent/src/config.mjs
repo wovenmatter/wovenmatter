@@ -2,8 +2,8 @@ import { mkdir, readFile, writeFile, rename } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { localServers } from './local-servers.mjs';
 
-export const providers = ['openai-codex', 'openai', 'openrouter', 'opencode-go', 'xai', 'claude-subscription', 'anthropic'];
-export const providerNames = { 'openai-codex': 'OpenAI · ChatGPT subscription', openai: 'OpenAI · API key', openrouter: 'OpenRouter', 'opencode-go': 'OpenCode Go', xai: 'Grok subscription', 'claude-subscription': 'Claude · Subscription', anthropic: 'Claude · API key' };
+export const providers = ['openai-codex', 'openai', 'openrouter', 'opencode-go', 'xai', 'xai-api', 'claude-subscription', 'anthropic'];
+export const providerNames = { 'openai-codex': 'OpenAI · ChatGPT subscription', openai: 'OpenAI · API key', openrouter: 'OpenRouter', 'opencode-go': 'OpenCode Go', xai: 'Grok subscription', 'xai-api': 'xAI · API key', 'claude-subscription': 'Claude · Subscription', anthropic: 'Claude · API key' };
 export const emptyConfig = { providers, models: [], defaultModel: null, fallbackModels: [], searchProvider: 'exa' };
 
 // Only app-authored messages may cross the helper boundary. SDK/provider

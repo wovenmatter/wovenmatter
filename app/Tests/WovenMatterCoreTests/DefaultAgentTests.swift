@@ -5,6 +5,24 @@ import WovenMatterCore
 
 @Suite("Built-in settings and recovery")
 struct DefaultAgentTests {
+    @Test func modelChoicesAreOptInAndDefaultRemainsAvailable() {
+        let catalog = ["openai/gpt", "openrouter/anthropic/claude", "opencode-go/glm"]
+        #expect(DefaultAgentModelCatalog.visibleIDs(explicit: [], defaultModel: catalog[1], catalog: catalog) == [catalog[1]])
+        #expect(DefaultAgentModelCatalog.visibleIDs(explicit: [catalog[2]], defaultModel: catalog[1], catalog: catalog) == [catalog[1], catalog[2]])
+        #expect(DefaultAgentModelCatalog.visibleIDs(explicit: [], defaultModel: nil, catalog: catalog) == [catalog[0]])
+        #expect(DefaultAgentModelCatalog.visibleIDs(explicit: [catalog[2], catalog[1]], defaultModel: catalog[1], catalog: catalog) == [catalog[2], catalog[1]])
+    }
+    @Test func labsAreSharedAcrossConnectionTypes() {
+        for id in ["anthropic/claude-sonnet-4", "claude-subscription/sonnet", "openrouter/anthropic/claude-sonnet", "opencode-go/claude-sonnet-4"] {
+            #expect(DefaultAgentModelCatalog.lab(id: id, name: "Claude Sonnet") == "Anthropic")
+        }
+        for id in ["openai-codex/gpt-5", "openai/o3", "openrouter/openai/gpt-5", "opencode-go/gpt-5"] {
+            #expect(DefaultAgentModelCatalog.lab(id: id, name: "Reasoning model") == "OpenAI")
+        }
+        #expect(DefaultAgentModelCatalog.lab(id: "openrouter/google/gemini-3", name: "Gemini") == "Google")
+        #expect(DefaultAgentModelCatalog.lab(id: "opencode-go/glm-5", name: "GLM") == "Z.ai")
+        #expect(DefaultAgentModelCatalog.lab(id: "openrouter/unknown/model", name: "Unknown") == "Other")
+    }
     @Test func workspaceOverridesRemainIndependent() throws {
         var settings = DefaultAgentSettingsScope()
         settings.global.defaultModel = "openai-codex/primary"

@@ -226,3 +226,64 @@ private actor RejectedCredentialFixture {
         self.access = "new"
     }
 }
+
+extension DefaultAgentCredentialTests {
+    @Test func accountMigrationSelectionOrderingAndRemovalPreserveCanonicalKey() throws {
+        let keychain = DefaultAgentKeychainFixture().access
+        try DefaultAgentSupport.saveKey("legacy", provider: "openrouter", keychain: keychain)
+        let legacy = try #require(ProviderConnectionAccounts.list(provider: "openrouter", keychain: keychain).first)
+        #expect(legacy.createdAt == nil)
+        #expect(legacy.isSelected)
+        let second = try ProviderConnectionAccounts.addKey("second", provider: "openrouter", keychain: keychain)
+        #expect(try DefaultAgentSupport.key("openrouter", keychain: keychain) == "legacy")
+        try ProviderConnectionAccounts.select(second.id, provider: "openrouter", keychain: keychain)
+        #expect(try DefaultAgentSupport.key("openrouter", keychain: keychain) == "second")
+        #expect(try ProviderConnectionAccounts.credential(legacy.id, provider: "openrouter", keychain: keychain)?.key == "legacy")
+        try ProviderConnectionAccounts.move(second.id, offset: -1, provider: "openrouter", keychain: keychain)
+        #expect(try ProviderConnectionAccounts.list(provider: "openrouter", keychain: keychain).first?.id == second.id)
+        try ProviderConnectionAccounts.remove(second.id, provider: "openrouter", keychain: keychain)
+        #expect(try DefaultAgentSupport.key("openrouter", keychain: keychain) == "legacy")
+    }
+    @Test func accountsEnforceCapAndBorrowWithoutRefreshTokens() throws {
+        let keychain = DefaultAgentKeychainFixture().access
+        for i in 0..<4 { try ProviderConnectionAccounts.addKey("key-\(i)", provider: "openai", keychain: keychain) }
+        #expect(throws: (any Error).self) { try ProviderConnectionAccounts.addKey("fifth", provider: "openai", keychain: keychain) }
+        var credential = DefaultAgentCredential(type: "oauth")
+        credential.access = "access"; credential.refresh = "private-refresh"; credential.accountId = "account"
+        let account = try ProviderConnectionAccounts.addOAuth(credential, provider: "openai-codex", keychain: keychain)
+        let borrowed = try #require(ProviderConnectionAccounts.borrowedAccounts(provider: "openai-codex", keychain: keychain).first)
+        #expect(borrowed.credential.refresh == "")
+        #expect(borrowed.credential.borrowed)
+        #expect(try ProviderConnectionAccounts.credential(account.id, provider: "openai-codex", keychain: keychain)?.refresh == "private-refresh")
+        try ProviderConnectionAccounts.remove(account.id, provider: "openai-codex", keychain: keychain)
+        var renewed = credential; renewed.access = "late"
+        #expect(try !ProviderConnectionAccounts.saveRenewed(renewed, replacing: credential, accountID: account.id, provider: "openai-codex", scope: "global", keychain: keychain))
+        #expect(try DefaultAgentSupport.oauth("openai-codex", keychain: keychain) == nil)
+    }
+}
+
+extension DefaultAgentCredentialTests {
+    @Test func interruptedAccountSelectionNeverReassignsSecretsToAnotherIdentity() throws {
+        let keychain = DefaultAgentKeychainFixture().access
+        let first = try ProviderConnectionAccounts.addKey("first", provider: "openai", keychain: keychain)
+        let second = try ProviderConnectionAccounts.addKey("second", provider: "openai", keychain: keychain)
+        let encoded = try #require(try DefaultAgentSupport.key("accounts.openai", keychain: keychain))
+        var transaction = try #require(try JSONSerialization.jsonObject(with: Data(encoded.utf8)) as? [String: Any])
+        let previous = try #require(transaction["entries"] as? [[String: Any]])
+        var next = previous
+        for index in next.indices {
+            var account = next[index]["account"] as! [String: Any]
+            account["isSelected"] = account["id"] as? String == second.id
+            next[index]["account"] = account
+        }
+        transaction["entries"] = next
+        transaction["pendingPreviousEntries"] = previous
+        try DefaultAgentSupport.saveKey(String(decoding: JSONSerialization.data(withJSONObject: transaction), as: UTF8.self), provider: "accounts.openai", keychain: keychain)
+        // Simulate interruption before the canonical write: recover the old
+        // selection, retaining both secrets under their original identities.
+        let accounts = try ProviderConnectionAccounts.list(provider: "openai", keychain: keychain)
+        #expect(accounts.first(where: \.isSelected)?.id == first.id)
+        #expect(try ProviderConnectionAccounts.credential(first.id, provider: "openai", keychain: keychain)?.key == "first")
+        #expect(try ProviderConnectionAccounts.credential(second.id, provider: "openai", keychain: keychain)?.key == "second")
+    }
+}

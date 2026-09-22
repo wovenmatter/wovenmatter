@@ -9,8 +9,10 @@ public enum BuiltInClaudeSignIn {
         public let account: String?
         public let detail: String
     }
-    public static func status() async throws -> Status {
-        let request = Data(#"{"action":"claude-status"}"#.utf8)
+    public static func status(profile: String? = nil) async throws -> Status {
+        var body = ["action": "claude-status"]
+        if let profile { body["profile"] = profile }
+        let request = try JSONSerialization.data(withJSONObject: body)
         return try await JSONDecoder().decode(Status.self, from: DefaultAgentControl.run(request))
     }
     public static func command(remote: RemoteWorkspaceConfiguration? = nil) throws -> String {
