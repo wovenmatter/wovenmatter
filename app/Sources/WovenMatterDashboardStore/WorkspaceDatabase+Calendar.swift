@@ -151,6 +151,22 @@ extension WorkspaceDatabase {
         var details = existing?.calendar ?? .init(createdBy: author)
         if existing != nil { details.editedBy = author; details.revision += 1 }
         if draft.recurrence == nil { details.excludedOccurrences = [] }
+        if let existing {
+          var previousDraft = WorkspaceCalendarDraft(existing)
+          previousDraft.showsOnCalendar = draft.showsOnCalendar
+          if existing.calendar.showsOnCalendar != draft.showsOnCalendar, try previousDraft.validated() == draft {
+            // A display-only change must not cancel queued work, advance the
+            // schedule, or replace the recurring session.
+            details.showsOnCalendar = draft.showsOnCalendar
+            try toolsExecuteUnlocked("UPDATE dashboard_calendar_items SET calendar_json=?,updated_at=? WHERE id=?",
+              [try toolsJSON(details), Self.timestamp(now), id])
+            if let callerID {
+              try recordHistoryUnlocked(.init(conversationID: callerID, harness: "wovenmatter", kind: "calendar.write",
+                payload: try toolsJSON(["eventID": id, "action": "update"])))
+            }
+            return id
+          }
+        }
         try cancelCalendarRunsUnlocked(eventID: id)
         try writeCalendarEventUnlocked(id: id, draft: draft, existing: existing, details: details, now: now)
         if let callerID {
@@ -166,6 +182,7 @@ extension WorkspaceDatabase {
       existing: WorkspaceCalendarItemRecord?, details: WorkspaceCalendarDetails, now: Date) throws {
     var details = details
     details.timeZoneID = draft.timeZoneID; details.recurrence = draft.recurrence; details.task = draft.task
+    details.showsOnCalendar = draft.task == nil || draft.showsOnCalendar
     let operatorID = try localMutationOperatorIDUnlocked()
     let stamp = Self.timestamp(now)
     // Match the precision of the canonical persisted start date. Comparing a

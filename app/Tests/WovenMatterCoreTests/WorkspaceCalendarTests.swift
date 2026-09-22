@@ -475,3 +475,65 @@ extension WorkspaceCalendarTests {
     #expect(try db.sessionTools(session.id).enabled == [.notes])
   }
 }
+
+extension WorkspaceCalendarTests {
+  @Test func legacyCalendarVisibilityDefaultsToVisible() throws {
+    func legacy<T: Encodable>(_ value: T) throws -> Data {
+      var object = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(value)) as? [String: Any])
+      object.removeValue(forKey: "showsOnCalendar")
+      return try JSONSerialization.data(withJSONObject: object)
+    }
+    let details = WorkspaceCalendarDetails(task: task())
+    #expect(try JSONDecoder().decode(WorkspaceCalendarDetails.self, from: legacy(details)).showsOnCalendar)
+    let draft = WorkspaceCalendarDraft(title: "Old task", startsAt: date("2026-09-01T13:00:00Z"), task: task())
+    #expect(try JSONDecoder().decode(WorkspaceCalendarDraft.self, from: legacy(draft)).showsOnCalendar)
+    var ordinary = draft; ordinary.task = nil; ordinary.showsOnCalendar = false
+    #expect(try ordinary.validated().showsOnCalendar)
+  }
+
+  @Test func standaloneTasksPersistRunAndReuseSessionsWithoutCalendarEntries() throws {
+    let (db, directory) = try fixture(); defer { try? FileManager.default.removeItem(at: directory) }
+    let start = date("2026-09-01T13:00:00Z")
+    let id = try db.saveCalendarEvent(draft: .init(title: "Background review", startsAt: start, timeZoneID: "UTC",
+      recurrence: .init(unit: .day), task: task(), showsOnCalendar: false), creating: true, now: start)
+    let reopened = try WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+    let event = try #require(reopened.calendarItems().first)
+    #expect(!event.calendar.showsOnCalendar)
+    #expect(!WorkspaceCalendarDraft(event).copied(to: start.addingTimeInterval(86_400)).showsOnCalendar)
+    let first = try #require(reopened.dueCalendarRuns(now: start).first)
+    try accept(first, in: reopened, now: start)
+    let nextDay = start.addingTimeInterval(86_400)
+    let second = try #require(reopened.dueCalendarRuns(now: nextDay).first)
+    #expect(second.sessionID == first.sessionID)
+    #expect(second.task.configuration == first.task.configuration)
+    let range = DateInterval(start: start.addingTimeInterval(-1), end: nextDay.addingTimeInterval(1))
+    #expect(WorkspaceCalendarSchedule.visibleOccurrences(events: try reopened.calendarItems(),
+      runs: try reopened.calendarRuns(), in: range).isEmpty)
+    var draft = WorkspaceCalendarDraft(event)
+    draft.showsOnCalendar = true
+    try reopened.saveCalendarEvent(id: id, draft: draft, creating: false, now: nextDay)
+    #expect(!WorkspaceCalendarSchedule.visibleOccurrences(events: try reopened.calendarItems(),
+      runs: try reopened.calendarRuns(), in: range).isEmpty)
+    #expect(try reopened.calendarRuns().contains { $0.id == first.id && $0.status == "accepted" })
+    #expect(try reopened.dueCalendarRuns(now: nextDay).map(\.id) == [second.id])
+    #expect(try reopened.isCalendarRunActive(second.id))
+  }
+
+  @Test func detachedStandaloneOccurrenceRetainsVisibilityAndCanMoveToCalendar() throws {
+    let (db, directory) = try fixture(); defer { try? FileManager.default.removeItem(at: directory) }
+    let start = date("2026-09-01T13:00:00Z")
+    let id = try db.saveCalendarEvent(draft: .init(title: "Review", startsAt: start, timeZoneID: "UTC",
+      recurrence: .init(unit: .day), task: task(), showsOnCalendar: false), creating: true, now: start)
+    let event = try #require(db.calendarItems().first)
+    let occurrence = try #require(WorkspaceCalendarSchedule.occurrence(event, index: 1))
+    let detachedID = try db.saveCalendarEvent(id: id, draft: occurrence.draft, creating: false, detaching: 1, now: start)
+    let detached = try #require(db.calendarItems().first { $0.id == detachedID })
+    #expect(!detached.calendar.showsOnCalendar && detached.calendar.recurrence == nil)
+    var draft = WorkspaceCalendarDraft(detached); draft.showsOnCalendar = true
+    try db.saveCalendarEvent(id: detachedID, draft: draft, creating: false, now: start)
+    let entries = WorkspaceCalendarSchedule.visibleOccurrences(events: try db.calendarItems(), runs: [],
+      in: .init(start: start, end: start.addingTimeInterval(3 * 86_400)))
+    #expect(entries.map(\.event.id) == [detachedID])
+    #expect(try db.dueCalendarRuns(now: start).contains { $0.eventID == id })
+  }
+}

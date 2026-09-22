@@ -9,13 +9,14 @@ struct DashboardCalendarEventSheet: View {
     @Bindable var model: ApplicationModel
     @State private var selection: DashboardCalendarSelection
     let onOpenSession: (String) -> Void
+    let tasksOnly: Bool
     @State private var draft: WorkspaceCalendarDraft
     @State private var editing: Bool
     @State private var scope: EditScope = .series
     @State private var showsDelete = false
 
-    init(model: ApplicationModel, selection: DashboardCalendarSelection, onOpenSession: @escaping (String) -> Void) {
-        self.model = model; self.onOpenSession = onOpenSession
+    init(model: ApplicationModel, selection: DashboardCalendarSelection, onOpenSession: @escaping (String) -> Void, tasksOnly: Bool = false) {
+        self.model = model; self.onOpenSession = onOpenSession; self.tasksOnly = tasksOnly
         _selection = State(initialValue: selection)
         _draft = State(initialValue: selection.draft)
         _editing = State(initialValue: selection.occurrence == nil)
@@ -37,7 +38,7 @@ struct DashboardCalendarEventSheet: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Text(editing ? (event == nil ? "Add event" : "Edit event") : draft.title)
+                Text(editing ? (event == nil ? (draft.task != nil ? "Add task" : "Add event") : (draft.task != nil ? "Edit task" : "Edit event")) : draft.title)
                     .font(.system(size: 20, weight: .semibold)).lineLimit(2)
                 Spacer()
                 if !editing { Button("Done") { dismiss() }.buttonStyle(DashboardQuietButtonStyle()).keyboardShortcut(.cancelAction) }
@@ -85,14 +86,20 @@ struct DashboardCalendarEventSheet: View {
                 }
             }
             DashboardCalendarField("Title") {
-                TextField("Event title", text: $draft.title)
+                TextField(draft.task != nil ? "Task title" : "Event title", text: $draft.title)
                     .modifier(DashboardCalendarInputStyle())
             }
-            DashboardCalendarField("Type") {
-                DashboardSegmentedSelector(options: [false, true], selection: Binding(get: { draft.task != nil }, set: { enabled in
-                    draft.task = enabled ? model.calendarTaskDefaults(runtime: .codex, workspaceID: nil, title: draft.title) : nil
-                    if enabled { draft.allDay = false }
-                })) { $0 ? "Scheduled task" : "Event" }
+            if !tasksOnly {
+                DashboardCalendarField("Type") {
+                    DashboardSegmentedSelector(options: [false, true], selection: Binding(get: { draft.task != nil }, set: { enabled in
+                        draft.task = enabled ? model.calendarTaskDefaults(runtime: .codex, workspaceID: nil, title: draft.title) : nil
+                        if enabled { draft.allDay = false }
+                    })) { $0 ? "Scheduled task" : "Event" }
+                }
+            }
+            if draft.task != nil {
+                Toggle("Show on calendar", isOn: $draft.showsOnCalendar)
+                    .toggleStyle(DashboardSwitchToggleStyle())
             }
             if draft.task == nil {
                 Toggle("All-day event", isOn: $draft.allDay).toggleStyle(DashboardSwitchToggleStyle())

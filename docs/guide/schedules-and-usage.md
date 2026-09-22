@@ -1,8 +1,15 @@
 # Scheduled work and usage
 
-## Cron Jobs
+## Scheduled Tasks
 
-**Cron Jobs** brings supported Hermes and OpenClaw schedules into the app.
+**Scheduled Tasks** has four tabs: **Scheduled Tasks**, **Calendar**, **Hermes**,
+and **OpenClaw**. Use **New task** in the first two tabs to choose the same agent,
+workspace, folder, model, thinking level, permissions, tools, prompt, and repeat
+schedule available in Calendar. Standalone tasks stay off the calendar by default.
+Use **Add to calendar**, **Remove from calendar**, or **Show on calendar** in the
+editor to change where a task appears without changing its runs or session.
+
+The **Hermes** and **OpenClaw** tabs manage their agent-service schedules.
 Connect the relevant agent in Settings first. Available editing and run controls
 differ between the integrations.
 
@@ -54,7 +61,7 @@ Tasks wait when their session is busy or the running-session limit is reached;
 an unavailable connection is retried. A send whose acceptance cannot be
 confirmed is marked for inspection rather than automatically sent again.
 Future recurring occurrences continue on their schedule. These app-owned
-tasks are separate from the agent-service schedules in **Cron Jobs**.
+tasks are separate from the **Hermes** and **OpenClaw** agent-service schedules.
 
 After a task sends, click its event and choose **Open session**. If a later edit
 moves the schedule, the original **Past run** keeps its saved prompt and session

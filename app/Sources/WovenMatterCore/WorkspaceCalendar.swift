@@ -52,6 +52,7 @@ public struct WorkspaceCalendarDetails: Codable, Equatable, Sendable {
   public var timeZoneID: String
   public var recurrence: WorkspaceCalendarRecurrence?
   public var task: WorkspaceCalendarTask?
+  public var showsOnCalendar: Bool
   public var excludedOccurrences: Set<Int>
   public var createdBy: WorkspaceCalendarAuthor
   public var editedBy: WorkspaceCalendarAuthor?
@@ -59,11 +60,28 @@ public struct WorkspaceCalendarDetails: Codable, Equatable, Sendable {
   public init(timeZoneID: String = TimeZone.current.identifier,
               recurrence: WorkspaceCalendarRecurrence? = nil, task: WorkspaceCalendarTask? = nil,
               excludedOccurrences: Set<Int> = [], createdBy: WorkspaceCalendarAuthor = .init(),
-              editedBy: WorkspaceCalendarAuthor? = nil, revision: Int = 0) {
+              editedBy: WorkspaceCalendarAuthor? = nil, revision: Int = 0, showsOnCalendar: Bool = true) {
     self.timeZoneID = timeZoneID; self.recurrence = recurrence; self.task = task
     self.excludedOccurrences = excludedOccurrences; self.createdBy = createdBy
     self.editedBy = editedBy; self.revision = revision
+    self.showsOnCalendar = task == nil || showsOnCalendar
   }
+
+  private enum CodingKeys: String, CodingKey {
+    case timeZoneID, recurrence, task, showsOnCalendar, excludedOccurrences, createdBy, editedBy, revision
+  }
+  public init(from decoder: Decoder) throws {
+    let values = try decoder.container(keyedBy: CodingKeys.self)
+    self.init(timeZoneID: try values.decode(String.self, forKey: .timeZoneID),
+      recurrence: try values.decodeIfPresent(WorkspaceCalendarRecurrence.self, forKey: .recurrence),
+      task: try values.decodeIfPresent(WorkspaceCalendarTask.self, forKey: .task),
+      excludedOccurrences: try values.decode(Set<Int>.self, forKey: .excludedOccurrences),
+      createdBy: try values.decode(WorkspaceCalendarAuthor.self, forKey: .createdBy),
+      editedBy: try values.decodeIfPresent(WorkspaceCalendarAuthor.self, forKey: .editedBy),
+      revision: try values.decode(Int.self, forKey: .revision),
+      showsOnCalendar: try values.decodeIfPresent(Bool.self, forKey: .showsOnCalendar) ?? true)
+  }
+
 }
 
 public struct WorkspaceCalendarDraft: Codable, Equatable, Sendable {
@@ -75,22 +93,42 @@ public struct WorkspaceCalendarDraft: Codable, Equatable, Sendable {
   public var timeZoneID: String
   public var recurrence: WorkspaceCalendarRecurrence?
   public var task: WorkspaceCalendarTask?
+  public var showsOnCalendar: Bool
 
   public init(title: String = "", details: String = "", startsAt: Date, endsAt: Date? = nil,
               allDay: Bool = false, timeZoneID: String = TimeZone.current.identifier,
-              recurrence: WorkspaceCalendarRecurrence? = nil, task: WorkspaceCalendarTask? = nil) {
+              recurrence: WorkspaceCalendarRecurrence? = nil, task: WorkspaceCalendarTask? = nil,
+              showsOnCalendar: Bool = true) {
     self.title = title; self.details = details; self.startsAt = startsAt; self.endsAt = endsAt
     self.allDay = allDay; self.timeZoneID = timeZoneID; self.recurrence = recurrence; self.task = task
+    self.showsOnCalendar = task == nil || showsOnCalendar
   }
 
   public init(_ item: WorkspaceCalendarItemRecord) {
     self.init(title: item.title, details: item.details ?? "", startsAt: item.startDate ?? Date(),
       endsAt: item.endDate, allDay: item.allDay, timeZoneID: item.calendar.timeZoneID,
-      recurrence: item.calendar.recurrence, task: item.calendar.task)
+      recurrence: item.calendar.recurrence, task: item.calendar.task, showsOnCalendar: item.calendar.showsOnCalendar)
+  }
+
+  private enum CodingKeys: String, CodingKey {
+    case title, details, startsAt, endsAt, allDay, timeZoneID, recurrence, task, showsOnCalendar
+  }
+  public init(from decoder: Decoder) throws {
+    let values = try decoder.container(keyedBy: CodingKeys.self)
+    self.init(title: try values.decode(String.self, forKey: .title),
+      details: try values.decode(String.self, forKey: .details),
+      startsAt: try values.decode(Date.self, forKey: .startsAt),
+      endsAt: try values.decodeIfPresent(Date.self, forKey: .endsAt),
+      allDay: try values.decode(Bool.self, forKey: .allDay),
+      timeZoneID: try values.decode(String.self, forKey: .timeZoneID),
+      recurrence: try values.decodeIfPresent(WorkspaceCalendarRecurrence.self, forKey: .recurrence),
+      task: try values.decodeIfPresent(WorkspaceCalendarTask.self, forKey: .task),
+      showsOnCalendar: try values.decodeIfPresent(Bool.self, forKey: .showsOnCalendar) ?? true)
   }
 
   public func validated() throws -> Self {
     var value = self
+    if task == nil { value.showsOnCalendar = true }
     value.title = title.trimmingCharacters(in: .whitespacesAndNewlines)
     value.details = details.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !value.title.isEmpty, value.title.utf8.count <= 4_096, details.utf8.count <= 65_536,
@@ -292,9 +330,10 @@ public enum WorkspaceCalendarSchedule {
   public static func visibleOccurrences(events: [WorkspaceCalendarItemRecord], runs: [WorkspaceCalendarRun],
                                          in range: DateInterval) -> [WorkspaceCalendarOccurrence] {
     let expanded = DateInterval(start: range.start.addingTimeInterval(-86_400), end: range.end.addingTimeInterval(86_400))
-    var result = events.flatMap { occurrences($0, in: $0.allDay ? expanded : range) }
+    let visibleEvents = events.filter { $0.calendar.task == nil || $0.calendar.showsOnCalendar }
+    var result = visibleEvents.flatMap { occurrences($0, in: $0.allDay ? expanded : range) }
     var ids = Set(result.map(\.id))
-    let eventsByID = Dictionary(uniqueKeysWithValues: events.map { ($0.id, $0) })
+    let eventsByID = Dictionary(uniqueKeysWithValues: visibleEvents.map { ($0.id, $0) })
     for run in runs where run.status != "cancelled" && run.scheduledAt >= range.start && run.scheduledAt < range.end {
       guard let event = eventsByID[run.eventID] else { continue }
       let value = WorkspaceCalendarOccurrence(event: event, index: run.occurrenceIndex,

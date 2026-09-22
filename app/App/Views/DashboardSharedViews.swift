@@ -38,7 +38,7 @@ struct DashboardUnavailableUtility: View {
     private var emptyTitle: String {
         switch title {
         case "Calendar": "No calendar items yet"
-        case "Cron Jobs": "No scheduled jobs"
+        case "Scheduled Tasks": "No scheduled jobs"
         default: "Library is not available yet."
         }
     }

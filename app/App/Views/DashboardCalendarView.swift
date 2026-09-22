@@ -77,10 +77,10 @@ enum DashboardCalendarEntryStyle: CaseIterable {
 
     var title: String {
         switch self {
-        case .event: "Event"
-        case .task: "Scheduled task"
-        case .recurringEvent: "Recurring event"
-        case .recurringTask: "Recurring scheduled task"
+        case .event: "Events"
+        case .task: "Scheduled Tasks"
+        case .recurringEvent: "Reoccurring Events"
+        case .recurringTask: "Reoccurring Scheduled Tasks"
         }
     }
 }
@@ -301,5 +301,114 @@ struct DashboardCalendarSurface: View {
         }
         model.clearCalendarMutationError()
         selection = .init(draft: draft.copied(to: day))
+    }
+}
+
+/// A list presentation of the same schedules used by Calendar. Calendar visibility
+/// changes presentation only; tasks keep their existing identity and run history.
+struct DashboardScheduledTasksSurface: View {
+    @Bindable var model: ApplicationModel
+    @Binding var provider: String
+    let onOpenSession: (String) -> Void
+    @State private var selection: DashboardCalendarSelection?
+
+    private var calendarTasks: Bool { provider == "Calendar" }
+    private var tasks: [WorkspaceCalendarItemRecord] {
+        model.calendarItems.filter {
+            $0.calendar.task != nil && $0.calendar.showsOnCalendar == calendarTasks
+        }.sorted { ($0.startDate ?? .distantFuture) < ($1.startDate ?? .distantFuture) }
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 16) {
+                heading
+                tabs
+                HStack(alignment: .top) {
+                    Text(calendarTasks
+                        ? "Tasks shown on your calendar. Create or manage them here."
+                        : "Schedule an agent prompt once or repeatedly. Add tasks to your calendar whenever you like.")
+                        .font(.system(size: 12)).foregroundStyle(DashboardPalette.mutedForeground)
+                    Spacer()
+                    Button("New task") { newTask() }.buttonStyle(DashboardPrimaryButtonStyle())
+                }
+                Text("Woven Matter must be running when a task is due.")
+                    .font(.system(size: 12)).foregroundStyle(DashboardPalette.mutedForeground)
+            }.padding(.horizontal, 32).padding(.top, 48).padding(.bottom, 20)
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 20) {
+                    if tasks.isEmpty {
+                        Text(calendarTasks ? "No calendar tasks." : "No scheduled tasks.")
+                            .font(.system(size: 13)).foregroundStyle(DashboardPalette.mutedForeground)
+                    }
+                    ForEach(tasks) { task in taskRow(task) }
+                    if let error = model.calendarMutationError { Text(error).font(.system(size: 12)).foregroundStyle(DashboardPalette.danger) }
+                }.frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 32).padding(.bottom, 32)
+            }.scrollIndicators(.never)
+        }
+        .sheet(item: $selection) { item in
+            DashboardCalendarEventSheet(model: model, selection: item,
+                onOpenSession: onOpenSession, tasksOnly: true)
+        }
+    }
+
+    private var heading: some View {
+        HStack(spacing: 12) {
+            DashboardLucideIcon(glyph: .calendarClockControl, size: 18)
+                .foregroundStyle(DashboardPalette.primary).frame(width: 36, height: 36)
+                .background(DashboardPalette.muted)
+                .clipShape(RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius))
+            Text("Scheduled Tasks").font(.system(size: 22, weight: .semibold))
+        }
+    }
+    private var tabs: some View {
+        DashboardSegmentedSelector(options: ["Scheduled Tasks", "Calendar", "Hermes", "OpenClaw"],
+            selection: $provider) { $0 }.frame(width: 440)
+    }
+    private func newTask() {
+        model.clearCalendarMutationError()
+        var draft = WorkspaceCalendarDraft(startsAt: Date().addingTimeInterval(3_600),
+            task: model.calendarTaskDefaults(runtime: .codex, workspaceID: nil))
+        draft.showsOnCalendar = calendarTasks
+        selection = .init(draft: draft)
+    }
+    private func taskRow(_ item: WorkspaceCalendarItemRecord) -> some View {
+        let run = model.calendarRuns.last { $0.eventID == item.id && $0.status != "cancelled" }
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top) {
+                Button {
+                    model.clearCalendarMutationError()
+                    let occurrence = WorkspaceCalendarOccurrence(event: item, index: 0,
+                        startsAt: item.startDate ?? Date(), endsAt: item.endDate)
+                    selection = .init(draft: WorkspaceCalendarDraft(item), occurrence: occurrence)
+                } label: {
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(item.title).font(.system(size: 14, weight: .semibold))
+                        Text(item.calendar.task?.configuration.runtimeKind.displayName ?? "Agent")
+                            .font(.system(size: 12)).foregroundStyle(DashboardPalette.mutedForeground)
+                    }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+                }.buttonStyle(.plain)
+                Button(calendarTasks ? "Remove from calendar" : "Add to calendar") {
+                    var draft = WorkspaceCalendarDraft(item)
+                    draft.showsOnCalendar.toggle()
+                    Task { _ = await model.saveCalendarEvent(draft, event: item) }
+                }.buttonStyle(DashboardQuietButtonStyle()).disabled(model.isCreatingCalendarItem)
+            }
+            HStack(spacing: 12) {
+                if let start = item.startDate {
+                    Text(start.formatted(date: .abbreviated, time: .shortened))
+                }
+                if let recurrence = item.calendar.recurrence { Text(recurrence.label) }
+                if let run { Text(run.statusLabel) }
+            }.font(.system(size: 12)).foregroundStyle(DashboardPalette.mutedForeground)
+            if let prompt = item.calendar.task?.prompt {
+                Text(prompt).font(.system(size: 13)).lineLimit(2)
+            }
+            if let run, model.workspaceOverview?.conversations.contains(where: { $0.id == run.sessionID }) == true {
+                Button("Open session") { onOpenSession(run.sessionID) }
+                    .buttonStyle(DashboardQuietButtonStyle())
+            }
+        }.padding(.vertical, 8)
     }
 }
