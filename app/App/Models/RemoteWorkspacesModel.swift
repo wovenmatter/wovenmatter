@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Observation
 import Security
@@ -77,6 +78,63 @@ final class RemoteWorkspacesModel {
     private let storageKey = "wovenmatter.remote-workspaces.v1"
     private let credentialAccessDefaultsKey =
         "wovenmatter.remote-workspaces.credential-access-enabled"
+
+    private struct DefaultAgentAcknowledgment {
+        let revision: String
+        let identity: RemoteWorkspaceRequestIdentity
+    }
+    private var defaultAgentAcknowledgments: [UUID: DefaultAgentAcknowledgment] = [:]
+    private var defaultAgentSyncTasks: [UUID: (id: UUID, task: Task<Void, any Error>)] = [:]
+    private var defaultAgentObservers: [any NSObjectProtocol] = []
+    private(set) var signInStatuses: [UUID: [AgentSignInStatus]] = [:]
+    private(set) var checkingSignIn: Set<UUID> = []
+    private(set) var signInErrors: [UUID: String] = [:]
+
+    func startDefaultAgentMaintenance() {
+        guard defaultAgentObservers.isEmpty else { return }
+        ProviderAccountCoordinator.shared.start()
+        for name in [DefaultAgentSupport.credentialsChanged, Notification.Name("wovenmatter.default-agent.snapshot-ready")] {
+            defaultAgentObservers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor in await self?.relayDefaultAgentCredentials() }
+            })
+        }
+        defaultAgentObservers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in
+                ProviderAccountCoordinator.shared.invalidate()
+                self?.defaultAgentAcknowledgments.removeAll()
+                await self?.relayDefaultAgentCredentials()
+            }
+        })
+        defaultAgentObservers.append(NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in
+                ProviderAccountCoordinator.shared.invalidate()
+                await self?.relayDefaultAgentCredentials()
+            }
+        })
+    }
+    private func relayDefaultAgentCredentials() async {
+        _ = try? await ProviderAccountCoordinator.shared.prepare("local")
+        guard isCredentialAccessEnabled else { return }
+        for workspace in workspaces where tunnels[workspace.id] != nil {
+            do { try await ensureDefaultAgent(workspace) }
+            catch { signInErrors[workspace.id] = "Default Agent credentials could not synchronize. Reconnect this workspace to retry." }
+        }
+    }
+    func refreshSignInStatus(_ configuration: RemoteWorkspaceConfiguration) async {
+        guard !checkingSignIn.contains(configuration.id), let identity = try? requestIdentity(configuration) else { return }
+        checkingSignIn.insert(configuration.id)
+        defer { checkingSignIn.remove(configuration.id) }
+        do {
+            let client = try await serviceClient(for: configuration)
+            let result = try await client.signInStatuses()
+            try requireCurrent(identity)
+            signInStatuses[configuration.id] = result
+            signInErrors[configuration.id] = nil
+        } catch {
+            guard (try? requireCurrent(identity)) != nil else { return }
+            signInErrors[configuration.id] = "Could not check sign-in status. The workspace may be unreachable; previous results are unchanged."
+        }
+    }
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -166,9 +224,9 @@ final class RemoteWorkspacesModel {
             return currentHarnesses(for: configuration).compactMap { harness in
                 harness.state == "ready"
                     && !isRuntimeInventoryUnavailable(harness.id, configuration: configuration)
-                    && self.runtimeMaintenance[configuration.id]?.contains(where: {
+                    && (harness.id == .defaultAgent || self.runtimeMaintenance[configuration.id]?.contains(where: {
                         $0.id == harness.id && $0.enabled && $0.visible && $0.installed && $0.operation?.status != "running"
-                    }) == true
+                    }) == true)
                     ? RemoteHarnessChatTarget(
                         configuration: configuration,
                         harness: harness
@@ -221,14 +279,14 @@ final class RemoteWorkspacesModel {
         _ runtimeKind: AgentRuntimeKind,
         in configuration: RemoteWorkspaceConfiguration
     ) -> Bool {
-        isRuntimeEnabled(runtimeKind, in: configuration)
+        (runtimeKind == .defaultAgent || isRuntimeEnabled(runtimeKind, in: configuration))
             && !isRuntimeInventoryUnavailable(runtimeKind, configuration: configuration)
             && statuses[configuration.id]?.running == true
             && currentHarnesses(for: configuration).contains {
                 $0.id == runtimeKind && $0.state == "ready"
-            } && runtimeMaintenance[configuration.id]?.contains(where: {
+            } && (runtimeKind == .defaultAgent || runtimeMaintenance[configuration.id]?.contains(where: {
                 $0.id == runtimeKind && $0.enabled && $0.installed && $0.operation?.status != "running"
-            }) == true
+            }) == true)
     }
 
     func refreshAll() {
@@ -275,7 +333,7 @@ final class RemoteWorkspacesModel {
     }
 
     func isRuntimeInventoryUnavailable(_ kind: AgentRuntimeKind, configuration: RemoteWorkspaceConfiguration) -> Bool {
-        runtimeErrors[configuration.id] != nil && runtimeChecksVerifiedAfterError[configuration.id]?.contains(kind) != true
+        kind != .defaultAgent && runtimeErrors[configuration.id] != nil && runtimeChecksVerifiedAfterError[configuration.id]?.contains(kind) != true
     }
 
     func checkRuntimeUpdates(_ kind: AgentRuntimeKind, configuration: RemoteWorkspaceConfiguration) {
@@ -1072,6 +1130,50 @@ final class RemoteWorkspacesModel {
         }
     }
 
+    func synchronizeDefaultAgent(_ configuration: RemoteWorkspaceConfiguration) async throws {
+        try await waitForDefaultAgentSync(configuration.id)
+        defaultAgentAcknowledgments.removeValue(forKey: configuration.id)
+        try await ensureDefaultAgent(configuration)
+    }
+    private func clearDefaultAgentSync(_ workspaceID: UUID, operationID: UUID) {
+        if defaultAgentSyncTasks[workspaceID]?.id == operationID {
+            defaultAgentSyncTasks[workspaceID] = nil
+        }
+    }
+    private func waitForDefaultAgentSync(_ workspaceID: UUID) async throws {
+        guard let pending = defaultAgentSyncTasks[workspaceID] else { return }
+        defer { clearDefaultAgentSync(workspaceID, operationID: pending.id) }
+        try await pending.task.value
+    }
+    func ensureDefaultAgent(_ configuration: RemoteWorkspaceConfiguration) async throws {
+        let identity = try requestIdentity(configuration)
+        let payload = try await ProviderAccountCoordinator.shared.prepare(configuration.id.uuidString.lowercased())
+        try requireCurrent(identity)
+        if let ack = defaultAgentAcknowledgments[configuration.id], ack.revision == payload.revision, ack.identity == identity { return }
+        if defaultAgentSyncTasks[configuration.id] != nil {
+            try await waitForDefaultAgentSync(configuration.id)
+            return try await ensureDefaultAgent(configuration)
+        }
+        let task = Task {
+            let client = try await serviceClient(for: configuration)
+            try requireCurrent(identity)
+            let receipt = try await client.configureDefaultAgent(payload.data())
+            try requireCurrent(identity)
+            guard receipt.saved, receipt.revision == payload.revision else {
+                throw DefaultAgentError.message("The workspace did not acknowledge the current Default Agent credentials.")
+            }
+            defaultAgentAcknowledgments[configuration.id] = .init(revision: receipt.revision, identity: identity)
+        }
+        let operationID = UUID()
+        defaultAgentSyncTasks[configuration.id] = (operationID, task)
+        do { try await task.value; clearDefaultAgentSync(configuration.id, operationID: operationID) }
+        catch {
+            clearDefaultAgentSync(configuration.id, operationID: operationID)
+            defaultAgentAcknowledgments.removeValue(forKey: configuration.id)
+            throw error
+        }
+    }
+
     private func refreshService(
         _ configuration: RemoteWorkspaceConfiguration
     ) async {
@@ -1090,6 +1192,7 @@ final class RemoteWorkspacesModel {
             try requireCurrent(identity)
             workspaceRoots[configuration.id] = health.workspaceRoot
             harnesses[configuration.id] = inventory
+            if inventory.contains(where: { $0.id == .defaultAgent }) { try await synchronizeDefaultAgent(configuration) }
             await refreshRuntimeMaintenance(configuration)
         } catch {
             guard (try? requireCurrent(identity)) != nil else { return }

@@ -81,6 +81,7 @@ enum ProviderLimitCollector {
     interactiveProvider: ProviderKind? = nil,
     codexWorkspaceSource: CodexWorkspaceSource? = nil,
     codexWorkspaceCount: Int = 0,
+    sharedCredentials: [String: DefaultAgentCredential]? = nil,
     now: Date
   ) async -> [UsageLimitAccount] {
     let enabled = await withTaskGroup(
@@ -90,7 +91,10 @@ enum ProviderLimitCollector {
       for provider in ProviderKind.supportedAccounts
         where enabledProviders.contains(provider) {
         group.addTask {
-          switch provider {
+          if let sharedCredentials, [.codex, .grok, .openCodeGo, .openRouter].contains(provider) {
+            return await sharedAccount(provider, credentials: sharedCredentials, now: now)
+          }
+          return switch provider {
           case .codex, .claude, .grok, .cursor:
             await credentialSensitiveAccount(
               provider: provider,
@@ -513,6 +517,53 @@ enum ProviderLimitCollector {
         detail: "Grok account billing was unavailable. Sign in with the Grok CLI to enable it.",
         now: now
       )
+    }
+  }
+
+  private static func sharedAccount(_ provider: ProviderKind, credentials: [String: DefaultAgentCredential], now: Date, mayRenew: Bool = true) async -> UsageLimitAccount {
+    let id: String
+    switch provider {
+    case .codex: id = "openai-codex"
+    case .grok: id = "xai"
+    case .openCodeGo: id = "opencode-go"
+    case .openRouter: id = "openrouter"
+    default: return unavailable(provider, detail: "This provider has no shared connection.", now: now)
+    }
+    guard let credential = credentials[id], let token = credential.access ?? credential.key else {
+      return UsageLimitAccount(provider: provider, accountLabel: provider.displayName, status: .needsCredential,
+        source: "Woven Matter Connections", detail: "Connect this account in Settings → Connections.", observedAt: now)
+    }
+    do {
+      let account: UsageLimitAccount
+      switch provider {
+      case .codex:
+        var headers: [String: String] = [:]
+        if let id = credential.accountId { headers["ChatGPT-Account-Id"] = id }
+        let object = try await authenticatedJSONObject(url: URL(string: "https://chatgpt.com/backend-api/wham/usage")!, bearer: token, headers: headers)
+        account = mapCodexUsage(object, now: now)
+      case .grok:
+        let object = try await authenticatedJSONObject(url: URL(string: "https://cli-chat-proxy.grok.com/v1/billing?format=credits")!, bearer: token,
+          headers: ["x-xai-token-auth": "xai-grok-cli"])
+        account = mapGrokProxy(object, accountLabel: credential.accountLabel, now: now)
+      case .openCodeGo: account = try await openCodeGo(apiKey: token, now: now)
+      case .openRouter: account = await openRouter(apiKey: token, now: now)
+      default: return unavailable(provider, detail: "Usage is unavailable.", now: now)
+      }
+      return UsageLimitAccount(provider: account.provider, accountScopeID: "wovenmatter.shared.\(id)",
+        accountLabel: credential.accountLabel ?? account.accountLabel, status: account.status,
+        quotaWindows: account.quotaWindows, balance: account.balance, providerBudget: account.providerBudget,
+        details: account.details, history: account.history, source: "Woven Matter shared connection · \(account.source)",
+        detail: account.detail, observedAt: account.observedAt, dashboardURL: account.dashboardURL)
+    } catch {
+      let rejected = (error as? SharedAccountHTTPError)?.status == 401
+      if rejected, mayRenew, credential.type == "oauth",
+         let renewed = try? await ProviderAccountCoordinator.shared.renewRejectedAccess(provider: id, access: token) {
+        var updated = credentials; updated[id] = renewed
+        return await sharedAccount(provider, credentials: updated, now: now, mayRenew: false)
+      }
+      return UsageLimitAccount(provider: provider, accountScopeID: "wovenmatter.shared.\(id)",
+        accountLabel: credential.accountLabel ?? provider.displayName, status: rejected ? .needsCredential : .unavailable,
+        source: "Woven Matter Connections", detail: rejected ? "Reconnect this account in Settings → Connections." : "Usage could not be checked. Manage or refresh this account in Connections.", observedAt: now)
     }
   }
 
@@ -1177,6 +1228,8 @@ enum ProviderLimitCollector {
     return object
   }
 
+  private struct SharedAccountHTTPError: Error { let status: Int }
+
   private static func authenticatedJSONObject(
     url: URL,
     bearer: String,
@@ -1194,6 +1247,9 @@ enum ProviderLimitCollector {
       maximumBytes: 1_048_576
     )
     if let http = response as? HTTPURLResponse { onResponse?(http.statusCode) }
+    if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+      throw SharedAccountHTTPError(status: http.statusCode)
+    }
     guard let http = response as? HTTPURLResponse,
           (200..<300).contains(http.statusCode),
           let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]

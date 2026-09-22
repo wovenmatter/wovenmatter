@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 import { PassThrough, Writable } from 'node:stream'
-import { createHash } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { connect, createServer as createNetServer } from 'node:net'
 import { tmpdir } from 'node:os'
@@ -192,11 +192,12 @@ test('service authentication exposes the reviewed harness catalog', async (conte
   const response = await fetch(`${service.url}/v1/harnesses`, { headers })
   const harnesses = (await response.json()).harnesses
   assert.deepEqual(harnesses.map((value) => value.id), [
+    'default_agent',
     'codex', 'claude_code', 'grok_build', 'hermes',
     'cursor', 'opencode', 'pi', 'openclaw',
   ])
   assert.ok(harnesses.every((value) =>
-    Array.isArray(value.setupMethods) && (value.id === 'opencode' || value.setupMethods.length > 0)
+    Array.isArray(value.setupMethods) && (['opencode', 'default_agent'].includes(value.id) || value.setupMethods.length > 0)
   ))
   const openCode = harnesses.find((value) => value.id === 'opencode')
   assert.equal(openCode.transport, 'opencode-v2')
@@ -204,7 +205,7 @@ test('service authentication exposes the reviewed harness catalog', async (conte
   assert.deepEqual(openCode.setupMethods, [])
   assert.match(openCode.transportError, /this workspace’s OpenCode v2 server/)
   assert.deepEqual(
-    Object.keys(harnesses[0].setupMethods[0]).sort(),
+    Object.keys(harnesses.find(value => value.id === 'codex').setupMethods[0]).sort(),
     ['displayName', 'id']
   )
   assert.ok(harnesses.every((value) =>
@@ -360,9 +361,9 @@ test('native sign-in reports a real handoff and verifies provider state', async 
   const harnessDocument = await waitFor(
     `${service.url}/v1/harnesses`,
     headers,
-    (value) => value.harnesses[0].state === 'ready'
+    (value) => value.harnesses.find(h => h.id === 'codex').state === 'ready'
   )
-  assert.equal(harnessDocument.harnesses[0].authenticationStatus, 'configured')
+  assert.equal(harnessDocument.harnesses.find(h => h.id === 'codex').authenticationStatus, 'configured')
   const terminalAuthorizationCode = await fetch(
     `${service.url}/v1/authentication-sessions/${session.id}/authorization-code`,
     { method: 'POST', headers, body: JSON.stringify({ code: 'too-late' }) }
@@ -459,7 +460,7 @@ test('harness readiness requires a real bounded transport handshake', async (con
     headers: { authorization: 'Bearer transport-token' },
   })
   assert.equal(response.status, 200)
-  const statuses = (await response.json()).harnesses
+  const statuses = (await response.json()).harnesses.filter(h => h.id !== 'default_agent')
   assert.equal(statuses[0].state, 'ready')
   assert.equal(statuses[0].transportStatus, 'ready')
   assert.equal(statuses[0].transportError, null)
@@ -819,6 +820,31 @@ test('database routes require authentication and ignore client-supplied workspac
   assert.deepEqual(listed.databases, [{ id: 'Sales', name: 'Sales', preference: 'sqlite' }])
   assert.equal((await request('/v1/databases/data', 'POST', { databaseID: '../Sales', relativePath: 'data.json' })).status, 400)
 })
+
+test('Default Agent credential routes require authentication, unlock explicitly, and keep files encrypted', async context => {
+  const root = await temporaryFixture(context, 'wovenmatter-credentials-api-');
+  const home = resolve(root, 'home'); await mkdir(home);
+  const service = await startService({ workspace: root, home, catalog: catalogPath, token: 'credential-test-token' });
+  context.after(() => service.child.kill('SIGTERM'));
+  const request = (path, body, token = 'credential-test-token') => fetch(service.url + path, {
+    method: body ? 'POST' : 'GET', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  assert.equal((await request('/v1/default-agent/status', undefined, 'wrong')).status, 401);
+  assert.equal((await (await request('/v1/default-agent/status')).json()).locked, true);
+  assert.equal((await request('/v1/default-agent/rpc', { method: 'initialize' })).status, 423);
+  const unlockKey = randomBytes(32).toString('base64');
+  const body = { workspace: 'fixture-workspace', unlockKey, revision: 'fixture-revision', config: {},
+    credentials: { openrouter: { type: 'api_key', key: 'fixture-provider-secret' } } };
+  const receipt = await (await request('/v1/default-agent/configuration', body)).json();
+  assert.equal(receipt.revision, 'fixture-revision');
+  const status = await (await request('/v1/default-agent/status')).json();
+  assert.equal(status.locked, false);
+  assert.equal(status.providers.find(p => p.id === 'openrouter').state, 'credentials_present');
+  assert.ok(!JSON.stringify(status).includes('fixture-provider-secret'));
+  const disk = await readFile(resolve(root, '.wovenmatter/default-agent/credentials.enc.json'), 'utf8');
+  assert.ok(!disk.includes('fixture-provider-secret') && !disk.includes(unlockKey));
+});
 
 async function startService({ workspace, home, catalog, token, gatewayPort }) {
   const port = await unusedPort()

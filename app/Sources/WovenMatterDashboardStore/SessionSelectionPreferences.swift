@@ -236,7 +236,7 @@ public final class SessionSelectionPreferences {
     case .openclaw, .hermes, .opencode: permission = "full"
     // Cursor's existing internal value means Full access, not smart review.
     case .cursor: permission = "auto"
-    case .pi, nil: permission = nil
+    case .pi, .defaultAgent, nil: permission = nil
     }
     return SessionSelections(permission: permission)
   }

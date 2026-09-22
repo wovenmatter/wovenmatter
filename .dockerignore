@@ -10,3 +10,11 @@
 !harnesses/
 !harnesses/catalog.json
 !harnesses/initialize-workspace.sh
+!remote/src/**
+!harnesses/hermes-delivery/
+!harnesses/hermes-delivery/**
+!default-agent/
+!default-agent/package.json
+!default-agent/package-lock.json
+!default-agent/src/
+!default-agent/src/**

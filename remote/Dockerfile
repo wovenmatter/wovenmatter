@@ -22,6 +22,9 @@ ENV HOME=/home \
     PLAYWRIGHT_BROWSERS_PATH=/home/.cache/ms-playwright
 
 WORKDIR /opt/wovenmatter
+COPY --chown=woven:woven default-agent/package*.json ./default-agent/
+RUN cd default-agent && npm ci --omit=dev --ignore-scripts --no-audit --no-fund
+COPY --chown=woven:woven default-agent/src ./default-agent/src
 COPY --chown=woven:woven remote/package.json ./package.json
 COPY --chown=woven:woven remote/src ./src
 COPY --chown=woven:woven remote/entrypoint.sh ./entrypoint.sh

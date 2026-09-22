@@ -80,7 +80,7 @@ public struct LocalACPRuntimeReadinessProbe: Equatable, Sendable {
 public enum LocalACPRuntimeCatalog {
     public static let definitions: [LocalACPRuntimeDefinition] = {
         guard let catalog = try? HarnessCatalog.loadBundled() else { return [] }
-        return catalog.harnesses.map { harness in
+        return [LocalACPRuntimeDefinition(runtimeKind: .defaultAgent, displayName: "Default Agent", commandName: "woven-default-agent", arguments: [], underlyingCLIName: nil, cliInstallerSource: nil, cliInstallerInterpreter: nil, adapterPackage: nil, adapterDescription: "Built into Woven Matter.")] + catalog.harnesses.map { harness in
             LocalACPRuntimeDefinition(
                 runtimeKind: harness.id,
                 displayName: harness.displayName,
@@ -156,6 +156,7 @@ public enum LocalACPRuntimeCatalog {
         case .openclaw: "direct-openclaw"
         case .cursor: "direct-cursor"
         case .opencode: "direct-opencode"
+        case .defaultAgent: "direct-default-agent"
         case .pi: "direct-pi"
         }
     }
@@ -188,8 +189,8 @@ public struct LocalACPRuntimePreferences {
 
     public var state: State {
         State(
-            enabledRuntimeKinds: runtimeKinds(forKey: Self.enabledRuntimeKindsKey),
-            shownRuntimeKinds: runtimeKinds(forKey: Self.shownRuntimeKindsKey)
+            enabledRuntimeKinds: runtimeKinds(forKey: Self.enabledRuntimeKindsKey).union([.defaultAgent]),
+            shownRuntimeKinds: runtimeKinds(forKey: Self.shownRuntimeKindsKey).union([.defaultAgent])
         )
     }
 
@@ -618,6 +619,7 @@ public struct LocalACPRuntimeResolver: Sendable {
     public func resolve(
         runtimeKind: AgentRuntimeKind
     ) -> LocalACPRuntimeResolution {
+        if runtimeKind == .defaultAgent { return DefaultAgentSupport.resolution() }
         guard let definition = LocalACPRuntimeCatalog.definition(for: runtimeKind) else {
             return LocalACPRuntimeResolution(
                 availability: LocalACPRuntimeAvailability(

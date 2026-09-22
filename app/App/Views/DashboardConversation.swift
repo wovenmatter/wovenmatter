@@ -359,6 +359,11 @@ struct DashboardCloudConversation: View {
             .simultaneousGesture(TapGesture().onEnded(onActivatePanel))
 
             VStack(spacing: 8) {
+                if let conversation, conversation.localRuntimeKind == .defaultAgent {
+                    Button("Default Agent settings") {
+                        model.pendingDefaultAgentSettingsScope = conversation.remoteWorkspaceID?.uuidString.lowercased() ?? "local"
+                    }.buttonStyle(DashboardQuietButtonStyle())
+                }
                 if let conversation, conversation.localRuntimeKind == .opencode, let openCode = workspaceOpenCode {
                     OpenCodeConversationControls(model: openCode, conversationID: conversation.id)
                         .frame(maxWidth: 768)

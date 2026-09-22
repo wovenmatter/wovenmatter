@@ -1534,6 +1534,35 @@ extension WorkspaceDatabase {
       }
   }
 
+  /// Reconcile only the exact remote run identities that this Mac submitted.
+  /// A disconnected transport may have marked them failed while the workspace kept running.
+  public func recoverDefaultAgentRuns(conversationID: String, snapshots: [DefaultAgentRunSnapshot]) throws {
+    try transaction {
+      let route = try prepareUnlocked("SELECT 1 FROM desktop_local_acp_sessions WHERE conversation_id=? AND runtime_kind='default_agent'")
+      defer { sqlite3_finalize(route) }
+      try bind(conversationID, at: 1, to: route)
+      guard sqlite3_step(route) == SQLITE_ROW else { throw LocalACPSessionDatabaseError.runtimeUnavailable }
+      for snapshot in snapshots {
+        let query = try prepareUnlocked("SELECT assistant_message_id FROM dashboard_runs WHERE id=? AND conversation_id=? AND desktop_owned=1 AND status!='completed'")
+        defer { sqlite3_finalize(query) }
+        try bind(snapshot.runID, at: 1, to: query); try bind(conversationID, at: 2, to: query)
+        guard sqlite3_step(query) == SQLITE_ROW else { continue }
+        let messageID = try text(query, column: 0)
+        let status = snapshot.error == nil ? "completed" : "failed"
+        let now = Self.timestamp(Date())
+        let message = try prepareUnlocked("UPDATE dashboard_messages SET content=?,status=?,updated_at=? WHERE id=? AND conversation_id=? AND desktop_owned=1")
+        defer { sqlite3_finalize(message) }
+        for (index, value) in [snapshot.content, status, now, messageID, conversationID].enumerated() { try bind(value, at: Int32(index + 1), to: message) }
+        try stepDone(message)
+        let run = try prepareUnlocked("UPDATE dashboard_runs SET status=?,error=?,completed_at=?,updated_at=? WHERE id=? AND conversation_id=? AND desktop_owned=1")
+        defer { sqlite3_finalize(run) }
+        try bind(status, at: 1, to: run); try bindNullable(snapshot.error, at: 2, to: run)
+        for (index, value) in [now, now, snapshot.runID, conversationID].enumerated() { try bind(value, at: Int32(index + 3), to: run) }
+        try stepDone(run)
+      }
+    }
+  }
+
   public func completeLocalACPRun(
     runID: String,
     error: String? = nil,

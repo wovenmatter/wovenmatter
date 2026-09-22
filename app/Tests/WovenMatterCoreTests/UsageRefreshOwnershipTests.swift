@@ -132,6 +132,26 @@ struct UsageRefreshOwnershipTests {
     #expect(try store.usageLimitAccounts(providers: [.cursor]).isEmpty)
   }
 
+  @Test("Shared connections never reuse a persisted previous account or harness quota")
+  func sharedLimitsDoNotInheritAnotherAccount() async throws {
+    let fixture = try UsageOwnershipDirectory()
+    let now = Date()
+    let prior = UsageLimitAccount(provider: .grok, accountScopeID: "wovenmatter.shared.xai",
+      accountLabel: "previous-account", status: .available, source: "fixture", detail: "", observedAt: now)
+    let store = try UsageStore(databaseURL: fixture.databaseURL)
+    try store.saveUsageLimitAccounts([prior], storedAt: now)
+    let service = LocalUsageService(
+      homeDirectory: fixture.url, fileManager: .default, credentialStore: UsageNoCredentials(),
+      usageDatabaseURL: fixture.databaseURL, usesSharedConnections: true, limitCollector: { _ in
+        [UsageLimitAccount(provider: .grok, accountScopeID: "wovenmatter.shared.xai",
+          accountLabel: "current-account", status: .unavailable, source: "fixture", detail: "", observedAt: now)]
+      })
+    let result = try await service.limitsSnapshot(refresh: true, enabledProviders: [.grok], allowCredentialAccess: false)
+    #expect(result.accounts.first?.accountLabel == "current-account")
+    #expect(result.accounts.first?.status == .unavailable)
+    #expect(result.codexWorkspaces.isEmpty)
+  }
+
   private func account(_ label: String, now: Date) -> UsageLimitAccount {
     UsageLimitAccount(provider: .cursor, accountLabel: label, status: .available,
       source: "fixture", detail: "synthetic", observedAt: now)
