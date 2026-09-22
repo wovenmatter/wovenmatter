@@ -1,31 +1,53 @@
 import SwiftUI
 
 enum DashboardCalendarColor: String, CaseIterable {
-    case green, blue, purple, amber, red, pink, orange, yellow, teal, gray
+    case cognac
+    case britishRacingGreen = "green"
+    case green = "lime"
+    case blue, purple, red, pink, orange, yellow, black
 
-    var title: String { rawValue.capitalized }
+    init?(rawValue: String) {
+        // Carry existing selections into the renamed palette.
+        switch rawValue {
+        case "amber": self = .cognac
+        case "teal": self = .green
+        case "gray": self = .black
+        default:
+            guard let color = Self.allCases.first(where: { $0.rawValue == rawValue }) else { return nil }
+            self = color
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .britishRacingGreen: "British Racing Green"
+        case .green: "Green"
+        case .blue: "Royal blue"
+        default: rawValue.capitalized
+        }
+    }
 
     var color: Color {
         switch self {
-        case .green: DashboardPalette.calendarEvent
+        case .cognac: DashboardPalette.calendarRecurringTask
+        case .britishRacingGreen: DashboardPalette.calendarEvent
+        case .green: .hex(0x84CC16)
         case .blue: DashboardPalette.calendarTask
         case .purple: DashboardPalette.calendarRecurringEvent
-        case .amber: DashboardPalette.calendarRecurringTask
-        case .red: .hex(0xB94E48)
-        case .pink: .hex(0xAD527C)
-        case .orange: .hex(0xBC642A)
-        case .yellow: .hex(0x94751D)
-        case .teal: .hex(0x287F7C)
-        case .gray: .hex(0x6C7478)
+        case .red: .hex(0xD23F3F)
+        case .pink: .hex(0xD75A95)
+        case .orange: .hex(0xE67E22)
+        case .yellow: .hex(0xE6B800)
+        case .black: .black
         }
     }
 }
 
 struct DashboardCalendarColors: DynamicProperty {
-    @AppStorage("wovenmatter.calendar.color.event") private var event = DashboardCalendarColor.green
+    @AppStorage("wovenmatter.calendar.color.event") private var event = DashboardCalendarColor.britishRacingGreen
     @AppStorage("wovenmatter.calendar.color.task") private var task = DashboardCalendarColor.blue
     @AppStorage("wovenmatter.calendar.color.recurring-event") private var recurringEvent = DashboardCalendarColor.purple
-    @AppStorage("wovenmatter.calendar.color.recurring-task") private var recurringTask = DashboardCalendarColor.amber
+    @AppStorage("wovenmatter.calendar.color.recurring-task") private var recurringTask = DashboardCalendarColor.cognac
 
     func selection(for style: DashboardCalendarEntryStyle) -> Binding<DashboardCalendarColor> {
         switch style {
@@ -76,7 +98,7 @@ struct DashboardCalendarLegendItem: View {
                             HStack(spacing: 8) {
                                 Circle().fill(option.color).frame(width: 10, height: 10)
                                     .accessibilityHidden(true)
-                                Text(option.title)
+                                Text(option.title).lineLimit(1)
                                 Spacer(minLength: 0)
                                 if option == selection {
                                     DashboardLucideIcon(glyph: .check, size: 12)
@@ -91,7 +113,7 @@ struct DashboardCalendarLegendItem: View {
                 }
             }
             .padding(16)
-            .frame(width: 300)
+            .frame(width: 440)
             .onExitCommand { showsColors = false }
         }
     }
