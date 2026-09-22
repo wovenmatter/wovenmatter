@@ -36,65 +36,32 @@ extension WorkspaceDatabase {
       try requireToolUnlocked(.calendar, sessionID: callerID)
       guard after >= 0, (1...200).contains(limit) else { throw WorkspaceToolError.invalid("Invalid pagination.") }
       let operatorID = try localMutationOperatorIDUnlocked()
-      var sql = "SELECT rowid AS sequence,id,kind,title,description,starts_at,ends_at,all_day,status,source,updated_at FROM dashboard_calendar_items WHERE user_id=? AND rowid>?"
+      var sql = "SELECT rowid AS sequence,id,kind,title,description,starts_at,ends_at,all_day,status,source,created_at,updated_at,json(calendar_json) AS calendar FROM dashboard_calendar_items WHERE user_id=? AND deleted_at IS NULL AND rowid>?"
       var values: [String?] = [operatorID, String(after)]
-      if let since { sql += " AND coalesce(ends_at,starts_at)>=?"; values.append(Self.timestamp(since)) }
+      if let since { sql += " AND (json_extract(calendar_json,'$.recurrence') IS NOT NULL OR coalesce(ends_at,starts_at)>=?)"; values.append(Self.timestamp(since)) }
       if let until { sql += " AND starts_at<=?"; values.append(Self.timestamp(until)) }
       sql += " ORDER BY rowid LIMIT ?"; values.append(String(limit + 1))
       var rows = try historyRowsUnlocked(sql, values: values)
+      rows = try rows.map { value in
+        guard var row = value.objectValue, let json = row["calendar"]?.stringValue else { return value }
+        row["calendar"] = try JSONDecoder().decode(GatewayJSONValue.self, from: Data(json.utf8))
+        return .object(row)
+      }
       let more = rows.count > limit
       if more { rows.removeLast() }
       return .object(["rows": .array(rows), "hasMore": .bool(more), "nextCursor": rows.last?.objectValue?["sequence"] ?? .number(Double(after))])
     }
   }
 
-  /// Full access is rechecked in the same transaction as the write.
   public func saveAgentCalendar(callerID: String, id: String = UUID().uuidString.lowercased(),
                                  creating: Bool, title: String, details: String?,
                                  startsAt: Date, endsAt: Date?, allDay: Bool, requestID: String? = nil) throws -> String {
-    guard !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, title.utf8.count <= 4_096,
-          (details?.utf8.count ?? 0) <= 65_536, startsAt.timeIntervalSince1970.isFinite,
-          endsAt.map({ $0.timeIntervalSince1970.isFinite && $0 > startsAt }) ?? true else {
-      throw WorkspaceToolError.invalid("A calendar event needs a title and valid dates.")
-    }
-    return try transaction {
-      try requireToolUnlocked(.calendar, sessionID: callerID, writesCalendar: true)
-      return try performToolMutationUnlocked(callerID: callerID, requestID: requestID,
-        operation: creating ? "calendar.create" : "calendar.update",
-        input: [id, title, details, String(startsAt.timeIntervalSince1970), endsAt.map { String($0.timeIntervalSince1970) }, allDay ? "true" : "false"]) {
-        let operatorID = try localMutationOperatorIDUnlocked()
-        let now = Self.timestamp(Date())
-        if creating {
-          guard UUID(uuidString: id) != nil else { throw WorkspaceToolError.invalid("An event ID must be a UUID.") }
-          try toolsExecuteUnlocked("""
-            INSERT INTO dashboard_calendar_items(id,user_id,kind,title,description,starts_at,ends_at,all_day,status,source,created_at,updated_at)
-            VALUES(?,?,'event',?,?,?,?,?,'scheduled',?,?,?)
-            """, [id, operatorID, title, details, Self.timestamp(startsAt), endsAt.map(Self.timestamp), allDay ? "1" : "0", "session:" + callerID, now, now])
-        } else {
-          try toolsExecuteUnlocked("""
-            UPDATE dashboard_calendar_items SET title=?,description=?,starts_at=?,ends_at=?,all_day=?,updated_at=?
-            WHERE id=? AND user_id=? AND kind='event'
-            """, [title, details, Self.timestamp(startsAt), endsAt.map(Self.timestamp), allDay ? "1" : "0", now, id, operatorID])
-          guard changedRowCountUnlocked == 1 else { throw WorkspaceToolError.invalid("Calendar event not found.") }
-        }
-        try recordHistoryUnlocked(.init(conversationID: callerID, harness: "wovenmatter", kind: "calendar.write",
-          payload: try toolsJSON(["eventID": id, "action": creating ? "create" : "update"])))
-        return id
-      }.result
-    }
+    try saveCalendarEvent(id: id, draft: .init(title: title, details: details ?? "",
+      startsAt: startsAt, endsAt: endsAt, allDay: allDay), creating: creating,
+      callerID: callerID, requestID: requestID)
   }
 
   public func removeAgentCalendar(callerID: String, id: String, requestID: String? = nil) throws {
-    try transaction {
-      try requireToolUnlocked(.calendar, sessionID: callerID, writesCalendar: true)
-      _ = try performToolMutationUnlocked(callerID: callerID, requestID: requestID,
-        operation: "calendar.remove", input: id) {
-        let operatorID = try localMutationOperatorIDUnlocked()
-        try toolsExecuteUnlocked("DELETE FROM dashboard_calendar_items WHERE id=? AND user_id=? AND kind='event'", [id, operatorID])
-        guard changedRowCountUnlocked == 1 else { throw WorkspaceToolError.invalid("Calendar event not found.") }
-        try recordHistoryUnlocked(.init(conversationID: callerID, harness: "wovenmatter", kind: "calendar.remove", payload: try toolsJSON(["eventID": id])))
-        return id
-      }
-    }
+    try deleteCalendarEvent(id: id, callerID: callerID, requestID: requestID)
   }
 }

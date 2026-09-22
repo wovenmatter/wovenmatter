@@ -73,6 +73,7 @@ extension ApplicationModel {
     private func runAgentToolTick() async {
         guard let database = dashboardStore?.database else { return }
         do {
+            await runCalendarTasks()
             pendingSessionAccess = try database.pendingCoordinationAccessRequests()
             var notifications = try database.collectCoordinationTurnNotifications()
             for request in pendingLocalACPPermissions {
@@ -107,7 +108,7 @@ extension ApplicationModel {
                     catch { agentTools?.error = error.localizedDescription }
                 }
             }
-            for delivery in try database.sessionDeliveries(queuedOnly: true) {
+            for delivery in try database.sessionDeliveries(queuedOnly: true, includeCalendar: false) {
                 guard !Task.isCancelled else { return }
                 // Initial sends try steering. A deferred send waits for an idle
                 // target instead of repeatedly trying an unsupported operation.
@@ -121,6 +122,7 @@ extension ApplicationModel {
                       ["accepted", "cancelled"].contains(receipt.status) else { continue }
                 try database.finishTimerOccurrence(id: timer.id, deliveryID: id)
             }
+            try database.settleCalendarRuns()
             try agentTools?.reload()
         } catch { agentTools?.error = error.localizedDescription }
     }
@@ -291,7 +293,7 @@ extension ApplicationModel {
         return try await task.value
     }
 
-    private func resolveToolSessionCreation(source: WorkspaceConversationRecord, command: WovenMatterToolCommand,
+    func resolveToolSessionCreation(source: WorkspaceConversationRecord, command: WovenMatterToolCommand,
                                             title: String) async throws -> WorkspaceSessionCreationConfiguration {
         if let raw = command.options["harness"], AgentRuntimeKind(rawValue: raw) == nil {
             throw WorkspaceToolError.invalid("Unknown harness.")
@@ -354,9 +356,17 @@ extension ApplicationModel {
         guard let claimed = try database.claimToolDelivery(id: delivery.id) else { return try .value(database.toolDelivery(id: delivery.id) ?? delivery) }
         do {
             let target = try toolConversation(claimed.targetID)
+            if claimed.kind == .calendar, target.localRuntimeKind == .opencode,
+               target.remoteWorkspaceID == nil, openCode?.isEnabled != true {
+                throw WorkspaceToolError.invalid("Enable OpenCode in Local agent workspace before running this task.")
+            }
             let sent = try await dispatchAgentMessage(conversation: target,
-                input: .init(text: claimed.text, historyDeliveryID: claimed.id))
+                input: .init(text: claimed.text, historyDeliveryID: claimed.id), allowSteering: claimed.kind != .calendar)
             guard sent else {
+                if claimed.kind == .calendar {
+                    try database.setToolDeliveryStatus(id: claimed.id, status: "queued")
+                    return try .value(database.toolDelivery(id: claimed.id) ?? claimed)
+                }
                 // Capacity is not a scheduler. No new queue is created by the limit.
                 try database.setToolDeliveryStatus(id: claimed.id, status: "cancelled")
                 return .init(silent: true)

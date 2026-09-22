@@ -33,7 +33,7 @@ def receive_all(connection, maximum):
 def option_indices(arguments):
     # Values may themselves look like flags. Only inspect argument positions,
     # never a literal message or document value, for CLI-side transformations.
-    boolean_flags = {"all-workspace", "independent", "no-notify", "paused", "all-day", "json", "header", "help"}
+    boolean_flags = {"all-workspace", "independent", "no-notify", "paused", "all-day", "timed", "no-repeat", "regular-event", "json", "header", "help"}
     if arguments[:1] == ["notes"]:
         boolean_flags.discard("json")
     result, index = {}, 2
