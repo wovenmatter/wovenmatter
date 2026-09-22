@@ -2,6 +2,7 @@ import SwiftUI
 import WovenMatterCore
 
 struct DashboardCalendarEventSheet: View {
+    @Environment(\.dashboardTheme) private var theme
     enum EditScope: String, CaseIterable { case series, detach }
     @Environment(\.dismiss) private var dismiss
     @Bindable var model: ApplicationModel
@@ -40,7 +41,7 @@ struct DashboardCalendarEventSheet: View {
                 Spacer()
                 if !editing { Button("Done") { dismiss() }.buttonStyle(DashboardQuietButtonStyle()).keyboardShortcut(.cancelAction) }
             }.padding(24)
-            Divider()
+            theme.palette.border.frame(height: 1)
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     if editing { editor } else { information }
@@ -50,8 +51,8 @@ struct DashboardCalendarEventSheet: View {
                     }
                 }.padding(24)
             }.scrollIndicators(.never)
-            Divider()
-            footer.padding(20)
+            theme.palette.border.frame(height: 1)
+            footer.padding(.horizontal, 24).padding(.vertical, 16)
         }
         .frame(width: 560).frame(minHeight: 400, maxHeight: 760)
         .background(DashboardPalette.background)
@@ -66,12 +67,13 @@ struct DashboardCalendarEventSheet: View {
     }
 
     private var editor: some View {
-        VStack(alignment: .leading, spacing: 15) {
+        VStack(alignment: .leading, spacing: 18) {
             if isSeries {
-                Picker("Apply changes to", selection: $scope) {
-                    Text("Entire series").tag(EditScope.series)
-                    Text("Detach this occurrence").tag(EditScope.detach)
-                }.pickerStyle(.segmented)
+                DashboardCalendarField("Apply changes to") {
+                    DashboardSegmentedSelector(options: EditScope.allCases, selection: $scope) {
+                        $0 == .series ? "Entire series" : "Detach this occurrence"
+                    }
+                }
                 .onChange(of: scope) { _, scope in
                     if scope == .detach, let occurrence = selection.occurrence {
                         draft.startsAt = occurrence.startsAt; draft.endsAt = occurrence.endsAt; draft.recurrence = nil
@@ -81,13 +83,16 @@ struct DashboardCalendarEventSheet: View {
                     }
                 }
             }
-            TextField("Event title", text: $draft.title).textFieldStyle(.roundedBorder)
-            Picker("Type", selection: Binding(get: { draft.task != nil }, set: { enabled in
-                draft.task = enabled ? model.calendarTaskDefaults(runtime: .codex, workspaceID: nil, title: draft.title) : nil
-                if enabled { draft.allDay = false }
-            })) {
-                Text("Event").tag(false); Text("Scheduled task").tag(true)
-            }.pickerStyle(.segmented)
+            DashboardCalendarField("Title") {
+                TextField("Event title", text: $draft.title)
+                    .modifier(DashboardCalendarInputStyle())
+            }
+            DashboardCalendarField("Type") {
+                DashboardSegmentedSelector(options: [false, true], selection: Binding(get: { draft.task != nil }, set: { enabled in
+                    draft.task = enabled ? model.calendarTaskDefaults(runtime: .codex, workspaceID: nil, title: draft.title) : nil
+                    if enabled { draft.allDay = false }
+                })) { $0 ? "Scheduled task" : "Event" }
+            }
             if draft.task == nil {
                 Toggle("All-day event", isOn: $draft.allDay).toggleStyle(DashboardSwitchToggleStyle())
                     .onChange(of: draft.allDay) { _, allDay in
@@ -97,10 +102,23 @@ struct DashboardCalendarEventSheet: View {
                         } else { draft.endsAt = draft.startsAt.addingTimeInterval(3_600) }
                     }
             }
-            DatePicker("Starts", selection: $draft.startsAt, displayedComponents: draft.allDay ? [.date] : [.date, .hourAndMinute])
-            DatePicker("Ends", selection: endDate, in: draft.startsAt..., displayedComponents: draft.allDay ? [.date] : [.date, .hourAndMinute])
-            Picker("Time zone", selection: Binding(get: { draft.timeZoneID }, set: { draft = draft.changingTimeZone(to: $0) })) {
-                ForEach(Array(Set(TimeZone.knownTimeZoneIdentifiers + [draft.timeZoneID])).sorted(), id: \.self) { Text($0.replacingOccurrences(of: "_", with: " ")).tag($0) }
+            HStack(alignment: .top, spacing: 16) {
+                DashboardCalendarField("Starts") {
+                    DatePicker("Starts", selection: $draft.startsAt, displayedComponents: draft.allDay ? [.date] : [.date, .hourAndMinute])
+                        .labelsHidden().datePickerStyle(.compact)
+                        .frame(minHeight: 36)
+                }
+                DashboardCalendarField("Ends") {
+                    DatePicker("Ends", selection: endDate, in: draft.startsAt..., displayedComponents: draft.allDay ? [.date] : [.date, .hourAndMinute])
+                        .labelsHidden().datePickerStyle(.compact)
+                        .frame(minHeight: 36)
+                }
+            }
+            DashboardCalendarField("Time zone") {
+                DashboardCalendarMenuPicker(title: "Time zone", selection: Binding(get: { draft.timeZoneID }, set: { draft = draft.changingTimeZone(to: $0) }),
+                    options: Array(Set(TimeZone.knownTimeZoneIdentifiers + [draft.timeZoneID])).sorted()) {
+                    $0.replacingOccurrences(of: "_", with: " ")
+                }
             }
             if !isSeries || scope == .series {
                 Toggle("Repeat", isOn: Binding(get: { draft.recurrence != nil }, set: { draft.recurrence = $0 ? .init(unit: .week) : nil }))
@@ -109,18 +127,19 @@ struct DashboardCalendarEventSheet: View {
                     HStack {
                         Text("Every")
                         TextField("Interval", value: Binding(get: { draft.recurrence?.interval ?? 1 }, set: { draft.recurrence?.interval = $0 }), format: .number)
-                            .frame(width: 55).textFieldStyle(.roundedBorder)
-                        Picker("Repeat unit", selection: Binding(get: { draft.recurrence?.unit ?? .week }, set: { draft.recurrence?.unit = $0 })) {
-                            ForEach(WorkspaceCalendarRecurrence.Unit.allCases, id: \.self) { Text($0.title).tag($0) }
-                        }.labelsHidden()
+                            .modifier(DashboardCalendarInputStyle()).frame(width: 64)
+                        DashboardCalendarMenuPicker(title: "Repeat unit", selection: Binding(get: { draft.recurrence?.unit ?? .week }, set: { draft.recurrence?.unit = $0 }),
+                            options: WorkspaceCalendarRecurrence.Unit.allCases, label: { $0.title })
                     }
                 }
             }
-            Text("Description").font(.system(size: 12, weight: .medium))
-            TextField("Optional description", text: $draft.details, axis: .vertical)
-                .lineLimit(3...6).textFieldStyle(.roundedBorder)
+            DashboardCalendarField("Description") {
+                TextField("Optional description", text: $draft.details, axis: .vertical)
+                    .lineLimit(3...6).scrollIndicators(.never)
+                    .modifier(DashboardCalendarInputStyle())
+            }
             if draft.task != nil {
-                Divider()
+                theme.palette.border.frame(height: 1)
                 DashboardCalendarTaskFields(model: model, task: Binding(get: { draft.task ?? model.calendarTaskDefaults(runtime: .codex, workspaceID: nil) }, set: { draft.task = $0 }), recurring: draft.recurrence != nil)
             }
         }
@@ -149,16 +168,16 @@ struct DashboardCalendarEventSheet: View {
             LabeledContent("Type", value: isPastRun ? "Past run" : draft.task == nil ? "Event" : "Scheduled task")
             LabeledContent("Starts", value: dateLabel(draft.startsAt))
             if let end = draft.endsAt { LabeledContent("Ends", value: dateLabel(draft.allDay ? calendar.date(byAdding: .day, value: -1, to: end) ?? end : end)) }
-            LabeledContent("Time zone", value: draft.timeZoneID)
+            LabeledContent("Time zone", value: draft.timeZoneID.replacingOccurrences(of: "_", with: " "))
             if let recurrence = draft.recurrence {
                 LabeledContent("Repeats", value: recurrence.label).foregroundStyle(DashboardPalette.calendarRecurring)
             }
             if !draft.details.isEmpty { Text(draft.details).textSelection(.enabled).fixedSize(horizontal: false, vertical: true) }
             if let task = draft.task {
-                Divider()
+                theme.palette.border.frame(height: 1)
                 LabeledContent("Agent", value: task.configuration.runtimeKind.displayName)
                 LabeledContent("Model", value: task.configuration.model ?? "Agent default")
-                LabeledContent("Thinking", value: task.configuration.thinking ?? "Agent default")
+                LabeledContent("Thinking level", value: task.configuration.thinking ?? "Agent default")
                 LabeledContent("Access", value: task.configuration.permission ?? "Agent default")
                 LabeledContent("Tools", value: WorkspaceToolGroup.allCases.filter { task.configuration.tools.enabled.contains($0) }.map(\.title).joined(separator: ", "))
                 LabeledContent("Work location", value: task.configuration.workspaceID.map { model.remoteWorkspaces.configuration(id: $0)?.name ?? "Unavailable workspace" } ?? "Local workspace")
@@ -169,19 +188,21 @@ struct DashboardCalendarEventSheet: View {
                 Text(task.prompt).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
             }
             if let run {
-                Divider()
+                theme.palette.border.frame(height: 1)
                 LabeledContent("Status", value: run.statusLabel)
                 if let error = run.error { Text(error).foregroundStyle(DashboardPalette.danger).fixedSize(horizontal: false, vertical: true) }
                 Button("Open session") { dismiss(); onOpenSession(run.sessionID) }
                     .buttonStyle(DashboardPrimaryButtonStyle())
                     .disabled(model.workspaceOverview?.conversations.contains { $0.id == run.sessionID } != true)
             }
-        }.font(.system(size: 13))
+        }
+        .font(.system(size: 13))
+        .labeledContentStyle(DashboardCalendarDetailStyle())
     }
 
     private func attribution(_ event: WorkspaceCalendarItemRecord) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Divider().padding(.bottom, 5)
+            theme.palette.border.frame(height: 1).padding(.bottom, 5)
             Text("Created by \(event.calendar.createdBy.label)")
             if let author = event.calendar.editedBy {
                 Text("Edited \(dashboardParsedDate(event.updatedAt)?.formatted(date: .abbreviated, time: .shortened) ?? event.updatedAt) by \(author.label)")

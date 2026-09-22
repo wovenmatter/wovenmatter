@@ -95,6 +95,7 @@ func dashboardParsedDate(_ value: String) -> Date? {
     var body: some Scene {
         WindowGroup("Calendar Preview") {
             DashboardCalendarSurface(model: model, onOpenSession: { openedSession = $0 })
+                .environment(\.dashboardTheme, CommandLine.arguments.contains("--cognac") ? .cognac : .green)
                 .frame(minWidth: 600, minHeight: 650)
                 .alert("Session opened", isPresented: Binding(get: { openedSession != nil }, set: { if !$0 { openedSession = nil } })) {
                     Button("OK") { openedSession = nil }

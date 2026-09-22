@@ -21,6 +21,7 @@ xcrun swiftc -swift-version 6 -parse-as-library -target "$(uname -m)-apple-macos
   "$repo_root/app/App/Views/DashboardDesign.swift" \
   "$repo_root/app/App/Views/DashboardCalendarView.swift" \
   "$repo_root/app/App/Views/DashboardCalendarEventSheet.swift" \
+  "$repo_root/app/App/Views/DashboardCalendarFormControls.swift" \
   "$repo_root/app/App/Views/DashboardCalendarTaskFields.swift" \
   "$repo_root/scripts/test-support/CalendarUIFixture.swift" \
   "${objects[@]}" -lsqlite3 -framework Security -framework LocalAuthentication \
@@ -37,5 +38,5 @@ PLIST
 # Use already-built assets when available; the controls still work without icons.
 assets="$cache_root/DerivedData/Build/Products/Debug/Woven Matter Dev.app/Contents/Resources/Assets.car"
 if [ -f "$assets" ]; then cp "$assets" "$app_path/Contents/Resources/Assets.car"; fi
-open -n "$app_path"
+open -n "$app_path" --args "$@"
 printf 'Calendar preview: %s\n' "$app_path"

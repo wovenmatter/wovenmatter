@@ -3,7 +3,6 @@ import WovenMatterCore
 import WovenMatterClient
 
 struct DashboardCalendarTaskFields: View {
-    @Environment(\.dashboardTheme) private var theme
     @Bindable var model: ApplicationModel
     @Binding var task: WorkspaceCalendarTask
     let recurring: Bool
@@ -34,31 +33,27 @@ struct DashboardCalendarTaskFields: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 18) {
             Text("Session").font(.system(size: 14, weight: .semibold))
-            Picker("Work location", selection: workspace) {
-                Text("Local workspace").tag("local")
-                if let id = task.configuration.workspaceID, model.remoteWorkspaces.configuration(id: id) == nil {
-                    Text("Unavailable workspace").tag(id.uuidString)
-                }
-                ForEach(model.remoteWorkspaces.workspaces) { configuration in
-                    Text(configuration.name).tag(configuration.id.uuidString)
+            DashboardCalendarField("Work location") {
+                DashboardCalendarMenuPicker(title: "Work location", selection: workspace, options: workspaceOptions) { id in
+                    id == "local" ? "Local workspace" : model.remoteWorkspaces.workspaces.first { $0.id.uuidString == id }?.name ?? "Unavailable workspace"
                 }
             }
-            Picker("Agent", selection: Binding(get: { task.configuration.runtimeKind }, set: {
-                changeAgent($0, workspaceID: task.configuration.workspaceID)
-            })) {
-                ForEach(AgentRuntimeKind.presentationOrder, id: \.self) { Text($0.displayName).tag($0) }
+            DashboardCalendarField("Agent") {
+                DashboardCalendarMenuPicker(title: "Agent", selection: Binding(get: { task.configuration.runtimeKind }, set: {
+                    changeAgent($0, workspaceID: task.configuration.workspaceID)
+                }), options: AgentRuntimeKind.presentationOrder, label: { $0.displayName })
             }
-            Picker("Session folder", selection: choice(\.folderID)) {
-                Text("All Workspace").tag("")
-                if let id = task.configuration.folderID, model.workspaceOverview?.folders.contains(where: { $0.id == id }) != true {
-                    Text("Unavailable folder").tag(id)
+            DashboardCalendarField("Session folder") {
+                DashboardCalendarMenuPicker(title: "Session folder", selection: choice(\.folderID), options: folderOptions) { id in
+                    id.isEmpty ? "All Workspace" : model.workspaceOverview?.folders.first { $0.id == id }?.name ?? "Unavailable folder"
                 }
-                ForEach(model.workspaceOverview?.folders ?? []) { Text($0.name).tag($0.id) }
             }
-            TextField("Working directory", text: choice(\.nativeWorkingDirectory))
-                .textFieldStyle(.roundedBorder)
+            DashboardCalendarField("Working directory") {
+                TextField("Working directory", text: choice(\.nativeWorkingDirectory))
+                    .modifier(DashboardCalendarInputStyle())
+            }
             HStack {
                 Text("Session settings").font(.system(size: 12, weight: .medium))
                 Spacer()
@@ -66,42 +61,61 @@ struct DashboardCalendarTaskFields: View {
                 Button("Refresh") { refreshID += 1 }.buttonStyle(DashboardQuietButtonStyle()).disabled(loading)
             }
             optionPicker("Model", selection: choice(\.model), choices: metadata?.selectableModels ?? [], metadata: metadata?.modelOptionMetadata ?? [:])
-            optionPicker("Thinking", selection: choice(\.thinking), choices: metadata?.selectableThinkingLevels ?? [], metadata: metadata?.thinkingOptionMetadata ?? [:])
+            optionPicker("Thinking level", selection: choice(\.thinking), choices: metadata?.selectableThinkingLevels ?? [], metadata: metadata?.thinkingOptionMetadata ?? [:])
             if task.configuration.runtimeKind != .pi {
                 optionPicker("Access", selection: choice(\.permission), choices: metadata?.permissionOptions ?? [], metadata: metadata?.permissionOptionMetadata ?? [:])
             }
             if let error { Text(error).font(.system(size: 11.5)).foregroundStyle(DashboardPalette.danger).fixedSize(horizontal: false, vertical: true) }
-            DisclosureGroup("Tools") {
+            DisclosureGroup {
                 VStack(alignment: .leading, spacing: 9) {
                     ForEach(WorkspaceToolGroup.allCases) { group in
                         Toggle(group.title, isOn: Binding(get: { task.configuration.tools.enabled.contains(group) }, set: {
                             if $0 { task.configuration.tools.enabled.insert(group) } else { task.configuration.tools.enabled.remove(group) }
                         })).toggleStyle(DashboardSwitchToggleStyle())
                     }
-                }.padding(.top, 8)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.top, 10)
+            } label: {
+                Text("Tools").font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(DashboardPalette.mutedForeground)
             }
             if recurring {
-                Picker("Send each occurrence to", selection: $task.sessionMode) {
-                    ForEach(WorkspaceCalendarTask.SessionMode.allCases, id: \.self) { Text($0.title).tag($0) }
+                DashboardCalendarField("Send each occurrence to") {
+                    DashboardCalendarMenuPicker(title: "Send each occurrence to", selection: $task.sessionMode,
+                        options: WorkspaceCalendarTask.SessionMode.allCases, label: { $0.title })
                 }
             }
-            Text("Prompt").font(.system(size: 12, weight: .medium))
-            TextEditor(text: $task.prompt).font(.system(size: 13)).scrollIndicators(.never)
-                .frame(minHeight: 110, maxHeight: 180).padding(6)
-                .overlay { RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius).stroke(theme.palette.border) }
-                .accessibilityLabel("Scheduled task prompt")
+            DashboardCalendarField("Prompt") {
+                TextEditor(text: $task.prompt)
+                    .scrollContentBackground(.hidden).scrollIndicators(.never)
+                    .frame(height: 120)
+                    .modifier(DashboardCalendarInputStyle())
+                    .accessibilityLabel("Scheduled task prompt")
+            }
         }
         .font(.system(size: 12.5))
         .task(id: catalogKey + "|" + String(refreshID)) { await loadMetadata() }
     }
 
+    private var workspaceOptions: [String] {
+        var options = ["local"] + model.remoteWorkspaces.workspaces.map { $0.id.uuidString }
+        if !options.contains(workspace.wrappedValue) { options.append(workspace.wrappedValue) }
+        return options
+    }
+
+    private var folderOptions: [String] {
+        var options = [""] + (model.workspaceOverview?.folders.map(\.id) ?? [])
+        if let id = task.configuration.folderID, !options.contains(id) { options.append(id) }
+        return options
+    }
+
     private func optionPicker(_ title: String, selection: Binding<String>, choices: [String], metadata: [String: SessionOptionMetadata]) -> some View {
-        Picker(title, selection: selection) {
-            Text("Agent default").tag("")
-            if !selection.wrappedValue.isEmpty && !choices.contains(selection.wrappedValue) {
-                Text(selection.wrappedValue).tag(selection.wrappedValue)
+        let options = [""] + choices + (selection.wrappedValue.isEmpty || choices.contains(selection.wrappedValue) ? [] : [selection.wrappedValue])
+        return DashboardCalendarField(title) {
+            DashboardCalendarMenuPicker(title: title, selection: selection, options: options) {
+                $0.isEmpty ? "Agent default" : metadata[$0]?.name ?? $0
             }
-            ForEach(choices, id: \.self) { Text(metadata[$0]?.name ?? $0).tag($0) }
         }.disabled(loading)
     }
 

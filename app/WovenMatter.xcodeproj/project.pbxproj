@@ -76,6 +76,7 @@
 		E9A58E7B05C5C2726FA4EE82 /* WorkspaceAgentToolsModel+Calendar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C678F616FB535F772A00598 /* WorkspaceAgentToolsModel+Calendar.swift */; };
 		F4743517D41721ACB550EE94 /* DashboardCalendarEventSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8AA41DB8B4A4AF41CCC355A1 /* DashboardCalendarEventSheet.swift */; };
 		22101ADAF84DA8CEE85A4AB8 /* DashboardCalendarTaskFields.swift in Sources */ = {isa = PBXBuildFile; fileRef = D6DCB1F7BFAF35416DF437EE /* DashboardCalendarTaskFields.swift */; };
+		C47EAA780000000000000001 /* DashboardCalendarFormControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = C47EAA780000000000000002 /* DashboardCalendarFormControls.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -149,6 +150,7 @@
 		7C678F616FB535F772A00598 /* WorkspaceAgentToolsModel+Calendar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WorkspaceAgentToolsModel+Calendar.swift"; sourceTree = "<group>"; };
 		8AA41DB8B4A4AF41CCC355A1 /* DashboardCalendarEventSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DashboardCalendarEventSheet.swift"; sourceTree = "<group>"; };
 		D6DCB1F7BFAF35416DF437EE /* DashboardCalendarTaskFields.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DashboardCalendarTaskFields.swift"; sourceTree = "<group>"; };
+		C47EAA780000000000000002 /* DashboardCalendarFormControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DashboardCalendarFormControls.swift"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -249,6 +251,7 @@
 				D49200000000000000000003 /* ConversationWorkTranscript.swift */,
 				D45300000000000000000002 /* DashboardCalendarView.swift */,
 				D6DCB1F7BFAF35416DF437EE /* DashboardCalendarTaskFields.swift */,
+				C47EAA780000000000000002 /* DashboardCalendarFormControls.swift */,
 				8AA41DB8B4A4AF41CCC355A1 /* DashboardCalendarEventSheet.swift */,
 				D45400000000000000000002 /* DashboardUsageView.swift */,
 				D45100000000000000000002 /* DashboardDesign.swift */,
@@ -444,6 +447,7 @@
 				D49200000000000000000001 /* ConversationWorkTranscript.swift in Sources */,
 				D45300000000000000000001 /* DashboardCalendarView.swift in Sources */,
 				22101ADAF84DA8CEE85A4AB8 /* DashboardCalendarTaskFields.swift in Sources */,
+				C47EAA780000000000000001 /* DashboardCalendarFormControls.swift in Sources */,
 				F4743517D41721ACB550EE94 /* DashboardCalendarEventSheet.swift in Sources */,
 				D45400000000000000000001 /* DashboardUsageView.swift in Sources */,
 				D45100000000000000000001 /* DashboardDesign.swift in Sources */,
