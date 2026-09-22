@@ -32,11 +32,18 @@ final class DefaultAgentSettingsModel {
     var searchConfigured = false
     var accountLabels: [String: String] = [:]
     func connectionLabel(_ id: String) -> String {
-        if let provider = providers.first(where: { $0.id == id }), !provider.connected { return "Connect account" }
-        if let label = accountLabels[id] { return label }
-        if let account = providers.first(where: { $0.id == id })?.account { return account }
-        return providers.first { $0.id == id }?.connected == true ? "Credentials present" : "Connect account"
+        if let provider = providers.first(where: { $0.id == id }) {
+            return provider.connected ? "Credentials present" : "Connect account"
+        }
+        return (accounts[id] ?? []).isEmpty ? "Connect account" : "Credential saved · status unchecked"
     }
+    private func invalidateConnection(_ provider: String) {
+        providers.removeAll { $0.id == provider }
+        accountLabels[provider] = nil
+    }
+    var cursorAccountStatus = "Refresh to check Cursor sign-in"
+    var signInProvider: String?
+    var accounts: [String: [ProviderConnectionAccounts.Account]] = [:]
     var busy = false
     var error: String?
     var notice: String?
@@ -52,6 +59,9 @@ final class DefaultAgentSettingsModel {
     private var operationTask: Task<Void, Never>?
     private var signInLease: UUID?
     private var activeKeyScope = "global"
+    private var removingAccount: String?
+    private var reconnectingAccount: String?
+    private var activeRemote: RemoteWorkspaceConfiguration?
 
     var configuration: DefaultAgentSettings {
         get { scope == "global" ? settings.global : settings.resolved(scope) }
@@ -63,8 +73,9 @@ final class DefaultAgentSettingsModel {
     }
     var inherits: Bool { scope != "global" && settings.workspaces[scope] == nil }
     var keyScope: String { inherits ? "global" : scope }
+    var effectiveDefaultModel: String? { configuration.defaultModel.flatMap { id in catalog.contains { $0.id == id } ? id : nil } ?? catalog.first { item in providers.contains { $0.id == item.provider && $0.connected } }?.id ?? catalog.first?.id }
     var orderedModels: [Model] {
-        configuration.models.isEmpty ? catalog : configuration.models.compactMap { id in catalog.first { $0.id == id } }
+        DefaultAgentModelCatalog.visibleIDs(explicit: configuration.models, defaultModel: effectiveDefaultModel, catalog: catalog.map(\.id)).compactMap { id in catalog.first { $0.id == id } }
     }
     func setInherits(_ value: Bool) {
         settings = DefaultAgentSupport.settings
@@ -75,18 +86,56 @@ final class DefaultAgentSettingsModel {
         }
         DefaultAgentSupport.settings = settings
     }
-    @discardableResult func saveKey(_ key: String, provider: String) -> Bool {
+    @discardableResult func saveKey(_ key: String, provider: String, label: String? = nil) -> Bool {
+        guard !inherits else { return false }
+        signInProvider = nil
         do {
-            try DefaultAgentSupport.saveKey(
-                key.trimmingCharacters(in: .whitespacesAndNewlines), provider: provider, scope: keyScope)
+            _ = try ProviderConnectionAccounts.addKey(
+                key.trimmingCharacters(in: .whitespacesAndNewlines), provider: provider, scope: keyScope, label: label)
             notice = key.isEmpty ? "Key removed." : "Key saved."
-            if provider == "anthropic", !key.isEmpty { enableProvider(provider) }
+            if ["anthropic", "xai-api"].contains(provider), !key.isEmpty { enableProvider(provider) }
             error = nil
+            loadAccounts()
             return true
         } catch {
             self.error = error.localizedDescription
             return false
         }
+    }
+    func loadAccounts() {
+        for provider in ["openai-codex", "openai", "claude-subscription", "anthropic", "xai", "xai-api", "openrouter", "opencode-go", "exa", "cursor"] {
+            do { accounts[provider] = try ProviderConnectionAccounts.list(provider: provider, scope: keyScope) }
+            catch { self.error = error.localizedDescription }
+        }
+    }
+    func selectAccount(_ id: String, provider: String, remote: RemoteWorkspaceConfiguration? = nil) {
+        guard !inherits else { return }
+        do { try ProviderConnectionAccounts.select(id, provider: provider, scope: keyScope); invalidateConnection(provider); refresh(remote: remote) }
+        catch { self.error = error.localizedDescription }
+    }
+    func moveAccount(_ id: String, provider: String, offset: Int) {
+        guard !inherits else { return }
+        do { try ProviderConnectionAccounts.move(id, offset: offset, provider: provider, scope: keyScope); loadAccounts() }
+        catch { self.error = error.localizedDescription }
+    }
+    func removeAccount(_ id: String, provider: String, remote: RemoteWorkspaceConfiguration? = nil) {
+        guard !inherits else { return }
+        if provider == "claude-subscription" {
+            do {
+                let profile = try ProviderConnectionAccounts.nativeProfile(id, provider: provider, scope: keyScope)
+                refresh(remote: remote, login: provider, action: "logout", profile: profile, removingAccount: id)
+            } catch { self.error = error.localizedDescription }
+            return
+        }
+        do { try ProviderConnectionAccounts.remove(id, provider: provider, scope: keyScope); invalidateConnection(provider); refresh(remote: remote) }
+        catch { self.error = error.localizedDescription }
+    }
+    func reconnectAccount(_ id: String, provider: String, remote: RemoteWorkspaceConfiguration?) {
+        guard !inherits else { return }
+        do {
+            let profile = provider == "claude-subscription" ? try ProviderConnectionAccounts.nativeProfile(id, provider: provider, scope: keyScope) : nil
+            refresh(remote: remote, login: provider, profile: profile, reconnectingAccount: id)
+        } catch { self.error = error.localizedDescription }
     }
     func signOut(_ provider: String, remote: RemoteWorkspaceConfiguration?) {
         if provider == "claude-subscription" {
@@ -110,30 +159,89 @@ final class DefaultAgentSettingsModel {
         }
     }
     func signInClaude(remote: RemoteWorkspaceConfiguration?) {
-        do {
-            let command = try BuiltInClaudeSignIn.command(remote: remote)
-            let directory = FileManager.default.temporaryDirectory.appending(path: "wovenmatter-native-sign-in")
-            try FileManager.default.createDirectory(
-                at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-            let script = directory.appending(path: "Claude-\(UUID().uuidString).command")
-            let contents = "#!/bin/sh\nulimit -c 0\n" + command + "\n"
-            try contents.write(to: script, atomically: true, encoding: .utf8)
-            try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: script.path)
-            let configuration = NSWorkspace.OpenConfiguration()
-            NSWorkspace.shared.open(
-                [script], withApplicationAt: URL(fileURLWithPath: "/System/Applications/Utilities/Terminal.app"),
-                configuration: configuration
-            ) { [weak self] _, failure in
-                if failure != nil {
-                    Task { @MainActor [weak self] in
-                        self?.error = "Could not open Claude sign-in in Terminal. Try again."
-                    }
+        guard !inherits else { return }
+        enableProvider("claude-subscription")
+        refresh(remote: remote, login: "claude-subscription")
+    }
+    func refreshCursorStatus() async {
+        guard let executable = LocalACPRuntimeResolver.resolveExecutable(named: "cursor-agent")
+            ?? LocalACPRuntimeResolver.resolveExecutable(named: "agent") else {
+            cursorAccountStatus = "Cursor CLI is not installed"
+            return
+        }
+        let status = await Task.detached { () -> String in
+            let child = Process()
+            child.executableURL = executable
+            child.arguments = ["status", "--format", "json"]
+            let output = Pipe()
+            child.standardOutput = output
+            child.standardError = FileHandle.nullDevice
+            child.standardInput = FileHandle.nullDevice
+            do {
+                try child.run()
+                DispatchQueue.global().asyncAfter(deadline: .now() + 15) { if child.isRunning { child.terminate() } }
+                let data = output.fileHandleForReading.readDataToEndOfFile()
+                child.waitUntilExit()
+                guard child.terminationStatus == 0,
+                    let value = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { return "Could not check Cursor sign-in" }
+                guard value["isAuthenticated"] as? Bool == true else { return "Connect account" }
+                let user = value["userInfo"] as? [String: Any]
+                return user?["email"] as? String ?? "Credentials present"
+            } catch { return "Could not check Cursor sign-in" }
+        }.value
+        cursorAccountStatus = status
+    }
+    func signInCursor() {
+        cancel()
+        signInProvider = "cursor"
+        error = nil
+        notice = "Preparing Cursor sign-in…"
+        guard let executable = LocalACPRuntimeResolver.resolveExecutable(named: "cursor-agent")
+            ?? LocalACPRuntimeResolver.resolveExecutable(named: "agent") else {
+            error = "Install Cursor’s agent CLI to connect this account."
+            return
+        }
+        busy = true
+        let runID = generation
+        let child = Process()
+        child.executableURL = executable
+        child.arguments = ["login"]
+        var environment = ProcessInfo.processInfo.environment
+        environment["NO_OPEN_BROWSER"] = "1"
+        child.environment = environment
+        let output = Pipe()
+        child.standardOutput = output
+        child.standardError = output
+        child.standardInput = FileHandle.nullDevice
+        outputBuffer = Data()
+        output.fileHandleForReading.readabilityHandler = { [weak self] handle in
+            let data = handle.availableData
+            if data.isEmpty { handle.readabilityHandler = nil; return }
+            Task { @MainActor in
+                guard let self, self.generation == runID else { return }
+                self.outputBuffer.append(data)
+                if self.outputBuffer.count > 32768 { self.outputBuffer = self.outputBuffer.suffix(32768) }
+                let text = String(decoding: self.outputBuffer, as: UTF8.self)
+                let expression = try? NSRegularExpression(pattern: #"https://[^\s<>"\x1b]+"#)
+                for match in expression?.matches(in: text, range: NSRange(text.startIndex..., in: text)) ?? [] {
+                    guard let range = Range(match.range, in: text), let url = URL(string: String(text[range])),
+                        let host = url.host, host == "cursor.com" || host.hasSuffix(".cursor.com") || host == "cursor.sh" || host.hasSuffix(".cursor.sh") else { continue }
+                    self.signInURL = url
+                    self.notice = "Open this link to complete Cursor sign-in."
                 }
             }
-            enableProvider("claude-subscription")
-            notice =
-                "Complete Claude’s sign-in in Terminal, then refresh connections here. Claude manages this workspace’s subscription credentials."
-        } catch { self.error = error.localizedDescription }
+        }
+        child.terminationHandler = { [weak self] child in
+            Task { @MainActor in
+                guard let self, self.generation == runID else { return }
+                self.busy = false
+                self.signInURL = nil
+                if child.terminationStatus == 0 { await self.refreshCursorStatus(); self.notice = self.cursorAccountStatus }
+                else { self.error = "Cursor sign-in did not complete. Try again." }
+            }
+        }
+        do { try child.run(); process = child }
+        catch { busy = false; self.error = "Could not start Cursor sign-in." }
     }
     func move(_ id: String, by offset: Int) {
         var value = configuration
@@ -145,14 +253,12 @@ final class DefaultAgentSettingsModel {
     }
     func setVisible(_ id: String, visible: Bool) {
         var value = configuration
-        if value.models.isEmpty { value.models = catalog.map(\.id) }
         if visible {
             if !value.models.contains(id) { value.models.append(id) }
         } else {
-            guard value.models.count > 1 else { return }
+            guard id != effectiveDefaultModel else { return }
             value.models.removeAll { $0 == id }
             value.fallbackModels.removeAll { $0 == id }
-            if value.defaultModel == id { value.defaultModel = value.models.first }
         }
         configuration = value
     }
@@ -189,6 +295,7 @@ final class DefaultAgentSettingsModel {
         if let process, process.isRunning { process.terminate() }
         process = nil
         busy = false
+        signInProvider = nil
         signInURL = nil
         signInCode = nil
         prompt = nil
@@ -206,9 +313,16 @@ final class DefaultAgentSettingsModel {
         prompt = nil
         promptOptions = []
     }
-    func refresh(remote: RemoteWorkspaceConfiguration? = nil, login: String? = nil, action: String? = nil) {
+    func refresh(remote: RemoteWorkspaceConfiguration? = nil, login: String? = nil, action: String? = nil, profile: String? = nil, removingAccount: String? = nil, reconnectingAccount: String? = nil) {
+        guard login == nil || !inherits else { return }
         cancel()
+        self.activeRemote = remote
+        self.removingAccount = removingAccount
+        self.reconnectingAccount = reconnectingAccount
         busy = true
+        signInProvider = login
+        loadAccounts()
+        notice = nil
         error = nil
         outputBuffer = Data()
         let runID = generation
@@ -229,7 +343,14 @@ final class DefaultAgentSettingsModel {
                 guard generation == runID else { return }
                 var body = try JSONSerialization.jsonObject(with: prepared.data()) as! [String: Any]
                 body["action"] = action ?? (login == nil ? "status" : "login")
-                if let login { body["provider"] = login }
+                if let login {
+                    body["provider"] = login
+                    if login == "claude-subscription" {
+                        body["profile"] = profile ?? (action == "logout"
+                            ? prepared.credentials[login]?.accountId ?? "legacy"
+                            : UUID().uuidString.lowercased())
+                    }
+                }
                 let child = Process()
                 if let remote {
                     let launch = try RemoteHarnessLaunchResolver.resolve(
@@ -301,12 +422,29 @@ final class DefaultAgentSettingsModel {
             outputBuffer.removeSubrange(...newline)
             guard let object = try? JSONSerialization.jsonObject(with: line) as? [String: Any] else { continue }
             if let result = object["result"] as? [String: Any] {
+                if result["disconnected"] as? Bool == true, let id = removingAccount, let provider = signInProvider {
+                    do { try ProviderConnectionAccounts.remove(id, provider: provider, scope: activeKeyScope) }
+                    catch { self.error = error.localizedDescription }
+                    removingAccount = nil
+                }
+                if result["connected"] as? Bool == true,
+                    let profile = result["nativeProfile"] as? String, let provider = result["provider"] as? String {
+                    do {
+                        _ = try ProviderConnectionAccounts.addNative(profile: profile, provider: provider, scope: activeKeyScope, label: result["account"] as? String)
+                        invalidateConnection(provider)
+                    }
+                    catch { self.error = error.localizedDescription }
+                }
                 if let raw = result["credential"], let provider = result["provider"] as? String {
                     do {
                         let credential = try JSONDecoder().decode(
                             DefaultAgentCredential.self, from: JSONSerialization.data(withJSONObject: raw))
-                        try DefaultAgentSupport.saveOAuth(credential, provider: provider, scope: activeKeyScope)
-                        accountLabels[provider] = credential.accountLabel
+                        if let id = reconnectingAccount {
+                            try ProviderConnectionAccounts.replace(credential, accountID: id, provider: provider, scope: activeKeyScope)
+                        } else {
+                            _ = try ProviderConnectionAccounts.addOAuth(credential, provider: provider, scope: activeKeyScope)
+                        }
+                        invalidateConnection(provider)
                     } catch {
                         self.error = "Sign-in completed but could not be saved in Keychain. Try again."
                         busy = false
@@ -314,6 +452,7 @@ final class DefaultAgentSettingsModel {
                         continue
                     }
                 }
+                loadAccounts()
                 finishSignIn()
                 if result["connected"] as? Bool == true {
                     notice = "Connected. This account is shared with the features that use it."
@@ -326,6 +465,11 @@ final class DefaultAgentSettingsModel {
                 if let data = try? JSONSerialization.data(withJSONObject: result),
                     let status = try? JSONDecoder().decode(Status.self, from: data)
                 {
+                    if let legacy = status.providers.first(where: { $0.id == "claude-subscription" && $0.connected }),
+                        (accounts["claude-subscription"] ?? []).isEmpty {
+                        do { _ = try ProviderConnectionAccounts.addNative(profile: "legacy", provider: "claude-subscription", scope: activeKeyScope, label: legacy.account); loadAccounts() }
+                        catch { self.error = error.localizedDescription }
+                    }
                     providers = status.providers
                     catalog = status.models
                     searchConfigured = status.searchConfigured
@@ -334,13 +478,28 @@ final class DefaultAgentSettingsModel {
                         "Workspace credentials reset. Shared connections are available; sign in again for independent workspace accounts."
                 } else if result["disconnected"] as? Bool == true {
                     notice = "Workspace sign-in removed. Shared credentials will be used when available."
-                } else {
+                } else if result["connected"] as? Bool == true {
                     notice = "Connected. This account is shared with the features that use it."
+                } else if result["connected"] as? Bool == false {
+                    notice = nil
+                    error = result["detail"] as? String ?? "Sign-in did not complete. Try again."
                 }
+                let shouldRefresh = result["connected"] as? Bool == true || result["disconnected"] as? Bool == true
+                if shouldRefresh, let provider = signInProvider { invalidateConnection(provider) }
                 busy = false
+                signInProvider = nil
                 signInURL = nil
                 signInCode = nil
                 prompt = nil
+                if shouldRefresh, error == nil {
+                    let completedGeneration = generation
+                    let remote = activeRemote
+                    Task { @MainActor [weak self] in
+                        await Task.yield()
+                        guard let self, self.generation == completedGeneration, !self.busy else { return }
+                        self.refresh(remote: remote)
+                    }
+                }
             }
             if let error = object["error"] as? String {
                 self.error = error
@@ -353,7 +512,7 @@ final class DefaultAgentSettingsModel {
                 {
                     signInURL = value
                 }
-                signInCode = event["userCode"] as? String
+                if let code = event["userCode"] as? String { signInCode = code }
                 notice = (event["message"] ?? event["instructions"]) as? String
             }
             if let value = object["prompt"] as? [String: Any] {

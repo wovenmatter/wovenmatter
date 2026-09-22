@@ -221,3 +221,34 @@ test('local approval cancellation tells the Mac to dismiss exactly that stale di
   assert.deepEqual(dismissed, [id]);
   assert.equal(requests.pending.size, 0);
 });
+
+test('composer offers only the default and explicitly enabled models', async t => {
+  const { engine } = await fixture(t, { config: { providers: ['claude-subscription', 'openai'] } });
+  const catalog = engine.catalog();
+  const other = catalog.find(model => model.id !== engine.config.defaultModel);
+  assert.deepEqual(engine.modelOptions().map(model => model.id), [engine.config.defaultModel]);
+  assert.ok(other, 'Fixture must include another catalog model');
+  engine.config.models = [other.id];
+  assert.deepEqual(engine.modelOptions().map(model => model.id), [engine.config.defaultModel, other.id]);
+  engine.config.models = [];
+  assert.deepEqual(engine.modelOptions().map(model => model.id), [engine.config.defaultModel]);
+});
+
+
+test('removed models normalize idle and restored selections to the visible default', async t => {
+  const { engine } = await fixture(t);
+  const record = await engine.create();
+  const expected = record.selected;
+  record.selected = 'openrouter/disabled';
+  engine.persistOptions(record);
+  await engine.apply({ config: engine.config });
+  assert.equal(record.selected, expected);
+  record.selected = 'openrouter/disabled';
+  engine.persistOptions(record);
+  engine.sessions.delete(record.session.sessionId);
+  record.session.dispose();
+  const restored = await engine.create(record.session.sessionId);
+  assert.equal(restored.selected, expected);
+  engine.config.defaultModel = 'disabled/model';
+  assert.equal(engine.modelOptions()[0].id, expected);
+});

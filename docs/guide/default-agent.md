@@ -12,13 +12,15 @@ Open **Settings → Connections** to connect providers:
   shared with Usage and Built-in.
 - **Claude:** use your Claude subscription through Anthropic’s native sign-in,
   an Anthropic API key, or both. They appear as separate model connections.
-- **Grok subscription:** sign in here independently of the Grok Build harness.
+- **Grok/xAI:** connect a Grok subscription or a separately billed xAI API key.
 - **Web search:** add an Exa key. Chat and workspace tools work without it.
 - **Local Model Server:** connect up to 12 OpenAI Responses-compatible servers.
   Their models appear in the existing Built-in model picker.
 
 Open **Settings → Built-in Agent** to choose a default, show or hide models,
 change their selector order, and choose an ordered list of fallback models.
+Only the default model is shown initially; explicitly enable any others. Filter
+the catalog by connection type, model lab across connections, or subscriptions.
 
 See [Connections and dictation](connections-and-dictation.md) for account and microphone setup.
 
@@ -30,7 +32,8 @@ New workspaces inherit these settings automatically. An offline workspace gets
 the current settings when it reconnects.
 
 Fallback applies when a connection loses authentication or exhausts its available
-usage. Woven Matter tries your configured fallback models in order, updates the
+usage. Woven Matter tries the preferred account and its ordered backups first,
+then your enabled fallback models in order, updates the
 model selector, and shows a popup explaining the switch. Ordinary transient
 rate limits do not trigger fallback. A turn that has already produced output or
 executed tools is not automatically replayed.
@@ -74,7 +77,7 @@ unlock it. Updates do not restart active sessions.
 If the Mac's workspace key is lost, use **Reset workspace credentials** on that
 workspace in Connections. This removes independent ChatGPT/Grok sign-ins and
 restores shared connections. Claude’s native sign-in is separate; use its
-**Sign out** button to remove it. Files and conversations remain.
+**Remove** button to disconnect that account. Files and conversations remain.
 Existing Built-in plaintext stores migrate after secure storage succeeds;
 older backups may still contain previous plaintext copies.
 
@@ -96,8 +99,8 @@ their existing runtime-specific connection behavior.
 
 ## Claude models
 
-In **Settings → Connections → Claude**, choose **Claude subscription** and click
-**Sign in with Claude**. Complete Anthropic’s own flow in Terminal, then click
+In **Settings → Connections → Anthropic**, expand **Claude subscriptions** and click
+**Sign in with Claude**. Complete Anthropic’s own flow using the inline link, then click
 **Refresh connections**. Woven Matter bundles the unmodified official runtime;
 this sign-in is separate from an independently installed Claude Code harness.
 An API key uses the separate **Claude API key** option and is billed separately.
@@ -105,7 +108,7 @@ An API key uses the separate **Claude API key** option and is billed separately.
 Claude provides model responses while Built-in retains its tools, approvals,
 history, and compaction. The composer exposes model, thinking, permissions, and
 workspace-tool controls. Settings is titled **Built-in Agent**; the sidebar shows
-**Built-in Pi SDK** or **Built-in Claude SDK** for the most recently used backend.
+**Built-in Pi sdk** or **Built-in Claude SDK** for the most recently used backend.
 
 Claude owns subscription login, storage, and refresh. On this Mac, it uses its
 native Keychain entry; plaintext fallback is blocked if Keychain is unavailable.

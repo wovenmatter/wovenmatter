@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createRequire } from 'node:module';
@@ -59,17 +60,24 @@ export class ClaudeRuntime {
   constructor(directory, { executeCommand = execute, query, directories = claudeDirectories } = {}) {
     this.directory = directory; this.executeCommand = executeCommand; this.query = query; this.directories = directories;
     this.models = defaultClaudeModels;
+    this.profileContext = new AsyncLocalStorage();
   }
-  async environment(key) { return claudeEnvironment(await this.directories(this.directory), key); }
+  withProfile(profile, operation) { return this.profileContext.run(profile, operation); }
+  profileDirectory(profile = this.profileContext.getStore()) {
+    if (!profile || profile === 'legacy') return this.directory;
+    if (!/^[a-zA-Z0-9-]{1,64}$/.test(profile)) throw new DefaultAgentError('Invalid Claude account profile.');
+    return join(this.directory, 'claude-accounts', profile);
+  }
+  async environment(key, profile) { return claudeEnvironment(await this.directories(this.profileDirectory(profile)), key); }
   async loadModels() {
     const saved = await readJSON(join(this.directory, 'claude-models.json'), []);
     if (Array.isArray(saved) && saved.length && saved.every(m => typeof m.value === 'string' && typeof m.displayName === 'string')) this.models = saved;
   }
-  async status() {
+  async status(profile) {
     let stdout;
     try {
       ({ stdout } = await this.executeCommand(claudeExecutable(), ['auth', 'status', '--json'], {
-        env: await this.environment(), timeout: 10000, maxBuffer: 65536, killSignal: 'SIGKILL',
+        env: await this.environment(undefined, profile), timeout: 10000, maxBuffer: 65536, killSignal: 'SIGKILL',
       }));
     } catch (error) {
       if (error.code !== 1 || !error.stdout) return { connected: false, state: 'check_failed', detail: 'Could not check the native Claude sign-in. Refresh connections to retry.' };
@@ -110,8 +118,8 @@ export class ClaudeRuntime {
     } finally { clearTimeout(timer); controller.abort(); session?.close(); }
     return this.models;
   }
-  async signOut() {
-    await this.executeCommand(claudeExecutable(), ['auth', 'logout'], { env: await this.environment(), timeout: 15000, maxBuffer: 65536 });
+  async signOut(profile) {
+    await this.executeCommand(claudeExecutable(), ['auth', 'logout'], { env: await this.environment(undefined, profile), timeout: 15000, maxBuffer: 65536 });
   }
 }
 
@@ -124,5 +132,42 @@ export async function nativeClaudeLogin(directory) {
   return new Promise((resolve, reject) => {
     child.once('error', reject);
     child.once('exit', code => resolve(code ?? 1));
+  });
+}
+
+// User-initiated native login. Only the authorization link crosses into the UI;
+// the native runtime retains all subscription tokens in its own storage.
+export async function inlineClaudeLogin(runtime, profile, { signal, notify, spawnCommand = spawn } = {}) {
+  const child = spawnCommand(claudeExecutable(), ['auth', 'login', '--claudeai'], {
+    env: { ...await runtime.environment(undefined, profile), BROWSER: '/usr/bin/true' },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  return new Promise((resolve, reject) => {
+    let buffer = '';
+    let killTimer;
+    const abort = () => { child.kill('SIGTERM'); killTimer = setTimeout(() => child.kill('SIGKILL'), 1500); killTimer.unref?.(); };
+    signal?.addEventListener('abort', abort, { once: true });
+    if (signal?.aborted) abort();
+    const consume = data => {
+      buffer = (buffer + data.toString()).slice(-32768);
+      for (const match of buffer.matchAll(/https:\/\/[^\s<>"\x1b]+/g)) {
+        try {
+          const url = new URL(match[0]);
+          if (['claude.ai', 'console.anthropic.com', 'platform.claude.com'].includes(url.hostname)) {
+            notify?.({ url: url.href, message: 'Open this link to complete Claude sign-in. Claude manages the account securely.' });
+          }
+        } catch {}
+      }
+    };
+    child.stdout?.on('data', consume);
+    child.stderr?.on('data', consume);
+    child.once('error', error => { clearTimeout(killTimer); signal?.removeEventListener('abort', abort); reject(error); });
+    child.once('exit', async code => {
+      clearTimeout(killTimer);
+      signal?.removeEventListener('abort', abort);
+      if (signal?.aborted) return reject(new DefaultAgentError('Sign-in cancelled.'));
+      if (code !== 0) return reject(new DefaultAgentError('Claude sign-in did not complete. Try again.'));
+      try { resolve(await runtime.status(profile)); } catch (error) { reject(error); }
+    });
   });
 }

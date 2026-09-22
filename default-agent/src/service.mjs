@@ -1,4 +1,4 @@
-import { CredentialVault, sharedCredentials } from './vault.mjs';
+import { CredentialVault, sharedCredentials, sharedAccounts } from './vault.mjs';
 import { join } from 'node:path';
 import { appendFile, readFile, readdir } from 'node:fs/promises';
 import { operationErrorMessage, readJSON, validateConfig, writePrivateJSON } from './config.mjs';
@@ -27,7 +27,7 @@ export function createDefaultAgentService({ cwd, directory }) {
   function configure(value) {
     const pending = configurationQueue.then(async () => {
       await vault.unlock(value.workspace, value.unlockKey);
-      await vault.modify(async stored => ({ ...stored, shared: sharedCredentials(value.credentials), revision: value.revision }));
+      await vault.modify(async stored => ({ ...stored, shared: sharedCredentials(value.credentials), accounts: sharedAccounts(value.credentialAccounts), revision: value.revision }));
       const config = validateConfig(value.config);
       await writePrivateJSON(join(directory, 'configuration.json'), { config });
       const current = enginePromise ? await enginePromise : null;

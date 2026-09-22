@@ -49,7 +49,7 @@ public enum DefaultAgentSupport {
     }
     public static let credentialsChanged = Notification.Name("wovenmatter.default-agent.credentials-changed")
     private static let revisionLock = NSLock()
-    private static let credentialLock = NSRecursiveLock()
+    static let credentialLock = NSRecursiveLock()
     nonisolated(unsafe) private static var changeRevision: UInt64 = 0
     public static var revision: UInt64 { revisionLock.withLock { changeRevision } }
     public static func changed() {
@@ -60,7 +60,7 @@ public enum DefaultAgentSupport {
         let scope = settings
         let keyScope = workspace == "global" || scope.workspaces[workspace] == nil ? "global" : workspace
         var credentials: [String: DefaultAgentCredential] = [:]
-        for id in ["openai", "openrouter", "opencode-go", "anthropic", "exa"] {
+        for id in ["openai", "openrouter", "opencode-go", "anthropic", "xai-api", "exa"] {
             if let key = try key(id, scope: keyScope) ?? (keyScope == "global" ? nil : key(id, scope: "global")),
                 !key.isEmpty
             {
@@ -77,7 +77,18 @@ public enum DefaultAgentSupport {
         }
         var config = workspace == "global" ? scope.global : scope.resolved(workspace)
         config.customServers = LocalModelServerStore.servers
-        return DefaultAgentPayload(config: config, credentials: credentials, workspace: workspace)
+        var payload = DefaultAgentPayload(config: config, credentials: credentials, workspace: workspace)
+        var accounts: [String: [DefaultAgentCredentialAccount]] = [:]
+        for id in ["openai", "openai-codex", "anthropic", "claude-subscription", "xai", "xai-api", "openrouter", "opencode-go", "exa", "cursor"] {
+            var entries = try ProviderConnectionAccounts.borrowedAccounts(provider: id, scope: keyScope)
+            if entries.isEmpty && keyScope != "global" { entries = try ProviderConnectionAccounts.borrowedAccounts(provider: id) }
+            if !entries.isEmpty {
+                accounts[id] = entries
+                payload.credentials[id] = entries[0].credential
+            }
+        }
+        payload.credentialAccounts = accounts
+        return payload
     }
     public static func oauth(_ provider: String, scope: String = "global", keychain: KeychainAccess = .init()) throws
         -> DefaultAgentCredential?

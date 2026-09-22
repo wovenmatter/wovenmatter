@@ -4,6 +4,9 @@ import { mkdtemp, rm, chmod, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ClaudeRuntime, claudeDirectories, claudeEnvironment } from '../src/claude-runtime.mjs';
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
+import { inlineClaudeLogin } from '../src/claude-runtime.mjs';
 import { PermissionRequests } from '../src/permissions.mjs';
 
 test('subscription runtime cannot inherit API keys, provider overrides, or another Claude login', () => {
@@ -66,4 +69,42 @@ test('approval cancellation and stale replies cannot authorize another turn', as
   requests.cancelSession('b');
   assert.equal(await second, false);
   assert.equal(requests.pending.size, 0);
+});
+
+test('native profiles are isolated across concurrent asynchronous operations', async () => {
+  const runtime = new ClaudeRuntime('/fixture', { directories: async path => ({ config: path, storage: path }) });
+  const values = await Promise.all(['first', 'second'].map(profile => runtime.withProfile(profile, async () => {
+    await new Promise(resolve => setTimeout(resolve, 1));
+    return (await runtime.environment()).CLAUDE_CONFIG_DIR;
+  })));
+  assert.deepEqual(values, ['/fixture/claude-accounts/first', '/fixture/claude-accounts/second']);
+  assert.equal((await runtime.environment()).CLAUDE_CONFIG_DIR, '/fixture');
+  await assert.rejects(runtime.environment(undefined, '../unsafe'), /Invalid Claude account/);
+});
+
+test('inline native login exposes only provider link and returns native account status', async () => {
+  const child = new EventEmitter(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
+  const notifications = [];
+  const runtime = { environment: async (_key, profile) => ({ PROFILE: profile }), status: async profile => ({ connected: true, account: profile }) };
+  const result = inlineClaudeLogin(runtime, 'fixture-profile', { notify: value => notifications.push(value), spawnCommand: (_path, args, options) => {
+    assert.deepEqual(args, ['auth', 'login', '--claudeai']);
+    assert.equal(options.env.PROFILE, 'fixture-profile');
+    setImmediate(() => { child.stdout.write('Ignore secret output. https://claude.ai/oauth/authorize?state=fixture\n'); child.emit('exit', 0); });
+    return child;
+  } });
+  assert.deepEqual(await result, { connected: true, account: 'fixture-profile' });
+  assert.equal(notifications[0].url, 'https://claude.ai/oauth/authorize?state=fixture');
+  assert.ok(!JSON.stringify(notifications).includes('Ignore secret'));
+});
+
+test('cancelling inline native login terminates its child and does not report success', async () => {
+  const controller = new AbortController();
+  const child = new EventEmitter(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
+  const signals = [];
+  child.kill = signal => { signals.push(signal); setImmediate(() => child.emit('exit', 0)); };
+  const result = inlineClaudeLogin({ environment: async () => ({}), status: async () => { throw Error('must not check status'); } }, 'fixture', {
+    signal: controller.signal, spawnCommand: () => { setImmediate(() => controller.abort()); return child; },
+  });
+  await assert.rejects(result, /Sign-in cancelled/);
+  assert.deepEqual(signals, ['SIGTERM']);
 });

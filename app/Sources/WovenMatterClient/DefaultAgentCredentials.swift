@@ -34,9 +34,16 @@ public struct DefaultAgentCredential: Codable, Equatable, Sendable {
         return copy
     }
 }
+public struct DefaultAgentCredentialAccount: Codable, Equatable, Sendable {
+    public var id: String
+    public var label: String
+    public var credential: DefaultAgentCredential
+    public init(id: String, label: String, credential: DefaultAgentCredential) { self.id = id; self.label = label; self.credential = credential }
+}
 public struct DefaultAgentPayload: Codable, Sendable {
     public var config: DefaultAgentSettings
     public var credentials: [String: DefaultAgentCredential]
+    public var credentialAccounts: [String: [DefaultAgentCredentialAccount]]?
     public var workspace: String
     public var unlockKey: String?
     public var revision: String?
@@ -250,26 +257,25 @@ public final class ProviderAccountCoordinator {
         let keyScopes = Set(["global"] + Array(settings.workspaces.keys))
         var issues: [String: [String: String]] = [:]
         for scope in keyScopes {
-            var owned: [String: DefaultAgentCredential] = [:]
-            for id in ["openai-codex", "xai"] {
-                if let c = try DefaultAgentSupport.oauth(id, scope: scope) { owned[id] = c }
-            }
-            guard owned.values.contains(where: { ($0.expires ?? 0) <= Date().timeIntervalSince1970 * 1000 + 300000 })
-            else { continue }
-            struct Request: Encodable {
-                let action = "refresh"
-                let credentials: [String: DefaultAgentCredential]
-            }
-            struct Result: Decodable {
-                let credentials: [String: DefaultAgentCredential]
-                let errors: [String: String]
-            }
-            let response = try await DefaultAgentControl.run(try JSONEncoder().encode(Request(credentials: owned)))
-            let result = try JSONDecoder().decode(Result.self, from: response)
-            issues[scope] = result.errors
-            for (id, c) in result.credentials where c != owned[id] {
-                if let original = owned[id] {
-                    try DefaultAgentSupport.saveRenewedOAuth(c, replacing: original, provider: id, scope: scope)
+            for provider in ["openai-codex", "xai"] {
+                for account in try ProviderConnectionAccounts.list(provider: provider, scope: scope) {
+                    guard let original = try ProviderConnectionAccounts.credential(account.id, provider: provider, scope: scope),
+                        (original.expires ?? 0) <= Date().timeIntervalSince1970 * 1000 + 300000 else { continue }
+                    struct Request: Encodable { let action = "refresh"; let credentials: [String: DefaultAgentCredential] }
+                    struct Result: Decodable { let credentials: [String: DefaultAgentCredential]; let errors: [String: String] }
+                    let result: Result
+                    do {
+                        let response = try await DefaultAgentControl.run(try JSONEncoder().encode(Request(credentials: [provider: original])))
+                        result = try JSONDecoder().decode(Result.self, from: response)
+                    } catch is CancellationError { throw CancellationError() }
+                    catch { continue } // One unavailable account must not block its healthy backups.
+                    if let error = result.errors[provider] {
+                        issues[scope, default: [:]][provider + "." + account.id] = error
+                        if account.isSelected { issues[scope, default: [:]][provider] = error }
+                    }
+                    if let renewed = result.credentials[provider], renewed != original {
+                        try ProviderConnectionAccounts.saveRenewed(renewed, replacing: original, accountID: account.id, provider: provider, scope: scope)
+                    }
                 }
             }
         }
@@ -280,6 +286,17 @@ public final class ProviderAccountCoordinator {
             for id in ["openai-codex", "xai"] {
                 let owner = try DefaultAgentSupport.oauth(id, scope: keyScope) == nil ? "global" : keyScope
                 if issues[owner]?[id] == "sign_in_required" { value.credentials.removeValue(forKey: id) }
+                // Keep the rejected slot in the hierarchy so fallback can explain
+                // the switch, but never export its rejected access/refresh tokens.
+                let sanitizedAccounts = value.credentialAccounts?[id]?.map { account in
+                    guard issues[owner]?[id + "." + account.id] == "sign_in_required" else { return account }
+                    var unavailable = DefaultAgentCredential(type: "oauth")
+                    unavailable.access = ""
+                    unavailable.expires = 0
+                    unavailable.borrowed = true
+                    return DefaultAgentCredentialAccount(id: account.id, label: account.label, credential: unavailable)
+                }
+                value.credentialAccounts?[id] = sanitizedAccounts
             }
             if scope != "local" && scope != "global" { value.unlockKey = try DefaultAgentSupport.workspaceKey(scope) }
             result[scope] = value

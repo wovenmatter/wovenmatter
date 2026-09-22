@@ -793,7 +793,7 @@ struct DashboardUsageView: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Connect only the accounts you choose")
                         .font(.system(size: 12.5, weight: .semibold))
-                    Text("Enable an account to allow credential checks. Cursor uses its local account session; OpenRouter uses your saved key. Other accounts use their CLI sign-in.")
+                    Text("Manage accounts and API keys in Connections. Enable a provider here to check usage, then choose the account whose limits you want to view.")
                         .font(.system(size: 11.5))
                         .foregroundStyle(DashboardPalette.mutedForeground)
                         .fixedSize(horizontal: false, vertical: true)
@@ -811,7 +811,7 @@ struct DashboardUsageView: View {
                 accountLabel: provider.displayName,
                 status: .needsCredential,
                 source: "Disabled",
-                detail: "Enable this account to allow local credential discovery and usage checks.",
+                detail: model.isUsageProviderEnabled(provider) ? "Checking selected account…" : "Enable this provider to check usage.",
                 dashboardURL: provider.usageDashboardURL
             )
         }
@@ -855,7 +855,7 @@ struct DashboardUsageView: View {
                     ProviderDot(provider: account.provider)
                         .padding(.top, 4)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(account.provider.displayName)
+                        Text(account.provider == .codex ? "OpenAI" : account.provider == .claude ? "Anthropic" : account.provider.displayName)
                             .font(.system(size: 13.5, weight: .semibold))
                         Text(account.accountLabel)
                             .font(.system(size: 11))
@@ -864,6 +864,18 @@ struct DashboardUsageView: View {
                     }
                     Spacer()
                     ConnectionsLink(title: account.isStale ? "Stale" : account.status.title)
+                }
+
+                let choices = model.usageConnectionChoices.filter { $0.provider == account.provider }
+                if !choices.isEmpty {
+                    Picker("Account", selection: Binding(
+                        get: { model.selectedUsageConnections[account.provider.rawValue] ?? choices.first!.id },
+                        set: { id in Task { await model.selectUsageConnection(id, provider: account.provider, range: range) } }
+                    )) {
+                        ForEach(choices) { choice in Text(choice.label).tag(choice.id) }
+                    }
+                    .disabled(!model.isUsageProviderEnabled(account.provider))
+                    .help("Choose whose usage to view. Preferred accounts and fallback order are managed in Connections.")
                 }
 
                 if account.provider == .codex,
@@ -945,11 +957,6 @@ struct DashboardUsageView: View {
                         .font(.system(size: 10.5))
                         .foregroundStyle(DashboardPalette.mutedForeground)
                         .fixedSize(horizontal: false, vertical: true)
-                }
-
-                if account.provider == .openRouter,
-                   model.isUsageProviderEnabled(.openRouter) {
-                    openRouterCredentialControls
                 }
 
                 if pinsFooter { Spacer(minLength: 12) }

@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import WovenMatterClient
 import WovenMatterCore
 
@@ -7,9 +8,8 @@ struct SettingsConnectionsView: View {
     var initialScope = "global"
     var reservesRailControlSpace = false
     let onBack: () -> Void
-    @State private var openAIMethod = "openai-codex"
-    @State private var claudeMethod = "claude-subscription"
     @State private var keyDrafts: [String: String] = [:]
+    @State private var keyLabels: [String: String] = [:]
     @State private var answer = ""
     @State private var confirmingCredentialReset = false
     private var agent: DefaultAgentSettingsModel { model.connections }
@@ -39,28 +39,14 @@ struct SettingsConnectionsView: View {
             }
             connectionsSection
             searchSection
-            SettingsCard(title: "Other usage accounts", detail: "These accounts remain owned by their independently installed harnesses.") {
-                ForEach([ProviderKind.cursor]) { provider in
-                    HStack {
-                        Text(provider.displayName)
-                        Spacer()
-                        Button("Manage sign-in") { model.signInUsageProvider(provider) }
-                            .buttonStyle(SettingsQuietButtonStyle())
-                            .disabled(model.signingInUsageProviders.contains(provider) || !model.isUsageProviderEnabled(provider))
-                    }
-                    if !model.isUsageProviderEnabled(provider) {
-                        Text("Enable \(provider.displayName) tracking in Usage to manage its usage sign-in.").font(.caption).foregroundStyle(.secondary)
-                    }
-                }
-            }
-            if let notice = agent.notice { Text(notice).font(.callout).foregroundStyle(.secondary) }
-            if let error = agent.error { SettingsError(error) }
+            if agent.signInProvider == nil, let notice = agent.notice { Text(notice).font(.callout).foregroundStyle(.secondary) }
+            if agent.signInProvider == nil, let error = agent.error { SettingsError(error) }
             HStack {
-                Button("Refresh connections") { agent.refresh(remote: remote) }
+                Button("Refresh connections") { agent.refresh(remote: remote) }.disabled(agent.busy)
                 if remote != nil {
                     Button("Reset workspace credentials") { confirmingCredentialReset = true }.disabled(agent.busy)
                 }
-                if agent.busy { ProgressView().controlSize(.small); Button("Cancel") { agent.cancel() } }
+                if agent.busy && agent.signInProvider == nil { ProgressView().controlSize(.small); Button("Cancel") { agent.cancel() } }
             }.buttonStyle(SettingsQuietButtonStyle())
             Text("Subscription sign-ins and API keys remain separate. Disconnecting a shared account affects every feature using it. Disabling dictation or usage tracking keeps the account connected.").font(.callout).foregroundStyle(.secondary)
             LocalModelServerConnections()
@@ -74,103 +60,129 @@ struct SettingsConnectionsView: View {
         }
     }
     private var connectionsSection: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Providers").font(.headline)
-            Picker("OpenAI connection", selection: $openAIMethod) {
-                Text("ChatGPT subscription").tag("openai-codex")
-                Text("OpenAI API key").tag("openai")
-            }.pickerStyle(.segmented).frame(maxWidth: 420)
-            Text("Both OpenAI connections can be enabled at the same time.").font(.callout).foregroundStyle(.secondary)
-            providerRow(openAIMethod, title: "OpenAI")
-            claudeSection
-            providerRow("openrouter", title: "OpenRouter")
-            providerRow("opencode-go", title: "OpenCode Go")
-            providerRow("xai", title: "Grok subscription")
-            signInSection
+        SettingsCard(title: "Model providers", detail: "Connect accounts for Built-in and Usage. Choose a preferred account and arrange backups for sign-in or usage exhaustion.") {
+            DisclosureGroup("OpenAI") {
+                connectionGroup("openai-codex", title: "ChatGPT subscriptions", subscription: true)
+                connectionGroup("openai", title: "API keys")
+            }
+            DisclosureGroup("Anthropic") {
+                connectionGroup("claude-subscription", title: "Claude subscriptions", subscription: true)
+                connectionGroup("anthropic", title: "API keys")
+            }
+            DisclosureGroup("Grok · xAI") {
+                connectionGroup("xai", title: "Grok subscriptions", subscription: true)
+                connectionGroup("xai-api", title: "xAI API keys")
+            }
+            DisclosureGroup("OpenRouter") { connectionGroup("openrouter", title: "API keys") }
+            DisclosureGroup("OpenCode") { connectionGroup("opencode-go", title: "API keys") }
+            DisclosureGroup("Cursor") {
+                Text(agent.cursorAccountStatus).font(.callout).foregroundStyle(.secondary)
+                Button("Refresh status") { Task { await agent.refreshCursorStatus() } }.buttonStyle(SettingsQuietButtonStyle())
+                Text("Usage limits only. Not available to Built-in.").font(.callout).foregroundStyle(.secondary)
+                Text("One account on this Mac. Signing in replaces the current account.").font(.caption).foregroundStyle(.secondary)
+                Button("Sign in to Cursor") { agent.signInCursor() }
+                    .buttonStyle(SettingsQuietButtonStyle())
+                    .disabled(agent.busy || remote != nil)
+                if agent.signInProvider == "cursor" { signInSection }
+            }
         }
     }
-    private var claudeSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Picker("Claude connection", selection: $claudeMethod) {
-                Text("Claude subscription").tag("claude-subscription")
-                Text("Claude API key").tag("anthropic")
-            }.pickerStyle(.segmented).frame(maxWidth: 420)
-            if claudeMethod == "anthropic" {
-                providerRow("anthropic", title: "Claude")
-                Text(
-                    "API usage is billed separately. Selecting a subscription model never uses this key automatically."
-                )
-                .font(.callout).foregroundStyle(.secondary)
-            } else {
-                HStack {
-                    Text("Claude").font(.headline)
-                    Spacer()
-                    Text(agent.connectionLabel("claude-subscription")).font(.callout).foregroundStyle(.secondary)
-                    Button("Sign in with Claude") { agent.signInClaude(remote: remote) }
-                    Button("Sign out") { agent.signOut("claude-subscription", remote: remote) }
-                }.buttonStyle(SettingsQuietButtonStyle()).disabled(agent.busy)
-                Text(
-                    remote == nil
-                        ? "Sign in through Anthropic’s bundled runtime in Terminal. Claude owns this Mac’s sign-in and refresh; API keys remain separate."
-                        : "Sign in through Anthropic’s runtime in this workspace. Subscription credentials stay in memory and require sign-in again after a container restart."
-                )
-                .font(.callout).foregroundStyle(.secondary)
-                if let detail = agent.providers.first(where: { $0.id == "claude-subscription" })?.detail {
-                    Text(detail).font(.caption).foregroundStyle(.secondary)
+    private func connectionGroup(_ id: String, title: String, subscription: Bool = false) -> some View {
+        DisclosureGroup(title) {
+            VStack(alignment: .leading, spacing: 10) {
+                let stored = agent.accounts[id] ?? []
+                let accounts = stored.filter(\.isSelected) + stored.filter { !$0.isSelected }
+                ForEach(Array(accounts.enumerated()), id: \.element.id) { index, account in
+                    DisclosureGroup {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(account.createdAt.map { "Added " + $0.formatted(date: .abbreviated, time: .shortened) } ?? "Existing connection")
+                                .font(.caption).foregroundStyle(.secondary)
+                            HStack {
+                                Button("Use first") { agent.selectAccount(account.id, provider: id, remote: remote) }.disabled(account.isSelected)
+                                Button("Move up") { agent.moveAccount(account.id, provider: id, offset: -1) }.disabled(account.isSelected || index <= 1)
+                                Button("Move down") { agent.moveAccount(account.id, provider: id, offset: 1) }.disabled(account.isSelected || index == accounts.count - 1)
+                                if subscription { Button("Reconnect") { agent.reconnectAccount(account.id, provider: id, remote: remote) } }
+                                Spacer()
+                                Button("Remove") { agent.removeAccount(account.id, provider: id, remote: remote) }
+                            }.buttonStyle(SettingsQuietButtonStyle()).disabled(!editable || agent.busy)
+                        }
+                    } label: {
+                        HStack {
+                            Text(account.label)
+                            Spacer()
+                            Text(account.isSelected ? "Preferred" : "Backup \(index)").font(.caption).foregroundStyle(.secondary)
+                            Text(account.isSelected && subscription ? agent.connectionLabel(id) : "Credential saved").font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
                 }
-            }
-        }.padding(.vertical, 4)
-    }
-    @ViewBuilder private func providerRow(_ id: String, title: String) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text(title).font(.headline)
-                Spacer()
-                Text(agent.connectionLabel(id)).font(.callout).foregroundStyle(.secondary)
-                if id == "openai-codex" || id == "xai" {
-                    Button("Sign in") { agent.refresh(remote: remote, login: id) }.buttonStyle(SettingsQuietButtonStyle()).disabled(agent.busy)
-                    Button(remote == nil ? "Sign out" : "Use shared sign-in") { agent.signOut(id, remote: remote) }
-                        .buttonStyle(SettingsQuietButtonStyle()).disabled(agent.busy)
+                if id == "claude-subscription", accounts.count < 4 {
+                    Text(agent.connectionLabel(id)).font(.callout).foregroundStyle(.secondary)
+                    Button(accounts.isEmpty ? "Sign in with Claude" : "Add Claude account") { agent.signInClaude(remote: remote) }
+                        .buttonStyle(SettingsQuietButtonStyle()).disabled(agent.busy || !editable)
+                } else if accounts.count < 4 {
+                    if subscription {
+                        Button(accounts.isEmpty ? "Sign in" : "Add account") { agent.refresh(remote: remote, login: id) }
+                            .buttonStyle(SettingsQuietButtonStyle()).disabled(agent.busy || !editable)
+                    } else { keyEntry(id) }
+                } else {
+                    Text("Four connections maximum. Remove one to add another.").font(.caption).foregroundStyle(.secondary)
                 }
-            }
-            if id != "openai-codex" && id != "xai" { keyEntry(id) }
-        }.padding(.vertical, 4)
+                if remote != nil && ["openai-codex", "xai"].contains(id) {
+                    Text("This workspace can own one independent sign-in, tried before its shared accounts.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Button("Use shared sign-in") { agent.signOut(id, remote: remote) }
+                        .buttonStyle(SettingsQuietButtonStyle()).disabled(agent.busy || !editable)
+                }
+                if agent.signInProvider == id { signInSection }
+            }.padding(.vertical, 8)
+        }
     }
     private func keyEntry(_ id: String) -> some View {
         HStack {
-            SecureField("API key", text: Binding(get: { keyDrafts[id] ?? "" }, set: { keyDrafts[id] = $0 }))
+            TextField("Label (optional)", text: Binding(get: { keyLabels[id] ?? "" }, set: { keyLabels[id] = $0 })).settingsInput().frame(maxWidth: 180)
+            SecureField("Add API key", text: Binding(get: { keyDrafts[id] ?? "" }, set: { keyDrafts[id] = $0 }))
                 .settingsInput().accessibilityLabel("\(id) API key")
             Button("Save key") {
-                guard agent.saveKey(keyDrafts[id] ?? "", provider: id) else { return }
+                guard agent.saveKey(keyDrafts[id] ?? "", provider: id, label: (keyLabels[id] ?? "").isEmpty ? nil : keyLabels[id]) else { return }
                 keyDrafts[id] = nil
+                keyLabels[id] = nil
                 agent.refresh(remote: remote)
             }.disabled((keyDrafts[id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            Button("Remove") { if agent.saveKey("", provider: id) { agent.refresh(remote: remote) } }
         }.buttonStyle(SettingsQuietButtonStyle()).disabled(!editable || agent.busy)
     }
-    @ViewBuilder private var signInSection: some View {
-        if let url = agent.signInURL {
-            HStack {
-                Link("Continue sign-in in browser", destination: url)
-                if let code = agent.signInCode { Text(code).monospaced().textSelection(.enabled) }
+    private var signInSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let url = agent.signInURL {
+                Link("Open sign-in page", destination: url)
+                Text(url.absoluteString).font(.caption).textSelection(.enabled)
+                if let code = agent.signInCode {
+                    HStack {
+                        Text(code).font(.system(.title3, design: .monospaced)).textSelection(.enabled)
+                        Button("Copy code") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(code, forType: .string) }
+                    }
+                }
             }
-        }
-        if let prompt = agent.prompt {
-            Text(prompt).font(.callout)
-            if agent.promptOptions.isEmpty {
-                HStack { TextField("Authorization code or redirect URL", text: $answer).settingsInput(); Button("Continue") { agent.respond(answer); answer = "" } }
-            } else {
-                HStack { ForEach(agent.promptOptions, id: \.id) { option in Button(option.label) { agent.respond(option.id) } } }
+            if let prompt = agent.prompt {
+                Text(prompt).font(.callout)
+                if agent.promptOptions.isEmpty {
+                    HStack { TextField("Authorization code or redirect URL", text: $answer).settingsInput(); Button("Continue") { agent.respond(answer); answer = "" } }
+                } else {
+                    HStack { ForEach(agent.promptOptions, id: \.id) { option in Button(option.label) { agent.respond(option.id) } } }
+                }
             }
-        }
+            if let notice = agent.notice { Text(notice).font(.callout).foregroundStyle(.secondary) }
+            if let error = agent.error { SettingsError(error) }
+            if agent.busy {
+                HStack { ProgressView().controlSize(.small); Text(agent.signInURL == nil ? "Preparing sign-in…" : "Waiting for sign-in…"); Button("Cancel") { agent.cancel() } }
+            }
+        }.buttonStyle(SettingsQuietButtonStyle())
     }
     private var searchSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Web search").font(.headline)
-            HStack { Text("Exa"); Spacer(); Text(agent.searchConfigured ? "Key configured" : "Add a key to enable search").font(.callout).foregroundStyle(.secondary) }
-            keyEntry("exa")
+        SettingsCard(title: "Web search") {
+            DisclosureGroup("Exa") { connectionGroup("exa", title: "API keys") }
         }
     }
+
 }
 
 struct ConnectionsLink: View {
