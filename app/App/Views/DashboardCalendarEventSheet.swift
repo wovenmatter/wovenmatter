@@ -170,7 +170,7 @@ struct DashboardCalendarEventSheet: View {
             if let end = draft.endsAt { LabeledContent("Ends", value: dateLabel(draft.allDay ? calendar.date(byAdding: .day, value: -1, to: end) ?? end : end)) }
             LabeledContent("Time zone", value: draft.timeZoneID.replacingOccurrences(of: "_", with: " "))
             if let recurrence = draft.recurrence {
-                LabeledContent("Repeats", value: recurrence.label).foregroundStyle(DashboardPalette.calendarRecurring)
+                LabeledContent("Repeats", value: recurrence.label).foregroundStyle(DashboardCalendarEntryStyle(draft).color)
             }
             if !draft.details.isEmpty { Text(draft.details).textSelection(.enabled).fixedSize(horizontal: false, vertical: true) }
             if let task = draft.task {

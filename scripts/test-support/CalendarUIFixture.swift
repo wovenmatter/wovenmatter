@@ -57,6 +57,10 @@ func dashboardParsedDate(_ value: String) -> Date? {
             changed.task?.prompt = "Review the release checklist and report any blockers."
             try! database.saveCalendarEvent(id: id, draft: changed, creating: false, now: start.addingTimeInterval(10801))
         }
+        _ = try! database.saveCalendarEvent(draft: .init(title: "Weekly planning", startsAt: start.addingTimeInterval(18000),
+            endsAt: start.addingTimeInterval(21600), recurrence: .init(unit: .week)), creating: true)
+        _ = try! database.saveCalendarEvent(draft: .init(title: "One-time project summary", startsAt: start.addingTimeInterval(21600),
+            endsAt: start.addingTimeInterval(23400), task: scheduled), creating: true)
         refresh()
     }
     func refresh() {
@@ -96,6 +100,7 @@ func dashboardParsedDate(_ value: String) -> Date? {
         WindowGroup("Calendar Preview") {
             DashboardCalendarSurface(model: model, onOpenSession: { openedSession = $0 })
                 .environment(\.dashboardTheme, CommandLine.arguments.contains("--cognac") ? .cognac : .green)
+                .frame(maxWidth: CommandLine.arguments.contains("--narrow") ? 600 : nil)
                 .frame(minWidth: 600, minHeight: 650)
                 .alert("Session opened", isPresented: Binding(get: { openedSession != nil }, set: { if !$0 { openedSession = nil } })) {
                     Button("OK") { openedSession = nil }

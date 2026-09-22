@@ -63,6 +63,37 @@ struct DashboardCalendarSelection: Identifiable {
     var occurrence: WorkspaceCalendarOccurrence?
 }
 
+enum DashboardCalendarEntryStyle: CaseIterable {
+    case event, task, recurringEvent, recurringTask
+
+    init(_ draft: WorkspaceCalendarDraft) {
+        switch (draft.task != nil, draft.recurrence != nil) {
+        case (false, false): self = .event
+        case (true, false): self = .task
+        case (false, true): self = .recurringEvent
+        case (true, true): self = .recurringTask
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .event: "Event"
+        case .task: "Scheduled task"
+        case .recurringEvent: "Recurring event"
+        case .recurringTask: "Recurring scheduled task"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .event: DashboardPalette.calendarEvent
+        case .task: DashboardPalette.calendarTask
+        case .recurringEvent: DashboardPalette.calendarRecurringEvent
+        case .recurringTask: DashboardPalette.calendarRecurringTask
+        }
+    }
+}
+
 struct DashboardCalendarSurface: View {
     @Environment(\.dashboardTheme) private var theme
     @Bindable var model: ApplicationModel
@@ -102,6 +133,7 @@ struct DashboardCalendarSurface: View {
                     if let error = model.calendarMutationError {
                         Text(error).font(.system(size: 12)).foregroundStyle(DashboardPalette.danger)
                     }
+                    legend
                 }
                 .frame(maxWidth: 1_080).frame(maxWidth: .infinity)
                 .padding(.horizontal, 32).padding(.top, 24).padding(.bottom, 40)
@@ -133,9 +165,6 @@ struct DashboardCalendarSurface: View {
                 HStack(spacing: 8) {
                     Text(layout.monthStart.formatted(.dateTime.month(.wide).year())).font(.system(size: 16, weight: .semibold))
                     Spacer()
-                    Label { Text("Recurring").font(.system(size: 11)) } icon: {
-                        Circle().fill(DashboardPalette.calendarRecurring).frame(width: 7, height: 7)
-                    }.foregroundStyle(DashboardPalette.mutedForeground)
                     Button("Today") { displayedMonth = Date(); selectedDate = calendar.startOfDay(for: Date()) }
                         .buttonStyle(DashboardQuietButtonStyle())
                     navigation(.arrowLeft, "Previous month", -1)
@@ -152,6 +181,23 @@ struct DashboardCalendarSurface: View {
         }
     }
 
+    private var legend: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Legend").font(.system(size: 11, weight: .medium))
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 190), alignment: .leading)], alignment: .leading, spacing: 10) {
+                ForEach(DashboardCalendarEntryStyle.allCases, id: \.self) { style in
+                    HStack(spacing: 8) {
+                        Circle().fill(style.color).frame(width: 7, height: 7)
+                            .accessibilityHidden(true)
+                        Text(style.title).font(.system(size: 11.5))
+                    }
+                }
+            }
+        }
+        .foregroundStyle(DashboardPalette.mutedForeground)
+        .padding(.horizontal, 16)
+    }
+
     private func dayCell(_ day: DashboardCalendarMonthLayout.Day, occurrences: [WorkspaceCalendarOccurrence]) -> some View {
         let selected = calendar.isDate(day.date, inSameDayAs: selectedDate)
         let today = calendar.isDateInToday(day.date)
@@ -164,12 +210,14 @@ struct DashboardCalendarSurface: View {
                     .frame(width: 25, height: 25).background(today ? DashboardPalette.primary : .clear, in: Circle())
             }.buttonStyle(.plain).accessibilityLabel(day.date.formatted(date: .complete, time: .omitted))
             ForEach(occurrences.prefix(3)) { occurrence in
+                let style = DashboardCalendarEntryStyle(occurrence.draft)
                 Button { open(occurrence) } label: {
                     HStack(spacing: 4) {
-                        Circle().fill(color(occurrence)).frame(width: 5, height: 5)
+                        Circle().fill(style.color).frame(width: 5, height: 5)
                         Text(occurrence.title).font(.system(size: 10.5, weight: .medium)).lineLimit(1)
                     }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
                 }.buttonStyle(.plain)
+                .accessibilityLabel(occurrence.title + ", " + style.title)
                 .help(occurrence.title + (occurrence.recurrence.map { " · " + $0.label } ?? ""))
                 .contextMenu { Button("Open event") { open(occurrence) }; Button("Copy event") { DashboardCalendarClipboard.copy(occurrence.draft) } }
             }
@@ -200,19 +248,20 @@ struct DashboardCalendarSurface: View {
                 }
                 if occurrences.isEmpty { Text("No events.").font(.system(size: 12.5)).foregroundStyle(DashboardPalette.mutedForeground) }
                 ForEach(occurrences) { occurrence in
+                    let style = DashboardCalendarEntryStyle(occurrence.draft)
                     Button { open(occurrence) } label: {
                         HStack(spacing: 12) {
-                            Circle().fill(color(occurrence)).frame(width: 7, height: 7)
+                            Circle().fill(style.color).frame(width: 7, height: 7)
                             Text(occurrence.allDay ? "All day" : occurrence.startsAt.formatted(date: .omitted, time: .shortened))
                                 .font(.system(size: 11.5)).frame(width: 75, alignment: .leading)
                             VStack(alignment: .leading, spacing: 3) {
                                 Text(occurrence.title).font(.system(size: 13, weight: .medium))
-                                Text(occurrence.recordedRun != nil ? "Past run" : occurrence.event.calendar.task == nil ? "Event" : "Scheduled task")
+                                Text(occurrence.recordedRun != nil ? "Past run" : style.title)
                                     .font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
                             }
                             Spacer()
                             if let repeatRule = occurrence.recurrence {
-                                Text(repeatRule.label).font(.system(size: 11)).foregroundStyle(DashboardPalette.calendarRecurring)
+                                Text(repeatRule.label).font(.system(size: 11)).foregroundStyle(style.color)
                             }
                             if let run = model.calendarRuns.last(where: { $0.eventID == occurrence.event.id && $0.scheduledAt == occurrence.startsAt }) {
                                 Text(run.statusLabel).font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
@@ -232,9 +281,6 @@ struct DashboardCalendarSurface: View {
             }
         } label: { DashboardLucideIcon(glyph: glyph, size: 14) }
         .buttonStyle(DashboardQuietButtonStyle()).accessibilityLabel(label)
-    }
-    private func color(_ occurrence: WorkspaceCalendarOccurrence) -> Color {
-        occurrence.recurrence == nil ? DashboardPalette.primary : DashboardPalette.calendarRecurring
     }
     private func select(_ date: Date) {
         selectedDate = calendar.startOfDay(for: date)
