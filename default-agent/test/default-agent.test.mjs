@@ -56,11 +56,11 @@ test('real SDK loads the complete selected tool set and resumes an empty draft w
   assert.equal(resumed.session.sessionId, record.session.sessionId);
   await assert.rejects(engine.prompt(record, 'No provider should be consumed', () => {}), /No configured connection/);
 });
-function fixtureEngine({ errors = [], connected = ['openai-codex', 'openrouter'], visible = false } = {}) {
+function fixtureEngine({ errors = [], connected = ['openai-codex', 'openrouter'], visible = false, streamEvents = [] } = {}) {
   const engine = new DefaultAgentEngine({ cwd: '/tmp', directory: '/tmp', config: { defaultModel: 'openai-codex/primary', fallbackModels: ['openrouter/fallback'] } });
   const selected = [];
   let listener;
-  const record = { selected: 'openai-codex/primary', busy: false, manager: { getLeafId: () => 'before', branch: () => {}, appendCustomEntry: () => {} }, session: { messages: [], agent: { state: { messages: [] } }, subscribe(fn) { listener = fn; return () => {}; }, async setModel(m) { selected.push(m.provider); }, async prompt() { if (visible) listener({ type: 'tool_execution_start', toolCallId: 't', toolName: 'bash', args: {} }); if (errors.length) throw new Error(errors.shift()); } } };
+  const record = { selected: 'openai-codex/primary', busy: false, manager: { getLeafId: () => 'before', branch: () => {}, appendCustomEntry: () => {} }, session: { messages: [], agent: { state: { messages: [] } }, subscribe(fn) { listener = fn; return () => {}; }, async setModel(m) { selected.push(m.provider); }, async prompt() { for (const event of streamEvents) listener(event); if (visible) listener({ type: 'tool_execution_start', toolCallId: 't', toolName: 'bash', args: {} }); if (errors.length) throw new Error(errors.shift()); } } };
   engine.resolveModel = ref => { const [provider, id] = ref.split('/'); return { provider, id, name: id }; };
   engine.credentials = { read: async p => connected.includes(p) ? { type: 'api_key', key: 'fixture' } : undefined };
   engine.runtime = { getAuth: async () => ({}), getModels: () => [] };
@@ -203,4 +203,19 @@ test('HTTP failure inspection stops at its byte limit and leaves the SDK body in
   const response = await request('https://example.test');
   assert.equal(record.httpAccessFailure, null);
   assert.equal(await response.text(), body);
+});
+
+test('reasoning block identity survives interleaved answer prefixes and changes for the next message', async () => {
+  const delta = (type, text) => ({ type: 'message_update', assistantMessageEvent: { type, contentIndex: type === 'thinking_delta' ? 0 : 1, delta: text } });
+  const { engine, record } = fixtureEngine({ streamEvents: [
+    { type: 'message_start' }, delta('thinking_delta', 'Reason'), delta('text_delta', 'T'),
+    delta('thinking_delta', 'ing'), delta('text_delta', 'iananmen'),
+    { type: 'message_start' }, delta('thinking_delta', 'Next tool step'),
+  ] });
+  const events = [];
+  await engine.prompt(record, 'fixture', event => events.push(event));
+  const thoughts = events.filter(event => event.sessionUpdate === 'agent_thought_chunk');
+  assert.equal(thoughts[0]._meta.wovenThoughtID, thoughts[1]._meta.wovenThoughtID);
+  assert.notEqual(thoughts[1]._meta.wovenThoughtID, thoughts[2]._meta.wovenThoughtID);
+  assert.equal(events.filter(event => event.sessionUpdate === 'agent_message_chunk').map(event => event.content.text).join(''), 'Tiananmen');
 });

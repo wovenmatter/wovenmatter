@@ -528,7 +528,7 @@ public actor LocalACPSessionCoordinator {
                     case .assistantBoundary:
                         try await streamWriter.finishSegment()
                     case .activity(let activity, let appendsContent):
-                        try await streamWriter.finishSegment()
+                        try await streamWriter.finishSegment(for: activity)
                         try self.database.upsertDeviceOwnedRunActivity(
                             runID: run.runID,
                             activity: activity,
@@ -1564,6 +1564,7 @@ actor LocalACPAssistantStreamWriter {
     private let onChange: LocalACPSessionCoordinator.ChangeHandler?
     private var buffer = ""
     private var accumulatedText = ""
+    private var seenThoughtIDs: Set<String> = []
     private var completedSegmentPrefix = ""
     private var flushTask: Task<Void, Never>?
     private var flushError: (any Error)?
@@ -1635,6 +1636,13 @@ actor LocalACPAssistantStreamWriter {
         flushTask = nil
         if let flushError { throw flushError }
         try flush()
+    }
+
+    func finishSegment(for activity: AgentRunActivity) async throws {
+        // A provider can deliver the last delta of an existing reasoning block
+        // after the first answer token. Updating that block is not a new segment.
+        if activity.kind == .thought, !seenThoughtIDs.insert(activity.id).inserted { return }
+        try await finishSegment()
     }
 
     func finishSegment() async throws {

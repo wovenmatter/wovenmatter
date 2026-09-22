@@ -372,11 +372,6 @@ struct DashboardCloudConversation: View {
             .simultaneousGesture(TapGesture().onEnded(onActivatePanel))
 
             VStack(spacing: 8) {
-                if let conversation, conversation.localRuntimeKind == .defaultAgent {
-                    Button("Built-in Agent settings") {
-                        model.pendingDefaultAgentSettingsScope = conversation.remoteWorkspaceID?.uuidString.lowercased() ?? "local"
-                    }.buttonStyle(DashboardQuietButtonStyle())
-                }
                 if let conversation, conversation.localRuntimeKind == .opencode, let openCode = workspaceOpenCode {
                     OpenCodeConversationControls(model: openCode, conversationID: conversation.id)
                         .frame(maxWidth: 768)
@@ -452,6 +447,14 @@ struct DashboardCloudConversation: View {
                             help: "Remove panel",
                             action: onClosePanel
                         )
+                    } else if let conversation, conversation.localRuntimeKind == .defaultAgent {
+                        DashboardPanelControlButton(
+                            glyph: .settings,
+                            accessibilityLabel: "Built-in Agent settings",
+                            help: "Built-in Agent settings"
+                        ) {
+                            model.pendingDefaultAgentSettingsScope = conversation.remoteWorkspaceID?.uuidString.lowercased() ?? "local"
+                        }
                     } else if showsAddPanel {
                         Color.clear
                             .frame(width: DashboardPanelControlButton.size, height: DashboardPanelControlButton.size)
