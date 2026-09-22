@@ -264,6 +264,7 @@ final class ApplicationModel {
     private(set) var conversationStatesByID: [String: DashboardConversationState] = [:]
     // Usage owns its observable state; these projections preserve the application API.
     private let usage: ApplicationUsageModel
+    func sharedConnectionsChanged() async { await usage.sharedConnectionsChanged() }
     var localUsage: LocalUsageSnapshot? { usage.localUsage }
     var localUsageError: String? { usage.localUsageError }
     var isRefreshingUsageAnalytics: Bool { usage.isRefreshingUsageAnalytics }
@@ -408,6 +409,7 @@ final class ApplicationModel {
     }
 
     private func start() async {
+        remoteWorkspaces.startDefaultAgentMaintenance()
         do {
             conversationChangeTask?.cancel()
             for worker in conversationChangeWorkers.values { worker.cancel() }
@@ -424,6 +426,9 @@ final class ApplicationModel {
             )
             let dashboardStore = try DashboardStore(supportDirectory: supportDirectory)
             self.dashboardStore = dashboardStore
+            await dashboardStore.setLocalACPResumePermissionHandler { [weak self] conversationID, request in
+                await self?.requestLocalACPPermission(conversationID: conversationID, request: request)
+            }
             try await dashboardStore.prepareLocalWorkspace()
             let openCode = OpenCodeModel(store: dashboardStore, ownerDeviceID: try await dashboardStore.dashboardDeviceID(), defaults: applicationDefaults)
             openCode.applyInitialSessionTools = { [weak self] id, tools in
@@ -668,6 +673,32 @@ final class ApplicationModel {
             && (lhs.localCLIAgentOrder ?? []) == (rhs.localCLIAgentOrder ?? [])
     }
 
+    private(set) var localSignInStatuses: [AgentSignInStatus] = []
+    private(set) var checkingLocalSignIn = false
+    private(set) var localSignInError: String?
+    func refreshLocalSignInStatus() async {
+        guard !checkingLocalSignIn else { return }
+        checkingLocalSignIn = true
+        defer { checkingLocalSignIn = false }
+        do {
+            let snapshot = try DefaultAgentSupport.snapshot(workspace: "local")
+            var body = try JSONSerialization.jsonObject(with: snapshot.data()) as! [String: Any]
+            body["action"] = "sign-in-status"
+            let resolver = localACPRuntimeResolver.snapshottingExecutableSearchDirectories()
+            body["harnesses"] = LocalACPRuntimeCatalog.definitions.filter { $0.runtimeKind != .defaultAgent }.map { definition -> [String: Any] in
+                let executable = resolver.executable(named: definition.underlyingCLIName ?? definition.commandName)?.path
+                return ["id": definition.runtimeKind.rawValue, "name": definition.displayName,
+                        "enabled": enabledLocalACPRuntimeKinds.contains(definition.runtimeKind), "executable": executable ?? NSNull() as Any]
+            }
+            struct Result: Decodable { let statuses: [AgentSignInStatus] }
+            let response = try await DefaultAgentControl.run(JSONSerialization.data(withJSONObject: body))
+            localSignInStatuses = try JSONDecoder().decode(Result.self, from: response).statuses
+            localSignInError = nil
+        } catch { localSignInError = "Could not check sign-in status. Previous results are unchanged. " + error.localizedDescription }
+    }
+
+    var defaultAgentFallbackNotice: String?
+
     var orderedLocalCLIAgents: [WorkspaceAgent] {
         Self.orderLocalCLIAgents(
             localCLIAgents,
@@ -784,6 +815,7 @@ final class ApplicationModel {
         // Metadata changes are independent of run content and must not replace
         // or be suppressed by a pending terminal notification.
         if case .configuration(let configuration) = change.phase {
+            if let notice = configuration.fallbackNotice { defaultAgentFallbackNotice = notice }
             // The running adapter already supplied this snapshot. Preparing a
             // session here would turn its initial notification into a refresh
             // loop, keeping the composer loading while idle sessions restart.
@@ -1984,6 +2016,10 @@ final class ApplicationModel {
             runtimeKind: runtimeKind,
             isBuzzWorkspaceSession: isBuzzWorkspaceSession
         )
+        if runtimeKind == .defaultAgent, let workspaceID = conversation.remoteWorkspaceID,
+           let remote = remoteWorkspaces.configuration(id: workspaceID) {
+            try await remoteWorkspaces.ensureDefaultAgent(remote)
+        }
         let launch = context?.launch
         let workspace = context?.workspace
         guard isBuzzWorkspaceSession || (launch != nil && workspace != nil) else {
@@ -2649,6 +2685,9 @@ final class ApplicationModel {
         }
     }
 
+    var pendingDefaultAgentSettingsScope: String?
+    var pendingConnectionsScope: String?
+    let connections = DefaultAgentSettingsModel()
     private(set) var pendingHermesSettingsAgentID: UUID?
     private(set) var hermesGatewayConnections: [UUID: HermesGatewayConnection] = [:]
     private(set) var hermesCronJobs: [UUID: [HermesValue]] = [:]

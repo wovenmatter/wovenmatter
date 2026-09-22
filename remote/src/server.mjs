@@ -1,3 +1,7 @@
+import { existsSync } from 'node:fs'
+const defaultAgentModule = new URL('../default-agent/src/service.mjs', import.meta.url)
+const { createDefaultAgentService } = await import(existsSync(defaultAgentModule) ? defaultAgentModule.href : new URL('../../default-agent/src/service.mjs', import.meta.url).href)
+const { signInStatuses } = await import(new URL('./sign-in-status.mjs', existsSync(defaultAgentModule) ? defaultAgentModule : new URL('../../default-agent/src/service.mjs', import.meta.url)).href)
 import { databaseOperation } from './database-catalog.mjs'
 import { createHermesInstance } from './hermes-instance.mjs'
 import { createRuntimeMaintenance, acquireHostLock } from './runtime-maintenance.mjs'
@@ -35,6 +39,7 @@ if (catalogDocument.schemaVersion !== 4 || !Array.isArray(catalogDocument.harnes
   throw new Error('Unsupported harness catalog')
 }
 const catalog = new Map(catalogDocument.harnesses.map((entry) => [entry.id, entry]))
+const defaultAgent = createDefaultAgentService({ cwd: workspaceRoot, directory: resolve(workspaceRoot, '.wovenmatter/default-agent') })
 const authenticationSessions = new Map()
 const maximumRetainedTerminalRecords = 64
 const maximumInstallerBytes = 5_242_880
@@ -72,6 +77,26 @@ const server = createServer(async (request, response) => {
   try {
     if (!authorized(request)) return json(response, 401, { error: 'unauthorized' })
     const url = new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`)
+    if (url.pathname === '/v1/sign-in-status' && request.method === 'GET') {
+      const agent = await defaultAgent.status();
+      const entries = await Promise.all([...catalog.values()].map(async h => ({
+        id: h.id, name: h.displayName, executable: await commandExists(h.cliCommand) ? h.cliCommand : null,
+      })));
+      const statuses = await signInStatuses(entries);
+      statuses.unshift(...(agent.locked ? [{ id: 'default_agent', name: 'Built-in', state: 'locked', detail: 'Reconnect Woven Matter to unlock stored credentials.' }]
+        : agent.providers.map(p => ({ ...p, name: 'Built-in · ' + p.name }))));
+      return json(response, 200, { statuses });
+    }
+    if (url.pathname === '/v1/default-agent/configuration'  && request.method === 'POST') {
+      return json(response, 200, await defaultAgent.configure(await readJSON(request)))
+    }
+    if (url.pathname === '/v1/default-agent/status' && request.method === 'GET') return json(response, 200, await defaultAgent.status())
+    if (url.pathname === '/v1/default-agent/rpc' && request.method === 'POST') {
+      return json(response, 200, await defaultAgent.invoke(await readJSON(request)))
+    }
+    const defaultRun = url.pathname.match(/^\/v1\/default-agent\/runs\/([0-9a-f-]+)$/)
+    if (defaultRun && request.method === 'GET') return json(response, 200, await defaultAgent.poll(defaultRun[1], Number(url.searchParams.get('after') ?? 0)))
+
 
     if (request.method === 'GET' && url.pathname === '/v1/databases') {
       return json(response, 200, await databaseOperation(workspaceRoot, { action: 'list' }))
@@ -111,6 +136,7 @@ const server = createServer(async (request, response) => {
 
     if (request.method === 'GET' && url.pathname === '/v1/harnesses') {
       const statuses = await Promise.all([...catalog.values()].map(harnessStatus))
+      statuses.unshift({ id: 'default_agent', displayName: 'Built-in', transport: 'woven-default-agent', capabilities: ['conversations', 'resume'], state: 'ready', installationStatus: 'installed', authenticationStatus: 'configured_in_settings', transportStatus: 'ready', setupMethods: [], detectedProviders: [] })
       return json(response, 200, { harnesses: statuses })
     }
 

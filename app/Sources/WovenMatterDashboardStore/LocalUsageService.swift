@@ -85,6 +85,7 @@ public struct LocalUsageLimitsSnapshot: Equatable, Sendable {
 
 struct UsageLimitsRequest: Sendable {
   let homeDirectory: URL
+  let allowCredentialAccess: Bool
   let openRouterAPIKey: String?
   let enabledProviders: Set<ProviderKind>
   let keychainInteraction: UsageKeychainInteraction
@@ -93,7 +94,8 @@ struct UsageLimitsRequest: Sendable {
   let codexWorkspaceCount: Int
   let now: Date
 
-  func collect() async -> [UsageLimitAccount] {
+  func collect(sharedCredentials: [String: DefaultAgentCredential]? = nil,
+               claudeStatus: BuiltInClaudeSignIn.Status? = nil) async -> [UsageLimitAccount] {
     await ProviderLimitCollector.collect(
       homeDirectory: homeDirectory,
       openRouterAPIKey: openRouterAPIKey,
@@ -102,6 +104,8 @@ struct UsageLimitsRequest: Sendable {
       interactiveProvider: interactiveProvider,
       codexWorkspaceSource: codexWorkspaceSource,
       codexWorkspaceCount: codexWorkspaceCount,
+      sharedCredentials: sharedCredentials,
+      claudeStatus: claudeStatus,
       now: now
     )
   }
@@ -124,6 +128,7 @@ public actor LocalUsageService {
   private let fileManager: FileManager
   private let credentialStore: any UsageCredentialStoring
   private let databaseURL: URL
+  private let usesSharedConnections: Bool
   private let limitCollector: @Sendable (UsageLimitsRequest) async -> [UsageLimitAccount]
   private let openRouterActivityFetcher: @Sendable (String) async throws -> OpenRouterActivityResult
   private var limitsGeneration = UUID()
@@ -134,12 +139,14 @@ public actor LocalUsageService {
     date: Date,
     providers: Set<ProviderKind>,
     codexWorkspaceID: String?,
+    connectionRevision: UInt64,
     accounts: [UsageLimitAccount]
   )?
   private var importOutcomes: [String: ImportOutcome] = [:]
   // A successful read or explicit save authorizes this app session. Do not ask
   // Keychain again during the refresh triggered by a one-time Allow response.
   private var openRouterAPIKey: String?
+  private var openRouterCredentialRevision = DefaultAgentSupport.revision
   private var openRouterStatus: UsageSourceStatus = .unavailable
   private var openRouterDetail = "Add an OpenRouter management key to import official account activity."
   private var cursorAccountStatus: UsageSourceStatus = .unavailable
@@ -154,7 +161,13 @@ public actor LocalUsageService {
     self.homeDirectory = homeDirectory
     self.fileManager = fileManager
     credentialStore = UsageCredentialStore(service: credentialService)
-    limitCollector = { await $0.collect() }
+    usesSharedConnections = true
+    limitCollector = { request in
+      let credentials = request.allowCredentialAccess ? ((try? await ProviderAccountCoordinator.shared.appCredentials()) ?? [:]) : [:]
+      let claudeStatus = request.allowCredentialAccess && request.enabledProviders.contains(.claude)
+        ? try? await BuiltInClaudeSignIn.status() : nil
+      return await request.collect(sharedCredentials: credentials, claudeStatus: claudeStatus)
+    }
     openRouterActivityFetcher = { try await OpenRouterActivityClient.fetch(apiKey: $0) }
     databaseURL = usageDatabaseURL ?? homeDirectory.appending(
       path: "Library/Application Support/Woven Matter/workspace.sqlite"
@@ -166,6 +179,7 @@ public actor LocalUsageService {
     fileManager: FileManager,
     credentialStore: any UsageCredentialStoring,
     usageDatabaseURL: URL,
+    usesSharedConnections: Bool = false,
     limitCollector: @escaping @Sendable (UsageLimitsRequest) async -> [UsageLimitAccount] = {
       await $0.collect()
     },
@@ -176,6 +190,7 @@ public actor LocalUsageService {
     self.homeDirectory = homeDirectory
     self.fileManager = fileManager
     self.credentialStore = credentialStore
+    self.usesSharedConnections = usesSharedConnections
     self.limitCollector = limitCollector
     self.openRouterActivityFetcher = openRouterActivityFetcher
     databaseURL = usageDatabaseURL
@@ -240,9 +255,10 @@ public actor LocalUsageService {
     now: Date = Date()
   ) async throws -> LocalUsageLimitsSnapshot {
     try Task.checkCancellation()
+    let connectionRevision = DefaultAgentSupport.revision
     let generation = UUID()
     limitsGeneration = generation
-    let codexSources = enabledProviders.contains(.codex)
+    let codexSources = !usesSharedConnections && enabledProviders.contains(.codex)
       ? ProviderLimitCollector.codexWorkspaceSources(homeDirectory: homeDirectory)
       : []
     let selectedCodexSource = ProviderLimitCollector.resolveCodexWorkspaceSource(
@@ -255,13 +271,18 @@ public actor LocalUsageService {
       && refreshReason != .credentialChanged
     if let cachedLimits,
        cachedLimits.providers == enabledProviders,
+       (!usesSharedConnections || cachedLimits.connectionRevision == connectionRevision),
        cachedLimits.codexWorkspaceID == resolvedCodexWorkspaceID,
        (!refresh || (mayReuseFreshLimits
          && now.timeIntervalSince(cachedLimits.date) < 60)) {
       accounts = cachedLimits.accounts
     } else {
+      // Shared account switches must never inherit a previous account or harness
+      // snapshot. Their live limits are cheap to re-fetch; keep only this session
+      // cache, fenced by the shared connection revision.
+      let sharedProviders: Set<ProviderKind> = usesSharedConnections ? [.codex, .grok, .openRouter, .openCodeGo] : []
       let persistent = (try? openUsageStore()?.usageLimitAccounts(
-        providers: enabledProviders,
+        providers: enabledProviders.subtracting(sharedProviders),
         accountScopes: resolvedCodexWorkspaceID.map { [.codex: $0] } ?? [:]
       )) ?? []
       let persistentByProvider = Dictionary(
@@ -279,6 +300,7 @@ public actor LocalUsageService {
         }
         let refreshed = await limitCollector(UsageLimitsRequest(
           homeDirectory: homeDirectory,
+          allowCredentialAccess: allowCredentialAccess,
           openRouterAPIKey: openRouterAPIKey,
           enabledProviders: enabledProviders,
           keychainInteraction: keychainInteraction,
@@ -287,7 +309,8 @@ public actor LocalUsageService {
           codexWorkspaceCount: codexSources.count,
           now: now
         ))
-        guard limitsGeneration == generation, !Task.isCancelled else {
+        guard limitsGeneration == generation, !Task.isCancelled,
+              !usesSharedConnections || connectionRevision == DefaultAgentSupport.revision else {
           throw CancellationError()
         }
         accounts = refreshed.map { refreshedAccount in
@@ -310,7 +333,7 @@ public actor LocalUsageService {
           return prior.retainingLastGood(after: account)
         }
         try? openUsageStore()?.saveUsageLimitAccounts(accounts, storedAt: now)
-        cachedLimits = (now, enabledProviders, resolvedCodexWorkspaceID, accounts)
+        cachedLimits = (now, enabledProviders, resolvedCodexWorkspaceID, connectionRevision, accounts)
       } else {
         let placeholders = ProviderLimitCollector.placeholderAccounts(
           enabledProviders: enabledProviders,
@@ -481,6 +504,10 @@ public actor LocalUsageService {
   }
 
   private func loadOpenRouterAPIKey() throws -> String? {
+    let revision = DefaultAgentSupport.revision
+    if revision != openRouterCredentialRevision {
+      openRouterAPIKey = nil; openRouterCredentialRevision = revision
+    }
     if let openRouterAPIKey { return openRouterAPIKey }
     let key = try credentialStore.loadOpenRouterAPIKey()
     openRouterAPIKey = key

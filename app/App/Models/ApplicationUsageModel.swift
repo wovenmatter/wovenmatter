@@ -127,11 +127,21 @@ final class ApplicationUsageModel {
     }
 
     func usageDestinationAppeared(range: UsageTimeRange) async {
+        updateSharedConnectionPresence()
         await refreshLocalUsage(
             range: range,
             refreshLimits: true,
             reason: .viewAppeared
         )
+    }
+    func sharedConnectionsChanged() async {
+        updateSharedConnectionPresence()
+        await refreshLocalUsage(range: currentUsageRange, refreshLimits: true, reason: .credentialChanged)
+    }
+    private func updateSharedConnectionPresence() {
+        guard let configured = try? DefaultAgentSupport.hasKey("openrouter") else { return }
+        isOpenRouterCredentialConfigured = configured
+        applicationDefaults.set(configured, forKey: Self.openRouterCredentialConfiguredDefaultsKey)
     }
 
     func usageAnalyticsSelected(range: UsageTimeRange) async {
@@ -462,6 +472,10 @@ final class ApplicationUsageModel {
     }
 
     func signInUsageProvider(_ provider: ProviderKind) {
+        if [.codex, .claude, .grok, .openRouter, .openCodeGo].contains(provider) {
+            NotificationCenter.default.post(name: .init("wovenmatter.open-connections"), object: "global")
+            return
+        }
         guard !signingInUsageProviders.contains(provider) else { return }
         guard enabledUsageProviders.contains(provider) else {
             localUsageError = "Enable \(provider.displayName) usage tracking before signing in."

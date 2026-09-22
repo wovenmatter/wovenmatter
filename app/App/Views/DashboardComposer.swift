@@ -56,6 +56,8 @@ struct DashboardComposer: View {
     @State private var completionRequest = 0
     @State private var caretAtEnd = true
     @State private var focused = false
+    @State private var dictationEditor = DictationEditor()
+    @State private var dictationDraftID = UUID().uuidString
     @State private var openMenu: DashboardComposerMenuKind?
     @State private var isDropTarget = false
     @State private var collapseOverride: Bool?
@@ -221,7 +223,9 @@ struct DashboardComposer: View {
             onEscape: dismissSlashCommands,
             completionRequest: $completionRequest,
             onCaretAtEndChange: { caretAtEnd = $0 },
-            onAttachFiles: onDropFiles
+            onAttachFiles: onDropFiles,
+            dictationEditor: dictationEditor,
+            dictationIdentity: sessionID ?? dictationDraftID
         )
         .frame(
             minHeight: isCollapsed ? 36 : 32,
@@ -530,19 +534,7 @@ struct DashboardComposer: View {
     }
 
     private var voiceControl: some View {
-        Button {
-            onActivate()
-            openMenu = nil
-            focused = false
-            onUnavailableAction("Voice input")
-        } label: {
-            DashboardLucideIcon(glyph: .mic, size: 16)
-                .frame(width: 36, height: 36)
-                .contentShape(Circle())
-        }
-        .buttonStyle(DashboardComposerControlButtonStyle())
-        .accessibilityLabel("Voice input unavailable")
-        .help("Dictation unavailable")
+        DictationMicrophone(editor: dictationEditor, onActivate: onActivate)
     }
 
     private var sendControl: some View {

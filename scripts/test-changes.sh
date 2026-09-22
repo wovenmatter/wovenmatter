@@ -43,6 +43,11 @@ run_package_tests() {
   WOVENMATTER_TEST_CACHE_DIR="$cache_root" scripts/test-application-usage.sh
 }
 
+run_default_agent_tests() {
+  npm ci --prefix default-agent --omit=dev --ignore-scripts --no-audit --no-fund
+  npm test --prefix default-agent
+}
+
 run_remote_tests() {
   npm test --prefix remote
 }
@@ -64,6 +69,7 @@ run_app_build() {
 
 run_all() {
   run_static_checks
+  run_default_agent_tests
   run_remote_tests
   run_package_tests
   run_app_build
@@ -71,12 +77,14 @@ run_all() {
 
 run_macos() {
   run_static_checks
+  run_default_agent_tests
   run_package_tests
   run_app_build
 }
 
 run_remote() {
   run_static_checks
+  run_default_agent_tests
   run_remote_tests
 }
 
@@ -102,7 +110,7 @@ changed="$(
 changed="$(printf '%s\n' "$changed" | sort -u)"
 if [ -z "$changed" ]; then
   printf 'No changes relative to %s.\n' "$base"
-elif printf '%s\n' "$changed" | grep -Eq '^(remote/|harnesses/|scripts/|\.github/|\.dockerignore$|app/Package|app/WovenMatter\.xcodeproj)'; then
+elif printf '%s\n' "$changed" | grep -Eq '^(default-agent/|remote/|harnesses/|scripts/|\.github/|\.dockerignore$|app/Package|app/WovenMatter\.xcodeproj)'; then
   run_all
 elif printf '%s\n' "$changed" | grep -Eq '^app/App/' \
   && printf '%s\n' "$changed" | grep -Eq '^app/(Sources|Tests)/'; then

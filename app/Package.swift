@@ -55,6 +55,15 @@ let package = Package(
       name: "WovenMatterClientTests",
       dependencies: ["WovenMatterClient"]
     ),
+    .testTarget(
+      name: "WovenMatterDictationTests",
+      dependencies: ["WovenMatterCore", "WovenMatterClient"],
+      path: "App",
+      sources: [
+        "Models/DictationModel.swift", "Services/DictationAudioCapture.swift",
+        "Services/DictationEditor.swift", "Tests/DictationTests.swift"
+      ]
+    ),
     // Exercise the same app service and socket/relay sources that the native
     // bundle uses, without launching the UI or any provider runtimes.
     .testTarget(

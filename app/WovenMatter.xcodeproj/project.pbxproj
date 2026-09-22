@@ -9,6 +9,14 @@
 /* Begin PBXBuildFile section */
 		A71B00000000000000000101 /* LibraryModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A71B00000000000000000102 /* LibraryModel.swift */; };
 		A71B00000000000000000001 /* DashboardLibraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A71B00000000000000000002 /* DashboardLibraryView.swift */; };
+		0890236A7DEEC4A26AB512AB /* DictationModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E4AE75EDB3C1EE9E7043F59 /* DictationModel.swift */; };
+		E95F4392C674DA52368A05A6 /* DictationAudioCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = 851DA88EE3B3AF907B5AB390 /* DictationAudioCapture.swift */; };
+		B93AB31EDDA3C1A9D35A791B /* DictationEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = FCBB65211C7015A6B8158E80 /* DictationEditor.swift */; };
+		C0DBB095B3E36A01B19862F1 /* LocalModelServerConnections.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA61B1265D88D38A1D708C78 /* LocalModelServerConnections.swift */; };
+		5C2F6DF3B2A02B37BECD38D0 /* SettingsConnectionsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D25E89AA1F9ECDB61C4EDEF /* SettingsConnectionsView.swift */; };
+		8BD4FF831500CD09DE10FC28 /* DictationControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8A44EB04E09581B6A85026F /* DictationControls.swift */; };
+		DA2000000000000000000004 /* SettingsDefaultAgentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA2000000000000000000003 /* SettingsDefaultAgentView.swift */; };
+		DA2000000000000000000002 /* DefaultAgentSettingsModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA2000000000000000000001 /* DefaultAgentSettingsModel.swift */; };
 		D472AB9160464F1FAB826C52 /* WorkspaceNoteRecovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = D472AB9160464F1FAB826C51 /* WorkspaceNoteRecovery.swift */; };
 		D472AB9160464F1FAB826C42 /* WorkspaceSessionManagement.swift in Sources */ = {isa = PBXBuildFile; fileRef = D472AB9160464F1FAB826C41 /* WorkspaceSessionManagement.swift */; };
 		D472AB9160464F1FAB826C32 /* WorkspaceSessionActivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = D472AB9160464F1FAB826C31 /* WorkspaceSessionActivity.swift */; };
@@ -85,6 +93,14 @@
 /* Begin PBXFileReference section */
 		A71B00000000000000000102 /* LibraryModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryModel.swift; sourceTree = "<group>"; };
 		A71B00000000000000000002 /* DashboardLibraryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardLibraryView.swift; sourceTree = "<group>"; };
+		7E4AE75EDB3C1EE9E7043F59 /* DictationModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictationModel.swift; sourceTree = "<group>"; };
+		851DA88EE3B3AF907B5AB390 /* DictationAudioCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictationAudioCapture.swift; sourceTree = "<group>"; };
+		FCBB65211C7015A6B8158E80 /* DictationEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictationEditor.swift; sourceTree = "<group>"; };
+		BA61B1265D88D38A1D708C78 /* LocalModelServerConnections.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalModelServerConnections.swift; sourceTree = "<group>"; };
+		4D25E89AA1F9ECDB61C4EDEF /* SettingsConnectionsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsConnectionsView.swift; sourceTree = "<group>"; };
+		E8A44EB04E09581B6A85026F /* DictationControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictationControls.swift; sourceTree = "<group>"; };
+		DA2000000000000000000003 /* SettingsDefaultAgentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsDefaultAgentView.swift; sourceTree = "<group>"; };
+		DA2000000000000000000001 /* DefaultAgentSettingsModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DefaultAgentSettingsModel.swift; sourceTree = "<group>"; };
 		D472AB9160464F1FAB826C51 /* WorkspaceNoteRecovery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WorkspaceNoteRecovery.swift"; sourceTree = "<group>"; };
 		D472AB9160464F1FAB826C41 /* WorkspaceSessionManagement.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WorkspaceSessionManagement.swift"; sourceTree = "<group>"; };
 		D472AB9160464F1FAB826C31 /* WorkspaceSessionActivity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WorkspaceSessionActivity.swift"; sourceTree = "<group>"; };
@@ -216,6 +232,8 @@
 		D49100000000000000000004 /* Models */ = {
 			isa = PBXGroup;
 			children = (
+				7E4AE75EDB3C1EE9E7043F59 /* DictationModel.swift */,
+				DA2000000000000000000001 /* DefaultAgentSettingsModel.swift */,
 				A14000000000000000000002 /* ApplicationModel+SessionSelections.swift */,
 				3CE258FB55B3D55A39972D5B /* OpenCodeModel.swift */,
 				D472AB9160464F1FAB826C11 /* ApplicationModel+AgentTools.swift */,
@@ -237,6 +255,10 @@
 		D0E0A91C0032120E4CDF1388 /* Views */ = {
 			isa = PBXGroup;
 			children = (
+				BA61B1265D88D38A1D708C78 /* LocalModelServerConnections.swift */,
+				4D25E89AA1F9ECDB61C4EDEF /* SettingsConnectionsView.swift */,
+				E8A44EB04E09581B6A85026F /* DictationControls.swift */,
+				DA2000000000000000000003 /* SettingsDefaultAgentView.swift */,
 				6F6AFCDD4A429E11B0945492 /* OpenCodeSessionView.swift */,
 				17AF06D69A7DE73E3F94E40A /* OpenCodeInteractionView.swift */,
 				97160C827D94B74AFAB2961A /* OpenCodeSettingsView.swift */,
@@ -299,6 +321,8 @@
 		D50000000000000000000008 /* Services */ = {
 			isa = PBXGroup;
 			children = (
+				851DA88EE3B3AF907B5AB390 /* DictationAudioCapture.swift */,
+				FCBB65211C7015A6B8158E80 /* DictationEditor.swift */,
 				879D531AEA3583A537B8BE1B /* DashboardNoteDrafts.swift */,
 				F19000000000000000000002 /* DashboardNoteDocumentCache.swift */,
 				E10100000000000000000002 /* WovenNoteService.swift */,
@@ -406,7 +430,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "set -eu\n/usr/bin/xattr -cr \"${TARGET_BUILD_DIR}/${WRAPPER_NAME}\"\n/bin/rm -rf \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/remote/test\"\n/bin/rm -f \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/remote/.env.example\" \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/remote/compose.yaml\"\ntouch \"${DERIVED_FILE_DIR}/bundle-metadata-cleaned.stamp\"\n";
+			shellScript = "set -eu\n\"${SRCROOT}/../scripts/prepare-default-agent.sh\" \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/default-agent\"\n/usr/bin/xattr -cr \"${TARGET_BUILD_DIR}/${WRAPPER_NAME}\"\n/bin/rm -rf \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/remote/test\"\n/bin/rm -f \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/remote/.env.example\" \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/remote/compose.yaml\"\ntouch \"${DERIVED_FILE_DIR}/bundle-metadata-cleaned.stamp\"\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -415,6 +439,14 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				0890236A7DEEC4A26AB512AB /* DictationModel.swift in Sources */,
+				E95F4392C674DA52368A05A6 /* DictationAudioCapture.swift in Sources */,
+				B93AB31EDDA3C1A9D35A791B /* DictationEditor.swift in Sources */,
+				C0DBB095B3E36A01B19862F1 /* LocalModelServerConnections.swift in Sources */,
+				5C2F6DF3B2A02B37BECD38D0 /* SettingsConnectionsView.swift in Sources */,
+				8BD4FF831500CD09DE10FC28 /* DictationControls.swift in Sources */,
+				DA2000000000000000000004 /* SettingsDefaultAgentView.swift in Sources */,
+				DA2000000000000000000002 /* DefaultAgentSettingsModel.swift in Sources */,
 				46E81C4CE9571D1C715098CA /* OpenCodeSessionView.swift in Sources */,
 				8B47C81B917AA853D87FB56A /* OpenCodeInteractionView.swift in Sources */,
 				E86083BC811D526E0900522B /* OpenCodeSettingsView.swift in Sources */,
@@ -490,6 +522,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = App/WovenMatter.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
 				DEFINES_MODULE = YES;
@@ -518,6 +551,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIconDev;
+				CODE_SIGN_ENTITLEMENTS = App/WovenMatter.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
 				DEFINES_MODULE = YES;
