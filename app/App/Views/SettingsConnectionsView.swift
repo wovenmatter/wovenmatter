@@ -76,6 +76,7 @@ struct SettingsConnectionsView: View {
             DisclosureGroup("OpenRouter") { connectionGroup("openrouter", title: "API keys") }
             DisclosureGroup("OpenCode") { connectionGroup("opencode-go", title: "API keys") }
             DisclosureGroup("Cursor") {
+                VStack(alignment: .leading, spacing: 8) {
                 Text(agent.cursorAccountStatus).font(.callout).foregroundStyle(.secondary)
                 Button("Refresh status") { Task { await agent.refreshCursorStatus() } }.buttonStyle(SettingsQuietButtonStyle())
                 Text("Usage limits only. Not available to Built-in.").font(.callout).foregroundStyle(.secondary)
@@ -84,6 +85,7 @@ struct SettingsConnectionsView: View {
                     .buttonStyle(SettingsQuietButtonStyle())
                     .disabled(agent.busy || remote != nil)
                 if agent.signInProvider == "cursor" { signInSection }
+                }.frame(maxWidth: .infinity, alignment: .leading).padding(.leading, 12)
             }
         }
     }
@@ -134,8 +136,8 @@ struct SettingsConnectionsView: View {
                         .buttonStyle(SettingsQuietButtonStyle()).disabled(agent.busy || !editable)
                 }
                 if agent.signInProvider == id { signInSection }
-            }.padding(.vertical, 8)
-        }
+            }.frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 8).padding(.leading, 12)
+        }.padding(.leading, 12)
     }
     private func keyEntry(_ id: String) -> some View {
         HStack {
