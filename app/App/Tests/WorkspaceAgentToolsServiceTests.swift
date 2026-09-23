@@ -29,7 +29,7 @@ struct WorkspaceAgentToolsServiceTests {
         let endpoint = try service.endpoint(for: caller)
         func request(_ arguments: [String]) async throws -> WovenMatterToolResponse {
             let data = try JSONEncoder().encode(WovenMatterToolRequest(arguments: arguments))
-            let response = try await Task.detached { try WovenMatterCommandLine.forward(data, to: endpoint) }.value
+            let response = try await runBlockingToolFixture { try WovenMatterCommandLine.forward(data, to: endpoint) }
             return try JSONDecoder().decode(WovenMatterToolResponse.self, from: response)
         }
         // Repeat through the actual bound socket handler: both this request and
@@ -152,6 +152,17 @@ extension WorkspaceAgentToolsServiceTests {
         await broken.waitUntilIdle()
         #expect(output.errors.count == 1)
         #expect(throws: (any Error).self) { try broken.submit(id: UUID().uuidString, request: fixture.request(slow: false)) }
+    }
+}
+
+// Socket reads and semaphore waits must not occupy Swift's cooperative workers:
+// the server tasks being tested need those workers to produce their responses.
+private func runBlockingToolFixture<T: Sendable>(_ body: @escaping @Sendable () throws -> T) async throws -> T {
+    try await withCheckedThrowingContinuation { continuation in
+        DispatchQueue.global(qos: .userInitiated).async {
+            do { continuation.resume(returning: try body()) }
+            catch { continuation.resume(throwing: error) }
+        }
     }
 }
 
@@ -450,7 +461,7 @@ extension WorkspaceAgentToolsServiceTests {
         let endpoint = try service.endpoint(for: caller)
         func request(_ arguments: [String], id: String = UUID().uuidString.lowercased()) async throws -> WovenMatterToolResponse {
             let data = try JSONEncoder().encode(WovenMatterToolRequest(arguments: arguments + ["--request-id", id], requestID: id))
-            let response = try await Task.detached { try WovenMatterCommandLine.forward(data, to: endpoint) }.value
+            let response = try await runBlockingToolFixture { try WovenMatterCommandLine.forward(data, to: endpoint) }
             return try JSONDecoder().decode(WovenMatterToolResponse.self, from: response)
         }
         let id = UUID().uuidString.lowercased()
