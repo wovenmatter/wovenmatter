@@ -423,16 +423,19 @@ extension WorkspaceAgentToolsServiceTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let database = try WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
         let caller = try database.createLocalACPSession(runtimeKind: .codex, title: "Planner", ownerDeviceID: UUID())
-        var taskResolutions = 0
-        var editDuringTaskResolution = false
+        @MainActor final class ResolutionState {
+            var count = 0
+            var editsEvent = false
+        }
+        let resolution = ResolutionState()
         let service = try WorkspaceAgentToolsModel(database: database,
             sessionHandler: { _, _, _ in throw CancellationError() },
             noteHandler: { _, _, _ in throw CancellationError() },
             noteRestoreHandler: { _, _, _, _, _ in throw CancellationError() },
             usageHandler: { _ in throw CancellationError() },
             calendarTaskHandler: { _, command, existing in
-                taskResolutions += 1
-                if editDuringTaskResolution {
+                resolution.count += 1
+                if resolution.editsEvent {
                     let event = try database.calendarEvent(id: command.required("id", allowPositional: true), callerID: caller)
                     var draft = WorkspaceCalendarDraft(event); draft.details = "A newer user edit"
                     try database.saveCalendarEvent(id: event.id, draft: draft, creating: false, expectedRevision: event.calendar.revision)
@@ -486,14 +489,14 @@ extension WorkspaceAgentToolsServiceTests {
         #expect(try await request(copy, id: copyID).success)
         #expect(try await request(["calendar", "remove", copyID]).success)
         // Replay succeeds even after the copy was deleted, without re-resolving defaults.
-        let beforeReplay = taskResolutions
+        let beforeReplay = resolution.count
         #expect(try await request(copy, id: copyID).result?.objectValue?["id"]?.stringValue == copyID)
-        #expect(taskResolutions == beforeReplay)
+        #expect(resolution.count == beforeReplay)
         #expect(try await !request(copy + ["--title", "Different input"], id: copyID).success)
-        editDuringTaskResolution = true
+        resolution.editsEvent = true
         #expect(try await !request(["calendar", "update", id, "--description", "Stale agent edit"]).success)
         #expect(try database.calendarEvent(id: id, callerID: caller).details == "A newer user edit")
-        editDuringTaskResolution = false
+        resolution.editsEvent = false
         var settings = try database.toolSettings(); settings.calendarAccess = .readOnly
         try database.saveToolSettings(settings)
         #expect(try await request(["calendar", "read", id]).success)
