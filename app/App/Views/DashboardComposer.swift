@@ -223,9 +223,9 @@ struct DashboardComposer: View {
             onEscape: dismissSlashCommands,
             completionRequest: $completionRequest,
             onCaretAtEndChange: { caretAtEnd = $0 },
+            onAttachFiles: onDropFiles,
             dictationEditor: dictationEditor,
-            dictationIdentity: sessionID ?? dictationDraftID,
-            onAttachFiles: onDropFiles
+            dictationIdentity: sessionID ?? dictationDraftID
         )
         .frame(
             minHeight: isCollapsed ? 36 : 32,
