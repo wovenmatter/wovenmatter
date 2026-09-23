@@ -1000,7 +1000,7 @@ public actor DashboardStore {
         LocalACPWorkspaceLaunchConfiguration(
           rootURL: resolved.workingDirectory,
           repositoriesURL: resolved.workingDirectory.appending(
-            path: "REPOS",
+            path: "Repos",
             directoryHint: .isDirectory
           )
         ),
