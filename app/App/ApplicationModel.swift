@@ -1171,7 +1171,11 @@ final class ApplicationModel {
                   state.isCurrentRefresh(generation) else { return }
             if let presentation { state.apply(presentation) }
             touchConversationState(state)
-            state.setError(nil)
+            // Reloading saved messages must not erase a current execution error
+            // projected by the backend; its next state snapshot owns clearing it.
+            if !isBackendFrontend || !backendExecutionErrorIDs.contains(id) {
+                state.setError(nil)
+            }
             workspaceError = nil
         } catch is CancellationError {
             return
