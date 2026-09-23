@@ -214,16 +214,7 @@ struct DashboardCalendarSurface: View {
                     .frame(width: 25, height: 25).background(today ? DashboardPalette.primary : .clear, in: Circle())
             }.buttonStyle(.plain).accessibilityLabel(day.date.formatted(date: .complete, time: .omitted))
             ForEach(occurrences.prefix(3)) { occurrence in
-                let style = DashboardCalendarEntryStyle(occurrence.draft)
-                Button { open(occurrence) } label: {
-                    HStack(spacing: 4) {
-                        Circle().fill(colors.color(for: style)).frame(width: 5, height: 5)
-                        Text(occurrence.title).font(.system(size: 10.5, weight: .medium)).lineLimit(1)
-                    }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
-                }.buttonStyle(.plain)
-                .accessibilityLabel(occurrence.title + ", " + style.title)
-                .help(occurrence.title + (occurrence.recurrence.map { " · " + $0.label } ?? ""))
-                .contextMenu { Button("Open event") { open(occurrence) }; Button("Copy event") { DashboardCalendarClipboard.copy(occurrence.draft) } }
+                monthOccurrenceButton(occurrence)
             }
             if occurrences.count > 3 {
                 Button("+\(occurrences.count - 3) more") { select(day.date) }
@@ -239,6 +230,28 @@ struct DashboardCalendarSurface: View {
         .contextMenu {
             Button("Add event") { add(on: day.date) }
             Button("Paste event") { paste(on: day.date) }
+        }
+    }
+
+    private func monthOccurrenceButton(_ occurrence: WorkspaceCalendarOccurrence) -> some View {
+        let style = DashboardCalendarEntryStyle(occurrence.draft)
+        let accessibilityLabel: String = occurrence.title + ", " + style.title
+        let recurrenceLabel: String = occurrence.recurrence.map { " · " + $0.label } ?? ""
+        let helpText: String = occurrence.title + recurrenceLabel
+        return Button { open(occurrence) } label: {
+            HStack(spacing: 4) {
+                Circle().fill(colors.color(for: style)).frame(width: 5, height: 5)
+                Text(occurrence.title).font(.system(size: 10.5, weight: .medium)).lineLimit(1)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(accessibilityLabel)
+        .help(helpText)
+        .contextMenu {
+            Button("Open event") { open(occurrence) }
+            Button("Copy event") { DashboardCalendarClipboard.copy(occurrence.draft) }
         }
     }
 
