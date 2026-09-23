@@ -1,7 +1,7 @@
 import { createNativeTaskExecutor } from './task-gateway-native.mjs'
 import { spawn } from 'node:child_process'
 import { createInterface } from 'node:readline'
-import { resolve, isAbsolute } from 'node:path'
+import { isAbsolute } from 'node:path'
 
 const before = message => Object.assign(new Error(message), { beforePrompt:true })
 const values = options => (options ?? []).flatMap(o => o.value == null ? values(o.options) : [o.value])
@@ -37,11 +37,11 @@ export async function applyTaskConfiguration(rpc, sessionID, initial, configurat
 }
 
 export function createTaskExecutor({ catalog,workspaceRoot,environment,defaultAgent,hermes,instances,launch = spawn,isEnabled = async()=>true }) {
-  const native = createNativeTaskExecutor({catalog,workspaceRoot,environment,launch,hermes,instances})
+  const native = createNativeTaskExecutor({workspaceRoot,environment,launch,hermes,instances})
   return async ({run,nativeSessionID,signal,publish,bindSession}) => {
     const config = run.task.configuration
     if (signal.aborted) throw before('Background execution was turned off.')
-    if (config.runtimeKind === 'default_agent') return runBuiltIn({run,nativeSessionID,signal,publish,bindSession,defaultAgent})
+    if (config.runtimeKind === 'default_agent') return runBuiltIn({run,nativeSessionID,signal,publish,bindSession,defaultAgent,workspaceRoot})
     if (['pi','hermes','opencode'].includes(config.runtimeKind)) {
       if (!await isEnabled(config.runtimeKind)) throw before('This agent is disabled in the workspace.')
       return native({run,nativeSessionID,signal,publish,bindSession})
@@ -76,10 +76,11 @@ export function createTaskExecutor({ catalog,workspaceRoot,environment,defaultAg
     child.stdin.on('error',()=>failAll(new Error('The agent input connection closed.')))
     child.stderr.on('data',()=>{}) // Provider output can contain secrets; don't copy it into result errors.
     const lines=createInterface({input:child.stdout})
-    lines.on('line',line=>{
+    const receiveLine = line => {
       bufferBytes+=Buffer.byteLength(line)
       if (line.length>1048576 || bufferBytes>64*1024*1024) { child.kill('SIGTERM');failAll(new Error('The task exceeded its response limit.'));return }
       let message;try { message=JSON.parse(line) } catch { return }
+      if (!message || typeof message !== 'object' || Array.isArray(message)) return
       if (message.method && message.id != null) {
         if (message.method==='session/request_permission') {
           const allow=config.runtimeKind==='cursor' && config.permission==='auto' && message.params?.options?.find(o=>o.kind==='allow_once')
@@ -91,6 +92,13 @@ export function createTaskExecutor({ catalog,workspaceRoot,environment,defaultAg
         const entry=pending.get(message.id);pending.delete(message.id);clearTimeout(entry.timer)
         if (message.error) entry.reject(new Error('The agent could not complete this operation. Check its account and saved task settings.'))
         else entry.done(message.result ?? {})
+      }
+    }
+    lines.on('line', line => {
+      try { receiveLine(line) }
+      catch {
+        failAll(new Error('The task output could not be retained.'))
+        child.kill('SIGTERM')
       }
     })
     child.on('error',()=>{terminal=true;failAll(new Error('The scheduled agent could not be started.'))})
@@ -123,11 +131,13 @@ export function createTaskExecutor({ catalog,workspaceRoot,environment,defaultAg
   }
 }
 
-async function runBuiltIn({run,nativeSessionID,signal,publish,bindSession,defaultAgent}) {
+async function runBuiltIn({run,nativeSessionID,signal,publish,bindSession,defaultAgent,workspaceRoot}) {
+  const cwd = run.task.configuration.nativeWorkingDirectory ?? workspaceRoot
+  if (!isAbsolute(cwd) || cwd.includes('\0')) throw before('The task working directory is invalid.')
   let sessionID,accepted=false
   try {
     if((await defaultAgent.status()).locked) throw Object.assign(before('Waiting for Woven Matter to reconnect and unlock the Built-in agent.'),{deferred:true})
-    const opened=await defaultAgent.invoke({method:nativeSessionID?'session/load':'session/new',params:nativeSessionID?{sessionId:nativeSessionID}:{}})
+    const opened=await defaultAgent.invoke({method:nativeSessionID?'session/load':'session/new',params:{cwd,...(nativeSessionID?{sessionId:nativeSessionID}:{})}})
     const session=opened.result
     sessionID=session?.sessionId ?? nativeSessionID
     if(!sessionID) throw before('The Built-in task session is unavailable.')
@@ -148,7 +158,12 @@ async function runBuiltIn({run,nativeSessionID,signal,publish,bindSession,defaul
       if(page.done) { if(needsApproval)throw Object.assign(new Error('This task needs approval. Open its session to continue.'),{needsApproval:true});if(page.error)throw new Error(page.error);if(cancelled)throw new Error('Background execution was turned off.');return page.result }
       await delay(100)
     }
-  } catch(error) { if(!accepted)error.beforePrompt=true;throw error }
+  } catch(error) {
+    if (accepted && sessionID) {
+      try { await defaultAgent.invoke({method:'session/cancel',params:{sessionId:sessionID}}) } catch {}
+    } else error.beforePrompt = true
+    throw error
+  }
 }
 
 function backgroundPrompt(run) {

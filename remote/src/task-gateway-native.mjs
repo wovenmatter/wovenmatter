@@ -40,10 +40,11 @@ async function runPi({run,config,cwd,environment,launch,nativeSessionID,signal,p
     pending.set(id,{resolve,reject,timer}); send({id,type,...params})
   })
   const lines=createInterface({input:child.stdout})
-  lines.on('line',line=>{
+  const receiveLine = line => {
     outputBytes+=Buffer.byteLength(line)
     if(outputBytes>64*1024*1024 || line.length>1048576) {fail(new Error('The task exceeded its response limit.'));child.kill('SIGTERM');return}
     let value;try{value=JSON.parse(line)}catch{return}
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return
     if(value.type==='response' && pending.has(value.id)) {
       const entry=pending.get(value.id);pending.delete(value.id);clearTimeout(entry.timer)
       if(value.success===false) entry.reject(new Error('Pi rejected the saved task configuration or prompt.'))
@@ -59,6 +60,13 @@ async function runPi({run,config,cwd,environment,launch,nativeSessionID,signal,p
       needsApproval=true;send({type:'extension_ui_response',id:value.id,cancelled:true})
     } else if(value.type==='agent_settled' && accepted) {
       if(needsApproval)finished.reject(approval());else if(turnFailed)finished.reject(new Error('Pi could not complete this task.'));else finished.resolve({stopReason:'end_turn'})
+    }
+  }
+  lines.on('line', line => {
+    try { receiveLine(line) }
+    catch {
+      fail(new Error('The task output could not be retained.'))
+      child.kill('SIGTERM')
     }
   })
   child.stderr.on('data',()=>{})
@@ -104,9 +112,10 @@ async function runHermes({run,config,cwd,environment,hermes,read,WebSocketClass,
     socket=new WebSocketClass(`ws://127.0.0.1:${registration.port}/api/ws?token=${encodeURIComponent(registration.token)}`)
     send=object=>socket.send(JSON.stringify(object))
     rpc=(method,params={})=>new Promise((resolve,reject)=>{const id=String(++serial),timer=setTimeout(()=>{pending.delete(id);reject(new Error('Hermes did not acknowledge the task operation.'))},30000);pending.set(id,{resolve,reject,timer});send({jsonrpc:'2.0',id,method,params})})
-    socket.addEventListener('message',event=>{
+    const receiveEvent = event => {
       for(const line of String(event.data).split('\n')) {
         let value;try{value=JSON.parse(line)}catch{continue}
+        if (!value || typeof value !== 'object' || Array.isArray(value)) continue
         if(value.id!=null && value.method) {needsApproval=true;send({jsonrpc:'2.0',id:value.id,result:{choice:'deny',cancelled:true}});finished.reject(approval());continue}
         if(pending.has(value.id)) {const entry=pending.get(value.id);pending.delete(value.id);clearTimeout(entry.timer);value.error?entry.reject(new Error('Hermes rejected the saved task settings or prompt.')):entry.resolve(value.result);continue}
         const event=value.params
@@ -123,6 +132,10 @@ async function runHermes({run,config,cwd,environment,hermes,read,WebSocketClass,
           else finished.resolve({stopReason:payload.status==='interrupted'?'cancelled':'end_turn'})
         }
       }
+    }
+    socket.addEventListener('message', event => {
+      try { receiveEvent(event) }
+      catch { fail(new Error('The task output could not be retained.')) }
     })
     socket.addEventListener('close',()=>fail(new Error('Hermes disconnected before the task completed.')))
     socket.addEventListener('error',()=>fail(new Error('Hermes connection failed.')))

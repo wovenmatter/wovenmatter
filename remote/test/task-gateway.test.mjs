@@ -144,3 +144,119 @@ test('scheduled output batches sync and is complete before the terminal result i
  const restarted=createTaskGateway({directory,execute:async()=>{throw new Error('no replay')}})
  assert.equal(restarted.results().entries[0].updates.length,1000)
 })
+
+
+test('changing a recurring task to new sessions never resumes its previous native session', async t => {
+  let clock = Date.parse('2026-01-01T15:00:00Z')
+  const calls = []
+  const { gateway } = await fixture(t, { now: () => clock, execute: async context => {
+    calls.push({ sessionID: context.run.sessionID, nativeSessionID: context.nativeSessionID })
+    context.bindSession('native-' + calls.length)
+  } })
+  gateway.publish({ publicationID: 'same', schedules: [task()], knownRuns: [] })
+  gateway.tick(); await settled(gateway)
+  const previous = gateway.schedules().schedules[0]
+  assert.equal(previous.nativeSessionID, 'native-1')
+  gateway.publish({ publicationID: 'new', schedules: [{ ...previous, revision: 2,
+    task: { ...previous.task, sessionMode: 'new' },
+  }], knownRuns: [] })
+  clock += 86400000
+  gateway.tick(); await settled(gateway)
+  clock += 86400000
+  gateway.tick(); await settled(gateway)
+  assert.deepEqual(calls.map(call => call.nativeSessionID), [null, null, null])
+  assert.equal(new Set(calls.map(call => call.sessionID)).size, 3)
+})
+
+
+test('every scheduled harness has a bounded retained response and preserves its earlier output', async t => {
+  const { gateway } = await fixture(t, { now: () => Date.parse('2026-01-02T15:00:00Z'), maximumOutputBytes: 256,
+    execute: async ({ publish }) => {
+      publish({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'kept' } })
+      publish({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'x'.repeat(256) } })
+    },
+  })
+  gateway.publish({ publicationID: 'bounded', schedules: [task()], knownRuns: [] })
+  gateway.tick(); await settled(gateway)
+  const result = gateway.results().entries[0]
+  assert.equal(result.run.status, 'uncertain')
+  assert.match(result.error, /response limit/)
+  assert.equal(result.updates.length, 1)
+  assert.equal(result.updates[0].content.text, 'kept')
+})
+
+test('Built-in cancels accepted work when its output consumer fails', async () => {
+  const { createTaskExecutor } = await import('../src/task-gateway-runner.mjs')
+  const calls = []
+  const defaultAgent = {
+    status: async () => ({ locked: false }),
+    invoke: async message => {
+      calls.push(message.method)
+      if (message.method === 'session/new') return { result: { sessionId: 'native' } }
+      if (message.method === 'session/prompt') return { operationID: 'operation' }
+      return { result: {} }
+    },
+    poll: async () => ({ updates: [{ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'hello' } }], cursor: 1, done: false }),
+  }
+  const execute = createTaskExecutor({ catalog: new Map(), workspaceRoot: '/tmp', environment: () => ({}), defaultAgent })
+  await assert.rejects(execute({ run: { id: 'run', task: { prompt: 'fixture', configuration: { runtimeKind: 'default_agent' } } },
+    signal: new AbortController().signal, bindSession: () => {}, publish: () => { throw new Error('fixture journal failure') },
+  }), /fixture journal failure/)
+  assert.deepEqual(calls, ['session/new', 'session/prompt', 'session/cancel'])
+})
+
+test('ACP output persistence errors reject the task and stop its child without escaping the stream callback', async () => {
+  const { EventEmitter } = await import('node:events')
+  const { PassThrough, Writable } = await import('node:stream')
+  const { createTaskExecutor } = await import('../src/task-gateway-runner.mjs')
+  const child = new EventEmitter()
+  child.stdout = new PassThrough(); child.stderr = new PassThrough()
+  let killed = false
+  child.kill = () => { killed = true; queueMicrotask(() => child.emit('exit', 0)); return true }
+  child.stdin = new Writable({ write(bytes, _encoding, done) {
+    const request = JSON.parse(String(bytes))
+    setImmediate(() => {
+      if (request.method === 'session/prompt') {
+        child.stdout.write('null\n')
+        child.stdout.write(JSON.stringify({ method: 'session/update', params: { update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'hello' } } } }) + '\n')
+      } else {
+        child.stdout.write(JSON.stringify({ id: request.id, result: request.method === 'initialize' ? { protocolVersion: 1 } : { sessionId: 'native' } }) + '\n')
+      }
+    })
+    done()
+  } })
+  const execute = createTaskExecutor({ catalog: new Map([['codex', { id: 'codex', transport: 'acp', command: 'fixture', arguments: [] }]]),
+    workspaceRoot: '/tmp', environment: () => ({}), launch: () => child })
+  await assert.rejects(execute({ run: { id: 'run', task: { prompt: 'fixture', configuration: { runtimeKind: 'codex' } } },
+    signal: new AbortController().signal, bindSession: () => {}, publish: () => { throw new Error('fixture journal failure') },
+  }), /output could not be retained/)
+  assert.equal(killed, true)
+})
+
+
+test('Built-in tasks forward their saved working directory for both new and recurring sessions', async () => {
+  const { createTaskExecutor } = await import('../src/task-gateway-runner.mjs')
+  const opened = []
+  const defaultAgent = {
+    status: async () => ({ locked: false }),
+    invoke: async message => {
+      if (['session/new', 'session/load'].includes(message.method)) {
+        opened.push(message)
+        return { result: { sessionId: 'native' } }
+      }
+      return { operationID: 'operation' }
+    },
+    poll: async () => ({ updates: [], cursor: 0, done: true, result: {} }),
+  }
+  const execute = createTaskExecutor({ catalog: new Map(), workspaceRoot: '/workspace', environment: () => ({}), defaultAgent })
+  const context = { run: { id: 'run', task: { prompt: 'fixture', configuration: { runtimeKind: 'default_agent', nativeWorkingDirectory: '/workspace/project' } } },
+    signal: new AbortController().signal, bindSession: () => {}, publish: () => {},
+  }
+  await execute(context)
+  await execute({ ...context, nativeSessionID: 'native' })
+  delete context.run.task.configuration.nativeWorkingDirectory
+  await execute(context)
+  assert.deepEqual(opened.map(message => message.params), [
+    { cwd: '/workspace/project' }, { cwd: '/workspace/project', sessionId: 'native' }, { cwd: '/workspace' },
+  ])
+})

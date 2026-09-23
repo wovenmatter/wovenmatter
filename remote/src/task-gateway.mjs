@@ -64,7 +64,7 @@ function validateSchedule(value) {
   return structuredClone(value)
 }
 
-export function createTaskGateway({ directory, execute, now = Date.now, onDisable = async () => {}, maximumConcurrent = 4, syncJournal = fsyncSync }) {
+export function createTaskGateway({ directory, execute, now = Date.now, onDisable = async () => {}, maximumConcurrent = 4, maximumOutputBytes = 64 * 1024 * 1024, syncJournal = fsyncSync }) {
   mkdirSync(directory, { recursive:true, mode:0o700 })
   const path = resolve(directory, 'state.json')
   let state = read(path, { enabled:true, schedules:[], knownRuns:[], results:[], claims:{}, publicationIDs:[] })
@@ -124,9 +124,8 @@ export function createTaskGateway({ directory, execute, now = Date.now, onDisabl
       } else if (previous && schedule.taskSessionID === previous.taskSessionID) schedule.nativeSessionID = previous.nativeSessionID
     }
     const known = body.knownRuns.map(r => { if (!validID(r.eventID) || !instant(r.scheduledAt)) throw fail(400,'Invalid previous run.'); return stamp(r.eventID,r.scheduledAt) })
-    for (const [id, job] of active) {
-      const claim = Object.values(state.claims).find(c => c.id === id)
-      if (!schedules.some(s => s.id === claim.run.eventID && s.revision === claim.eventRevision)) job.controller.abort()
+    for (const job of active.values()) {
+      if (!schedules.some(s => s.id === job.eventID && s.revision === job.eventRevision)) job.controller.abort()
     }
     state.schedules = schedules
     state.requiresPublication = false
@@ -142,8 +141,9 @@ export function createTaskGateway({ directory, execute, now = Date.now, onDisabl
     const scheduledAt = iso(at)
     const key = stamp(schedule.id, scheduledAt)
     const id = randomUUID()
-    const sessionID = schedule.task.sessionMode === 'same' && schedule.recurrence ? schedule.taskSessionID ?? randomUUID() : randomUUID()
-    const claim = { id, eventRevision:schedule.revision, run:{ id,eventID:schedule.id,occurrenceIndex:index,scheduledAt,sessionID,task:structuredClone(schedule.task),status:'sending',title:schedule.title }, nativeSessionID:schedule.nativeSessionID ?? null }
+    const reuseSession = schedule.task.sessionMode === 'same' && schedule.recurrence != null
+    const sessionID = reuseSession ? schedule.taskSessionID ?? randomUUID() : randomUUID()
+    const claim = { id, eventRevision:schedule.revision, run:{ id,eventID:schedule.id,occurrenceIndex:index,scheduledAt,sessionID,task:structuredClone(schedule.task),status:'sending',title:schedule.title }, nativeSessionID:reuseSession ? schedule.nativeSessionID ?? null : null }
     state.claims[key] = claim
     state.knownRuns.push(key)
     if (schedule.task.sessionMode === 'same' && schedule.recurrence) schedule.taskSessionID = sessionID
@@ -151,7 +151,7 @@ export function createTaskGateway({ directory, execute, now = Date.now, onDisabl
     save()
     const controller = new AbortController()
     const updates = []
-    let journalLines = [], journalBytes = 0, journalTimer
+    let journalLines = [], journalBytes = 0, outputBytes = 0, journalTimer
     const flushJournal = () => {
       clearTimeout(journalTimer); journalTimer = null
       if (!journalLines.length) return
@@ -161,7 +161,10 @@ export function createTaskGateway({ directory, execute, now = Date.now, onDisabl
     }
     const publishUpdate = update => {
       const line = JSON.stringify(update)+'\n'
-      journalLines.push(line); journalBytes += Buffer.byteLength(line)
+      const bytes = Buffer.byteLength(line)
+      if (outputBytes + bytes > maximumOutputBytes) throw new Error('The task exceeded its response limit.')
+      outputBytes += bytes
+      journalLines.push(line); journalBytes += bytes
       updates.push(update)
       if (journalBytes >= 65536) flushJournal()
       else if (!journalTimer) {
@@ -180,7 +183,7 @@ export function createTaskGateway({ directory, execute, now = Date.now, onDisabl
       }
       save()
     }
-    const job = { controller, completion:null, runtimeKind:schedule.task.configuration.runtimeKind }
+    const job = { controller, completion:null, eventID:schedule.id, eventRevision:schedule.revision, runtimeKind:schedule.task.configuration.runtimeKind }
     active.set(id,job)
     job.completion = (async () => {
       try {
@@ -214,7 +217,7 @@ export function createTaskGateway({ directory, execute, now = Date.now, onDisabl
       if (active.size >= maximumConcurrent) break
       if (schedule.retryAfter && Date.parse(schedule.retryAfter)>now()) continue
       if (schedule.nextFireAt == null || Date.parse(schedule.nextFireAt) > now()) continue
-      if ([...active.keys()].some(id => Object.values(state.claims).some(c => c.id === id && c.run.eventID === schedule.id))) continue
+      if ([...active.values()].some(job => job.eventID === schedule.id)) continue
       let index = latestOccurrence(schedule, now())
       while (index != null && index >= 0 && schedule.excludedOccurrences.includes(index)) index--
       const at = index == null ? null : occurrenceDate(schedule,index)

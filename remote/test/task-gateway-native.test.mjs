@@ -85,3 +85,29 @@ test('OpenCode approval policy never auto-approves authentication and interrupts
   await assert.rejects(createNativeTaskExecutor({...options,instances:{action:async()=>{},registrationPath:'fixture'},read:async()=>JSON.stringify({url:'http://127.0.0.1:4000',password:'fixture',pid:42}),fetchRequest})(context),error=>error.needsApproval===true&&!error.beforePrompt)
   assert.equal(submitted,true);assert.equal(replied,false);assert.equal(interrupted,true)
 })
+
+
+test('Pi output persistence failures stop the child and remain inside the task result', async () => {
+  let killed = false
+  const launch = () => {
+    const child = new EventEmitter()
+    child.stdout = new PassThrough(); child.stderr = new PassThrough()
+    child.kill = () => { killed = true; queueMicrotask(() => child.emit('exit', 0)); return true }
+    child.stdin = new Writable({ write(bytes, _encoding, done) {
+      const request = JSON.parse(String(bytes))
+      setImmediate(() => {
+        child.stdout.write(JSON.stringify({ type: 'response', id: request.id, success: true, data: { sessionId: 'native' } }) + '\n')
+        if (request.type === 'prompt') {
+          child.stdout.write('null\n')
+          child.stdout.write(JSON.stringify({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: 'hello' } }) + '\n')
+        }
+      })
+      done()
+    } })
+    return child
+  }
+  const context = base('pi')
+  context.publish = () => { throw new Error('fixture journal failure') }
+  await assert.rejects(createNativeTaskExecutor({ ...options, launch })(context), /output could not be retained/)
+  assert.equal(killed, true)
+})
