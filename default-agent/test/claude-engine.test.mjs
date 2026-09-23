@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, readFile, access } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm, readFile, access } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
@@ -111,6 +111,44 @@ test('model, thinking, and permission choices survive an empty draft restart', a
   assert.equal(restored.selected, 'claude-subscription/sonnet');
   assert.equal(restored.session.thinkingLevel, 'high');
   assert.equal(restored.permission, 'full');
+});
+
+test('session working directories stay isolated and survive a service restart', async t => {
+  const { engine, root, options } = await fixture(t);
+  const first = join(root, 'first-project'), second = join(root, 'second-project');
+  await Promise.all([mkdir(first), mkdir(second)]);
+  const opened = await engine.handle('session/new', { cwd: first });
+  const record = engine.sessions.get(opened.sessionId);
+  assert.equal(record.cwd, await realpath(first));
+  assert.equal(record.manager.getHeader().cwd, record.cwd);
+  await engine.select(record, 'full', 'permission_mode');
+  const write = record.session.agent.state.tools.find(tool => tool.name === 'write');
+  await write.execute('write-first', { path: 'location.txt', content: 'first project' }, new AbortController().signal);
+  assert.equal(await readFile(join(first, 'location.txt'), 'utf8'), 'first project');
+  await assert.rejects(access(join(root, 'location.txt')));
+  await assert.rejects(engine.handle('session/load', { sessionId: opened.sessionId, cwd: second }), /different working directory/);
+  assert.equal(engine.sessions.get(opened.sessionId), record);
+
+  const restarted = await new DefaultAgentEngine({ ...options, cwd: second }).initialize();
+  t.after(() => { for (const value of restarted.sessions.values()) value.session.dispose(); });
+  await assert.rejects(restarted.handle('session/load', { sessionId: opened.sessionId, cwd: second }), /different working directory/);
+  assert.equal(restarted.sessions.size, 0);
+  const loaded = await restarted.handle('session/load', { sessionId: opened.sessionId });
+  const restored = restarted.sessions.get(loaded.sessionId);
+  assert.equal(restored.cwd, await realpath(first));
+  const restoredWrite = restored.session.agent.state.tools.find(tool => tool.name === 'write');
+  await restoredWrite.execute('write-restored', { path: 'restored.txt', content: 'same project' }, new AbortController().signal);
+  assert.equal(await readFile(join(first, 'restored.txt'), 'utf8'), 'same project');
+  await assert.rejects(access(join(second, 'restored.txt')));
+  assert.equal((await restarted.handle('session/load', { sessionId: opened.sessionId, cwd: first })).sessionId, opened.sessionId);
+});
+
+test('invalid or unavailable working directories fail before a Built-in session is created', async t => {
+  const { engine, root } = await fixture(t);
+  for (const cwd of ['relative/project', '', 'invalid\0directory', join(root, 'missing')]) {
+    await assert.rejects(engine.handle('session/new', { cwd }), /working directory/);
+  }
+  assert.equal(engine.sessions.size, 0);
 });
 
 test('remote approvals replay on reconnect, cancel safely, and reject stale decisions', { timeout: 15000 }, async t => {

@@ -1,5 +1,5 @@
-import { mkdir, readdir, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { mkdir, readdir, realpath, stat, writeFile } from 'node:fs/promises';
+import { isAbsolute, join } from 'node:path';
 import { createAgentSession, createCodingTools, DefaultResourceLoader, ModelRuntime, SessionManager, SettingsManager } from '@earendil-works/pi-coding-agent';
 import { Credentials } from './credentials.mjs';
 import { accessFailure, DefaultAgentError, emptyConfig, modelRef, providerNames, providers, validateConfig } from './config.mjs';
@@ -125,9 +125,28 @@ export class DefaultAgentEngine {
       toolCall: { toolCallId, title: name, kind: name.toLowerCase() === 'bash' ? 'execute' : 'other', rawInput: input },
       options: [{ optionId: 'allow', name: 'Allow once', kind: 'allow_once' }, { optionId: 'deny', name: 'Deny', kind: 'reject_once' }] }, signal);
   }
-  async create(id) {
-    if (id && this.sessions.has(id)) return this.sessions.get(id);
-    let manager;
+  async sessionDirectory(value) {
+    if (typeof value !== 'string' || !isAbsolute(value) || value.includes('\0') || Buffer.byteLength(value) > 4096) {
+      throw new DefaultAgentError('Choose an absolute working directory for this Built-in session.');
+    }
+    try {
+      const directory = await realpath(value);
+      if (!(await stat(directory)).isDirectory()) throw new Error('Not a directory.');
+      return directory;
+    } catch {
+      throw new DefaultAgentError('The Built-in session working directory is unavailable.');
+    }
+  }
+  async create(id, requestedCwd) {
+    const requested = requestedCwd === undefined ? undefined : await this.sessionDirectory(requestedCwd);
+    if (id && this.sessions.has(id)) {
+      const record = this.sessions.get(id);
+      if (requested !== undefined && requested !== record.cwd) {
+        throw new DefaultAgentError('This Built-in session belongs to a different working directory. Create a new session for this location.');
+      }
+      return record;
+    }
+    let manager, cwd;
     const sessionDir = join(this.directory, 'sessions');
     await mkdir(sessionDir, { recursive: true, mode: 0o700 });
     if (id) {
@@ -135,13 +154,18 @@ export class DefaultAgentEngine {
       const files = await readdir(sessionDir);
       const file = files.find(f => f.endsWith(`_${id}.jsonl`));
       if (!file) throw new Error('Built-in session could not be found.');
-      manager = SessionManager.open(join(sessionDir, file), sessionDir, this.cwd);
+      manager = SessionManager.open(join(sessionDir, file), sessionDir);
+      cwd = await this.sessionDirectory(manager.getCwd());
+      if (requested !== undefined && requested !== cwd) {
+        throw new DefaultAgentError('This Built-in session belongs to a different working directory. Create a new session for this location.');
+      }
     } else {
-      manager = SessionManager.create(this.cwd, sessionDir);
+      cwd = requested ?? await this.sessionDirectory(this.cwd);
+      manager = SessionManager.create(cwd, sessionDir);
       // SDK defers persistence until the first assistant response. Woven Matter
       // needs even a configuration-only draft to have a durable identity.
       await writeFile(manager.getSessionFile(), JSON.stringify(manager.getHeader()) + '\n', { mode: 0o600, flag: 'wx' });
-      manager = SessionManager.open(manager.getSessionFile(), sessionDir, this.cwd);
+      manager = SessionManager.open(manager.getSessionFile(), sessionDir);
     }
     const saved = manager.buildSessionContext?.().model;
     const options = manager.getEntries().filter(e => e.type === 'custom' && e.customType === 'woven-built-in-options').at(-1)?.data ?? {};
@@ -155,17 +179,17 @@ export class DefaultAgentEngine {
     const selected = [options.selected, saved ? `${saved.provider}/${saved.modelId}` : null, this.config.defaultModel].find(id => visible.some(m => m.id === id)) ?? visible[0]?.id;
     const model = this.resolveModel(selected);
     const settingsManager = SettingsManager.inMemory({ retry: { enabled: false }, compaction: { enabled: true } });
-    const loader = new DefaultResourceLoader({ cwd: this.cwd, agentDir: this.directory, settingsManager,
+    const loader = new DefaultResourceLoader({ cwd, agentDir: this.directory, settingsManager,
       noExtensions: true, noThemes: true,
       appendSystemPrompt: [builtInInstructions] });
     await loader.reload();
-    const record = { manager, selected, busy: false, permission: options.permission ?? 'normal' };
-    const guardedTools = createCodingTools(this.cwd).map(tool => ({ ...tool, label: tool.label ?? tool.name,
+    const record = { manager, cwd, selected, busy: false, permission: options.permission ?? 'normal' };
+    const guardedTools = createCodingTools(cwd).map(tool => ({ ...tool, label: tool.label ?? tool.name,
       execute: async (id, input, signal, onUpdate) => {
         if (['bash', 'write', 'edit'].includes(tool.name) && !await this.approve(record, tool.name, input, signal, id)) throw new Error('The user declined this tool.');
         return tool.execute(id, input, signal, onUpdate);
       } }));
-    const { session } = await createAgentSession({ cwd: this.cwd, agentDir: this.directory, modelRuntime: this.runtime, model, thinkingLevel: options.thinking, sessionManager: manager, settingsManager, resourceLoader: loader,
+    const { session } = await createAgentSession({ cwd, agentDir: this.directory, modelRuntime: this.runtime, model, thinkingLevel: options.thinking, sessionManager: manager, settingsManager, resourceLoader: loader,
       tools: ['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls', 'web_search', 'web_read'], customTools: [...guardedTools, ...searchTools(async () => (await this.credentials.read('exa'))?.key)] });
     record.session = session;
     record.selected = model ? modelRef(model) : selected;
@@ -297,7 +321,7 @@ export class DefaultAgentEngine {
     if (method === 'initialize') return { protocolVersion: 1, agentInfo: { name: 'wovenmatter-default-agent', version: '0.1.0' }, agentCapabilities: { loadSession: true, promptCapabilities: { image: false } }, authMethods: [] };
     if (method === 'woven/status') return this.status();
     if (method === 'session/new' || method === 'session/load') {
-      const record = await this.create(method === 'session/load' ? params.sessionId : undefined);
+      const record = await this.create(method === 'session/load' ? params.sessionId : undefined, params.cwd);
       return { sessionId: record.session.sessionId, ...this.configuration(record) };
     }
     const record = this.sessions.get(params.sessionId) ?? await this.create(params.sessionId);
