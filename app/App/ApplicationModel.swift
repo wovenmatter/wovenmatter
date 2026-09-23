@@ -3021,6 +3021,7 @@ final class ApplicationModel {
         guard !workspaceFolderChangeInProgress else { return }
         workspaceFolderChangeInProgress = true
         workspaceFolderChangeError = nil
+        workspaceFolderRecovery = nil
         Task {
             defer { workspaceFolderChangeInProgress = false }
             do {
