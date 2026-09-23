@@ -494,7 +494,7 @@ extension WorkspaceAgentToolsServiceTests {
         let endpoint = try service.endpoint(for: caller)
         func request(_ arguments: [String], id: String = UUID().uuidString.lowercased()) async throws -> WovenMatterToolResponse {
             let data = try JSONEncoder().encode(WovenMatterToolRequest(arguments: arguments + ["--request-id", id], requestID: id))
-            let response = try await Task.detached { try WovenMatterCommandLine.forward(data, to: endpoint) }.value
+            let response = try await runBlockingToolFixture { try WovenMatterCommandLine.forward(data, to: endpoint) }
             return try JSONDecoder().decode(WovenMatterToolResponse.self, from: response)
         }
         let id = UUID().uuidString.lowercased()
