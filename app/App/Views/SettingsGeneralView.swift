@@ -31,13 +31,14 @@ struct SettingsGeneralView: View {
             reservesRailControlSpace: reservesRailControlSpace,
             onBack: onBack
         ) {
-            appearanceCard
             releaseUpdateCard
+            sidebarLayoutCard
+            appearanceCard
             backgroundExecutionCard
+            credentialAccessCard
             dictationCard
             conversationTitlesCard
             if let tools = model.agentTools { WorkspaceToolDefaultsCard(tools: tools) }
-            credentialAccessCard
         }
         .onChange(of: storedTheme) { _, _ in
             model.persistMacSurfaceProfileFromUserDefaults()
@@ -252,19 +253,11 @@ struct SettingsGeneralView: View {
                 }
             }
 
-            Divider()
-                .overlay(theme.palette.border)
-                .padding(.vertical, 2)
-
-            sidebarLayoutSelector
         }
     }
 
-    private var sidebarLayoutSelector: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Sidebar layout")
-                .font(.system(size: 13, weight: .medium))
-
+    private var sidebarLayoutCard: some View {
+        SettingsCard(title: "Sidebar layout") {
             DashboardSegmentedSelector(
                 options: DashboardSidebarStyle.allCases,
                 selection: sidebarStyleBinding
