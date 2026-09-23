@@ -49,6 +49,12 @@ public struct WorkspaceSessionTools: Codable, Equatable, Sendable {
     self.enabled = enabled
   }
 
+  private enum CodingKeys: String, CodingKey { case enabled }
+  public func encode(to encoder: any Encoder) throws {
+    var container = encoder.container(keyedBy: CodingKeys.self)
+    try container.encode(enabled.sorted { $0.rawValue < $1.rawValue }, forKey: .enabled)
+  }
+
   public init(identifiers: [String]) throws {
     let groups = identifiers.compactMap(WorkspaceToolGroup.init(rawValue:))
     guard groups.count == identifiers.count else {
@@ -198,7 +204,7 @@ public enum WorkspaceToolError: Error, LocalizedError, Equatable, Sendable {
 }
 
 public enum WorkspaceSessionDeliveryKind: String, Codable, Sendable {
-  case message, created, timer, notification
+  case message, created, timer, notification, calendar
 }
 
 public struct WorkspaceSessionDelivery: Codable, Identifiable, Equatable, Sendable {

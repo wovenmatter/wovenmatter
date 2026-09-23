@@ -20,6 +20,12 @@ when an intentional design change is accepted.
   Preserve intentional differences such as borderless Usage sections.
 - **Icons:** use the existing `DashboardLucideIcon` glyphs and bundled harness
   logos, matching nearby icon sizes and stroke weights.
+- **Calendar:** keep the four-item legend below the selected-day list. Use the
+  saved category colors for event markers and recurrence labels. Default to
+  British Racing Green events, royal blue scheduled tasks, purple recurring
+  events, and Cognac recurring scheduled tasks. The picker offers Cognac, British
+  Racing Green, lighter green, royal blue, purple, red, pink, orange, yellow, and
+  black. Choices persist and may be reused across categories.
 - **Sidebar foregrounds:** use `DashboardPalette.foreground` (`#0A1F16`) for text and interface icons in both rails, including section headings, metadata, and pinned indicators. Keep agent/harness logos in their original colors. Shared controls use the sidebar foreground environment only inside the rails.
 - **Switches:** use `DashboardSwitchToggleStyle` for boolean controls and multi-select toggles. It supplies compact native switches in a 28 × 16-point control frame before their labels on the left, in the shared forest-green action color and is the default at the app root. Markdown task-list markers remain document content.
 - **Interaction:** keep controls compact, selection fills restrained, and focus
