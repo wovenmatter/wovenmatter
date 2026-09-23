@@ -79,7 +79,7 @@ public struct AgentDatabaseQueryResponse: Codable, Equatable, Sendable {
   }
 }
 
-public struct DatabaseTabularData: Equatable, Sendable {
+public struct DatabaseTabularData: Equatable, Codable, Sendable {
   public let columns: [String]
   public let rows: [[String]]
   public let json: String

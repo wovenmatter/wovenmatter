@@ -3,7 +3,14 @@ import WovenMatterClient
 import WovenMatterCore
 
 private struct SettingsHermesProfileApprovals: View {
-    let connection: HermesGatewayConnection?
+    @Bindable var model: ApplicationModel
+    var agentID: UUID?
+    var workspaceID: UUID?
+    private var connected: Bool {
+        if let workspaceID { return model.isRemoteHermesGatewayConnected(workspaceID: workspaceID) }
+        if let agentID { return model.isHermesGatewayConnected(agentID: agentID) }
+        return false
+    }
     @State private var mode: String?
     @State private var busy = false
     @State private var error: String?
@@ -29,16 +36,16 @@ private struct SettingsHermesProfileApprovals: View {
                     Task { await update(choice) }
                 }
                 .accessibilityLabel("Hermes profile approval policy")
-                .disabled(busy || connection == nil || mode == nil)
+                .disabled(busy || !connected || mode == nil)
                 Button("Refresh") { Task { await update(nil) } }
                     .buttonStyle(SettingsQuietButtonStyle())
-                    .disabled(busy || connection == nil)
+                    .disabled(busy || !connected)
             }
             SettingsNote("This setting applies to every conversation in this Hermes profile. Smart approvals uses Hermes’s reviewer to decide when to ask. The conversation’s Full access option bypasses that policy until you return to Ask for approval.")
-            if connection == nil { SettingsNote("Connect Gateway to choose this profile’s approval policy.") }
+            if !connected { SettingsNote("Connect Gateway to choose this profile’s approval policy.") }
             if let error { SettingsError(error) }
         }
-        .task(id: connection) { await update(nil) }
+        .task(id: connected) { await update(nil) }
         .onDisappear { requestID = UUID() }
     }
 
@@ -48,16 +55,11 @@ private struct SettingsHermesProfileApprovals: View {
         requestID = id
         error = nil
         if choice == nil { mode = nil }
-        guard let connection else { busy = false; return }
+        guard connected else { busy = false; return }
         busy = true
         defer { if requestID == id { busy = false } }
         do {
-            let confirmed: String
-            if let choice {
-                confirmed = try await HermesProfileApprovals.set(choice, connection: connection)
-            } else {
-                confirmed = try await HermesProfileApprovals.read(connection: connection)
-            }
+            let confirmed = try await model.hermesProfileApproval(agentID: agentID, workspaceID: workspaceID, mode: choice)
             guard requestID == id, !Task.isCancelled else { return }
             mode = confirmed
         } catch {
@@ -105,7 +107,7 @@ struct SettingsHermesView: View {
                                         .foregroundStyle(DashboardPalette.mutedForeground)
                                 }.frame(maxWidth: .infinity, alignment: .leading)
                                 let linked = model.isHermesGatewayLinked(agentID: agent.id)
-                                let ready = linked && !checking && model.hermesGatewayConnections[agent.id] != nil
+                                let ready = linked && !checking && model.isHermesGatewayConnected(agentID: agent.id)
                                 SettingsPill(checking && linked ? "Checking…" : ready ? "Ready" : "Not connected",
                                     tone: ready ? .neutral : .warning)
                                 SettingsLocalRuntimeUpdateButton(model: model, runtimeKind: .hermes)
@@ -168,7 +170,7 @@ struct SettingsHermesView: View {
                                 .font(.system(size: 11))
                                 .foregroundStyle(DashboardPalette.mutedForeground)
                         }.frame(maxWidth: .infinity, alignment: .leading)
-                        SettingsPill(model.remoteHermesConnections[configuration.id] == nil ? "Not connected" : "Ready", tone: .neutral)
+                        SettingsPill(!model.isRemoteHermesGatewayConnected(workspaceID: configuration.id) ? "Not connected" : "Ready", tone: .neutral)
                         SettingsRemoteRuntimeUpdateButton(
                             model: model.remoteWorkspaces,
                             harness: found,
@@ -185,7 +187,7 @@ struct SettingsHermesView: View {
                         Task { do { try await model.stopRemoteHermes(configuration) } catch { self.error=error.localizedDescription } }
                     }.buttonStyle(SettingsQuietButtonStyle())
                     SettingsNote("Stopping Hermes pauses scheduled jobs until you reconnect its Gateway.")
-                    SettingsHermesProfileApprovals(connection: model.remoteHermesConnections[configuration.id])
+                    SettingsHermesProfileApprovals(model: model, workspaceID: configuration.id)
                 } else { SettingsEmpty("No Hermes agents discovered.") }
                 SettingsRuntimeMaintenanceErrorView(
                     model: model,
@@ -224,7 +226,7 @@ struct SettingsHermesAgentView: View {
     @State private var loaded = false
 
     private var agent: WorkspaceAgent? { model.localCLIAgents.first { $0.id == agentID && $0.runtimeKind == .hermes } }
-    private var connection: HermesGatewayConnection? { model.hermesGatewayConnections[agentID] }
+    private var connected: Bool { model.isHermesGatewayConnected(agentID: agentID) }
     private var filtered: [HermesValue] {
         sessions.filter { !known.contains($0["id"].text) && (search.isEmpty || $0["title"].text.localizedCaseInsensitiveContains(search)) }
     }
@@ -236,7 +238,7 @@ struct SettingsHermesAgentView: View {
             if agent != nil {
                 SettingsCard(title: "Gateway connection") {
                     HStack {
-                        SettingsPill(connection != nil ? "Ready" : "Not connected", tone: .neutral)
+                        SettingsPill(connected ? "Ready" : "Not connected", tone: .neutral)
                         Spacer()
                         Button(model.isHermesGatewayLinked(agentID: agentID) ? "Reconnect" : "Connect Gateway") { Task { await connect() } }.buttonStyle(SettingsQuietButtonStyle())
                         Button("Unlink") {
@@ -250,7 +252,7 @@ struct SettingsHermesAgentView: View {
                     }
                 }
                 SettingsCard(title: "Approvals", detail: "Applies to every conversation using this Hermes profile.") {
-                    SettingsHermesProfileApprovals(connection: connection)
+                    SettingsHermesProfileApprovals(model: model, agentID: agentID)
                 }
                 SettingsCard(title: "Woven Matter name", detail: "This name is shown only in Woven Matter.") {
                     VStack(alignment: .leading, spacing: 8) {
@@ -268,7 +270,7 @@ struct SettingsHermesAgentView: View {
                 }
                 SettingsCard(title: "Shared Hermes sessions", detail: "Import a session with its original working folder.") {
                     Button("Refresh sessions") { Task { await refresh() } }
-                        .buttonStyle(SettingsQuietButtonStyle(horizontalPadding: 8, minimumHeight: 26)).disabled(connection == nil)
+                        .buttonStyle(SettingsQuietButtonStyle(horizontalPadding: 8, minimumHeight: 26)).disabled(!connected)
                     if loaded {
                         TextField("Search listed conversations", text: $search).textFieldStyle(.roundedBorder)
                             .onChange(of: search) { _, _ in page = 0 }
@@ -318,35 +320,24 @@ struct SettingsHermesAgentView: View {
     }
 
     private func refresh() async {
-        guard !busy, let connection else { return }
+        guard !busy, connected else { return }
         busy = true; error = nil
         defer { busy = false }
-        let rpc = HermesGatewayRPC(connection: connection)
         do {
-            try await rpc.connect()
-            let fetched = try await rpc.call("session.list", ["limit": .number(100)])["sessions"].array
-            await rpc.disconnect()
-            known = try model.knownHermesSessions(home: connection.home)
-            sessions = fetched.filter { !known.contains($0["id"].text) }
+            sessions = try await model.availableHermesSessions(agentID: agentID)
+            known = []
             page = 0; loaded = true
-        } catch {
-            await rpc.disconnect()
-            model.invalidateHermesGatewayConnection(agentID: agentID, expected: connection)
-            self.error = error.localizedDescription
-        }
+        } catch { self.error = error.localizedDescription }
     }
 
     private func importSession(_ id: String) async {
-        guard !busy, let connection else { return }
+        guard !busy, connected else { return }
         busy = true; error = nil
         defer { busy = false; page = min(page, pageCount - 1) }
         do {
-            known = try model.knownHermesSessions(home: connection.home)
-            sessions.removeAll { known.contains($0["id"].text) }
-            guard !known.contains(id) else { return }
-            try await model.importHermesSession(connection: connection, sessionID: id)
+            try await model.importHermesSession(agentID: agentID, sessionID: id)
             sessions.removeAll { $0["id"].text == id }
-            known = try model.knownHermesSessions(home: connection.home)
+            known.insert(id)
         } catch { self.error = error.localizedDescription }
     }
 }

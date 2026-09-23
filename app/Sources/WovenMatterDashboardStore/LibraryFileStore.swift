@@ -8,9 +8,13 @@ public struct LibraryFileStore: Sendable {
   public let supportDirectory: URL
   private var directory: URL { supportDirectory.appending(path: "library-files", directoryHint: .isDirectory) }
   private var openDirectory: URL { supportDirectory.appending(path: "library-open", directoryHint: .isDirectory) }
-  public init(supportDirectory: URL) { self.supportDirectory = supportDirectory }
+  private let readOnlyProjection: Bool
+  public init(supportDirectory: URL, readOnlyProjection: Bool = false) {
+    self.supportDirectory = supportDirectory; self.readOnlyProjection = readOnlyProjection
+  }
 
   public func retain(_ data: Data) throws -> String {
+    guard !readOnlyProjection else { throw WorkspaceDatabaseError.readOnlyProjection }
     guard data.count <= AgentMessageAttachmentLimits.maximumFileBytes else {
       throw AgentMessageAttachmentError.fileTooLarge(
         name: "File", maximumBytes: AgentMessageAttachmentLimits.maximumFileBytes)
@@ -89,6 +93,7 @@ public struct LibraryFileStore: Sendable {
     guard FileManager.default.fileExists(atPath: source.path) else {
       throw AgentMessageAttachmentError.unreadableFile(item.title)
     }
+    guard !readOnlyProjection else { throw WorkspaceDatabaseError.readOnlyProjection }
     let folder = openDirectory.appending(path: hash)
     try FileManager.default.createDirectory(
       at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
@@ -123,6 +128,7 @@ public struct LibraryFileStore: Sendable {
   }
 
   public func cleanup(retained: Set<String>, visible: Set<String>) throws {
+    guard !readOnlyProjection else { throw WorkspaceDatabaseError.readOnlyProjection }
     let manager = FileManager.default
     for (folder, live) in [(directory, retained), (openDirectory, visible)] {
       guard manager.fileExists(atPath: folder.path) else { continue }

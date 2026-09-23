@@ -6,6 +6,23 @@ import WovenMatterClient
 @MainActor @Observable
 final class DictationModel {
     static let shared = DictationModel()
+    @ObservationIgnored var backendRequest: BackendSpeechTransport.Request?
+    private func activeCredential() async throws -> DefaultAgentCredential {
+        if let backendRequest {
+            let label = try await BackendSpeechTransport.availability(request: backendRequest)
+            var placeholder = DefaultAgentCredential(type: "oauth")
+            placeholder.displayName = label
+            return placeholder
+        }
+        #if !SWIFT_PACKAGE
+        guard LocalExecutionRole.current != .frontend else { throw GrokSpeechError.unavailable }
+        #endif
+        return try await credential()
+    }
+    private func activeClient() -> any GrokSpeechTransport {
+        if let backendRequest { return BackendSpeechTransport(request: backendRequest) }
+        return makeClient()
+    }
     enum Phase { case idle, connecting, recording, finishing }
     var enabled = false {
         didSet {
@@ -68,7 +85,7 @@ final class DictationModel {
 
     func refreshAvailability() async {
         do {
-            let credential = try await credential()
+            let credential = try await activeCredential()
             accountLabel = credential.accountLabel ?? "Grok subscription"
             availability = "Connected · Dictation access is checked when you record."
         } catch {
@@ -111,19 +128,19 @@ final class DictationModel {
                         "Microphone access is disabled. Enable it for Woven Matter in macOS Settings → Privacy & Security → Microphone."
                     )
                 }
-                let credential = try await credential()
+                let credential = try await activeCredential()
                 guard generation == id, !Task.isCancelled else { return }
                 accountLabel = credential.accountLabel ?? "Grok subscription"
-                var speech = makeClient()
+                var speech = activeClient()
                 client = speech
                 do { try await speech.connect(credential: credential) } catch GrokSpeechError.signInRequired {
                     await speech.cancel()
                     guard generation == id, !Task.isCancelled else { return }
-                    guard let renewed = try await renewCredential(credential) else {
+                    guard backendRequest == nil, let renewed = try await renewCredential(credential) else {
                         throw GrokSpeechError.signInRequired
                     }
                     guard generation == id, !Task.isCancelled else { return }
-                    speech = makeClient()
+                    speech = activeClient()
                     client = speech
                     try await speech.connect(credential: renewed)
                 }

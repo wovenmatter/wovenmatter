@@ -136,7 +136,8 @@ struct LocalACPSessionDriver: Sendable {
                 },
                 shutdown: {
                     await client.shutdown()
-                }
+                },
+                setRunID: { await client.setRunID($0) }
             )
         }
         let client = try LocalACPClient.start(
@@ -1303,8 +1304,8 @@ public actor LocalACPSessionCoordinator {
                     )
                 }
             }
-            if descriptor.runtimeKind == .defaultAgent, !initialized.recoveredDefaultAgentRuns.isEmpty {
-                try database.recoverDefaultAgentRuns(conversationID: descriptor.conversationID, snapshots: initialized.recoveredDefaultAgentRuns)
+            if !initialized.recoveredDefaultAgentRuns.isEmpty {
+                try database.recoverRemoteAgentRuns(conversationID: descriptor.conversationID, snapshots: initialized.recoveredDefaultAgentRuns)
                 publishChange(conversationID: descriptor.conversationID, runID: "", phase: .terminal)
             }
             var configuration = initialized.configuration

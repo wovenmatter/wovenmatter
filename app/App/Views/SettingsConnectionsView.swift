@@ -57,7 +57,7 @@ struct SettingsConnectionsView: View {
                 if agent.busy && agent.signInProvider == nil { ProgressView().controlSize(.small); Button("Cancel") { agent.cancel() } }
             }.buttonStyle(SettingsQuietButtonStyle())
             Text("Subscription sign-ins and API keys remain separate. Disconnecting a shared account affects every feature using it. Disabling dictation or usage tracking keeps the account connected.").font(.callout).foregroundStyle(.secondary)
-            LocalModelServerConnections()
+            LocalModelServerConnections(agent: agent)
         }
         .task { agent.changeScope(initialScope); agent.refresh(remote: remote) }
         .onDisappear { agent.cancel() }
@@ -153,10 +153,12 @@ struct SettingsConnectionsView: View {
             SecureField("Add API key", text: Binding(get: { keyDrafts[id] ?? "" }, set: { keyDrafts[id] = $0 }))
                 .settingsInput().accessibilityLabel("\(id) API key")
             Button("Save key") {
-                guard agent.saveKey(keyDrafts[id] ?? "", provider: id, label: (keyLabels[id] ?? "").isEmpty ? nil : keyLabels[id]) else { return }
-                keyDrafts[id] = nil
-                keyLabels[id] = nil
-                agent.refresh(remote: remote)
+                Task { @MainActor in
+                    guard await agent.saveKeyConfirmed(keyDrafts[id] ?? "", provider: id, label: (keyLabels[id] ?? "").isEmpty ? nil : keyLabels[id]) else { return }
+                    keyDrafts[id] = nil
+                    keyLabels[id] = nil
+                    agent.refresh(remote: remote)
+                }
             }.disabled((keyDrafts[id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }.buttonStyle(SettingsQuietButtonStyle()).disabled(!editable || agent.busy)
     }

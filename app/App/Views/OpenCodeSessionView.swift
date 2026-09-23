@@ -22,8 +22,7 @@ struct OpenCodeConversationControls: View {
                         Text(item["payload"]["text"].text).textSelection(.enabled)
                         Text("This input has not been resent. Check the conversation in OpenCode before sending it again.")
                         Button("Acknowledge") { model.perform {
-                            try model.store.database.saveOpenCodeSubmission(conversationID: conversationID, id: item["id"].text, payload: item["payload"], status: "acknowledged")
-                            if let link = model.links[conversationID] { try await model.coordinator.refresh(link) }
+                            try await model.acknowledgeSubmission(conversationID, submission: item)
                         } }
                     }.font(.caption)
                 }
@@ -92,9 +91,9 @@ private struct OpenCodeMediaItem: View {
     private func contents() async throws -> Data {
         if let embedded { return embedded }
         let uri = file["uri"].string ?? file["source"]["uri"].text
-        guard let location = URL(string: uri), location.isFileURL, let link = model.links[conversationID] else {
+        guard let location = URL(string: uri), location.isFileURL, model.links[conversationID] != nil else {
             throw OpenCodeError.message("This attachment has no embedded content or server file reference.")
         }
-        return try await model.coordinator.readFile(connectionID: link.connectionID, path: location.path, query: model.locationQuery(conversationID)).0
+        return try await model.readFile(conversationID, path: location.path)
     }
 }

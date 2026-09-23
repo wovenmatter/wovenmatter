@@ -474,7 +474,7 @@ private final class LocalACPBoundedDownloadDelegate:
     }
 }
 
-public struct LocalACPInstallerPreview: Equatable, Sendable {
+public struct LocalACPInstallerPreview: Codable, Equatable, Sendable {
     public let runtimeKind: AgentRuntimeKind
     public let source: URL
     public let sha256: String?

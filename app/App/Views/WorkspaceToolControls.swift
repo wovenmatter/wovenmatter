@@ -64,11 +64,13 @@ struct WorkspaceSessionToolsMenu: View {
     @State private var error: String?
 
     private func set(_ group: WorkspaceToolGroup, enabled: Bool, confirmed: Bool = false) {
-        do {
-            try tools.setEnabled(group, enabled: enabled, sessionID: sessionID, confirmedPausingTimers: confirmed)
-            error = nil
-        } catch WorkspaceToolError.timerPauseConfirmation { confirmsTimerPause = true }
-        catch { self.error = error.localizedDescription }
+        Task {
+            do {
+                try await tools.setEnabledFromUI(group, enabled: enabled, sessionID: sessionID, confirmedPausingTimers: confirmed)
+                error = nil
+            } catch WorkspaceToolError.timerPauseConfirmation { confirmsTimerPause = true }
+            catch { self.error = error.localizedDescription }
+        }
     }
 
     var body: some View {

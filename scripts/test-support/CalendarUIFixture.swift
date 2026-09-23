@@ -27,6 +27,7 @@ func dashboardParsedDate(_ value: String) -> Date? {
     var calendarItems: [WorkspaceCalendarItemRecord] = []
     var calendarRuns: [WorkspaceCalendarRun] = []
     var calendarMutationError: String?
+    var remoteCalendarGatewayErrors: [UUID: String] = [:]
     var isCreatingCalendarItem = false
     init() {
         let root = FileManager.default.temporaryDirectory.appending(path: "wm-calendar-ui-" + UUID().uuidString)

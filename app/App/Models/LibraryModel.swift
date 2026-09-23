@@ -18,6 +18,8 @@ final class LibraryModel {
     private static let pageSize = 100
     private var query = LibraryQuery()
     private var requestID = UUID()
+    typealias BackendExecutor = @MainActor (BackendLibraryCommand) async throws -> BackendLibraryResult
+    private var backendExecutor: BackendExecutor?
     private var service: LibraryService?
     private var syncTask: Task<Void, Never>?
     private var locations: [LibraryLocation] = []
@@ -41,9 +43,11 @@ final class LibraryModel {
 
     func synchronize(
         service: LibraryService, locations: [LibraryLocation],
-        remoteWorkspace: @escaping LibraryService.RemoteWorkspaceLookup
+        remoteWorkspace: @escaping LibraryService.RemoteWorkspaceLookup,
+        backendExecutor: BackendExecutor? = nil
     ) {
         self.service = service
+        self.backendExecutor = backendExecutor
         self.locations = locations
         self.remoteWorkspace = remoteWorkspace
         guard syncTask == nil else { return }
@@ -56,11 +60,15 @@ final class LibraryModel {
         }
     }
 
-    private func synchronizeOnce() async {
+    func synchronizeOnce() async {
         guard let service else { return }
         today = Calendar.autoupdatingCurrent.startOfDay(for: Date())
         do {
-            try await service.synchronize(locations: locations, remoteWorkspace: remoteWorkspace)
+            // A frontend reads the same indexed catalog without indexing, copying,
+            // cleaning files, or connecting to remote hosts a second time.
+            if backendExecutor == nil {
+                try await service.synchronize(locations: locations, remoteWorkspace: remoteWorkspace)
+            }
             revision = try await service.revision()
         } catch is CancellationError {
             return
@@ -104,7 +112,13 @@ final class LibraryModel {
     func open(_ item: WorkspaceLibraryItem) {
         Task {
             do {
-                guard let url = try await service?.openURL(id: item.id) else { return }
+                let url: URL?
+                if let backendExecutor {
+                    url = try await backendExecutor(.open(id: item.id)).url
+                } else {
+                    url = try await service?.openURL(id: item.id)
+                }
+                guard let url else { return }
                 if !NSWorkspace.shared.open(url) { error = "No application could open this item." }
             } catch { self.error = error.localizedDescription }
         }
@@ -113,7 +127,11 @@ final class LibraryModel {
     func retry(_ item: WorkspaceLibraryItem) {
         Task {
             do {
-                try await service?.retry(id: item.id)
+                if let backendExecutor {
+                    _ = try await backendExecutor(.retry(id: item.id))
+                } else {
+                    try await service?.retry(id: item.id)
+                }
                 await synchronizeOnce()
             } catch { self.error = error.localizedDescription }
         }

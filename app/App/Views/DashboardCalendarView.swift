@@ -337,7 +337,7 @@ struct DashboardScheduledTasksSurface: View {
                     Spacer()
                     Button("New task") { newTask() }.buttonStyle(DashboardPrimaryButtonStyle())
                 }
-                Text("Woven Matter must be running when a task is due.")
+                Text("Local tasks run while Woven Matter is open or background execution is enabled. Remote tasks run on their workspace when its background execution is enabled.")
                     .font(.system(size: 12)).foregroundStyle(DashboardPalette.mutedForeground)
             }.padding(.horizontal, 32).padding(.top, 48).padding(.bottom, 20)
             ScrollView {
@@ -347,6 +347,10 @@ struct DashboardScheduledTasksSurface: View {
                             .font(.system(size: 13)).foregroundStyle(DashboardPalette.mutedForeground)
                     }
                     ForEach(tasks) { task in taskRow(task) }
+                    ForEach(model.remoteCalendarGatewayErrors.keys.sorted(by: { $0.uuidString < $1.uuidString }), id: \.self) { id in
+                        Text("\(model.remoteWorkspaces.configuration(id: id)?.name ?? "Remote workspace"): \(model.remoteCalendarGatewayErrors[id] ?? "")")
+                            .font(.system(size: 12)).foregroundStyle(DashboardPalette.danger)
+                    }
                     if let error = model.calendarMutationError { Text(error).font(.system(size: 12)).foregroundStyle(DashboardPalette.danger) }
                 }.frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 32).padding(.bottom, 32)

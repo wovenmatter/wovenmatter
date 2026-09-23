@@ -96,13 +96,37 @@ public actor DashboardStore {
   public nonisolated let conversationChanges: AsyncStream<DashboardConversationChange>
 
   private let deviceIdentity: DashboardDeviceIdentity
-  private let localSessions: LocalACPSessionCoordinator
-  private let openClawGateway: OpenClawGatewayCoordinator
-  private let localOpenClawGateways: OpenClawLocalGatewayLifecycle
-  private let messageAttachments: MessageAttachmentStore
+  private let ownedLocalSessions: LocalACPSessionCoordinator?
+  private let ownedOpenClawGateway: OpenClawGatewayCoordinator?
+  private let ownedLocalOpenClawGateways: OpenClawLocalGatewayLifecycle?
+  private let ownedMessageAttachments: MessageAttachmentStore?
+  private var localSessions: LocalACPSessionCoordinator {
+    get throws { guard let value = ownedLocalSessions else { throw WorkspaceDatabaseError.readOnlyProjection }; return value }
+  }
+  private var openClawGateway: OpenClawGatewayCoordinator {
+    get throws { guard let value = ownedOpenClawGateway else { throw WorkspaceDatabaseError.readOnlyProjection }; return value }
+  }
+  private var localOpenClawGateways: OpenClawLocalGatewayLifecycle {
+    get throws { guard let value = ownedLocalOpenClawGateways else { throw WorkspaceDatabaseError.readOnlyProjection }; return value }
+  }
+  private var messageAttachments: MessageAttachmentStore {
+    get throws { guard let value = ownedMessageAttachments else { throw WorkspaceDatabaseError.readOnlyProjection }; return value }
+  }
   private var localWorkspacePrepared = false
 
-  public init(supportDirectory: URL) throws {
+  public init(supportDirectory: URL, readOnlyProjection: Bool = false) throws {
+    if readOnlyProjection {
+      let database = try WorkspaceDatabase(url: supportDirectory.appending(path: "workspace.sqlite"), readOnlyProjection: true)
+      self.database = database
+      self.library = LibraryService(database: database)
+      self.deviceIdentity = DashboardDeviceIdentity(fileURL: supportDirectory.appending(path: "dashboard-device-id"), readOnlyProjection: true)
+      self.conversationChanges = AsyncStream { $0.finish() }
+      self.ownedMessageAttachments = nil
+      self.ownedLocalSessions = nil
+      self.ownedOpenClawGateway = nil
+      self.ownedLocalOpenClawGateways = nil
+      return
+    }
     try FileManager.default.createDirectory(at: supportDirectory, withIntermediateDirectories: true)
     // Complete usage DDL before opening the workspace owner and its recovery
     // transaction. A second handle changing schema after workspace triggers are
@@ -131,8 +155,8 @@ public actor DashboardStore {
     self.library = LibraryService(database: database)
     self.deviceIdentity = identity
     self.conversationChanges = changes.stream
-    self.messageAttachments = try MessageAttachmentStore(supportDirectory: supportDirectory)
-    self.localSessions = LocalACPSessionCoordinator(
+    self.ownedMessageAttachments = try MessageAttachmentStore(supportDirectory: supportDirectory)
+    self.ownedLocalSessions = LocalACPSessionCoordinator(
       database: database,
       processLease: localProcessLease,
       onChange: publishChange,
@@ -140,11 +164,11 @@ public actor DashboardStore {
         try? await usageRecorder.record(observation)
       }
     )
-    self.openClawGateway = OpenClawGatewayCoordinator(
+    self.ownedOpenClawGateway = OpenClawGatewayCoordinator(
       database: database,
       onChange: publishChange
     )
-    self.localOpenClawGateways = OpenClawLocalGatewayLifecycle()
+    self.ownedLocalOpenClawGateways = OpenClawLocalGatewayLifecycle()
   }
 
   public func stageMessageAttachment(
@@ -169,6 +193,7 @@ public actor DashboardStore {
   }
 
   public func prepareLocalWorkspace() async throws {
+    guard !database.isReadOnlyProjection else { throw WorkspaceDatabaseError.readOnlyProjection }
     guard !localWorkspacePrepared else { return }
     let deviceID = try await deviceIdentity.id()
     try database.bindDeviceOwnership(ownerDeviceID: deviceID)
@@ -198,8 +223,8 @@ public actor DashboardStore {
   }
 
   public func unlinkOpenClawGateway(agentID: UUID) async throws {
-    await openClawGateway.disconnect(agentID: agentID)
-    await localOpenClawGateways.release(agentID: agentID)
+    try await openClawGateway.disconnect(agentID: agentID)
+    try await localOpenClawGateways.release(agentID: agentID)
     try database.removeOpenClawGatewayLink(agentID: agentID)
   }
 
@@ -208,7 +233,7 @@ public actor DashboardStore {
     endpoint: OpenClawGatewayEndpoint,
     requestHeaders: [String: String]
   ) async {
-    await openClawGateway.configureTransport(
+    await ownedOpenClawGateway?.configureTransport(
       agentID: agentID,
       endpoint: endpoint,
       requestHeaders: requestHeaders
@@ -241,6 +266,7 @@ public actor DashboardStore {
       workspaceLinkID: workspaceLinkID,
       agentID: remoteAgentID
     )
+    guard !database.isReadOnlyProjection else { throw WorkspaceDatabaseError.readOnlyProjection }
     let resolver = BuzzLocalAgentLaunchResolver()
     let initialPort = OpenClawLocalGatewayLifecycle.stablePort(for: remoteAgentID)
     var resolved = try resolver.resolveDirectGateway(
@@ -288,6 +314,7 @@ public actor DashboardStore {
     agentID: UUID,
     workingDirectory: URL
   ) async throws -> OpenClawGatewayEndpoint {
+    guard !database.isReadOnlyProjection else { throw WorkspaceDatabaseError.readOnlyProjection }
     guard let base = LocalACPRuntimeResolver().resolve(runtimeKind: .openclaw).launchConfiguration else {
       throw LocalACPSessionDatabaseError.runtimeUnavailable
     }
@@ -321,7 +348,7 @@ public actor DashboardStore {
       reuseExistingListener: true
     )
     let endpoint = OpenClawGatewayEndpointResolver.localAgentWorkspace(port: configuration.port)
-    await openClawGateway.configureTransport(agentID: agentID, endpoint: endpoint,
+    try await openClawGateway.configureTransport(agentID: agentID, endpoint: endpoint,
       requestHeaders: configuration.token.map { ["Authorization": "Bearer " + $0] } ?? [:],
       password: configuration.password)
     return endpoint
@@ -948,7 +975,7 @@ public actor DashboardStore {
   public func setLocalACPResumePermissionHandler(
     _ handler: @escaping LocalACPSessionCoordinator.ResumePermissionHandler
   ) async {
-    await localSessions.setResumePermissionHandler(handler)
+    await ownedLocalSessions?.setResumePermissionHandler(handler)
   }
 
   public func localACPSessionConfiguration(
@@ -1042,13 +1069,13 @@ public actor DashboardStore {
   }
 
   public func cancelLocalACPPrompt(conversationID: String) async {
-    await localSessions.cancel(conversationID: conversationID)
+    await ownedLocalSessions?.cancel(conversationID: conversationID)
   }
 
   public func shutdownLocalACPSessions() async {
-    await openClawGateway.shutdown()
-    await localSessions.shutdown()
-    await localOpenClawGateways.shutdown()
+    await ownedOpenClawGateway?.shutdown()
+    await ownedLocalSessions?.shutdown()
+    await ownedLocalOpenClawGateways?.shutdown()
   }
 
 }
@@ -1057,14 +1084,21 @@ actor DashboardDeviceIdentity {
   private static let localLock = NSLock()
 
   private let fileURL: URL
+  private let readOnlyProjection: Bool
   private var cached: UUID?
 
-  init(fileURL: URL) {
+  init(fileURL: URL, readOnlyProjection: Bool = false) {
     self.fileURL = fileURL
+    self.readOnlyProjection = readOnlyProjection
   }
 
   func id() throws -> UUID {
     if let cached { return cached }
+    if readOnlyProjection {
+      guard let existing = storedID() else { throw WorkspaceDatabaseError.readOnlyProjection }
+      cached = existing
+      return existing
+    }
     let value = try Self.localLock.withLock {
       try withExclusiveFileLock {
         if let existing = storedID() {

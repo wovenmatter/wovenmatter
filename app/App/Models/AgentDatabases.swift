@@ -1,7 +1,7 @@
 import Foundation
 import WovenMatterCore
 
-enum DashboardDatabaseSourceKind: String, CaseIterable, Sendable {
+enum DashboardDatabaseSourceKind: String, CaseIterable, Codable, Sendable {
     case local
     case remote
     case buzz
@@ -15,7 +15,7 @@ enum DashboardDatabaseSourceKind: String, CaseIterable, Sendable {
     }
 }
 
-struct DashboardAgentDatabase: Equatable, Identifiable, Sendable {
+struct DashboardAgentDatabase: Equatable, Identifiable, Codable, Sendable {
     let sourceID: String
     let databaseID: String
     let name: String
@@ -26,7 +26,7 @@ struct DashboardAgentDatabase: Equatable, Identifiable, Sendable {
     var id: String { "\(sourceID):\(databaseID)" }
 }
 
-struct DashboardDatabaseSource: Equatable, Identifiable, Sendable {
+struct DashboardDatabaseSource: Equatable, Identifiable, Codable, Sendable {
     let id: String
     let name: String
     let kind: DashboardDatabaseSourceKind
@@ -37,7 +37,7 @@ struct DashboardDatabaseSource: Equatable, Identifiable, Sendable {
     let allowsExternalLinks: Bool
 }
 
-struct DashboardDatabasesSnapshot: Equatable, Sendable {
+struct DashboardDatabasesSnapshot: Equatable, Codable, Sendable {
     static let empty = DashboardDatabasesSnapshot(sources: [])
 
     let sources: [DashboardDatabaseSource]

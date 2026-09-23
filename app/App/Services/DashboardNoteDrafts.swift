@@ -354,6 +354,16 @@ final class DashboardNoteWriteBehind: @unchecked Sendable {
         }
     }
 
+    func flushAsync() async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
+            queue.async { [self] in
+                scheduledGeneration &+= 1
+                if let failure = drainPending() { continuation.resume(throwing: failure) }
+                else { continuation.resume() }
+            }
+        }
+    }
+
     func hasOutstandingWork() -> Bool {
         queue.sync {
             guard pending.isEmpty else { return true }

@@ -21,7 +21,7 @@ struct OpenCodeSettingsCard: View {
                 Spacer()
                 if model.isReady && !model.isRemote {
                     Button("Open in browser") {
-                        model.perform { openURL(try model.browserURL()) }
+                        model.perform { openURL(try await model.browserURL()) }
                     }
                     .buttonStyle(SettingsQuietButtonStyle())
                 }

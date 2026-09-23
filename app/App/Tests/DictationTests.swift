@@ -263,3 +263,39 @@ private actor DelayedSpeechFixture: GrokSpeechTransport {
         #expect(view.string == "Draft current")
     }
 }
+
+@MainActor @Test func backendSpeechProxyKeepsCredentialsOnOwner() async throws {
+    let fixture = SpeechFixture()
+    let service = BackendSpeechService(credential: {
+        var value = DefaultAgentCredential(type: "oauth")
+        value.access = "fixture-private-access"
+        value.displayName = "Fixture account"
+        return value
+    }, makeTransport: { fixture })
+    let request: BackendSpeechTransport.Request = { method, payload in
+        try await service.handle(method: method, payload: payload)
+    }
+    let availability = try await service.handle(method: "speech.availability", payload: JSONEncoder().encode(BackendSpeechRequest()))
+    #expect(!String(decoding: availability, as: UTF8.self).contains("fixture-private-access"))
+    #expect(try await BackendSpeechTransport.availability(request: request) == "Fixture account")
+    let proxy = BackendSpeechTransport(request: request)
+    try await proxy.connect(credential: DefaultAgentCredential(type: "oauth"))
+    #expect(await fixture.credentials.first?.access == "fixture-private-access")
+    try await proxy.send(Data([0, 1, 0, 1]))
+    await fixture.emit(.partial("hello"))
+    #expect(try await proxy.next(timeout: .seconds(1)) == .partial("hello"))
+    try await proxy.finish()
+    await fixture.emit(.done("hello", duration: 1))
+    #expect(try await proxy.next(timeout: .seconds(1)) == .done("hello", duration: 1))
+    await proxy.cancel()
+}
+
+@MainActor @Test func backendSpeechProxyRejectsOversizedAudio() async throws {
+    let proxy = BackendSpeechTransport(request: { _, _ in
+        Issue.record("Oversized audio must never cross the RPC boundary")
+        return Data()
+    })
+    await #expect(throws: GrokSpeechError.audioBacklog) {
+        try await proxy.send(Data(count: 65_537))
+    }
+}

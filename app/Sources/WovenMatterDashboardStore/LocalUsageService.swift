@@ -4,7 +4,7 @@ import SQLite3
 import WovenMatterClient
 import WovenMatterCore
 
-public enum UsageRefreshReason: Equatable, Sendable {
+public enum UsageRefreshReason: String, Codable, Equatable, Sendable {
   case startup
   case viewAppeared
   case rangeChanged
@@ -32,7 +32,7 @@ public enum UsageKeychainInteraction: String, Equatable, Sendable {
   var allowsInteraction: Bool { self == .oneShotExplicit }
 }
 
-public struct CodexUsageWorkspace: Equatable, Identifiable, Sendable {
+public struct CodexUsageWorkspace: Codable, Equatable, Identifiable, Sendable {
   public let id: String
   public let name: String
   public let email: String
@@ -65,7 +65,7 @@ public struct CodexUsageWorkspacePreferences {
 }
 
 /// A display selection for Usage; it never changes inference account preferences.
-public struct UsageConnectionChoice: Equatable, Identifiable, Sendable {
+public struct UsageConnectionChoice: Codable, Equatable, Identifiable, Sendable {
   public let provider: ProviderKind
   public let connectionID: String
   public let accountID: String

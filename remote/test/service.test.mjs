@@ -846,6 +846,32 @@ test('Built-in credential routes require authentication, unlock explicitly, and 
   assert.ok(!disk.includes('fixture-provider-secret') && !disk.includes(unlockKey));
 });
 
+test('task gateway routes are authenticated, default enabled, and persist explicit disable', async context => {
+  const root = await temporaryFixture(context, 'wovenmatter-task-gateway-api-')
+  const home = resolve(root, 'home'); await mkdir(home)
+  const service = await startService({workspace:root,home,catalog:catalogPath,token:'task-test-token'})
+  context.after(() => service.child.kill('SIGTERM'))
+  const request = (path, method='GET', body, token='task-test-token') => fetch(service.url+path, {
+    method,headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},
+    body:body===undefined?undefined:JSON.stringify(body),
+  })
+  assert.equal((await request('/v1/task-gateway','GET',undefined,'wrong')).status,401)
+  assert.equal((await (await request('/v1/task-gateway')).json()).enabled,true)
+  const published = await request('/v1/task-gateway/schedules','PUT',{publicationID:'fixture-publication',knownRuns:[],schedules:[{
+    id:'fixture-event',title:'Future task',startsAt:'2099-01-01T14:00:00Z',nextFireAt:'2099-01-01T14:00:00Z',timeZoneID:'UTC',revision:1,excludedOccurrences:[],
+    task:{prompt:'fixture only',sessionMode:'new',configuration:{runtimeKind:'codex',title:'Future task',tools:{enabled:[]}}},
+  }]})
+  assert.equal(published.status,200);assert.equal((await published.json()).scheduleCount,1)
+  assert.equal((await (await request('/v1/task-gateway/schedules')).json()).schedules[0].id,'fixture-event')
+  assert.deepEqual(await (await request('/v1/task-gateway/results?after=0')).json(),{entries:[],cursor:'0'})
+  assert.equal((await request('/v1/task-gateway/results?after=-1')).status,400)
+  assert.equal((await request('/v1/task-gateway','PATCH',{enabled:'no'})).status,400)
+  const disabled=await (await request('/v1/task-gateway','PATCH',{enabled:false})).json()
+  assert.equal(disabled.enabled,false);assert.equal(disabled.activeRuns,0)
+  assert.equal(JSON.parse(await readFile(resolve(root,'.wovenmatter/task-gateway/state.json'),'utf8')).enabled,false)
+  assert.notEqual((await request('/v1/durable-acp/attach','POST',{channelID:'no-start',harnessID:'codex'})).status,200)
+})
+
 async function startService({ workspace, home, catalog, token, gatewayPort }) {
   const port = await unusedPort()
   const environment = await fixtureEnvironment(home)

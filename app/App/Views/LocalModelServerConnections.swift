@@ -3,25 +3,32 @@ import WovenMatterCore
 import WovenMatterClient
 
 struct LocalModelServerConnections: View {
-    @State private var servers = LocalModelServerStore.servers
+    @Bindable var agent: DefaultAgentSettingsModel
+    private var servers: [LocalModelServer] { agent.localServers }
+    @State private var error: String?
     @State private var adding = false
     var body: some View {
         SettingsCard(title: "Local models", detail: "Connect OpenAI Responses-compatible servers on this Mac or your Tailscale network.") {
             ForEach(servers) { server in
-                LocalModelServerConnectionRow(server: server, changed: reload)
+                LocalModelServerConnectionRow(agent: agent, server: server, changed: reload)
                 Divider()
             }
             if adding || servers.isEmpty {
-                LocalModelServerConnectionRow(server: nil) { adding = false; reload() }
+                LocalModelServerConnectionRow(agent: agent, server: nil) { adding = false; reload() }
             } else if servers.count < LocalModelServerStore.maximumServers {
                 Button("Add model server") { adding = true }.buttonStyle(SettingsQuietButtonStyle())
             }
+            if let error { SettingsError(error) }
         }
+        .task { reload() }
     }
-    private func reload() { servers = LocalModelServerStore.servers }
+    private func reload() {
+        Task { do { try await agent.reloadLocalServers(); error = nil } catch { self.error = error.localizedDescription } }
+    }
 }
 
 private struct LocalModelServerConnectionRow: View {
+    @Bindable var agent: DefaultAgentSettingsModel
     let server: LocalModelServer?
     let changed: () -> Void
     @State private var url = ""
@@ -47,8 +54,12 @@ private struct LocalModelServerConnectionRow: View {
                         .font(.caption).foregroundStyle(.secondary)
                     Spacer()
                     Button("Remove") {
-                        do { try LocalModelServerStore.remove(server); changed() }
-                        catch { self.error = error.localizedDescription }
+                        Task {
+                            busy = true
+                            defer { busy = false }
+                            do { try await agent.removeLocalServer(server); changed() }
+                            catch { self.error = error.localizedDescription }
+                        }
                     }.buttonStyle(SettingsQuietButtonStyle()).disabled(busy)
                 }
             }
@@ -63,9 +74,7 @@ private struct LocalModelServerConnectionRow: View {
         Task {
             defer { busy = false }
             do {
-                let savedKey = enteredKey.isEmpty ? try server.flatMap { try DefaultAgentSupport.key($0.id) } : enteredKey
-                guard let savedKey, !savedKey.isEmpty else { throw DefaultAgentError.message("Enter the server API key.") }
-                _ = try await LocalModelServerStore.connect(url: enteredURL, key: savedKey, replacing: server)
+                try await agent.connectLocalServer(url: enteredURL, key: enteredKey, replacing: server)
                 key = ""; verified = true; changed()
             } catch { self.error = error.localizedDescription }
         }

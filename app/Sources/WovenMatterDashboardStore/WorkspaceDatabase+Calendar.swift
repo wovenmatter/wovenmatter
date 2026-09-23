@@ -44,6 +44,11 @@ extension WorkspaceDatabase {
         CREATE INDEX IF NOT EXISTS workspace_calendar_run_event ON workspace_calendar_runs(event_id);
         CREATE INDEX IF NOT EXISTS workspace_calendar_pending_runs ON workspace_calendar_runs(status) WHERE status='pending';
         CREATE TABLE IF NOT EXISTS workspace_calendar_sessions(id TEXT PRIMARY KEY, configuration_json TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS workspace_calendar_remote_ownership(
+          workspace_id TEXT PRIMARY KEY, state TEXT NOT NULL CHECK(state IN ('pending','remote')));
+        CREATE TABLE IF NOT EXISTS workspace_calendar_remote_receipts(
+          id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, session_id TEXT NOT NULL, payload_json TEXT NOT NULL);
+
         """)
       let runColumns = Set(try historyRowsUnlocked("PRAGMA table_info(workspace_calendar_runs)", values: [])
         .compactMap { $0.objectValue?["name"]?.stringValue })
@@ -116,6 +121,11 @@ extension WorkspaceDatabase {
         guard creating ? !idExists : existing != nil else { throw WorkspaceToolError.invalid("Calendar event not found or already exists.") }
         if let expectedRevision, existing?.calendar.revision != expectedRevision {
           throw WorkspaceToolError.invalid("This event changed. Reopen it before saving your changes.")
+        }
+        if let previousWorkspace = existing?.calendar.task?.configuration.workspaceID,
+           previousWorkspace != draft.task?.configuration.workspaceID,
+           try remoteCalendarWorkspaceIDsUnlocked().contains(previousWorkspace.uuidString.lowercased()) {
+          throw WorkspaceToolError.invalid("Turn off background execution for this workspace before moving its scheduled task to another workspace.")
         }
         if let task = draft.task { try validateFolderUnlocked(id: task.configuration.folderID, operatorID: localMutationOperatorIDUnlocked()) }
         let author = try calendarAuthorUnlocked(callerID)
@@ -276,7 +286,10 @@ extension WorkspaceDatabase {
     try transaction {
       let dueIDs = Set(try historyRowsUnlocked("SELECT id FROM dashboard_calendar_items WHERE next_fire_at<=? AND deleted_at IS NULL",
         values: [String(now.timeIntervalSince1970)]).compactMap { $0.objectValue?["id"]?.stringValue })
-      let events = dueIDs.isEmpty ? [] : try calendarItemsUnlocked().filter { dueIDs.contains($0.id) }
+      let delegated = try remoteCalendarWorkspaceIDsUnlocked()
+      let events = dueIDs.isEmpty ? [] : try calendarItemsUnlocked().filter {
+        dueIDs.contains($0.id) && !delegated.contains($0.calendar.task?.configuration.workspaceID?.uuidString.lowercased() ?? "")
+      }
       for event in events {
         guard let task = event.calendar.task, let start = event.startDate else { continue }
         let row = try historyRowsUnlocked("SELECT next_fire_at,task_session_id FROM dashboard_calendar_items WHERE id=?", values: [event.id]).first?.objectValue
@@ -315,7 +328,7 @@ extension WorkspaceDatabase {
         WHERE r.status='pending' AND (r.retry_after IS NULL OR r.retry_after<=?)
           AND (d.retry_after IS NULL OR d.retry_after<=?)
         """, values: [String(now.timeIntervalSince1970), String(now.timeIntervalSince1970)]).compactMap { $0.objectValue?["id"]?.stringValue })
-      return eligible.isEmpty ? [] : try calendarRunsUnlocked(unfinishedOnly: true).filter { $0.isPending && eligible.contains($0.id) }
+      return eligible.isEmpty ? [] : try calendarRunsUnlocked(unfinishedOnly: true).filter { $0.isPending && eligible.contains($0.id) && !delegated.contains($0.task.configuration.workspaceID?.uuidString.lowercased() ?? "") }
     }
   }
 
@@ -330,6 +343,8 @@ extension WorkspaceDatabase {
     !(try historyRowsUnlocked("""
       SELECT 1 FROM workspace_calendar_runs r JOIN dashboard_calendar_items e ON e.id=r.event_id
       WHERE r.id=? AND r.status='pending' AND e.deleted_at IS NULL AND json_extract(e.calendar_json,'$.task') IS NOT NULL
+      AND NOT EXISTS(SELECT 1 FROM workspace_calendar_remote_ownership o
+        WHERE o.workspace_id=lower(json_extract(e.calendar_json,'$.task.configuration.workspaceID')))
       """, values: [id])).isEmpty
   }
 
@@ -377,5 +392,233 @@ extension WorkspaceDatabase {
     try toolsExecuteUnlocked("UPDATE dashboard_conversations SET title=?,folder_id=? WHERE id=?", [configuration.title, configuration.folderID, id])
     try toolsExecuteUnlocked("UPDATE desktop_local_acp_sessions SET title=? WHERE conversation_id=?", [configuration.title, id])
     try toolsExecuteUnlocked("UPDATE workspace_session_tools SET enabled_json=?,defaults_applied=1 WHERE session_id=?", [try toolsJSON(configuration.tools.enabled), id])
+  }
+}
+
+public enum RemoteCalendarExecutionOwnership: String, Codable, Sendable {
+  case local, pending, remote
+}
+
+public struct RemoteCalendarScheduleExport: Sendable {
+  public let event: WorkspaceCalendarItemRecord
+  public let nextFireAt: Date?
+  public let taskSessionID: String?
+  public let nativeSessionID: String?
+  public let runs: [WorkspaceCalendarRun]
+}
+
+extension WorkspaceDatabase {
+  func remoteCalendarWorkspaceIDsUnlocked() throws -> Set<String> {
+    Set(try historyRowsUnlocked("SELECT workspace_id FROM workspace_calendar_remote_ownership", values: [])
+      .compactMap { $0.objectValue?["workspace_id"]?.stringValue })
+  }
+
+  public func remoteCalendarExecutionOwnership(workspaceID: UUID) throws -> RemoteCalendarExecutionOwnership {
+    try withLock {
+      let value = try historyRowsUnlocked("SELECT state FROM workspace_calendar_remote_ownership WHERE workspace_id=?",
+        values: [workspaceID.uuidString.lowercased()]).first?.objectValue?["state"]?.stringValue
+      return value.flatMap(RemoteCalendarExecutionOwnership.init(rawValue:)) ?? .local
+    }
+  }
+
+  /// Persist pending BEFORE publication. An ambiguous response must remain pending
+  /// until remote acknowledgement/reconciliation; reconnect never re-enables local execution.
+  public func setRemoteCalendarExecutionOwnership(workspaceID: UUID, state: RemoteCalendarExecutionOwnership) throws {
+    try transaction {
+      let workspace = workspaceID.uuidString.lowercased()
+      if state == .pending {
+        let runs = try calendarRunsUnlocked().filter { $0.task.configuration.workspaceID == workspaceID }
+        for run in runs where run.isPending {
+          let started = try historyRowsUnlocked("SELECT transport_started FROM workspace_session_deliveries WHERE id=?", values: [run.id])
+            .first?.objectValue?["transport_started"]?.intValue == 1
+          guard !started else { throw WorkspaceToolError.invalid("Wait for the current scheduled task to finish before moving execution.") }
+          try cancelCalendarRunsUnlocked(eventID: run.eventID, scheduledAt: run.scheduledAt)
+        }
+      }
+      if state == .local {
+        try toolsExecuteUnlocked("DELETE FROM workspace_calendar_remote_ownership WHERE workspace_id=?", [workspace])
+      } else {
+        try toolsExecuteUnlocked("INSERT INTO workspace_calendar_remote_ownership(workspace_id,state) VALUES(?,?) ON CONFLICT(workspace_id) DO UPDATE SET state=excluded.state", [workspace, state.rawValue])
+      }
+    }
+  }
+
+  /// Full replacement snapshot: deleted events are absent, so remote schedules
+  /// removed on this Mac are removed during the next successful publication.
+  public func remoteCalendarExecutionSnapshot(workspaceID: UUID) throws -> [RemoteCalendarScheduleExport] {
+    try withLock {
+      try calendarItemsUnlocked().filter { $0.calendar.task?.configuration.workspaceID == workspaceID }.map { event in
+        let row = try historyRowsUnlocked("SELECT next_fire_at,task_session_id,(SELECT acp_session_id FROM desktop_local_acp_sessions WHERE conversation_id=task_session_id) AS native_session_id FROM dashboard_calendar_items WHERE id=?", values: [event.id]).first?.objectValue
+        return RemoteCalendarScheduleExport(event: event,
+          nextFireAt: row?["next_fire_at"]?.doubleValue.map(Date.init(timeIntervalSince1970:)),
+          taskSessionID: row?["task_session_id"]?.stringValue,
+          nativeSessionID: row?["native_session_id"]?.stringValue,
+          runs: try calendarRunsUnlocked(eventID: event.id).filter { $0.status != "cancelled" })
+      }
+    }
+  }
+
+  /// Import immutable remote outcomes even after an event was deleted. The
+  /// occurrence uniqueness key prevents a repeated receipt from creating a run.
+  public func importRemoteCalendarRun(_ run: WorkspaceCalendarRun, workspaceID: UUID,
+      coalescedThrough: Date? = nil, eventRevision: Int? = nil) throws {
+    try transaction {
+      guard run.task.configuration.workspaceID == workspaceID,
+        try calendarItemsUnlocked(includeDeleted: true).contains(where: { $0.id == run.eventID }) else {
+        throw WorkspaceToolError.invalid("Remote scheduled task does not belong to this workspace.")
+      }
+      try toolsExecuteUnlocked("""
+        INSERT INTO workspace_calendar_runs(id,event_id,scheduled_at,occurrence_index,session_id,task_json,title,status,error,coalesced_through)
+        VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(event_id,scheduled_at) DO UPDATE SET
+          id=excluded.id,status=excluded.status,error=excluded.error,session_id=excluded.session_id
+        WHERE workspace_calendar_runs.status IN ('pending','queued','cancelled')
+        """, [run.id,run.eventID,Self.timestamp(run.scheduledAt),String(run.occurrenceIndex),run.sessionID,
+          try toolsJSON(run.task),run.title,run.status,run.error,
+          String((coalescedThrough ?? run.scheduledAt).timeIntervalSince1970)])
+      try toolsExecuteUnlocked("INSERT INTO workspace_calendar_sessions(id,configuration_json) VALUES(?,?) ON CONFLICT(id) DO NOTHING",
+        [run.sessionID,try toolsJSON(run.task.configuration)])
+      if let event = try calendarItemsUnlocked().first(where: { $0.id == run.eventID }),
+         event.calendar.revision == eventRevision,
+         event.calendar.task?.configuration.workspaceID == workspaceID {
+        if run.task.sessionMode == .same {
+          try toolsExecuteUnlocked("UPDATE dashboard_calendar_items SET task_session_id=? WHERE id=?", [run.sessionID,run.eventID])
+        }
+        let row = try historyRowsUnlocked("SELECT next_fire_at FROM dashboard_calendar_items WHERE id=?", values: [run.eventID]).first?.objectValue
+        if let next = row?["next_fire_at"]?.doubleValue, next <= run.scheduledAt.timeIntervalSince1970 {
+          try advanceCalendarUnlocked(event, after: coalescedThrough ?? run.scheduledAt)
+        }
+      }
+    }
+  }
+}
+
+extension WorkspaceDatabase {
+  /// Atomic transcript projection and receipt: a crash/repeated fetch cannot
+  /// duplicate a prompt or assistant reply. Native updates are retained verbatim.
+  public func importRemoteCalendarTranscript(receiptID: String, run: WorkspaceCalendarRun,
+      workspaceID: UUID, workspaceName: String, ownerDeviceID: UUID,
+      nativeSessionID: String?, updates: [GatewayJSONValue], error: String?, completedAt: Date) throws {
+    try transaction {
+      guard run.task.configuration.workspaceID == workspaceID,
+            let conversationID = UUID(uuidString: run.sessionID) else {
+        throw WorkspaceToolError.invalid("Invalid remote scheduled session.")
+      }
+      if try !historyRowsUnlocked("SELECT 1 FROM workspace_calendar_remote_receipts WHERE id=?", values: [receiptID]).isEmpty { return }
+      let configuration = run.task.configuration
+      let existing = try historyRowsUnlocked("SELECT remote_workspace_id,runtime_kind FROM desktop_local_acp_sessions WHERE conversation_id=?", values: [run.sessionID]).first?.objectValue
+      if let existing {
+        guard existing["remote_workspace_id"]?.stringValue?.lowercased() == workspaceID.uuidString.lowercased(),
+              existing["runtime_kind"]?.stringValue == configuration.runtimeKind.rawValue else {
+          throw WorkspaceToolError.invalid("Remote session identity conflicts with an existing session.")
+        }
+      } else {
+        try toolsExecuteUnlocked("INSERT INTO workspace_calendar_sessions(id,configuration_json) VALUES(?,?) ON CONFLICT(id) DO NOTHING", [run.sessionID,try toolsJSON(configuration)])
+        _ = try createRemoteACPSessionUnlocked(runtimeKind: configuration.runtimeKind,
+          remoteWorkspaceID: workspaceID, remoteWorkspaceName: workspaceName,
+          title: configuration.title, ownerDeviceID: ownerDeviceID, createdAt: run.scheduledAt,
+          openCodeAssociation: configuration.runtimeKind == .opencode ? nativeSessionID.map { ("remote-workspace:" + workspaceID.uuidString.lowercased(),$0) } : nil,
+          requestedConversationID: conversationID)
+      }
+      try toolsExecuteUnlocked("""
+        UPDATE desktop_local_acp_sessions SET acp_session_id=coalesce(?,acp_session_id),model=?,thinking=?,permission=?,updated_at=?,revision=revision+1
+        WHERE conversation_id=?
+        """, [nativeSessionID,configuration.model,configuration.thinking,configuration.permission,Self.timestamp(completedAt),run.sessionID])
+      // OpenCode's server remains its transcript owner; attaching the native
+      // session above makes the existing synchronization path fetch its history.
+      if configuration.runtimeKind != .opencode {
+        let response = updates.compactMap { update -> String? in
+          let object = update.objectValue?["update"]?.objectValue ?? update.objectValue
+          guard object?["sessionUpdate"]?.stringValue == "agent_message_chunk" else { return nil }
+          return object?["content"]?.objectValue?["text"]?.stringValue
+        }.joined()
+        let runID = UUID().uuidString.lowercased()
+        let userID = UUID().uuidString.lowercased(), assistantID = UUID().uuidString.lowercased()
+        let status = error == nil ? "completed" : "failed"
+        let started = Self.timestamp(run.scheduledAt), finished = Self.timestamp(completedAt)
+        for (id,role,content,stamp) in [(userID,"user",run.task.prompt,started),
+          (assistantID,"assistant",response,Self.timestamp(run.scheduledAt.addingTimeInterval(0.001)))] {
+          try toolsExecuteUnlocked("""
+            INSERT INTO dashboard_messages(id,conversation_id,run_id,role,message_source,content,status,
+              governing_plane,authority_kind,authority_device_id,authority_agent_id,created_at,updated_at,desktop_owned)
+            SELECT ?,id,?,?,'local_acp',?,?,'wovenmatter_macos','device_owned',authority_device_id,agent_id,?,?,1
+            FROM dashboard_conversations WHERE id=?
+            """, [id,runID,role,content,role == "user" ? "completed" : status,stamp,finished,run.sessionID])
+        }
+        try toolsExecuteUnlocked("""
+          INSERT INTO dashboard_runs(id,conversation_id,user_id,agent_id,agent_codename,governing_plane,authority_kind,
+            authority_device_id,authority_agent_id,openclaw_session_key,user_message_id,assistant_message_id,status,
+            started_at,created_at,updated_at,completed_at,error,desktop_owned)
+          SELECT ?,id,user_id,agent_id,agent_codename,'wovenmatter_macos','device_owned',authority_device_id,agent_id,
+            ?,?,?,?,?,?,?,?,?,1 FROM dashboard_conversations WHERE id=?
+          """, [runID,nativeSessionID,userID,assistantID,status,started,started,finished,finished,error,run.sessionID])
+        try toolsExecuteUnlocked("UPDATE dashboard_runs SET status='running' WHERE id=?", [runID])
+        var thoughtSequence = 0
+        var activeThought: String?
+        for update in updates {
+          let value = update.objectValue?["update"] ?? update
+          guard let object = value.objectValue, let kind = object["sessionUpdate"]?.stringValue else { continue }
+          let raw = try toolsJSON(value)
+          var activity: AgentRunActivity?
+          var appending = false
+          if kind == "agent_thought_chunk" {
+            if activeThought == nil { thoughtSequence += 1; activeThought = "thought-\(thoughtSequence)" }
+            let id = object["_meta"]?.objectValue?["wovenThoughtID"]?.stringValue ?? activeThought!
+            activity = .init(id: id, kind: .thought, title: "Thinking", status: "completed",
+              content: object["content"]?.objectValue?["text"]?.stringValue, contentIsDelta: true, rawPayloadJSON: raw)
+            appending = true
+          } else {
+            activeThought = nil
+            if ["tool_call", "tool_call_update"].contains(kind), let id = object["toolCallId"]?.stringValue {
+              activity = .init(id: id, kind: .tool, title: object["title"]?.stringValue,
+                status: object["status"]?.stringValue, toolName: object["kind"]?.stringValue,
+                rawInputJSON: try object["rawInput"].map(toolsJSON),
+                rawOutputJSON: try object["rawOutput"].map(toolsJSON), rawPayloadJSON: raw)
+            } else if kind == "plan" {
+              let entries = object["entries"]?.arrayValue?.compactMap { entry -> AgentRunPlanEntry? in
+                guard let fields = entry.objectValue, let content = fields["content"]?.stringValue,
+                      let status = fields["status"]?.stringValue else { return nil }
+                return .init(content: content, priority: fields["priority"]?.stringValue, status: status)
+              } ?? []
+              activity = .init(id: "plan", kind: .plan, title: "Plan", planEntries: entries, rawPayloadJSON: raw)
+            }
+          }
+          if let activity {
+            try upsertDeviceOwnedRunActivityUnlocked(runID: runID, activity: activity,
+              appendingContent: appending, updatedAt: completedAt)
+          }
+        }
+        try toolsExecuteUnlocked("UPDATE dashboard_runs SET status=? WHERE id=?", [status,runID])
+        try toolsExecuteUnlocked("""
+          UPDATE dashboard_conversations SET last_message_preview=?,last_message_at=max(coalesce(last_message_at,''),?),updated_at=max(updated_at,?) WHERE id=?
+          """, [String((response.isEmpty ? run.task.prompt : response).prefix(200)),finished,finished,run.sessionID])
+      }
+      try toolsExecuteUnlocked("INSERT INTO workspace_calendar_remote_receipts(id,workspace_id,session_id,payload_json) VALUES(?,?,?,?)",
+        [receiptID,workspaceID.uuidString.lowercased(),run.sessionID,try toolsJSON(updates)])
+    }
+  }
+}
+
+extension WorkspaceDatabase {
+  /// Call only after the remote gateway confirms it is disabled and its result
+  /// journal is drained. Keep the durable fence until this checkpoint is saved.
+  public func restoreRemoteCalendarExecutionCheckpoint(workspaceID: UUID, schedules: [RemoteTaskGatewaySchedule]) throws {
+    try transaction {
+      guard try remoteCalendarWorkspaceIDsUnlocked().contains(workspaceID.uuidString.lowercased()) else {
+        throw WorkspaceToolError.invalid("Remote scheduled task execution is not fenced.")
+      }
+      let events = try calendarItemsUnlocked()
+      for schedule in schedules {
+        guard schedule.task.configuration.workspaceID == workspaceID,
+              let event = events.first(where: { $0.id == schedule.id }),
+              event.calendar.task?.configuration.workspaceID == workspaceID,
+              event.calendar.revision == schedule.revision else { continue }
+        try toolsExecuteUnlocked("UPDATE dashboard_calendar_items SET next_fire_at=?,task_session_id=? WHERE id=?",
+          [schedule.nextFireAt.map { String($0.timeIntervalSince1970) },schedule.taskSessionID,schedule.id])
+        if let session = schedule.taskSessionID, let native = schedule.nativeSessionID {
+          try toolsExecuteUnlocked("UPDATE desktop_local_acp_sessions SET acp_session_id=? WHERE conversation_id=? AND remote_workspace_id=?",
+            [native,session,workspaceID.uuidString.lowercased()])
+        }
+      }
+    }
   }
 }

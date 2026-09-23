@@ -5,8 +5,8 @@ import Darwin
 import Glibc
 #endif
 
-public struct LocalACPWorkspaceAvailability: Equatable, Sendable {
-    public enum State: String, Equatable, Sendable {
+public struct LocalACPWorkspaceAvailability: Codable, Equatable, Sendable {
+    public enum State: String, Codable, Equatable, Sendable {
         case ready
         case setupRequired = "setup_required"
         case invalidConfiguration = "invalid_configuration"
@@ -73,7 +73,7 @@ public struct LocalACPWorkspaceResolution: Sendable {
     }
 }
 
-public enum LocalACPWorkspaceFolder: Sendable {
+public enum LocalACPWorkspaceFolder: Codable, Sendable {
     case repositories
     case databases
 
@@ -103,7 +103,7 @@ public enum LocalACPWorkspaceFolderRecovery: Sendable {
     case copyAndBackUp
 }
 
-public struct LocalACPWorkspaceFolderChangeResult: Sendable {
+public struct LocalACPWorkspaceFolderChangeResult: Codable, Sendable {
     public let backupURL: URL?
     public let skippedItemNames: [String]
 }

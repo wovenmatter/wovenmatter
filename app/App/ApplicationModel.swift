@@ -1,17 +1,18 @@
 import Foundation
+import AppKit
 import Observation
 import WovenMatterClient
 import WovenMatterCore
 import WovenMatterDashboardStore
 
-struct PendingLocalACPPermission: Equatable, Identifiable {
+struct PendingLocalACPPermission: Codable, Sendable, Equatable, Identifiable {
     let id: UUID
     let conversationID: String
     let title: String
     let options: [LocalACPPermissionOption]
 }
 
-struct PendingLocalACPInteraction: Equatable, Identifiable {
+struct PendingLocalACPInteraction: Codable, Sendable, Equatable, Identifiable {
     let id: UUID
     let conversationID: String
     let request: LocalACPInteractionRequest
@@ -53,6 +54,7 @@ final class ApplicationModel {
 
     private(set) var state: State = .starting
     private(set) var localCLIAgents: [WorkspaceAgent] = []
+    private var backendBuzzDiscoveryEnabled = false
     private(set) var buzzWorkspaceAgents: [WorkspaceAgent] = []
     private(set) var remoteWorkspaceAgents: [WorkspaceAgent] = []
     let remoteWorkspaces: RemoteWorkspacesModel
@@ -77,6 +79,7 @@ final class ApplicationModel {
     }
 
     func synchronizeRemoteOpenCodeInstances() async {
+        if isBackendFrontend { try? await refreshBackendOpenCodeState(); return }
         let generation = UUID()
         remoteOpenCodeSyncGeneration = generation
         guard let dashboardStore, let ownerDeviceID = try? await dashboardStore.dashboardDeviceID() else { return }
@@ -130,6 +133,11 @@ final class ApplicationModel {
     }
 
     func openCodeSettingsAgent(workspaceID: UUID?) async throws -> WorkspaceAgent {
+        if isBackendFrontend {
+            guard let agent = try await sendBackendWorkspaceService(.openCodeSettingsAgent(workspaceID)).agent else { throw ApplicationModelError.localACPRuntimeUnavailable }
+            await refreshWorkspace()
+            return agent
+        }
         guard let dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
         if let workspaceID {
             guard let configuration = remoteWorkspaces.configuration(id: workspaceID) else { throw ApplicationModelError.remoteHarnessUnavailable }
@@ -144,12 +152,19 @@ final class ApplicationModel {
     }
 
     func renameOpenCodeAgent(agentID: UUID, displayName: String) async throws {
+        if isBackendFrontend { _ = try await sendBackendWorkspaceService(.renameOpenCode(agentID, displayName)); await refreshWorkspace(); return }
         guard let dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
         try dashboardStore.database.renameOpenCodeAgent(id: agentID, displayName: displayName)
         await refreshWorkspace()
     }
 
     func remoteOpenClawAgentID(for configuration: RemoteWorkspaceConfiguration) async throws -> UUID {
+        if isBackendFrontend {
+            guard let raw = try await sendBackendWorkspaceService(.remoteOpenClawAgent(configuration.id)).entityID,
+                  let id = UUID(uuidString: raw) else { throw ApplicationModelError.remoteHarnessUnavailable }
+            await refreshWorkspace()
+            return id
+        }
         guard let dashboardStore, remoteWorkspaces.configuration(id: configuration.id) == configuration else {
             throw ApplicationModelError.remoteHarnessUnavailable
         }
@@ -199,8 +214,14 @@ final class ApplicationModel {
     @ObservationIgnored var toolCreationTasks: [String: Task<WovenMatterToolResponse, any Error>] = [:]
     @ObservationIgnored private var toolSessionAdmission = WorkspaceSessionAdmission()
     var calendarMutationError: String?
+    var remoteCalendarGatewayErrors: [UUID: String] = [:]
+    var remoteCalendarSyncInProgress: Set<UUID> = []
+    var remoteCalendarLastSync: [UUID: Date] = [:]
+    var remoteCalendarPublished: [UUID: [String: Int]] = [:]
+    var remoteCalendarResultCursors: [UUID: String] = [:]
     var isCreatingCalendarItem = false
     private(set) var noteDrafts: [String: DashboardNoteDraft] = [:]
+    private var consumedBackendPrefills: [String: String] = [:]
     var pendingComposerPrefills: [String: String] = [:]
     private(set) var localACPSessionMetadata: [
         String: LocalACPSessionMetadata
@@ -211,6 +232,7 @@ final class ApplicationModel {
     }
     private(set) var updatingLocalACPSessionIDs: Set<String> = []
     private(set) var localRunError: String?
+    private var backendLaunchableRuntimeKinds: Set<AgentRuntimeKind> = []
     private(set) var localACPRuntimeAvailability: [LocalACPRuntimeAvailability] = []
     private(set) var localACPDatabaseReadyRuntimeKinds: Set<AgentRuntimeKind> = []
     private(set) var localACPAgentReconciliationError: String?
@@ -293,6 +315,15 @@ final class ApplicationModel {
     private var noteWriteBehind: DashboardNoteWriteBehind?
     private var dashboardStoreStarted = false
     private var dashboardStoreStartDeferredForNoteRecovery = false
+    @ObservationIgnored var backendRPCClient: BackendRPCClient?
+    @ObservationIgnored var backendRPCServer: BackendRPCServer?
+    @ObservationIgnored var backendApplicationService: BackendApplicationService?
+    @ObservationIgnored var backendClientTask: Task<Void, Never>?
+    @ObservationIgnored var backendStopping = false
+    @ObservationIgnored var backendCommandsInFlight = 0
+    @ObservationIgnored private var backendExecutionErrorIDs: Set<String> = []
+    @ObservationIgnored private var backendStopRequestedForLifecycle = false
+    @ObservationIgnored var isPreparedForExecutionRestart = false
     private var startupTask: Task<Void, Never>?
     private var conversationChangeTask: Task<Void, Never>?
     private var conversationChangeWorkers: [String: Task<Void, Never>] = [:]
@@ -414,6 +445,7 @@ final class ApplicationModel {
     }
 
     private func start() async {
+        if isBackendFrontend { await startBackendClient(); return }
         remoteWorkspaces.startDefaultAgentMaintenance()
         do {
             conversationChangeTask?.cancel()
@@ -449,6 +481,10 @@ final class ApplicationModel {
                 await self.refreshConversation(id: id)
             }
             Task { await openCode.restore() }
+            remoteWorkspaces.onTaskGatewayChangeRequested = { [weak self] configuration, enabled in
+                guard let self else { throw ApplicationModelError.dashboardStoreUnavailable }
+                return try await self.changeRemoteCalendarGateway(configuration, enabled: enabled)
+            }
             remoteWorkspaces.onRuntimeMaintenanceChanged = { [weak self] in
                 await self?.synchronizeRemoteOpenCodeInstances()
             }
@@ -573,10 +609,18 @@ final class ApplicationModel {
         let generation = surfaceProfilePersistenceGeneration
         surfaceProfilePersistenceTask?.cancel()
         surfaceProfilePersistenceTask = Task {
+            defer { if generation == surfaceProfilePersistenceGeneration { surfaceProfilePersistenceTask = nil } }
             do {
                 try await Task.sleep(for: .milliseconds(100))
                 try Task.checkCancellation()
-                let updated = try await dashboardStore.updateMacSurfaceProfile(next)
+                let updated: SurfaceProfile
+                if isBackendFrontend {
+                    let result = try await sendBackendCommand(.workspaceMutation(.saveSurfaceProfile(next)))
+                    guard let profile = result.surfaceProfile else { throw BackendRPCError.remote("The background service did not save these preferences.") }
+                    updated = profile
+                } else {
+                    updated = try await dashboardStore.updateMacSurfaceProfile(next)
+                }
                 guard generation == surfaceProfilePersistenceGeneration else { return }
                 macSurfaceProfile = updated
                 Self.cacheSurfaceProfile(updated)
@@ -587,6 +631,25 @@ final class ApplicationModel {
                 macSurfaceProfile = current
                 NSLog("Could not persist Mac surface profile: %@", error.localizedDescription)
             }
+        }
+    }
+
+    func saveAuthoritativeSurfaceProfile(_ profile: SurfaceProfile) async throws -> SurfaceProfile {
+        guard !isBackendFrontend, let dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
+        let updated = try await dashboardStore.updateMacSurfaceProfile(profile)
+        macSurfaceProfile = updated
+        Self.cacheSurfaceProfile(updated)
+        return updated
+    }
+
+    private func refreshBackendSurfaceProfile() async throws {
+        guard surfaceProfilePersistenceTask == nil else { return }
+        let profile = try JSONDecoder().decode(SurfaceProfile?.self,
+            from: await callBackend(method: "surfaceProfile.snapshot"))
+        guard surfaceProfilePersistenceTask == nil, let profile else { return }
+        if macSurfaceProfile != profile {
+            macSurfaceProfile = profile
+            Self.cacheSurfaceProfile(profile)
         }
     }
 
@@ -682,6 +745,10 @@ final class ApplicationModel {
     private(set) var checkingLocalSignIn = false
     private(set) var localSignInError: String?
     func refreshLocalSignInStatus() async {
+        if isBackendFrontend {
+            await performBackendRuntimeCommand(.refreshSignIn)
+            return
+        }
         guard !checkingLocalSignIn else { return }
         checkingLocalSignIn = true
         defer { checkingLocalSignIn = false }
@@ -813,6 +880,11 @@ final class ApplicationModel {
     private func enqueueConversationChange(
         _ change: DashboardConversationChange
     ) {
+        if let backendApplicationService {
+            let scopes: Set<BackendInvalidationScope>
+            switch change.phase { case .configuration, .terminal: scopes = [.runtime]; default: scopes = [] }
+            Task { await backendApplicationService.invalidations.publish(scopes: scopes, conversationIDs: [change.conversationID]) }
+        }
         if case .composerPrefill(let text) = change.phase {
             pendingComposerPrefills[change.conversationID] = text
             return
@@ -840,6 +912,7 @@ final class ApplicationModel {
             )
             return
         }
+        if LocalExecutionRole.current == .backend, change.phase == .content { return }
         if change.phase == .content,
            terminalRunIDsByConversation[change.conversationID] == change.runID {
             return
@@ -979,11 +1052,11 @@ final class ApplicationModel {
     }
 
     private func refreshWorkspace(force: Bool) async {
-        if Date().timeIntervalSince(lastOpenClawCronRefresh) >= 30 {
+        if !isBackendFrontend, Date().timeIntervalSince(lastOpenClawCronRefresh) >= 30 {
             lastOpenClawCronRefresh = Date()
             Task { await refreshOpenClawCron() }
         }
-        if Date().timeIntervalSince(lastHermesCronRefresh) >= 30 {
+        if !isBackendFrontend, Date().timeIntervalSince(lastHermesCronRefresh) >= 30 {
             lastHermesCronRefresh = Date()
             Task { await refreshHermesCron() }
         }
@@ -1006,9 +1079,18 @@ final class ApplicationModel {
                 let name = remote?.name ?? (conversation.remoteWorkspaceID == nil ? "Local workspace" : "Remote workspace")
                 return LibraryLocation(conversationID: conversation.id, name: name, root: root)
             }
-            library.synchronize(service: dashboardStore.library, locations: libraryLocations) { [weak remoteWorkspaces] id in
-                await remoteWorkspaces?.libraryConfiguration(id: id)
-            }
+            let libraryBackend: LibraryModel.BackendExecutor?
+            if isBackendFrontend {
+                libraryBackend = { [weak self] command in
+                    guard let self else { throw CancellationError() }
+                    let payload = try JSONEncoder().encode(command)
+                    let data = try await self.callBackend(method: "library.command", payload: payload)
+                    return try JSONDecoder().decode(BackendLibraryResult.self, from: data)
+                }
+            } else { libraryBackend = nil }
+            library.synchronize(service: dashboardStore.library, locations: libraryLocations,
+                remoteWorkspace: { [weak remoteWorkspaces] id in await remoteWorkspaces?.libraryConfiguration(id: id) },
+                backendExecutor: libraryBackend)
             let reconciledRunning = try await dashboardStore
                 .activeAgentConversationIDs()
             if localRunningConversationIDs != reconciledRunning {
@@ -1024,6 +1106,8 @@ final class ApplicationModel {
     }
 
     func refreshConversation(id: String) async {
+        // Presentation work belongs to the UI; execution and terminal bookkeeping stay in the backend.
+        guard LocalExecutionRole.current != .backend else { return }
         let state = ensureConversationState(id: id)
         let generation = state.beginRefresh()
         do {
@@ -1289,6 +1373,11 @@ final class ApplicationModel {
         guard workspaceOverview?.conversations.first(where: { $0.id == id })?.unread == true else { return }
         Task {
             do {
+                if isBackendFrontend {
+                    _ = try await sendBackendCommand(.workspaceMutation(.markConversationRead(id: id)))
+                    await refreshWorkspace()
+                    return
+                }
                 guard let dashboardStore else {
                     throw ApplicationModelError.dashboardStoreUnavailable
                 }
@@ -1303,6 +1392,11 @@ final class ApplicationModel {
     func createFolder(name: String) async -> String? {
         folderMutationError = nil
         do {
+            if isBackendFrontend {
+                let result = try await sendBackendCommand(.workspaceMutation(.createFolder(name: name)))
+                await refreshWorkspace()
+                return result.entityID
+            }
             guard let dashboardStore else {
                 throw ApplicationModelError.dashboardStoreUnavailable
             }
@@ -1318,6 +1412,11 @@ final class ApplicationModel {
     func renameFolder(id: String, name: String) async -> Bool {
         folderMutationError = nil
         do {
+            if isBackendFrontend {
+                let result = try await sendBackendCommand(.workspaceMutation(.renameFolder(id: id, name: name)))
+                await refreshWorkspace()
+                return result.accepted
+            }
             guard let dashboardStore else {
                 throw ApplicationModelError.dashboardStoreUnavailable
             }
@@ -1333,6 +1432,11 @@ final class ApplicationModel {
     func setFolderPinned(id: String, isPinned: Bool) async -> Bool {
         folderMutationError = nil
         do {
+            if isBackendFrontend {
+                let result = try await sendBackendCommand(.workspaceMutation(.pinFolder(id: id, isPinned: isPinned)))
+                await refreshWorkspace()
+                return result.accepted
+            }
             guard let dashboardStore else {
                 throw ApplicationModelError.dashboardStoreUnavailable
             }
@@ -1348,6 +1452,11 @@ final class ApplicationModel {
     func moveFolder(id: String, direction: WorkspaceFolderMoveDirection) async -> Bool {
         folderMutationError = nil
         do {
+            if isBackendFrontend {
+                let result = try await sendBackendCommand(.workspaceMutation(.moveFolder(id: id, up: { if case .up = direction { return true }; return false }())))
+                await refreshWorkspace()
+                return result.accepted
+            }
             guard let dashboardStore else {
                 throw ApplicationModelError.dashboardStoreUnavailable
             }
@@ -1369,6 +1478,11 @@ final class ApplicationModel {
     func deleteFolder(id: String) async -> Bool {
         folderMutationError = nil
         do {
+            if isBackendFrontend {
+                let result = try await sendBackendCommand(.workspaceMutation(.deleteFolder(id: id)))
+                await refreshWorkspace()
+                return result.accepted
+            }
             guard let dashboardStore else {
                 throw ApplicationModelError.dashboardStoreUnavailable
             }
@@ -1388,6 +1502,11 @@ final class ApplicationModel {
     func moveConversation(id: String, toFolderID folderID: String?) async -> Bool {
         folderMutationError = nil
         do {
+            if isBackendFrontend {
+                let result = try await sendBackendCommand(.workspaceMutation(.moveConversation(id: id, folderID: folderID)))
+                await refreshWorkspace()
+                return result.accepted
+            }
             guard let dashboardStore else {
                 throw ApplicationModelError.dashboardStoreUnavailable
             }
@@ -1410,6 +1529,11 @@ final class ApplicationModel {
     ) async -> String? {
         noteMutationError = nil
         do {
+            if isBackendFrontend {
+                let result = try await sendBackendCommand(.workspaceMutation(.createNote(folderID: folderID, kind: kind)))
+                await refreshWorkspace()
+                return result.entityID
+            }
             guard let dashboardStore else {
                 throw ApplicationModelError.dashboardStoreUnavailable
             }
@@ -1543,6 +1667,37 @@ final class ApplicationModel {
             noteMutationError = error.localizedDescription
             return false
         }
+    }
+
+    /// Keeps the existing 700ms coalescing and durable recovery journal, while the
+    /// backend alone commits note contents to SQLite.
+    func configureFrontendNoteWriteBehind(store: DashboardStore, supportDirectory: URL) async throws {
+        let journal = DashboardNoteDraftJournal(fileURL: supportDirectory.appending(path: "note-draft-journal.ndjson"))
+        let recovered = try journal.latestEntries()
+        let client = BackendRPCClient(socketURL: LocalExecutionRole.backendSocketURL(workspaceDirectory: supportDirectory))
+        let writer = DashboardNoteWriteBehind(journal: journal, update: { entry in
+            let command = BackendApplicationCommand.workspaceMutation(.persistNoteDraft(entry))
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            let result = try client.callSynchronously(method: "application.command", payload: encoder.encode(command),
+                requestID: entry.mutationID ?? UUID().uuidString)
+            let response = try JSONDecoder().decode(BackendApplicationResult.self, from: result)
+            guard response.accepted else { throw ApplicationModelError.noteDraftSaveFailed }
+        }, completion: { [weak self] entry, result in
+            Task { @MainActor [weak self] in self?.completeNoteWrite(entry, result: result) }
+        })
+        noteWriteBehind = writer
+        for entry in recovered {
+            let note = workspaceOverview?.notes.first { $0.id == entry.noteID }
+            noteDrafts[entry.noteID] = .recovered(from: entry, source: note)
+        }
+        try await writer.replayAndFlush(recovered)
+    }
+
+    func flushNotesBeforeBackendClientQuit() async -> Bool {
+        guard let writer = noteWriteBehind else { return true }
+        do { try await writer.flushAsync(); return true }
+        catch { noteMutationError = error.localizedDescription; return false }
     }
 
     private func completeNoteWrite(
@@ -1721,6 +1876,7 @@ final class ApplicationModel {
         _ isShown: Bool,
         runtimeKind: AgentRuntimeKind
     ) {
+        if isBackendFrontend { sendBackendRuntimeCommand(.setShown(runtimeKind, isShown)); return }
         let state = localACPRuntimePreferences.setShown(
             isShown,
             for: runtimeKind
@@ -1731,6 +1887,7 @@ final class ApplicationModel {
     func enableLocalACPRuntimeCredentialAccess(
         _ runtimeKind: AgentRuntimeKind
     ) {
+        if isBackendFrontend { sendBackendRuntimeCommand(.setCredentialAccess(runtimeKind, true)); return }
         guard runtimeInventories[runtimeKind]?.isInstalled == true,
               installingLocalACPRuntimeKinds.isEmpty else { return }
         acknowledgeCredentialAccessDisclosure()
@@ -1743,6 +1900,7 @@ final class ApplicationModel {
     func disableLocalACPRuntimeCredentialAccess(
         _ runtimeKind: AgentRuntimeKind
     ) {
+        if isBackendFrontend { sendBackendRuntimeCommand(.setCredentialAccess(runtimeKind, false)); return }
         guard enabledLocalACPRuntimeKinds.contains(runtimeKind) else {
             return
         }
@@ -1780,6 +1938,12 @@ final class ApplicationModel {
     func stageMessageAttachments(
         _ files: [(url: URL, mimeType: String)]
     ) async throws -> [AgentMessageAttachmentDraft] {
+        if isBackendFrontend {
+            return try await sendBackendCommand(.stageAttachments(files: files.map {
+                BackendAttachmentSource(url: $0.url, mimeType: $0.mimeType)
+            })).attachments ?? []
+        }
+
         guard let dashboardStore else {
             throw ApplicationModelError.dashboardStoreUnavailable
         }
@@ -1853,6 +2017,10 @@ final class ApplicationModel {
         note: WorkspaceNoteRecord? = nil,
         allowSteering: Bool = true
     ) async throws -> Bool {
+        if isBackendFrontend {
+            return try await sendBackendCommand(.sendMessage(conversationID: conversation.id, input: input, noteID: note?.id)).accepted
+        }
+
         guard let dashboardStore, let agentTools else { throw ApplicationModelError.dashboardStoreUnavailable }
         try await applyPendingSessionSelections(conversationID: conversation.id)
         guard !loadingLocalACPSessionIDs.contains(conversation.id),
@@ -1862,6 +2030,7 @@ final class ApplicationModel {
         // A scheduled task waits for an idle turn even if another send started
         // during asynchronous settings preparation.
         guard allowSteering || !runningToolSessionIDs.contains(conversation.id) else { return false }
+        guard !backendStopping else { throw BackendRPCError.remote("The background service is stopping.") }
         let decision = toolSessionAdmission.begin(conversation.id, running: runningToolSessionIDs,
             limit: agentTools.settings.maximumRunningSessions)
         if decision == .atCapacity { return false }
@@ -2070,6 +2239,9 @@ final class ApplicationModel {
             guard let configuration = remoteWorkspaces.configuration(id: workspaceID) else { return false }
             return remoteWorkspaces.isHarnessReady(runtimeKind, in: configuration)
         }
+        if isBackendFrontend {
+            return backendLaunchableRuntimeKinds.contains(runtimeKind) && localACPWorkspaceAvailability.isReady
+        }
         return localACPLaunchConfigurations[runtimeKind] != nil
             && localACPWorkspaceLaunchConfiguration != nil
     }
@@ -2077,11 +2249,20 @@ final class ApplicationModel {
     func refreshLocalACPSession(
         conversation: WorkspaceConversationRecord
     ) async {
+        if isBackendFrontend {
+            do {
+                if let metadata = try await sendBackendCommand(.sessionMetadata(conversationID: conversation.id)).metadata {
+                    localACPSessionMetadata[conversation.id] = metadata
+                }
+            } catch { ensureConversationState(id: conversation.id).setError(error.localizedDescription) }
+            return
+        }
+
         do { try await applyPendingSessionSelections(conversationID: conversation.id) }
         catch { ensureConversationState(id: conversation.id).setError(error.localizedDescription); return }
         if conversation.localRuntimeKind == .opencode {
             if let openCode = openCodeModel(for: conversation.id), openCode.isEnabled, let link = openCode.links[conversation.id] {
-                await openCode.coordinator.watch(link)
+                await openCode.watch(link)
             }
             return
         }
@@ -2170,6 +2351,18 @@ final class ApplicationModel {
         thinking: String? = nil,
         permission: String? = nil
     ) {
+        if isBackendFrontend {
+            guard updatingLocalACPSessionIDs.insert(conversation.id).inserted else { return }
+            Task {
+                defer { updatingLocalACPSessionIDs.remove(conversation.id) }
+                do {
+                    _ = try await sendBackendCommand(.configureSession(conversationID: conversation.id,
+                        model: model, thinking: thinking, permission: permission))
+                } catch { ensureConversationState(id: conversation.id).setError(error.localizedDescription) }
+            }
+            return
+        }
+
         guard let runtimeKind = conversation.localRuntimeKind,
               model != nil || thinking != nil || permission != nil else { return }
         let permission = runtimeKind == .pi ? nil : permission
@@ -2278,6 +2471,14 @@ final class ApplicationModel {
         initialTitle: String? = nil,
         nativeWorkspaceID: String? = nil
     ) async -> String? {
+        if isBackendFrontend {
+            do {
+                return try await sendBackendCommand(.createSession(runtime: runtimeKind, workspaceID: nil,
+                    conversationID: requestedConversationID ?? UUID(), workingDirectory: nativeWorkingDirectory,
+                    title: initialTitle, nativeWorkspaceID: nativeWorkspaceID)).conversationID
+            } catch { localRunError = error.localizedDescription; return nil }
+        }
+
         if runtimeKind == .hermes {
             do { try requireLocalHermesLink(openSettings: true) }
             catch { localRunError = error.localizedDescription; return nil }
@@ -2351,6 +2552,14 @@ final class ApplicationModel {
         initialTitle: String? = nil,
         nativeWorkspaceID: String? = nil
     ) async -> String? {
+        if isBackendFrontend {
+            do {
+                return try await sendBackendCommand(.createSession(runtime: target.harness.id, workspaceID: target.configuration.id,
+                    conversationID: requestedConversationID ?? UUID(), workingDirectory: nativeWorkingDirectory,
+                    title: initialTitle, nativeWorkspaceID: nativeWorkspaceID)).conversationID
+            } catch { localRunError = error.localizedDescription; return nil }
+        }
+
         guard remoteWorkspaces.isHarnessReady(
             target.harness.id,
             in: target.configuration
@@ -2446,7 +2655,8 @@ final class ApplicationModel {
                 runtimeKind: runtimeKind,
                 processWorkingDirectory: processDirectory,
                 workspaceRoot: URL(fileURLWithPath: remoteWorkspaces.remoteWorkspaceRoot(for: configuration)),
-                workingDirectory: inheritedRoot
+                workingDirectory: inheritedRoot,
+                durableChannelID: conversation.id
             )
         }
         if runtimeKind == .hermes { try requireLocalHermesLink(conversationID: conversation.id) }
@@ -2473,6 +2683,13 @@ final class ApplicationModel {
     func createBuzzWorkspaceLocalACPSession(
         enrollment: BuzzWorkspaceAgentEnrollment
     ) async -> String? {
+        if isBackendFrontend {
+            do {
+                let result = try await sendBackendWorkspaceService(.createBuzzSession(enrollment.id))
+                await refreshWorkspace()
+                return result.entityID
+            } catch { localRunError = error.localizedDescription; return nil }
+        }
         guard launchableBuzzWorkspaceEnrollmentIDs.contains(enrollment.id) else {
             localRunError = "The selected Buzz agent is not available from its linked workspace."
             return nil
@@ -2510,6 +2727,7 @@ final class ApplicationModel {
     }
 
     func refreshRuntimeInventory() {
+        if isBackendFrontend { sendBackendRuntimeCommand(.refreshInventory); return }
         guard !checkingRuntimeInventory, checkingRuntimeKinds.isEmpty, installingLocalACPRuntimeKinds.isEmpty,
               preparedLocalACPRuntimeInstall == nil else { return }
         checkingRuntimeInventory = true
@@ -2538,6 +2756,7 @@ final class ApplicationModel {
     }
 
     func checkRuntimeUpdate(_ kind: AgentRuntimeKind) {
+        if isBackendFrontend { sendBackendRuntimeCommand(.checkUpdate(kind)); return }
         guard !checkingRuntimeInventory, checkingRuntimeKinds.insert(kind).inserted else { return }
         guard installingLocalACPRuntimeKinds.isEmpty, openCode?.isInstalling != true else {
             checkingRuntimeKinds.remove(kind)
@@ -2596,6 +2815,7 @@ final class ApplicationModel {
     }
 
     func installLocalACPRuntimeComponent(_ runtimeKind: AgentRuntimeKind) {
+        if isBackendFrontend { sendBackendRuntimeCommand(.install(runtimeKind)); return }
         // Finish the initial inventory before an install invalidates its generation.
         // Otherwise the remaining runtime rows can be left without an inventory.
         guard !checkingRuntimeInventory, installingLocalACPRuntimeKinds.isEmpty, openCode?.isInstalling != true, preparedLocalACPRuntimeInstall == nil,
@@ -2621,17 +2841,22 @@ final class ApplicationModel {
     }
 
     func updateRuntime(_ kind: AgentRuntimeKind) {
+        if isBackendFrontend { sendBackendRuntimeCommand(.update(kind)); return }
         guard let definition = LocalACPRuntimeCatalog.definition(for: kind) else { return }
         performRuntimeMaintenance(definition, update: true)
     }
 
     func confirmPreparedLocalACPRuntimeInstall() {
+        if isBackendFrontend { sendBackendRuntimeCommand(.confirmInstall); return }
         guard let prepared = preparedLocalACPRuntimeInstall else { return }
         preparedLocalACPRuntimeInstall = nil
         performRuntimeMaintenance(prepared.definition, update: false, preview: prepared.preview)
     }
 
-    func cancelPreparedLocalACPRuntimeInstall() { preparedLocalACPRuntimeInstall = nil }
+    func cancelPreparedLocalACPRuntimeInstall() {
+        if isBackendFrontend { sendBackendRuntimeCommand(.cancelInstall); return }
+        preparedLocalACPRuntimeInstall = nil
+    }
 
     private func performRuntimeMaintenance(_ definition: LocalACPRuntimeDefinition, update: Bool,
                                           preview: LocalACPInstallerPreview? = nil) {
@@ -2693,6 +2918,7 @@ final class ApplicationModel {
     var pendingDefaultAgentSettingsScope: String?
     var pendingConnectionsScope: String?
     let connections = DefaultAgentSettingsModel()
+    private let backendSpeech = BackendSpeechService()
     private(set) var pendingHermesSettingsAgentID: UUID?
     private(set) var hermesGatewayConnections: [UUID: HermesGatewayConnection] = [:]
     private(set) var hermesCronJobs: [UUID: [HermesValue]] = [:]
@@ -2700,6 +2926,10 @@ final class ApplicationModel {
     private(set) var hermesResultRoutes: [UUID: [String: String]] = [:]
     private(set) var hermesCronErrors: [UUID: String] = [:]
     private(set) var isRefreshingHermesCron = false
+    private var backendLinkedHermesIDs: Set<UUID> = []
+    private var backendConnectedHermesIDs: Set<UUID> = []
+    private var backendRemoteHermesIDs: Set<UUID> = []
+    private var backendHermesCronAgentIDs: Set<UUID> = []
     private var lastHermesCronRefresh = Date.distantPast
     private(set) var remoteHermesConnections: [UUID: HermesGatewayConnection] = [:]
     private(set) var hermesGatewayCheckedAt: [UUID: Date] = [:]
@@ -2723,6 +2953,7 @@ final class ApplicationModel {
     }
 
     func isHermesGatewayLinked(agentID: UUID) -> Bool {
+        if isBackendFrontend { return backendLinkedHermesIDs.contains(agentID) }
         guard enabledLocalACPRuntimeKinds.contains(.hermes),
               let launch = localACPLaunchConfigurations[.hermes] else { return false }
         let home = launch.environment["HERMES_HOME"] ?? FileManager.default.homeDirectoryForCurrentUser.appending(path: ".hermes").path
@@ -2730,6 +2961,7 @@ final class ApplicationModel {
     }
 
     func connectHermesGateway(agentID: UUID, restart: Bool = false) async throws {
+        if isBackendFrontend { _ = try await sendBackendWorkspaceService(.connectHermes(agentID, restart: restart)); return }
         guard localCLIAgents.contains(where: { $0.id == agentID && $0.runtimeKind == .hermes }) else {
             throw HermesGatewayError.message("This Hermes agent is no longer available.")
         }
@@ -2761,19 +2993,24 @@ final class ApplicationModel {
     }
 
     func unlinkHermesGateway(agentID: UUID) {
+        if isBackendFrontend { forwardBackendWorkspaceService(.unlinkHermes(agentID)); return }
         hermesGatewayConnections[agentID] = nil
         hermesGatewayCheckedAt[agentID] = nil
         applicationDefaults.removeObject(forKey: "hermes.gateway.link." + agentID.uuidString)
     }
 
     func renameHermesAgent(agentID: UUID, displayName: String) async throws {
+        if isBackendFrontend { _ = try await sendBackendWorkspaceService(.renameHermes(agentID, displayName)); return }
         guard let dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
         try dashboardStore.database.renameHermesAgent(id: agentID, displayName: displayName)
         await refreshWorkspace()
     }
 
     var hermesCronAgents: [WorkspaceAgent] {
-        localCLIAgents.filter { $0.runtimeKind == .hermes && isHermesGatewayLinked(agentID:$0.id) }
+        if isBackendFrontend {
+            return (localCLIAgents + remoteWorkspaceAgents).filter { backendHermesCronAgentIDs.contains($0.id) }
+        }
+        return localCLIAgents.filter { $0.runtimeKind == .hermes && isHermesGatewayLinked(agentID:$0.id) }
           + remoteWorkspaceAgents.filter { agent in
               agent.runtimeKind == .hermes && agent.runtimeDeviceID.map { applicationDefaults.bool(forKey:"hermes.remote.link." + $0.uuidString) } == true
           }
@@ -2790,6 +3027,7 @@ final class ApplicationModel {
     }
 
     func refreshHermesCron() async {
+        if isBackendFrontend { _ = await forwardBackendCron(.refreshHermes); return }
         guard !isRefreshingHermesCron, let dashboardStore else { return }
         isRefreshingHermesCron = true
         lastHermesCronRefresh = Date()
@@ -2837,6 +3075,7 @@ final class ApplicationModel {
     }
 
     func continueHermesResult(agent:WorkspaceAgent,result:HermesScheduledResult) async -> String? {
+        if isBackendFrontend { return await forwardBackendCron(.continueHermes(agentID: agent.id, resultID: result.id))?.conversationID }
         guard let dashboardStore else { return nil }
         do {
             let connection=try await cronHermesConnection(agent:agent)
@@ -2863,6 +3102,7 @@ final class ApplicationModel {
     }
 
     func createHermesCron(agent:WorkspaceAgent,name:String,schedule:String,prompt:String) async -> Bool {
+        if isBackendFrontend { return await forwardBackendCron(.createHermes(agentID: agent.id, name: name, schedule: schedule, prompt: prompt))?.accepted ?? false }
         do {
             let connection=try await cronHermesConnection(agent:agent)
             let job = try await HermesSessionHistory.fetch(connection:connection,path:"/api/cron/jobs" + (try await HermesDelivery.profileQuery(connection:connection)),method:"POST",
@@ -2875,6 +3115,7 @@ final class ApplicationModel {
     }
 
     func setHermesResultRoute(agent:WorkspaceAgent, jobID:String, destination:String) async {
+        if isBackendFrontend { _ = await forwardBackendCron(.routeHermes(agentID: agent.id, jobID: jobID, destination: destination)); return }
         guard let dashboardStore else { return }
         do {
             var connection = try await cronHermesConnection(agent:agent)
@@ -2893,6 +3134,7 @@ final class ApplicationModel {
     }
 
     func changeHermesCron(agent:WorkspaceAgent,jobID:String,action:String) async {
+        if isBackendFrontend { _ = await forwardBackendCron(.changeHermes(agentID: agent.id, jobID: jobID, action: action)); return }
         guard ["pause","resume"].contains(action) else { return }
         do {
             let connection=try await cronHermesConnection(agent:agent)
@@ -2903,6 +3145,7 @@ final class ApplicationModel {
     }
 
     func stopRemoteHermes(_ configuration:RemoteWorkspaceConfiguration) async throws {
+        if isBackendFrontend { _ = try await sendBackendWorkspaceService(.stopRemoteHermes(configuration.id)); return }
         applicationDefaults.set(false,forKey:"hermes.remote.link." + configuration.id.uuidString)
         do { try await remoteWorkspaces.restartHermes(for:configuration,action:"stop") }
         catch { applicationDefaults.set(true,forKey:"hermes.remote.link." + configuration.id.uuidString);throw error }
@@ -2911,6 +3154,7 @@ final class ApplicationModel {
     }
 
     func connectRemoteHermes(_ configuration: RemoteWorkspaceConfiguration) async throws {
+        if isBackendFrontend { _ = try await sendBackendWorkspaceService(.connectRemoteHermes(configuration.id)); return }
         let connection = try await remoteWorkspaces.prepareHermesConnection(for: configuration)
         let rpc = HermesGatewayRPC(connection: connection)
         do { try await rpc.connect(); await rpc.disconnect() }
@@ -2922,6 +3166,7 @@ final class ApplicationModel {
     }
 
     func hermesGatewayConnection() async throws -> HermesGatewayConnection {
+        guard !isBackendFrontend else { throw BackendRPCError.remote("Gateway connections are owned by the background service.") }
         guard enabledLocalACPRuntimeKinds.contains(.hermes), let launch = localACPLaunchConfigurations[.hermes] else {
             throw HermesGatewayError.message("Enable Hermes in Local agent workspace, then refresh this page.")
         }
@@ -2933,6 +3178,7 @@ final class ApplicationModel {
     }
 
     func importHermesSession(connection: HermesGatewayConnection, sessionID: String) async throws {
+        guard !isBackendFrontend else { throw BackendRPCError.remote("Use the background service to import this session.") }
         guard let dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
         try requireLocalHermesLink()
         guard localCLIAgents.contains(where: { $0.runtimeKind == .hermes && hermesGatewayConnections[$0.id] == connection }) else {
@@ -2947,10 +3193,12 @@ final class ApplicationModel {
     }
 
     func refreshLocalACPRuntimesNow(checkCredentialsFor runtimeKinds: Set<AgentRuntimeKind> = []) {
+        if isBackendFrontend { sendBackendRuntimeCommand(.refreshRuntimes(runtimeKinds)); return }
         Task { await refreshLocalACPRuntimes(checkCredentialsFor: runtimeKinds) }
     }
 
     func setTitleGenerationEnabled(_ enabled: Bool) {
+        if isBackendFrontend { sendBackendRuntimeCommand(.titleEnabled(enabled)); return }
         titleGenerationSettings.isEnabled = enabled
         applicationDefaults.set(
             enabled,
@@ -2959,6 +3207,7 @@ final class ApplicationModel {
     }
 
     func setTitleGenerationModel(_ model: String) {
+        if isBackendFrontend { sendBackendRuntimeCommand(.titleModel(model)); return }
         titleGenerationSettings.model = model
         applicationDefaults.set(
             model,
@@ -2967,6 +3216,7 @@ final class ApplicationModel {
     }
 
     func setTitleGenerationThinking(_ thinking: String) {
+        if isBackendFrontend { sendBackendRuntimeCommand(.titleThinking(thinking)); return }
         titleGenerationSettings.thinking = thinking
         applicationDefaults.set(
             thinking,
@@ -2975,10 +3225,12 @@ final class ApplicationModel {
     }
 
     func refreshTitleGenerationCapabilitiesNow() {
+        if isBackendFrontend { sendBackendRuntimeCommand(.refreshTitleCapabilities); return }
         Task { await refreshTitleGenerationCapabilities() }
     }
 
     func setUpLocalACPWorkspace(homeDirectory: URL) {
+        if isBackendFrontend { sendBackendRuntimeCommand(.setUpWorkspace(homeDirectory)); return }
         Task {
             do {
                 try await localACPWorkspaceStore.setUpWorkspace(
@@ -2994,18 +3246,22 @@ final class ApplicationModel {
     }
 
     func configureLocalACPRepositories(_ repositoriesURL: URL?) {
+        if isBackendFrontend { sendBackendRuntimeCommand(.repositories(repositoriesURL)); return }
         configureWorkspaceFolder(.repositories, destination: repositoriesURL)
     }
 
     func configureLocalACPDatabases(_ databasesURL: URL?) {
+        if isBackendFrontend { sendBackendRuntimeCommand(.databases(databasesURL)); return }
         configureWorkspaceFolder(.databases, destination: databasesURL)
     }
 
     func cancelWorkspaceFolderChange() {
+        if isBackendFrontend { sendBackendRuntimeCommand(.cancelFolderChange); return }
         pendingWorkspaceFolderChange = nil
     }
 
     func confirmWorkspaceFolderChange(copyContents: Bool) {
+        if isBackendFrontend { sendBackendRuntimeCommand(.confirmFolderChange(copyContents)); return }
         guard let pending = pendingWorkspaceFolderChange else { return }
         pendingWorkspaceFolderChange = nil
         configureWorkspaceFolder(
@@ -3051,6 +3307,14 @@ final class ApplicationModel {
     }
 
     func resolveLocalACPPermission(id: UUID, optionID: String?) {
+        if isBackendFrontend {
+            Task {
+                do { _ = try await sendBackendCommand(.resolvePermission(id: id, optionID: optionID)) }
+                catch { localRunError = error.localizedDescription }
+            }
+            return
+        }
+
         guard let continuation = localACPPermissionContinuations.removeValue(forKey: id) else {
             return
         }
@@ -3062,6 +3326,14 @@ final class ApplicationModel {
         id: UUID,
         response: LocalACPInteractionResponse
     ) {
+        if isBackendFrontend {
+            Task {
+                do { _ = try await sendBackendCommand(.resolveInteraction(id: id, response: response)) }
+                catch { localRunError = error.localizedDescription }
+            }
+            return
+        }
+
         guard let continuation = localACPInteractionContinuations.removeValue(
             forKey: id
         ) else { return }
@@ -3070,6 +3342,14 @@ final class ApplicationModel {
     }
 
     func cancelLocalACPPrompt(conversationID: String) {
+        if isBackendFrontend {
+            Task {
+                do { _ = try await sendBackendCommand(.cancelSession(conversationID: conversationID)) }
+                catch { ensureConversationState(id: conversationID).setError(error.localizedDescription) }
+            }
+            return
+        }
+
         if let openCode = openCodeModel(for: conversationID), openCode.links[conversationID] != nil {
             openCode.perform { _ = try await openCode.sessionCall(conversationID, "/interrupt", method: "POST") }
             return
@@ -3106,7 +3386,7 @@ final class ApplicationModel {
         }
         LocalACPClient.terminateAllProcesses()
         PiRPCClient.terminateAllProcesses()
-        Task { for instance in openCodeInstances { await instance.coordinator.shutdown() }; await dashboardStore?.shutdownLocalACPSessions() }
+        Task { for instance in openCodeInstances { await instance.shutdown() }; await dashboardStore?.shutdownLocalACPSessions() }
     }
 
     private func requestLocalACPPermission(
@@ -3361,6 +3641,11 @@ final class ApplicationModel {
     }
 
     func refreshDatabases() async {
+        if isBackendFrontend {
+            do { _ = try await sendBackendWorkspaceService(.refreshDatabases) }
+            catch { databaseError = error.localizedDescription }
+            return
+        }
         if isRefreshingDatabases {
             databaseRefreshRequestedWhileRunning = true
             await withCheckedContinuation { continuation in
@@ -3490,6 +3775,10 @@ final class ApplicationModel {
 
     @discardableResult
     func createDatabase(sourceID: String, name: String, preference: AgentDatabasePreference) async -> String? {
+        if isBackendFrontend {
+            do { return try await sendBackendWorkspaceService(.createDatabase(sourceID: sourceID, name: name, preference: preference)).entityID }
+            catch { databaseError = error.localizedDescription; return nil }
+        }
         if sourceID == "local" { return await createLocalDatabase(name: name, preference: preference) }
         guard let configuration = remoteDatabaseConfiguration(sourceID: sourceID) else {
             databaseError = "Choose an available workspace."
@@ -3512,6 +3801,7 @@ final class ApplicationModel {
         name: String,
         preference: AgentDatabasePreference
     ) async -> String? {
+        if isBackendFrontend { return await createDatabase(sourceID: "local", name: name, preference: preference) }
         guard let root = localACPWorkspaceLaunchConfiguration?.databasesURL else {
             databaseError = "Set up the local agent workspace before creating a database."
             return nil
@@ -3535,6 +3825,10 @@ final class ApplicationModel {
 
     @discardableResult
     func registerExternalDatabase(_ url: URL) async -> String? {
+        if isBackendFrontend {
+            do { return try await sendBackendWorkspaceService(.registerDatabase(url)).entityID }
+            catch { databaseError = error.localizedDescription; return nil }
+        }
         guard let root = localACPWorkspaceLaunchConfiguration?.databasesURL else {
             databaseError = "Set up the local agent workspace before linking a database."
             return nil
@@ -3556,6 +3850,11 @@ final class ApplicationModel {
         _ preference: AgentDatabasePreference,
         database: DashboardAgentDatabase
     ) async {
+        if isBackendFrontend {
+            do { _ = try await sendBackendWorkspaceService(.databasePreference(id: database.id, preference: preference)) }
+            catch { databaseError = error.localizedDescription }
+            return
+        }
         guard updatingDatabasePreferenceIDs.insert(database.id).inserted else { return }
         defer { updatingDatabasePreferenceIDs.remove(database.id) }
         do {
@@ -3580,6 +3879,10 @@ final class ApplicationModel {
     }
 
     func linkedData(for link: DatabaseArtifactLink) async throws -> DatabaseTabularData {
+        if isBackendFrontend {
+            guard let data = try await sendBackendWorkspaceService(.databaseData(link)).data else { throw DashboardDatabaseLinkError.databaseUnavailable }
+            return data
+        }
         if let configuration = remoteDatabaseConfiguration(sourceID: link.sourceID) {
             let result = try await remoteWorkspaces.databaseData(for: link, in: configuration)
             let identity = remoteWorkspaces.databaseCatalogIdentity
@@ -3691,6 +3994,7 @@ final class ApplicationModel {
     }
 
     func setBuzzDiscoveryEnabled(_ enabled: Bool) {
+        if isBackendFrontend { forwardBackendWorkspaceService(.buzzEnabled(enabled)); return }
         applicationDefaults.set(
             enabled,
             forKey: Self.buzzDiscoveryEnabledDefaultsKey
@@ -3717,6 +4021,10 @@ final class ApplicationModel {
         workspacePath rawWorkspacePath: String,
         agentStorePath rawAgentStorePath: String
     ) async -> Bool {
+        if isBackendFrontend {
+            do { return try await sendBackendWorkspaceService(.addBuzz(name: displayName, workspacePath: rawWorkspacePath, agentStorePath: rawAgentStorePath)).success == true }
+            catch { buzzWorkspaceError = error.localizedDescription; return false }
+        }
         let cleanName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleanName.isEmpty else {
             buzzWorkspaceError = "Enter a workspace name."
@@ -3757,6 +4065,7 @@ final class ApplicationModel {
     }
 
     func discoverBuzzWorkspaceAgents(_ link: BuzzWorkspaceLink) {
+        if isBackendFrontend { forwardBackendWorkspaceService(.discoverBuzz(link.id)); return }
         guard checkingBuzzWorkspaceLinkIDs.insert(link.id).inserted else { return }
         buzzWorkspaceError = nil
         Task {
@@ -3775,6 +4084,7 @@ final class ApplicationModel {
     }
 
     func enrollBuzzWorkspaceAgent(_ candidate: BuzzWorkspaceAgentCandidate) {
+        if isBackendFrontend { forwardBackendWorkspaceService(.enrollBuzz(workspaceID: candidate.workspaceLinkID, candidateID: candidate.id)); return }
         Task {
             do {
                 guard let dashboardStore else {
@@ -3796,6 +4106,7 @@ final class ApplicationModel {
     func removeBuzzWorkspaceAgentEnrollment(
         _ enrollment: BuzzWorkspaceAgentEnrollment
     ) {
+        if isBackendFrontend { forwardBackendWorkspaceService(.removeBuzzEnrollment(enrollment.id)); return }
         guard mutatingBuzzWorkspaceEnrollmentIDs.insert(enrollment.id).inserted else {
             return
         }
@@ -3818,6 +4129,7 @@ final class ApplicationModel {
     }
 
     func deleteBuzzWorkspace(_ link: BuzzWorkspaceLink) {
+        if isBackendFrontend { forwardBackendWorkspaceService(.deleteBuzz(link.id)); return }
         guard checkingBuzzWorkspaceLinkIDs.insert(link.id).inserted else { return }
         Task {
             defer { checkingBuzzWorkspaceLinkIDs.remove(link.id) }
@@ -3837,6 +4149,7 @@ final class ApplicationModel {
     }
 
     private func refreshBuzzWorkspaces() async {
+        if isBackendFrontend { await forwardBackendWorkspaceServiceAndWait(.refreshBuzz); return }
         guard applicationDefaults.bool(
             forKey: Self.buzzDiscoveryEnabledDefaultsKey
         ) else {
@@ -3876,6 +4189,7 @@ final class ApplicationModel {
     }
 
     func renameOpenClawAgent(agentID: UUID, displayName: String) {
+        if isBackendFrontend { forwardBackendWorkspaceService(.renameOpenClaw(agentID, displayName)); return }
         guard let dashboardStore else { return }
         guard !openClawGatewayOperationAgentIDs.contains(agentID) else { return }
         let cleanName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -3902,6 +4216,7 @@ final class ApplicationModel {
     }
 
     func linkOpenClawGateway(agent: WorkspaceAgent) {
+        if isBackendFrontend { forwardBackendWorkspaceService(.linkOpenClaw(agent.id)); return }
         guard agent.runtimeKind == .openclaw, let dashboardStore else {
             openClawGatewayErrors[agent.id] = OpenClawGatewayEndpointResolutionError
                 .openClawRequired.localizedDescription
@@ -3948,6 +4263,7 @@ final class ApplicationModel {
     }
 
     func unlinkOpenClawGateway(agentID: UUID) {
+        if isBackendFrontend { forwardBackendWorkspaceService(.unlinkOpenClaw(agentID)); return }
         guard let dashboardStore else { return }
         guard openClawGatewayOperationAgentIDs.insert(agentID).inserted else { return }
         openClawGatewayOperationStatuses[agentID] = .unlinking
@@ -3969,6 +4285,7 @@ final class ApplicationModel {
     }
 
     func reconnectOpenClawGateway(agentID: UUID) {
+        if isBackendFrontend { forwardBackendWorkspaceService(.reconnectOpenClaw(agentID)); return }
         guard let existing = openClawGatewayLink(agentID: agentID),
               let agent = openClawAgent(agentID: agentID),
               let dashboardStore else { return }
@@ -4008,6 +4325,7 @@ final class ApplicationModel {
     }
 
     func restartOpenClawGateway(agentID: UUID) {
+        if isBackendFrontend { forwardBackendWorkspaceService(.restartOpenClaw(agentID)); return }
         guard let existing = openClawGatewayLink(agentID: agentID),
               let agent = openClawAgent(agentID: agentID),
               let dashboardStore else { return }
@@ -4047,6 +4365,7 @@ final class ApplicationModel {
     }
 
     func refreshOpenClawGatewayStatus(agentID: UUID) async {
+        if isBackendFrontend { await forwardBackendWorkspaceServiceAndWait(.refreshOpenClaw(agentID)); return }
         guard openClawGatewayLink(agentID: agentID) != nil,
               !openClawGatewayOperationAgentIDs.contains(agentID),
               let dashboardStore else { return }
@@ -4060,6 +4379,7 @@ final class ApplicationModel {
     }
 
     func loadOpenClawHeartbeat(agentID: UUID) async {
+        if isBackendFrontend { await forwardBackendWorkspaceServiceAndWait(.loadHeartbeat(agentID)); return }
         guard let dashboardStore else { return }
         do {
             openClawHeartbeatConfigurations[agentID] = try await dashboardStore
@@ -4076,6 +4396,7 @@ final class ApplicationModel {
         agentID: UUID,
         configuration: OpenClawHeartbeatConfiguration
     ) {
+        if isBackendFrontend { forwardBackendWorkspaceService(.saveHeartbeat(agentID, configuration)); return }
         guard let dashboardStore else { return }
         openClawHeartbeatSavingAgentIDs.insert(agentID)
         openClawHeartbeatMessages[agentID] = nil
@@ -4168,6 +4489,14 @@ final class ApplicationModel {
     }
 
     func cancelOpenClawGatewayPrompt(conversationID: String) {
+        if isBackendFrontend {
+            Task {
+                do { _ = try await sendBackendCommand(.cancelSession(conversationID: conversationID)) }
+                catch { ensureConversationState(id: conversationID).setError(error.localizedDescription) }
+            }
+            return
+        }
+
         let permissionIDs = pendingLocalACPPermissions
             .filter { $0.conversationID == conversationID }
             .map(\.id)
@@ -4196,6 +4525,7 @@ final class ApplicationModel {
         thinkingLevel: String?,
         permission: String? = nil
     ) {
+        if isBackendFrontend { forwardBackendWorkspaceService(.patchOpenClawSession(conversationID, model: model, thinking: thinkingLevel, permission: permission)); return }
         guard model != nil || thinkingLevel != nil || permission != nil else { return }
         if retryPendingSessionSelections(conversationID: conversationID,
             selections: SessionSelections(model: model, thinking: thinkingLevel, permission: permission)) { return }
@@ -4229,6 +4559,7 @@ final class ApplicationModel {
     }
 
     func refreshOpenClawGatewaySession(conversationID: String) async {
+        if isBackendFrontend { await forwardBackendWorkspaceServiceAndWait(.refreshOpenClawSession(conversationID)); return }
         guard let dashboardStore else { return }
         do {
             try await applyPendingSessionSelections(conversationID: conversationID)
@@ -4260,11 +4591,16 @@ final class ApplicationModel {
     }
 
     func openClawNativeSessions(agentID: UUID, offset: Int = 0) async throws -> (sessions: [OpenClawGatewaySession], nextOffset: Int?) {
+        if isBackendFrontend {
+            let response = try await sendBackendWorkspaceService(.openClawSessions(agentID, offset: offset))
+            return (response.openClawSessions ?? [], response.nextOffset)
+        }
         guard let dashboardStore else { throw OpenClawGatewayClientError.connectionClosed }
         return try await dashboardStore.openClawNativeSessions(agentID: agentID, offset: offset)
     }
 
     func importOpenClawSession(agentID: UUID, session: OpenClawGatewaySession) async throws {
+        if isBackendFrontend { _ = try await sendBackendWorkspaceService(.importOpenClaw(agentID, session)); return }
         guard let dashboardStore else { throw OpenClawGatewayClientError.connectionClosed }
         _ = try await dashboardStore.importOpenClawSession(agentID: agentID, session: session)
         await refreshOpenClawGateways()
@@ -4309,6 +4645,7 @@ final class ApplicationModel {
     }
 
     func refreshOpenClawCron() async {
+        if isBackendFrontend { _ = await forwardBackendCron(.refreshOpenClaw); return }
         guard !isRefreshingOpenClawCron, let dashboardStore else { return }
         isRefreshingOpenClawCron = true
         lastOpenClawCronRefresh = Date()
@@ -4328,6 +4665,14 @@ final class ApplicationModel {
     func saveOpenClawCron(agentID: UUID, job: OpenClawCronJob?, name: String, message: String,
                           expression: String, timeZone: String, declarationKey: String,
                           destination: String, preserveSchedule: Bool = false) async -> String? {
+        if isBackendFrontend {
+            guard let response = await forwardBackendCron(.saveOpenClaw(agentID: agentID, jobID: job?.id,
+                name: name, message: message, expression: expression, timeZone: timeZone,
+                declarationKey: declarationKey, destination: destination, preserveSchedule: preserveSchedule)) else {
+                return openClawCronError ?? "The background service is unavailable."
+            }
+            return response.error
+        }
         guard let dashboardStore, !openClawCronBusy else { return "Another job change is in progress." }
         openClawCronBusy = true
         defer { openClawCronBusy = false }
@@ -4351,6 +4696,7 @@ final class ApplicationModel {
     }
 
     func performOpenClawCronAction(job: OpenClawCronJob, action: String) {
+        if isBackendFrontend { Task { _ = await forwardBackendCron(.actionOpenClaw(agentID: job.agentID, jobID: job.id, action: action)) }; return }
         guard let dashboardStore, !openClawCronBusy else { return }
         openClawCronBusy = true
         Task {
@@ -4369,6 +4715,7 @@ final class ApplicationModel {
     }
 
     func setOpenClawResultRoute(job: OpenClawCronJob, destination: String) {
+        if isBackendFrontend { Task { _ = await forwardBackendCron(.routeOpenClaw(agentID: job.agentID, jobID: job.id, destination: destination)) }; return }
         guard let dashboardStore else { return }
         Task {
             do {
@@ -4381,6 +4728,7 @@ final class ApplicationModel {
     }
 
     func emptyOpenClawCronTrash() {
+        if isBackendFrontend { Task { _ = await forwardBackendCron(.emptyOpenClawTrash) }; return }
         guard let dashboardStore else { return }
         Task {
             do {
@@ -4396,6 +4744,7 @@ final class ApplicationModel {
         agentID: UUID,
         context: String? = nil
     ) async -> String? {
+        if isBackendFrontend { return await forwardBackendCron(.openClawContext(agentID: agentID, context: context))?.conversationID }
         let conversationID: String?
         if let enrollment = buzzWorkspaceSnapshot.enrollments.first(where: {
             $0.id == agentID
@@ -4457,6 +4806,9 @@ final class ApplicationModel {
     }
 
     private func apply(_ snapshot: DashboardStoreSnapshot) {
+        if let backendApplicationService, snapshot.revision != workspaceRevision {
+            Task { await backendApplicationService.invalidations.publish(scopes: [.workspace, .calendar]) }
+        }
         if loggedDashboardRecordCounts != snapshot.recordCounts {
             let counts = snapshot.recordCounts
             NSLog(
@@ -4477,7 +4829,7 @@ final class ApplicationModel {
             $0.governingPlane == .wovenmatterMacOS
                 && !($0.platformCodename?.hasPrefix("buzz-workspace:") ?? false)
         }
-        let buzzDiscoveryEnabled = applicationDefaults.bool(
+        let buzzDiscoveryEnabled = isBackendFrontend ? backendBuzzDiscoveryEnabled : applicationDefaults.bool(
             forKey: Self.buzzDiscoveryEnabledDefaultsKey
         )
         let nextBuzzWorkspaceAgents = snapshot.agents.filter {
@@ -4556,6 +4908,917 @@ enum ApplicationModelError: LocalizedError {
             "The open note could not be attached to this run. Wait for it to finish saving, then try again."
         case .noteDraftSaveFailed:
             "The latest note draft could not be saved on this Mac. Your draft is preserved; retry after saving succeeds."
+        }
+    }
+}
+
+struct BackendApplicationState: Codable, Sendable {
+    let runningConversationIDs: Set<String>
+    let metadata: [String: LocalACPSessionMetadata]
+    let permissions: [PendingLocalACPPermission]
+    let interactions: [PendingLocalACPInteraction]
+    let composerPrefills: [String: String]
+    let calendarErrors: [UUID: String]
+    let sessionAccess: [WorkspaceCoordinationAccessRequest]
+    let sessionAccessError: String?
+    let executionErrors: [String: String]
+}
+
+extension ApplicationModel {
+    // Raised only after every frontend surface has a backend route and the
+    // split-process acceptance suite passes. A partial client must never launch.
+    static var backendClientCapabilitiesComplete: Bool { true }
+    var isBackendFrontend: Bool { LocalExecutionRole.current == .frontend }
+    private var executionHasPendingOperations: Bool {
+        !installingLocalACPRuntimeKinds.isEmpty || !updatingRuntimeKinds.isEmpty
+        || !openClawGatewayOperationAgentIDs.isEmpty || !openClawHeartbeatSavingAgentIDs.isEmpty
+        || openClawCronBusy || !updatingDatabasePreferenceIDs.isEmpty
+        || !checkingBuzzWorkspaceLinkIDs.isEmpty || !mutatingBuzzWorkspaceEnrollmentIDs.isEmpty
+        || !updatingLocalACPSessionIDs.isEmpty || workspaceFolderChangeInProgress
+    }
+
+
+    func callBackend(method: String, payload: Data = Data()) async throws -> Data {
+        guard let backendRPCClient else { throw BackendRPCError.remote("The background service is not connected.") }
+        return try await backendRPCClient.call(method: method, payload: payload)
+    }
+
+    func sendBackendCommand(_ command: BackendApplicationCommand) async throws -> BackendApplicationResult {
+        try JSONDecoder().decode(BackendApplicationResult.self,
+            from: await callBackend(method: "application.command", payload: JSONEncoder().encode(command)))
+    }
+
+    func startBackendService() async {
+        do {
+            let service = BackendApplicationService(model: self,
+                completeClientRouting: Self.backendClientCapabilitiesComplete)
+            let server = BackendRPCServer(socketURL: LocalExecutionRole.backendSocketURL(workspaceDirectory: try Self.dashboardSupportDirectory()))
+            backendApplicationService = service
+            backendRPCServer = server
+            try server.start { [weak self] request in
+                guard let self else { return BackendRPCResponse(id: request.id, error: "The background service stopped.") }
+                return await self.handleBackendRequest(request)
+            }
+            observeBackendApplicationState()
+            observeBackendRemoteState()
+            observeBackendCronState()
+            observeBackendGatewaySettingsState()
+            observeBackendDatabasesState()
+            observeBackendUsageState()
+            observeBackendOpenCodeState()
+            connections.reloadStoredConnectionState()
+            observeBackendConnectionsState()
+        } catch {
+            state = .failed(error.localizedDescription)
+            NSLog("Background service could not start: %@", error.localizedDescription)
+        }
+    }
+
+    private func handleBackendRequest(_ request: BackendRPCRequest) async -> BackendRPCResponse {
+        let isCommand = request.method.hasSuffix(".command") || request.method == "speech.start"
+        guard !backendStopping else { return .init(id: request.id, error: "The background service is stopping.") }
+        if isCommand { backendCommandsInFlight += 1 }
+        defer { if isCommand { backendCommandsInFlight -= 1 } }
+        do {
+            if request.method.hasPrefix("speech.") {
+                return .init(id: request.id, result: try await backendSpeech.handle(method: request.method, payload: request.payload))
+            }
+            if request.method == "surfaceProfile.snapshot" {
+                return .init(id: request.id, result: try JSONEncoder().encode(macSurfaceProfile))
+            }
+            if request.method.hasPrefix("connections.") {
+                return .init(id: request.id, result: try await BackendConnectionsService.handle(method: request.method, payload: request.payload, model: connections))
+            }
+            if request.method == "opencode.snapshot" {
+                return .init(id: request.id, result: try JSONEncoder().encode(backendOpenCodeSnapshot()))
+            }
+            if request.method == "opencode.command" {
+                let payload = try JSONDecoder().decode(BackendOpenCodeRequest.self, from: request.payload)
+                let instance = payload.workspaceID.flatMap { remoteOpenCodes[$0] } ?? (payload.workspaceID == nil ? openCode : nil)
+                guard let instance else { throw OpenCodeError.message("This workspace's OpenCode connection is unavailable.") }
+                let result = try await BackendOpenCodeService(model: instance).execute(payload.command)
+                return .init(id: request.id, result: try JSONEncoder().encode(result))
+            }
+            if request.method == "workspaceServices.command" {
+                return .init(id: request.id, result: try await handleBackendWorkspaceServicesRequest(payload: request.payload))
+            }
+            if request.method == "gatewaySettings.snapshot" {
+                return .init(id: request.id, result: try JSONEncoder().encode(backendGatewaySettingsSnapshot()))
+            }
+            if request.method == "databases.snapshot" {
+                return .init(id: request.id, result: try JSONEncoder().encode(backendDatabasesSnapshot()))
+            }
+            if request.method == "cron.command" { return .init(id: request.id, result: try await handleBackendCronRequest(payload: request.payload)) }
+            if request.method == "cron.snapshot" { return .init(id: request.id, result: try JSONEncoder().encode(backendCronSnapshot())) }
+            if request.method == "library.command" {
+                guard let dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
+                let command = try JSONDecoder().decode(BackendLibraryCommand.self, from: request.payload)
+                let result = try await BackendLibraryService(service: dashboardStore.library).execute(command)
+                return .init(id: request.id, result: try JSONEncoder().encode(result))
+            }
+            if request.method.hasPrefix("usage.") {
+                return .init(id: request.id, result: try await usage.handleBackendRequest(request))
+            }
+            if request.method == "runtime.command" {
+                return .init(id: request.id, result: try await handleBackendRuntimeRequest(payload: request.payload))
+            }
+            if request.method == "runtime.snapshot" {
+                return .init(id: request.id, result: try JSONEncoder().encode(backendRuntimeSnapshot()))
+            }
+            if request.method == "remoteWorkspaces.snapshot" {
+                return .init(id: request.id, result: try JSONEncoder().encode(remoteWorkspaces.backendSnapshot()))
+            }
+            if request.method == "application.state" {
+                return .init(id: request.id, result: try JSONEncoder().encode(backendApplicationState()))
+            }
+            if request.method == "application.stop" {
+                guard await !backendSpeech.isActive else {
+                    throw BackendRPCError.remote("Finish dictation before stopping the background service.")
+                }
+                guard backendCommandsInFlight == 0, !executionHasPendingOperations, !connections.busy, remoteWorkspaces.busyWorkspaceIDs.isEmpty,
+                      !remoteWorkspaces.isCreating, runningToolSessionIDs.isEmpty, pendingLocalACPPermissions.isEmpty,
+                      pendingLocalACPInteractions.isEmpty, pendingSessionAccess.isEmpty else {
+                    throw BackendRPCError.remote("Wait for running sessions and pending approvals before stopping the background service.")
+                }
+                backendStopping = true
+                do {
+                    guard flushNoteDrafts() else { throw ApplicationModelError.noteDraftSaveFailed }
+                    try await prepareOpenCodeInstancesToQuit()
+                } catch { backendStopping = false; throw error }
+                Task { @MainActor in
+                    try? await Task.sleep(for: .milliseconds(150))
+                    WovenMatterLifecycleDelegate.requestTerminationAfterUpdate()
+                }
+                return .init(id: request.id, result: Data("{}".utf8))
+            }
+            guard let service = backendApplicationService else { throw BackendRPCError.remote("The background service is starting.") }
+            return await service.handle(request)
+        } catch { return .init(id: request.id, error: error.localizedDescription) }
+    }
+
+    private func backendApplicationState() -> BackendApplicationState {
+        .init(runningConversationIDs: localRunningConversationIDs, metadata: localACPSessionMetadata,
+              permissions: pendingLocalACPPermissions, interactions: pendingLocalACPInteractions,
+              composerPrefills: pendingComposerPrefills, calendarErrors: remoteCalendarGatewayErrors,
+              sessionAccess: pendingSessionAccess, sessionAccessError: sessionAccessError,
+              executionErrors: conversationStatesByID.compactMapValues { $0.error })
+    }
+
+    private func observeBackendApplicationState() {
+        withObservationTracking {
+            _ = backendApplicationState()
+            _ = backendRuntimeSnapshot()
+        } onChange: { [weak self] in
+            Task { @MainActor in
+                guard let self, let service = self.backendApplicationService else { return }
+                self.observeBackendApplicationState()
+                await service.invalidations.publish(scopes: [.runtime, .permissions])
+            }
+        }
+    }
+
+    private func observeBackendRemoteState() {
+        withObservationTracking { _ = remoteWorkspaces.backendSnapshot() } onChange: { [weak self] in
+            Task { @MainActor in
+                guard let self, let service = self.backendApplicationService else { return }
+                self.observeBackendRemoteState()
+                await service.invalidations.publish(scopes: [.remoteWorkspaces])
+            }
+        }
+    }
+    private func observeBackendUsageState() {
+        withObservationTracking { _ = usage.backendSnapshot() } onChange: { [weak self] in
+            Task { @MainActor in
+                guard let self, let service = self.backendApplicationService else { return }
+                self.observeBackendUsageState()
+                await service.invalidations.publish(scopes: [.usage])
+            }
+        }
+    }
+    private func observeBackendConnectionsState() {
+        withObservationTracking { _ = BackendConnectionsSnapshot(connections) } onChange: { [weak self] in
+            Task { @MainActor in
+                guard let self, let service = self.backendApplicationService else { return }
+                self.observeBackendConnectionsState()
+                await service.invalidations.publish(scopes: [.settings])
+            }
+        }
+    }
+    private func refreshBackendConnectionsState() async throws {
+        let snapshot = try JSONDecoder().decode(BackendConnectionsSnapshot.self,
+            from: await callBackend(method: "connections.snapshot"))
+        if snapshot != BackendConnectionsSnapshot(connections) { connections.applyBackendSnapshot(snapshot) }
+    }
+    private func refreshBackendRemoteState() async throws {
+        remoteWorkspaces.applyBackendSnapshot(try JSONDecoder().decode(RemoteWorkspacesModel.BackendSnapshot.self,
+            from: await callBackend(method: "remoteWorkspaces.snapshot")))
+    }
+
+    func startBackendClient() async {
+        do {
+            let support = try Self.dashboardSupportDirectory()
+            let client = BackendRPCClient(socketURL: LocalExecutionRole.backendSocketURL(workspaceDirectory: support))
+            backendRPCClient = client
+            // A running owner is the common path: connect directly without any
+            // launchctl subprocesses or main-thread startup waits.
+            let existing = try? await client.call(method: "application.readiness", timeout: 0.5)
+            if existing.flatMap({ try? JSONDecoder().decode(BackendApplicationReadiness.self, from: $0) }) == nil {
+                try await LocalBackgroundExecution.launchBackendProcess()
+            }
+            usage.backendRequest = { [weak self] method, payload in
+                guard let self else { throw CancellationError() }
+                return try await self.callBackend(method: method, payload: payload)
+            }
+            DictationModel.shared.backendRequest = { [weak self] method, payload in
+                guard let self else { throw CancellationError() }
+                return try await self.callBackend(method: method, payload: payload)
+            }
+            connections.backendRequest = { [weak self] method, payload in
+                guard let self else { throw CancellationError() }
+                return try await self.callBackend(method: method, payload: payload)
+            }
+            remoteWorkspaces.backendRequest = { [weak self] method, payload in
+                guard let self else { throw CancellationError() }
+                return try await self.callBackend(method: method, payload: payload)
+            }
+            var ready = false
+            for _ in 0..<100 {
+                try Task.checkCancellation()
+                if let data = try? await client.call(method: "application.readiness"),
+                   let status = try? JSONDecoder().decode(BackendApplicationReadiness.self, from: data), status.ready {
+                    guard status.protocolVersion == 1 else { throw BackendRPCError.remote("The background service needs to be updated with this app.") }
+                    guard status.completeClientRouting else {
+                        throw BackendRPCError.remote("Background execution is not ready in this build. Keep using the normal app while integration is completed.")
+                    }
+                    ready = true; break
+                }
+                try await Task.sleep(for: .milliseconds(100))
+            }
+            guard ready else { throw BackendRPCError.remote("The background service did not become ready. Try reopening Woven Matter.") }
+            let store = try DashboardStore(supportDirectory: support, readOnlyProjection: true)
+            dashboardStore = store
+            agentTools = try WorkspaceAgentToolsModel(projection: store.database) { [weak self] mutation in
+                guard let self else { throw CancellationError() }
+                let result = try await self.sendBackendCommand(.toolsMutation(mutation))
+                if result.requiresTimerPauseConfirmation { throw WorkspaceToolError.timerPauseConfirmation }
+            }
+            await refreshWorkspace()
+            try await configureFrontendNoteWriteBehind(store: store, supportDirectory: support)
+            try await refreshBackendApplicationState()
+            try await refreshBackendRemoteState()
+            try await refreshBackendCronState()
+            try await refreshBackendGatewaySettingsState()
+            try await refreshBackendDatabasesState()
+            try await refreshBackendOpenCodeState()
+            try await refreshBackendConnectionsState()
+            try await refreshBackendSurfaceProfile()
+            await usage.refreshBackendSnapshot()
+            state = .ready
+            backendClientTask?.cancel()
+            backendClientTask = Task { [weak self] in
+                var cursor: BackendInvalidationCursor?
+                while !Task.isCancelled {
+                    guard let self else { return }
+                    do {
+                        let data = try await client.call(method: "application.changes", payload: JSONEncoder().encode(cursor))
+                        let change = try JSONDecoder().decode(BackendInvalidations.self, from: data)
+                        if change.requiresReload || !change.scopes.isDisjoint(with: [.workspace, .calendar]) {
+                            await self.refreshWorkspaceIfChanged()
+                        }
+                        if change.requiresReload || !change.scopes.isDisjoint(with: [.runtime, .permissions]) {
+                            try await self.refreshBackendApplicationState()
+                        }
+                        if change.requiresReload || change.scopes.contains(.cron) { try await self.refreshBackendCronState() }
+                        if change.requiresReload || change.scopes.contains(.gatewaySettings) { try await self.refreshBackendGatewaySettingsState() }
+                        if change.requiresReload || change.scopes.contains(.databases) { try await self.refreshBackendDatabasesState() }
+                        if change.requiresReload || change.scopes.contains(.remoteWorkspaces) { try await self.refreshBackendRemoteState() }
+                        if change.requiresReload || change.scopes.contains(.openCode) { try await self.refreshBackendOpenCodeState() }
+                        if change.requiresReload || change.scopes.contains(.settings) {
+                            try await self.refreshBackendConnectionsState()
+                            try await self.refreshBackendSurfaceProfile()
+                        }
+                        if change.requiresReload || change.scopes.contains(.usage) { await self.usage.refreshBackendSnapshot() }
+                        if !change.conversationIDs.isEmpty { try await Task.sleep(for: .milliseconds(16)) }
+                        if change.requiresReload || change.scopes.contains(.settings) { try self.agentTools?.reload() }
+                        let visible = Set(self.conversationStatesByID.keys)
+                        for id in change.requiresReload ? visible : change.conversationIDs.intersection(visible) {
+                            await self.refreshConversation(id: id)
+                        }
+                        cursor = change.cursor
+                    } catch is CancellationError { return }
+                    catch {
+                        cursor = nil
+                        self.workspaceError = "Background service disconnected. Your sessions remain owned by the backend."
+                        try? await Task.sleep(for: .seconds(2))
+                    }
+                }
+            }
+        } catch { state = .failed(error.localizedDescription) }
+    }
+
+    private func refreshBackendApplicationState() async throws {
+        let snapshot = try JSONDecoder().decode(BackendApplicationState.self, from: await callBackend(method: "application.state"))
+        localRunningConversationIDs = snapshot.runningConversationIDs
+        localACPSessionMetadata = snapshot.metadata
+        pendingLocalACPPermissions = snapshot.permissions
+        pendingLocalACPInteractions = snapshot.interactions
+        consumedBackendPrefills = consumedBackendPrefills.filter { snapshot.composerPrefills[$0.key] == $0.value }
+        pendingComposerPrefills = snapshot.composerPrefills.filter { consumedBackendPrefills[$0.key] != $0.value }
+        remoteCalendarGatewayErrors = snapshot.calendarErrors
+        pendingSessionAccess = snapshot.sessionAccess
+        sessionAccessError = snapshot.sessionAccessError
+        for id in backendExecutionErrorIDs.subtracting(snapshot.executionErrors.keys) {
+            conversationStatesByID[id]?.setError(nil)
+        }
+        for (id, error) in snapshot.executionErrors { ensureConversationState(id: id).setError(error) }
+        backendExecutionErrorIDs = Set(snapshot.executionErrors.keys)
+        applyBackendRuntimeSnapshot(try JSONDecoder().decode(BackendRuntimeSnapshot.self,
+            from: await callBackend(method: "runtime.snapshot")))
+    }
+
+    func changeLocalBackgroundExecution(enabled: Bool) async throws {
+        guard !DictationModel.shared.isBusy else { throw BackendRPCError.remote("Finish dictation before switching execution modes.") }
+        guard Self.backendClientCapabilitiesComplete else { throw BackendRPCError.remote("Background execution is not ready in this build.") }
+        guard !executionHasPendingOperations, localRunningConversationIDs.isEmpty, pendingLocalACPPermissions.isEmpty,
+              pendingLocalACPInteractions.isEmpty, pendingSessionAccess.isEmpty else {
+            throw BackendRPCError.remote("Wait for running sessions and pending approvals before switching execution modes.")
+        }
+        guard await flushNotesBeforeBackendClientQuit() else { throw ApplicationModelError.noteDraftSaveFailed }
+        let previous = LocalBackgroundExecution.shared.isEnabled
+        try await LocalExecutionTransition.perform(prepare: {
+            if self.isBackendFrontend { try await self.prepareBackendForUpdate() }
+            else { try await self.prepareOpenCodeInstancesToQuit() }
+        }, commit: {
+            try LocalBackgroundExecution.shared.commitEnabled(enabled)
+        }, relaunch: {
+            try LocalBackgroundExecution.relaunchAfterCurrentProcessExits()
+        }, rollback: {
+            try LocalBackgroundExecution.shared.commitEnabled(previous)
+        }, recover: {
+            if self.isBackendFrontend { try await self.recoverBackendAfterFailedUpdate() }
+            else { await self.restoreOpenCodeInstances() }
+        })
+        isPreparedForExecutionRestart = true
+        WovenMatterLifecycleDelegate.requestTerminationAfterUpdate()
+    }
+
+    func prepareBackendForUpdate() async throws {
+        guard isBackendFrontend else { return }
+        guard await flushNotesBeforeBackendClientQuit() else { throw ApplicationModelError.noteDraftSaveFailed }
+        _ = try await callBackend(method: "application.stop")
+        backendStopRequestedForLifecycle = true
+        try await WovenMatterBackendProcess.waitForExecutionOwnerToExit(
+            leaseURL: Self.dashboardSupportDirectory().appending(path: LocalExecutionRole.backend.leaseFileName))
+        try LocalBackendSupervisor.current().suspend()
+        isPreparedForExecutionRestart = true
+    }
+
+    func recoverBackendAfterFailedUpdate() async throws {
+        isPreparedForExecutionRestart = false
+        guard isBackendFrontend else { return }
+        // A refused stop leaves the original backend in place. A successful stop
+        // releases its lease before a replacement process may take ownership.
+        if !backendStopRequestedForLifecycle,
+           let data = try? await callBackend(method: "application.readiness"),
+           let status = try? JSONDecoder().decode(BackendApplicationReadiness.self, from: data), status.ready {
+            return
+        }
+        try await WovenMatterBackendProcess.waitForExecutionOwnerToExit(
+            leaseURL: Self.dashboardSupportDirectory().appending(path: LocalExecutionRole.backend.leaseFileName))
+        try await LocalBackgroundExecution.launchBackendProcess()
+        for _ in 0..<100 {
+            if let data = try? await callBackend(method: "application.readiness"),
+               let status = try? JSONDecoder().decode(BackendApplicationReadiness.self, from: data), status.ready {
+                backendStopRequestedForLifecycle = false
+                workspaceError = nil
+                return
+            }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        throw BackendRPCError.remote("The background service could not be restarted. Reopen Woven Matter to reconnect.")
+    }
+
+}
+
+// Runtime settings are projected from the execution owner in frontend mode.
+extension ApplicationModel {
+    func backendRuntimeSnapshot() -> BackendRuntimeSnapshot {
+        BackendRuntimeSnapshot(availability: localACPRuntimeAvailability,
+            readyKinds: localACPDatabaseReadyRuntimeKinds,
+            launchableKinds: Set(localACPLaunchConfigurations.keys),
+            reconciliationError: localACPAgentReconciliationError,
+            checkingKinds: checkingLocalACPRuntimeKinds,
+            enabledKinds: enabledLocalACPRuntimeKinds, shownKinds: shownLocalACPRuntimeKinds,
+            inventories: runtimeInventories, failures: runtimeFailures, failureDetails: runtimeFailureDetails,
+            checkingInventory: checkingRuntimeInventory, checkingUpdates: checkingRuntimeKinds,
+            checkedUpdates: checkedRuntimeKinds, updatingKinds: updatingRuntimeKinds,
+            failedUpdates: failedRuntimeUpdateKinds, installingKinds: installingLocalACPRuntimeKinds,
+            installPreview: preparedLocalACPRuntimeInstall?.preview,
+            workspace: localACPWorkspaceAvailability, pendingFolder: pendingWorkspaceFolderChange?.folder,
+            pendingDestination: pendingWorkspaceFolderChange?.destination,
+            folderError: workspaceFolderChangeError, folderInProgress: workspaceFolderChangeInProgress,
+            folderRecovery: workspaceFolderRecovery, runError: localRunError,
+            signInStatuses: localSignInStatuses, checkingSignIn: checkingLocalSignIn, signInError: localSignInError,
+            titleEnabled: titleGenerationSettings.isEnabled, titleModel: titleGenerationSettings.model,
+            titleThinking: titleGenerationSettings.thinking, titleCapabilities: titleGenerationCapabilities,
+            titleStatus: titleGenerationStatus, checkingTitle: isRefreshingTitleGenerationCapabilities)
+    }
+
+    func applyBackendRuntimeSnapshot(_ value: BackendRuntimeSnapshot) {
+        localACPRuntimeAvailability = value.availability
+        localACPDatabaseReadyRuntimeKinds = value.readyKinds
+        backendLaunchableRuntimeKinds = value.launchableKinds
+        localACPAgentReconciliationError = value.reconciliationError
+        checkingLocalACPRuntimeKinds = value.checkingKinds
+        enabledLocalACPRuntimeKinds = value.enabledKinds
+        shownLocalACPRuntimeKinds = value.shownKinds
+        runtimeInventories = value.inventories
+        runtimeFailures = value.failures
+        runtimeFailureDetails = value.failureDetails
+        checkingRuntimeInventory = value.checkingInventory
+        checkingRuntimeKinds = value.checkingUpdates
+        checkedRuntimeKinds = value.checkedUpdates
+        updatingRuntimeKinds = value.updatingKinds
+        failedRuntimeUpdateKinds = value.failedUpdates
+        installingLocalACPRuntimeKinds = value.installingKinds
+        preparedLocalACPRuntimeInstall = value.installPreview.flatMap { preview in
+            LocalACPRuntimeCatalog.definition(for: preview.runtimeKind).map {
+                PreparedLocalACPRuntimeInstall(definition: $0, preview: preview)
+            }
+        }
+        localACPWorkspaceAvailability = value.workspace
+        // Public paths support UI path pickers. Never project executable launch
+        // environments or saved provider credentials into the frontend.
+        if let root = value.workspace.rootPath, let repositories = value.workspace.repositoriesPath {
+            localACPWorkspaceLaunchConfiguration = LocalACPWorkspaceLaunchConfiguration(
+                rootURL: URL(fileURLWithPath: root), repositoriesURL: URL(fileURLWithPath: repositories),
+                databasesURL: value.workspace.databasesPath.map { URL(fileURLWithPath: $0) })
+        } else { localACPWorkspaceLaunchConfiguration = nil }
+        if let folder = value.pendingFolder, let destination = value.pendingDestination {
+            pendingWorkspaceFolderChange = PendingWorkspaceFolderChange(folder: folder, destination: destination)
+        } else { pendingWorkspaceFolderChange = nil }
+        workspaceFolderChangeError = value.folderError
+        workspaceFolderChangeInProgress = value.folderInProgress
+        workspaceFolderRecovery = value.folderRecovery
+        localRunError = value.runError
+        localSignInStatuses = value.signInStatuses
+        checkingLocalSignIn = value.checkingSignIn
+        localSignInError = value.signInError
+        titleGenerationSettings = ConversationTitleGenerationSettings(isEnabled: value.titleEnabled,
+            model: value.titleModel, thinking: value.titleThinking)
+        titleGenerationCapabilities = value.titleCapabilities
+        titleGenerationStatus = value.titleStatus
+        isRefreshingTitleGenerationCapabilities = value.checkingTitle
+    }
+
+    func sendBackendRuntimeCommand(_ command: BackendRuntimeCommand) {
+        Task { await performBackendRuntimeCommand(command) }
+    }
+
+    private func performBackendRuntimeCommand(_ command: BackendRuntimeCommand) async {
+        do {
+            let payload = try JSONEncoder().encode(command)
+            let response = try await callBackend(method: "runtime.command", payload: payload)
+            applyBackendRuntimeSnapshot(try JSONDecoder().decode(BackendRuntimeSnapshot.self, from: response))
+        } catch { localRunError = error.localizedDescription }
+    }
+
+    func handleBackendRuntimeRequest(payload: Data) async throws -> Data {
+        guard !isBackendFrontend else { throw ApplicationModelError.dashboardStoreUnavailable }
+        let command = try JSONDecoder().decode(BackendRuntimeCommand.self, from: payload)
+        switch command {
+        case .refreshInventory: refreshRuntimeInventory()
+        case .checkUpdate(let kind): checkRuntimeUpdate(kind)
+        case .install(let kind): installLocalACPRuntimeComponent(kind)
+        case .update(let kind): updateRuntime(kind)
+        case .confirmInstall: confirmPreparedLocalACPRuntimeInstall()
+        case .cancelInstall: cancelPreparedLocalACPRuntimeInstall()
+        case .refreshRuntimes(let kinds): refreshLocalACPRuntimesNow(checkCredentialsFor: kinds)
+        case .refreshSignIn: await refreshLocalSignInStatus()
+        case .setShown(let kind, let shown): setLocalACPRuntimeShown(shown, runtimeKind: kind)
+        case .setCredentialAccess(let kind, let enabled):
+            if enabled { enableLocalACPRuntimeCredentialAccess(kind) }
+            else { disableLocalACPRuntimeCredentialAccess(kind) }
+        case .setUpWorkspace(let url): setUpLocalACPWorkspace(homeDirectory: url)
+        case .repositories(let url): configureLocalACPRepositories(url)
+        case .databases(let url): configureLocalACPDatabases(url)
+        case .confirmFolderChange(let copy): confirmWorkspaceFolderChange(copyContents: copy)
+        case .cancelFolderChange: cancelWorkspaceFolderChange()
+        case .titleEnabled(let enabled): setTitleGenerationEnabled(enabled)
+        case .titleModel(let model): setTitleGenerationModel(model)
+        case .titleThinking(let thinking): setTitleGenerationThinking(thinking)
+        case .refreshTitleCapabilities: refreshTitleGenerationCapabilitiesNow()
+        }
+        return try JSONEncoder().encode(backendRuntimeSnapshot())
+    }
+}
+
+
+extension ApplicationModel {
+    func backendCronSnapshot() -> BackendCronSnapshot {
+        .init(hermesAgentIDs: Set(hermesCronAgents.map(\.id)), hermesJobs: hermesCronJobs,
+              hermesResults: hermesCronResults, hermesRoutes: hermesResultRoutes,
+              hermesErrors: hermesCronErrors, refreshingHermes: isRefreshingHermesCron,
+              openClawJobs: openClawCronJobs, openClawRuns: openClawCronRuns,
+              openClawRoutes: openClawResultRoutes, refreshingOpenClaw: isRefreshingOpenClawCron,
+              openClawBusy: openClawCronBusy, openClawError: openClawCronError)
+    }
+
+    func applyBackendCronSnapshot(_ value: BackendCronSnapshot) {
+        backendHermesCronAgentIDs = value.hermesAgentIDs
+        hermesCronJobs = value.hermesJobs
+        hermesCronResults = value.hermesResults
+        hermesResultRoutes = value.hermesRoutes
+        hermesCronErrors = value.hermesErrors
+        isRefreshingHermesCron = value.refreshingHermes
+        openClawCronJobs = value.openClawJobs
+        openClawCronRuns = value.openClawRuns
+        openClawResultRoutes = value.openClawRoutes
+        isRefreshingOpenClawCron = value.refreshingOpenClaw
+        openClawCronBusy = value.openClawBusy
+        openClawCronError = value.openClawError
+    }
+
+    private func forwardBackendCron(_ command: BackendCronCommand) async -> BackendCronResponse? {
+        do {
+            let data = try await callBackend(method: "cron.command", payload: JSONEncoder().encode(command))
+            let response = try JSONDecoder().decode(BackendCronResponse.self, from: data)
+            applyBackendCronSnapshot(response.snapshot)
+            return response
+        } catch {
+            openClawCronError = error.localizedDescription
+            for id in backendHermesCronAgentIDs { hermesCronErrors[id] = error.localizedDescription }
+            return nil
+        }
+    }
+
+    func handleBackendCronRequest(payload: Data) async throws -> Data {
+        guard !isBackendFrontend else { throw BackendRPCError.unavailable }
+        let command = try JSONDecoder().decode(BackendCronCommand.self, from: payload)
+        func agent(_ id: UUID) throws -> WorkspaceAgent {
+            guard let agent = hermesCronAgents.first(where: { $0.id == id }) else {
+                throw BackendRPCError.remote("This Hermes agent is no longer available.")
+            }
+            return agent
+        }
+        func job(_ agentID: UUID, _ id: String) throws -> OpenClawCronJob {
+            guard let job = openClawCronJobs.first(where: { $0.agentID == agentID && $0.id == id }) else {
+                throw BackendRPCError.remote("This scheduled job is no longer available. Refresh before trying again.")
+            }
+            return job
+        }
+        var accepted = true
+        var conversationID: String?
+        var error: String?
+        switch command {
+        case .refreshHermes: await refreshHermesCron()
+        case let .continueHermes(id, resultID):
+            guard let result = hermesCronResults[id]?.first(where: { $0.id == resultID }) else {
+                throw BackendRPCError.remote("This scheduled result is no longer available.")
+            }
+            conversationID = await continueHermesResult(agent: try agent(id), result: result)
+            accepted = conversationID != nil
+        case let .createHermes(id, name, schedule, prompt):
+            accepted = await createHermesCron(agent: try agent(id), name: name, schedule: schedule, prompt: prompt)
+        case let .routeHermes(id, jobID, destination):
+            await setHermesResultRoute(agent: try agent(id), jobID: jobID, destination: destination)
+        case let .changeHermes(id, jobID, action):
+            await changeHermesCron(agent: try agent(id), jobID: jobID, action: action)
+        case .refreshOpenClaw: await refreshOpenClawCron()
+        case let .saveOpenClaw(id, jobID, name, message, expression, zone, key, destination, preserve):
+            error = await saveOpenClawCron(agentID: id, job: try jobID.map { try job(id, $0) },
+                name: name, message: message, expression: expression, timeZone: zone,
+                declarationKey: key, destination: destination, preserveSchedule: preserve)
+            accepted = error == nil
+        case let .actionOpenClaw(id, jobID, action): performOpenClawCronAction(job: try job(id, jobID), action: action)
+        case let .routeOpenClaw(id, jobID, destination): setOpenClawResultRoute(job: try job(id, jobID), destination: destination)
+        case .emptyOpenClawTrash: emptyOpenClawCronTrash()
+        case let .openClawContext(id, context):
+            conversationID = await createOpenClawContextConversation(agentID: id, context: context)
+            accepted = conversationID != nil
+        }
+        return try JSONEncoder().encode(BackendCronResponse(snapshot: backendCronSnapshot(),
+            accepted: accepted, conversationID: conversationID, error: error))
+    }
+}
+
+
+extension ApplicationModel {
+    private func backendOpenCodeSnapshot() -> [BackendOpenCodeWorkspaceSnapshot] {
+        openCodeInstances.map { .init(ownerDeviceID: $0.ownerDeviceID,
+            configuration: $0.remoteConfiguration, state: $0.backendSnapshot()) }
+    }
+
+    private func observeBackendOpenCodeState() {
+        withObservationTracking { _ = backendOpenCodeSnapshot() } onChange: { [weak self] in
+            Task { @MainActor in
+                guard let self, let service = self.backendApplicationService else { return }
+                try? await Task.sleep(for: .milliseconds(33))
+                self.observeBackendOpenCodeState()
+                await service.invalidations.publish(scopes: [.openCode])
+            }
+        }
+    }
+
+    private func refreshBackendOpenCodeState() async throws {
+        guard isBackendFrontend, let dashboardStore else { return }
+        let states = try JSONDecoder().decode([BackendOpenCodeWorkspaceSnapshot].self,
+            from: await callBackend(method: "opencode.snapshot"))
+        var retainedRemoteIDs = Set<UUID>()
+        var hasLocal = false
+        for item in states {
+            let existing = item.configuration.map { remoteOpenCodes[$0.id] } ?? openCode
+            let instance: OpenCodeModel
+            if let existing, existing.isBackendProjection, existing.remoteConfiguration == item.configuration {
+                instance = existing
+            } else {
+                instance = OpenCodeModel(store: dashboardStore, ownerDeviceID: item.ownerDeviceID,
+                    defaults: applicationDefaults, remoteConfiguration: item.configuration,
+                    remoteWorkspaces: remoteWorkspaces, backendRequest: { [weak self] method, payload in
+                        guard let self else { throw CancellationError() }
+                        return try await self.callBackend(method: method, payload: payload)
+                    })
+            }
+            instance.applyBackendSnapshot(item.state)
+            instance.hydrateBackendSessions(Set(conversationStatesByID.keys))
+            if let configuration = item.configuration {
+                retainedRemoteIDs.insert(configuration.id)
+                if remoteOpenCodes[configuration.id] !== instance { remoteOpenCodes[configuration.id] = instance }
+            } else {
+                hasLocal = true
+                if openCode !== instance { openCode = instance }
+            }
+        }
+        if !hasLocal { openCode = nil }
+        for id in Array(remoteOpenCodes.keys) where !retainedRemoteIDs.contains(id) { remoteOpenCodes.removeValue(forKey: id) }
+    }
+}
+
+extension ApplicationModel {
+    func isHermesGatewayConnected(agentID: UUID) -> Bool {
+        isBackendFrontend ? backendConnectedHermesIDs.contains(agentID) : hermesGatewayConnections[agentID] != nil
+    }
+
+    func isRemoteHermesGatewayConnected(workspaceID: UUID) -> Bool {
+        isBackendFrontend ? backendRemoteHermesIDs.contains(workspaceID) : remoteHermesConnections[workspaceID] != nil
+    }
+
+    func hermesProfileApproval(agentID: UUID?, workspaceID: UUID?, mode: HermesProfileApprovalMode?) async throws -> String {
+        if isBackendFrontend {
+            guard let value = try await sendBackendWorkspaceService(.hermesApprovals(agentID: agentID,
+                workspaceID: workspaceID, mode: mode?.rawValue)).approvalMode else { throw BackendRPCError.invalidFrame }
+            return value
+        }
+        let connection: HermesGatewayConnection?
+        if let workspaceID { connection = remoteHermesConnections[workspaceID] }
+        else if let agentID { connection = hermesGatewayConnections[agentID] }
+        else { connection = nil }
+        guard let connection else { throw BackendRPCError.remote("Connect this Hermes Gateway first.") }
+        if let mode { return try await HermesProfileApprovals.set(mode, connection: connection) }
+        return try await HermesProfileApprovals.read(connection: connection)
+    }
+
+    func availableHermesSessions(agentID: UUID) async throws -> [HermesValue] {
+        if isBackendFrontend {
+            return try await sendBackendWorkspaceService(.hermesSessions(agentID)).hermesSessions ?? []
+        }
+        guard let connection = hermesGatewayConnections[agentID] else {
+            throw BackendRPCError.remote("Connect this Hermes Gateway first.")
+        }
+        let rpc = HermesGatewayRPC(connection: connection)
+        do {
+            try await rpc.connect()
+            let fetched = try await rpc.call("session.list", ["limit": .number(100)])["sessions"].array
+            await rpc.disconnect()
+            let known = try knownHermesSessions(home: connection.home)
+            return fetched.filter { !known.contains($0["id"].text) }
+        } catch {
+            await rpc.disconnect()
+            invalidateHermesGatewayConnection(agentID: agentID, expected: connection)
+            throw error
+        }
+    }
+
+    func importHermesSession(agentID: UUID, sessionID: String) async throws {
+        if isBackendFrontend { _ = try await sendBackendWorkspaceService(.importHermes(agentID, sessionID)); return }
+        guard let connection = hermesGatewayConnections[agentID] else {
+            throw BackendRPCError.remote("Connect this Hermes Gateway first.")
+        }
+        try await importHermesSession(connection: connection, sessionID: sessionID)
+    }
+
+    func backendGatewaySettingsSnapshot() -> BackendGatewaySettingsSnapshot {
+        .init(buzzEnabled: applicationDefaults.bool(forKey: Self.buzzDiscoveryEnabledDefaultsKey),
+              buzzLinks: buzzWorkspaceSnapshot.links, buzzEnrollments: buzzWorkspaceSnapshot.enrollments,
+              buzzCandidates: buzzWorkspaceCandidates, buzzLaunchable: launchableBuzzWorkspaceEnrollmentIDs,
+              buzzChecking: checkingBuzzWorkspaceLinkIDs, buzzMutating: mutatingBuzzWorkspaceEnrollmentIDs,
+              buzzBoundConversations: buzzBoundLocalACPConversationIDs, buzzAgents: buzzWorkspaceAgents, buzzError: buzzWorkspaceError,
+              linkedHermesIDs: Set(localCLIAgents.filter { isHermesGatewayLinked(agentID: $0.id) }.map(\.id)),
+              connectedHermesIDs: Set(hermesGatewayConnections.keys), remoteHermesIDs: Set(remoteHermesConnections.keys),
+              hermesCheckedAt: hermesGatewayCheckedAt, links: openClawGatewayLinks,
+              conversationIDs: openClawGatewayConversationIDs, errors: openClawGatewayErrors,
+              notices: openClawGatewayNotices, operations: openClawGatewayOperationAgentIDs,
+              statuses: openClawGatewayOperationStatuses, heartbeats: openClawHeartbeatConfigurations,
+              heartbeatMessages: openClawHeartbeatMessages, heartbeatErrors: openClawHeartbeatErrorAgentIDs,
+              heartbeatSaving: openClawHeartbeatSavingAgentIDs, metadata: openClawGatewaySessionMetadata)
+    }
+
+    func applyBackendGatewaySettingsSnapshot(_ value: BackendGatewaySettingsSnapshot) {
+        backendBuzzDiscoveryEnabled = value.buzzEnabled
+        buzzWorkspaceSnapshot = .init(links: value.buzzLinks, enrollments: value.buzzEnrollments)
+        buzzWorkspaceCandidates = value.buzzCandidates
+        launchableBuzzWorkspaceEnrollmentIDs = value.buzzLaunchable
+        checkingBuzzWorkspaceLinkIDs = value.buzzChecking
+        mutatingBuzzWorkspaceEnrollmentIDs = value.buzzMutating
+        buzzBoundLocalACPConversationIDs = value.buzzBoundConversations
+        buzzWorkspaceAgents = value.buzzAgents
+        buzzWorkspaceError = value.buzzError
+        backendLinkedHermesIDs = value.linkedHermesIDs
+        backendConnectedHermesIDs = value.connectedHermesIDs
+        backendRemoteHermesIDs = value.remoteHermesIDs
+        hermesGatewayCheckedAt = value.hermesCheckedAt
+        openClawGatewayLinks = value.links
+        openClawGatewayConversationIDs = value.conversationIDs
+        openClawGatewayErrors = value.errors
+        openClawGatewayNotices = value.notices
+        openClawGatewayOperationAgentIDs = value.operations
+        openClawGatewayOperationStatuses = value.statuses
+        openClawHeartbeatConfigurations = value.heartbeats
+        openClawHeartbeatMessages = value.heartbeatMessages
+        openClawHeartbeatErrorAgentIDs = value.heartbeatErrors
+        openClawHeartbeatSavingAgentIDs = value.heartbeatSaving
+        openClawGatewaySessionMetadata = value.metadata
+    }
+
+    func backendDatabasesSnapshot() -> BackendDatabasesSnapshot {
+        .init(catalog: databasesSnapshot, refreshing: isRefreshingDatabases,
+              updating: updatingDatabasePreferenceIDs, error: databaseError)
+    }
+
+    func applyBackendDatabasesSnapshot(_ value: BackendDatabasesSnapshot) {
+        databasesSnapshot = value.catalog
+        isRefreshingDatabases = value.refreshing
+        updatingDatabasePreferenceIDs = value.updating
+        databaseError = value.error
+    }
+
+    private func sendBackendWorkspaceService(_ command: BackendWorkspaceServiceCommand) async throws -> BackendWorkspaceServiceResponse {
+        let data = try await callBackend(method: "workspaceServices.command", payload: JSONEncoder().encode(command))
+        let response = try JSONDecoder().decode(BackendWorkspaceServiceResponse.self, from: data)
+        if let gateway = response.gateway { applyBackendGatewaySettingsSnapshot(gateway) }
+        if let databases = response.databases { applyBackendDatabasesSnapshot(databases) }
+        return response
+    }
+
+    private func forwardBackendWorkspaceService(_ command: BackendWorkspaceServiceCommand) {
+        Task { await forwardBackendWorkspaceServiceAndWait(command) }
+    }
+
+    private func forwardBackendWorkspaceServiceAndWait(_ command: BackendWorkspaceServiceCommand) async {
+        do { _ = try await sendBackendWorkspaceService(command) }
+        catch { localRunError = error.localizedDescription }
+    }
+
+    func handleBackendWorkspaceServicesRequest(payload: Data) async throws -> Data {
+        guard !isBackendFrontend else { throw BackendRPCError.unavailable }
+        let command = try JSONDecoder().decode(BackendWorkspaceServiceCommand.self, from: payload)
+        func workspace(_ id: UUID) throws -> RemoteWorkspaceConfiguration {
+            guard let configuration = remoteWorkspaces.configuration(id: id) else {
+                throw BackendRPCError.remote("This remote workspace is no longer available.")
+            }
+            return configuration
+        }
+        var response = BackendWorkspaceServiceResponse()
+        var databaseCommand = false
+        switch command {
+        case .openCodeSettingsAgent(let id): response.agent = try await openCodeSettingsAgent(workspaceID: id)
+        case .renameOpenCode(let id, let name): try await renameOpenCodeAgent(agentID: id, displayName: name)
+        case .remoteOpenClawAgent(let id): response.entityID = try await remoteOpenClawAgentID(for: workspace(id)).uuidString
+        case .consumePrefill(let id, let expected):
+            if pendingComposerPrefills[id] == expected { pendingComposerPrefills.removeValue(forKey: id) }
+        case .buzzEnabled(let enabled): setBuzzDiscoveryEnabled(enabled)
+        case .refreshBuzz: await refreshBuzzWorkspaces()
+        case .addBuzz(let name, let path, let store):
+            response.success = await addLocalBuzzWorkspace(displayName: name, workspacePath: path, agentStorePath: store)
+        case .createBuzzSession(let id):
+            guard let enrollment = buzzWorkspaceAgentEnrollments.first(where: { $0.id == id }) else { throw BackendRPCError.remote("This Buzz enrollment is no longer available.") }
+            response.entityID = await createBuzzWorkspaceLocalACPSession(enrollment: enrollment)
+            if response.entityID == nil { throw BackendRPCError.remote(localRunError ?? "This Buzz agent could not start a session.") }
+        case .discoverBuzz(let id):
+            guard let link = buzzWorkspaceLinks.first(where: { $0.id == id }) else { throw BackendRPCError.remote("This Buzz workspace is no longer available.") }
+            discoverBuzzWorkspaceAgents(link)
+        case .enrollBuzz(let id, let candidateID):
+            guard let candidate = buzzWorkspaceCandidates[id]?.first(where: { $0.id == candidateID }) else { throw BackendRPCError.remote("Refresh this Buzz workspace before enrolling this agent.") }
+            enrollBuzzWorkspaceAgent(candidate)
+        case .removeBuzzEnrollment(let id):
+            guard let enrollment = buzzWorkspaceAgentEnrollments.first(where: { $0.id == id }) else { throw BackendRPCError.remote("This Buzz enrollment is no longer available.") }
+            removeBuzzWorkspaceAgentEnrollment(enrollment)
+        case .deleteBuzz(let id):
+            guard let link = buzzWorkspaceLinks.first(where: { $0.id == id }) else { throw BackendRPCError.remote("This Buzz workspace is no longer available.") }
+            deleteBuzzWorkspace(link)
+        case let .connectHermes(id, restart): try await connectHermesGateway(agentID: id, restart: restart)
+        case let .unlinkHermes(id): unlinkHermesGateway(agentID: id)
+        case let .renameHermes(id, name): try await renameHermesAgent(agentID: id, displayName: name)
+        case let .connectRemoteHermes(id): try await connectRemoteHermes(workspace(id))
+        case let .stopRemoteHermes(id): try await stopRemoteHermes(workspace(id))
+        case let .hermesApprovals(agentID, workspaceID, raw):
+            let mode = raw.flatMap(HermesProfileApprovalMode.init(rawValue:))
+            guard raw == nil || mode != nil else { throw BackendRPCError.remote("Unknown Hermes approval mode.") }
+            response.approvalMode = try await hermesProfileApproval(agentID: agentID, workspaceID: workspaceID, mode: mode)
+        case let .hermesSessions(id): response.hermesSessions = try await availableHermesSessions(agentID: id)
+        case let .importHermes(id, session): try await importHermesSession(agentID: id, sessionID: session)
+        case let .renameOpenClaw(id, name): renameOpenClawAgent(agentID: id, displayName: name)
+        case let .linkOpenClaw(id):
+            guard let agent = openClawAgent(agentID: id) else { throw BackendRPCError.remote("This agent is no longer available.") }
+            linkOpenClawGateway(agent: agent)
+        case let .unlinkOpenClaw(id): unlinkOpenClawGateway(agentID: id)
+        case let .reconnectOpenClaw(id): reconnectOpenClawGateway(agentID: id)
+        case let .restartOpenClaw(id): restartOpenClawGateway(agentID: id)
+        case let .refreshOpenClaw(id): await refreshOpenClawGatewayStatus(agentID: id)
+        case let .loadHeartbeat(id): await loadOpenClawHeartbeat(agentID: id)
+        case let .saveHeartbeat(id, configuration): saveOpenClawHeartbeat(agentID: id, configuration: configuration)
+        case let .patchOpenClawSession(id, model, thinking, permission):
+            patchOpenClawGatewaySession(conversationID: id, model: model, thinkingLevel: thinking, permission: permission)
+        case let .refreshOpenClawSession(id): await refreshOpenClawGatewaySession(conversationID: id)
+        case let .openClawSessions(id, offset):
+            let result = try await openClawNativeSessions(agentID: id, offset: offset)
+            response.openClawSessions = result.sessions; response.nextOffset = result.nextOffset
+        case let .importOpenClaw(id, session): try await importOpenClawSession(agentID: id, session: session)
+        case .refreshDatabases: databaseCommand = true; await refreshDatabases()
+        case let .createDatabase(sourceID, name, preference):
+            databaseCommand = true
+            response.entityID = await createDatabase(sourceID: sourceID, name: name, preference: preference)
+        case let .registerDatabase(url): databaseCommand = true; response.entityID = await registerExternalDatabase(url)
+        case let .databasePreference(id, preference):
+            databaseCommand = true
+            guard let database = databasesSnapshot.databases.first(where: { $0.id == id }) else {
+                throw BackendRPCError.remote("This database is no longer available. Refresh before trying again.")
+            }
+            await updateDatabasePreference(preference, database: database)
+        case let .databaseData(link): databaseCommand = true; response.data = try await linkedData(for: link)
+        }
+        if databaseCommand { response.databases = backendDatabasesSnapshot() }
+        else { response.gateway = backendGatewaySettingsSnapshot() }
+        return try JSONEncoder().encode(response)
+    }
+}
+
+
+extension ApplicationModel {
+    private func observeBackendCronState() {
+        withObservationTracking { _ = backendCronSnapshot() } onChange: { [weak self] in
+            Task { @MainActor in
+                guard let self, let service = self.backendApplicationService else { return }
+                self.observeBackendCronState()
+                await service.invalidations.publish(scopes: [.cron])
+            }
+        }
+    }
+
+    private func observeBackendGatewaySettingsState() {
+        withObservationTracking { _ = backendGatewaySettingsSnapshot() } onChange: { [weak self] in
+            Task { @MainActor in
+                guard let self, let service = self.backendApplicationService else { return }
+                self.observeBackendGatewaySettingsState()
+                await service.invalidations.publish(scopes: [.gatewaySettings])
+            }
+        }
+    }
+
+    private func observeBackendDatabasesState() {
+        withObservationTracking { _ = backendDatabasesSnapshot() } onChange: { [weak self] in
+            Task { @MainActor in
+                guard let self, let service = self.backendApplicationService else { return }
+                self.observeBackendDatabasesState()
+                await service.invalidations.publish(scopes: [.databases])
+            }
+        }
+    }
+
+    private func refreshBackendCronState() async throws {
+        applyBackendCronSnapshot(try JSONDecoder().decode(BackendCronSnapshot.self,
+            from: await callBackend(method: "cron.snapshot")))
+    }
+
+    private func refreshBackendGatewaySettingsState() async throws {
+        applyBackendGatewaySettingsSnapshot(try JSONDecoder().decode(BackendGatewaySettingsSnapshot.self,
+            from: await callBackend(method: "gatewaySettings.snapshot")))
+    }
+
+    private func refreshBackendDatabasesState() async throws {
+        applyBackendDatabasesSnapshot(try JSONDecoder().decode(BackendDatabasesSnapshot.self,
+            from: await callBackend(method: "databases.snapshot")))
+    }
+}
+
+
+extension ApplicationModel {
+    func consumeComposerPrefill(conversationID: String, expected: String) {
+        guard pendingComposerPrefills[conversationID] == expected else { return }
+        pendingComposerPrefills.removeValue(forKey: conversationID)
+        if isBackendFrontend {
+            consumedBackendPrefills[conversationID] = expected
+            forwardBackendWorkspaceService(.consumePrefill(conversationID, expected))
         }
     }
 }

@@ -3,7 +3,7 @@ import WovenMatterCore
 
 /// Inventory follows the executable selected for launch, including nested SDKs.
 /// A standalone CLI version is never used as the adapter's engine version.
-public struct RuntimeComponent: Equatable, Sendable {
+public struct RuntimeComponent: Codable, Equatable, Sendable {
     public let name: String
     public let executable: URL?
     public let installed: String?
@@ -19,7 +19,7 @@ public struct RuntimeComponent: Equatable, Sendable {
     }
 }
 
-public struct RuntimeInventory: Equatable, Sendable {
+public struct RuntimeInventory: Codable, Equatable, Sendable {
     public let kind: AgentRuntimeKind
     public let components: [RuntimeComponent]
     public let limitation: String?

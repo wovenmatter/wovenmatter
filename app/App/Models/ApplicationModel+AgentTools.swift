@@ -128,6 +128,13 @@ extension ApplicationModel {
     }
 
     func resolveSessionToolAccess(id: String, allowed: Bool) {
+        if isBackendFrontend {
+            Task {
+                do { _ = try await sendBackendCommand(.resolveSessionAccess(id: id, allowed: allowed)) }
+                catch { sessionAccessError = error.localizedDescription }
+            }
+            return
+        }
         guard let database = dashboardStore?.database else { return }
         do {
             let outcome = try database.resolveCoordinationAccess(requestID: id, allowed: allowed)

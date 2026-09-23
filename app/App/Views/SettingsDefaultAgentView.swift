@@ -7,7 +7,7 @@ struct SettingsDefaultAgentView: View {
     var initialScope = "global"
     var reservesRailControlSpace = false
     let onBack: () -> Void
-    @State private var agent = DefaultAgentSettingsModel()
+    private var agent: DefaultAgentSettingsModel { model.connections }
     @State private var modelSearch = ""
     @State private var connectionFilter = ""
     @State private var labFilter = ""

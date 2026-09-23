@@ -60,7 +60,7 @@ let package = Package(
       dependencies: ["WovenMatterCore", "WovenMatterClient"],
       path: "App",
       sources: [
-        "Models/DictationModel.swift", "Services/DictationAudioCapture.swift",
+        "Models/DictationModel.swift", "Models/BackendSpeechService.swift", "Services/DictationAudioCapture.swift",
         "Services/DictationEditor.swift", "Tests/DictationTests.swift"
       ]
     ),
@@ -81,7 +81,7 @@ let package = Package(
         "Models/WorkspaceAgentToolsModel.swift", "Models/WorkspaceAgentToolsModel+Calendar.swift", "Services/WovenMatterToolService.swift",
         "Services/WovenNoteService.swift", "Services/WovenMatterRemoteToolBridge.swift",
         "Tests/WorkspaceAgentToolsServiceTests.swift",
-        "Models/LibraryModel.swift", "Tests/LibraryModelTests.swift"
+        "Models/LibraryModel.swift", "Models/BackendLibraryService.swift", "Tests/LibraryModelTests.swift"
       ]
     )
   ]
