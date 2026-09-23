@@ -32,8 +32,8 @@ struct SettingsGeneralView: View {
             onBack: onBack
         ) {
             appearanceCard
-            backgroundExecutionCard
             releaseUpdateCard
+            backgroundExecutionCard
             dictationCard
             conversationTitlesCard
             if let tools = model.agentTools { WorkspaceToolDefaultsCard(tools: tools) }
