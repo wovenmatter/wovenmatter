@@ -1,8 +1,21 @@
+import { createHash } from 'node:crypto';
 import { CredentialVault, sharedCredentials, sharedAccounts } from './vault.mjs';
 import { join } from 'node:path';
 import { appendFile, readFile, readdir } from 'node:fs/promises';
-import { operationErrorMessage, readJSON, validateConfig, writePrivateJSON } from './config.mjs';
+import { DefaultAgentError, operationErrorMessage, readJSON, validateConfig, writePrivateJSON } from './config.mjs';
 import { PermissionRequests } from './permissions.mjs';
+
+// Object-key order does not change a retry's identity. Store only the digest,
+// not a second copy of the prompt or configuration.
+function requestFingerprint(message) {
+  const ordered = value => Array.isArray(value) ? value.map(ordered)
+    : value && typeof value === 'object'
+      ? Object.fromEntries(Object.keys(value).sort().map(key => [key, ordered(value[key])])) : value;
+  return createHash('sha256').update(JSON.stringify(ordered({ method: message.method, params: message.params ?? {} }))).digest('hex');
+}
+function verifyRetry(stored, fingerprint) {
+  if (stored.fingerprint !== fingerprint) throw new DefaultAgentError('This run identifier belongs to a different request. Reconnect to the original run or send a new message.');
+}
 
 // Owned by the workspace service. Requests only attach to runs; disconnecting a
 // reader never cancels the SDK session. Journals support replay after reconnect.
@@ -42,15 +55,20 @@ export function createDefaultAgentService({ cwd, directory }) {
     if (!vault.unlocked) return { locked: true, providers: [], models: [], searchConfigured: false };
     return { ...(await (await engine()).status()), locked: false, epoch };
   }
-  function invoke(message) {
+  async function invoke(message) {
     const id = message.operationID;
     if (message.method !== 'session/prompt' || !id) return invokeOperation(message);
-    if (admissions.has(id)) return admissions.get(id);
-    const pending = invokeOperation(message).finally(() => admissions.delete(id));
-    admissions.set(id, pending);
+    const fingerprint = requestFingerprint(message);
+    const existing = admissions.get(id);
+    if (existing) {
+      verifyRetry(existing, fingerprint);
+      return existing.pending;
+    }
+    const pending = invokeOperation(message, fingerprint).finally(() => admissions.delete(id));
+    admissions.set(id, { fingerprint, pending });
     return pending;
   }
-  async function invokeOperation(message) {
+  async function invokeOperation(message, fingerprint = requestFingerprint(message)) {
     if (message.method === 'woven/permission') {
       permissions.resolve(message.params?.id, message.params?.result);
       return { result: {} };
@@ -76,10 +94,11 @@ export function createDefaultAgentService({ cwd, directory }) {
     }
     const id = message.operationID ?? crypto.randomUUID();
     if (!/^[0-9a-f-]{36}$/i.test(id)) throw new Error('Invalid operation identifier.');
-    if (operations.has(id) || await readJSON(join(directory, `run-${id}.json`), null)) return { operationID: id };
+    const existing = operations.get(id) ?? await readJSON(join(directory, `run-${id}.json`), null);
+    if (existing) { verifyRetry(existing, fingerprint); return { operationID: id }; }
     if (await readJSON(join(directory, `accepted-${id}.json`), null)) throw new Error('This run was interrupted by a workspace restart. Submit a new message to retry.');
-    const operation = { updates: [], done: false, result: null, error: null, sessionID: message.params.sessionId };
-    await writePrivateJSON(join(directory, `accepted-${id}.json`), { sessionID: operation.sessionID });
+    const operation = { fingerprint, updates: [], done: false, result: null, error: null, sessionID: message.params.sessionId };
+    await writePrivateJSON(join(directory, `accepted-${id}.json`), { sessionID: operation.sessionID, fingerprint });
     operations.set(id, operation);
     const path = join(directory, `run-${id}.jsonl`);
     let journal = Promise.resolve();
@@ -93,7 +112,7 @@ export function createDefaultAgentService({ cwd, directory }) {
         if (journalError) throw journalError;
         const record = e.sessions.get(operation.sessionID);
         const snapshot = { runID: message.params?._meta?.wovenRunID ?? id, content: operation.updates.filter(u => u.sessionUpdate === 'agent_message_chunk').map(u => u.content.text).join(''), error: operation.error, model: record?.selected };
-        await writePrivateJSON(join(directory, `run-${id}.json`), { sessionID: operation.sessionID, snapshot, result: operation.result, error: operation.error });
+        await writePrivateJSON(join(directory, `run-${id}.json`), { sessionID: operation.sessionID, fingerprint, snapshot, result: operation.result, error: operation.error });
       }
       catch { operation.error = 'The workspace could not save the completed run.'; }
       operation.done = true;

@@ -19,7 +19,9 @@ struct SettingsDefaultAgentView: View {
     }
     private var editable: Bool { !agent.inherits }
     private var visibleCatalog: [DefaultAgentSettingsModel.Model] {
-        let all = agent.orderedModels + agent.catalog.filter { candidate in !agent.orderedModels.contains { $0.id == candidate.id } }
+        let ordered = agent.orderedModels
+        let visibleIDs = Set(ordered.map(\.id))
+        let all = ordered + agent.catalog.filter { !visibleIDs.contains($0.id) }
         return all.filter { item in
             (modelSearch.isEmpty || item.name.localizedCaseInsensitiveContains(modelSearch) || item.providerName.localizedCaseInsensitiveContains(modelSearch) || item.id.localizedCaseInsensitiveContains(modelSearch))
                 && (connectionFilter.isEmpty || item.provider == connectionFilter)

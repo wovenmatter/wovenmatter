@@ -9,14 +9,13 @@ import { signInStatuses } from './sign-in-status.mjs';
 import { probeServer } from './local-servers.mjs';
 import { preferredSignInAnswer } from './sign-in-interaction.mjs';
 import { grokAccountProfile } from './account-profile.mjs';
-import { nativeClaudeLogin, inlineClaudeLogin } from './claude-runtime.mjs';
+import { inlineClaudeLogin } from './claude-runtime.mjs';
 import { PermissionRequests, RemotePermissionRequests } from './permissions.mjs';
 
 const send = (value, flushed) => process.stdout.write(JSON.stringify(value) + '\n', flushed);
 const remote = process.argv.includes('--remote');
 const control = process.argv.includes('--control');
 const directory = process.env.WOVEN_DEFAULT_AGENT_DIRECTORY ?? join(homedir(), '.wovenmatter', 'default-agent');
-if (process.argv.includes('--claude-login')) process.exit(await nativeClaudeLogin(directory));
 const permissions = new PermissionRequests();
 const requestPermission = (params, signal) => permissions.request(params, signal,
   (id, value) => send({ jsonrpc: '2.0', id, method: 'session/request_permission', params: value }),
