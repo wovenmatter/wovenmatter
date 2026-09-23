@@ -318,16 +318,26 @@ struct WorkspaceFolderRecoveryTests {
         try Data("preserve first".utf8).write(to: first.appending(path: "marker"))
         try Data("preserve second".utf8).write(to: second.appending(path: "marker"))
         let path = f.repos.path
+        let (readiness, ready) = AsyncStream<Void>.makeStream()
         let observer = Task.detached { () -> (available: Bool, checks: Int) in
+            defer { ready.finish() }
             var checks = 0
             while !Task.isCancelled {
                 guard FileManager.default.fileExists(atPath: path) else { return (false, checks) }
                 checks += 1
+                if checks == 1 {
+                    ready.yield()
+                    ready.finish()
+                }
                 await Task.yield()
             }
             return (true, checks)
         }
         defer { observer.cancel() }
+        // Starting a detached task does not guarantee it runs before these actor
+        // calls complete, especially under a constrained test executor.
+        var readinessIterator = readiness.makeAsyncIterator()
+        _ = await readinessIterator.next()
         for _ in 0..<12 {
             try await store.configureRepositories(first)
             try await store.configureRepositories(second)

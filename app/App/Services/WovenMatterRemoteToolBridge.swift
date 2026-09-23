@@ -207,14 +207,16 @@ final class WovenMatterRelayForwarder: @unchecked Sendable {
                         return true
                     }
                     guard canWrite else { return }
-                    do { try write(packet) }
-                    catch {
-                        // Retire the forwarder before waking idle waiters.
+                    do {
+                        try write(packet)
+                    } catch {
+                        // Retire the failed writer before notifying observers or
+                        // releasing idle waiters; neither may admit more work.
                         stop()
                         onFailure(error)
                     }
                 }
-            } catch { onFailure(error); stop() }
+            } catch { stop(); onFailure(error) }
         }
     }
 
