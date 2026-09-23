@@ -18,8 +18,8 @@ actor BackendSpeechService {
     private var transport: (any GrokSpeechTransport)?
     private var expiry: Task<Void, Never>?
     private var lastActivity = ContinuousClock.now
-    private var sending = false
-    private var reading = false
+    private var sendingID: UUID?
+    private var readingID: UUID?
     private var events: [GrokSpeechEvent] = []
     private var eventTask: Task<Void, Never>?
     private var eventWaiter: CheckedContinuation<GrokSpeechEvent?, Never>?
@@ -40,8 +40,12 @@ actor BackendSpeechService {
             case "speech.availability": reply.accountLabel = try await credential().accountLabel ?? "Grok subscription"
             case "speech.start":
                 guard let id = request.id else { throw GrokSpeechError.unavailable }
-                await cancel()
+                // Claim the new recording before suspension. An older start
+                // waiting for transport cleanup must not replace a newer one.
+                let previous = clearSession()
                 activeID = id
+                await previous?.cancel()
+                guard activeID == id else { throw CancellationError() }
                 let token = try await credential()
                 guard activeID == id else { throw CancellationError() }
                 var speech = makeTransport(); transport = speech; touch(id)
@@ -76,16 +80,17 @@ actor BackendSpeechService {
                 touch(id)
                 switch method {
                 case "speech.send":
-                    guard let audio = request.audio, audio.count <= 65_536, !sending else { throw GrokSpeechError.audioBacklog }
-                    sending = true
-                    defer { sending = false }
+                    guard let audio = request.audio, audio.count <= 65_536, sendingID != id else { throw GrokSpeechError.audioBacklog }
+                    sendingID = id
+                    defer { if sendingID == id { sendingID = nil } }
                     try await speech.send(audio)
                 case "speech.finish": try await speech.finish()
                 case "speech.next":
-                    guard !reading else { throw GrokSpeechError.audioBacklog }
-                    reading = true
-                    defer { reading = false }
+                    guard readingID != id else { throw GrokSpeechError.audioBacklog }
+                    readingID = id
+                    defer { if readingID == id { readingID = nil } }
                     reply.event = await nextEvent()
+                    guard activeID == id else { throw CancellationError() }
                     if case .done = reply.event { await cancel() }
                     if case .failure = reply.event { await cancel() }
                 default: throw GrokSpeechError.unavailable
@@ -139,11 +144,16 @@ actor BackendSpeechService {
         if lastActivity.duration(to: .now) >= .seconds(70) { await cancel(); return true }
         return false
     }
-    private func cancel() async {
+    private func clearSession() -> (any GrokSpeechTransport)? {
         let previous = transport
-        activeID = nil; transport = nil; expiry?.cancel(); expiry = nil
+        activeID = nil; transport = nil; sendingID = nil; readingID = nil
+        expiry?.cancel(); expiry = nil
         eventTask?.cancel(); eventTask = nil; events = []
         eventTimeout?.cancel(); completeEventWait()
+        return previous
+    }
+    private func cancel() async {
+        let previous = clearSession()
         await previous?.cancel()
     }
 }

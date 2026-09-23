@@ -8,6 +8,16 @@ struct BackendRPCTests {
         URL(fileURLWithPath: "/private/tmp/wm-rpc-" + UUID().uuidString.prefix(8)).appending(path: "control.sock")
     }
 
+    @Test func retryIdentityBindsMethodAndPayloadWithoutRequestID() {
+        let first = BackendRPCRequest(id: "same", method: "application.command", payload: Data("note".utf8))
+        let sameCommand = BackendRPCRequest(id: "other", method: first.method, payload: first.payload)
+        let otherMethod = BackendRPCRequest(id: first.id, method: "remoteWorkspaces.command", payload: first.payload)
+        let otherContent = BackendRPCRequest(id: first.id, method: first.method, payload: Data("changed note".utf8))
+        #expect(BackendRPCCommandIdentity(first) == BackendRPCCommandIdentity(sameCommand))
+        #expect(BackendRPCCommandIdentity(first) != BackendRPCCommandIdentity(otherMethod))
+        #expect(BackendRPCCommandIdentity(first) != BackendRPCCommandIdentity(otherContent))
+    }
+
     @Test func authenticatedRoundTripAndReadiness() async throws {
         let url = endpoint()
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }

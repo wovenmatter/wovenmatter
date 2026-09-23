@@ -1,3 +1,4 @@
+import CryptoKit
 import Darwin
 import Foundation
 
@@ -7,6 +8,18 @@ public struct BackendRPCRequest: Codable, Sendable {
     public let payload: Data
     public init(id: String = UUID().uuidString, method: String, payload: Data = Data()) {
         self.id = id; self.method = method; self.payload = payload
+    }
+}
+
+/// Binds a retry to its method and content without retaining completed command
+/// bodies, which can contain large notes or attachment metadata.
+public struct BackendRPCCommandIdentity: Equatable, Sendable {
+    private let method: String
+    private let payloadDigest: SHA256.Digest
+
+    public init(_ request: BackendRPCRequest) {
+        method = request.method
+        payloadDigest = SHA256.hash(data: request.payload)
     }
 }
 

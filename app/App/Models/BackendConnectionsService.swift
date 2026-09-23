@@ -28,7 +28,6 @@ struct BackendConnectionsSnapshot: Codable, Equatable {
     var catalog: [DefaultAgentSettingsModel.Model]
     var providers: [DefaultAgentSettingsModel.Provider]
     var searchConfigured: Bool
-    var accountLabels: [String: String]
     var accounts: [String: [ProviderConnectionAccounts.Account]]
     var cursorAccountStatus: String
     var signInProvider: String?
@@ -44,7 +43,7 @@ struct BackendConnectionsSnapshot: Codable, Equatable {
     @MainActor init(_ model: DefaultAgentSettingsModel) {
         localServers = model.localServers
         scope = model.scope; settings = model.settings; catalog = model.catalog; providers = model.providers
-        searchConfigured = model.searchConfigured; accountLabels = model.accountLabels; accounts = model.accounts
+        searchConfigured = model.searchConfigured; accounts = model.accounts
         cursorAccountStatus = model.cursorAccountStatus; signInProvider = model.signInProvider
         busy = model.busy; error = model.error; notice = model.notice
         signInURL = model.signInURL; signInCode = model.signInCode

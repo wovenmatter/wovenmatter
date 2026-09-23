@@ -62,11 +62,11 @@ final class BackendApplicationService {
     let model: ApplicationModel
     private let completeClientRouting: Bool
     private struct PendingCommand {
-        let payload: Data
+        let identity: BackendRPCCommandIdentity
         let task: Task<BackendRPCResponse, Never>
     }
     private var pending: [String: PendingCommand] = [:]
-    private var completed: [String: (Data, BackendRPCResponse)] = [:]
+    private var completed: [String: (BackendRPCCommandIdentity, BackendRPCResponse)] = [:]
     private var completionOrder: [String] = []
 
     init(model: ApplicationModel, completeClientRouting: Bool = false) {
@@ -77,20 +77,21 @@ final class BackendApplicationService {
 
     func handle(_ request: BackendRPCRequest) async -> BackendRPCResponse {
         guard ["application.command", "remoteWorkspaces.command"].contains(request.method) else { return await perform(request) }
+        let identity = BackendRPCCommandIdentity(request)
         if let saved = completed[request.id] {
-            return saved.0 == request.payload ? saved.1 : BackendRPCResponse(id: request.id, error: "Request identity was reused for a different command.")
+            return saved.0 == identity ? saved.1 : BackendRPCResponse(id: request.id, error: "Request identity was reused for a different command.")
         }
         if let saved = pending[request.id] {
-            guard saved.payload == request.payload else {
+            guard saved.identity == identity else {
                 return BackendRPCResponse(id: request.id, error: "Request identity was reused for a different command.")
             }
             return await saved.task.value
         }
         let task = Task { await self.perform(request) }
-        pending[request.id] = .init(payload: request.payload, task: task)
+        pending[request.id] = .init(identity: identity, task: task)
         let result = await task.value
         pending[request.id] = nil
-        completed[request.id] = (request.payload, result)
+        completed[request.id] = (identity, result)
         completionOrder.append(request.id)
         if completionOrder.count > 128 { completed[completionOrder.removeFirst()] = nil }
         return result

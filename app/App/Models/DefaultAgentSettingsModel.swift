@@ -87,7 +87,7 @@ final class DefaultAgentSettingsModel {
     func applyBackendSnapshot(_ value: BackendConnectionsSnapshot) {
         localServers = value.localServers
         scope = value.scope; settings = value.settings; catalog = value.catalog; providers = value.providers
-        searchConfigured = value.searchConfigured; accountLabels = value.accountLabels; accounts = value.accounts
+        searchConfigured = value.searchConfigured; accounts = value.accounts
         cursorAccountStatus = value.cursorAccountStatus; signInProvider = value.signInProvider
         busy = value.busy; error = value.error; notice = value.notice
         signInURL = value.signInURL; signInCode = value.signInCode; prompt = value.prompt; promptID = value.promptID
