@@ -10,6 +10,8 @@ final class WorkspaceAgentToolsModel {
     typealias NoteHandler = @MainActor (String, NoteEditingRequest, String) async throws -> NoteEditingResponse
     typealias NoteRestoreHandler = @MainActor (String, String, String, String, String) async throws -> NoteEditingResponse
     typealias UsageHandler = @MainActor (WovenMatterToolCommand) async throws -> WovenMatterToolResponse
+    typealias CalendarTaskHandler = @MainActor (String, WovenMatterToolCommand, WorkspaceCalendarTask?) async throws -> WorkspaceCalendarTask
+    let calendarTaskHandler: CalendarTaskHandler?
     let database: WorkspaceDatabase
     private(set) var settings: WorkspaceToolSettings
     private(set) var sessionPolicies: [String: WorkspaceSessionTools] = [:]
@@ -33,7 +35,8 @@ final class WorkspaceAgentToolsModel {
 
     init(database: WorkspaceDatabase, sessionHandler: @escaping SessionHandler,
          noteHandler: @escaping NoteHandler, noteRestoreHandler: @escaping NoteRestoreHandler, usageHandler: @escaping UsageHandler,
-         onMutation: @escaping @MainActor () async -> Void) throws {
+         calendarTaskHandler: CalendarTaskHandler? = nil, onMutation: @escaping @MainActor () async -> Void) throws {
+        self.calendarTaskHandler = calendarTaskHandler
         self.database = database
         self.settings = try database.toolSettings()
         self.sessionHandler = sessionHandler
@@ -259,7 +262,7 @@ final class WorkspaceAgentToolsModel {
                     result = .init(result: try database.listAgentFolders(callerID: callerID))
                 } else { result = try await sessionHandler(callerID, command, request) }
             case .timers: result = try timer(command, callerID: callerID, requestID: request.requestID)
-            case .calendar: result = try calendar(command, callerID: callerID, requestID: request.requestID)
+            case .calendar: result = try await calendar(command, callerID: callerID, requestID: request.requestID)
             case .usage: result = try await usageHandler(command)
             case .library: result = try library(command, callerID: callerID)
             }
@@ -342,23 +345,6 @@ final class WorkspaceAgentToolsModel {
         if command.action == "remove" { try database.removeSessionTimer(id: id, callerID: callerID, requestID: requestID) }
         else { try database.pauseSessionTimer(id: id, paused: command.action == "pause", callerID: callerID, requestID: requestID) }
         return .init(result: .object(["id": .string(id), "status": .string(command.action)]))
-    }
-
-    private func calendar(_ command: WovenMatterToolCommand, callerID: String, requestID: String) throws -> WovenMatterToolResponse {
-        if command.action == "list" {
-            return .init(result: try database.listAgentCalendar(callerID: callerID,
-                since: command.options["since"].map(Self.date), until: command.options["until"].map(Self.date),
-                after: Int64(command.integer("after", default: 0, range: 0...Int.max)), limit: command.integer("limit", default: 100, range: 1...200)))
-        }
-        if command.action == "remove" {
-            try database.removeAgentCalendar(callerID: callerID, id: command.required("id", allowPositional: true), requestID: requestID)
-            return .init()
-        }
-        let creating = command.action == "create"
-        let id = try database.saveAgentCalendar(callerID: callerID, id: creating ? requestID : command.required("id", allowPositional: true),
-            creating: creating, title: command.required("title"), details: command.options["description"], startsAt: Self.date(command.required("starts-at")),
-            endsAt: command.options["ends-at"].map(Self.date), allDay: command.options["all-day"] != nil, requestID: requestID)
-        return .init(result: .object(["id": .string(id)]))
     }
 
     private func library(_ command: WovenMatterToolCommand, callerID: String) throws -> WovenMatterToolResponse {

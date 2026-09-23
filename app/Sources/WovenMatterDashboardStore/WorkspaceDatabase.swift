@@ -35,6 +35,7 @@ public final class WorkspaceDatabase: @unchecked Sendable {
       try migrate()
       try migrateWorkspaceHistory()
       try migrateAgentTools()
+      try migrateCalendar()
       try migrateLibrary()
     } catch {
       sqlite3_close(database)

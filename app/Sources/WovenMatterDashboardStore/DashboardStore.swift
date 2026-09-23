@@ -18,6 +18,7 @@ public struct DashboardStoreSnapshot: Sendable {
   public let agents: [WorkspaceAgent]
   public let workspace: WorkspaceSnapshot
   public let calendarItems: [WorkspaceCalendarItemRecord]
+  public let calendarRuns: [WorkspaceCalendarRun]
   public let recordCounts: DashboardRecordCounts
   public let revision: Int64
 }
@@ -436,6 +437,10 @@ public actor DashboardStore {
     try await openClawGateway.sessionMetadata(conversationID: conversationID)
   }
 
+  public func calendarOpenClawMetadata(agentID: UUID, model: String?) async throws -> LocalACPSessionMetadata {
+    try await openClawGateway.calendarTaskMetadata(agentID: agentID, model: model)
+  }
+
   public func renameOpenClawAgent(agentID: UUID, displayName: String) throws {
     try database.renameOpenClawAgent(id: agentID, displayName: displayName)
   }
@@ -640,6 +645,7 @@ public actor DashboardStore {
       agents: try database.dashboardAgents(),
       workspace: try database.workspaceOverview(),
       calendarItems: try database.calendarItems(),
+      calendarRuns: try database.calendarRuns(),
       recordCounts: try database.dashboardRecordCounts(),
       revision: try database.dashboardRevision()
     )
@@ -1002,7 +1008,7 @@ public actor DashboardStore {
         LocalACPWorkspaceLaunchConfiguration(
           rootURL: resolved.workingDirectory,
           repositoriesURL: resolved.workingDirectory.appending(
-            path: "REPOS",
+            path: "Repos",
             directoryHint: .isDirectory
           )
         ),

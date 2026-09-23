@@ -184,6 +184,7 @@ final class ApplicationModel {
     let library = LibraryModel()
     var libraryMessageTarget: WorkspaceLibraryItem?
     private(set) var calendarItems: [WorkspaceCalendarItemRecord] = []
+    private(set) var calendarRuns: [WorkspaceCalendarRun] = []
     private(set) var workspaceRevision: Int64 = 0
     private(set) var workspaceListRevision: Int64 = 0
     private(set) var macSurfaceProfile: SurfaceProfile?
@@ -197,8 +198,8 @@ final class ApplicationModel {
     @ObservationIgnored var toolRuntimeTask: Task<Void, Never>?
     @ObservationIgnored var toolCreationTasks: [String: Task<WovenMatterToolResponse, any Error>] = [:]
     @ObservationIgnored private var toolSessionAdmission = WorkspaceSessionAdmission()
-    private(set) var calendarMutationError: String?
-    private(set) var isCreatingCalendarItem = false
+    var calendarMutationError: String?
+    var isCreatingCalendarItem = false
     private(set) var noteDrafts: [String: DashboardNoteDraft] = [:]
     var pendingComposerPrefills: [String: String] = [:]
     private(set) var localACPSessionMetadata: [
@@ -214,6 +215,14 @@ final class ApplicationModel {
     private(set) var localACPDatabaseReadyRuntimeKinds: Set<AgentRuntimeKind> = []
     private(set) var localACPAgentReconciliationError: String?
     private(set) var checkingLocalACPRuntimeKinds: Set<AgentRuntimeKind> = []
+    struct PendingWorkspaceFolderChange {
+        let folder: LocalACPWorkspaceFolder
+        let destination: URL
+    }
+    private(set) var pendingWorkspaceFolderChange: PendingWorkspaceFolderChange?
+    private(set) var workspaceFolderChangeError: String?
+    private(set) var workspaceFolderChangeInProgress = false
+    private(set) var workspaceFolderRecovery: LocalACPWorkspaceFolderChangeResult?
     private(set) var localACPWorkspaceAvailability = LocalACPWorkspaceAvailability(
         state: .setupRequired,
         detail: "Set up the shared direct workspace before starting a chat.",
@@ -304,7 +313,7 @@ final class ApplicationModel {
     @ObservationIgnored
     private let conversationTitleGenerator = CodexConversationTitleGenerator()
     @ObservationIgnored
-    private var localACPLaunchConfigurations: [
+    private(set) var localACPLaunchConfigurations: [
         AgentRuntimeKind: LocalACPRuntimeLaunchConfiguration
     ] = [:]
     @ObservationIgnored
@@ -480,6 +489,9 @@ final class ApplicationModel {
                 }, usageHandler: { [weak self] command in
                     guard let self else { throw CancellationError() }
                     return try await self.handleAgentUsage(command)
+                }, calendarTaskHandler: { [weak self] caller, command, existing in
+                    guard let self else { throw CancellationError() }
+                    return try await self.resolveCalendarTask(callerID: caller, command: command, existing: existing)
                 }, onMutation: { [weak self] in await self?.refreshWorkspace() })
             configureSessionToolSelectionAdapter()
             try dashboardStore.database.recoverToolDeliveries()
@@ -1801,7 +1813,8 @@ final class ApplicationModel {
     func dispatchAgentMessage(
         conversation: WorkspaceConversationRecord,
         input: AgentMessageInput,
-        note: WorkspaceNoteRecord? = nil
+        note: WorkspaceNoteRecord? = nil,
+        allowSteering: Bool = true
     ) async throws -> Bool {
         guard let dashboardStore, let agentTools else { throw ApplicationModelError.dashboardStoreUnavailable }
         try await applyPendingSessionSelections(conversationID: conversation.id)
@@ -1809,6 +1822,9 @@ final class ApplicationModel {
               !updatingLocalACPSessionIDs.contains(conversation.id) else {
             throw ApplicationModelError.localSessionConfigurationInProgress
         }
+        // A scheduled task waits for an idle turn even if another send started
+        // during asynchronous settings preparation.
+        guard allowSteering || !runningToolSessionIDs.contains(conversation.id) else { return false }
         let decision = toolSessionAdmission.begin(conversation.id, running: runningToolSessionIDs,
             limit: agentTools.settings.maximumRunningSessions)
         if decision == .atCapacity { return false }
@@ -2382,7 +2398,7 @@ final class ApplicationModel {
                 let root = inheritedRoot ?? workspaceRoot
                 return RemoteHarnessLaunchContext(launch: LocalACPRuntimeLaunchConfiguration(runtimeKind: .hermes,
                     executableURL: URL(fileURLWithPath: "/usr/bin/ssh"), arguments: [], environment: ["WOVENMATTER_HERMES_CONNECTION": encoded],
-                    processWorkingDirectoryURL: processDirectory), workspace: LocalACPWorkspaceLaunchConfiguration(rootURL: root, repositoriesURL: workspaceRoot.appending(path: "REPOS"), databasesURL: workspaceRoot.appending(path: "Databases")))
+                    processWorkingDirectoryURL: processDirectory), workspace: LocalACPWorkspaceLaunchConfiguration(rootURL: root, repositoriesURL: workspaceRoot.appending(path: "Repos"), databasesURL: workspaceRoot.appending(path: "Databases")))
             }
             return try RemoteHarnessLaunchResolver.resolve(
                 configuration: configuration,
@@ -2646,7 +2662,7 @@ final class ApplicationModel {
 
     func dismissPendingHermesSettings() { pendingHermesSettingsAgentID = nil }
 
-    private func requireLocalHermesLink(conversationID: String? = nil, openSettings: Bool = false) throws {
+    func requireLocalHermesLink(conversationID: String? = nil, openSettings: Bool = false) throws {
         guard let agent = localCLIAgents.first(where: { $0.runtimeKind == .hermes }) else {
             throw HermesGatewayError.message("Enable Hermes in Local agent workspace first.")
         }
@@ -2934,28 +2950,58 @@ final class ApplicationModel {
     }
 
     func configureLocalACPRepositories(_ repositoriesURL: URL?) {
-        Task {
-            do {
-                try await localACPWorkspaceStore.configureRepositories(
-                    repositoriesURL
-                )
-                localRunError = nil
-                await refreshLocalACPWorkspace()
-            } catch {
-                localRunError = error.localizedDescription
-            }
-        }
+        configureWorkspaceFolder(.repositories, destination: repositoriesURL)
     }
 
     func configureLocalACPDatabases(_ databasesURL: URL?) {
+        configureWorkspaceFolder(.databases, destination: databasesURL)
+    }
+
+    func cancelWorkspaceFolderChange() {
+        pendingWorkspaceFolderChange = nil
+    }
+
+    func confirmWorkspaceFolderChange(copyContents: Bool) {
+        guard let pending = pendingWorkspaceFolderChange else { return }
+        pendingWorkspaceFolderChange = nil
+        configureWorkspaceFolder(
+            pending.folder, destination: pending.destination,
+            recovery: copyContents ? .copyAndBackUp : .backUp
+        )
+    }
+
+    private func configureWorkspaceFolder(
+        _ folder: LocalACPWorkspaceFolder, destination: URL?,
+        recovery: LocalACPWorkspaceFolderRecovery = .requireConfirmation
+    ) {
+        guard !workspaceFolderChangeInProgress else { return }
+        workspaceFolderChangeInProgress = true
+        workspaceFolderChangeError = nil
         Task {
+            defer { workspaceFolderChangeInProgress = false }
             do {
-                try await localACPWorkspaceStore.configureDatabases(databasesURL)
+                let result: LocalACPWorkspaceFolderChangeResult
+                switch folder {
+                case .repositories:
+                    result = try await localACPWorkspaceStore.configureRepositories(
+                        destination, recovery: recovery
+                    )
+                case .databases:
+                    result = try await localACPWorkspaceStore.configureDatabases(
+                        destination, recovery: recovery
+                    )
+                }
+                workspaceFolderRecovery = result
                 localRunError = nil
                 await refreshLocalACPWorkspace()
                 await refreshDatabases()
+            } catch let error as LocalACPWorkspaceError
+                where error == .defaultRepositoriesNotEmpty || error == .defaultDatabasesNotEmpty {
+                if let destination {
+                    pendingWorkspaceFolderChange = PendingWorkspaceFolderChange(folder: folder, destination: destination)
+                }
             } catch {
-                localRunError = error.localizedDescription
+                workspaceFolderChangeError = error.localizedDescription
             }
         }
     }
@@ -4410,6 +4456,7 @@ final class ApplicationModel {
         if calendarItems != snapshot.calendarItems {
             calendarItems = snapshot.calendarItems
         }
+        if calendarRuns != snapshot.calendarRuns { calendarRuns = snapshot.calendarRuns }
         let nextOverview = DashboardWorkspaceOverview(snapshot.workspace)
         if workspaceOverview?.folders != nextOverview.folders
             || workspaceOverview?.conversations != nextOverview.conversations

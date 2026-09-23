@@ -644,7 +644,10 @@ struct WorkspaceView: View {
                         onUnavailableComposerAction: showUnavailableMutation
                     )
                 case .calendar:
-                    DashboardCalendarSurface(model: model)
+                    DashboardCalendarSurface(model: model, onOpenSession: { id in
+                        destination = .workspace
+                        selectConversation(id)
+                    })
                 case .cronJobs:
                     DashboardCronSurface(
                         model: model,

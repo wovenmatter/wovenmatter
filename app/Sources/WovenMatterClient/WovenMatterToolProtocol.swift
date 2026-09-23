@@ -71,11 +71,11 @@ public struct WovenMatterToolCommand: Sendable {
       .history: ["search", "conversations", "conversation", "message", "runs", "trace", "events", "event"],
       .sessions: ["list", "status", "create", "send", "manage", "release", "notifications", "receipts", "folders", "harnesses"],
       .timers: ["list", "create", "update", "pause", "resume", "remove"],
-      .usage: ["read"], .calendar: ["list", "create", "update", "remove"], .library: ["list", "read"]
+      .usage: ["read"], .calendar: ["list", "read", "occurrences", "create", "update", "remove", "copy", "detach"], .library: ["list", "read"]
     ]
     guard allowedActions[group]?.contains(action) == true else { throw WorkspaceToolError.invalid("Unknown \(domain) command '\(action)'.") }
-    let booleanFlags: Set<String> = ["all-workspace", "independent", "no-notify", "paused", "all-day", "json", "header"]
-    let valueFlags: Set<String> = ["id", "session", "conversation", "note-id", "folder", "workspace", "directory", "harness", "model", "thinking", "title", "text", "purpose", "request-id", "search", "run", "kind", "sender", "since", "until", "after", "before", "limit", "offset", "characters", "at", "every", "starts-at", "ends-at", "description", "enabled", "revision", "version", "file", "html", "style", "block-id", "table-id", "row", "column", "rows", "columns", "source-id", "database-id", "path", "query"]
+    let booleanFlags: Set<String> = ["all-workspace", "independent", "no-notify", "paused", "all-day", "timed", "no-repeat", "regular-event", "json", "header"]
+    let valueFlags: Set<String> = ["id", "session", "conversation", "note-id", "folder", "workspace", "directory", "harness", "model", "thinking", "title", "text", "purpose", "request-id", "search", "run", "kind", "sender", "since", "until", "after", "before", "limit", "offset", "characters", "at", "every", "starts-at", "ends-at", "description", "prompt", "time-zone", "repeat-unit", "repeat-interval", "session-mode", "occurrence", "enabled", "revision", "version", "file", "html", "style", "block-id", "table-id", "row", "column", "rows", "columns", "source-id", "database-id", "path", "query"]
     var positional: [String] = [], options: [String: String] = [:]
     var indices: [String: Int] = [:], operationArguments = Array(arguments.prefix(2))
     var wantsHelp = false
@@ -191,10 +191,19 @@ public struct WovenMatterToolCommand: Sendable {
       """
     case .usage: "read [--since ISO8601 --until ISO8601 --offset N --limit 1...200]\nRead recorded usage. This tool cannot change usage or credentials."
     case .calendar: """
-      list [--since ISO8601 --until ISO8601]
+      list [--since ISO8601 --until ISO8601 --after CURSOR --limit 1...200]
+      read EVENT_ID | occurrences EVENT_ID --since ISO8601 --until ISO8601
       create --title TITLE --starts-at ISO8601 [--ends-at ISO8601 --description TEXT --all-day]
-      update EVENT_ID --title TITLE --starts-at ISO8601 [--ends-at ISO8601 --description TEXT --all-day]
-      remove EVENT_ID
+      update EVENT_ID [--title TITLE --starts-at ISO8601 --ends-at ISO8601 --description TEXT --revision N]
+      detach EVENT_ID --occurrence INDEX [event changes] | copy EVENT_ID --starts-at ISO8601
+      remove EVENT_ID [--occurrence INDEX --revision N]
+      Repetition: --repeat-unit day|week|month --repeat-interval N --time-zone IANA_ZONE; --no-repeat clears it.
+      Tasks: --prompt TEXT [--harness NAME --model MODEL --thinking LEVEL --workspace local|ID --directory ABSOLUTE_PATH --folder all|ID]
+        [--session-mode same|new]. Permissions and tools use user-controlled session defaults; edit them in Calendar.
+      --regular-event removes the task; --timed clears all-day. Tasks require a time and Session management access.
+      Update changes the series. Detach retains the occurrence's settings as an independent one-time event.
+      Copy creates an independent event. Each overdue one-time task runs; recurring tasks catch up once.
+      Task prompts run only while Woven Matter is open. Read returns attribution, revision, and session links.
       Calendar access is set in General settings; read-only mode rejects mutations.
       Mutation retries accept --request-id UUID and preserve later edits or removal.
       """

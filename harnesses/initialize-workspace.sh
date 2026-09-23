@@ -1,14 +1,41 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-workspace_root="${1:?usage: initialize-workspace.sh WORKSPACE_ROOT}"
+workspace_root="${1:?usage: initialize-workspace.sh WORKSPACE_ROOT [--skip-linked-folders]}"
 managed_begin='<!-- BEGIN WOVEN MATTER MANAGED -->'
 managed_end='<!-- END WOVEN MATTER MANAGED -->'
 
 umask 077
-mkdir -p "$workspace_root" \
-  "$workspace_root/REPOS" \
-  "$workspace_root/Databases" \
+mkdir -p "$workspace_root"
+
+# Rename the legacy spelling without merging two existing folders. On a
+# case-sensitive filesystem retain the old path for existing agent sessions.
+has_legacy_repos=false
+has_repos=false
+for entry in "$workspace_root"/*; do
+  case "${entry##*/}" in
+    REPOS) has_legacy_repos=true ;;
+    Repos) has_repos=true ;;
+  esac
+done
+if "$has_legacy_repos" && ! "$has_repos"; then
+  mv "$workspace_root/REPOS" "$workspace_root/Repos"
+  if [ ! -e "$workspace_root/REPOS" ] && [ ! -L "$workspace_root/REPOS" ]; then
+    ln -s Repos "$workspace_root/REPOS"
+  fi
+fi
+
+# Keep even an unavailable link intact so Settings can repair its destination.
+# The local app manages these folders under its workspace lock, independently
+# of one another. Remote workspaces use this script to create both defaults.
+if [ "${2:-}" != --skip-linked-folders ]; then
+  for folder in Repos Databases; do
+    if [ ! -L "$workspace_root/$folder" ]; then
+      mkdir -p "$workspace_root/$folder"
+    fi
+  done
+fi
+mkdir -p \
   "$workspace_root/GUIDES" \
   "$workspace_root/PLANS" \
   "$workspace_root/RESEARCH" \
@@ -22,7 +49,7 @@ cat > "$managed_file" <<'EOF'
 <!-- BEGIN WOVEN MATTER MANAGED -->
 # Woven Matter Workspace
 
-- Work in the appropriate checkout under `REPOS/`.
+- Work in the appropriate checkout under `Repos/`.
 - Put durable guides, plans, research, work summaries, and deliverables in the matching workspace folders.
 - Store agent-accessible data in `Databases/<name>/`. Each database is an ordinary folder.
 - `Databases/<name>/.wovenmatter/database.json` records optional `none`, `json`, or `sqlite` format guidance using schema `wovenmatter.database.v1`. Keep linked JSON files and SQLite databases inside their database folder; remote links cannot follow symlinks.
@@ -54,5 +81,10 @@ if [ ! -e "$workspace_root/CLAUDE.md" ] && [ ! -L "$workspace_root/CLAUDE.md" ];
   ln -s AGENTS.md "$workspace_root/CLAUDE.md"
 fi
 
-chmod 700 "$workspace_root" "$workspace_root"/* "$workspace_root/.scratch" 2>/dev/null || true
+chmod 700 "$workspace_root"
+for folder in Repos Databases GUIDES PLANS RESEARCH WORK_LOGS OUTBOX .scratch; do
+  if [ -d "$workspace_root/$folder" ] && [ ! -L "$workspace_root/$folder" ]; then
+    chmod 700 "$workspace_root/$folder"
+  fi
+done
 chmod 600 "$agents_file"

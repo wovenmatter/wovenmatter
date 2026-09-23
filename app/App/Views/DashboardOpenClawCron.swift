@@ -50,19 +50,21 @@ struct OpenClawCronSurface: View {
     var body: some View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 12) {
-                HStack(spacing: 12) {
-                    DashboardLucideIcon(glyph: .calendarClockControl, size: 18)
-                        .foregroundStyle(DashboardPalette.primary)
-                        .frame(width: 36, height: 36)
-                        .background(DashboardPalette.muted)
-                        .clipShape(RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius, style: .continuous))
-                    Text("Cron Jobs").font(.system(size: 22, weight: .semibold))
-                    Spacer(minLength: 16)
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack(spacing: 12) {
+                        DashboardLucideIcon(glyph: .calendarClockControl, size: 18)
+                            .foregroundStyle(DashboardPalette.primary)
+                            .frame(width: 36, height: 36)
+                            .background(DashboardPalette.muted)
+                            .clipShape(RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius, style: .continuous))
+                        Text("Scheduled Tasks").font(.system(size: 22, weight: .semibold))
+                        Spacer(minLength: 0)
+                    }
                     DashboardSegmentedSelector(
-                        options: ["Hermes", "OpenClaw"],
+                        options: ["Scheduled Tasks", "Calendar Tasks", "Hermes", "OpenClaw"],
                         selection: $provider
                     ) { $0 }
-                    .frame(width: 220)
+                    .frame(maxWidth: 440)
                 }
                 ViewThatFits(in: .horizontal) {
                     openClawHeaderActions
@@ -100,7 +102,7 @@ struct OpenClawCronSurface: View {
             if jobs.isEmpty {
                 DashboardConversationEmptyState(
                     icon: .calendarClockControl,
-                    title: showsDeleted ? "Cron Trash is empty" : "No scheduled jobs",
+                    title: showsDeleted ? "Task trash is empty" : "No scheduled jobs",
                     detail: showsDeleted
                         ? "Deleted jobs and their retained results appear here."
                         : agents.isEmpty
@@ -119,6 +121,10 @@ struct OpenClawCronSurface: View {
                 .scrollIndicators(.never)
             }
         }
+        .transaction { transaction in
+            transaction.animation = nil
+            transaction.disablesAnimations = true
+        }
         .background(theme.palette.workspace)
         .sheet(item: $editor) { selection in
             OpenClawCronEditor(model: model, agentID: selection.agentID, job: selection.job)
@@ -133,7 +139,7 @@ struct OpenClawCronSurface: View {
                 }
             }
         } message: {
-            Text("Stops future runs. Saved results stay in Cron Jobs.")
+            Text("Stops future runs. Saved results stay in Scheduled Tasks.")
         }
         .task(id: heartbeatAgent?.id) {
             guard let agentID = heartbeatAgent?.id else { return }
@@ -224,12 +230,8 @@ struct OpenClawCronSurface: View {
                     .foregroundStyle(DashboardPalette.mutedForeground)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(16)
+            .padding(.vertical, 8)
             .clipShape(RoundedRectangle(cornerRadius: DashboardMetrics.cardRadius, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: DashboardMetrics.cardRadius, style: .continuous)
-                    .stroke(DashboardPalette.foreground.opacity(0.12), lineWidth: 1)
-            }
         }
     }
 
@@ -258,7 +260,7 @@ struct OpenClawCronSurface: View {
                 get: { model.openClawResultRoutes[job.agentID]?[job.id] ?? "" },
                 set: { model.setOpenClawResultRoute(job: job, destination: $0) }
             )) {
-                Text("Cron history only").tag("")
+                Text("Scheduled Tasks only").tag("")
                 Text("New chat for each result").tag("new")
                 ForEach((model.workspaceOverview?.conversations ?? []).filter {
                     $0.agentID == job.agentID.uuidString.lowercased() && !$0.isArchived && $0.openClawSessionKey != nil
@@ -320,12 +322,8 @@ struct OpenClawCronSurface: View {
                 .disabled(model.openClawCronBusy)
             }
         }
-        .padding(14)
+        .padding(.vertical, 16)
         .clipShape(RoundedRectangle(cornerRadius: DashboardMetrics.cardRadius, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: DashboardMetrics.cardRadius, style: .continuous)
-                .stroke(DashboardPalette.foreground.opacity(0.12), lineWidth: 1)
-        }
     }
 
 
@@ -462,12 +460,8 @@ struct OpenClawHeartbeatCard: View {
                 }
             }
         }
-        .padding(16)
+        .padding(.vertical, 12)
         .clipShape(RoundedRectangle(cornerRadius: DashboardMetrics.cardRadius, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: DashboardMetrics.cardRadius, style: .continuous)
-                .stroke(DashboardPalette.foreground.opacity(0.12), lineWidth: 1)
-        }
         .onAppear { if let configuration { draft = configuration } }
         .onChange(of: configuration) { _, configuration in
             if let configuration { draft = configuration }
@@ -490,7 +484,7 @@ struct OpenClawHeartbeatCard: View {
                 .font(.system(size: 10.5, weight: .semibold))
                 .foregroundStyle(DashboardPalette.mutedForeground)
             content()
-                .textFieldStyle(.roundedBorder)
+                .modifier(DashboardCalendarInputStyle())
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -536,14 +530,15 @@ private struct OpenClawCronEditor: View {
         VStack(alignment: .leading, spacing: 16) {
             Text(job == nil ? "New scheduled job" : "Edit scheduled job")
                 .font(.system(size: 20, weight: .semibold))
-            TextField("Job name", text: $name)
+            DashboardCalendarField("Name") {
+                TextField("Task name", text: $name).modifier(DashboardCalendarInputStyle())
+            }
             if hasAgentPrompt {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Instructions").font(.system(size: 12, weight: .medium))
+                DashboardCalendarField("Prompt") {
                     TextEditor(text: $message)
-                        .scrollIndicators(.never)
+                        .scrollContentBackground(.hidden).scrollIndicators(.never)
                         .frame(height: 120)
-                        .font(.system(size: 13))
+                        .modifier(DashboardCalendarInputStyle())
                 }
             }
             if originalSchedule?.objectValue?["kind"]?.stringValue != "cron", job != nil {
@@ -551,14 +546,18 @@ private struct OpenClawCronEditor: View {
             }
             if job == nil || originalSchedule?.objectValue?["kind"]?.stringValue == "cron" || changesSchedule {
                 HStack {
-                    TextField("Cron expression", text: $expression)
-                    TextField("Time zone", text: $timeZone)
+                    DashboardCalendarField("Cron expression") {
+                        TextField("0 9 * * *", text: $expression).modifier(DashboardCalendarInputStyle())
+                    }
+                    DashboardCalendarField("Time zone") {
+                        TextField("Time zone", text: $timeZone).modifier(DashboardCalendarInputStyle())
+                    }
                 }
                 Text("Minute · hour · day of month · month · day of week")
                     .font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
             }
             Picker("Send results to", selection: $destination) {
-                Text("Cron history only").tag("")
+                Text("Scheduled Tasks only").tag("")
                 Text("New chat for each result").tag("new")
                 ForEach((model.workspaceOverview?.conversations ?? []).filter {
                     $0.agentID == agentID.uuidString.lowercased() && !$0.isArchived && $0.openClawSessionKey != nil
@@ -569,7 +568,7 @@ private struct OpenClawCronEditor: View {
             if let error { Text(error).font(.system(size: 12)).foregroundStyle(DashboardPalette.danger).textSelection(.enabled) }
             HStack {
                 Spacer()
-                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("Cancel") { dismiss() }.buttonStyle(DashboardQuietButtonStyle()).keyboardShortcut(.cancelAction)
                 Button(model.openClawCronBusy ? "Saving…" : "Save") {
                     Task {
                         error = await model.saveOpenClawCron(agentID: agentID, job: job,

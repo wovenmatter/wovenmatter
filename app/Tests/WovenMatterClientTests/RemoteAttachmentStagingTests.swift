@@ -135,11 +135,11 @@ struct RemoteAttachmentStagingTests {
     defer { task.cancel() }
     // Cancellation before Task.detached starts only measures executor latency.
     // Wait for the real child, then verify cancellation and process cleanup.
-    // The blocking subprocess occupies a cooperative worker. Observe and cancel
-    // it from Dispatch so cancellation is not delayed until the child exits on
-    // a small CI runner with no free cooperative worker.
+    // The transfer intentionally blocks a cooperative-executor thread. Watch
+    // from an independent queue so a busy, low-core CI runner can cancel the
+    // live child before its sleep finishes, rather than testing executor load.
     let processID: pid_t? = await withCheckedContinuation { continuation in
-      DispatchQueue.global(qos: .userInitiated).async {
+      DispatchQueue(label: "attachment-fixture-cancellation").async {
         let deadline = ContinuousClock.now.advanced(by: .seconds(30))
         var processID: pid_t?
         while processID == nil, ContinuousClock.now < deadline {
