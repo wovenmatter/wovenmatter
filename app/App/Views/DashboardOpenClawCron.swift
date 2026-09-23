@@ -61,7 +61,7 @@ struct OpenClawCronSurface: View {
                         Spacer(minLength: 0)
                     }
                     DashboardSegmentedSelector(
-                        options: ["Scheduled Tasks", "Calendar", "Hermes", "OpenClaw"],
+                        options: ["Scheduled Tasks", "Calendar Tasks", "Hermes", "OpenClaw"],
                         selection: $provider
                     ) { $0 }
                     .frame(maxWidth: 440)

@@ -312,7 +312,7 @@ struct DashboardScheduledTasksSurface: View {
     let onOpenSession: (String) -> Void
     @State private var selection: DashboardCalendarSelection?
 
-    private var calendarTasks: Bool { provider == "Calendar" }
+    private var calendarTasks: Bool { provider == "Calendar Tasks" }
     private var tasks: [WorkspaceCalendarItemRecord] {
         model.calendarItems.filter {
             $0.calendar.task != nil && $0.calendar.showsOnCalendar == calendarTasks
@@ -327,7 +327,7 @@ struct DashboardScheduledTasksSurface: View {
                 HStack(alignment: .top) {
                     Text(calendarTasks
                         ? "Tasks shown on your calendar. Create or manage them here."
-                        : "Schedule an agent prompt once or repeatedly. Add tasks to your calendar whenever you like.")
+                        : "Schedule a task to run once, or as a reoccurring task. Add tasks to your calendar whenever you like.")
                         .font(.system(size: 12)).foregroundStyle(DashboardPalette.mutedForeground)
                     Spacer()
                     Button("New task") { newTask() }.buttonStyle(DashboardPrimaryButtonStyle())
@@ -363,7 +363,7 @@ struct DashboardScheduledTasksSurface: View {
         }
     }
     private var tabs: some View {
-        DashboardSegmentedSelector(options: ["Scheduled Tasks", "Calendar", "Hermes", "OpenClaw"],
+        DashboardSegmentedSelector(options: ["Scheduled Tasks", "Calendar Tasks", "Hermes", "OpenClaw"],
             selection: $provider) { $0 }.frame(width: 440)
     }
     private func newTask() {

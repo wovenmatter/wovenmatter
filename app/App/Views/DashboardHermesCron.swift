@@ -7,7 +7,7 @@ struct DashboardCronSurface: View {
   let onOpenConversation: (String) -> Void
   @State private var provider = "Scheduled Tasks"
   var body: some View {
-    if provider == "Scheduled Tasks" || provider == "Calendar" {
+    if provider == "Scheduled Tasks" || provider == "Calendar Tasks" {
       DashboardScheduledTasksSurface(model: model, provider: $provider, onOpenSession: onOpenConversation)
     } else if provider == "Hermes" {
       HermesCronSurface(
@@ -134,7 +134,7 @@ struct HermesCronSurface: View {
 
   private var cronProviderSelector: some View {
     DashboardSegmentedSelector(
-      options: ["Scheduled Tasks", "Calendar", "Hermes", "OpenClaw"],
+      options: ["Scheduled Tasks", "Calendar Tasks", "Hermes", "OpenClaw"],
       selection: $provider
     ) { $0 }
     .frame(maxWidth: 440)
