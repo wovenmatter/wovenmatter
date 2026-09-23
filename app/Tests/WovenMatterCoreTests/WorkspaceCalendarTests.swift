@@ -565,6 +565,49 @@ extension WorkspaceCalendarTests {
     #expect(try reopened.remoteCalendarExecutionSnapshot(workspaceID:workspace).isEmpty)
   }
 
+  @Test func remoteReceiptSurvivesDeletedFolderAndReplayAfterReopen() throws {
+    let (db, directory) = try fixture(); defer { try? FileManager.default.removeItem(at: directory) }
+    let workspace = UUID(), owner = UUID(), start = date("2026-09-22T12:00:00Z")
+    let folder = try db.createFolder(name: "Remote results")
+    var remoteTask = task(); remoteTask.configuration.workspaceID = workspace
+    remoteTask.configuration.folderID = folder
+    let eventID = try db.saveCalendarEvent(draft: .init(title: "Remote", startsAt: start, task: remoteTask), creating: true, now: start)
+    let run = WorkspaceCalendarRun(id: UUID().uuidString.lowercased(), eventID: eventID, occurrenceIndex: 0, scheduledAt: start,
+      sessionID: UUID().uuidString.lowercased(), task: remoteTask, status: "accepted", title: "Remote")
+    try db.importRemoteCalendarRun(run, workspaceID: workspace, eventRevision: 0)
+    try db.deleteFolder(id: folder)
+    // The fallback belongs to completed-result import, not new execution.
+    #expect(throws: WorkspaceNoteMutationError.folderNotFound) {
+      try db.createRemoteACPSession(runtimeKind: .codex, remoteWorkspaceID: workspace,
+        remoteWorkspaceName: "Fixture", title: "Remote", ownerDeviceID: owner,
+        requestedConversationID: UUID(uuidString: run.sessionID))
+    }
+    func importTranscript(_ database: WorkspaceDatabase) throws {
+      try database.importRemoteCalendarTranscript(receiptID: "deleted-folder-receipt", run: run,
+        workspaceID: workspace, workspaceName: "Fixture", ownerDeviceID: owner,
+        nativeSessionID: "native-deleted-folder", updates: [], error: nil, completedAt: start.addingTimeInterval(5))
+    }
+    try importTranscript(db)
+    let reopened = try WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+    try importTranscript(reopened)
+    let session = try #require(reopened.workspaceOverview().conversations.first { $0.id == run.sessionID })
+    #expect(session.folderID == nil)
+    #expect(session.title == remoteTask.configuration.title)
+    #expect(try reopened.localACPSession(conversationID: run.sessionID).acpSessionID == "native-deleted-folder")
+    #expect(try reopened.calendarRuns().first?.task.configuration.folderID == folder)
+    let savedConfiguration = try #require(reopened.withLock {
+      try reopened.historyRowsUnlocked("SELECT configuration_json FROM workspace_calendar_sessions WHERE id=?", values: [run.sessionID])
+        .first?.objectValue?["configuration_json"]?.stringValue
+    })
+    #expect(try JSONDecoder().decode(WorkspaceSessionCreationConfiguration.self, from: Data(savedConfiguration.utf8)).folderID == folder)
+    let counts = try reopened.withLock {
+      try reopened.historyRowsUnlocked("SELECT (SELECT count(*) FROM dashboard_messages WHERE conversation_id=?) AS messages, (SELECT count(*) FROM workspace_calendar_remote_receipts WHERE id=?) AS receipts",
+        values: [run.sessionID, "deleted-folder-receipt"]).first?.objectValue
+    }
+    #expect(counts?["messages"]?.intValue == 2)
+    #expect(counts?["receipts"]?.intValue == 1)
+  }
+
   @Test func remoteReceiptImportsOnceAndRetainsNativeSession() throws {
     let (db,directory) = try fixture(); defer { try? FileManager.default.removeItem(at:directory) }
     let workspace = UUID(),start = date("2026-09-22T12:00:00Z")

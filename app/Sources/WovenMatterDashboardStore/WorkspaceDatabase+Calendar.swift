@@ -384,12 +384,21 @@ extension WorkspaceDatabase {
   }
 
   /// Called from the ordinary session-insertion transaction.
-  func adoptCalendarSessionUnlocked(_ id: String) throws {
+  func adoptCalendarSessionUnlocked(_ id: String, allowMissingFolder: Bool = false) throws {
     guard let json = try historyRowsUnlocked("SELECT configuration_json FROM workspace_calendar_sessions WHERE id=?", values: [id])
       .first?.objectValue?["configuration_json"]?.stringValue else { return }
     let configuration = try JSONDecoder().decode(WorkspaceSessionCreationConfiguration.self, from: Data(json.utf8))
-    try validateFolderUnlocked(id: configuration.folderID, operatorID: localMutationOperatorIDUnlocked())
-    try toolsExecuteUnlocked("UPDATE dashboard_conversations SET title=?,folder_id=? WHERE id=?", [configuration.title, configuration.folderID, id])
+    let operatorID = try localMutationOperatorIDUnlocked()
+    var folderID = configuration.folderID
+    if allowMissingFolder, let requestedFolderID = folderID,
+       try historyRowsUnlocked("SELECT 1 FROM folders WHERE id=? AND user_id=?", values: [requestedFolderID, operatorID]).isEmpty {
+      // A completed remote run must remain importable after its destination
+      // folder is deleted. Keep its original configuration as provenance.
+      folderID = nil
+    } else {
+      try validateFolderUnlocked(id: folderID, operatorID: operatorID)
+    }
+    try toolsExecuteUnlocked("UPDATE dashboard_conversations SET title=?,folder_id=? WHERE id=?", [configuration.title, folderID, id])
     try toolsExecuteUnlocked("UPDATE desktop_local_acp_sessions SET title=? WHERE conversation_id=?", [configuration.title, id])
     try toolsExecuteUnlocked("UPDATE workspace_session_tools SET enabled_json=?,defaults_applied=1 WHERE session_id=?", [try toolsJSON(configuration.tools.enabled), id])
   }
@@ -517,7 +526,7 @@ extension WorkspaceDatabase {
           remoteWorkspaceID: workspaceID, remoteWorkspaceName: workspaceName,
           title: configuration.title, ownerDeviceID: ownerDeviceID, createdAt: run.scheduledAt,
           openCodeAssociation: configuration.runtimeKind == .opencode ? nativeSessionID.map { ("remote-workspace:" + workspaceID.uuidString.lowercased(),$0) } : nil,
-          requestedConversationID: conversationID)
+          requestedConversationID: conversationID, allowMissingCalendarFolder: true)
       }
       try toolsExecuteUnlocked("""
         UPDATE desktop_local_acp_sessions SET acp_session_id=coalesce(?,acp_session_id),model=?,thinking=?,permission=?,updated_at=?,revision=revision+1

@@ -115,8 +115,8 @@ extension WorkspaceDatabase {
 
   /// Session insertion and creation provenance commit together, so an interrupted
   /// remote setup cannot leave an apparently user-created conversation behind.
-  func adoptReservedSessionOriginUnlocked(_ targetID: String) throws {
-    try adoptCalendarSessionUnlocked(targetID)
+  func adoptReservedSessionOriginUnlocked(_ targetID: String, allowMissingCalendarFolder: Bool = false) throws {
+    try adoptCalendarSessionUnlocked(targetID, allowMissingFolder: allowMissingCalendarFolder)
     guard let row = try historyRowsUnlocked("SELECT source_id,purpose,configuration_json FROM workspace_session_creations WHERE target_id=?", values: [targetID]).first?.objectValue,
           let source = row["source_id"]?.stringValue else { return }
     try requireToolUnlocked(.sessions, sessionID: source)

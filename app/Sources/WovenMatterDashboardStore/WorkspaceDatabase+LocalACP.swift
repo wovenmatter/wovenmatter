@@ -354,7 +354,8 @@ extension WorkspaceDatabase {
     ownerDeviceID: UUID,
     createdAt: Date = Date(),
     openCodeAssociation: (connectionID: String, sessionID: String)? = nil,
-    requestedConversationID: UUID? = nil
+    requestedConversationID: UUID? = nil,
+    allowMissingCalendarFolder: Bool = false
   ) throws -> String {
     guard LocalACPRuntimeCatalog.definition(for: runtimeKind) != nil else {
       throw LocalACPSessionDatabaseError.runtimeUnavailable
@@ -430,7 +431,7 @@ extension WorkspaceDatabase {
       try bind(timestamp, at: 8, to: session)
       try bind(timestamp, at: 9, to: session)
       try stepDone(session)
-      try adoptReservedSessionOriginUnlocked(conversationID)
+      try adoptReservedSessionOriginUnlocked(conversationID, allowMissingCalendarFolder: allowMissingCalendarFolder)
       if let link = openCodeAssociation {
         let association = try prepareUnlocked("INSERT INTO desktop_opencode_sessions(conversation_id, connection_id, session_id, snapshot_json) VALUES (?, ?, ?, '{}')")
         defer { sqlite3_finalize(association) }
