@@ -29,7 +29,7 @@ struct WorkspaceAgentToolsServiceTests {
         let endpoint = try service.endpoint(for: caller)
         func request(_ arguments: [String]) async throws -> WovenMatterToolResponse {
             let data = try JSONEncoder().encode(WovenMatterToolRequest(arguments: arguments))
-            let response = try await Task.detached { try WovenMatterCommandLine.forward(data, to: endpoint) }.value
+            let response = try await runBlockingToolFixture { try WovenMatterCommandLine.forward(data, to: endpoint) }
             return try JSONDecoder().decode(WovenMatterToolResponse.self, from: response)
         }
         // Repeat through the actual bound socket handler: both this request and
@@ -152,6 +152,17 @@ extension WorkspaceAgentToolsServiceTests {
         await broken.waitUntilIdle()
         #expect(output.errors.count == 1)
         #expect(throws: (any Error).self) { try broken.submit(id: UUID().uuidString, request: fixture.request(slow: false)) }
+    }
+}
+
+// Socket reads and semaphore waits must not occupy Swift's cooperative workers:
+// the server tasks being tested need those workers to produce their responses.
+private func runBlockingToolFixture<T: Sendable>(_ body: @escaping @Sendable () throws -> T) async throws -> T {
+    try await withCheckedThrowingContinuation { continuation in
+        DispatchQueue.global(qos: .userInitiated).async {
+            do { continuation.resume(returning: try body()) }
+            catch { continuation.resume(throwing: error) }
+        }
     }
 }
 
@@ -505,5 +516,33 @@ extension WorkspaceAgentToolsServiceTests {
         #expect(try await request(["calendar", "create", "--title", "Ordinary event", "--starts-at", "2026-09-22T13:00:00Z"]).success)
         try database.setSessionTools(.init(enabled: []), sessionID: caller)
         #expect(try await !request(["calendar", "list"]).success)
+    }
+
+    @Test func librarySocketAcceptsReturnedDatesAndRejectsInvalidPagination() async throws {
+        let fixture = try ToolSnapshotFixture()
+        defer { fixture.stop() }
+        let run = try fixture.database.beginLocalACPRun(conversationID: fixture.caller, content: "https://example.com/shared")
+        try fixture.database.completeLocalACPRun(runID: run.runID)
+        try fixture.database.indexLibraryMessages()
+        let item = try #require(fixture.database.libraryItems().first)
+        let endpoint = try fixture.model.endpoint(for: fixture.caller)
+        func request(_ arguments: [String]) async throws -> WovenMatterToolResponse {
+            let data = try JSONEncoder().encode(WovenMatterToolRequest(arguments: ["library"] + arguments))
+            let response = try await runBlockingToolFixture { try WovenMatterCommandLine.forward(data, to: endpoint) }
+            return try JSONDecoder().decode(WovenMatterToolResponse.self, from: response)
+        }
+        let listed = try await request(["list", "--since", item.sentAt, "--sender", "me", "--workspace", "local"])
+        #expect(listed.success)
+        #expect(listed.result?.objectValue?["items"]?.arrayValue?.count == 1)
+        let read = try await request(["read", item.id])
+        #expect(read.success)
+        #expect(read.result?.objectValue?["messageID"]?.stringValue == item.messageID)
+        for option in ["limit", "offset"] {
+            let malformed = try await request(["list", "--" + option, "invalid"])
+            #expect(!malformed.success)
+        }
+        try fixture.model.setEnabled(.library, enabled: false, sessionID: fixture.caller)
+        let denied = try await request(["read", item.id])
+        #expect(!denied.success)
     }
 }

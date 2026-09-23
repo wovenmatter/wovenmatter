@@ -181,6 +181,8 @@ final class ApplicationModel {
     private var openClawGatewayConversationIDs: Set<String> = []
     private var buzzBoundLocalACPConversationIDs: Set<String> = []
     private(set) var workspaceOverview: DashboardWorkspaceOverview?
+    let library = LibraryModel()
+    var libraryMessageTarget: WorkspaceLibraryItem?
     private(set) var calendarItems: [WorkspaceCalendarItemRecord] = []
     private(set) var calendarRuns: [WorkspaceCalendarRun] = []
     private(set) var workspaceRevision: Int64 = 0
@@ -955,6 +957,20 @@ final class ApplicationModel {
             let priorRevision = force || workspaceOverview == nil ? nil : workspaceRevision
             if let snapshot = try await dashboardStore.snapshot(ifChangedFrom: priorRevision) {
                 apply(snapshot)
+            }
+            let libraryLocations = (workspaceOverview?.conversations ?? []).map { conversation in
+                let remote = conversation.remoteWorkspaceID.flatMap { remoteWorkspaces.configuration(id: $0) }
+                let nativeDirectory = openCodeModel(for: conversation.id)?.snapshots[conversation.id]?.info["location"]["directory"].string
+                let root = nativeDirectory.flatMap { $0.isEmpty ? nil : $0 }
+                    ?? (try? dashboardStore.database.toolSessionCreationConfiguration(targetID: conversation.id))?.nativeWorkingDirectory
+                    ?? remote.map { remoteWorkspaces.remoteWorkspaceRoot(for: $0) }
+                    ?? localACPWorkspaceLaunchConfiguration?.rootURL.path
+                    ?? FileManager.default.homeDirectoryForCurrentUser.appending(path: ".woven-matter").path
+                let name = remote?.name ?? (conversation.remoteWorkspaceID == nil ? "Local workspace" : "Remote workspace")
+                return LibraryLocation(conversationID: conversation.id, name: name, root: root)
+            }
+            library.synchronize(service: dashboardStore.library, locations: libraryLocations) { [weak remoteWorkspaces] id in
+                await remoteWorkspaces?.libraryConfiguration(id: id)
             }
             let reconciledRunning = try await dashboardStore
                 .activeAgentConversationIDs()
@@ -1972,11 +1988,6 @@ final class ApplicationModel {
         let workspace = context?.workspace
         guard isBuzzWorkspaceSession || (launch != nil && workspace != nil) else {
             throw ApplicationModelError.localACPRuntimeUnavailable
-        }
-        if runtimeKind == .pi, !input.files.isEmpty {
-            throw AgentMessageAttachmentError.unsupportedForAgent(
-                "Pi RPC does not expose a file attachment contract yet."
-            )
         }
         let input = try await remoteWorkspaces.stagingFiles(of: input, in: conversation.remoteWorkspaceID)
         return try await store.acceptLocalACPPrompt(
@@ -3032,6 +3043,7 @@ final class ApplicationModel {
     }
 
     func shutdownLocalACPSessions() {
+        library.stop()
         toolRuntimeTask?.cancel()
         agentTools?.stop()
         for task in toolCreationTasks.values { task.cancel() }

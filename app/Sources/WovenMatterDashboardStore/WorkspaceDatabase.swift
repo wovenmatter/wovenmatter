@@ -15,8 +15,10 @@ public enum WorkspaceDatabaseError: Error, Equatable {
 public final class WorkspaceDatabase: @unchecked Sendable {
   private let lock = NSLock()
   private var connection: OpaquePointer?
+  let libraryFiles: LibraryFileStore
 
   public init(url: URL) throws {
+    libraryFiles = LibraryFileStore(supportDirectory: url.deletingLastPathComponent())
     var database: OpaquePointer?
     let flags = SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX
     guard sqlite3_open_v2(url.path, &database, flags, nil) == SQLITE_OK, let database else {
@@ -34,6 +36,7 @@ public final class WorkspaceDatabase: @unchecked Sendable {
       try migrateWorkspaceHistory()
       try migrateAgentTools()
       try migrateCalendar()
+      try migrateLibrary()
     } catch {
       sqlite3_close(database)
       connection = nil

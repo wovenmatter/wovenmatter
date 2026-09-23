@@ -264,12 +264,7 @@ final class WorkspaceAgentToolsModel {
             case .timers: result = try timer(command, callerID: callerID, requestID: request.requestID)
             case .calendar: result = try await calendar(command, callerID: callerID, requestID: request.requestID)
             case .usage: result = try await usageHandler(command)
-            case .library:
-                // Main has no retained Library table yet. Never fabricate records
-                // or silently expose conversation history through this capability.
-                if command.action == "read" { throw WorkspaceToolError.invalid("There are no retained Library items in this workspace yet.") }
-                result = .init(result: .object(["items": .array([]), "available": .bool(false),
-                    "detail": .string("The Library does not store items yet.")]))
+            case .library: result = try library(command, callerID: callerID)
             }
             // History queries persist reference IDs in the database's query
             // path. Re-journaling their full response recursively copies history.
@@ -350,6 +345,31 @@ final class WorkspaceAgentToolsModel {
         if command.action == "remove" { try database.removeSessionTimer(id: id, callerID: callerID, requestID: requestID) }
         else { try database.pauseSessionTimer(id: id, paused: command.action == "pause", callerID: callerID, requestID: requestID) }
         return .init(result: .object(["id": .string(id), "status": .string(command.action)]))
+    }
+
+    private func library(_ command: WovenMatterToolCommand, callerID: String) throws -> WovenMatterToolResponse {
+        var query = LibraryQuery()
+        query.search = command.options["search"] ?? ""
+        if let workspace = command.options["workspace"] {
+            query.workspaces = Set(workspace.split(separator: ",").map { String($0).lowercased() })
+        }
+        if let harness = command.options["harness"] {
+            query.harnesses = Set(harness.split(separator: ",").map(String.init))
+        }
+        if let kind = command.options["kind"] {
+            guard let value = LibraryItemKind(rawValue: kind) else { throw WorkspaceToolError.invalid("Use file, link, or photo.") }
+            query.kind = value
+        }
+        if let sender = command.options["sender"] {
+            guard let value = LibrarySender(rawValue: sender) else { throw WorkspaceToolError.invalid("Use me or agent.") }
+            query.sender = value
+        }
+        query.since = try command.options["since"].map(Self.date)
+        query.until = try command.options["until"].map(Self.date)
+        return .init(result: try database.queryAgentLibrary(callerID: callerID,
+            id: command.action == "read" ? try command.required("id", allowPositional: true) : nil,
+            query: query, limit: command.integer("limit", default: 100, range: 1...200),
+            offset: command.integer("offset", default: 0, range: 0...Int.max)))
     }
 
     static func date(_ raw: String) throws -> Date {

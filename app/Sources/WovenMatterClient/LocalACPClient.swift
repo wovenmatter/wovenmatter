@@ -4,6 +4,7 @@ import WovenMatterCore
 
 public enum LocalACPEvent: Equatable, Sendable {
     case assistantChunk(String)
+    case assistantAsset(LibraryAsset)
     case assistantSnapshot(String)
     case sessionIdentity(String)
     case assistantBoundary
@@ -1309,7 +1310,7 @@ public actor LocalACPClient {
                     ]),
                 ]))
             } else {
-                if let remotePath = file.remotePath { linkedPaths.append(remotePath) }
+                linkedPaths.append(file.remotePath ?? file.localURL.path)
                 fileBlocks.append(.object([
                     "type": .string("resource_link"),
                     "uri": .string(uri),
@@ -1325,7 +1326,7 @@ public actor LocalACPClient {
         // in the text. Inlined images and text need no such help.
         if !linkedPaths.isEmpty {
             outboundText += (outboundText.isEmpty ? "" : "\n\n")
-                + "Attached files in this workspace:\n"
+                + "Attached files available to this session:\n"
                 + linkedPaths.map { "- \($0)" }.joined(separator: "\n")
         }
         var blocks: [ACPJSONValue] = []
@@ -2176,7 +2177,20 @@ public actor LocalACPClient {
         switch kind {
         case "agent_message_chunk":
             activeReasoningPhaseID = nil
-            return update["content"]?["text"]?.stringValue.map(LocalACPEvent.assistantChunk)
+            if let text = update["content"]?["text"]?.stringValue { return .assistantChunk(text) }
+            guard let block = update["content"] else { return nil }
+            let resource = block["resource"] ?? block
+            let mime = resource["mimeType"]?.stringValue ?? block["mimeType"]?.stringValue
+            let source = resource["uri"]?.stringValue ?? block["uri"]?.stringValue ?? ""
+            let data = (resource["blob"]?.stringValue ?? block["data"]?.stringValue).flatMap { encoded -> Data? in
+                guard encoded.utf8.count <= Int(AgentMessageAttachmentLimits.maximumFileBytes * 4 / 3 + 8) else { return nil }
+                return Data(base64Encoded: encoded)
+            } ?? resource["text"]?.stringValue.map { Data($0.utf8) }
+            guard !source.isEmpty || data != nil else { return nil }
+            let name = block["name"]?.stringValue ?? resource["name"]?.stringValue
+                ?? (source.isEmpty ? (mime?.hasPrefix("image/") == true ? "Image" : "Attachment") : URL(string: source)?.lastPathComponent ?? "Attachment")
+            return .assistantAsset(LibraryAsset(source: source, title: name,
+                kind: LibraryLinkDiscovery.kind(source: source, mimeType: mime), mimeType: mime, data: data))
         case "agent_thought_chunk":
             guard let text = update["content"]?["text"]?.stringValue else { return nil }
             let reasoningID: String

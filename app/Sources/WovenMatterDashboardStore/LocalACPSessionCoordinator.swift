@@ -105,7 +105,7 @@ struct LocalACPSessionDriver: Sendable {
                 },
                 prompt: { input, onEvent, onPermission, _ in
                     try await client.prompt(
-                        input.textWithReferenceContext,
+                        input,
                         onEvent: onEvent,
                         onPermission: onPermission
                     )
@@ -120,12 +120,7 @@ struct LocalACPSessionDriver: Sendable {
                     )
                 },
                 activeInput: { input in
-                    guard input.files.isEmpty else {
-                        throw AgentMessageAttachmentError.unsupportedForAgent(
-                            "Pi RPC does not advertise a file attachment contract yet."
-                        )
-                    }
-                    try await client.steer(input.transportText())
+                    try await client.steer(input)
                     return LocalACPActiveInputReceipt(
                         completion: Task { nil }
                     )
@@ -390,11 +385,6 @@ public actor LocalACPSessionCoordinator {
             guard descriptor.runtimeKind == launch.runtimeKind else {
                 throw LocalACPSessionDatabaseError.runtimeUnavailable
             }
-            if descriptor.runtimeKind == .pi, !input.files.isEmpty {
-                throw AgentMessageAttachmentError.unsupportedForAgent(
-                    "Pi RPC does not advertise a file attachment contract yet."
-                )
-            }
             let run = try database.beginLocalACPRun(
                 conversationID: conversationID,
                 input: input,
@@ -500,6 +490,15 @@ public actor LocalACPSessionCoordinator {
                 input,
                 { event in
                     switch event {
+                    case .assistantAsset(let asset):
+                        try await streamWriter.finishSegment()
+                        try self.database.recordLibraryOutput(runID: run.runID, asset: asset)
+                        let label = asset.title.replacingOccurrences(of: "[", with: "").replacingOccurrences(of: "]", with: "")
+                        if !asset.source.isEmpty {
+                            try await streamWriter.append("\n[" + label + "](" + asset.source + ")\n")
+                        } else {
+                            try await streamWriter.append("\nAttached " + label + " — open in Library.\n")
+                        }
                     case .assistantChunk(let chunk):
                         try await streamWriter.append(chunk)
                     case .sessionIdentity(let sessionID):
@@ -835,11 +834,6 @@ public actor LocalACPSessionCoordinator {
               let active = activeSessions[conversationID],
               let activeInput = active.client.activeInput else {
             throw LocalACPSessionDatabaseError.steeringUnsupported
-        }
-        if active.runtimeKind == .pi, !input.files.isEmpty {
-            throw AgentMessageAttachmentError.unsupportedForAgent(
-                "Pi RPC does not advertise a file attachment contract yet."
-            )
         }
         try await streamWriter.finishSegmentAndPause()
         let identifiers: LocalACPSteeringIdentifiers
