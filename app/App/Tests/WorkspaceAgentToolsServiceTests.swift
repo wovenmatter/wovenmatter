@@ -131,6 +131,35 @@ extension WorkspaceAgentToolsServiceTests {
     }
 
     @Test(.timeLimit(.minutes(1)))
+    func relayWriterFailureRetiresBeforeNotifyingObservers() async throws {
+        let fixture = try RelayForwardingFixture()
+        defer { fixture.stop() }
+        let holder = RelayForwarderReference()
+        let output = RelayOutputCapture()
+        let notified = DispatchSemaphore(value: 0)
+        let replacement = try fixture.request(slow: false)
+        let forwarder = WovenMatterRelayForwarder(localSocket: fixture.endpoint.path,
+            write: { _ in throw CancellationError() }, onFailure: { error in
+                output.fail(error)
+                // A failure observer must never be able to queue another request
+                // onto a writer that has already failed. Attempt it only once.
+                if output.errors.count == 1 {
+                    #expect(throws: CancellationError.self) {
+                        try holder.value?.submit(id: UUID().uuidString, request: replacement)
+                    }
+                }
+                notified.signal()
+            })
+        holder.value = forwarder
+        defer { forwarder.stop() }
+        try forwarder.submit(id: UUID().uuidString, request: replacement)
+        let notificationFinished = await Task.detached { waitForRelaySignal(notified) }.value
+        #expect(notificationFinished)
+        await forwarder.waitUntilIdle()
+        #expect(output.errors.count == 1)
+    }
+
+    @Test(.timeLimit(.minutes(1)))
     func relayTimeoutRetainsRequestIdentityAndWriterFailureRetiresForwarder() async throws {
         let fixture = try RelayForwardingFixture()
         defer { fixture.stop() }
