@@ -153,7 +153,11 @@ extension WorkspaceAgentToolsServiceTests {
         holder.value = forwarder
         defer { forwarder.stop() }
         try forwarder.submit(id: UUID().uuidString, request: replacement)
-        let notificationFinished = await Task.detached { waitForRelaySignal(notified) }.value
+        let notificationFinished = await withCheckedContinuation { continuation in
+            DispatchQueue(label: "relay-failure-notification").async {
+                continuation.resume(returning: notified.wait(timeout: .now() + 30) == .success)
+            }
+        }
         #expect(notificationFinished)
         await forwarder.waitUntilIdle()
         #expect(output.errors.count == 1)
