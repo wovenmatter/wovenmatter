@@ -17,20 +17,6 @@ public enum WorkspaceFolderMutationError: LocalizedError, Equatable, Sendable {
   }
 }
 
-public enum WorkspaceCalendarMutationError: LocalizedError, Equatable, Sendable {
-  case emptyTitle
-  case invalidDateRange
-
-  public var errorDescription: String? {
-    switch self {
-    case .emptyTitle:
-      "Enter a title for the event."
-    case .invalidDateRange:
-      "The event must end after it starts."
-    }
-  }
-}
-
 // Workspace ownership, surface preferences, folders, overview and calendar.
 extension WorkspaceDatabase {
   public func bindDeviceOwnership(

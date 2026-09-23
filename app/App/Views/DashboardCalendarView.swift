@@ -96,6 +96,11 @@ struct DashboardCalendarSurface: View {
     private let calendar = Calendar.autoupdatingCurrent
     private let columns = Array(repeating: GridItem(.flexible(minimum: 54), spacing: 6), count: 7)
 
+    init(model: ApplicationModel, onOpenSession: @escaping (String) -> Void = { _ in }) {
+        self.model = model
+        self.onOpenSession = onOpenSession
+    }
+
     private var layout: DashboardCalendarMonthLayout { .init(displaying: displayedMonth, calendar: calendar) }
     private var visibleRange: DateInterval {
         let start = layout.days.first?.date ?? selectedDate

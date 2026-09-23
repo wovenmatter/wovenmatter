@@ -2,7 +2,7 @@
 
 ## Scheduled Tasks
 
-**Scheduled Tasks** has four tabs: **Scheduled Tasks**, **Calendar**, **Hermes**,
+**Scheduled Tasks** has four tabs: **Scheduled Tasks**, **Calendar Tasks**, **Hermes**,
 and **OpenClaw**. Use **New task** in the first two tabs to choose the same agent,
 workspace, folder, model, thinking level, permissions, tools, prompt, and repeat
 schedule available in Calendar. Standalone tasks stay off the calendar by default.
