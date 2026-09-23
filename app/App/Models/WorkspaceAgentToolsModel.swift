@@ -10,6 +10,8 @@ final class WorkspaceAgentToolsModel {
     typealias NoteHandler = @MainActor (String, NoteEditingRequest, String) async throws -> NoteEditingResponse
     typealias NoteRestoreHandler = @MainActor (String, String, String, String, String) async throws -> NoteEditingResponse
     typealias UsageHandler = @MainActor (WovenMatterToolCommand) async throws -> WovenMatterToolResponse
+    typealias CalendarTaskHandler = @MainActor (String, WovenMatterToolCommand, WorkspaceCalendarTask?) async throws -> WorkspaceCalendarTask
+    let calendarTaskHandler: CalendarTaskHandler?
     let database: WorkspaceDatabase
     private(set) var settings: WorkspaceToolSettings
     private(set) var sessionPolicies: [String: WorkspaceSessionTools] = [:]
@@ -33,7 +35,8 @@ final class WorkspaceAgentToolsModel {
 
     init(database: WorkspaceDatabase, sessionHandler: @escaping SessionHandler,
          noteHandler: @escaping NoteHandler, noteRestoreHandler: @escaping NoteRestoreHandler, usageHandler: @escaping UsageHandler,
-         onMutation: @escaping @MainActor () async -> Void) throws {
+         calendarTaskHandler: CalendarTaskHandler? = nil, onMutation: @escaping @MainActor () async -> Void) throws {
+        self.calendarTaskHandler = calendarTaskHandler
         self.database = database
         self.settings = try database.toolSettings()
         self.sessionHandler = sessionHandler
@@ -259,14 +262,9 @@ final class WorkspaceAgentToolsModel {
                     result = .init(result: try database.listAgentFolders(callerID: callerID))
                 } else { result = try await sessionHandler(callerID, command, request) }
             case .timers: result = try timer(command, callerID: callerID, requestID: request.requestID)
-            case .calendar: result = try calendar(command, callerID: callerID, requestID: request.requestID)
+            case .calendar: result = try await calendar(command, callerID: callerID, requestID: request.requestID)
             case .usage: result = try await usageHandler(command)
-            case .library:
-                // Main has no retained Library table yet. Never fabricate records
-                // or silently expose conversation history through this capability.
-                if command.action == "read" { throw WorkspaceToolError.invalid("There are no retained Library items in this workspace yet.") }
-                result = .init(result: .object(["items": .array([]), "available": .bool(false),
-                    "detail": .string("The Library does not store items yet.")]))
+            case .library: result = try library(command, callerID: callerID)
             }
             // History queries persist reference IDs in the database's query
             // path. Re-journaling their full response recursively copies history.
@@ -349,21 +347,29 @@ final class WorkspaceAgentToolsModel {
         return .init(result: .object(["id": .string(id), "status": .string(command.action)]))
     }
 
-    private func calendar(_ command: WovenMatterToolCommand, callerID: String, requestID: String) throws -> WovenMatterToolResponse {
-        if command.action == "list" {
-            return .init(result: try database.listAgentCalendar(callerID: callerID,
-                since: command.options["since"].map(Self.date), until: command.options["until"].map(Self.date),
-                after: Int64(command.integer("after", default: 0, range: 0...Int.max)), limit: command.integer("limit", default: 100, range: 1...200)))
+    private func library(_ command: WovenMatterToolCommand, callerID: String) throws -> WovenMatterToolResponse {
+        var query = LibraryQuery()
+        query.search = command.options["search"] ?? ""
+        if let workspace = command.options["workspace"] {
+            query.workspaces = Set(workspace.split(separator: ",").map { String($0).lowercased() })
         }
-        if command.action == "remove" {
-            try database.removeAgentCalendar(callerID: callerID, id: command.required("id", allowPositional: true), requestID: requestID)
-            return .init()
+        if let harness = command.options["harness"] {
+            query.harnesses = Set(harness.split(separator: ",").map(String.init))
         }
-        let creating = command.action == "create"
-        let id = try database.saveAgentCalendar(callerID: callerID, id: creating ? requestID : command.required("id", allowPositional: true),
-            creating: creating, title: command.required("title"), details: command.options["description"], startsAt: Self.date(command.required("starts-at")),
-            endsAt: command.options["ends-at"].map(Self.date), allDay: command.options["all-day"] != nil, requestID: requestID)
-        return .init(result: .object(["id": .string(id)]))
+        if let kind = command.options["kind"] {
+            guard let value = LibraryItemKind(rawValue: kind) else { throw WorkspaceToolError.invalid("Use file, link, or photo.") }
+            query.kind = value
+        }
+        if let sender = command.options["sender"] {
+            guard let value = LibrarySender(rawValue: sender) else { throw WorkspaceToolError.invalid("Use me or agent.") }
+            query.sender = value
+        }
+        query.since = try command.options["since"].map(Self.date)
+        query.until = try command.options["until"].map(Self.date)
+        return .init(result: try database.queryAgentLibrary(callerID: callerID,
+            id: command.action == "read" ? try command.required("id", allowPositional: true) : nil,
+            query: query, limit: command.integer("limit", default: 100, range: 1...200),
+            offset: command.integer("offset", default: 0, range: 0...Int.max)))
     }
 
     static func date(_ raw: String) throws -> Date {

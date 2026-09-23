@@ -43,6 +43,11 @@ struct DashboardConversationScrollState: Equatable {
     mutating func setNearBottom(_ isNearBottom: Bool) {
         self.isNearBottom = isNearBottom
     }
+
+    mutating func sourceMessagePositioned(in conversationID: String) {
+        positionedConversationID = conversationID
+        isNearBottom = false
+    }
 }
 
 private struct DashboardConversationMessageRow: Identifiable {
@@ -113,6 +118,8 @@ struct DashboardCloudConversation: View {
     @State private var bottomStackHeight: CGFloat = 0
     @State private var scrollInteractionRevision = 0
     @State private var isUserScrolling = false
+    @State private var libraryHighlightID: String?
+    @State private var librarySourceMessageID: String?
 
     var body: some View {
         let runsByAssistantMessageID = self.runsByAssistantMessageID
@@ -121,7 +128,7 @@ struct DashboardCloudConversation: View {
         let referencesByMessageID = Dictionary(grouping: messageReferences, by: \.messageID)
         let visibleMessages = messages.filter { record in
             DashboardRunDisplayPolicy.presentsMessage(record, run: runsByAssistantMessageID[record.id])
-                && (conversation?.localRuntimeKind != .opencode || workspaceOpenCode?.links[record.conversationID] == nil
+                && (record.id == librarySourceMessageID || conversation?.localRuntimeKind != .opencode || workspaceOpenCode?.links[record.conversationID] == nil
                     || workspaceOpenCode?.snapshots[record.conversationID]?.messages.contains(where: { $0["id"].text == record.clientMessageID && OpenCodeSessionSnapshot.presentsMessage($0) }) == true)
         }
         let openCodeOrder = Dictionary((conversation.flatMap { workspaceOpenCode?.snapshots[$0.id]?.messages } ?? []).enumerated().map { ($0.element["id"].text, $0.offset) }, uniquingKeysWith: { first, _ in first })
@@ -233,6 +240,7 @@ struct DashboardCloudConversation: View {
                                     }
                                 }
                                 .id(row.id)
+                                .background(row.id == libraryHighlightID ? theme.palette.themeWhisper : Color.clear)
                                 .padding(.top, row.id == rows.first?.id ? 0 : row.spacingBefore)
                             }
                         }
@@ -248,6 +256,9 @@ struct DashboardCloudConversation: View {
                     .scrollTargetLayout()
                 }
                 .scrollIndicators(.never)
+                .task(id: [model.libraryMessageTarget?.id, conversation?.id]) {
+                    await scrollToLibraryMessage(using: proxy)
+                }
                 .onDisappear { model.agentTools?.observeSession(nil, token: toolObservationToken) }
                 .environment(\.conversationTranscriptInteraction) {
                     transcriptOwnsScroll = true
@@ -277,6 +288,7 @@ struct DashboardCloudConversation: View {
                 } action: { oldGeometry, newGeometry in
                     let followedBottomBeforeGrowth = oldGeometry.contentHeight != newGeometry.contentHeight
                         && scrollState.isNearBottom && !isUserScrolling && !isPrependingHistory
+                        && model.libraryMessageTarget?.conversationID != conversation?.id
                     let isPositioningConversation = pendingBottomConversationID == conversation?.id
                         && newestPresentedMessageIdentity != nil
                     scrollState.setNearBottom(newGeometry.isNearBottom && !transcriptOwnsScroll)
@@ -311,15 +323,16 @@ struct DashboardCloudConversation: View {
                 .onChange(of: conversation?.id, initial: true) { _, conversationID in
                     model.agentTools?.observeSession(conversationID, token: toolObservationToken)
                     isUserScrolling = false
-                    transcriptOwnsScroll = false
+                    transcriptOwnsScroll = model.libraryMessageTarget?.conversationID == conversationID
                     scrollInteractionRevision += 1
                     scrollState.conversationChanged(to: conversationID)
-                    pendingBottomConversationID = conversationID
+                    if transcriptOwnsScroll { scrollState.setNearBottom(false) }
+                    pendingBottomConversationID = model.libraryMessageTarget?.conversationID == conversationID ? nil : conversationID
                     bottomPositionRevision += 1
                     scrollPositionID = nil
                 }
                 .onChange(of: newestPresentedMessageIdentity, initial: true) { _, identity in
-                    guard identity != nil else { return }
+                    guard identity != nil, model.libraryMessageTarget?.conversationID != conversation?.id else { return }
                     let action = scrollState.contentChanged(
                         conversationID: conversation?.id,
                         hasMessages: !visibleMessages.isEmpty,
@@ -689,6 +702,47 @@ struct DashboardCloudConversation: View {
 
     private func historyLoaderID(oldestMessageID: String) -> String {
         "chat-history:\(conversation?.id ?? "none"):\(oldestMessageID)"
+    }
+
+    @MainActor
+    private func scrollToLibraryMessage(using proxy: ScrollViewProxy) async {
+        guard let item = model.libraryMessageTarget, item.conversationID == conversation?.id else { return }
+        pendingBottomConversationID = nil
+        bottomPositionRevision += 1
+        scrollInteractionRevision += 1
+        transcriptOwnsScroll = true
+        scrollState.setNearBottom(false)
+        // A Library source can outlive the live OpenCode snapshot's message window.
+        librarySourceMessageID = item.messageID
+        await model.refreshConversation(id: item.conversationID)
+        while !Task.isCancelled,
+              model.conversationState(for: item.conversationID)?.content?.messages.contains(where: { $0.id == item.messageID }) != true {
+            if model.conversationState(for: item.conversationID)?.isLoadingOlderMessages == true {
+                try? await Task.sleep(for: .milliseconds(25))
+                continue
+            }
+            guard await model.loadOlderConversationMessages(id: item.conversationID) else { break }
+        }
+        guard !Task.isCancelled, conversation?.id == item.conversationID else { return }
+        await Task.yield()
+        try? await Task.sleep(for: .milliseconds(100))
+        guard !Task.isCancelled, model.libraryMessageTarget?.id == item.id,
+              conversation?.id == item.conversationID else { return }
+        guard model.conversationState(for: item.conversationID)?.content?.messages.contains(where: { $0.id == item.messageID }) == true else {
+            model.conversationState(for: item.conversationID)?.setError("This source message is no longer available.")
+            model.libraryMessageTarget = nil
+            return
+        }
+        libraryHighlightID = item.messageID
+        scrollState.sourceMessagePositioned(in: item.conversationID)
+        scrollPositionID = nil
+        scrollWithoutAnimation(proxy, to: item.messageID, anchor: .top)
+        pendingBottomConversationID = nil
+        try? await Task.sleep(for: .seconds(2))
+        if libraryHighlightID == item.messageID { libraryHighlightID = nil }
+        if !Task.isCancelled, model.libraryMessageTarget?.id == item.id {
+            model.libraryMessageTarget = nil
+        }
     }
 
     @MainActor

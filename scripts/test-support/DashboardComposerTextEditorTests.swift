@@ -72,6 +72,7 @@ private func expect(
 @MainActor
 struct DashboardComposerTextEditorTests {
     static func main() {
+        testAttachmentPasteLeavesTextUntouched()
         testShiftReturnReplacesSelectionWithoutSubmitting()
         testPlainReturnSubmitsWithoutEditing()
         testKeyRoutingPreservesMarkedTextAndStandardBindings()
@@ -87,6 +88,32 @@ struct DashboardComposerTextEditorTests {
         testNativeFocusUpdatesTheBindingImmediately()
         testStaleBlurDoesNotCancelManualRefocus()
         print("Dashboard composer native text behavior passed.")
+    }
+
+    private static func testAttachmentPasteLeavesTextUntouched() {
+        let textView = DashboardComposerNativeTextView()
+        textView.string = "Keep this draft"
+        let board = NSPasteboard.withUniqueName()
+        defer { board.releaseGlobally() }
+        let file = URL(fileURLWithPath: "/tmp/attachment fixture.pdf")
+        board.writeObjects([file as NSURL])
+        var attached: [URL] = []
+        textView.onAttachFiles = { attached = $0; return true }
+        expect(textView.attach(from: board), "File paste should use attachment callback")
+        expect(attached == [file], "File URL should preserve spaces")
+        expect(textView.string == "Keep this draft", "File paste must not replace the draft")
+        board.clearContents()
+        let image = NSImage(size: NSSize(width: 4, height: 4))
+        image.lockFocus(); NSColor.green.setFill(); NSRect(x: 0, y: 0, width: 4, height: 4).fill(); image.unlockFocus()
+        board.writeObjects([image])
+        expect(textView.attach(from: board), "Screenshot paste should create an attachment")
+        expect(attached.first?.pathExtension == "png", "Screenshot must be a real PNG")
+        if let url = attached.first {
+            expect(NSImage(contentsOf: url) != nil, "Staged screenshot should decode")
+            try? FileManager.default.removeItem(at: url.deletingLastPathComponent())
+        }
+        board.clearContents(); board.setString("ordinary text", forType: .string)
+        expect(!textView.attach(from: board), "Text paste should remain native")
     }
 
     private static func testShiftReturnReplacesSelectionWithoutSubmitting() {

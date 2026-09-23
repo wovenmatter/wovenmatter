@@ -83,6 +83,16 @@ extension WorkspaceDatabase {
         try bind(visibleText, at: 5, to: insert)
         try bind(status, at: 6, to: insert); try bind(created, at: 7, to: insert); try bind(now, at: 8, to: insert)
         try bind(conversationID, at: 9, to: insert); try stepDone(insert)
+        let hasStoredInputFiles = !(try historyRowsUnlocked("SELECT 1 FROM dashboard_message_attachments WHERE message_id=? LIMIT 1", values: [id])).isEmpty
+        if status != "streaming", assistant || !hasStoredInputFiles {
+          for file in message["files"].array + message["content"].array.filter({ $0["type"].text == "file" }) {
+            let source = file["uri"].string ?? file["source"]["uri"].text
+            let mime = file["mime"].string ?? file["mimeType"].string
+            let title = file["name"].string ?? URL(string: source)?.lastPathComponent ?? "Attachment"
+            try captureNativeLibraryFileUnlocked(source: source, title: title, mime: mime, base64: file["data"].string,
+              messageID: id, conversationID: conversationID)
+          }
+        }
         if let deliveryID = inputContext?["delivery_id"]?.stringValue {
           try toolsExecuteUnlocked("UPDATE workspace_session_deliveries SET message_id=?,status='accepted' WHERE id=? AND target_id=? AND (message_id IS NULL OR message_id=?)", [id, deliveryID, conversationID, id])
         }
@@ -131,7 +141,7 @@ extension WorkspaceDatabase {
       try bind(now, at: 4, to: update); try bind(conversationID, at: 5, to: update); try stepDone(update)
   }
 
-  public func saveOpenCodeSubmission(conversationID: String, id: String, payload: OpenCodeValue, status: String, visibleText: String? = nil, deliveryID: String? = nil) throws {
+  public func saveOpenCodeSubmission(conversationID: String, id: String, payload: OpenCodeValue, status: String, visibleText: String? = nil, deliveryID: String? = nil, input: AgentMessageInput? = nil) throws {
     try transaction {
       if let deliveryID { try markToolDeliveryTransportStartedUnlocked(id: deliveryID) }
       let statement = try prepareUnlocked("""
@@ -141,6 +151,16 @@ extension WorkspaceDatabase {
       defer { sqlite3_finalize(statement) }
       try bind(id, at: 1, to: statement); try bind(conversationID, at: 2, to: statement)
       try bind(payload.json, at: 3, to: statement); try bind(status, at: 4, to: statement); try stepDone(statement)
+      if let input, !input.attachments.isEmpty,
+         let row = try historyRowsUnlocked("SELECT user_id,agent_id,authority_device_id FROM dashboard_conversations WHERE id=?", values: [conversationID]).first?.objectValue,
+         let device = row["authority_device_id"]?.stringValue.flatMap(UUID.init(uuidString:)) {
+        let messageID = "opencode:\(conversationID):\(id)"
+        if (try historyRowsUnlocked("SELECT 1 FROM dashboard_message_attachments WHERE message_id=? UNION ALL SELECT 1 FROM dashboard_message_references WHERE message_id=?", values: [messageID, messageID])).isEmpty {
+          try insertMessageAttachmentsUnlocked(input.attachments, conversationID: conversationID, messageID: messageID,
+            userID: row["user_id"]?.stringValue ?? "", agentID: row["agent_id"]?.stringValue ?? "",
+            ownerDeviceID: device, governingPlane: .wovenmatterMacOS, createdAt: Date())
+        }
+      }
       if let visibleText {
         if let deliveryID {
           guard !(try historyRowsUnlocked("SELECT 1 FROM workspace_session_deliveries WHERE id=? AND target_id=? AND status='sending'", values: [deliveryID, conversationID])).isEmpty else {

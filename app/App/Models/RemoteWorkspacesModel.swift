@@ -289,6 +289,12 @@ final class RemoteWorkspacesModel {
             }) == true)
     }
 
+    func libraryConfiguration(id: String) -> RemoteWorkspaceConfiguration? {
+        guard isCredentialAccessEnabled, let id = UUID(uuidString: id),
+              !invalidatingWorkspaceIDs.contains(id), statuses[id]?.running == true else { return nil }
+        return configuration(id: id)
+    }
+
     func refreshAll() {
         guard isCredentialAccessEnabled else { return }
         for workspace in workspaces { refresh(workspace) }

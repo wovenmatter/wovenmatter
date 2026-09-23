@@ -235,8 +235,36 @@ public actor PiRPCClient {
         return configuration
     }
 
+    public func prompt(_ input: AgentMessageInput, onEvent: LocalACPClient.EventHandler? = nil,
+                       onPermission: LocalACPClient.PermissionHandler? = nil) async throws -> LocalACPStopReason {
+        let payload = try Self.attachmentPayload(input)
+        return try await prompt(payload.text, images: payload.images, onEvent: onEvent, onPermission: onPermission)
+    }
+
+    public func steer(_ input: AgentMessageInput) async throws {
+        let payload = try Self.attachmentPayload(input)
+        try await steer(payload.text, images: payload.images)
+    }
+
+    static func attachmentPayload(_ input: AgentMessageInput) throws -> (text: String, images: [[String: String]]) {
+        var text = input.transportText(), images: [[String: String]] = []
+        for file in input.files {
+            if file.kind == .image {
+                let bytes = try Data(contentsOf: file.localURL)
+                guard bytes.count <= AgentMessageAttachmentLimits.maximumFileBytes else {
+                    throw AgentMessageAttachmentError.fileTooLarge(name: file.fileName, maximumBytes: AgentMessageAttachmentLimits.maximumFileBytes)
+                }
+                images.append(["type": "image", "data": bytes.base64EncodedString(), "mimeType": file.mimeType])
+            } else {
+                text += "\nAttached file: " + file.fileName + "\n" + (file.remotePath ?? file.localURL.path) + "\n"
+            }
+        }
+        return (text, images)
+    }
+
     public func prompt(
         _ text: String,
+        images: [[String: String]] = [],
         onEvent: LocalACPClient.EventHandler? = nil,
         onPermission: LocalACPClient.PermissionHandler? = nil
     ) async throws -> LocalACPStopReason {
@@ -268,6 +296,7 @@ public actor PiRPCClient {
                 let response = try await sendCommand([
                     "type": "prompt",
                     "message": text,
+                    "images": images,
                 ])
                 if response["success"] as? Bool != true {
                     throw PiRPCClientError.commandFailed(
@@ -292,10 +321,11 @@ public actor PiRPCClient {
         }
     }
 
-    public func steer(_ text: String) async throws {
+    public func steer(_ text: String, images: [[String: String]] = []) async throws {
         let response = try await sendCommand([
             "type": "steer",
             "message": text,
+            "images": images,
         ])
         guard response["success"] as? Bool == true else {
             throw PiRPCClientError.commandFailed(

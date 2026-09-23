@@ -842,6 +842,9 @@ public actor OpenClawGatewayCoordinator {
         active.liveToolCallIDs.insert(activity.id)
       }
     }
+    if projection.terminalState != nil, let payload = event.payload, let assistantMessageID {
+      try? database.captureGatewayLibraryFiles(payload, messageID: assistantMessageID, conversationID: active.conversationID)
+    }
     if let terminal = projection.terminalState {
       active.assistantSource.finish(runID: remoteRunID)
       active.terminalStatesByRemoteRunID[remoteRunID] = terminal
@@ -1376,15 +1379,26 @@ public actor OpenClawGatewayCoordinator {
     let description = try await client.request(
       "sessions.describe", params: .object(["key": .string(descriptor.sessionKey)])
     )
-    let session = description.objectValue?["session"]?.objectValue ?? [:]
+    return try await sessionMetadata(client: client, sessionKey: descriptor.sessionKey,
+      session: description.objectValue?["session"]?.objectValue ?? [:])
+  }
+
+  public func calendarTaskMetadata(agentID: UUID, model: String?) async throws -> LocalACPSessionMetadata {
+    let client = try await client(agentID: agentID)
+    return try await sessionMetadata(client: client, sessionKey: "agent:main:main",
+      session: model.map { ["model": .string($0)] } ?? [:], includeCommands: false)
+  }
+
+  private func sessionMetadata(client: OpenClawGatewayClient, sessionKey: String,
+      session: [String: GatewayJSONValue], includeCommands: Bool = true) async throws -> LocalACPSessionMetadata {
     let rawModel = session["model"]?.stringValue
     let provider = session["modelProvider"]?.stringValue
     let selectedModel = rawModel.map { model in
       model.contains("/") || provider?.isEmpty != false ? model : provider! + "/" + model
     }
-    let agentID = OpenClawGatewaySession.agentID(for: descriptor.sessionKey)
+    let agentID = OpenClawGatewaySession.agentID(for: sessionKey)
     var modelParams = Self.modelsListParameters.objectValue ?? [:]
-    modelParams["sessionKey"] = .string(descriptor.sessionKey)
+    modelParams["sessionKey"] = .string(sessionKey)
     modelParams["includeDetails"] = .bool(true)
     if let agentID { modelParams["agentId"] = .string(agentID) }
     let catalog = try await client.request("models.list", params: .object(modelParams))
@@ -1428,9 +1442,9 @@ public actor OpenClawGatewayCoordinator {
         )
       }
     }
-    let commands = await Self.slashCommands(client: client, agentID: agentID, sessionKey: descriptor.sessionKey)
+    let commands = includeCommands ? await Self.slashCommands(client: client, agentID: agentID, sessionKey: sessionKey) : []
     return LocalACPSessionMetadata(
-      sessionKey: descriptor.sessionKey,
+      sessionKey: sessionKey,
       model: selectedModel,
       thinking: session["thinkingLevel"]?.stringValue,
       modelOptions: configuredModels,

@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A71B00000000000000000101 /* LibraryModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A71B00000000000000000102 /* LibraryModel.swift */; };
+		A71B00000000000000000001 /* DashboardLibraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A71B00000000000000000002 /* DashboardLibraryView.swift */; };
 		0890236A7DEEC4A26AB512AB /* DictationModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E4AE75EDB3C1EE9E7043F59 /* DictationModel.swift */; };
 		E95F4392C674DA52368A05A6 /* DictationAudioCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = 851DA88EE3B3AF907B5AB390 /* DictationAudioCapture.swift */; };
 		B93AB31EDDA3C1A9D35A791B /* DictationEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = FCBB65211C7015A6B8158E80 /* DictationEditor.swift */; };
@@ -80,9 +82,17 @@
 		1A239171AFDF4F0AA55642C4 /* wovenmatter-remote.py in Resources */ = {isa = PBXBuildFile; fileRef = 3C0A700E6F1C4902ACCF3585 /* wovenmatter-remote.py */; };
 		F19000000000000000000001 /* DashboardNoteDocumentCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = F19000000000000000000002 /* DashboardNoteDocumentCache.swift */; };
 		A14000000000000000000001 /* ApplicationModel+SessionSelections.swift in Sources */ = {isa = PBXBuildFile; fileRef = A14000000000000000000002 /* ApplicationModel+SessionSelections.swift */; };
+		A13EC094A3DEA4F302868640 /* ApplicationModel+Calendar.swift in Sources */ = {isa = PBXBuildFile; fileRef = B88F25850147F01B163EDF7E /* ApplicationModel+Calendar.swift */; };
+		E9A58E7B05C5C2726FA4EE82 /* WorkspaceAgentToolsModel+Calendar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C678F616FB535F772A00598 /* WorkspaceAgentToolsModel+Calendar.swift */; };
+		F4743517D41721ACB550EE94 /* DashboardCalendarEventSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8AA41DB8B4A4AF41CCC355A1 /* DashboardCalendarEventSheet.swift */; };
+		22101ADAF84DA8CEE85A4AB8 /* DashboardCalendarTaskFields.swift in Sources */ = {isa = PBXBuildFile; fileRef = D6DCB1F7BFAF35416DF437EE /* DashboardCalendarTaskFields.swift */; };
+		C47EAA780000000000000001 /* DashboardCalendarFormControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = C47EAA780000000000000002 /* DashboardCalendarFormControls.swift */; };
+		C47EAA780000000000000003 /* DashboardCalendarColors.swift in Sources */ = {isa = PBXBuildFile; fileRef = C47EAA780000000000000004 /* DashboardCalendarColors.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		A71B00000000000000000102 /* LibraryModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryModel.swift; sourceTree = "<group>"; };
+		A71B00000000000000000002 /* DashboardLibraryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardLibraryView.swift; sourceTree = "<group>"; };
 		7E4AE75EDB3C1EE9E7043F59 /* DictationModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictationModel.swift; sourceTree = "<group>"; };
 		851DA88EE3B3AF907B5AB390 /* DictationAudioCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictationAudioCapture.swift; sourceTree = "<group>"; };
 		FCBB65211C7015A6B8158E80 /* DictationEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictationEditor.swift; sourceTree = "<group>"; };
@@ -157,6 +167,12 @@
 		3C0A700E6F1C4902ACCF3585 /* wovenmatter-remote.py */ = {isa = PBXFileReference; lastKnownFileType = text.script.python; path = "wovenmatter-remote.py"; sourceTree = "<group>"; };
 		F19000000000000000000002 /* DashboardNoteDocumentCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardNoteDocumentCache.swift; sourceTree = "<group>"; };
 		A14000000000000000000002 /* ApplicationModel+SessionSelections.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ApplicationModel+SessionSelections.swift"; sourceTree = "<group>"; };
+		B88F25850147F01B163EDF7E /* ApplicationModel+Calendar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ApplicationModel+Calendar.swift"; sourceTree = "<group>"; };
+		7C678F616FB535F772A00598 /* WorkspaceAgentToolsModel+Calendar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WorkspaceAgentToolsModel+Calendar.swift"; sourceTree = "<group>"; };
+		8AA41DB8B4A4AF41CCC355A1 /* DashboardCalendarEventSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DashboardCalendarEventSheet.swift"; sourceTree = "<group>"; };
+		D6DCB1F7BFAF35416DF437EE /* DashboardCalendarTaskFields.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DashboardCalendarTaskFields.swift"; sourceTree = "<group>"; };
+		C47EAA780000000000000002 /* DashboardCalendarFormControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DashboardCalendarFormControls.swift"; sourceTree = "<group>"; };
+		C47EAA780000000000000004 /* DashboardCalendarColors.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DashboardCalendarColors.swift"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -221,7 +237,10 @@
 				A14000000000000000000002 /* ApplicationModel+SessionSelections.swift */,
 				3CE258FB55B3D55A39972D5B /* OpenCodeModel.swift */,
 				D472AB9160464F1FAB826C11 /* ApplicationModel+AgentTools.swift */,
+				B88F25850147F01B163EDF7E /* ApplicationModel+Calendar.swift */,
 				20E807F893654CD4A1F24D40 /* WorkspaceAgentToolsModel.swift */,
+				7C678F616FB535F772A00598 /* WorkspaceAgentToolsModel+Calendar.swift */,
+				A71B00000000000000000102 /* LibraryModel.swift */,
 				87BA82494C4524C032235AAF /* DashboardConversationReferencePreview.swift */,
 				C06300000000000000000002 /* ApplicationUsageModel.swift */,
 				FC6A850ACFC17DE4433439A7 /* DashboardConversationState.swift */,
@@ -260,6 +279,11 @@
 				D49000000000000000000003 /* ConversationMarkdown.swift */,
 				D49200000000000000000003 /* ConversationWorkTranscript.swift */,
 				D45300000000000000000002 /* DashboardCalendarView.swift */,
+				D6DCB1F7BFAF35416DF437EE /* DashboardCalendarTaskFields.swift */,
+				C47EAA780000000000000002 /* DashboardCalendarFormControls.swift */,
+				C47EAA780000000000000004 /* DashboardCalendarColors.swift */,
+				8AA41DB8B4A4AF41CCC355A1 /* DashboardCalendarEventSheet.swift */,
+				A71B00000000000000000002 /* DashboardLibraryView.swift */,
 				D45400000000000000000002 /* DashboardUsageView.swift */,
 				D45100000000000000000002 /* DashboardDesign.swift */,
 				A11C00000000000000000004 /* WorkspaceView.swift */,
@@ -450,7 +474,10 @@
 				F10100000000000000000001 /* ArtifactEditor.swift in Sources */,
 				F10200000000000000000001 /* DashboardDatabasesView.swift in Sources */,
 				D472AB9160464F1FAB826C12 /* ApplicationModel+AgentTools.swift in Sources */,
+				A13EC094A3DEA4F302868640 /* ApplicationModel+Calendar.swift in Sources */,
 				5C84BF439B9047118002DD70 /* WorkspaceAgentToolsModel.swift in Sources */,
+				E9A58E7B05C5C2726FA4EE82 /* WorkspaceAgentToolsModel+Calendar.swift in Sources */,
+				A71B00000000000000000101 /* LibraryModel.swift in Sources */,
 				E10100000000000000000001 /* WovenNoteService.swift in Sources */,
 				0D0C4EE8248E4F63A87CF7B4 /* WovenMatterRemoteToolBridge.swift in Sources */,
 				A76B232332644C4E91ECB1DC /* WovenMatterToolService.swift in Sources */,
@@ -461,6 +488,11 @@
 				D49300000000000000000001 /* ConversationMessageLayout.swift in Sources */,
 				D49200000000000000000001 /* ConversationWorkTranscript.swift in Sources */,
 				D45300000000000000000001 /* DashboardCalendarView.swift in Sources */,
+				22101ADAF84DA8CEE85A4AB8 /* DashboardCalendarTaskFields.swift in Sources */,
+				C47EAA780000000000000001 /* DashboardCalendarFormControls.swift in Sources */,
+				C47EAA780000000000000003 /* DashboardCalendarColors.swift in Sources */,
+				F4743517D41721ACB550EE94 /* DashboardCalendarEventSheet.swift in Sources */,
+				A71B00000000000000000001 /* DashboardLibraryView.swift in Sources */,
 				D45400000000000000000001 /* DashboardUsageView.swift in Sources */,
 				D45100000000000000000001 /* DashboardDesign.swift in Sources */,
 				A11C00000000000000000003 /* WorkspaceView.swift in Sources */,

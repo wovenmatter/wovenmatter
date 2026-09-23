@@ -765,7 +765,7 @@ extension WorkspaceDatabase {
     }
   }
 
-  private func insertMessageAttachmentsUnlocked(
+  func insertMessageAttachmentsUnlocked(
     _ attachments: [AgentMessageAttachmentDraft],
     conversationID: String,
     messageID: String,

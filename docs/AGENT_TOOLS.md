@@ -21,8 +21,8 @@ The composer has a compact Tools dropdown with seven independent groups:
 | Session management | Discover session metadata, create sessions, message, inspect managed sessions and manage coordination |
 | Timers | Create, inspect, update, pause, resume and remove persistent session follow-ups |
 | Usage data | Read recorded usage; no mutation or credential access |
-| Calendar | Read, create, update and delete events, subject to the configured access mode |
-| Library | Reports that retained items are unavailable; Library storage is not implemented yet |
+| Calendar | Read, create, edit, copy, detach and delete events and scheduled tasks, subject to the configured access mode |
+| Library | List and read exchanged-item metadata, original links, retention status, and source message IDs |
 
 All groups initially default to enabled. General settings, below Conversation
 titles, defines defaults for newly opened sessions. Session controls enable or
@@ -99,8 +99,8 @@ Timers return to a session with a saved instruction, supporting one-time and
 recurring follow-ups. Definitions persist, but execute only while Woven Matter
 is running. Pausing, disabling or deleting removes active timer indicators.
 Disabling the Timers group with active timers asks the user to confirm pausing
-them. Ordinary in-session timers remain distinct from provider Cron Jobs;
-broader scheduled-job authoring can grow through the same command surface.
+them. Ordinary in-session timers remain distinct from provider Cron Jobs and
+Calendar tasks that create or reuse a configured session.
 
 General settings provides these independent limits:
 
@@ -113,7 +113,41 @@ The running-session count covers Woven Matter sessions, not provider-internal
 subagents. There is no configurable per-destination coordinator count: the fixed rule is one.
 At the active-session limit, a user send in another idle session is blocked with
 a pop-up before dispatch. No limit message is sent to a harness. Existing work
-and supported steering continue; there is no automatic global capacity queue.
+and supported steering continue. Calendar tasks wait for capacity and an idle
+destination; ordinary user sends do not enter an automatic capacity queue.
+
+## Calendar events and scheduled tasks
+
+`wovenmatter calendar help` describes the shared Calendar command surface.
+`create` and `update` accept a title, description, start/end, all-day or timed
+status, time zone, and `--repeat-unit day|week|month` with `--repeat-interval`.
+Add `--prompt` to schedule a normal agent session. Task configuration supports
+`--harness`, `--model`, `--thinking`, `--workspace local|UUID`, `--directory`,
+`--folder UUID|all`, and `--session-mode same|new`. Creation requires both
+Calendar write access and Session management. Permissions and tools are
+captured from user-owned session defaults, and can be changed by the user in
+the Calendar editor; an agent cannot raise these through CLI flags.
+
+Updates preserve unspecified settings. `--regular-event` removes execution;
+`--no-repeat` removes recurrence. `update` changes the entire series. To edit
+one occurrence, use `detach ID --occurrence N`; the resulting independent event
+keeps the settings and creator, records the editor, and no longer repeats. There
+is no linked single-occurrence override. `copy ID --starts-at ISO_DATE` creates
+a new one-time event. `remove` deletes the series, or only `--occurrence N`.
+
+`read ID` returns the event, revision, attribution, and run-to-session links.
+Pass `--revision` to reject stale updates/deletions. `list` returns paginated
+definitions; recurring definitions can span the requested range. Use
+`occurrences ID --since ISO_DATE --until ISO_DATE` for the actual occurrence
+indices in a window of at most one year.
+
+Calendar tasks persist through restarts. Every overdue independent task runs;
+each recurring series catches up once. The default recurring mode reuses one
+session, with an option to create a new session for every occurrence. Durable
+receipts prevent duplicate submissions. A lost native acknowledgement remains
+uncertain and is never blindly retried; later recurring occurrences still run.
+Edits and deletion cancel pending sends before transport starts, and completed
+sessions remain accessible after event deletion.
 
 ## Capture, recovery and compatibility
 
@@ -151,4 +185,12 @@ an unsigned native app. The interactive hover fixture runs separately through
 Fixtures do not establish live provider compatibility or rendered UI behavior.
 Before release, check the session settings and local/remote workflows you use,
 including attachments, timer delivery, permission requests, and note recovery.
-Older imported history remains partial, and Library storage is unavailable.
+Older imported history remains partial. Library collects newly exchanged items
+after activation; it does not backfill existing conversations or imported history.
+
+With Library enabled, `wovenmatter library list` supports `--workspace`, `--harness`,
+`--sender me|agent`, `--kind file|link|photo`, `--since`, `--until`, `--search`,
+`--limit`, and `--offset`. Workspace and harness filters accept comma-separated
+values. `wovenmatter library read --id <item-id>` returns the item's metadata and
+original source, not file bytes or a grant to read its conversation. Conversation
+history retains its separate access check.

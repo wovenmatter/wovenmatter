@@ -387,7 +387,7 @@ struct DashboardSidebarNavigationPage: View {
             }
             DashboardRailRow(
                 icon: .calendarClock,
-                title: "Cron Jobs",
+                title: "Scheduled Tasks",
                 hoverID: "destination:cron-jobs",
                 selected: destination == .cronJobs
             ) {

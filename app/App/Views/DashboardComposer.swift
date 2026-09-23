@@ -224,7 +224,8 @@ struct DashboardComposer: View {
             completionRequest: $completionRequest,
             onCaretAtEndChange: { caretAtEnd = $0 },
             dictationEditor: dictationEditor,
-            dictationIdentity: sessionID ?? dictationDraftID
+            dictationIdentity: sessionID ?? dictationDraftID,
+            onAttachFiles: onDropFiles
         )
         .frame(
             minHeight: isCollapsed ? 36 : 32,
@@ -943,6 +944,13 @@ struct DashboardAttachmentPicker: View {
                         }
                         .buttonStyle(.plain)
                     }
+                }
+            }
+            .scrollIndicators(.never)
+            .overlay {
+                if kind == .note && filteredNotes.isEmpty {
+                    ContentUnavailableView(query.isEmpty ? "No notes yet" : "No matching notes", systemImage: "note.text",
+                        description: Text(query.isEmpty ? "Create a note in your workspace, then attach it here." : "Try a different search."))
                 }
             }
             .searchable(text: $query, prompt: kind == .note ? "Search notes" : "Search conversations")
