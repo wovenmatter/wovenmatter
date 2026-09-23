@@ -16,6 +16,7 @@ private struct UsageLimitsRefreshKey: Hashable, Sendable {
     let keychainInteraction: String
     let interactiveProvider: String?
     let selectedCodexWorkspaceID: String?
+    let selectedConnections: [String: String]
 }
 
 /// Owns usage presentation, refresh lifetimes and preferences independently of workspace runs.
@@ -35,6 +36,8 @@ final class ApplicationUsageModel {
     private(set) var signingInUsageProviders: Set<ProviderKind> = []
     private(set) var hasAcknowledgedCredentialAccessDisclosure = false
     private(set) var enabledUsageProviders: Set<ProviderKind> = []
+    private(set) var usageConnectionChoices: [UsageConnectionChoice] = []
+    private(set) var selectedUsageConnections: [String: String] = [:]
     private(set) var codexUsageWorkspaces: [CodexUsageWorkspace] = []
     private(set) var selectedCodexUsageWorkspaceID: String?
     @ObservationIgnored
@@ -67,6 +70,7 @@ final class ApplicationUsageModel {
 
     init(applicationDefaults: UserDefaults) {
         self.applicationDefaults = applicationDefaults
+        selectedUsageConnections = applicationDefaults.dictionary(forKey: "wovenmatter.usage.selected-connections") as? [String: String] ?? [:]
         isOpenRouterCredentialConfigured = applicationDefaults.bool(
             forKey: Self.openRouterCredentialConfiguredDefaultsKey
         )
@@ -127,11 +131,21 @@ final class ApplicationUsageModel {
     }
 
     func usageDestinationAppeared(range: UsageTimeRange) async {
+        updateSharedConnectionPresence()
         await refreshLocalUsage(
             range: range,
             refreshLimits: true,
             reason: .viewAppeared
         )
+    }
+    func sharedConnectionsChanged() async {
+        updateSharedConnectionPresence()
+        await refreshLocalUsage(range: currentUsageRange, refreshLimits: true, reason: .credentialChanged)
+    }
+    private func updateSharedConnectionPresence() {
+        guard let configured = try? DefaultAgentSupport.hasKey("openrouter") else { return }
+        isOpenRouterCredentialConfigured = configured
+        applicationDefaults.set(configured, forKey: Self.openRouterCredentialConfiguredDefaultsKey)
     }
 
     func usageAnalyticsSelected(range: UsageTimeRange) async {
@@ -206,16 +220,16 @@ final class ApplicationUsageModel {
         interactiveProvider: ProviderKind?
     ) async {
         let enabledProviders = enabledUsageProviders
-        let allowsCredentialAccess = isOpenRouterCredentialConfigured
-            && hasAcknowledgedCredentialAccessDisclosure
-            && enabledProviders.contains(.openRouter)
+        let allowsCredentialAccess = hasAcknowledgedCredentialAccessDisclosure
+        let requestedConnections = selectedUsageConnections
         let requestedCodexWorkspaceID = selectedCodexUsageWorkspaceID
         let key = UsageLimitsRefreshKey(
             enabledProviders: enabledProviders.map(\.rawValue).sorted(),
             allowsCredentialAccess: allowsCredentialAccess,
             keychainInteraction: keychainInteraction.rawValue,
             interactiveProvider: interactiveProvider?.rawValue,
-            selectedCodexWorkspaceID: requestedCodexWorkspaceID
+            selectedCodexWorkspaceID: requestedCodexWorkspaceID,
+            selectedConnections: requestedConnections
         )
         let requestID = UUID()
         usageLimitsRequestID = requestID
@@ -232,13 +246,17 @@ final class ApplicationUsageModel {
                     allowCredentialAccess: allowsCredentialAccess,
                     keychainInteraction: keychainInteraction,
                     interactiveProvider: interactiveProvider,
-                    selectedCodexWorkspaceID: requestedCodexWorkspaceID
+                    selectedCodexWorkspaceID: requestedCodexWorkspaceID,
+                    selectedConnections: requestedConnections
                 )
             }
             guard usageLimitsRequestID == requestID,
                   enabledUsageProviders == enabledProviders,
+                  selectedUsageConnections == requestedConnections,
                   selectedCodexUsageWorkspaceID == requestedCodexWorkspaceID else { return }
             try Task.checkCancellation()
+            usageConnectionChoices = limits.connectionChoices
+            selectedUsageConnections.merge(limits.selectedConnections) { _, new in new }
             codexUsageWorkspaces = limits.codexWorkspaces
             selectedCodexUsageWorkspaceID = limits.selectedCodexWorkspaceID
             let existing = localUsage
@@ -414,6 +432,23 @@ final class ApplicationUsageModel {
         )
     }
 
+    func selectUsageConnection(_ id: String, provider: ProviderKind, range: UsageTimeRange) async {
+        guard enabledUsageProviders.contains(provider),
+              usageConnectionChoices.contains(where: { $0.provider == provider && $0.id == id }),
+              selectedUsageConnections[provider.rawValue] != id else { return }
+        selectedUsageConnections[provider.rawValue] = id
+        applicationDefaults.set(selectedUsageConnections, forKey: "wovenmatter.usage.selected-connections")
+        // Remove the old account's numbers immediately, before any asynchronous
+        // request can leave them displayed under the newly selected identity.
+        if let current = localUsage {
+            localUsage = LocalUsageSnapshot(analytics: current.analytics,
+                limits: current.limits.filter { $0.provider != provider },
+                hasOpenRouterCredential: current.hasOpenRouterCredential)
+        }
+        await refreshUsageLimits(reason: .credentialChanged, force: true,
+            keychainInteraction: .noninteractive, interactiveProvider: nil)
+    }
+
     func selectCodexUsageWorkspace(
         _ workspaceID: String,
         range: UsageTimeRange
@@ -462,6 +497,10 @@ final class ApplicationUsageModel {
     }
 
     func signInUsageProvider(_ provider: ProviderKind) {
+        if [.codex, .claude, .grok, .openRouter, .openCodeGo].contains(provider) {
+            NotificationCenter.default.post(name: .init("wovenmatter.open-connections"), object: "global")
+            return
+        }
         guard !signingInUsageProviders.contains(provider) else { return }
         guard enabledUsageProviders.contains(provider) else {
             localUsageError = "Enable \(provider.displayName) usage tracking before signing in."

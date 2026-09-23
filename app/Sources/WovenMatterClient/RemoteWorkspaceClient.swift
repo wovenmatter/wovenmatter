@@ -3,7 +3,7 @@ import Security
 import WovenMatterCore
 
 /// Captures authorization and destination before suspension; stale responses must not apply.
-public struct RemoteWorkspaceRequestIdentity: Sendable {
+public struct RemoteWorkspaceRequestIdentity: Sendable, Equatable {
     public let configuration: RemoteWorkspaceConfiguration
     public let credentialEpoch: UUID
     public let workspaceEpoch: UUID
@@ -94,11 +94,10 @@ public enum RemoteHarnessLaunchResolver {
         guard configuration.workspaceID.wholeMatch(of: idPattern) != nil else {
             throw RemoteWorkspaceClientError.invalidWorkspaceID
         }
-        guard let harness = try HarnessCatalog.loadBundled().harnesses.first(
+        let harness = try HarnessCatalog.loadBundled().harnesses.first(
             where: { $0.id == runtimeKind }
-        ) else {
-            throw RemoteWorkspaceClientError.harnessUnavailable
-        }
+        )
+        guard harness != nil || runtimeKind == .defaultAgent else { throw RemoteWorkspaceClientError.harnessUnavailable }
         let destination = try RemoteWorkspaceSSHClient.validatedDestination(
             hostName: configuration.hostName,
             userName: configuration.userName
@@ -113,20 +112,26 @@ public enum RemoteHarnessLaunchResolver {
             "wovenmatter-\(configuration.workspaceID)",
             "env",
             "HOME=/home",
+            "WOVEN_DEFAULT_AGENT_DIRECTORY=/home/.woven-matter/.wovenmatter/default-agent",
             "PATH=/home/.local/bin:/home/.npm-global/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
         ]
         for (key, value) in LocalACPRuntimeCatalog
             .definition(for: runtimeKind)?.environment.sorted(by: { $0.key < $1.key }) ?? [] {
             command.append("\(key)=\(value)")
         }
-        command.append(contentsOf: [
-            "bash", "-c",
-            #"mkdir -p /home/.wovenmatter && exec 9>/home/.wovenmatter/runtime-operation.lock && { flock --shared --nonblock 9 || { printf '%s\n' 'Runtime maintenance is in progress. Retry after it finishes.' >&2; exit 75; }; } && exec "$@""#,
-            "woven-runtime",
-        ])
-        command.append(harness.command)
-        let harnessArgumentsStartIndex = command.count
-        command.append(contentsOf: harness.arguments)
+        var harnessArgumentsStartIndex = command.count
+        if runtimeKind == .defaultAgent {
+            command.append(contentsOf: ["sh", "-c", #"ulimit -c 0; exec "$@""#, "woven-default-agent", "node", "/opt/wovenmatter/default-agent/src/main.mjs", "--remote"])
+        } else if let harness {
+            command.append(contentsOf: [
+                "bash", "-c",
+                #"mkdir -p /home/.wovenmatter && exec 9>/home/.wovenmatter/runtime-operation.lock && { flock --shared --nonblock 9 || { printf '%s\n' 'Runtime maintenance is in progress. Retry after it finishes.' >&2; exit 75; }; } && exec "$@""#,
+                "woven-runtime",
+            ])
+            command.append(harness.command)
+            harnessArgumentsStartIndex = command.count
+            command.append(contentsOf: harness.arguments)
+        }
         let remoteCommand = command.map(shellQuote).joined(separator: " ")
         let sshArguments = [
             "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", destination, remoteCommand,
@@ -136,6 +141,7 @@ public enum RemoteHarnessLaunchResolver {
                 runtimeKind: runtimeKind,
                 executableURL: URL(fileURLWithPath: "/usr/bin/ssh"),
                 arguments: sshArguments,
+                environment: runtimeKind == .defaultAgent ? ["WOVEN_DEFAULT_AGENT_SCOPE": configuration.id.uuidString.lowercased()] : [:],
                 processWorkingDirectoryURL: processWorkingDirectory,
                 wrappedCommand: LocalACPRuntimeWrappedCommand(
                     argumentIndex: sshArguments.count - 1,
@@ -814,12 +820,14 @@ public actor RemoteWorkspaceSSHClient {
         let result = try RemoteWorkspaceProcess.run(
             executable: "/usr/bin/tar",
             arguments: [
-                "-czf", "-",
+                "--no-mac-metadata", "-czf", "-",
+                "--exclude=.DS_Store",
                 "--exclude=remote/test",
                 "--exclude=remote/.env.example",
                 "--exclude=remote/compose.yaml",
                 "-C", root.path,
                 "remote", "harnesses",
+                "default-agent/package.json", "default-agent/package-lock.json", "default-agent/src",
             ]
         )
         guard result.status == 0 else {
@@ -1118,6 +1126,18 @@ public struct RemoteWorkspaceServiceClient: Sendable {
             method: "POST",
             body: nil
         )
+    }
+
+    public func configureDefaultAgent(_ payload: Data) async throws -> DefaultAgentSyncReceipt {
+        try await request(path: "v1/default-agent/configuration", method: "POST", body: payload)
+    }
+    public func defaultAgentStatus() async throws -> DefaultAgentStatus {
+        try await request(path: "v1/default-agent/status", method: "GET", body: nil)
+    }
+    public func signInStatuses() async throws -> [AgentSignInStatus] {
+        struct Response: Decodable { let statuses: [AgentSignInStatus] }
+        let value: Response = try await request(path: "v1/sign-in-status", method: "GET", body: nil)
+        return value.statuses
     }
 
     private func request<Value: Decodable>(

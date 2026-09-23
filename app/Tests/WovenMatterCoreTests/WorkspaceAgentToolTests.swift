@@ -6,6 +6,23 @@ import WovenMatterClient
 
 @Suite("Agent tools access, coordination and timers")
 struct WorkspaceAgentToolTests {
+  @Test func builtInClaudeUsageKeepsSubscriptionAndAPIKeyBillingDistinct() async throws {
+    let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let url = directory.appending(path: "usage.sqlite")
+    let recorder = try UsageRunRecorder(databaseURL: url)
+    let date = Date(timeIntervalSince1970: 1_800_000_000)
+    for provider in ["claude-subscription", "anthropic"] {
+      try await recorder.record(.init(runID: provider, timestamp: date, runtimeKind: .defaultAgent,
+        sessionID: "fixture", model: provider + "/sonnet", reasoningLevel: "high", agent: "Built-in",
+        workspace: "local", tokens: .init(inputTokens: 3, outputTokens: 2), costUSD: nil))
+    }
+    let samples = try UsageStore(databaseURL: url).samples(in: DateInterval(start: date.addingTimeInterval(-1), duration: 2))
+    #expect(samples.count == 2)
+    #expect(samples.allSatisfy { $0.provider == .claude })
+    #expect(Set(samples.map(\.billingRoute)) == ["Claude subscription", "Claude API key"])
+  }
   @Test func explicitCreationDirectoryCrossesParserAndRejectsInvalidPathsBeforeSaving() throws {
     let (db, root, source, _) = try fixture()
     defer { try? FileManager.default.removeItem(at: root) }

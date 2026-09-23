@@ -150,6 +150,7 @@ public struct LocalACPSessionConfiguration: Equatable, Sendable {
     public let slashCommands: [LocalACPSlashCommand]
     public let modelOptionMetadata: [String: SessionOptionMetadata]
     public let thinkingOptionMetadata: [String: SessionOptionMetadata]
+    public let fallbackNotice: String?
     public let permission: String?
     public let permissionOptions: [String]
     public let permissionOptionMetadata: [String: SessionOptionMetadata]
@@ -164,6 +165,7 @@ public struct LocalACPSessionConfiguration: Equatable, Sendable {
         slashCommands: [LocalACPSlashCommand] = [],
         modelOptionMetadata: [String: SessionOptionMetadata] = [:],
         thinkingOptionMetadata: [String: SessionOptionMetadata] = [:],
+        fallbackNotice: String? = nil,
         permission: String? = nil,
         permissionOptions: [String] = [],
         permissionOptionMetadata: [String: SessionOptionMetadata] = [:],
@@ -176,6 +178,7 @@ public struct LocalACPSessionConfiguration: Equatable, Sendable {
         self.slashCommands = slashCommands
         self.modelOptionMetadata = modelOptionMetadata
         self.thinkingOptionMetadata = thinkingOptionMetadata
+        self.fallbackNotice = fallbackNotice
         self.workingDirectory = workingDirectory
         self.permission = permission
         self.permissionOptions = Self.unique(permissionOptions)
@@ -214,15 +217,18 @@ public struct LocalACPSessionConfiguration: Equatable, Sendable {
 public struct LocalACPInitializedSession: Equatable, Sendable {
     public let sessionID: String
     public let loadedExistingSession: Bool
+    public let recoveredDefaultAgentRuns: [DefaultAgentRunSnapshot]
     public let configuration: LocalACPSessionConfiguration
 
     public init(
         sessionID: String,
         loadedExistingSession: Bool,
-        configuration: LocalACPSessionConfiguration = .empty
+        configuration: LocalACPSessionConfiguration = .empty,
+        recoveredDefaultAgentRuns: [DefaultAgentRunSnapshot] = []
     ) {
         self.sessionID = sessionID
         self.loadedExistingSession = loadedExistingSession
+        self.recoveredDefaultAgentRuns = recoveredDefaultAgentRuns
         self.configuration = configuration
     }
 }
@@ -507,6 +513,29 @@ public actor LocalACPClient {
     private var agentName: String?
     private var pendingInitialSystemPrompt: String?
     private var initialSystemPromptInFlight = false
+    private var defaultAgentRunID: String?
+    private var defaultAgentRemote = false
+    private let accountCoordinator: ProviderAccountCoordinator?
+    private var defaultAgentScope = "local"
+    private var defaultAgentCredentialRevision: String?
+    public func setDefaultAgentRunID(_ value: String) async throws {
+        defaultAgentRunID = value
+        try await prepareDefaultAgent()
+    }
+    private func prepareCredentialPayload(_ scope: String) async throws -> DefaultAgentPayload {
+        let coordinator = if let accountCoordinator { accountCoordinator } else { await ProviderAccountCoordinator.shared }
+        return try await coordinator.prepare(scope)
+    }
+    private func prepareDefaultAgent() async throws {
+        guard runtimeKind == .defaultAgent, !defaultAgentRemote else { return }
+        let payload = try await prepareCredentialPayload("local")
+        guard payload.revision != defaultAgentCredentialRevision else { return }
+        let parameters = try JSONDecoder().decode(ACPJSONValue.self, from: payload.data())
+        let result = try await request(method: "woven/configure", params: parameters)
+        defaultAgentCredentialRevision = payload.revision
+        captureSessionConfiguration(from: result)
+        await configurationHandler?(configuration)
+    }
     private var loadSessionSupported = false
     private var steeringSupported = false
     private var sessionID: String?
@@ -528,6 +557,8 @@ public actor LocalACPClient {
     private let requestedPermission: String?
     private var sessionCancellationRequested = false
     private var pendingPermissionRequestIDs: [ACPJSONValue] = []
+    private var builtInPermissionTasks: [String: Task<String?, Never>] = [:]
+    private var cancelledBuiltInPermissions: Set<String> = []
     private struct PendingCursorRequest {
         let id: ACPJSONValue
         let method: String
@@ -546,6 +577,7 @@ public actor LocalACPClient {
     private let historyRecorder: WorkspaceWireRecorder?
     private var activeEventHandler: EventHandler?
     private var activePermissionHandler: PermissionHandler?
+    private var resumePermissionHandler: PermissionHandler?
     private var activeInteractionHandler: InteractionHandler?
     private var activePromptRequestCount = 0
     // ACP does not provide an identifier for thought chunks. Keep one stable
@@ -563,8 +595,10 @@ public actor LocalACPClient {
         runtimeKind: AgentRuntimeKind,
         workingDirectory: URL,
         requestedPermission: String?,
-        historyRecorder: WorkspaceWireRecorder? = nil
+        historyRecorder: WorkspaceWireRecorder? = nil,
+        accountCoordinator: ProviderAccountCoordinator?
     ) {
+        self.accountCoordinator = accountCoordinator
         self.historyRecorder = historyRecorder
         self.requestedPermission = requestedPermission
         self.cursorPermission = requestedPermission ?? "normal"
@@ -572,12 +606,15 @@ public actor LocalACPClient {
         self.input = input
         self.cursor = cursor
         self.runtimeKind = runtimeKind
+        self.defaultAgentScope = process.environment?["WOVEN_DEFAULT_AGENT_SCOPE"] ?? "local"
+        self.defaultAgentRemote = process.arguments?.contains("/usr/bin/ssh") == true
         self.workingDirectory = workingDirectory.standardizedFileURL
     }
 
     public static func start(
         launch: LocalACPRuntimeLaunchConfiguration,
-        workingDirectory: URL
+        workingDirectory: URL,
+        accountCoordinator: ProviderAccountCoordinator? = nil
     ) throws -> LocalACPClient {
         guard launch.runtimeKind != .opencode else {
             throw OpenCodeError.message("OpenCode v1 ACP is no longer supported. Create a new OpenCode v2 server session.")
@@ -592,7 +629,7 @@ public actor LocalACPClient {
         let preparedLaunch = try LocalACPSessionPermissions.prepareLaunch(launch)
         process.arguments = [
             "-c",
-            #"set -m; exec "$@""#,
+            #"ulimit -c 0; set -m; exec "$@""#,
             "wovenmatter-local-acp",
             launch.executableURL.path,
         ] + preparedLaunch.arguments
@@ -629,7 +666,8 @@ public actor LocalACPClient {
             runtimeKind: launch.runtimeKind,
             workingDirectory: workingDirectory,
             requestedPermission: preparedLaunch.explicitPermission,
-            historyRecorder: launch.historyRecorder
+            historyRecorder: launch.historyRecorder,
+            accountCoordinator: accountCoordinator
         )
     }
 
@@ -672,6 +710,7 @@ public actor LocalACPClient {
         title: String?,
         systemPrompt: String? = nil
     ) async throws -> LocalACPInitializedSession {
+        try await prepareDefaultAgent()
         _ = try await initializeConnection()
         if runtimeKind == .cursor {
             _ = try await request(
@@ -709,7 +748,8 @@ public actor LocalACPClient {
                 return LocalACPInitializedSession(
                     sessionID: existingSessionID,
                     loadedExistingSession: true,
-                    configuration: configuration
+                    configuration: configuration,
+                    recoveredDefaultAgentRuns: runtimeKind == .defaultAgent ? ((try? JSONDecoder().decode([DefaultAgentRunSnapshot].self, from: JSONEncoder().encode(loaded?["_meta"]?["recoveredRuns"] ?? .array([])))) ?? []) : []
                 )
             } catch LocalACPClientError.agent(let code, let message)
                 where Self.isMissingSessionError(
@@ -922,6 +962,10 @@ public actor LocalACPClient {
 
     public func sessionConfiguration() -> LocalACPSessionConfiguration {
         configuration
+    }
+
+    public func setResumePermissionHandler(_ handler: @escaping PermissionHandler) {
+        resumePermissionHandler = handler
     }
 
     public func setConfigurationHandler(_ handler: @escaping @Sendable (LocalACPSessionConfiguration) async -> Void) async {
@@ -1186,6 +1230,8 @@ public actor LocalACPClient {
             .grokInterjection
         case .hermes, .cursor, .opencode, .openclaw:
             .concurrentPrompt
+        case .defaultAgent:
+            .unsupported
         case .pi:
             .piRPC
         }
@@ -1226,6 +1272,7 @@ public actor LocalACPClient {
             params: .object([
                 "sessionId": .string(sessionID),
                 "prompt": try Self.promptBlocks(input, text: prefixedText),
+                "_meta": runtimeKind == .defaultAgent ? .object(["wovenRunID": .string(defaultAgentRunID ?? UUID().uuidString.lowercased())]) : .object([:]),
             ])
         )
         if initialSystemPrompt != nil {
@@ -1369,6 +1416,7 @@ public actor LocalACPClient {
     public func cancel() throws {
         guard let sessionID else { return }
         sessionCancellationRequested = true
+        for task in builtInPermissionTasks.values { task.cancel() }
         let pending = pendingPermissionRequestIDs
         pendingPermissionRequestIDs.removeAll()
         for id in pending {
@@ -1392,6 +1440,7 @@ public actor LocalACPClient {
         }
         guard !closed else { return }
         closed = true
+        dismissBuiltInPermissions()
         readerTask?.cancel()
         readerTask = nil
         notificationTask?.cancel()
@@ -1501,8 +1550,16 @@ public actor LocalACPClient {
     }
 
     private func receive(_ data: Data) throws {
-        try historyRecorder?("in", data)
+        if runtimeKind != .defaultAgent { try historyRecorder?("in", data) }
         let envelope = try Self.decodeEnvelope(data)
+        if runtimeKind == .defaultAgent, envelope.method == "woven/permission_cancel",
+           let id = envelope.params?["requestID"]?.stringValue {
+            // This must bypass the notification barrier held by the dialog.
+            // Cancelling its task also removes the app's pending approval UI.
+            if let task = builtInPermissionTasks[id] { task.cancel() }
+            else { cancelledBuiltInPermissions.insert(id) }
+            return
+        }
         if envelope.method == nil,
            let id = envelope.id?.integerValue,
            let pending = pendingRequests.removeValue(forKey: id) {
@@ -1554,7 +1611,14 @@ public actor LocalACPClient {
     }
 
     private func handleNotification(_ envelope: ACPEnvelope) async throws {
-        if envelope.method == "session/update" {
+        if envelope.method == "woven/credentials", runtimeKind == .defaultAgent {
+            do {
+                let payload = try await prepareCredentialPayload(defaultAgentScope)
+                try write(ACPEnvelope(id: envelope.id, result: JSONDecoder().decode(ACPJSONValue.self, from: payload.data())))
+            } catch {
+                try write(ACPEnvelope(id: envelope.id, error: .init(code: -32000, message: "Built-in credentials are unavailable.")))
+            }
+        } else if envelope.method == "session/update" {
             guard belongsToActiveSession(envelope) else { return }
             let update = envelope.params?["update"]
             switch update?["sessionUpdate"]?.stringValue {
@@ -1580,7 +1644,7 @@ public actor LocalACPClient {
             }
             try await respondToPermissionRequest(
                 envelope,
-                handler: activePermissionHandler
+                handler: activePermissionHandler ?? (runtimeKind == .defaultAgent ? resumePermissionHandler : nil)
             )
         } else if envelope.method == "cursor/ask_question" {
             try await respondToCursorQuestion(
@@ -1617,7 +1681,17 @@ public actor LocalACPClient {
     }
 
     private func readerFailed(_ error: any Error) {
+        dismissBuiltInPermissions()
         failPendingRequests(with: error)
+    }
+
+    private func dismissBuiltInPermissions() {
+        for (id, task) in builtInPermissionTasks {
+            pendingPermissionRequestIDs.removeAll { $0.stringValue == id }
+            task.cancel()
+        }
+        builtInPermissionTasks.removeAll()
+        cancelledBuiltInPermissions.removeAll()
     }
 
     private func failPendingRequests(with error: any Error) {
@@ -1680,6 +1754,10 @@ public actor LocalACPClient {
             )
         }
         if let configOptions = value["configOptions"]?.arrayValue {
+            if runtimeKind == .defaultAgent, value["_meta"]?["engineUsed"]?.boolValue == true,
+               let engine = value["_meta"]?["engine"]?.stringValue, ["pi", "claude"].contains(engine) {
+                UserDefaults.standard.set(engine, forKey: DefaultAgentSupport.lastEngineKey)
+            }
             let parsed = configurationOptions(from: configOptions)
             let hadModelOption = modelConfigurationID != nil
             let hadPermissionOption = permissionConfigurationID != nil
@@ -1703,6 +1781,7 @@ public actor LocalACPClient {
                 slashCommands: configuration.slashCommands,
                 modelOptionMetadata: parsed.model?.metadata ?? (hadModelOption ? [:] : configuration.modelOptionMetadata),
                 thinkingOptionMetadata: parsed.thinking?.metadata ?? [:],
+                fallbackNotice: value["_meta"]?["fallbackReason"]?.stringValue,
                 permission: parsed.permission?.currentValue ?? (hadPermissionOption ? nil : configuration.permission),
                 permissionOptions: parsed.permission.map {
                     LocalACPSessionPermissions.nativeOptions(runtimeKind: runtimeKind, options: $0.options)
@@ -1965,6 +2044,17 @@ public actor LocalACPClient {
            options.filter({ $0.kind == "allow_once" }).count == 1,
            let allowOnce = options.first(where: { $0.kind == "allow_once" }) {
             selectedID = allowOnce.id
+        } else if runtimeKind == .defaultAgent, let requestID = id.stringValue {
+            if cancelledBuiltInPermissions.remove(requestID) != nil {
+                selectedID = nil
+            } else {
+                let task = Task { await handler?(request) }
+                builtInPermissionTasks[requestID] = task
+                selectedID = await withTaskCancellationHandler {
+                    await task.value
+                } onCancel: { task.cancel() }
+                builtInPermissionTasks.removeValue(forKey: requestID)
+            }
         } else {
             selectedID = await handler?(request)
         }
@@ -2116,7 +2206,7 @@ public actor LocalACPClient {
     private func write(_ envelope: ACPEnvelope) throws {
         guard !closed else { throw LocalACPClientError.processExited }
         var data = try JSONEncoder().encode(envelope)
-        try historyRecorder?("out", data)
+        if runtimeKind != .defaultAgent { try historyRecorder?("out", data) }
         data.append(0x0A)
         try input.write(contentsOf: data)
     }
@@ -2194,7 +2284,10 @@ public actor LocalACPClient {
         case "agent_thought_chunk":
             guard let text = update["content"]?["text"]?.stringValue else { return nil }
             let reasoningID: String
-            if let activeReasoningPhaseID {
+            if runtimeKind == .defaultAgent, let blockID = update["_meta"]?["wovenThoughtID"]?.stringValue {
+                reasoningID = blockID
+                activeReasoningPhaseID = blockID
+            } else if let activeReasoningPhaseID {
                 reasoningID = activeReasoningPhaseID
             } else {
                 reasoningPhaseSequence += 1

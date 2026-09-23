@@ -263,7 +263,10 @@ private struct FixtureCommandReader: Sendable {
 
   private func readLine() throws -> Data? {
     let clock = ContinuousClock()
-    let deadline = clock.now.advanced(by: .seconds(5))
+    // The full suite runs hundreds of tests concurrently on CI. This is the
+    // fake peer's idle budget, not a product timeout; do not close the pipe
+    // while the resumed client is merely waiting for executor time.
+    let deadline = clock.now.advanced(by: .seconds(30))
     var line = Data()
     while clock.now < deadline {
       var descriptor = pollfd(fd: handle.fileDescriptor, events: Int16(POLLIN), revents: 0)

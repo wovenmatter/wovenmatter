@@ -18,6 +18,9 @@ struct SettingsLocalWorkspaceView: View {
         ) {
             SettingsWorkspaceSidebarVisibilityControl(.localWorkspace)
             workspaceCard
+            SettingsSignInStatusCard(statuses: model.localSignInStatuses, checking: model.checkingLocalSignIn, error: model.localSignInError, scope: "local") {
+                Task { await model.refreshLocalSignInStatus() }
+            }
             runtimesCard
         }
         .task { await model.openCode?.resolveExecutable(); model.refreshRuntimeInventory() }
@@ -224,7 +227,18 @@ struct SettingsLocalWorkspaceView: View {
                     $0.runtimeKind.presentationRank < $1.runtimeKind.presentationRank
                 }
             ) { definition in
-                if definition.runtimeKind == .opencode {
+                if definition.runtimeKind == .defaultAgent {
+                    SettingsInset {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Built-in").font(.system(size: 13, weight: .medium))
+                                Text("Built into Woven Matter.").font(.callout).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Button("Settings") { onMore(.defaultAgent) }.buttonStyle(SettingsQuietButtonStyle())
+                        }
+                    }
+                } else if definition.runtimeKind == .opencode {
                     openCodeRuntimeRow
                 } else {
                 let availability = model.localACPRuntimeAvailability.first {

@@ -447,6 +447,14 @@ struct DashboardCloudConversation: View {
                             help: "Remove panel",
                             action: onClosePanel
                         )
+                    } else if let conversation, conversation.localRuntimeKind == .defaultAgent {
+                        DashboardPanelControlButton(
+                            glyph: .settings,
+                            accessibilityLabel: "Built-in Agent settings",
+                            help: "Built-in Agent settings"
+                        ) {
+                            model.pendingDefaultAgentSettingsScope = conversation.remoteWorkspaceID?.uuidString.lowercased() ?? "local"
+                        }
                     } else if showsAddPanel {
                         Color.clear
                             .frame(width: DashboardPanelControlButton.size, height: DashboardPanelControlButton.size)

@@ -266,6 +266,7 @@ struct DashboardSidebarNavigationPage: View {
     private var showsBuzzWorkspaces = true
 
     @State private var agentsOpen = true
+    @AppStorage(DefaultAgentSupport.lastEngineKey) private var builtInEngine = "pi"
     @State private var foldersOpen = true
     @State private var recentsOpen = true
     @State private var scrollHoverCoordinator = DashboardScrollHoverCoordinator()
@@ -579,7 +580,7 @@ struct DashboardSidebarNavigationPage: View {
                     DashboardRailRow(
                         icon: .container,
                         harnessLogo: DashboardHarnessLogo(runtimeKind: target.harness.id),
-                        title: target.harness.displayName,
+                        title: target.harness.id == .defaultAgent ? DefaultAgentSupport.sidebarName(engine: builtInEngine) : target.harness.displayName,
                         hoverID: "remote-harness:\(target.id)",
                         selected: agent.map {
                             destination == .workspace && selectedAgentID == $0.id
@@ -684,7 +685,7 @@ struct DashboardSidebarNavigationPage: View {
         return DashboardRailRow(
             icon: dashboardAgentGlyph(agent, iconKey: presentation.iconKey),
             harnessLogo: DashboardHarnessLogo(runtimeKind: agent.runtimeKind),
-            title: presentation.displayName,
+            title: agent.runtimeKind == .defaultAgent ? DefaultAgentSupport.sidebarName(engine: builtInEngine) : presentation.displayName,
             hoverID: "agent:\(agent.id.uuidString)",
             trailing: agent.runtimeStatus == .running ? "Running" : nil,
             showsPin: isPinned,
