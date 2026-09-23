@@ -287,6 +287,62 @@ struct WorkspaceFolderRecoveryTests {
         #expect(!LocalACPWorkspaceProvisioner.isSymbolicLink(f.repos))
     }
 
+    @Test("workspace ancestors, including the filesystem root, cannot be linked", arguments: [LocalACPWorkspaceFolder.repositories, .databases])
+    func rejectWorkspaceAncestors(folder: LocalACPWorkspaceFolder) async throws {
+        let f = try Fixture()
+        defer { f.remove() }
+        let store = f.store("ancestors")
+        _ = await store.resolve()
+        let original = f.workspace.appending(path: folder.directoryName)
+        try Data("keep".utf8).write(to: original.appending(path: "marker"))
+        for target in [URL(fileURLWithPath: "/", isDirectory: true), f.home, f.workspace] {
+            do {
+                try LocalACPWorkspaceProvisioner.configureDirectory(
+                    folder, at: f.workspace, externalURL: target, recovery: .backUp
+                )
+                Issue.record("Expected ancestor rejection: \(target.path)")
+            } catch { #expect(error as? LocalACPWorkspaceError == folder.containsWorkspaceError) }
+            #expect(!LocalACPWorkspaceProvisioner.isSymbolicLink(original))
+            #expect(try Data(contentsOf: original.appending(path: "marker")) == Data("keep".utf8))
+        }
+    }
+
+    @Test("readers never lose the folder while links and defaults are exchanged")
+    func continuousFolderAvailability() async throws {
+        let f = try Fixture()
+        defer { f.remove() }
+        let store = f.store("continuous")
+        _ = await store.resolve()
+        let first = try f.directory("first")
+        let second = try f.directory("second")
+        try Data("preserve first".utf8).write(to: first.appending(path: "marker"))
+        try Data("preserve second".utf8).write(to: second.appending(path: "marker"))
+        let path = f.repos.path
+        let observer = Task.detached { () -> (available: Bool, checks: Int) in
+            var checks = 0
+            while !Task.isCancelled {
+                guard FileManager.default.fileExists(atPath: path) else { return (false, checks) }
+                checks += 1
+                await Task.yield()
+            }
+            return (true, checks)
+        }
+        defer { observer.cancel() }
+        for _ in 0..<12 {
+            try await store.configureRepositories(first)
+            try await store.configureRepositories(second)
+            try await store.configureRepositories(nil)
+        }
+        observer.cancel()
+        let observed = await observer.value
+        #expect(observed.available)
+        #expect(observed.checks > 0)
+        #expect(try Data(contentsOf: first.appending(path: "marker")) == Data("preserve first".utf8))
+        #expect(try Data(contentsOf: second.appending(path: "marker")) == Data("preserve second".utf8))
+        #expect((try FileManager.default.contentsOfDirectory(atPath: f.workspace.path))
+            .allSatisfy { !$0.hasPrefix(".wovenmatter-folder-") })
+    }
+
     @Test("saved destinations seed missing folders but never override existing folders")
     func savedDestinationMigration() async throws {
         let f = try Fixture()

@@ -1,9 +1,5 @@
 import Foundation
-#if canImport(Darwin)
 import Darwin
-#else
-import Glibc
-#endif
 
 public struct LocalACPWorkspaceAvailability: Codable, Equatable, Sendable {
     public enum State: String, Codable, Equatable, Sendable {
@@ -201,14 +197,12 @@ public enum LocalACPWorkspaceProvisioner {
         let link = directoryURL(for: folder, at: root)
         let previousDestination = fileManager.destinationOfSymbolicLinkIfPresent(at: link)
         guard let externalURL else {
-            if let previousDestination {
-                try fileManager.removeItem(at: link)
-                do {
-                    try fileManager.createDirectory(at: link, withIntermediateDirectories: false)
-                } catch {
-                    try fileManager.createSymbolicLink(atPath: link.path, withDestinationPath: previousDestination)
-                    throw error
-                }
+            if previousDestination != nil {
+                let replacement = root.appending(path: ".wovenmatter-folder-\(UUID().uuidString)")
+                try fileManager.createDirectory(at: replacement, withIntermediateDirectories: false)
+                defer { try? fileManager.removeItem(at: replacement) }
+                try setOwnerOnlyDirectoryPermissions(replacement)
+                try exchangeItems(at: link, and: replacement)
             } else {
                 try fileManager.createDirectory(at: link, withIntermediateDirectories: true)
             }
@@ -221,14 +215,11 @@ public enum LocalACPWorkspaceProvisioner {
         if link.resolvingSymlinksInPath() == target {
             return LocalACPWorkspaceFolderChangeResult(backupURL: nil, skippedItemNames: [])
         }
-        if let previousDestination {
-            try fileManager.removeItem(at: link)
-            do {
-                try fileManager.createSymbolicLink(at: link, withDestinationURL: target)
-            } catch {
-                try fileManager.createSymbolicLink(atPath: link.path, withDestinationPath: previousDestination)
-                throw error
-            }
+        if previousDestination != nil {
+            let replacement = root.appending(path: ".wovenmatter-folder-\(UUID().uuidString)")
+            try fileManager.createSymbolicLink(at: replacement, withDestinationURL: target)
+            defer { try? fileManager.removeItem(at: replacement) }
+            try exchangeItems(at: link, and: replacement)
             return LocalACPWorkspaceFolderChangeResult(backupURL: nil, skippedItemNames: [])
         }
 
@@ -242,18 +233,28 @@ public enum LocalACPWorkspaceProvisioner {
             }
             // Preserve the whole folder, including writes made after the initial listing.
             let saved = root.appending(path: "\(folder.directoryName) Backup \(UUID().uuidString)")
-            try fileManager.moveItem(at: link, to: saved)
+            try fileManager.createSymbolicLink(at: saved, withDestinationURL: target)
+            do {
+                try exchangeItems(at: link, and: saved)
+            } catch {
+                try? fileManager.removeItem(at: saved)
+                throw error
+            }
             backup = saved
-        }
-        do {
+        } else {
             try fileManager.createSymbolicLink(at: link, withDestinationURL: target)
-        } catch {
-            if let backup { try fileManager.moveItem(at: backup, to: link) }
-            throw error
         }
         // Never recursively delete a folder that an agent could still be writing into.
         if let saved = backup, saved.path.withCString({ rmdir($0) }) == 0 { backup = nil }
         return LocalACPWorkspaceFolderChangeResult(backupURL: backup, skippedItemNames: skippedItems)
+    }
+
+    /// Keep the live path and its backup valid across a crash, including when
+    /// exchanging a directory and a link. Unsupported filesystems fail unchanged.
+    private static func exchangeItems(at first: URL, and second: URL) throws {
+        guard renamex_np(first.path, second.path, UInt32(RENAME_SWAP)) == 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
     }
 
     private static func copyContents(_ contents: [URL], to target: URL) throws -> [String] {
@@ -274,7 +275,9 @@ public enum LocalACPWorkspaceProvisioner {
                 let stagedItem = staging.appending(path: item.lastPathComponent)
                 try fileManager.copyItem(at: item, to: stagedItem)
                 do {
-                    try fileManager.moveItem(at: stagedItem, to: destination)
+                    guard renamex_np(stagedItem.path, destination.path, UInt32(RENAME_EXCL)) == 0 else {
+                        throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+                    }
                 } catch {
                     // A different writer may have created the destination during the copy.
                     guard itemExists(destination) else { throw error }
@@ -296,8 +299,10 @@ public enum LocalACPWorkspaceProvisioner {
               isDirectory.boolValue else { throw folder.unavailableError }
         let root = workspaceRoot.standardizedFileURL.resolvingSymlinksInPath()
         let current = directoryURL(for: folder, at: root)
-        if root == target || root.path.hasPrefix(target.path + "/")
-            || (!isSymbolicLink(current) && target.path.hasPrefix(current.resolvingSymlinksInPath().path + "/")) {
+        if root.pathComponents.starts(with: target.pathComponents)
+            || (!isSymbolicLink(current)
+                && target != current.resolvingSymlinksInPath()
+                && target.pathComponents.starts(with: current.resolvingSymlinksInPath().pathComponents)) {
             throw folder.containsWorkspaceError
         }
         return target

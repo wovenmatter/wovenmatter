@@ -123,18 +123,6 @@ export class ClaudeRuntime {
   }
 }
 
-// This entry point is launched only by the user's Connections button, in their
-// terminal. Native auth has inherited stdio and owns its browser/code exchange.
-export async function nativeClaudeLogin(directory) {
-  const child = spawn(claudeExecutable(), ['auth', 'login'], {
-    env: claudeEnvironment(await claudeDirectories(directory)), stdio: 'inherit',
-  });
-  return new Promise((resolve, reject) => {
-    child.once('error', reject);
-    child.once('exit', code => resolve(code ?? 1));
-  });
-}
-
 // User-initiated native login. Only the authorization link crosses into the UI;
 // the native runtime retains all subscription tokens in its own storage.
 export async function inlineClaudeLogin(runtime, profile, { signal, notify, spawnCommand = spawn } = {}) {

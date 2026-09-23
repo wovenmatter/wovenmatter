@@ -110,8 +110,24 @@ struct DashboardComposerTextEditorTests {
         expect(attached.first?.pathExtension == "png", "Screenshot must be a real PNG")
         if let url = attached.first {
             expect(NSImage(contentsOf: url) != nil, "Staged screenshot should decode")
-            try? FileManager.default.removeItem(at: url.deletingLastPathComponent())
+            DashboardComposerNativeTextView.releaseTemporaryAttachments([url])
+            expect(!FileManager.default.fileExists(atPath: url.deletingLastPathComponent().path), "Owned paste staging must be cleaned after attachment staging")
         }
+        let unrelatedFolder = FileManager.default.temporaryDirectory.appending(path: "wovenmatter-paste-user-" + UUID().uuidString)
+        let unrelatedFile = unrelatedFolder.appending(path: "report.txt")
+        do {
+            try FileManager.default.createDirectory(at: unrelatedFolder, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: unrelatedFolder) }
+            try Data("Keep this user file".utf8).write(to: unrelatedFile)
+            DashboardComposerNativeTextView.releaseTemporaryAttachments([unrelatedFile])
+            expect(FileManager.default.fileExists(atPath: unrelatedFile.path), "A matching folder name does not grant ownership of user files")
+        } catch { fatalError("Could not prepare attachment cleanup fixture: \(error)") }
+        var rejectedFile: URL?
+        textView.onAttachFiles = { rejectedFile = $0.first; return false }
+        expect(!textView.attach(from: board), "A rejected screenshot attachment must remain rejected")
+        if let rejectedFile {
+            expect(!FileManager.default.fileExists(atPath: rejectedFile.path), "Rejected paste staging must be cleaned immediately")
+        } else { fatalError("Screenshot rejection must reach the attachment callback") }
         board.clearContents(); board.setString("ordinary text", forType: .string)
         expect(!textView.attach(from: board), "Text paste should remain native")
     }

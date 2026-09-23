@@ -116,8 +116,9 @@ is metadata only; the app neither reads credential files nor receives refresh
 credentials from Claude. The Usage page uses that status rather than reading the
 native subscription token to fetch quota information.
 
-The Connections button opens the bundled runtime’s own interactive sign-in in
-Terminal, locally or through the workspace’s existing SSH/docker-exec route.
+Connections starts the bundled runtime’s native sign-in locally or through the
+workspace’s existing SSH/docker-exec route. The authorization link appears beneath
+the account; the user completes sign-in in their browser.
 No authentication UI is driven by automated tests. On macOS,
 `CLAUDE_SECURESTORAGE_CONFIG_DIR` targets a private, read-only directory: the pinned
 runtime uses its path to identify the native Keychain entry, and its disk fallback

@@ -119,7 +119,6 @@ final class DefaultAgentSettingsModel {
     var catalog: [Model] = []
     var providers: [Provider] = []
     var searchConfigured = false
-    var accountLabels: [String: String] = [:]
     func connectionLabel(_ id: String) -> String {
         if let provider = providers.first(where: { $0.id == id }) {
             return provider.connected ? "Credentials present" : "Connect account"
@@ -128,7 +127,6 @@ final class DefaultAgentSettingsModel {
     }
     private func invalidateConnection(_ provider: String) {
         providers.removeAll { $0.id == provider }
-        accountLabels[provider] = nil
     }
     var cursorAccountStatus = "Refresh to check Cursor sign-in"
     var signInProvider: String?
@@ -400,7 +398,6 @@ final class DefaultAgentSettingsModel {
         self.scope = scope
         catalog = []
         providers = []
-        accountLabels = [:]
         notice = nil
         error = nil
     }
@@ -452,7 +449,6 @@ final class DefaultAgentSettingsModel {
         operationTask = Task { [self] in
             do {
                 let prepared = try await ProviderAccountCoordinator.shared.prepare(scope)
-                accountLabels = prepared.credentials.compactMapValues { $0.accountLabel }
                 if login != nil {
                     let lease = try await ProviderAccountCoordinator.shared.beginSignIn()
                     guard generation == runID, !Task.isCancelled else {

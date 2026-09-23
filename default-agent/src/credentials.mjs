@@ -12,10 +12,10 @@ export class Credentials extends InMemoryCredentialStore {
     const vault = this.vault ? await this.vault.read() : undefined;
     const entries = (vault ? vault.accounts : this.accounts)?.[provider] ?? [];
     const owned = vault?.owned?.[provider] ?? this.owned[provider];
-    if (owned) return [{ id: 'default', label: 'Workspace account', credential: owned }, ...entries];
+    if (owned) return [{ id: 'default', label: 'Workspace account', credential: owned, owned: true }, ...entries];
     return entries.length ? entries : [{ id: 'default', label: 'Current account', credential: await this.read(provider) }];
   }
-  runWithAccount(provider, account, operation) { return this.context.run({ provider, id: account.id, fallback: account.credential }, operation); }
+  runWithAccount(provider, account, operation) { return this.context.run({ provider, id: account.id, owned: account.owned === true }, operation); }
   async read(provider) {
     const context = this.context.getStore();
     if (context?.provider === provider && context.id !== 'default') {
@@ -23,6 +23,9 @@ export class Credentials extends InMemoryCredentialStore {
       return accounts?.[provider]?.find(a => a.id === context.id)?.credential;
     }
     const stored = this.vault ? await this.vault.read() : { shared: this.supplied, owned: this.owned };
+    // Removing a workspace-owned sign-in must not silently change accounts
+    // inside an in-flight turn. The engine owns any permitted fallback.
+    if (context?.provider === provider && context.owned) return stored.owned?.[provider];
     return stored.owned?.[provider] ?? stored.shared?.[provider] ?? stored.accounts?.[provider]?.[0]?.credential;
   }
   async list() {

@@ -173,6 +173,33 @@ test('remote service owns an accepted run and completion can be recovered withou
   assert.equal(JSON.parse(await readFile(join(directory, `run-${operationID}.json`))).snapshot.runID, operationID);
 });
 
+test('remote run identity rejects conflicting requests during admission, execution and after restart', async t => {
+  const directory = await temporary(t);
+  const configuration = { workspace: 'fixture', unlockKey: randomBytes(32).toString('base64'), config: {}, credentials: {} };
+  const service = createDefaultAgentService({ cwd: directory, directory });
+  await service.configure(configuration);
+  const engine = await service.engine();
+  let calls = 0, release;
+  engine.handle = async () => { calls++; await new Promise(resolve => { release = resolve; }); return { stopReason: 'end_turn' }; };
+  const operationID = crypto.randomUUID();
+  const request = { method: 'session/prompt', operationID, params: { sessionId: crypto.randomUUID(), prompt: [{ type: 'text', text: 'Original' }] } };
+  const changed = { ...request, params: { ...request.params, prompt: [{ type: 'text', text: 'Different' }] } };
+  const first = service.invoke(request);
+  await assert.rejects(service.invoke(changed), /different request/);
+  await first;
+  await assert.rejects(service.invoke({ ...request, params: { ...request.params, sessionId: crypto.randomUUID() } }), /different request/);
+  // Semantically identical JSON remains a valid retry despite key ordering.
+  await service.invoke({ ...request, params: { prompt: [{ text: 'Original', type: 'text' }], sessionId: request.params.sessionId } });
+  assert.equal(calls, 1);
+  release();
+  while (!(await service.poll(operationID)).done) await new Promise(resolve => setTimeout(resolve, 5));
+  await assert.rejects(service.invoke(changed), /different request/);
+  const recovered = createDefaultAgentService({ cwd: directory, directory });
+  await recovered.configure(configuration);
+  await assert.rejects(recovered.invoke(changed), /different request/);
+  assert.deepEqual(await recovered.invoke(request), { operationID });
+});
+
 test('independent remote sign-in takes priority over updates and is encrypted across helpers', async t => {
   const directory = await temporary(t), key = randomBytes(32).toString('base64');
   const first = new CredentialVault(directory), second = new CredentialVault(directory);
@@ -247,6 +274,18 @@ test('account contexts isolate overlapping asynchronous requests', async () => {
   assert.deepEqual(values, ['a', 'b']);
 });
 
+test('removing a workspace-owned account does not silently switch an active turn to shared credentials', async () => {
+  const credentials = new Credentials({ openai: { type: 'api_key', key: 'shared' } });
+  credentials.owned.openai = { type: 'api_key', key: 'workspace' };
+  const [account] = await credentials.candidates('openai');
+  await credentials.runWithAccount('openai', account, async () => {
+    assert.equal((await credentials.read('openai')).key, 'workspace');
+    delete credentials.owned.openai;
+    assert.equal(await credentials.read('openai'), undefined);
+  });
+  assert.equal((await credentials.read('openai')).key, 'shared');
+});
+
 test('account backups are encrypted and borrowed tokens never export renewal secrets', async t => {
   const directory = await temporary(t);
   const vault = new CredentialVault(directory);
@@ -288,4 +327,5 @@ test('native profile sharing includes only an identifier, never native credentia
   assert.deepEqual(sharedCredentials({ 'claude-subscription': { type: 'native', accountId: 'profile-1', access: 'must-not-share', refresh: 'must-not-share' } }),
     { 'claude-subscription': { type: 'native', accountId: 'profile-1' } });
   assert.deepEqual(sharedCredentials({ 'claude-subscription': { type: 'native', accountId: '../outside' } }), {});
+  assert.deepEqual(sharedAccounts({ 'claude-subscription': [{ id: 'fixture', label: 'Invalid', credential: { type: 'native', accountId: '../outside' } }] }), { 'claude-subscription': [] });
 });
