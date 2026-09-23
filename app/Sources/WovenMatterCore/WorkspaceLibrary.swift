@@ -179,38 +179,49 @@ public enum LibraryLinkDiscovery {
             (label?.isEmpty == false ? label! : (fallback?.isEmpty == false ? fallback! : source)).prefix(512)),
           kind: kind(source: source)))
     }
-    let pattern = #"!?\[([^\]\n]*)\]\((<[^>\n]+>|(?:[^\s()]|\([^()]*\))+)(?:\s+\"[^\"]*\")?\)"#
-    if let regex = try? NSRegularExpression(pattern: pattern) {
-      for match in regex.matches(in: text, range: full) {
-        guard let label = Range(match.range(at: 1), in: text), let source = Range(match.range(at: 2), in: text) else {
-          continue
-        }
-        append(String(text[source]), title: String(text[label]))
-        markdownRanges.append(match.range)
+    func matches(_ pattern: String, visit: (NSTextCheckingResult) -> Void) {
+      guard results.count < maximumItemsPerMessage,
+        let regex = try? NSRegularExpression(pattern: pattern)
+      else { return }
+      regex.enumerateMatches(in: text, range: full) { match, _, stop in
+        if let match { visit(match) }
+        if results.count == maximumItemsPerMessage { stop.pointee = true }
       }
+    }
+    matches(#"!?\[([^\[\]\n]*)\]\((<[^>\n]+>|(?:[^\s()]|\([^()]*\))+)(?:\s+\"[^\"]*\")?\)"#) { match in
+      guard let label = Range(match.range(at: 1), in: text), let source = Range(match.range(at: 2), in: text) else {
+        return
+      }
+      append(String(text[source]), title: String(text[label]))
+      markdownRanges.append(match.range)
     }
     // Reference-style citations, including footnotes, retain their destination URLs.
-    if let regex = try? NSRegularExpression(pattern: #"(?im)^\s*\[[^\]]+\]:\s*(\S+)"#) {
-      for match in regex.matches(in: text, range: full) {
-        if let range = Range(match.range(at: 1), in: text) { append(String(text[range]), title: nil) }
-      }
+    matches(#"(?im)^[ \t]*\[[^\[\]\r\n]+\]:[ \t]*(\S+)"#) { match in
+      if let range = Range(match.range(at: 1), in: text) { append(String(text[range]), title: nil) }
     }
-    if let regex = try? NSRegularExpression(pattern: #"(?i)\b(?:https?://|file:///|sandbox:/)[^\s<>\[\]"']+"#) {
-      for match in regex.matches(in: text, range: full) {
-        guard !markdownRanges.contains(where: { NSIntersectionRange($0, match.range).length > 0 }),
-          let range = Range(match.range, in: text)
-        else { continue }
-        var source = String(text[range]).trimmingCharacters(in: CharacterSet(charactersIn: ".,;!?"))
-        while source.last == ")", source.filter({ $0 == ")" }).count > source.filter({ $0 == "(" }).count {
-          source.removeLast()
-        }
-        append(source, title: nil)
+    // Both match streams are ordered. Advance through Markdown spans once instead
+    // of rescanning every span for each URL in a large/repetitive message.
+    var markdownIndex = 0
+    matches(#"(?i)\b(?:https?://|file:///|sandbox:/)[^\s<>\[\]"']+"#) { match in
+      while markdownIndex < markdownRanges.count, NSMaxRange(markdownRanges[markdownIndex]) <= match.range.location {
+        markdownIndex += 1
       }
+      guard markdownIndex == markdownRanges.count
+        || NSIntersectionRange(markdownRanges[markdownIndex], match.range).length == 0,
+        let range = Range(match.range, in: text)
+      else { return }
+      var source = String(text[range]).trimmingCharacters(in: CharacterSet(charactersIn: ".,;!?"))
+      var extraClosing = source.reduce(0) { count, character in
+        count + (character == ")" ? 1 : character == "(" ? -1 : 0)
+      }
+      while source.last == ")", extraClosing > 0 {
+        source.removeLast()
+        extraClosing -= 1
+      }
+      append(source, title: nil)
     }
-    if let regex = try? NSRegularExpression(pattern: #"(?m)(?:^|\s)MEDIA:\s*([^\s]+)"#) {
-      for match in regex.matches(in: text, range: full) {
-        if let range = Range(match.range(at: 1), in: text) { append(String(text[range]), title: nil) }
-      }
+    matches(#"(?m)(?:^|\s)MEDIA:\s*([^\s]+)"#) { match in
+      if let range = Range(match.range(at: 1), in: text) { append(String(text[range]), title: nil) }
     }
     return results
   }

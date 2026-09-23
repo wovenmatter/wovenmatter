@@ -407,6 +407,16 @@ final class DashboardComposerNativeTextView: NSTextView {
         super.paste(sender)
     }
 
+    private static var temporaryAttachmentFolders: Set<URL> = []
+
+    static func releaseTemporaryAttachments(_ urls: [URL]) {
+        for url in urls {
+            let folder = url.deletingLastPathComponent()
+            guard temporaryAttachmentFolders.remove(folder) != nil else { continue }
+            try? FileManager.default.removeItem(at: folder)
+        }
+    }
+
     @discardableResult
     func attach(from pasteboard: NSPasteboard) -> Bool {
         let urls = (pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL]) ?? []
@@ -415,13 +425,17 @@ final class DashboardComposerNativeTextView: NSTextView {
               let bitmap = NSBitmapImageRep(data: tiff), let png = bitmap.representation(using: .png, properties: [:]),
               png.count <= 25 * 1024 * 1024 else { return false }
         let folder = FileManager.default.temporaryDirectory.appending(path: "wovenmatter-paste-" + UUID().uuidString, directoryHint: .isDirectory)
+        let file = folder.appending(path: "Screenshot.png")
         do {
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-            let file = folder.appending(path: "Screenshot.png")
             try png.write(to: file, options: .atomic)
+            Self.temporaryAttachmentFolders.insert(folder)
             if onAttachFiles?([file]) == true { return true }
+        } catch {
             try? FileManager.default.removeItem(at: folder)
-        } catch { return false }
+            return false
+        }
+        Self.releaseTemporaryAttachments([file])
         return false
     }
 

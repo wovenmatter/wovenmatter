@@ -1102,13 +1102,7 @@ struct WorkspaceView: View {
             let scoped = urls.filter { $0.startAccessingSecurityScopedResource() }
             defer {
                 scoped.forEach { $0.stopAccessingSecurityScopedResource() }
-                for url in urls {
-                    let folder = url.deletingLastPathComponent()
-                    if folder.deletingLastPathComponent().standardizedFileURL == FileManager.default.temporaryDirectory.standardizedFileURL,
-                       folder.lastPathComponent.hasPrefix("wovenmatter-paste-") {
-                        try? FileManager.default.removeItem(at: folder)
-                    }
-                }
+                DashboardComposerNativeTextView.releaseTemporaryAttachments(urls)
             }
             do {
                 let files = urls.map { url in

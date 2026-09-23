@@ -484,6 +484,21 @@ struct WorkspaceLibraryTests {
     #expect(LibraryLinkDiscovery.links(in: "[danger](javascript:alert(1))").isEmpty)
   }
 
+  @Test("large repetitive messages retain unique links without quadratic rescanning")
+  func repetitiveLinkDiscovery() {
+    let repeated = String(repeating: "[Same](https://example.com/same) ", count: 10_000)
+    let links = LibraryLinkDiscovery.links(in: repeated + "https://example.com/final")
+    #expect(links.map(\.source) == ["https://example.com/same", "https://example.com/final"])
+    let unfinishedLabels = String(repeating: "[", count: 100_000)
+    #expect(LibraryLinkDiscovery.links(in: unfinishedLabels + " https://example.com/final").map(\.source)
+      == ["https://example.com/final"])
+    let punctuation = String(repeating: ")", count: 100_000)
+    #expect(LibraryLinkDiscovery.links(in: "https://example.com/a_(b)" + punctuation).map(\.source)
+      == ["https://example.com/a_(b)"])
+    let distinct = (0..<500).map { "[Item](https://example.com/\($0))" }.joined(separator: " ")
+    #expect(LibraryLinkDiscovery.links(in: distinct).count == LibraryLinkDiscovery.maximumItemsPerMessage)
+  }
+
   @Test("date ranges use local calendar days including daylight saving transitions")
   func dates() throws {
     var calendar = Calendar(identifier: .gregorian)
