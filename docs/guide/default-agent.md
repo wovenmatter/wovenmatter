@@ -94,8 +94,10 @@ credentials, a harness reporting sign-in, missing sign-in, unsupported checks,
 and failures. These checks do not verify remaining usage. Local harnesses whose
 credential access is disabled stay unchecked.
 
-These disconnect guarantees apply to Built-in. The other harnesses retain
-their existing runtime-specific connection behavior.
+With remote background execution enabled, the workspace also retains supported
+ACP and Pi sessions across Mac disconnections. Service or container restarts are
+a separate boundary: interrupted sends are not automatically repeated. See
+[Background execution](../architecture/BACKGROUND_EXECUTION.md).
 
 ## Claude models
 

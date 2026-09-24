@@ -87,7 +87,13 @@ export function createTaskGateway({ directory, execute, now = Date.now, onDisabl
   }
   save()
   function readJournal(id) {
-    try { return readFileSync(resolve(directory, `run-${id}.jsonl`), 'utf8').split('\n').filter(Boolean).map(JSON.parse) }
+    try {
+      const lines = readFileSync(resolve(directory, `run-${id}.jsonl`), 'utf8').split('\n')
+      // A crash can tear the final append. Keep complete records while the
+      // durable claim marks the run uncertain; never resubmit its prompt.
+      lines.pop()
+      return lines.filter(Boolean).map(JSON.parse)
+    }
     catch (e) { if (e.code === 'ENOENT') return []; throw e }
   }
   function status() { return { enabled:state.enabled, epoch, activeRuns:active.size, scheduleCount:state.schedules.length, waitingTasks:state.schedules.filter(s=>s.waitingReason).map(s=>({eventID:s.id,reason:s.waitingReason,retryAfter:s.retryAfter})) } }

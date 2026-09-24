@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile, rename } from 'node:fs/promises';
+import { mkdir, open, readFile, rename, unlink } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { localServers } from './local-servers.mjs';
 
@@ -19,8 +19,16 @@ export async function readJSON(path, fallback = {}) {
 export async function writePrivateJSON(path, value) {
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
   const temporary = `${path}.${process.pid}.${crypto.randomUUID()}.tmp`;
-  await writeFile(temporary, JSON.stringify(value), { mode: 0o600, flag: 'wx' });
-  await rename(temporary, path);
+  try {
+    const file = await open(temporary, 'wx', 0o600);
+    try { await file.writeFile(JSON.stringify(value)); await file.sync(); }
+    finally { await file.close(); }
+    await rename(temporary, path);
+    const directory = await open(dirname(path), 'r');
+    try { await directory.sync(); } finally { await directory.close(); }
+  } finally {
+    await unlink(temporary).catch(error => { if (error.code !== 'ENOENT') throw error; });
+  }
 }
 export function validateConfig(input) {
   if (!input || typeof input !== 'object') throw new Error('Invalid Built-in settings.');

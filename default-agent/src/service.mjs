@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { CredentialVault, sharedCredentials, sharedAccounts } from './vault.mjs';
 import { join } from 'node:path';
-import { appendFile, readFile, readdir } from 'node:fs/promises';
+import { appendFile, open, readFile, readdir } from 'node:fs/promises';
 import { DefaultAgentError, operationErrorMessage, readJSON, validateConfig, writePrivateJSON } from './config.mjs';
 import { PermissionRequests } from './permissions.mjs';
 
@@ -110,9 +110,13 @@ export function createDefaultAgentService({ cwd, directory }) {
       try {
         await journal;
         if (journalError) throw journalError;
+        // Persist streamed output before publishing its completion receipt.
+        const file = await open(path, 'a', 0o600);
+        try { await file.sync(); } finally { await file.close(); }
         const record = e.sessions.get(operation.sessionID);
         const snapshot = { runID: message.params?._meta?.wovenRunID ?? id, content: operation.updates.filter(u => u.sessionUpdate === 'agent_message_chunk').map(u => u.content.text).join(''), error: operation.error, model: record?.selected };
         await writePrivateJSON(join(directory, `run-${id}.json`), { sessionID: operation.sessionID, fingerprint, snapshot, result: operation.result, error: operation.error });
+        operations.delete(id);
       }
       catch { operation.error = 'The workspace could not save the completed run.'; }
       operation.done = true;
@@ -126,7 +130,7 @@ export function createDefaultAgentService({ cwd, directory }) {
     const completion = await readJSON(join(directory, `run-${id}.json`), null);
     if (!completion) throw new Error('This run was interrupted when the workspace service stopped.');
     let updates = []; try { updates = (await readFile(join(directory, `run-${id}.jsonl`), 'utf8')).trim().split('\n').filter(Boolean).map(JSON.parse); } catch (error) { if (error.code !== 'ENOENT') throw error; }
-    return { updates: updates.slice(after, after + 200), cursor: Math.min(updates.length, after + 200), done: after + 200 >= updates.length, ...completion };
+    return { updates: updates.slice(after, after + 200), pendingPermissions: [], cursor: Math.min(updates.length, after + 200), done: after + 200 >= updates.length, ...completion };
   }
   async function cancelActive() {
     const running = [...operations.values()].filter(operation => !operation.done);
