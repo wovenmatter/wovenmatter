@@ -92,6 +92,7 @@ public struct DashboardConversationChange: Equatable, Sendable {
 
 public actor DashboardStore {
   public nonisolated let database: WorkspaceDatabase
+  public nonisolated let library: LibraryService
   public nonisolated let conversationChanges: AsyncStream<DashboardConversationChange>
 
   private let deviceIdentity: DashboardDeviceIdentity
@@ -127,6 +128,7 @@ public actor DashboardStore {
       changes.continuation.yield($0)
     }
     self.database = database
+    self.library = LibraryService(database: database)
     self.deviceIdentity = identity
     self.conversationChanges = changes.stream
     self.messageAttachments = try MessageAttachmentStore(supportDirectory: supportDirectory)

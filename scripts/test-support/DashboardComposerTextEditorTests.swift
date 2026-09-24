@@ -72,6 +72,7 @@ private func expect(
 @MainActor
 struct DashboardComposerTextEditorTests {
     static func main() {
+        testAttachmentPasteLeavesTextUntouched()
         testShiftReturnReplacesSelectionWithoutSubmitting()
         testPlainReturnSubmitsWithoutEditing()
         testKeyRoutingPreservesMarkedTextAndStandardBindings()
@@ -87,6 +88,48 @@ struct DashboardComposerTextEditorTests {
         testNativeFocusUpdatesTheBindingImmediately()
         testStaleBlurDoesNotCancelManualRefocus()
         print("Dashboard composer native text behavior passed.")
+    }
+
+    private static func testAttachmentPasteLeavesTextUntouched() {
+        let textView = DashboardComposerNativeTextView()
+        textView.string = "Keep this draft"
+        let board = NSPasteboard.withUniqueName()
+        defer { board.releaseGlobally() }
+        let file = URL(fileURLWithPath: "/tmp/attachment fixture.pdf")
+        board.writeObjects([file as NSURL])
+        var attached: [URL] = []
+        textView.onAttachFiles = { attached = $0; return true }
+        expect(textView.attach(from: board), "File paste should use attachment callback")
+        expect(attached == [file], "File URL should preserve spaces")
+        expect(textView.string == "Keep this draft", "File paste must not replace the draft")
+        board.clearContents()
+        let image = NSImage(size: NSSize(width: 4, height: 4))
+        image.lockFocus(); NSColor.green.setFill(); NSRect(x: 0, y: 0, width: 4, height: 4).fill(); image.unlockFocus()
+        board.writeObjects([image])
+        expect(textView.attach(from: board), "Screenshot paste should create an attachment")
+        expect(attached.first?.pathExtension == "png", "Screenshot must be a real PNG")
+        if let url = attached.first {
+            expect(NSImage(contentsOf: url) != nil, "Staged screenshot should decode")
+            DashboardComposerNativeTextView.releaseTemporaryAttachments([url])
+            expect(!FileManager.default.fileExists(atPath: url.deletingLastPathComponent().path), "Owned paste staging must be cleaned after attachment staging")
+        }
+        let unrelatedFolder = FileManager.default.temporaryDirectory.appending(path: "wovenmatter-paste-user-" + UUID().uuidString)
+        let unrelatedFile = unrelatedFolder.appending(path: "report.txt")
+        do {
+            try FileManager.default.createDirectory(at: unrelatedFolder, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: unrelatedFolder) }
+            try Data("Keep this user file".utf8).write(to: unrelatedFile)
+            DashboardComposerNativeTextView.releaseTemporaryAttachments([unrelatedFile])
+            expect(FileManager.default.fileExists(atPath: unrelatedFile.path), "A matching folder name does not grant ownership of user files")
+        } catch { fatalError("Could not prepare attachment cleanup fixture: \(error)") }
+        var rejectedFile: URL?
+        textView.onAttachFiles = { rejectedFile = $0.first; return false }
+        expect(!textView.attach(from: board), "A rejected screenshot attachment must remain rejected")
+        if let rejectedFile {
+            expect(!FileManager.default.fileExists(atPath: rejectedFile.path), "Rejected paste staging must be cleaned immediately")
+        } else { fatalError("Screenshot rejection must reach the attachment callback") }
+        board.clearContents(); board.setString("ordinary text", forType: .string)
+        expect(!textView.attach(from: board), "Text paste should remain native")
     }
 
     private static func testShiftReturnReplacesSelectionWithoutSubmitting() {

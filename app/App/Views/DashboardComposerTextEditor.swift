@@ -14,6 +14,7 @@ struct DashboardComposerTextEditor: NSViewRepresentable {
     var onEscape: () -> Bool = { false }
     var completionRequest: Binding<Int> = .constant(0)
     var onCaretAtEndChange: (Bool) -> Void = { _ in }
+    var onAttachFiles: ([URL]) -> Bool = { _ in false }
 
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
@@ -24,6 +25,7 @@ struct DashboardComposerTextEditor: NSViewRepresentable {
         scrollView.maximumVisibleLines = maximumVisibleLines
         let textView = scrollView.composerTextView
         textView.delegate = context.coordinator
+        textView.registerForDraggedTypes([.fileURL, .png, .tiff])
         textView.onPrepareInput = { [weak coordinator = context.coordinator, weak textView] in
             guard let coordinator, let textView else { return }
             coordinator.reconcilePendingCompletion(for: textView)
@@ -45,6 +47,9 @@ struct DashboardComposerTextEditor: NSViewRepresentable {
         }
         textView.onEscape = { [weak coordinator = context.coordinator] in
             coordinator?.parent.onEscape() ?? false
+        }
+        textView.onAttachFiles = { [weak coordinator = context.coordinator] urls in
+            coordinator?.parent.onAttachFiles(urls) ?? false
         }
         textView.onBecomeFirstResponder = { [weak coordinator = context.coordinator] in
             coordinator?.parent.isFocused = true
@@ -305,6 +310,7 @@ final class DashboardComposerNativeTextView: NSTextView {
     static let composerFont = NSFont.systemFont(ofSize: 15)
     static let lineSpacing: CGFloat = 4
 
+    var onAttachFiles: (([URL]) -> Bool)?
     var onSubmit: (() -> Void)?
     var onTab: (() -> Bool)?
     var onPrepareInput: (() -> Void)?
@@ -384,6 +390,53 @@ final class DashboardComposerNativeTextView: NSTextView {
         case .standard:
             super.keyDown(with: event)
         }
+    }
+
+    override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
+        if sender.draggingPasteboard.canReadObject(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) { return .copy }
+        return super.draggingEntered(sender)
+    }
+
+    override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+        if attach(from: sender.draggingPasteboard) { return true }
+        return super.performDragOperation(sender)
+    }
+
+    override func paste(_ sender: Any?) {
+        if attach(from: .general) { return }
+        super.paste(sender)
+    }
+
+    private static var temporaryAttachmentFolders: Set<URL> = []
+
+    static func releaseTemporaryAttachments(_ urls: [URL]) {
+        for url in urls {
+            let folder = url.deletingLastPathComponent()
+            guard temporaryAttachmentFolders.remove(folder) != nil else { continue }
+            try? FileManager.default.removeItem(at: folder)
+        }
+    }
+
+    @discardableResult
+    func attach(from pasteboard: NSPasteboard) -> Bool {
+        let urls = (pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL]) ?? []
+        if !urls.isEmpty { return onAttachFiles?(urls) ?? false }
+        guard let image = NSImage(pasteboard: pasteboard), let tiff = image.tiffRepresentation,
+              let bitmap = NSBitmapImageRep(data: tiff), let png = bitmap.representation(using: .png, properties: [:]),
+              png.count <= 25 * 1024 * 1024 else { return false }
+        let folder = FileManager.default.temporaryDirectory.appending(path: "wovenmatter-paste-" + UUID().uuidString, directoryHint: .isDirectory)
+        let file = folder.appending(path: "Screenshot.png")
+        do {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+            try png.write(to: file, options: .atomic)
+            Self.temporaryAttachmentFolders.insert(folder)
+            if onAttachFiles?([file]) == true { return true }
+        } catch {
+            try? FileManager.default.removeItem(at: folder)
+            return false
+        }
+        Self.releaseTemporaryAttachments([file])
+        return false
     }
 
     override func didChangeText() {
