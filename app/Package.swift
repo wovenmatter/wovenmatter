@@ -12,10 +12,11 @@ let package = Package(
     .library(name: "WovenMatterClient", targets: ["WovenMatterClient"]),
     .library(name: "WovenMatterDashboardStore", targets: ["WovenMatterDashboardStore"])
   ],
-  dependencies: [],
+  dependencies: [.package(path: "../shared")],
   targets: [
     .target(
       name: "WovenMatterCore",
+      dependencies: [.product(name: "WovenMatterCompanion", package: "shared")],
       swiftSettings: [
         .enableUpcomingFeature("ExistentialAny")
       ]
@@ -55,24 +56,24 @@ let package = Package(
       name: "WovenMatterClientTests",
       dependencies: ["WovenMatterClient"]
     ),
-    // Exercise the same app service and socket/relay sources that the native
-    // bundle uses, without launching the UI or any provider runtimes.
-    .testTarget(
-      name: "WovenMatterAgentToolsTests",
+    // Build the native app sources once without its executable entry point.
+    // Both test suites exercise those same services without starting providers.
+    .target(
+      name: "WovenMatterAppFacade",
       dependencies: ["WovenMatterCore", "WovenMatterClient", "WovenMatterDashboardStore"],
       path: "App",
-      exclude: [
-        "ApplicationModel.swift", "WovenMatterApp.swift", "WovenMatterLifecycleDelegate.swift",
-        "Info.plist", "Assets.xcassets", "Resources", "Views", "Services/DashboardNoteDrafts.swift",
-        "Models/ApplicationModel+AgentTools.swift", "Models/AgentDatabases.swift",
-        "Models/ConversationMarkdownDocument.swift", "Models/DashboardConversationReferencePreview.swift",
-        "Models/DashboardConversationState.swift", "Models/OpenCodeModel.swift", "Models/RemoteWorkspacesModel.swift"
-      ],
-      sources: [
-        "Models/WorkspaceAgentToolsModel.swift", "Services/WovenMatterToolService.swift",
-        "Services/WovenNoteService.swift", "Services/WovenMatterRemoteToolBridge.swift",
-        "Tests/WorkspaceAgentToolsServiceTests.swift"
-      ]
+      exclude: ["Assets.xcassets", "Info.plist", "Resources", "Tests"],
+      sources: ["ApplicationModel.swift", "WovenMatterApp.swift", "WovenMatterLifecycleDelegate.swift", "Models", "Services", "Views"],
+      swiftSettings: [.define("COMPANION_FACADE_TESTS")]
+    ),
+    .testTarget(
+      name: "WovenMatterAgentToolsTests",
+      dependencies: ["WovenMatterAppFacade", "WovenMatterCore", "WovenMatterClient", "WovenMatterDashboardStore"],
+      path: "App/Tests"
+    ),
+    .testTarget(
+      name: "WovenMatterAppFacadeTests",
+      dependencies: ["WovenMatterAppFacade", "WovenMatterDashboardStore"]
     )
   ]
 )

@@ -1,0 +1,76 @@
+name: WovenMatterCompanion
+options:
+  deploymentTarget:
+    iOS: "18.0"
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+packages:
+  Mobile:
+    path: .
+  Shared:
+    path: ../shared
+targets:
+  WovenMatterMobileApp:
+    productName: WovenMatterCompanion
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources/CompanionApp
+    dependencies:
+      - package: Mobile
+        product: CompanionClient
+      - package: Shared
+        product: WovenMatterCompanion
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.wovenmatter.companion.dev
+        PRODUCT_NAME: WovenMatterCompanion
+        PRODUCT_MODULE_NAME: WovenMatterMobileApp
+        DEVELOPMENT_TEAM: 3M84Q9NAMN
+        CODE_SIGN_STYLE: Automatic
+        INFOPLIST_FILE: Config/Info.plist
+        MARKETING_VERSION: 0.1.0
+        CURRENT_PROJECT_VERSION: 1
+        TARGETED_DEVICE_FAMILY: "1"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+  CompanionAppTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Tests/CompanionAppTests
+    dependencies:
+      - target: WovenMatterMobileApp
+      - package: Mobile
+        product: CompanionClient
+        link: false
+      - package: Shared
+        product: WovenMatterCompanion
+        link: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.wovenmatter.companion.dev.apptests
+        TEST_HOST: $(BUILT_PRODUCTS_DIR)/WovenMatterCompanion.app/WovenMatterCompanion
+        BUNDLE_LOADER: $(TEST_HOST)
+        GENERATE_INFOPLIST_FILE: YES
+  CompanionUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: Tests/CompanionUITests
+    dependencies:
+      - target: WovenMatterMobileApp
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.wovenmatter.companion.dev.uitests
+        DEVELOPMENT_TEAM: 3M84Q9NAMN
+        GENERATE_INFOPLIST_FILE: YES
+schemes:
+  WovenMatterCompanion:
+    build:
+      targets:
+        WovenMatterMobileApp: all
+    test:
+      targets:
+        - CompanionAppTests
+        - CompanionUITests

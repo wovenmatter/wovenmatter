@@ -301,10 +301,11 @@ final class OpenCodeModel {
         return try OpenCodeConnection.discover(file: registration).browserURL
     }
 
-    func create(workspace: URL, requestedConversationID: UUID? = nil, title: String? = nil, nativeWorkspaceID: String? = nil) async throws -> String {
+    func create(workspace: URL, requestedConversationID: UUID? = nil, title: String? = nil, nativeWorkspaceID: String? = nil, folderID: String? = nil) async throws -> String {
         guard isEnabled else { throw OpenCodeError.message("Enable OpenCode for this workspace before creating a chat.") }
         guard !serverStopped else { throw OpenCodeError.message("Start OpenCode from its settings page before creating a chat.") }
         guard !busy else { throw OpenCodeError.message("A session is already being created.") }
+        try store.database.validateSessionFolder(folderID)
         busy = true; defer { busy = false }
         let pendingKey = "wovenmatter.opencode.pending-create." + connectionID + (requestedConversationID.map { "." + $0.uuidString.lowercased() } ?? "")
         let pending = defaults.string(forKey: pendingKey)
@@ -328,11 +329,12 @@ final class OpenCodeModel {
         var nativeCreationConfirmed = false
         do {
             try await connectLocal()
+            try store.database.validateSessionFolder(folderID)
             let response = try await coordinator.createSession(connectionID: connectionID, id: id,
                 workspace: URL(fileURLWithPath: captured.nativeDirectory), recover: pending != nil || requestedConversationID != nil,
                 title: title, nativeWorkspaceID: nativeWorkspaceID)
             nativeCreationConfirmed = true
-            let localID = try await open(response["data"], requestedConversationID: requestedConversationID, creationPreferences: captured)
+            let localID = try await open(response["data"], requestedConversationID: requestedConversationID, creationPreferences: captured, folderID: folderID)
             defaults.removeObject(forKey: pendingKey)
             defaults.removeObject(forKey: selectionKey)
             return localID
@@ -366,19 +368,21 @@ final class OpenCodeModel {
     }
 
     private func open(_ session: OpenCodeValue, importedSnapshot: OpenCodeSessionSnapshot? = nil,
-                      requestedConversationID: UUID? = nil, creationPreferences: PendingCreationPreferences? = nil) async throws -> String {
+                      requestedConversationID: UUID? = nil, creationPreferences: PendingCreationPreferences? = nil,
+                      folderID: String? = nil) async throws -> String {
         let sessionID = session["id"].text
         guard sessionID.hasPrefix("ses") else { throw OpenCodeError.message("OpenCode did not return a session ID.") }
+        try store.database.validateSessionFolder(folderID)
         let conversationID: String
         if let configuration = remoteConfiguration {
             conversationID = try store.database.createRemoteACPSession(runtimeKind: .opencode,
                 remoteWorkspaceID: configuration.id, remoteWorkspaceName: configuration.name,
                 title: session["title"].string ?? "New OpenCode chat", ownerDeviceID: ownerDeviceID,
-                openCodeAssociation: (connectionID, sessionID), requestedConversationID: requestedConversationID)
+                openCodeAssociation: (connectionID, sessionID), requestedConversationID: requestedConversationID, folderID: folderID)
         } else {
             conversationID = try store.database.createLocalACPSession(runtimeKind: .opencode,
                 title: session["title"].string ?? "New OpenCode chat", ownerDeviceID: ownerDeviceID,
-                openCodeAssociation: (connectionID, sessionID), importedOpenCodeSnapshot: importedSnapshot, requestedConversationID: requestedConversationID)
+                openCodeAssociation: (connectionID, sessionID), importedOpenCodeSnapshot: importedSnapshot, requestedConversationID: requestedConversationID, folderID: folderID)
         }
         let link = OpenCodeSessionLink(conversationID: conversationID, connectionID: connectionID, sessionID: sessionID)
         links[conversationID] = link
@@ -409,6 +413,24 @@ final class OpenCodeModel {
 
     func sessionCall(_ id: String, _ suffix: String = "", method: String = "GET", body: OpenCodeValue? = nil) async throws -> OpenCodeValue {
         guard let link = links[id], isLocalSession(id) else { throw OpenCodeError.message("This is a saved transcript. Start a new OpenCode chat to continue.") }
+        let parts = suffix.split(separator: "/").map { String($0).removingPercentEncoding ?? String($0) }
+        if method == "POST", parts.count == 3, ["permission", "form"].contains(parts[0]),
+           ["reply", "cancel"].contains(parts[2]) {
+            let runID = try store.database.activeRunID(conversationID: id)
+            if parts[0] == "permission", parts[2] == "reply",
+               let request = snapshots[id]?.permissions.first(where: { $0["id"].text == parts[1] }) {
+                try await coordinator.replyToPermission(link, expectedRequest: request,
+                    expectedRunID: runID, reply: body?["reply"].text ?? "")
+            } else if parts[0] == "form", let request = snapshots[id]?.forms.first(where: { $0["id"].text == parts[1] }) {
+                if parts[2] == "cancel" {
+                    try await coordinator.cancelForm(link, expectedRequest: request, expectedRunID: runID)
+                } else {
+                    try await coordinator.replyToForm(link, expectedRequest: request, expectedRunID: runID,
+                        answers: body?["answer"] ?? .null)
+                }
+            } else { throw OpenCodeError.message("This OpenCode request has already ended. Refresh the conversation.") }
+            return .null
+        }
         let result = try await coordinator.call(connectionID: connectionID, method: method,
             path: "/api/session/" + OpenCodeHTTPClient.segment(link.sessionID) + suffix, body: body)
         if method != "GET" { try? await coordinator.refresh(link) }
@@ -565,7 +587,8 @@ final class OpenCodeModel {
             workspace: workspace, selections: nativeSelections(id))
     }
 
-    func send(_ id: String, input: AgentMessageInput, discovery: String? = nil) async throws {
+    @discardableResult
+    func send(_ id: String, input: AgentMessageInput, discovery: String? = nil, requiresIdle: Bool = false) async throws -> OpenCodeSubmissionReceipt {
         guard let link = links[id], isLocalSession(id) else { throw OpenCodeError.message("This saved transcript is read-only. Create a new OpenCode chat.") }
         guard isEnabled else { throw OpenCodeError.message("Enable OpenCode for this workspace before sending.") }
         if let configuration = remoteConfiguration,
@@ -586,11 +609,16 @@ final class OpenCodeModel {
             input = try await remoteWorkspaces.stagingFiles(of: input, in: configuration.id)
         }
         if let command = OpenCodeComposerMetadata.invocation(input.text, commands: commands[id] ?? []) {
-            try await coordinator.command(link, name: command.name,
-                input: AgentMessageInput(text: command.arguments, attachments: input.attachments, historyDeliveryID: input.historyDeliveryID), discovery: discovery)
+            return try await coordinator.command(link, name: command.name,
+                input: AgentMessageInput(text: command.arguments, attachments: input.attachments, historyDeliveryID: input.historyDeliveryID), discovery: discovery, requiresIdle: requiresIdle)
         } else {
-            try await coordinator.prompt(link, input: input, discovery: discovery)
+            return try await coordinator.prompt(link, input: input, discovery: discovery, requiresIdle: requiresIdle)
         }
+    }
+
+    func interrupt(_ id: String, expectedRunID: String? = nil) async throws {
+        guard let link = links[id], isLocalSession(id) else { throw OpenCodeError.message("This saved transcript is read-only. Create a new OpenCode chat.") }
+        try await coordinator.interrupt(link, expectedRunID: expectedRunID)
     }
 
     func perform(_ operation: @escaping @MainActor () async throws -> Void) {

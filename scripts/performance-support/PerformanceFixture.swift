@@ -56,12 +56,7 @@ extension ApplicationModel {
             shownLocalACPRuntimeKinds = [.codex]
             titleGenerationSettings.isEnabled = false
             let journal = DashboardNoteDraftJournal(fileURL: root.appending(path: "drafts.ndjson"))
-            noteWriteBehind = DashboardNoteWriteBehind(journal: journal, update: { [database = store.database] entry in
-                try database.persistNoteDraft(id: entry.noteID, title: entry.title, content: entry.content,
-                    folderID: entry.folderID, createdAt: entry.createdAt)
-            }, completion: { [weak self] entry, result in
-                Task { @MainActor [weak self] in self?.completeNoteWrite(entry, result: result) }
-            })
+            noteWriteBehind = makeNoteWriteBehind(journal: journal, database: store.database)
             try await store.prepareLocalWorkspace()
             let deviceID = try await store.dashboardDeviceID()
             try await Task.detached {

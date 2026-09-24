@@ -72,6 +72,10 @@
 		1A239171AFDF4F0AA55642C4 /* wovenmatter-remote.py in Resources */ = {isa = PBXBuildFile; fileRef = 3C0A700E6F1C4902ACCF3585 /* wovenmatter-remote.py */; };
 		F19000000000000000000001 /* DashboardNoteDocumentCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = F19000000000000000000002 /* DashboardNoteDocumentCache.swift */; };
 		A14000000000000000000001 /* ApplicationModel+SessionSelections.swift in Sources */ = {isa = PBXBuildFile; fileRef = A14000000000000000000002 /* ApplicationModel+SessionSelections.swift */; };
+		E678564F286E71B5FA588A5A /* CompanionCommandService.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF3D48D1E7B9587A3DF2F895 /* CompanionCommandService.swift */; };
+		B7937C7349692E25EE127696 /* CompanionHostController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0083907CDB98FA31255BD2C1 /* CompanionHostController.swift */; };
+		3D87BAA73934F3BC92DC78F1 /* SettingsCompanionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F0B68181C793F898EC7A4DE /* SettingsCompanionView.swift */; };
+		D8ADD27CBC40434BB0183702 /* CompanionNativeInteractions.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2737F707B9A5E3A2A5A5AD8 /* CompanionNativeInteractions.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -141,6 +145,10 @@
 		3C0A700E6F1C4902ACCF3585 /* wovenmatter-remote.py */ = {isa = PBXFileReference; lastKnownFileType = text.script.python; path = "wovenmatter-remote.py"; sourceTree = "<group>"; };
 		F19000000000000000000002 /* DashboardNoteDocumentCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardNoteDocumentCache.swift; sourceTree = "<group>"; };
 		A14000000000000000000002 /* ApplicationModel+SessionSelections.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ApplicationModel+SessionSelections.swift"; sourceTree = "<group>"; };
+		FF3D48D1E7B9587A3DF2F895 /* CompanionCommandService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionCommandService.swift; sourceTree = "<group>"; };
+		0083907CDB98FA31255BD2C1 /* CompanionHostController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionHostController.swift; sourceTree = "<group>"; };
+		8F0B68181C793F898EC7A4DE /* SettingsCompanionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsCompanionView.swift; sourceTree = "<group>"; };
+		A2737F707B9A5E3A2A5A5AD8 /* CompanionNativeInteractions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionNativeInteractions.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -224,6 +232,7 @@
 				D7A74DFD3BA4438CB7357741 /* SettingsHermesView.swift */,
 				E45100000000000000000002 /* DashboardHermesCron.swift */,
 				502EF864DA314DFBB322C973 /* DashboardLocalSecretCard.swift */,
+				8F0B68181C793F898EC7A4DE /* SettingsCompanionView.swift */,
 				40D1B5DEF1B0023CB8C52B6D /* DashboardSharedViews.swift */,
 				C04200000000000000000002 /* DashboardConversationPopover.swift */,
 				3AB89D5EB3D93F04C3A5CB5E /* DashboardOpenClawCron.swift */,
@@ -275,6 +284,9 @@
 		D50000000000000000000008 /* Services */ = {
 			isa = PBXGroup;
 			children = (
+				0083907CDB98FA31255BD2C1 /* CompanionHostController.swift */,
+				A2737F707B9A5E3A2A5A5AD8 /* CompanionNativeInteractions.swift */,
+				FF3D48D1E7B9587A3DF2F895 /* CompanionCommandService.swift */,
 				879D531AEA3583A537B8BE1B /* DashboardNoteDrafts.swift */,
 				F19000000000000000000002 /* DashboardNoteDocumentCache.swift */,
 				E10100000000000000000002 /* WovenNoteService.swift */,
@@ -399,6 +411,10 @@
 				ECBF462874DF484F9FDD5C91 /* DashboardLocalSecretCard.swift in Sources */,
 				A14000000000000000000001 /* ApplicationModel+SessionSelections.swift in Sources */,
 				4C606D43824083BD3A612FF1 /* OpenCodeModel.swift in Sources */,
+				3D87BAA73934F3BC92DC78F1 /* SettingsCompanionView.swift in Sources */,
+				B7937C7349692E25EE127696 /* CompanionHostController.swift in Sources */,
+				D8ADD27CBC40434BB0183702 /* CompanionNativeInteractions.swift in Sources */,
+				E678564F286E71B5FA588A5A /* CompanionCommandService.swift in Sources */,
 				923D138C1F54FC887AA90493 /* DashboardSharedViews.swift in Sources */,
 				C04200000000000000000001 /* DashboardConversationPopover.swift in Sources */,
 				BAAE9A1BC06C8AC78E67AA1B /* DashboardOpenClawCron.swift in Sources */,
@@ -493,7 +509,7 @@
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = App/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = "Woven Matter Dev";
+				INFOPLIST_KEY_CFBundleDisplayName = "$(WOVENMATTER_APP_PRODUCT_NAME)";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright Woven Matter";
 				INFOPLIST_KEY_NSPrincipalClass = NSApplication;

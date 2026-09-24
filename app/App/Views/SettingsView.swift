@@ -20,6 +20,7 @@ private enum SettingsSection: Equatable {
     case landing
     case general
     case harness(AgentRuntimeKind, UUID?, HarnessSettingsOrigin)
+    case companion
     case openClaw
     case openCode
     case hermes
@@ -54,6 +55,10 @@ struct SettingsView: View {
             switch section {
             case .landing:
                 landing
+            case .companion:
+                SettingsCompanionView(model: model, host: model.companionHost,
+                    reservesRailControlSpace: reservesRailControlSpace,
+                    onBack: { section = .landing })
             case .general:
                 SettingsGeneralView(
                     model: model,
@@ -186,6 +191,12 @@ struct SettingsView: View {
                     detail: "Theme, sidebar layout, and conversation titles.",
                     icon: { DashboardLucideIcon(glyph: .settings, size: 15) },
                     action: { section = .general }
+                )
+                SettingsDestinationRow(
+                    title: "iPhone companion",
+                    detail: "Pair your iPhone and share this Mac's workspace over Tailscale.",
+                    icon: { Image(systemName: "iphone").font(.system(size: 15)) },
+                    action: { section = .companion }
                 )
                 SettingsDestinationRow(
                     title: "Local agent workspace",

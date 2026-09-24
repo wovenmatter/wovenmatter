@@ -151,7 +151,7 @@ struct WorkspaceHistoryTests {
     let note = try db.createNote(folderID: nil, title: "Document", content: "Original")
     let original = try #require(db.noteAssetVersions(id: note).first)
     _ = try db.applyNoteEdits(
-      .init(command: .apply, noteID: note, operations: [.appendText(" agent", .paragraph)]))
+      .init(command: .apply, noteID: note, expectedRevision: try db.readNoteForEditing(id: note).revision, operations: [.appendText(" agent", .paragraph)]))
     #expect(try db.noteAssetVersions(id: note).count == 2)
     #expect(throws: (any Error).self) {
       try db.restoreNoteAssetVersion(
@@ -163,7 +163,7 @@ struct WorkspaceHistoryTests {
     #expect(restored.document?.plainText == NoteDocument.decode(original.content).plainText)
     for n in 0..<65 {
       _ = try db.applyNoteEdits(
-        .init(command: .apply, noteID: note, operations: [.setTitle("Version \(n)")]))
+        .init(command: .apply, noteID: note, expectedRevision: try db.readNoteForEditing(id: note).revision, operations: [.setTitle("Version \(n)")]))
     }
     #expect(try db.noteAssetVersions(id: note).count == 50)
     #expect(try db.readNoteForEditing(id: note).title == "Version 64")
@@ -177,17 +177,18 @@ struct WorkspaceHistoryTests {
       let current = try db.readNoteForEditing(id: note)
       for n in 0..<10 {
         _ = try db.persistNoteDraft(
-          id: note, title: "Draft \(n)", content: try #require(current.document).encoded())
+          id: note, title: "Draft \(n)", content: try #require(current.document).encoded(),
+          expectedRevision: try db.readNoteForEditing(id: note).revision)
       }
       #expect(try db.noteAssetVersions(id: note).count == 1)
       try db.checkpointNote(id: note)
       #expect(try db.noteAssetVersions(id: note).count == 2)
       if kind == .html {
         _ = try db.applyNoteEdits(
-          .init(command: .apply, noteID: note, operations: [.setHTML("<h1>Changed</h1>")]))
+          .init(command: .apply, noteID: note, expectedRevision: try db.readNoteForEditing(id: note).revision, operations: [.setHTML("<h1>Changed</h1>")]))
       } else {
         _ = try db.applyNoteEdits(
-          .init(command: .apply, noteID: note, operations: [.setTitle("Agent title")]))
+          .init(command: .apply, noteID: note, expectedRevision: try db.readNoteForEditing(id: note).revision, operations: [.setTitle("Agent title")]))
       }
       #expect(try db.noteAssetVersions(id: note).count == 3)
     }
@@ -220,7 +221,7 @@ struct WorkspaceHistoryTests {
           command: .apply, noteID: note, expectedRevision: previous,
           operations: [.setHTML("<p>\(n) \(body)</p>")]))
       let revision = try #require(response.revision)
-      #expect(revision > previous)
+      #expect(try #require(Int64(revision)) > #require(Int64(previous)))
       previous = revision
     }
     let versions = try db.noteAssetVersions(id: note)

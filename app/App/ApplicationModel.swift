@@ -7,6 +7,7 @@ import WovenMatterDashboardStore
 struct PendingLocalACPPermission: Equatable, Identifiable {
     let id: UUID
     let conversationID: String
+    let runID: String
     let title: String
     let options: [LocalACPPermissionOption]
 }
@@ -14,7 +15,15 @@ struct PendingLocalACPPermission: Equatable, Identifiable {
 struct PendingLocalACPInteraction: Equatable, Identifiable {
     let id: UUID
     let conversationID: String
+    let runID: String
     let request: LocalACPInteractionRequest
+}
+
+struct CompanionRecoveredNoteDraft: Equatable, Identifiable {
+    let id: String
+    let noteID: String
+    let title: String
+    let error: String
 }
 
 struct PreparedLocalACPRuntimeInstall: Equatable, Identifiable {
@@ -199,6 +208,9 @@ final class ApplicationModel {
     private(set) var isCreatingCalendarItem = false
     private(set) var noteDrafts: [String: DashboardNoteDraft] = [:]
     var pendingComposerPrefills: [String: String] = [:]
+    private(set) var companionRecoveredNoteDrafts: [CompanionRecoveredNoteDraft] = []
+    @ObservationIgnored
+    private var recoveredNoteEntries: [String: DashboardNoteJournalEntry] = [:]
     private(set) var localACPSessionMetadata: [
         String: LocalACPSessionMetadata
     ] = [:]
@@ -273,6 +285,10 @@ final class ApplicationModel {
     private(set) var shownLocalACPRuntimeKinds: Set<AgentRuntimeKind> = []
 
     private(set) var dashboardStore: DashboardStore?
+    @ObservationIgnored
+    lazy var companionCommands = CompanionCommandService(model: self)
+    @ObservationIgnored
+    lazy var companionHost = CompanionHostController(model: self)
     private var noteWriteBehind: DashboardNoteWriteBehind?
     private var dashboardStoreStarted = false
     private var dashboardStoreStartDeferredForNoteRecovery = false
@@ -313,13 +329,7 @@ final class ApplicationModel {
     private(set) var localACPWorkspaceLaunchConfiguration:
         LocalACPWorkspaceLaunchConfiguration?
     @ObservationIgnored
-    private var localACPPermissionContinuations: [
-        UUID: CheckedContinuation<String?, Never>
-    ] = [:]
-    @ObservationIgnored
-    private var localACPInteractionContinuations: [
-        UUID: CheckedContinuation<LocalACPInteractionResponse, Never>
-    ] = [:]
+    private let interactionBroker = AgentInteractionBroker()
     private var loggedDashboardRecordCounts: DashboardRecordCounts?
     private var noteRefreshTask: Task<Void, Never>?
     @ObservationIgnored
@@ -342,13 +352,19 @@ final class ApplicationModel {
         startsAutomatically: Bool? = nil
     ) {
         self.applicationDefaults = applicationDefaults
-        self.usage = ApplicationUsageModel(applicationDefaults: applicationDefaults)
+        self.usage = ApplicationUsageModel(applicationDefaults: applicationDefaults, localUsageService: LocalUsageService(
+            homeDirectory: CompanionTestWorkspace.supportDirectory?.appending(path: "ProviderFixtureHome")
+                ?? FileManager.default.homeDirectoryForCurrentUser,
+            usageDatabaseURL: CompanionTestWorkspace.supportDirectory?.appending(path: "workspace.sqlite")))
         self.sessionSelectionPreferences = SessionSelectionPreferences(defaults: applicationDefaults)
         self.localACPRuntimePreferences = LocalACPRuntimePreferences(
             defaults: applicationDefaults
         )
         self.remoteWorkspaces = RemoteWorkspacesModel(defaults: applicationDefaults)
-        self.localACPWorkspaceStore = LocalACPWorkspaceConfigurationStore()
+        self.localACPWorkspaceStore = LocalACPWorkspaceConfigurationStore(
+            homeDirectory: CompanionTestWorkspace.supportDirectory?.appending(path: "ProviderFixtureHome")
+                ?? FileManager.default.homeDirectoryForCurrentUser
+        )
         self.dashboardStore = dashboardStore
         let localACPRuntimePreferenceState = localACPRuntimePreferences.state
         enabledLocalACPRuntimeKinds =
@@ -396,6 +412,102 @@ final class ApplicationModel {
         startupTask = Task { await start() }
     }
 
+    private func makeNoteWriteBehind(
+        journal: DashboardNoteDraftJournal,
+        database: WorkspaceDatabase
+    ) -> DashboardNoteWriteBehind {
+        DashboardNoteWriteBehind(
+            journal: journal,
+            update: { [database] entry in
+                try database.persistNoteDraft(
+                    id: entry.noteID,
+                    title: entry.title,
+                    content: entry.content,
+                    folderID: entry.folderID,
+                    createdAt: entry.createdAt,
+                    expectedRevision: entry.expectedRevision,
+                    baseContent: entry.baseContent,
+                    baseTitle: entry.baseTitle,
+                    operationID: entry.mutationID
+                )
+            },
+            committedRevision: { [database] entry in
+                guard let operationID = entry.mutationID else { return nil }
+                return try database.companionDraftRevision(operationID: operationID)
+            },
+            completion: { [weak self] entry, result in
+                Task { @MainActor [weak self] in
+                    self?.completeNoteWrite(entry, result: result)
+                }
+            }
+        )
+    }
+
+    #if COMPANION_FACADE_TESTS
+    /// Installs explicit inert provider metadata while preserving real routing,
+    /// session preferences, tools, persistence and note recovery.
+    func configureCompanionFixture(directory: URL) async throws {
+        guard let dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
+        lastOpenClawCronRefresh = .distantFuture
+        lastHermesCronRefresh = .distantFuture
+        titleGenerationSettings.isEnabled = false
+        let runtimes = AgentRuntimeKind.allCases.filter { $0 != .opencode }
+        let hermesHome = directory.appending(path: "hermes-profile").path
+        localACPLaunchConfigurations = Dictionary(uniqueKeysWithValues: runtimes.map {
+            ($0, LocalACPRuntimeLaunchConfiguration(runtimeKind: $0,
+                executableURL: directory.appending(path: "fake-provider"), arguments: [],
+                environment: $0 == .hermes ? ["HERMES_HOME": hermesHome] : [:]))
+        })
+        enabledLocalACPRuntimeKinds = Set(runtimes)
+        shownLocalACPRuntimeKinds = Set(runtimes)
+        localACPWorkspaceLaunchConfiguration = .init(rootURL: directory, repositoriesURL: directory)
+        localACPDatabaseReadyRuntimeKinds = Set(runtimes)
+        try await dashboardStore.prepareLocalWorkspace()
+        if noteWriteBehind == nil {
+            noteWriteBehind = makeNoteWriteBehind(
+                journal: DashboardNoteDraftJournal(fileURL: directory.appending(path: "fixture-drafts.ndjson")),
+                database: dashboardStore.database)
+        }
+        if agentTools == nil { try configureAgentTools(store: dashboardStore) }
+        agentTools?.companionFixtureCLIPath = { _, _, remote in
+            remote == nil ? directory.appending(path: "wovenmatter-fixture").path : "/fixture/remote/wovenmatter"
+        }
+        await refreshOpenClawGateways()
+        await refreshWorkspace()
+        for agent in localCLIAgents where agent.runtimeKind == .hermes {
+            applicationDefaults.set(hermesHome, forKey: "hermes.gateway.link." + agent.id.uuidString)
+        }
+        remoteHermesConnections = Dictionary(uniqueKeysWithValues: remoteWorkspaces.workspaces.map {
+            ($0.id, HermesGatewayConnection(home: "/fixture/hermes", port: 1,
+                token: "fixture-only", pid: 0, remoteWorkspaceID: $0.id))
+        })
+    }
+    #endif
+
+    private func configureAgentTools(store dashboardStore: DashboardStore) throws {
+        toolRuntimeTask?.cancel()
+        agentTools?.stop()
+        agentTools = try WorkspaceAgentToolsModel(database: dashboardStore.database,
+            sessionHandler: { [weak self] caller, command, request in
+                guard let self else { throw CancellationError() }
+                return try await self.handleSessionTool(callerID: caller, command: command, request: request)
+            }, noteHandler: { [weak self] caller, request, requestID in
+                guard let self else { throw CancellationError() }
+                return try await self.handleAgentNote(callerID: caller, request: request, requestID: requestID)
+            }, noteRestoreHandler: { [weak self] caller, noteID, versionID, revision, requestID in
+                guard let self else { throw CancellationError() }
+                guard self.flushNoteDrafts() else { throw ApplicationModelError.noteDraftSaveFailed }
+                let response = try dashboardStore.database.restoreNoteAssetVersion(noteID: noteID, versionID: versionID,
+                    expectedRevision: revision, callerConversationID: caller, requestID: requestID)
+                await self.adoptNoteEditingResponse(response)
+                return response
+            }, usageHandler: { [weak self] command in
+                guard let self else { throw CancellationError() }
+                return try await self.handleAgentUsage(command)
+            }, onMutation: { [weak self] in await self?.refreshWorkspace() })
+        configureSessionToolSelectionAdapter()
+    }
+
     private func start() async {
         do {
             conversationChangeTask?.cancel()
@@ -441,45 +553,9 @@ final class ApplicationModel {
                 fileURL: supportDirectory.appending(path: "note-draft-journal.ndjson")
             )
             let recoveredEntries = try journal.latestEntries()
-            let writeBehind = DashboardNoteWriteBehind(
-                journal: journal,
-                update: { [database = dashboardStore.database] entry in
-                    try database.persistNoteDraft(
-                        id: entry.noteID,
-                        title: entry.title,
-                        content: entry.content,
-                        folderID: entry.folderID,
-                        createdAt: entry.createdAt
-                    )
-                },
-                completion: { [weak self] entry, result in
-                    Task { @MainActor [weak self] in
-                        self?.completeNoteWrite(entry, result: result)
-                    }
-                }
-            )
+            let writeBehind = makeNoteWriteBehind(journal: journal, database: dashboardStore.database)
             noteWriteBehind = writeBehind
-            toolRuntimeTask?.cancel()
-            agentTools?.stop()
-            agentTools = try WorkspaceAgentToolsModel(database: dashboardStore.database,
-                sessionHandler: { [weak self] caller, command, request in
-                    guard let self else { throw CancellationError() }
-                    return try await self.handleSessionTool(callerID: caller, command: command, request: request)
-                }, noteHandler: { [weak self] caller, request, requestID in
-                    guard let self else { throw CancellationError() }
-                    return try await self.handleAgentNote(callerID: caller, request: request, requestID: requestID)
-                }, noteRestoreHandler: { [weak self] caller, noteID, versionID, revision, requestID in
-                    guard let self else { throw CancellationError() }
-                    guard self.flushNoteDrafts() else { throw ApplicationModelError.noteDraftSaveFailed }
-                    let response = try dashboardStore.database.restoreNoteAssetVersion(noteID: noteID, versionID: versionID,
-                        expectedRevision: revision, callerConversationID: caller, requestID: requestID)
-                    await self.adoptNoteEditingResponse(response)
-                    return response
-                }, usageHandler: { [weak self] command in
-                    guard let self else { throw CancellationError() }
-                    return try await self.handleAgentUsage(command)
-                }, onMutation: { [weak self] in await self?.refreshWorkspace() })
-            configureSessionToolSelectionAdapter()
+            try configureAgentTools(store: dashboardStore)
             try dashboardStore.database.recoverToolDeliveries()
             try dashboardStore.database.recoverToolSessionCreations()
             try dashboardStore.database.cancelPendingCoordinationAccess()
@@ -496,17 +572,21 @@ final class ApplicationModel {
             do {
                 try await writeBehind.replayAndFlush(recoveredEntries)
             } catch {
-                dashboardStoreStartDeferredForNoteRecovery = true
+                // Recovery conflicts preserve their journal entries but do not prevent
+                // unrelated conversations and the companion service from starting.
+                dashboardStoreStartDeferredForNoteRecovery = false
                 noteMutationError = error.localizedDescription
                 for entry in recoveredEntries {
                     noteDrafts[entry.noteID]?.fail(error.localizedDescription)
                 }
             }
+            refreshRecoveredNoteDrafts()
             recoverPendingRemoteNoteEdits(store: dashboardStore)
             await refreshWorkspace()
             state = .ready
             startAgentToolRuntime()
             startDashboardStoreIfReady()
+            await companionHost.restoreIfEnabled()
             Task { [weak self] in
                 await self?.refreshDatabases()
             }
@@ -863,7 +943,7 @@ final class ApplicationModel {
             )
         }
         await refreshWorkspaceIfChanged()
-        finishAgentRunInteractions(conversationID: change.conversationID)
+        finishAgentRunInteractions(conversationID: change.conversationID, runID: change.runID)
         trimConversationStateCacheIfNeeded()
         if let conversation = workspaceOverview?.conversations.first(where: {
             $0.id == change.conversationID
@@ -908,7 +988,8 @@ final class ApplicationModel {
         }
     }
 
-    private static func dashboardSupportDirectory() throws -> URL {
+    static func dashboardSupportDirectory() throws -> URL {
+        if let isolated = CompanionTestWorkspace.supportDirectory { return isolated }
         let fileManager = FileManager.default
         guard let applicationSupport = fileManager.urls(
             for: .applicationSupportDirectory,
@@ -1410,7 +1491,9 @@ final class ApplicationModel {
             draft.saveState = .saved
             draft.editRevision = 0
             draft.persistedRevision = 0
-            draft.sourceUpdatedAt = response.revision
+            draft.sourceRevision = response.revision
+            draft.sourceContent = content
+            draft.sourceTitle = response.title ?? draft.title
             noteDrafts[response.noteID] = draft
         }
         return true
@@ -1462,7 +1545,10 @@ final class ApplicationModel {
             content: draft.content,
             revision: draft.editRevision,
             folderID: note.folderID,
-            createdAt: note.createdAt
+            createdAt: note.createdAt,
+            expectedRevision: draft.sourceRevision,
+            baseContent: draft.sourceContent,
+            baseTitle: draft.sourceTitle
         )
         noteDrafts[note.id] = draft
         noteWriteBehind.submit(entry)
@@ -1487,6 +1573,12 @@ final class ApplicationModel {
         guard var draft = noteDrafts[entry.noteID] else { return }
         switch result {
         case .success:
+            if let operationID = entry.mutationID,
+               let committedRevision = try? dashboardStore?.database.companionDraftRevision(operationID: operationID) {
+                draft.sourceRevision = committedRevision
+                draft.sourceContent = entry.content
+                draft.sourceTitle = entry.title
+            }
             draft.persistedRevision = max(draft.persistedRevision, entry.revision)
             if draft.editRevision == entry.revision {
                 draft.saveState = .saved
@@ -1513,6 +1605,56 @@ final class ApplicationModel {
                 noteMutationError = error.localizedDescription
             }
         }
+        refreshRecoveredNoteDrafts()
+    }
+
+    private func refreshRecoveredNoteDrafts() {
+        guard let entries = try? noteWriteBehind?.recoverableEntries() else { return }
+        recoveredNoteEntries = [:]
+        companionRecoveredNoteDrafts = entries.map { entry in
+            let id = entry.mutationID ?? WorkspaceDatabase.recoveryCopyID(
+                sourceID: entry.noteID, title: entry.title, content: entry.content
+            )
+            recoveredNoteEntries[id] = entry
+            let error: String
+            if case .failed(let message) = noteDrafts[entry.noteID]?.saveState { error = message }
+            else { error = "Unsynced writing is preserved on this Mac." }
+            return CompanionRecoveredNoteDraft(id: id, noteID: entry.noteID, title: entry.title, error: error)
+        }
+    }
+
+    /// Called only by an explicit user recovery action. The original and any
+    /// unrelated journal versions remain intact until this exact copy is durable.
+    @discardableResult
+    func preserveRecoveredNoteAsCopy(id: String) async throws -> String {
+        guard let entry = recoveredNoteEntries[id], let dashboardStore, let noteWriteBehind else {
+            throw CompanionCommandService.CommandError.unavailable
+        }
+        let copyID = try dashboardStore.database.preserveRecoveryCopy(
+            sourceID: entry.noteID, title: entry.title, content: entry.content, folderID: entry.folderID
+        )
+        try noteWriteBehind.discardRecoveredDraft(noteID: entry.noteID, content: entry.content, title: entry.title)
+        refreshRecoveredNoteDrafts()
+        if let next = recoveredNoteEntries.values.first(where: { $0.noteID == entry.noteID }) {
+            let source = workspaceOverview?.notes.first(where: { $0.id == entry.noteID })
+            var recovered = DashboardNoteDraft.recovered(from: next, source: source)
+            recovered.fail("Another preserved version is available. Save a copy to keep it separately.")
+            noteDrafts[entry.noteID] = recovered
+        } else {
+            noteDrafts.removeValue(forKey: entry.noteID)
+        }
+        await refreshWorkspace()
+        return copyID
+    }
+
+    func preserveCurrentNoteDraftAsCopy(noteID: String) async {
+        refreshRecoveredNoteDrafts()
+        guard let draft = noteDrafts[noteID],
+              let entry = recoveredNoteEntries.first(where: {
+                $0.value.noteID == noteID && $0.value.title == draft.title && $0.value.content == draft.content
+              }) else { return }
+        do { _ = try await preserveRecoveredNoteAsCopy(id: entry.key) }
+        catch { noteMutationError = error.localizedDescription }
     }
 
     func clearNoteMutationError() {
@@ -1737,7 +1879,7 @@ final class ApplicationModel {
             resourceID: note.id,
             titleSnapshot: note.title,
             contentSnapshot: String(note.content.prefix(AgentMessageAttachmentLimits.maximumReferenceCharacters)),
-            revisionSnapshot: note.updatedAt ?? note.createdAt ?? "",
+            revisionSnapshot: note.revision ?? note.updatedAt ?? note.createdAt ?? "",
             folderIDSnapshot: note.folderID,
             folderTitleSnapshot: folder?.name
         ))
@@ -1780,13 +1922,37 @@ final class ApplicationModel {
         return false
     }
 
-    /// Both user and CLI delivery use this admission point. A false result means
-    /// no dispatch occurred; callers decide whether to show the user limit alert.
+    /// Desktop, CLI and phone commands share selection, admission and tool policy.
     func dispatchAgentMessage(
         conversation: WorkspaceConversationRecord,
         input: AgentMessageInput,
         note: WorkspaceNoteRecord? = nil
     ) async throws -> Bool {
+        try await dispatchCanonicalAgentMessage(conversation: conversation, input: input, note: note).accepted
+    }
+
+    func acceptCanonicalAgentMessage(
+        conversation: WorkspaceConversationRecord,
+        input: AgentMessageInput,
+        note: WorkspaceNoteRecord? = nil,
+        expectedRunID: String? = nil,
+        requiresIdle: Bool = false,
+        expectedNoteRevision: String? = nil
+    ) async throws -> LocalACPRunIdentifiers? {
+        let result = try await dispatchCanonicalAgentMessage(conversation: conversation, input: input, note: note,
+            expectedRunID: expectedRunID, requiresIdle: requiresIdle, expectedNoteRevision: expectedNoteRevision)
+        guard result.accepted else { throw ApplicationModelError.activeTurnLimitReached }
+        return result.identifiers
+    }
+
+    private func dispatchCanonicalAgentMessage(
+        conversation: WorkspaceConversationRecord,
+        input: AgentMessageInput,
+        note: WorkspaceNoteRecord? = nil,
+        expectedRunID: String? = nil,
+        requiresIdle: Bool = false,
+        expectedNoteRevision: String? = nil
+    ) async throws -> (accepted: Bool, identifiers: LocalACPRunIdentifiers?) {
         guard let dashboardStore, let agentTools else { throw ApplicationModelError.dashboardStoreUnavailable }
         try await applyPendingSessionSelections(conversationID: conversation.id)
         guard !loadingLocalACPSessionIDs.contains(conversation.id),
@@ -1795,10 +1961,28 @@ final class ApplicationModel {
         }
         let decision = toolSessionAdmission.begin(conversation.id, running: runningToolSessionIDs,
             limit: agentTools.settings.maximumRunningSessions)
-        if decision == .atCapacity { return false }
+        if decision == .atCapacity { return (false, nil) }
         if decision == .preparing { throw ApplicationModelError.localSessionConfigurationInProgress }
         let steering = decision == .steer
         defer { toolSessionAdmission.finish(conversation.id) }
+        func validateCommandTarget() throws {
+            let activeRunID = try dashboardStore.database.activeRunID(conversationID: conversation.id)
+            if requiresIdle && (activeRunID != nil || runningToolSessionIDs.contains(conversation.id)) {
+                throw LocalACPSessionDatabaseError.runAlreadyActive
+            }
+            if let expectedRunID, activeRunID != expectedRunID {
+                throw LocalACPSessionDatabaseError.runNotFound
+            }
+            if let expectedNoteRevision {
+                guard flushNoteDrafts() else { throw ApplicationModelError.noteDraftSaveFailed }
+                let noteID = note?.id ?? input.references.first(where: { $0.kind == .note })?.resourceID
+                guard let noteID, let canonical = try dashboardStore.database.companionNote(id: noteID),
+                      String(canonical.revision) == expectedNoteRevision else {
+                    throw CompanionCommandService.CommandError.noteRevisionChanged
+                }
+            }
+        }
+        try validateCommandTarget()
         if conversation.localRuntimeKind == .hermes, conversation.remoteWorkspaceID == nil,
            !buzzBoundLocalACPConversationIDs.contains(conversation.id) {
             try requireLocalHermesLink(conversationID: conversation.id)
@@ -1817,7 +2001,8 @@ final class ApplicationModel {
             guard flushNoteDrafts() else { throw ApplicationModelError.noteDraftSaveFailed }
             let response = try dashboardStore.database.readNoteForEditing(id: note.id, callerConversationID: conversation.id)
             guard let revision = response.revision else { throw ApplicationModelError.noteContextUnavailable }
-            context = AgentNoteContext(noteID: note.id, title: response.title ?? note.title, folderID: note.folderID, revision: revision)
+            context = AgentNoteContext(noteID: note.id, title: response.title ?? note.title, folderID: note.folderID,
+                revision: revision, requireCurrentRevision: expectedNoteRevision != nil ? true : nil)
         }
         let remote = conversation.remoteWorkspaceID.flatMap { remoteWorkspaces.configuration(id: $0) }
         if conversation.remoteWorkspaceID != nil, remote == nil { throw ApplicationModelError.remoteHarnessUnavailable }
@@ -1827,23 +2012,35 @@ final class ApplicationModel {
         if let deliveryID = normalized.historyDeliveryID {
             try dashboardStore.database.validateClaimedToolDelivery(id: deliveryID)
         }
+        // Discovery may await a remote bridge; check that the phone's target is
+        // still current before any provider work or canonical transcript write.
+        try validateCommandTarget()
         if !steering { localRunningConversationIDs.insert(conversation.id) }
+        var accepted: LocalACPRunIdentifiers?
         do {
             if conversation.localRuntimeKind == .opencode {
                 guard let openCode = openCodeModel(for: conversation.id) else { throw OpenCodeError.message("This workspace's OpenCode connection is unavailable.") }
-                try await openCode.send(conversation.id, input: normalized, discovery: discovery)
+                guard expectedRunID == nil else { throw LocalACPSessionDatabaseError.steeringUnsupported }
+                let receipt = try await openCode.send(conversation.id, input: normalized, discovery: discovery,
+                    requiresIdle: requiresIdle)
+                accepted = receipt.identifiers
             } else if steering {
                 if isOpenClawGatewayConversation(conversation.id) {
-                    _ = try await dashboardStore.sendActiveOpenClawGatewayPrompt(conversationID: conversation.id, input: normalized, deliveryContent: deliveryContent)
+                    let ids = try await dashboardStore.sendActiveOpenClawGatewayPrompt(conversationID: conversation.id,
+                        input: normalized, deliveryContent: deliveryContent, expectedRunID: expectedRunID)
+                    accepted = LocalACPRunIdentifiers(runID: ids.runID, userMessageID: ids.userMessageID, assistantMessageID: ids.assistantMessageID)
                 } else {
                     let staged = try await remoteWorkspaces.stagingFiles(of: normalized, in: conversation.remoteWorkspaceID)
-                    _ = try await dashboardStore.sendActiveLocalACPPrompt(conversationID: conversation.id, input: staged, deliveryContent: deliveryContent)
+                    try validateCommandTarget()
+                    let ids = try await dashboardStore.sendActiveLocalACPPrompt(conversationID: conversation.id,
+                        input: staged, deliveryContent: deliveryContent, expectedRunID: expectedRunID)
+                    accepted = LocalACPRunIdentifiers(runID: ids.runID, userMessageID: ids.userMessageID, assistantMessageID: ids.assistantMessageID)
                 }
             } else if isOpenClawGatewayConversation(conversation.id) {
-                _ = try await acceptOpenClawGatewayMessage(conversation: conversation, input: normalized,
+                accepted = try await acceptOpenClawGatewayMessage(conversation: conversation, input: normalized,
                     deliveryContent: deliveryContent, noteContext: context, store: dashboardStore)
             } else {
-                _ = try await acceptLocalAgentMessage(conversation: conversation, input: normalized,
+                accepted = try await acceptLocalAgentMessage(conversation: conversation, input: normalized,
                     deliveryContent: deliveryContent, noteContext: context, store: dashboardStore)
             }
         } catch {
@@ -1851,7 +2048,7 @@ final class ApplicationModel {
             throw error
         }
         scheduleConversationTitleGeneration(conversation: conversation, firstPrompt: normalized.previewText)
-        return true
+        return (true, accepted)
     }
 
     var runningToolSessionIDs: Set<String> {
@@ -1985,14 +2182,16 @@ final class ApplicationModel {
         )
     }
 
-    private func finishAgentRunInteractions(conversationID: String) {
+    private func finishAgentRunInteractions(conversationID: String, runID: String) {
         let permissionIDs = pendingLocalACPPermissions
-            .filter { $0.conversationID == conversationID }
+            .filter { $0.conversationID == conversationID && $0.runID == runID }
             .map(\.id)
         for permissionID in permissionIDs {
             resolveLocalACPPermission(id: permissionID, optionID: nil)
         }
-        cancelLocalACPInteractions(conversationID: conversationID)
+        for pending in pendingLocalACPInteractions where pending.conversationID == conversationID && pending.runID == runID {
+            resolveLocalACPInteraction(id: pending.id, response: .cancelled)
+        }
     }
 
     func isLocalACPSessionLaunchAvailable(_ conversation: WorkspaceConversationRecord) -> Bool {
@@ -2203,12 +2402,80 @@ final class ApplicationModel {
         openClawGatewayConversationIDs.insert(target.id)
     }
 
+    func canStartCanonicalLocalSession(_ runtimeKind: AgentRuntimeKind) -> Bool {
+        if runtimeKind == .opencode { return openCode?.isReady == true && openCode?.isEnabled == true }
+        if runtimeKind == .hermes {
+            do { try requireLocalHermesLink() } catch { return false }
+        }
+        return localACPLaunchConfigurations[runtimeKind] != nil
+            && localACPWorkspaceLaunchConfiguration != nil
+            && isLocalACPAgentReady(runtimeKind)
+    }
+
+    func canStartCanonicalGatewaySession(agentID: UUID) -> Bool {
+        guard let link = openClawGatewayLinks.first(where: { $0.agentID == agentID && $0.connectionStatus == .ready }) else { return false }
+        switch link.location {
+        case .localAgentWorkspace:
+            return localACPWorkspaceLaunchConfiguration != nil
+        case .buzzLocal:
+            return launchableBuzzWorkspaceEnrollmentIDs.contains(agentID)
+        case .remoteWorkspace:
+            guard let workspaceID = remoteWorkspaceAgents.first(where: { $0.id == agentID })?.runtimeDeviceID else { return false }
+            return remoteWorkspaces.readyChatTargets.contains { $0.configuration.id == workspaceID && $0.harness.id == .openclaw }
+        }
+    }
+
+    func createCanonicalGatewaySession(agentID: UUID, conversationID: String, folderID: String? = nil) async throws -> String {
+        guard let dashboardStore, let requestedID = UUID(uuidString: conversationID),
+              let link = openClawGatewayLinks.first(where: { $0.agentID == agentID && $0.connectionStatus == .ready })
+        else { throw CompanionCommandService.CommandError.unknownProvider }
+        switch link.location {
+        case .buzzLocal:
+            guard let enrollment = buzzWorkspaceSnapshot.enrollments.first(where: { $0.id == agentID }),
+                  let id = await createBuzzWorkspaceLocalACPSession(enrollment: enrollment,
+                    requestedConversationID: requestedID, folderID: folderID) else {
+                throw CompanionCommandService.CommandError.creationFailed(localRunError ?? "This linked workspace is unavailable.")
+            }
+            return id
+        case .remoteWorkspace:
+            guard let workspaceID = remoteWorkspaceAgents.first(where: { $0.id == agentID })?.runtimeDeviceID,
+                  let target = remoteWorkspaces.readyChatTargets.first(where: {
+                      $0.configuration.id == workspaceID && $0.harness.id == .openclaw
+                  }), let id = await createRemoteACPSession(target: target,
+                    requestedConversationID: requestedID, folderID: folderID) else {
+                throw CompanionCommandService.CommandError.creationFailed(localRunError ?? "This remote workspace is unavailable.")
+            }
+            return id
+        case .localAgentWorkspace:
+            guard let workspace = localACPWorkspaceLaunchConfiguration else {
+                throw ApplicationModelError.localACPRuntimeUnavailable
+            }
+            let defaults = sessionSelectionPreferences.defaults(harness: AgentRuntimeKind.openclaw.rawValue,
+                workspace: "local:" + workspace.rootURL.standardizedFileURL.path)
+            try dashboardStore.database.validateSessionFolder(folderID)
+            let key = Self.openClawSessionKey(conversationID: requestedID.uuidString.lowercased())
+            try await dashboardStore.createOpenClawWorkspaceSession(agentID: agentID, sessionKey: key,
+                cwd: workspace.rootURL, recover: true)
+            // The database revalidates the folder after native preparation and
+            // commits the conversation and its routing identity together.
+            let id = try await dashboardStore.createLocalACPSession(runtimeKind: .openclaw,
+                title: "New OpenClaw chat", requestedConversationID: requestedID,
+                gatewayAgentID: agentID, folderID: folderID)
+            openClawGatewayConversationIDs.insert(id)
+            do { try await prepareNewSessionSelections(conversationID: id, capturedDefaults: defaults) }
+            catch { ensureConversationState(id: id).setError(error.localizedDescription) }
+            await refreshWorkspace()
+            return id
+        }
+    }
+
     func createLocalACPSession(
         runtimeKind: AgentRuntimeKind,
         requestedConversationID: UUID? = nil,
         nativeWorkingDirectory: URL? = nil,
         initialTitle: String? = nil,
-        nativeWorkspaceID: String? = nil
+        nativeWorkspaceID: String? = nil,
+        folderID: String? = nil
     ) async -> String? {
         if runtimeKind == .hermes {
             do { try requireLocalHermesLink(openSettings: true) }
@@ -2218,7 +2485,7 @@ final class ApplicationModel {
             do {
                 guard let openCode else { throw OpenCodeError.message("OpenCode is still starting.") }
                 guard let workspace = localACPWorkspaceLaunchConfiguration else { throw ApplicationModelError.localACPRuntimeUnavailable }
-                let id = try await openCode.create(workspace: nativeWorkingDirectory ?? workspace.rootURL, requestedConversationID: requestedConversationID, title: initialTitle, nativeWorkspaceID: nativeWorkspaceID)
+                let id = try await openCode.create(workspace: nativeWorkingDirectory ?? workspace.rootURL, requestedConversationID: requestedConversationID, title: initialTitle, nativeWorkspaceID: nativeWorkspaceID, folderID: folderID)
                 await refreshWorkspace()
                 return id
             } catch { localRunError = error.localizedDescription; return nil }
@@ -2246,7 +2513,8 @@ final class ApplicationModel {
             let conversationID = try await dashboardStore.createLocalACPSession(
                 runtimeKind: runtimeKind,
                 title: "New \(runtimeKind.displayName) chat",
-                requestedConversationID: requestedConversationID
+                requestedConversationID: requestedConversationID,
+                folderID: folderID
             )
             if runtimeKind == .openclaw,
                let agent = localCLIAgents.first(where: { $0.runtimeKind == .openclaw }),
@@ -2281,7 +2549,8 @@ final class ApplicationModel {
         requestedConversationID: UUID? = nil,
         nativeWorkingDirectory: URL? = nil,
         initialTitle: String? = nil,
-        nativeWorkspaceID: String? = nil
+        nativeWorkspaceID: String? = nil,
+        folderID: String? = nil
     ) async -> String? {
         guard remoteWorkspaces.isHarnessReady(
             target.harness.id,
@@ -2300,7 +2569,7 @@ final class ApplicationModel {
                 }
                 try await instance.connectLocal()
                 let directory = remoteWorkspaces.remoteWorkspaceRoot(for: target.configuration)
-                let id = try await instance.create(workspace: nativeWorkingDirectory ?? URL(fileURLWithPath: directory), requestedConversationID: requestedConversationID, title: initialTitle, nativeWorkspaceID: nativeWorkspaceID)
+                let id = try await instance.create(workspace: nativeWorkingDirectory ?? URL(fileURLWithPath: directory), requestedConversationID: requestedConversationID, title: initialTitle, nativeWorkspaceID: nativeWorkspaceID, folderID: folderID)
                 await refreshWorkspace()
                 return id
             }
@@ -2313,7 +2582,8 @@ final class ApplicationModel {
                 remoteWorkspaceID: target.configuration.id,
                 remoteWorkspaceName: target.configuration.name,
                 title: "New \(target.harness.displayName) chat",
-                requestedConversationID: requestedConversationID
+                requestedConversationID: requestedConversationID,
+                folderID: folderID
             )
             if target.harness.id == .openclaw {
                 let agentID = try await dashboardStore.ensureRemoteHarnessAgent(
@@ -2403,7 +2673,9 @@ final class ApplicationModel {
     }
 
     func createBuzzWorkspaceLocalACPSession(
-        enrollment: BuzzWorkspaceAgentEnrollment
+        enrollment: BuzzWorkspaceAgentEnrollment,
+        requestedConversationID: UUID? = nil,
+        folderID: String? = nil
     ) async -> String? {
         guard launchableBuzzWorkspaceEnrollmentIDs.contains(enrollment.id) else {
             localRunError = "The selected Buzz agent is not available from its linked workspace."
@@ -2418,7 +2690,9 @@ final class ApplicationModel {
             let conversationID = try await dashboardStore
                 .createBuzzWorkspaceLocalACPSession(
                     enrollmentID: enrollment.id,
-                    title: "New \(enrollment.displayNameSnapshot) chat"
+                    title: "New \(enrollment.displayNameSnapshot) chat",
+                    requestedConversationID: requestedConversationID,
+                    folderID: folderID
                 )
             buzzBoundLocalACPConversationIDs.insert(conversationID)
             if isOpenClawGatewayLinked(agentID: enrollment.id) {
@@ -2949,39 +3223,28 @@ final class ApplicationModel {
         }
     }
 
-    func resolveLocalACPPermission(id: UUID, optionID: String?) {
-        guard let continuation = localACPPermissionContinuations.removeValue(forKey: id) else {
-            return
-        }
+    @discardableResult
+    func resolveLocalACPPermission(id: UUID, optionID: String?) -> Bool {
+        guard interactionBroker.resolvePermission(id: id, optionID: optionID) else { return false }
         pendingLocalACPPermissions.removeAll { $0.id == id }
-        continuation.resume(returning: optionID)
+        return true
     }
 
+    @discardableResult
     func resolveLocalACPInteraction(
         id: UUID,
         response: LocalACPInteractionResponse
-    ) {
-        guard let continuation = localACPInteractionContinuations.removeValue(
-            forKey: id
-        ) else { return }
+    ) -> Bool {
+        guard interactionBroker.resolveInteraction(id: id, response: response) else { return false }
         pendingLocalACPInteractions.removeAll { $0.id == id }
-        continuation.resume(returning: response)
+        return true
     }
 
     func cancelLocalACPPrompt(conversationID: String) {
-        if let openCode = openCodeModel(for: conversationID), openCode.links[conversationID] != nil {
-            openCode.perform { _ = try await openCode.sessionCall(conversationID, "/interrupt", method: "POST") }
-            return
-        }
-        let permissionIDs = pendingLocalACPPermissions
-            .filter { $0.conversationID == conversationID }
-            .map(\.id)
-        for permissionID in permissionIDs {
-            resolveLocalACPPermission(id: permissionID, optionID: nil)
-        }
-        cancelLocalACPInteractions(conversationID: conversationID)
+        guard let runID = canonicalActiveRunID(conversationID: conversationID) else { return }
         Task {
-            await dashboardStore?.cancelLocalACPPrompt(conversationID: conversationID)
+            do { try await companionCommands.stop(conversationID: conversationID, runID: runID) }
+            catch { ensureConversationState(id: conversationID).setError(error.localizedDescription) }
         }
     }
 
@@ -2994,6 +3257,7 @@ final class ApplicationModel {
         pendingSessionAccess.removeAll()
         for task in applyingSessionSelectionTasks.values { task.cancel() }
         applyingSessionSelectionTasks.removeAll()
+        companionHost.stop()
         let permissionIDs = pendingLocalACPPermissions.map(\.id)
         for permissionID in permissionIDs {
             resolveLocalACPPermission(id: permissionID, optionID: nil)
@@ -3011,13 +3275,15 @@ final class ApplicationModel {
         conversationID: String,
         request: LocalACPPermissionRequest
     ) async -> String? {
+        guard let runID = canonicalActiveRunID(conversationID: conversationID) else { return nil }
         let id = UUID()
         return await withTaskCancellationHandler {
             await withCheckedContinuation { continuation in
-                localACPPermissionContinuations[id] = continuation
+                interactionBroker.registerPermission(id: id, request: request, continuation: continuation)
                 pendingLocalACPPermissions.append(PendingLocalACPPermission(
                     id: id,
                     conversationID: conversationID,
+                    runID: runID,
                     title: request.title,
                     options: request.options
                 ))
@@ -3036,13 +3302,15 @@ final class ApplicationModel {
         conversationID: String,
         request: LocalACPInteractionRequest
     ) async -> LocalACPInteractionResponse {
+        guard let runID = canonicalActiveRunID(conversationID: conversationID) else { return .cancelled }
         let id = UUID()
         return await withTaskCancellationHandler {
             await withCheckedContinuation { continuation in
-                localACPInteractionContinuations[id] = continuation
+                interactionBroker.registerInteraction(id: id, request: request, continuation: continuation)
                 pendingLocalACPInteractions.append(PendingLocalACPInteraction(
                     id: id,
                     conversationID: conversationID,
+                    runID: runID,
                     request: request
                 ))
                 if Task.isCancelled {
@@ -3053,6 +3321,32 @@ final class ApplicationModel {
             Task { @MainActor [weak self] in
                 self?.resolveLocalACPInteraction(id: id, response: .cancelled)
             }
+        }
+    }
+
+    func canonicalActiveRunID(conversationID: String) -> String? {
+        try? dashboardStore?.database.activeRunID(conversationID: conversationID)
+    }
+
+    func cancelCanonicalRun(conversationID: String, runID: String) async throws {
+        guard let dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
+        if let openCode = openCodeModel(for: conversationID), openCode.links[conversationID] != nil {
+            try await openCode.interrupt(conversationID, expectedRunID: runID)
+        } else if isOpenClawGatewayConversation(conversationID) {
+            try await dashboardStore.cancelOpenClawGatewayPrompt(
+                conversationID: conversationID, expectedRunID: runID
+            )
+        } else {
+            try await dashboardStore.cancelLocalACPPrompt(
+                conversationID: conversationID, expectedRunID: runID
+            )
+        }
+        // Only requests belonging to this run are cancelled. A later run is untouched.
+        for pending in pendingLocalACPPermissions where pending.runID == runID {
+            resolveLocalACPPermission(id: pending.id, optionID: nil)
+        }
+        for pending in pendingLocalACPInteractions where pending.runID == runID {
+            resolveLocalACPInteraction(id: pending.id, response: .cancelled)
         }
     }
 
@@ -4066,26 +4360,7 @@ final class ApplicationModel {
     }
 
     func cancelOpenClawGatewayPrompt(conversationID: String) {
-        let permissionIDs = pendingLocalACPPermissions
-            .filter { $0.conversationID == conversationID }
-            .map(\.id)
-        for permissionID in permissionIDs {
-            resolveLocalACPPermission(id: permissionID, optionID: nil)
-        }
-        Task {
-            guard let dashboardStore else { return }
-            do {
-                try await dashboardStore.cancelOpenClawGatewayPrompt(
-                    conversationID: conversationID
-                )
-                ensureConversationState(id: conversationID).setError(nil)
-            } catch {
-                await refreshConversation(id: conversationID)
-                ensureConversationState(id: conversationID).setError(
-                    "Unable to stop OpenClaw Gateway run: \(error.localizedDescription)"
-                )
-            }
-        }
+        cancelLocalACPPrompt(conversationID: conversationID)
     }
 
     func patchOpenClawGatewaySession(

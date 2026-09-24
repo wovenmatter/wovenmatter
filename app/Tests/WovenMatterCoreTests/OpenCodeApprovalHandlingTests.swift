@@ -6,6 +6,145 @@ import WovenMatterCore
 
 @Suite(.serialized)
 struct OpenCodeApprovalHandlingTests {
+    @Test(arguments: [false, true])
+    func connectionResetRetainsInflightReplyAndPrunesEndedRequest(shutdown: Bool) async throws {
+        let context = try ApprovalContext()
+        defer { context.clean() }
+        let pending = request("per_a", "ses_a")
+        await context.fixture.setRequests([pending], session: "ses_a")
+        await context.fixture.setReplyDelay(.milliseconds(100))
+        let coordinator = context.coordinator()
+        try await coordinator.connect(context.connection)
+        let first = Task {
+            try await coordinator.replyToPermission(context.a, expectedRequest: pending, expectedRunID: nil, reply: "once")
+        }
+        try await context.fixture.waitForReplies(1)
+        if shutdown { await coordinator.shutdown() }
+        else { await coordinator.disconnect(connectionID: context.connection.identity) }
+        try await coordinator.connect(context.connection)
+        await #expect(throws: OpenCodeError.self) {
+            try await coordinator.replyToPermission(context.a, expectedRequest: pending, expectedRunID: nil, reply: "reject")
+        }
+        await #expect(throws: CancellationError.self) { try await first.value }
+        await #expect(throws: OpenCodeError.self) {
+            try await coordinator.replyToPermission(context.a, expectedRequest: pending, expectedRunID: nil, reply: "reject")
+        }
+        #expect(await context.fixture.replies.count == 1)
+
+        // An authoritative snapshot retires the guard once the native request
+        // has ended; neither reconnect nor shutdown retains historical IDs.
+        await context.fixture.setRequests([], session: "ses_a")
+        try await coordinator.refresh(context.a)
+        await context.fixture.setRequests([pending], session: "ses_a")
+        try await coordinator.replyToPermission(context.a, expectedRequest: pending, expectedRunID: nil, reply: "reject")
+        #expect(await context.fixture.replies.count == 2)
+        await coordinator.shutdown()
+    }
+
+    @Test func nativeRequestWithoutRunStillResolvesAfterAssistantProjectionArrives() async throws {
+        let context = try ApprovalContext()
+        defer { context.clean() }
+        let pending = request("per_a", "ses_a")
+        await context.fixture.setRequests([pending], session: "ses_a")
+        let coordinator = context.coordinator()
+        try await coordinator.connect(context.connection)
+        try await coordinator.refresh(context.a)
+        #expect(try context.database.activeRunID(conversationID: context.a.conversationID) == nil)
+        await context.fixture.setMessages([["id": "msg_assistant", "type": "assistant", "text": "Working",
+            "time": ["created": .number(1000)]]], session: "ses_a", active: true)
+        try await coordinator.replyToPermission(context.a, expectedRequest: pending, expectedRunID: nil, reply: "once")
+        #expect(try context.database.activeRunID(conversationID: context.a.conversationID) != nil)
+        #expect(await context.fixture.replies.count == 1)
+        await coordinator.shutdown()
+    }
+
+    @Test func desktopNormalizedFormPreservesClearedDefaultsAndConditionalFields() async throws {
+        let context = try ApprovalContext()
+        defer { context.clean() }
+        let fields: [OpenCodeValue] = [
+            ["key": "amount", "type": "integer", "default": .number(2)],
+            ["key": "amountDetail", "type": "string", "required": .bool(true),
+             "when": .array([["key": "amount", "op": "eq", "value": .number(2)]])],
+            ["key": "choice", "type": "string", "default": "suggested"],
+            ["key": "enabled", "type": "boolean", "default": .bool(true)],
+            ["key": "details", "type": "string", "required": .bool(true),
+             "when": .array([["key": "enabled", "op": "eq", "value": .bool(true)]])],
+            ["key": "choices", "type": "multiselect", "custom": .bool(true)],
+            ["key": "ratio", "type": "number", "minimum": .number(0), "maximum": .number(5)],
+            ["key": "verification", "type": "external"]
+        ]
+        let form: OpenCodeValue = ["id": "form_normalized", "fields": .array(fields)]
+        let desktopAnswer = try OpenCodeFormAnswers.reply(fields: fields, answers: [
+            "amount": "", "choice": .null, "enabled": .bool(false), "details": "hidden stale value",
+            "choices": .array(["custom", "selected"]), "ratio": "2.75", "verification": .bool(true)
+        ])
+        #expect(desktopAnswer["amount"].isNull && desktopAnswer["choice"].isNull && desktopAnswer["details"].isNull)
+        await context.fixture.setForms([form], session: "ses_a")
+        let coordinator = context.coordinator()
+        try await coordinator.connect(context.connection)
+        try await coordinator.replyToForm(context.a, expectedRequest: form, expectedRunID: nil, answers: desktopAnswer)
+        #expect(await context.fixture.replies.first?.1 == ["answer": desktopAnswer])
+        await coordinator.shutdown()
+    }
+
+    @Test func nativeManualResponsesValidateCurrentRequestAndResolveOnlyOnce() async throws {
+        let context = try ApprovalContext()
+        defer { context.clean() }
+        let pending = request("per_a", "ses_a")
+        await context.fixture.setRequests([pending], session: "ses_a")
+        let coordinator = context.coordinator()
+        try await coordinator.connect(context.connection)
+        await #expect(throws: OpenCodeError.self) {
+            try await coordinator.replyToPermission(context.a, expectedRequest: pending, expectedRunID: nil, reply: "always")
+        }
+        await #expect(throws: OpenCodeError.self) {
+            try await coordinator.replyToPermission(context.a, expectedRequest: pending, expectedRunID: "old-run", reply: "once")
+        }
+        var stale = pending
+        stale["resources"] = .array(["different command"])
+        await #expect(throws: OpenCodeError.self) {
+            try await coordinator.replyToPermission(context.a, expectedRequest: stale, expectedRunID: nil, reply: "once")
+        }
+        #expect(await context.fixture.replies.isEmpty)
+        await context.fixture.setReplyDelay(.milliseconds(50))
+        let wins = await withTaskGroup(of: Bool.self) { group in
+            for reply in ["once", "reject"] {
+                group.addTask {
+                    do { try await coordinator.replyToPermission(context.a, expectedRequest: pending, expectedRunID: nil, reply: reply); return true }
+                    catch { return false }
+                }
+            }
+            var winners = 0
+            for await succeeded in group where succeeded { winners += 1 }
+            return winners
+        }
+        #expect(wins == 1)
+        #expect(await context.fixture.replies.count == 1)
+        await #expect(throws: OpenCodeError.self) {
+            try await coordinator.replyToPermission(context.a, expectedRequest: pending, expectedRunID: nil, reply: "once")
+        }
+        #expect(await context.fixture.replies.count == 1)
+        await coordinator.shutdown()
+    }
+
+    @Test func nativeFormCancelAndDesktopReplyShareResolution() async throws {
+        let context = try ApprovalContext()
+        defer { context.clean() }
+        let form: OpenCodeValue = ["id": "form_a", "fields": .array([["key": "answer", "type": "string", "required": .bool(true)]])]
+        await context.fixture.setForms([form], session: "ses_a")
+        let coordinator = context.coordinator()
+        try await coordinator.connect(context.connection)
+        try await coordinator.cancelForm(context.a, expectedRequest: form, expectedRunID: nil)
+        await #expect(throws: OpenCodeError.self) {
+            try await coordinator.replyToForm(context.a, expectedRequest: form, expectedRunID: nil, answers: ["answer": "late"])
+        }
+        let replies = await context.fixture.replies
+        #expect(replies.count == 1)
+        #expect(replies.first?.0 == "/api/session/ses_a/form/form_a/cancel")
+        #expect(replies.first?.1 == .null)
+        await coordinator.shutdown()
+    }
+
     @Test func fullAccessRepliesStayInOneSessionAndNeverHandleFormsQuestionsOrAuthentication() async throws {
         let context = try ApprovalContext()
         defer { context.clean() }
@@ -246,8 +385,16 @@ private struct ApprovalContext {
 private actor ApprovalHTTPFixture {
     var replies: [(String, OpenCodeValue)] = []
     private var requests: [String: [OpenCodeValue]] = [:]
+    private var forms: [String: [OpenCodeValue]] = [:]
+    private var messages: [String: [OpenCodeValue]] = [:]
+    private var activeSessions: Set<String> = []
     private var delay: Duration = .zero
     func setRequests(_ values: [OpenCodeValue], session: String) { requests[session] = values }
+    func setForms(_ values: [OpenCodeValue], session: String) { forms[session] = values }
+    func setMessages(_ values: [OpenCodeValue], session: String, active: Bool) {
+        messages[session] = values
+        if active { activeSessions.insert(session) } else { activeSessions.remove(session) }
+    }
     func setReplyDelay(_ value: Duration) { delay = value }
     func waitForReplies(_ count: Int) async throws {
         for _ in 0..<100 {
@@ -259,10 +406,12 @@ private actor ApprovalHTTPFixture {
     func response(_ request: URLRequest) async throws -> (Int, OpenCodeValue) {
         let path = request.url!.path
         if path == "/api/health" { return (200, ["version": .string(OpenCodeConnection.supportedVersion), "healthy": .bool(true)]) }
-        if path == "/api/session/active" { return (200, ["data": [:]]) }
+        if path == "/api/session/active" {
+            return (200, ["data": .object(Dictionary(uniqueKeysWithValues: activeSessions.map { ($0, OpenCodeValue.bool(true)) }))])
+        }
         let parts = path.split(separator: "/").map(String.init)
         let sessionID = parts.count >= 3 ? parts[2] : ""
-        if request.httpMethod == "POST", path.hasSuffix("/reply") {
+        if request.httpMethod == "POST", path.hasSuffix("/reply") || path.hasSuffix("/cancel") {
             var body = request.httpBody ?? Data()
             if let stream = request.httpBodyStream {
                 stream.open(); defer { stream.close() }
@@ -272,11 +421,14 @@ private actor ApprovalHTTPFixture {
                     if count <= 0 { break }; body.append(contentsOf: bytes.prefix(count))
                 }
             }
-            replies.append((path, try JSONDecoder().decode(OpenCodeValue.self, from: body)))
+            replies.append((path, body.isEmpty ? .null : try JSONDecoder().decode(OpenCodeValue.self, from: body)))
             if delay > .zero { try await Task.sleep(for: delay) }
             return (204, .null)
         }
         if path.hasSuffix("/permission") { return (200, ["data": .array(requests[sessionID] ?? [])]) }
+        if path.hasSuffix("/form") { return (200, ["data": .array(forms[sessionID] ?? [])]) }
+        if path.hasSuffix("/message") { return (200, ["data": .array(Array((messages[sessionID] ?? []).reversed()))]) }
+        if path.hasSuffix("/state") { return (200, ["data": ["status": "pending"]]) }
         if parts.count == 3 { return (200, ["data": ["id": .string(sessionID), "location": ["directory": "/fixture"]]]) }
         return (200, ["data": .array([])])
     }

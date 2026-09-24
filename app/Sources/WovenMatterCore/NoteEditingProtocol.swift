@@ -7,6 +7,9 @@ public struct AgentNoteContext: Codable, Equatable, Sendable {
   public var revision: String
   public var remoteEditNonce: String?
   public var artifactKind: NoteArtifactKind?
+  /// Opt-in for an editable binding that must still be current when its run is
+  /// accepted. Historical reference snapshots retain their original semantics.
+  public var requireCurrentRevision: Bool?
 
   public init(
     noteID: String,
@@ -14,7 +17,8 @@ public struct AgentNoteContext: Codable, Equatable, Sendable {
     folderID: String? = nil,
     revision: String,
     remoteEditNonce: String? = nil,
-    artifactKind: NoteArtifactKind? = nil
+    artifactKind: NoteArtifactKind? = nil,
+    requireCurrentRevision: Bool? = nil
   ) {
     self.noteID = noteID
     self.title = title
@@ -22,6 +26,7 @@ public struct AgentNoteContext: Codable, Equatable, Sendable {
     self.revision = revision
     self.remoteEditNonce = remoteEditNonce
     self.artifactKind = artifactKind
+    self.requireCurrentRevision = requireCurrentRevision
   }
 }
 
@@ -470,10 +475,16 @@ public enum NoteEditOperation: Codable, Equatable, Sendable {
 
 public extension NoteDocument {
   mutating func apply(_ operations: [NoteEditOperation]) throws -> String? {
+    guard operations.count <= 128,
+          try JSONEncoder().encode(operations).count <= CompanionProtocol.maximumNoteBytes else {
+      throw NoteDocumentSafetyError.tooLarge
+    }
+    try validateEditableShape()
     var title: String?
     for operation in operations {
       switch operation {
       case .setTitle(let value):
+        guard value.utf8.count <= 4096 else { throw NoteDocumentSafetyError.tooLarge }
         title = value
       case .appendText(let text, let style):
         blocks.append(.richText(NoteRichTextBlock(style: style, text: text)))
@@ -498,6 +509,8 @@ public extension NoteDocument {
         block.style = style
         blocks[index] = .richText(block)
       case .createTable(let afterBlockID, let rows, let columns, let headerRow):
+        guard (1...1000).contains(rows), (1...128).contains(columns),
+              rows <= 50_000 / columns else { throw NoteDocumentSafetyError.unsupportedFormat }
         blocks.insert(
           .table(NoteTableBlock(rows: rows, columns: columns, headerRow: headerRow)),
           at: insertionIndex(after: afterBlockID)
@@ -546,6 +559,7 @@ public extension NoteDocument {
       case .setTableDatabaseLink(let tableID, let link):
         try mutateTable(id: tableID) { $0.databaseLink = link }
       }
+      try validateEditableShape()
     }
     self = normalized()
     return title

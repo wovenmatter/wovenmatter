@@ -44,10 +44,14 @@ struct DashboardNotePane: View {
         Binding(
             get: { documentCache.value(noteID: note.id, source: model.noteDraft(for: note).content) },
             set: { updated in
-                guard let content = try? documentCache.encode(updated, noteID: note.id) else { return }
+                guard documentIsEditable, let content = try? documentCache.encode(updated, noteID: note.id) else { return }
                 model.updateNoteDraft(note: note, content: content)
             }
         )
+    }
+
+    private var documentIsEditable: Bool {
+        documentCache.isEditable(noteID: note.id, source: draft.content)
     }
 
     private var currentDocument: NoteDocument {
@@ -165,7 +169,7 @@ struct DashboardNotePane: View {
             .padding(.trailing, reservesTrailingRailControlSpace ? 56 : 12)
             .frame(height: 56)
 
-            if showsFormatting && currentDocument.kind == .note {
+            if showsFormatting && currentDocument.kind == .note && documentIsEditable {
                 DashboardNoteFormattingBar(controller: editorController)
                     .padding(.horizontal, 32)
                     .padding(.vertical, 6)
@@ -174,19 +178,34 @@ struct DashboardNotePane: View {
 
             VStack(alignment: .leading, spacing: 8) {
                 Group {
-                    switch currentDocument.kind {
-                    case .note:
-                        DashboardNoteEditor(document: document, controller: editorController)
-                            .accessibilityLabel("Note body")
-                    case .spreadsheet:
-                        DashboardSpreadsheetEditor(document: document)
-                            .accessibilityLabel("Spreadsheet")
-                    case .html:
-                        DashboardHTMLArtifactView(
-                            html: currentDocument.html,
-                            linkedDataJSON: linkedDataJSON
-                        )
-                        .accessibilityLabel("HTML artifact")
+                    if !documentIsEditable {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("This note uses a document format this version cannot edit. Its original data is preserved.")
+                                .font(.callout)
+                                .foregroundStyle(DashboardPalette.mutedForeground)
+                            ScrollView {
+                                Text(draft.content)
+                                    .font(.system(.body, design: .monospaced))
+                                    .textSelection(.enabled)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                            .scrollIndicators(.never)
+                        }
+                    } else {
+                        switch currentDocument.kind {
+                        case .note:
+                            DashboardNoteEditor(document: document, controller: editorController)
+                                .accessibilityLabel("Note body")
+                        case .spreadsheet:
+                            DashboardSpreadsheetEditor(document: document)
+                                .accessibilityLabel("Spreadsheet")
+                        case .html:
+                            DashboardHTMLArtifactView(
+                                html: currentDocument.html,
+                                linkedDataJSON: linkedDataJSON
+                            )
+                            .accessibilityLabel("HTML artifact")
+                        }
                     }
                 }
 
@@ -208,6 +227,12 @@ struct DashboardNotePane: View {
                         Button("Retry") { model.retryNoteDraft(note: note) }
                             .buttonStyle(.plain)
                             .underline()
+                        Button("Save a copy") {
+                            Task { await model.preserveCurrentNoteDraftAsCopy(noteID: note.id) }
+                        }
+                        .buttonStyle(.plain)
+                        .underline()
+                        .help("Keep your writing in a new note and retain the Mac's current version.")
                     }
                     .font(.system(size: 11))
                     .foregroundStyle(DashboardPalette.danger)

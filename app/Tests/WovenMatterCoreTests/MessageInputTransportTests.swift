@@ -28,11 +28,11 @@ struct MessageInputTransportTests {
       )),
     ])
     let context = """
-      <wovenmatter-reference type="note" id="n" title="Note title">
+      <wovenmatter-reference type="note" id="n" revision="1" title="Note title">
       note body
       </wovenmatter-reference>
 
-      <wovenmatter-reference type="conversation" id="c" title="Chat title">
+      <wovenmatter-reference type="conversation" id="c" revision="2" title="Chat title">
       Read this attached session with wovenmatter history conversation c. This attachment grants read-only access to this session.
       </wovenmatter-reference>
       """
@@ -58,11 +58,12 @@ struct MessageInputTransportTests {
     )
     let input = AgentMessageInput(text: "keep text", attachments: [
       .file(first), .reference(note), .file(second),
-    ])
+    ], historyDeliveryID: "history-delivery")
     let mapped = await input.mappingFiles { file in
       file.staged(at: "/staged/\(file.fileName)")
     }
     #expect(mapped.text == "keep text")
+    #expect(mapped.historyDeliveryID == "history-delivery")
     #expect(input.files.allSatisfy { $0.remotePath == nil })
     #expect(input.attachments == [.file(first), .reference(note), .file(second)])
     #expect(mapped.attachments.map(\.id) == ["file-a", "note-1", "file-b"])

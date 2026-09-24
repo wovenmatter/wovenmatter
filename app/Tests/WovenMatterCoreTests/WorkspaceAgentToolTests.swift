@@ -492,7 +492,7 @@ extension WorkspaceAgentToolTests {
     let note = try db.createNote(folderID: nil)
     let requestID = UUID().uuidString
     let request = NoteEditingRequest(command: .apply, noteID: note,
-      operations: [.appendText("Exactly once", .paragraph)])
+      expectedRevision: try db.readNoteForEditing(id: note).revision, operations: [.appendText("Exactly once", .paragraph)])
     let before = try db.noteAssetVersions(id: note).count
     let responses = try await withThrowingTaskGroup(of: NoteEditingResponse.self) { group in
       for _ in 0..<12 {
@@ -505,14 +505,14 @@ extension WorkspaceAgentToolTests {
     #expect(responses.filter { $0.replayed != true }.count == 1)
     #expect(Set(responses.compactMap(\.revision)).count == 1)
     #expect(try db.noteAssetVersions(id: note).count == before + 1)
-    let userEdit = try db.applyNoteEdits(.init(command: .apply, noteID: note, operations: [.setTitle("Later user edit")]))
+    let userEdit = try db.applyNoteEdits(.init(command: .apply, noteID: note, expectedRevision: try db.readNoteForEditing(id: note).revision, operations: [.setTitle("Later user edit")]))
     let reopened = try WorkspaceDatabase(url: dir.appending(path: "workspace.sqlite"))
     let replay = try reopened.applyNoteEdits(request, callerConversationID: caller, requestID: requestID)
     #expect(replay.replayed == true && replay.document == nil && replay.title == nil)
     #expect(replay.revision == responses.first?.revision)
     #expect(try reopened.readNoteForEditing(id: note) == userEdit)
     #expect(throws: (any Error).self) {
-      try reopened.applyNoteEdits(.init(command: .apply, noteID: note, operations: [.setTitle("Changed payload")]),
+      try reopened.applyNoteEdits(.init(command: .apply, noteID: note, expectedRevision: try db.readNoteForEditing(id: note).revision, operations: [.setTitle("Changed payload")]),
         callerConversationID: caller, requestID: requestID)
     }
     try reopened.setSessionTools(.init(enabled: []), sessionID: caller)
@@ -529,13 +529,13 @@ extension WorkspaceAgentToolTests {
     #expect(try db.createNote(folderID: nil, title: "Original", callerConversationID: caller, requestID: creationID) == note)
     #expect(try db.listAgentNotes(callerID: caller).objectValue?["rows"]?.arrayValue?.count == 1)
     let version = try #require(db.noteAssetVersions(id: note).first)
-    let edited = try db.applyNoteEdits(.init(command: .apply, noteID: note, operations: [.setTitle("Second")]))
+    let edited = try db.applyNoteEdits(.init(command: .apply, noteID: note, expectedRevision: try db.readNoteForEditing(id: note).revision, operations: [.setTitle("Second")]))
     let expected = try #require(edited.revision)
     let restoreID = UUID().uuidString
     let restored = try db.restoreNoteAssetVersion(noteID: note, versionID: version.id, expectedRevision: expected,
       callerConversationID: caller, requestID: restoreID)
     #expect(restored.title == "Original")
-    let latest = try db.applyNoteEdits(.init(command: .apply, noteID: note, operations: [.setTitle("Third")]))
+    let latest = try db.applyNoteEdits(.init(command: .apply, noteID: note, expectedRevision: try db.readNoteForEditing(id: note).revision, operations: [.setTitle("Third")]))
     // A receipt remains usable after its old version has been pruned.
     try db.transaction { try db.toolsExecuteUnlocked("DELETE FROM note_asset_versions WHERE id=?", [version.id]) }
     let replay = try db.restoreNoteAssetVersion(noteID: note, versionID: version.id, expectedRevision: expected,
@@ -555,14 +555,14 @@ extension WorkspaceAgentToolTests {
     let note = try db.createNote(folderID: nil)
     let requestID = UUID().uuidString
     let request = NoteEditingRequest(command: .apply, noteID: note,
-      operations: [.appendText("Must roll back", .paragraph), .deleteBlock(id: "missing-block")])
+      expectedRevision: try db.readNoteForEditing(id: note).revision, operations: [.appendText("Must roll back", .paragraph), .deleteBlock(id: "missing-block")])
     let original = try db.readNoteForEditing(id: note)
     let versions = try db.noteAssetVersions(id: note)
     #expect(throws: (any Error).self) { try db.applyNoteEdits(request, callerConversationID: caller, requestID: requestID) }
     #expect(try db.readNoteForEditing(id: note) == original)
     #expect(try db.noteAssetVersions(id: note).map(\.id) == versions.map(\.id))
     // A failed transaction did not burn the request ID.
-    let success = try db.applyNoteEdits(.init(command: .apply, noteID: note, operations: [.setTitle("Recovered")]),
+    let success = try db.applyNoteEdits(.init(command: .apply, noteID: note, expectedRevision: try db.readNoteForEditing(id: note).revision, operations: [.setTitle("Recovered")]),
       callerConversationID: caller, requestID: requestID)
     #expect(success.title == "Recovered" && success.replayed != true)
   }
