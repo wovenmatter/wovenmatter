@@ -813,6 +813,10 @@ struct DashboardSidebarNavigationState: Equatable, Sendable {
 }
 
 struct DashboardPalette {
+    static let calendarEvent = DashboardPalette.primary
+    static let calendarTask = Color.hex(0x4169E1)
+    static let calendarRecurringEvent = Color.hex(0x7462A6)
+    static let calendarRecurringTask = DashboardTheme.cognac.palette.themeAccent
     static let foreground = Color.hex(0x0A1F16)
     static let mutedForeground = Color.hex(0x5C6F64)
     static let primary = Color.hex(0x004225)

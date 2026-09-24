@@ -97,7 +97,7 @@ extension WorkspaceDatabase {
         try toolsExecuteUnlocked("UPDATE workspace_session_deliveries SET status='cancelled' WHERE id=?", [id])
         return
       }
-      let scheduled = delivery.kind == .timer || delivery.kind == .notification
+      let scheduled = delivery.kind == .timer || delivery.kind == .notification || delivery.kind == .calendar
       let status = submitted ? "uncertain" : scheduled ? "queued" : "failed"
       try toolsExecuteUnlocked("UPDATE workspace_session_deliveries SET status=?,retry_after=? WHERE id=?",
         [status, status == "queued" ? String(now.addingTimeInterval(30).timeIntervalSince1970) : nil, id])
@@ -120,6 +120,7 @@ extension WorkspaceDatabase {
     let source = try sessionToolsUnlocked(delivery.sourceID)
     let target = try sessionToolsUnlocked(delivery.targetID)
     switch delivery.kind {
+    case .calendar: return try calendarRunAuthorizedUnlocked(delivery.id)
     case .message, .created: return source.enabled.contains(.sessions)
     case .timer:
       guard target.enabled.contains(.timers) else { return false }
@@ -152,7 +153,7 @@ extension WorkspaceDatabase {
       try executeUnlocked("""
         UPDATE workspace_session_deliveries SET status=CASE
           WHEN transport_started=1 THEN 'uncertain'
-          WHEN kind IN ('timer','notification') THEN 'queued' ELSE 'failed' END
+          WHEN kind IN ('timer','notification','calendar') THEN 'queued' ELSE 'failed' END
           WHERE status='sending' AND message_id IS NULL
         """)
     }
@@ -162,10 +163,11 @@ extension WorkspaceDatabase {
     try withLock { try deliveryUnlocked(id) }
   }
 
-  public func sessionDeliveries(sessionID: String? = nil, queuedOnly: Bool = false, limit: Int = 200, beforeID: String? = nil, outgoingOnly: Bool = false, activityOnly: Bool = false) throws -> [WorkspaceSessionDelivery] {
+  public func sessionDeliveries(sessionID: String? = nil, queuedOnly: Bool = false, limit: Int = 200, beforeID: String? = nil, outgoingOnly: Bool = false, activityOnly: Bool = false, includeCalendar: Bool = true) throws -> [WorkspaceSessionDelivery] {
     try withLock {
       var sql = "SELECT rowid AS sequence,* FROM workspace_session_deliveries WHERE 1=1"
       var values: [String?] = []
+      if !includeCalendar { sql += " AND kind!='calendar'" }
       if let sessionID {
         if activityOnly {
           sql += " AND ((source_id=? AND kind IN ('message','created')) OR (target_id=? AND native_command IS NOT NULL))"
