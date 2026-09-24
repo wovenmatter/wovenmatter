@@ -175,6 +175,45 @@ struct WorkspaceView: View {
     }
 
     var body: some View {
+        workspaceWithAttachments
+        .onChange(of: model.pendingDefaultAgentSettingsScope) { _, scope in
+            if scope != nil { openUtility(.settings) }
+        }
+        .onChange(of: model.pendingConnectionsScope) { _, scope in
+            if scope != nil { openUtility(.settings) }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .init("wovenmatter.open-connections"))) { event in
+            model.pendingConnectionsScope = event.object as? String ?? "global"
+            openUtility(.settings)
+        }
+        .onChange(of: model.pendingHermesSettingsAgentID) { _, agentID in
+            if agentID != nil {
+                closeNewChatChooser()
+                openUtility(.settings)
+            }
+        }
+        .confirmationDialog(
+            "Connect the OpenClaw Gateway?",
+            isPresented: Binding(
+                get: { model.pendingOpenClawGatewayAgentID != nil },
+                set: { if !$0 { model.dismissPendingOpenClawGatewayLink() } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Connect Gateway") {
+                model.confirmPendingOpenClawGatewayLink()
+            }
+            Button("Use ACP for now", role: .cancel) {
+                model.dismissPendingOpenClawGatewayLink()
+            }
+        } message: {
+            Text("You can chat now with ACP. Connect the Gateway to also use shared sessions and scheduled jobs.")
+        }
+    }
+
+    // Keep presentation and routing as separate opaque expressions so the
+    // supported Xcode toolchains do not solve one enormous modifier chain.
+    private var workspaceSurface: some View {
         GeometryReader { geometry in
             let layout = DashboardLayoutState.resolve(
                 width: geometry.size.width,
@@ -194,6 +233,9 @@ struct WorkspaceView: View {
                     }
                 }
                 .background(theme.palette.workspace)
+                .alert("Built-in switched models", isPresented: Binding(get: { model.defaultAgentFallbackNotice != nil }, set: { if !$0 { model.defaultAgentFallbackNotice = nil } })) {
+                    Button("OK") { model.defaultAgentFallbackNotice = nil }
+                } message: { Text(model.defaultAgentFallbackNotice ?? "") }
 
                 if showsNewChatChooser || showsNewNoteChooser {
                     Color.black.opacity(0.20)
@@ -246,6 +288,10 @@ struct WorkspaceView: View {
         .onAppear {
             selectDefaults()
         }
+        .overlay(alignment: .top) { DictationFeedback().padding(.top, 12) }
+        .onChange(of: destination) { _, value in
+            if value != .workspace { DictationModel.shared.leaveWorkspace() }
+        }
         .onChange(of: allAgents.map(\.id)) { _, _ in selectDefaults() }
         .onChange(of: model.workspaceOverview?.conversations.map(\.id) ?? []) { _, ids in
             selectDefaults()
@@ -280,6 +326,10 @@ struct WorkspaceView: View {
         .sheet(item: $archivedLibrarySource) { item in
             DashboardLibrarySourceSheet(item: item, model: model)
         }
+    }
+
+    private var workspaceWithAttachments: some View {
+        workspaceSurface
         .fileImporter(
             isPresented: $showsAttachmentImporter,
             allowedContentTypes: [.data],
@@ -325,29 +375,6 @@ struct WorkspaceView: View {
                     }
                 }
             )
-        }
-        .onChange(of: model.pendingHermesSettingsAgentID) { _, agentID in
-            if agentID != nil {
-                closeNewChatChooser()
-                openUtility(.settings)
-            }
-        }
-        .confirmationDialog(
-            "Connect the OpenClaw Gateway?",
-            isPresented: Binding(
-                get: { model.pendingOpenClawGatewayAgentID != nil },
-                set: { if !$0 { model.dismissPendingOpenClawGatewayLink() } }
-            ),
-            titleVisibility: .visible
-        ) {
-            Button("Connect Gateway") {
-                model.confirmPendingOpenClawGatewayLink()
-            }
-            Button("Use ACP for now", role: .cancel) {
-                model.dismissPendingOpenClawGatewayLink()
-            }
-        } message: {
-            Text("You can chat now with ACP. Connect the Gateway to also use shared sessions and scheduled jobs.")
         }
     }
 

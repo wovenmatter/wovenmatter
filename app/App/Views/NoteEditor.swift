@@ -268,6 +268,8 @@ final class DashboardNoteEditorController {
 struct DashboardNoteEditor: NSViewRepresentable {
     @Binding var document: NoteDocument
     let controller: DashboardNoteEditorController
+    var dictationEditor: DictationEditor? = nil
+    var dictationIdentity = ""
 
     func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
 
@@ -299,12 +301,14 @@ struct DashboardNoteEditor: NSViewRepresentable {
         textView.textStorage?.setAttributedString(NoteAttributedDocument.render(document))
         scrollView.documentView = textView
         context.coordinator.bind(textView)
+        dictationEditor?.bind(textView, identity: dictationIdentity)
         return scrollView
     }
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         context.coordinator.parent = self
         guard let textView = scrollView.documentView as? NSTextView else { return }
+        dictationEditor?.bind(textView, identity: dictationIdentity)
         controller.bind(textView: textView, document: document) { updated in
             context.coordinator.emit(updated)
         }
@@ -356,6 +360,9 @@ struct DashboardNoteEditor: NSViewRepresentable {
         func textDidChange(_ notification: Notification) {
             guard !applying, let textView = notification.object as? NSTextView else { return }
             emit(NoteAttributedDocument.parse(textView.attributedString(), basedOn: lastDocument))
+        }
+        func textDidBeginEditing(_ notification: Notification) {
+            if let editor = parent.dictationEditor { DictationModel.shared.activeEditor = editor }
         }
     }
 }

@@ -5,33 +5,33 @@ import Testing
 
 @Suite("Runtime boundaries", .serialized)
 struct RuntimeBoundaryTests {
-  @Test("local runtime visibility defaults hidden and persists independently")
+  @Test("built-in agent stays available while external runtimes persist visibility independently")
   func localRuntimeVisibilityPreferences() throws {
     let suiteName = "wovenmatter.runtime-visibility.\(UUID().uuidString)"
     let defaults = try #require(UserDefaults(suiteName: suiteName))
     defer { defaults.removePersistentDomain(forName: suiteName) }
     let preferences = LocalACPRuntimePreferences(defaults: defaults)
 
-    #expect(preferences.state.enabledRuntimeKinds.isEmpty)
-    #expect(preferences.state.shownRuntimeKinds.isEmpty)
+    #expect(preferences.state.enabledRuntimeKinds == [.defaultAgent])
+    #expect(preferences.state.shownRuntimeKinds == [.defaultAgent])
 
     var state = preferences.enable(.codex)
-    #expect(state.enabledRuntimeKinds == [.codex])
-    #expect(state.shownRuntimeKinds == [.codex])
+    #expect(state.enabledRuntimeKinds == [.defaultAgent, .codex])
+    #expect(state.shownRuntimeKinds == [.defaultAgent, .codex])
 
     state = preferences.setShown(false, for: .codex)
-    #expect(state.enabledRuntimeKinds == [.codex])
-    #expect(state.shownRuntimeKinds.isEmpty)
+    #expect(state.enabledRuntimeKinds == [.defaultAgent, .codex])
+    #expect(state.shownRuntimeKinds == [.defaultAgent])
 
     state = preferences.setShown(true, for: .codex)
     state = preferences.disable(.codex)
-    #expect(state.enabledRuntimeKinds.isEmpty)
-    #expect(state.shownRuntimeKinds == [.codex])
+    #expect(state.enabledRuntimeKinds == [.defaultAgent])
+    #expect(state.shownRuntimeKinds == [.defaultAgent, .codex])
 
     state = preferences.setShown(false, for: .codex)
     state = preferences.setShown(true, for: .claudeCode)
-    #expect(state.enabledRuntimeKinds.isEmpty)
-    #expect(state.shownRuntimeKinds == [.claudeCode])
+    #expect(state.enabledRuntimeKinds == [.defaultAgent])
+    #expect(state.shownRuntimeKinds == [.defaultAgent, .claudeCode])
 
     let restored = LocalACPRuntimePreferences(defaults: defaults).state
     #expect(restored == state)
@@ -207,6 +207,10 @@ struct RuntimeBoundaryTests {
       runtimeKind: .codex,
       processWorkingDirectory: URL(filePath: "/private/tmp")
     )
+    let builtIn = try RemoteHarnessLaunchResolver.resolve(configuration: configuration, runtimeKind: .defaultAgent, processWorkingDirectory: URL(filePath: "/private/tmp"))
+    #expect(builtIn.launch.arguments.last?.contains("default-agent/src/main.mjs") == true)
+    #expect(builtIn.launch.arguments.last?.contains("'--remote'") == true)
+    #expect(builtIn.launch.arguments.last?.contains("runtime-operation.lock") == false)
     #expect(launch.workspace.rootURL.path == "/home/.woven-matter")
     #expect(launch.launch.arguments.last?.contains("'HOME=/home'") == true)
     #expect(launch.launch.arguments.last?.contains("flock --shared --nonblock 9") == true)

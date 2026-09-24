@@ -51,12 +51,12 @@ jobs:
           git diff --name-only "$base_sha" "$HEAD_SHA" > "$RUNNER_TEMP/changed-files"
 
           macos=false
-          if grep -Eq '^app/|^harnesses/|^scripts/.*\.sh$|^scripts/test-support/|^\.github/workflows/(ci|release)\.yml$' "$RUNNER_TEMP/changed-files"; then
+          if grep -Eq '^app/|^default-agent/|^harnesses/|^scripts/.*\.sh$|^scripts/test-support/|^\.github/workflows/(ci|release)\.yml$' "$RUNNER_TEMP/changed-files"; then
             macos=true
           fi
 
           remote=false
-          if grep -Eq '^remote/|^harnesses/|^\.dockerignore$|^scripts/(remote-workspace|scan-public-tree|test-changes|test-container|test-remote-workspace)\.sh$|^\.github/workflows/ci\.yml$' "$RUNNER_TEMP/changed-files"; then
+          if grep -Eq '^remote/|^default-agent/|^harnesses/|^\.dockerignore$|^scripts/(remote-workspace|scan-public-tree|test-changes|test-container|test-remote-workspace)\.sh$|^\.github/workflows/ci\.yml$' "$RUNNER_TEMP/changed-files"; then
             remote=true
           fi
 

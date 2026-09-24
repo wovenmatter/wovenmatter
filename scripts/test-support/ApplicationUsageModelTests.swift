@@ -52,11 +52,20 @@ struct ApplicationUsageModelTests {
         } onChange: {
             errorChanges.record()
         }
-        model.signInUsageProvider(.claude)
+        model.signInUsageProvider(.cursor)
         precondition(errorChanges.count == 1)
-        precondition(model.localUsageError == "Enable Claude usage tracking before signing in.")
+        precondition(model.localUsageError == "Enable Cursor usage tracking before signing in.")
         precondition(model.signingInUsageProviders.isEmpty)
         precondition(model.enabledUsageProviders == [.codex])
+
+        let connectionRequests = ChangeRecorder()
+        let observer = NotificationCenter.default.addObserver(forName: .init("wovenmatter.open-connections"), object: nil, queue: nil) { _ in
+            connectionRequests.record()
+        }
+        model.signInUsageProvider(.claude)
+        NotificationCenter.default.removeObserver(observer)
+        precondition(connectionRequests.count == 1)
+        precondition(model.signingInUsageProviders.isEmpty)
 
         // An unlisted workspace must not alter the saved selection or start work.
         await model.selectCodexUsageWorkspace("unlisted-workspace", range: .last30Days)

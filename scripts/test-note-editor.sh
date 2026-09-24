@@ -15,11 +15,14 @@ xcrun swiftc \
   -emit-module-path "$cache_root/WovenMatterCore.swiftmodule" \
   "$repo_root/app/Sources/WovenMatterCore/Database.swift" \
   "$repo_root/app/Sources/WovenMatterCore/NoteDocument.swift" \
+  "$repo_root/app/Sources/WovenMatterCore/DictationInsertion.swift" \
   -o "$cache_root/libWovenMatterCore.dylib"
 xcrun swiftc \
   -parse-as-library -module-cache-path "$cache_root/ModuleCache" \
   -I "$cache_root" -L "$cache_root" -lWovenMatterCore \
   -Xlinker -rpath -Xlinker "$cache_root" \
+  "$repo_root/app/App/Services/DictationEditor.swift" \
+  "$repo_root/scripts/test-support/DictationFocusFixture.swift" \
   "$repo_root/app/App/Views/NoteEditor.swift" \
   "$repo_root/app/App/Services/DashboardNoteDocumentCache.swift" \
   "$repo_root/scripts/test-support/DashboardNoteEditorTests.swift" \

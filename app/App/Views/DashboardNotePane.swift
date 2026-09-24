@@ -21,6 +21,7 @@ struct DashboardNotePane: View {
     let onClose: () -> Void
     @FocusState private var titleFocused: Bool
     @State private var editorController = DashboardNoteEditorController()
+    @State private var dictationEditor = DictationEditor()
     @State private var documentCache = DashboardNoteDocumentCache()
     @State private var showsFormatting = false
     @State private var showsVersionHistory = false
@@ -102,6 +103,7 @@ struct DashboardNotePane: View {
                     .accessibilityLabel("Note title")
                     .layoutPriority(1)
                 Spacer()
+                if currentDocument.kind == .note { DictationMicrophone(editor: dictationEditor) }
                 DashboardDatabaseLinkControl(
                     document: document,
                     snapshot: model.databasesSnapshot
@@ -176,7 +178,8 @@ struct DashboardNotePane: View {
                 Group {
                     switch currentDocument.kind {
                     case .note:
-                        DashboardNoteEditor(document: document, controller: editorController)
+                        DashboardNoteEditor(document: document, controller: editorController,
+                                            dictationEditor: dictationEditor, dictationIdentity: note.id)
                             .accessibilityLabel("Note body")
                     case .spreadsheet:
                         DashboardSpreadsheetEditor(document: document)

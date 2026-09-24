@@ -15,6 +15,8 @@ struct DashboardComposerTextEditor: NSViewRepresentable {
     var completionRequest: Binding<Int> = .constant(0)
     var onCaretAtEndChange: (Bool) -> Void = { _ in }
     var onAttachFiles: ([URL]) -> Bool = { _ in false }
+    var dictationEditor: DictationEditor? = nil
+    var dictationIdentity = ""
 
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
@@ -33,6 +35,7 @@ struct DashboardComposerTextEditor: NSViewRepresentable {
         textView.placeholderString = placeholder
         textView.setAccessibilityLabel(placeholder)
         textView.string = text
+        dictationEditor?.bind(textView, identity: dictationIdentity)
         textView.onSubmit = { [weak coordinator = context.coordinator] in
             coordinator?.parent.onSubmit()
         }
@@ -62,6 +65,7 @@ struct DashboardComposerTextEditor: NSViewRepresentable {
         context.coordinator.parent = self
         scrollView.maximumVisibleLines = maximumVisibleLines
         let textView = scrollView.composerTextView
+        dictationEditor?.bind(textView, identity: dictationIdentity)
         textView.placeholderString = placeholder
         textView.setAccessibilityLabel(placeholder)
 
@@ -188,6 +192,7 @@ struct DashboardComposerTextEditor: NSViewRepresentable {
 
         func textDidBeginEditing(_ notification: Notification) {
             parent.isFocused = true
+            if let editor = parent.dictationEditor { DictationModel.shared.activeEditor = editor }
         }
 
         func textDidEndEditing(_ notification: Notification) {

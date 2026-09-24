@@ -45,6 +45,9 @@ struct SettingsRemoteWorkspacesView: View {
                 credentialAccessCard
                 if let selectedWorkspace {
                     workspaceCard(selectedWorkspace)
+                    SettingsSignInStatusCard(statuses: model.signInStatuses[selectedWorkspace.id] ?? [], checking: model.checkingSignIn.contains(selectedWorkspace.id), error: model.signInErrors[selectedWorkspace.id], scope: selectedWorkspace.id.uuidString.lowercased()) {
+                        Task { await model.refreshSignInStatus(selectedWorkspace) }
+                    }
                     resourceCard(selectedWorkspace)
                     harnessesCard(selectedWorkspace)
                     if let progress = model.progress {
@@ -524,7 +527,9 @@ struct SettingsRemoteWorkspacesView: View {
                                 harness.state.replacingOccurrences(of: "_", with: " ").capitalized,
                                 tone: harness.state == "ready" ? .neutral : .warning
                             )
-                            runtimeButtons(harness, workspace: workspace)
+                            if harness.id == .defaultAgent {
+                                Button("Settings") { onMoreRuntime(.defaultAgent, workspace) }.buttonStyle(SettingsQuietButtonStyle())
+                            } else { runtimeButtons(harness, workspace: workspace) }
                         }
                         if let runtime = model.runtimeMaintenance[workspace.id]?.first(where: { $0.id == harness.id }) {
                             runtimeInventory(runtime, workspace: workspace)

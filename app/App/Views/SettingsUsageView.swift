@@ -3,14 +3,10 @@ import WovenMatterCore
 
 private enum SettingsUsageCredentialAction: Identifiable {
     case enableProvider(ProviderKind)
-    case saveOpenRouter(String)
-    case deleteOpenRouter
 
     var id: String {
         switch self {
         case .enableProvider(let provider): "enable-\(provider.rawValue)"
-        case .saveOpenRouter: "save-openrouter"
-        case .deleteOpenRouter: "delete-openrouter"
         }
     }
 
@@ -25,10 +21,6 @@ private enum SettingsUsageCredentialAction: Identifiable {
             default:
                 "Allow Woven Matter to check \(provider.displayName) usage using its local sign-in."
             }
-        case .saveOpenRouter:
-            "Save your OpenRouter key in this Mac’s Keychain and use it to check usage."
-        case .deleteOpenRouter:
-            "Remove your saved OpenRouter key from this Mac’s Keychain."
         }
     }
 }
@@ -38,7 +30,6 @@ struct SettingsUsageView: View {
     var reservesRailControlSpace = false
     var onBack: () -> Void
 
-    @State private var openRouterAPIKey = ""
     @State private var pendingCredentialAction: SettingsUsageCredentialAction?
     @State private var range: UsageTimeRange = {
         let rawValue = UserDefaults.standard.string(
@@ -110,12 +101,7 @@ struct SettingsUsageView: View {
                     HStack(spacing: 8) {
                         Text(provider.displayName)
                             .font(.system(size: 13, weight: .medium))
-                        SettingsPill(
-                            providerStatus(provider),
-                            tone: model.isUsageProviderEnabled(provider)
-                                ? .neutral
-                                : .warning
-                        )
+                        ConnectionsLink(title: providerStatus(provider))
                     }
                     if let detail = providerDetail(provider) {
                         Text(detail)
@@ -127,69 +113,7 @@ struct SettingsUsageView: View {
                 Spacer(minLength: 16)
             }
 
-            if provider == .openRouter {
-                openRouterControls
-            } else if model.isUsageProviderEnabled(provider),
-                      shouldOfferSignIn(provider) {
-                Button(
-                    model.signingInUsageProviders.contains(provider)
-                        ? "Signing in…"
-                        : "Sign in"
-                ) {
-                    model.signInUsageProvider(provider)
-                }
-                .buttonStyle(SettingsQuietButtonStyle())
-                .disabled(
-                    model.signingInUsageProviders.contains(provider)
-                        || model.isRefreshingLocalUsage
-                )
-                .accessibilityLabel("Sign in to \(provider.displayName)")
-                .help("Uses the existing \(provider.displayName) CLI sign-in flow.")
-            }
-        }
-    }
-
-    private var openRouterControls: some View {
-        VStack(alignment: .leading, spacing: 9) {
-            HStack(spacing: 8) {
-                SecureField(
-                    model.isOpenRouterCredentialConfigured
-                        ? "Enter a replacement key"
-                        : "OpenRouter API or management key",
-                    text: $openRouterAPIKey
-                )
-                .settingsInput()
-                .disabled(!model.isUsageProviderEnabled(.openRouter))
-                .accessibilityLabel("OpenRouter API key")
-                .help("Stored in this Mac’s Keychain.")
-
-                Button(
-                    model.isOpenRouterCredentialConfigured
-                        ? "Replace key"
-                        : "Save API key"
-                ) {
-                    requestCredentialAction(.saveOpenRouter(openRouterAPIKey))
-                }
-                .buttonStyle(DashboardPrimaryButtonStyle())
-                .disabled(
-                    !model.isUsageProviderEnabled(.openRouter)
-                        || openRouterAPIKey
-                            .trimmingCharacters(in: .whitespacesAndNewlines)
-                            .isEmpty
-                        || model.isRefreshingLocalUsage
-                )
-                .help("Save the key in Keychain.")
-            }
-
-            if model.isOpenRouterCredentialConfigured {
-                Button("Remove saved key", role: .destructive) {
-                    requestCredentialAction(.deleteOpenRouter)
-                }
-                .buttonStyle(.plain)
-                .font(.system(size: 11.5, weight: .medium))
-                .foregroundStyle(DashboardPalette.danger)
-                .help("Remove the saved OpenRouter key from this Mac's Keychain.")
-            }
+            ConnectionsLink(title: "Manage connection")
         }
     }
 
@@ -244,11 +168,6 @@ struct SettingsUsageView: View {
         model.localUsage?.limits.first { $0.provider == provider }
     }
 
-    private func shouldOfferSignIn(_ provider: ProviderKind) -> Bool {
-        guard let account = account(for: provider) else { return true }
-        return account.status != .available && account.status != .signedIn
-    }
-
     private func requestCredentialAction(
         _ action: SettingsUsageCredentialAction
     ) {
@@ -266,16 +185,6 @@ struct SettingsUsageView: View {
         case .enableProvider(let provider):
             Task {
                 await model.enableUsageProvider(provider, range: range)
-            }
-        case .saveOpenRouter(let key):
-            Task {
-                await model.saveOpenRouterAPIKey(key, range: range)
-                if model.localUsageError == nil { openRouterAPIKey = "" }
-            }
-        case .deleteOpenRouter:
-            Task {
-                await model.deleteOpenRouterAPIKey(range: range)
-                if model.localUsageError == nil { openRouterAPIKey = "" }
             }
         }
     }

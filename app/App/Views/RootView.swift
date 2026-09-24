@@ -1,4 +1,5 @@
 import SwiftUI
+import WovenMatterClient
 
 struct RootView: View {
     @Bindable var model: ApplicationModel
@@ -23,6 +24,9 @@ struct RootView: View {
         .toggleStyle(DashboardSwitchToggleStyle())
         .preferredColorScheme(.light)
         .background(theme.palette.workspace)
+        .onReceive(NotificationCenter.default.publisher(for: DefaultAgentSupport.credentialsChanged)) { _ in
+            Task { await model.sharedConnectionsChanged(); await DictationModel.shared.refreshAvailability() }
+        }
         .alert("Session limit reached", isPresented: $model.activeSessionLimitPresented) {
             Button("OK", role: .cancel) { }
         } message: {

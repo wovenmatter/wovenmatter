@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import WovenMatterCore
 @testable import WovenMatterDashboardStore
 
 struct ACPAssistantStreamWriterTests {
@@ -26,6 +27,20 @@ struct ACPAssistantStreamWriterTests {
       .filter { $0.activity.kind == .assistant }
     #expect(assistantActivities.count == 1)
     #expect(assistantActivities[0].activity.content == "First  \n")
+  }
+
+  @Test func lateReasoningDeltaDoesNotSplitAnswerPrefix() async throws {
+    let fixture = try WriterFixture()
+    defer { fixture.remove() }
+    let thought = AgentRunActivity(id: "built-in-1-0", kind: .thought, phase: "update", title: "Thinking", status: "running", content: "Reasoning")
+    try await fixture.writer.finishSegment(for: thought)
+    try await fixture.writer.append("T")
+    try await fixture.writer.finishSegment(for: thought)
+    try await fixture.writer.append("iananmen Square")
+    try await fixture.writer.finish()
+    #expect(try fixture.assistantText() == ["Tiananmen Square"])
+    let activities = try fixture.database.conversationHistoryPage(id: fixture.conversationID, limit: 20).activities
+    #expect(!activities.contains { $0.activity.kind == .assistant })
   }
 
   @Test func finishFlushesFailureTailAndIsIdempotent() async throws {

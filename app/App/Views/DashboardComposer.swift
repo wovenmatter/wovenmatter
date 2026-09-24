@@ -56,6 +56,8 @@ struct DashboardComposer: View {
     @State private var completionRequest = 0
     @State private var caretAtEnd = true
     @State private var focused = false
+    @State private var dictationEditor = DictationEditor()
+    @State private var dictationDraftID = UUID().uuidString
     @State private var openMenu: DashboardComposerMenuKind?
     @State private var isDropTarget = false
     @State private var collapseOverride: Bool?
@@ -221,7 +223,9 @@ struct DashboardComposer: View {
             onEscape: dismissSlashCommands,
             completionRequest: $completionRequest,
             onCaretAtEndChange: { caretAtEnd = $0 },
-            onAttachFiles: onDropFiles
+            onAttachFiles: onDropFiles,
+            dictationEditor: dictationEditor,
+            dictationIdentity: sessionID ?? dictationDraftID
         )
         .frame(
             minHeight: isCollapsed ? 36 : 32,
@@ -434,7 +438,7 @@ struct DashboardComposer: View {
     }
 
     private var compactControls: some View {
-        VStack(alignment: .trailing, spacing: 4) {
+        HStack(spacing: 4) {
             HStack(spacing: 4) {
                 attachmentControl
                 if showsSessionControls {
@@ -468,13 +472,12 @@ struct DashboardComposer: View {
                 toolsControl
             }
 
-            HStack(spacing: 4) {
-                collapseControl
-                voiceControl
-                sendControl
-            }
+            Spacer(minLength: 8)
+            collapseControl
+            voiceControl
+            sendControl
         }
-        .frame(maxWidth: .infinity, alignment: .trailing)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var collapsedControls: some View {
@@ -530,19 +533,7 @@ struct DashboardComposer: View {
     }
 
     private var voiceControl: some View {
-        Button {
-            onActivate()
-            openMenu = nil
-            focused = false
-            onUnavailableAction("Voice input")
-        } label: {
-            DashboardLucideIcon(glyph: .mic, size: 16)
-                .frame(width: 36, height: 36)
-                .contentShape(Circle())
-        }
-        .buttonStyle(DashboardComposerControlButtonStyle())
-        .accessibilityLabel("Voice input unavailable")
-        .help("Dictation unavailable")
+        DictationMicrophone(editor: dictationEditor, onActivate: onActivate)
     }
 
     private var sendControl: some View {
@@ -686,7 +677,7 @@ struct DashboardComposer: View {
             focused = false
             openMenu = openMenu == kind ? nil : kind
         } label: {
-            DashboardComposerSessionLabel(icon: icon, title: title)
+            DashboardComposerSessionLabel(icon: icon, title: title, maximumTitleWidth: kind == .model ? 90 : (kind == .thinking ? 40 : 80))
         }
         .buttonStyle(DashboardComposerControlButtonStyle())
         .disabled(unavailable)
@@ -853,6 +844,7 @@ struct DashboardDraftAttachmentChip: View {
 struct DashboardComposerSessionLabel: View {
     let icon: DashboardLucideGlyph
     let title: String
+    var maximumTitleWidth: CGFloat = 120
 
     var body: some View {
         HStack(spacing: 8) {
@@ -860,6 +852,7 @@ struct DashboardComposerSessionLabel: View {
             Text(title)
                 .lineLimit(1)
                 .truncationMode(.middle)
+                .frame(maxWidth: maximumTitleWidth)
             DashboardLucideIcon(glyph: .chevronDown, size: 14)
         }
         .font(.system(size: 12, weight: .medium))
