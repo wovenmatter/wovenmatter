@@ -212,6 +212,14 @@ final class ApplicationModel {
     private(set) var localACPDatabaseReadyRuntimeKinds: Set<AgentRuntimeKind> = []
     private(set) var localACPAgentReconciliationError: String?
     private(set) var checkingLocalACPRuntimeKinds: Set<AgentRuntimeKind> = []
+    struct PendingWorkspaceFolderChange {
+        let folder: LocalACPWorkspaceFolder
+        let destination: URL
+    }
+    private(set) var pendingWorkspaceFolderChange: PendingWorkspaceFolderChange?
+    private(set) var workspaceFolderChangeError: String?
+    private(set) var workspaceFolderChangeInProgress = false
+    private(set) var workspaceFolderRecovery: LocalACPWorkspaceFolderChangeResult?
     private(set) var localACPWorkspaceAvailability = LocalACPWorkspaceAvailability(
         state: .setupRequired,
         detail: "Set up the shared direct workspace before starting a chat.",
@@ -2371,7 +2379,7 @@ final class ApplicationModel {
                 let root = inheritedRoot ?? workspaceRoot
                 return RemoteHarnessLaunchContext(launch: LocalACPRuntimeLaunchConfiguration(runtimeKind: .hermes,
                     executableURL: URL(fileURLWithPath: "/usr/bin/ssh"), arguments: [], environment: ["WOVENMATTER_HERMES_CONNECTION": encoded],
-                    processWorkingDirectoryURL: processDirectory), workspace: LocalACPWorkspaceLaunchConfiguration(rootURL: root, repositoriesURL: workspaceRoot.appending(path: "REPOS"), databasesURL: workspaceRoot.appending(path: "Databases")))
+                    processWorkingDirectoryURL: processDirectory), workspace: LocalACPWorkspaceLaunchConfiguration(rootURL: root, repositoriesURL: workspaceRoot.appending(path: "Repos"), databasesURL: workspaceRoot.appending(path: "Databases")))
             }
             return try RemoteHarnessLaunchResolver.resolve(
                 configuration: configuration,
@@ -2923,28 +2931,59 @@ final class ApplicationModel {
     }
 
     func configureLocalACPRepositories(_ repositoriesURL: URL?) {
-        Task {
-            do {
-                try await localACPWorkspaceStore.configureRepositories(
-                    repositoriesURL
-                )
-                localRunError = nil
-                await refreshLocalACPWorkspace()
-            } catch {
-                localRunError = error.localizedDescription
-            }
-        }
+        configureWorkspaceFolder(.repositories, destination: repositoriesURL)
     }
 
     func configureLocalACPDatabases(_ databasesURL: URL?) {
+        configureWorkspaceFolder(.databases, destination: databasesURL)
+    }
+
+    func cancelWorkspaceFolderChange() {
+        pendingWorkspaceFolderChange = nil
+    }
+
+    func confirmWorkspaceFolderChange(copyContents: Bool) {
+        guard let pending = pendingWorkspaceFolderChange else { return }
+        pendingWorkspaceFolderChange = nil
+        configureWorkspaceFolder(
+            pending.folder, destination: pending.destination,
+            recovery: copyContents ? .copyAndBackUp : .backUp
+        )
+    }
+
+    private func configureWorkspaceFolder(
+        _ folder: LocalACPWorkspaceFolder, destination: URL?,
+        recovery: LocalACPWorkspaceFolderRecovery = .requireConfirmation
+    ) {
+        guard !workspaceFolderChangeInProgress else { return }
+        workspaceFolderChangeInProgress = true
+        workspaceFolderChangeError = nil
+        workspaceFolderRecovery = nil
         Task {
+            defer { workspaceFolderChangeInProgress = false }
             do {
-                try await localACPWorkspaceStore.configureDatabases(databasesURL)
+                let result: LocalACPWorkspaceFolderChangeResult
+                switch folder {
+                case .repositories:
+                    result = try await localACPWorkspaceStore.configureRepositories(
+                        destination, recovery: recovery
+                    )
+                case .databases:
+                    result = try await localACPWorkspaceStore.configureDatabases(
+                        destination, recovery: recovery
+                    )
+                }
+                workspaceFolderRecovery = result
                 localRunError = nil
                 await refreshLocalACPWorkspace()
                 await refreshDatabases()
+            } catch let error as LocalACPWorkspaceError
+                where error == .defaultRepositoriesNotEmpty || error == .defaultDatabasesNotEmpty {
+                if let destination {
+                    pendingWorkspaceFolderChange = PendingWorkspaceFolderChange(folder: folder, destination: destination)
+                }
             } catch {
-                localRunError = error.localizedDescription
+                workspaceFolderChangeError = error.localizedDescription
             }
         }
     }

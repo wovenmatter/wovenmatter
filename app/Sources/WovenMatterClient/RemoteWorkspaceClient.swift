@@ -146,7 +146,7 @@ public enum RemoteHarnessLaunchResolver {
             workspace: LocalACPWorkspaceLaunchConfiguration(
                 rootURL: remoteRoot,
                 repositoriesURL: workspaceRoot.appending(
-                    path: "REPOS",
+                    path: "Repos",
                     directoryHint: .isDirectory
                 ),
                 databasesURL: workspaceRoot.appending(path: "Databases", directoryHint: .isDirectory)
