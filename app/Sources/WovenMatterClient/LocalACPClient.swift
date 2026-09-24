@@ -13,7 +13,7 @@ public enum LocalACPEvent: Equatable, Sendable {
     case composerPrefill(String)
 }
 
-public struct LocalACPPermissionOption: Equatable, Identifiable, Sendable {
+public struct LocalACPPermissionOption: Codable, Equatable, Identifiable, Sendable {
     public let id: String
     public let name: String
     public let kind: String
@@ -25,7 +25,7 @@ public struct LocalACPPermissionOption: Equatable, Identifiable, Sendable {
     }
 }
 
-public struct LocalACPPermissionRequest: Equatable, Sendable {
+public struct LocalACPPermissionRequest: Codable, Equatable, Sendable {
     public let title: String
     public let options: [LocalACPPermissionOption]
 
@@ -35,7 +35,7 @@ public struct LocalACPPermissionRequest: Equatable, Sendable {
     }
 }
 
-public struct LocalACPQuestionOption: Equatable, Identifiable, Sendable {
+public struct LocalACPQuestionOption: Codable, Equatable, Identifiable, Sendable {
     public let id: String
     public let label: String
 
@@ -45,7 +45,7 @@ public struct LocalACPQuestionOption: Equatable, Identifiable, Sendable {
     }
 }
 
-public struct LocalACPQuestion: Equatable, Identifiable, Sendable {
+public struct LocalACPQuestion: Codable, Equatable, Identifiable, Sendable {
     public let id: String
     public let prompt: String
     public let options: [LocalACPQuestionOption]
@@ -64,7 +64,7 @@ public struct LocalACPQuestion: Equatable, Identifiable, Sendable {
     }
 }
 
-public struct LocalACPQuestionRequest: Equatable, Sendable {
+public struct LocalACPQuestionRequest: Codable, Equatable, Sendable {
     public let title: String?
     public let questions: [LocalACPQuestion]
 
@@ -74,12 +74,12 @@ public struct LocalACPQuestionRequest: Equatable, Sendable {
     }
 }
 
-public enum LocalACPQuestionAnswer: Equatable, Sendable {
+public enum LocalACPQuestionAnswer: Codable, Equatable, Sendable {
     case single(String)
     case multiple([String])
 }
 
-public struct LocalACPPlanRequest: Equatable, Sendable {
+public struct LocalACPPlanRequest: Codable, Equatable, Sendable {
     public let name: String?
     public let overview: String?
     public let markdown: String
@@ -91,13 +91,13 @@ public struct LocalACPPlanRequest: Equatable, Sendable {
     }
 }
 
-public enum LocalACPInteractionRequest: Equatable, Sendable {
+public enum LocalACPInteractionRequest: Codable, Equatable, Sendable {
     case questions(LocalACPQuestionRequest)
     case plan(LocalACPPlanRequest)
     case secret(prompt: String)
 }
 
-public enum LocalACPInteractionResponse: Equatable, Sendable {
+public enum LocalACPInteractionResponse: Codable, Equatable, Sendable {
     case answers([String: LocalACPQuestionAnswer])
     case planAccepted(Bool)
     case secret(String)
@@ -515,6 +515,7 @@ public actor LocalACPClient {
     private var initialSystemPromptInFlight = false
     private var defaultAgentRunID: String?
     private var defaultAgentRemote = false
+    private var durableRemoteACP = false
     private let accountCoordinator: ProviderAccountCoordinator?
     private var defaultAgentScope = "local"
     private var defaultAgentCredentialRevision: String?
@@ -606,6 +607,7 @@ public actor LocalACPClient {
         self.input = input
         self.cursor = cursor
         self.runtimeKind = runtimeKind
+        self.durableRemoteACP = process.environment?["WOVEN_DURABLE_REMOTE_ACP"] == "1"
         self.defaultAgentScope = process.environment?["WOVEN_DEFAULT_AGENT_SCOPE"] ?? "local"
         self.defaultAgentRemote = process.arguments?.contains("/usr/bin/ssh") == true
         self.workingDirectory = workingDirectory.standardizedFileURL
@@ -749,7 +751,7 @@ public actor LocalACPClient {
                     sessionID: existingSessionID,
                     loadedExistingSession: true,
                     configuration: configuration,
-                    recoveredDefaultAgentRuns: runtimeKind == .defaultAgent ? ((try? JSONDecoder().decode([DefaultAgentRunSnapshot].self, from: JSONEncoder().encode(loaded?["_meta"]?["recoveredRuns"] ?? .array([])))) ?? []) : []
+                    recoveredDefaultAgentRuns: (runtimeKind == .defaultAgent || durableRemoteACP) ? ((try? JSONDecoder().decode([DefaultAgentRunSnapshot].self, from: JSONEncoder().encode(loaded?["_meta"]?["recoveredRuns"] ?? .array([])))) ?? []) : []
                 )
             } catch LocalACPClientError.agent(let code, let message)
                 where Self.isMissingSessionError(
@@ -1272,7 +1274,7 @@ public actor LocalACPClient {
             params: .object([
                 "sessionId": .string(sessionID),
                 "prompt": try Self.promptBlocks(input, text: prefixedText),
-                "_meta": runtimeKind == .defaultAgent ? .object(["wovenRunID": .string(defaultAgentRunID ?? UUID().uuidString.lowercased())]) : .object([:]),
+                "_meta": (runtimeKind == .defaultAgent || durableRemoteACP) ? .object(["wovenRunID": .string(defaultAgentRunID ?? UUID().uuidString.lowercased())]) : .object([:]),
             ])
         )
         if initialSystemPrompt != nil {
@@ -1644,7 +1646,7 @@ public actor LocalACPClient {
             }
             try await respondToPermissionRequest(
                 envelope,
-                handler: activePermissionHandler ?? (runtimeKind == .defaultAgent ? resumePermissionHandler : nil)
+                handler: activePermissionHandler ?? ((runtimeKind == .defaultAgent || durableRemoteACP) ? resumePermissionHandler : nil)
             )
         } else if envelope.method == "cursor/ask_question" {
             try await respondToCursorQuestion(

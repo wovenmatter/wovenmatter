@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 import WovenMatterCore
+import WovenMatterClient
 @testable import WovenMatterDashboardStore
 
 @Suite("Calendar events, recurrence and scheduled sessions")
@@ -535,5 +536,124 @@ extension WorkspaceCalendarTests {
       in: .init(start: start, end: start.addingTimeInterval(3 * 86_400)))
     #expect(entries.map(\.event.id) == [detachedID])
     #expect(try db.dueCalendarRuns(now: start).contains { $0.eventID == id })
+  }
+}
+
+extension WorkspaceCalendarTests {
+  @Test func remoteOwnershipSurvivesRestartAndBlocksPendingDelivery() throws {
+    let (db, directory) = try fixture(); defer { try? FileManager.default.removeItem(at: directory) }
+    let workspace = UUID(), start = date("2026-09-22T12:00:00Z")
+    var remoteTask = task(); remoteTask.configuration.workspaceID = workspace
+    let id = try db.saveCalendarEvent(draft: .init(title: "Remote",startsAt: start,task: remoteTask),creating: true,now:start)
+    let run = try #require(db.dueCalendarRuns(now:start).first)
+    try db.setRemoteCalendarExecutionOwnership(workspaceID:workspace,state:.pending)
+    #expect(try db.dueCalendarRuns(now:start).isEmpty)
+    #expect(try !db.isCalendarRunActive(run.id))
+    let snapshot = try #require(db.remoteCalendarExecutionSnapshot(workspaceID:workspace).first)
+    #expect(snapshot.event.id == id)
+    #expect(snapshot.runs.isEmpty)
+    var moved = WorkspaceCalendarDraft(snapshot.event)
+    moved.task?.configuration.workspaceID = nil
+    #expect(throws: (any Error).self) {
+      try db.saveCalendarEvent(id:id,draft:moved,creating:false)
+    }
+    let reopened = try WorkspaceDatabase(url:directory.appending(path:"workspace.sqlite"))
+    #expect(try reopened.remoteCalendarExecutionOwnership(workspaceID:workspace) == .pending)
+    #expect(try reopened.dueCalendarRuns(now:start).isEmpty)
+    try reopened.setRemoteCalendarExecutionOwnership(workspaceID:workspace,state:.remote)
+    try reopened.deleteCalendarEvent(id:id)
+    #expect(try reopened.remoteCalendarExecutionSnapshot(workspaceID:workspace).isEmpty)
+  }
+
+  @Test func remoteReceiptSurvivesDeletedFolderAndReplayAfterReopen() throws {
+    let (db, directory) = try fixture(); defer { try? FileManager.default.removeItem(at: directory) }
+    let workspace = UUID(), owner = UUID(), start = date("2026-09-22T12:00:00Z")
+    let folder = try db.createFolder(name: "Remote results")
+    var remoteTask = task(); remoteTask.configuration.workspaceID = workspace
+    remoteTask.configuration.folderID = folder
+    let eventID = try db.saveCalendarEvent(draft: .init(title: "Remote", startsAt: start, task: remoteTask), creating: true, now: start)
+    let run = WorkspaceCalendarRun(id: UUID().uuidString.lowercased(), eventID: eventID, occurrenceIndex: 0, scheduledAt: start,
+      sessionID: UUID().uuidString.lowercased(), task: remoteTask, status: "accepted", title: "Remote")
+    try db.importRemoteCalendarRun(run, workspaceID: workspace, eventRevision: 0)
+    try db.deleteFolder(id: folder)
+    // The fallback belongs to completed-result import, not new execution.
+    #expect(throws: WorkspaceNoteMutationError.folderNotFound) {
+      try db.createRemoteACPSession(runtimeKind: .codex, remoteWorkspaceID: workspace,
+        remoteWorkspaceName: "Fixture", title: "Remote", ownerDeviceID: owner,
+        requestedConversationID: UUID(uuidString: run.sessionID))
+    }
+    func importTranscript(_ database: WorkspaceDatabase) throws {
+      try database.importRemoteCalendarTranscript(receiptID: "deleted-folder-receipt", run: run,
+        workspaceID: workspace, workspaceName: "Fixture", ownerDeviceID: owner,
+        nativeSessionID: "native-deleted-folder", updates: [], error: nil, completedAt: start.addingTimeInterval(5))
+    }
+    try importTranscript(db)
+    let reopened = try WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+    try importTranscript(reopened)
+    let session = try #require(reopened.workspaceOverview().conversations.first { $0.id == run.sessionID })
+    #expect(session.folderID == nil)
+    #expect(session.title == remoteTask.configuration.title)
+    #expect(try reopened.localACPSession(conversationID: run.sessionID).acpSessionID == "native-deleted-folder")
+    #expect(try reopened.calendarRuns().first?.task.configuration.folderID == folder)
+    let savedConfiguration = try #require(reopened.withLock {
+      try reopened.historyRowsUnlocked("SELECT configuration_json FROM workspace_calendar_sessions WHERE id=?", values: [run.sessionID])
+        .first?.objectValue?["configuration_json"]?.stringValue
+    })
+    #expect(try JSONDecoder().decode(WorkspaceSessionCreationConfiguration.self, from: Data(savedConfiguration.utf8)).folderID == folder)
+    let counts = try reopened.withLock {
+      try reopened.historyRowsUnlocked("SELECT (SELECT count(*) FROM dashboard_messages WHERE conversation_id=?) AS messages, (SELECT count(*) FROM workspace_calendar_remote_receipts WHERE id=?) AS receipts",
+        values: [run.sessionID, "deleted-folder-receipt"]).first?.objectValue
+    }
+    #expect(counts?["messages"]?.intValue == 2)
+    #expect(counts?["receipts"]?.intValue == 1)
+  }
+
+  @Test func remoteReceiptImportsOnceAndRetainsNativeSession() throws {
+    let (db,directory) = try fixture(); defer { try? FileManager.default.removeItem(at:directory) }
+    let workspace = UUID(),start = date("2026-09-22T12:00:00Z")
+    var remoteTask = task();remoteTask.configuration.workspaceID = workspace
+    let id = try db.saveCalendarEvent(draft:.init(title:"Remote",startsAt:start,task:remoteTask),creating:true,now:start)
+    // Exercise replacement of a reservation cancelled during ownership transfer.
+    _ = try db.dueCalendarRuns(now:start)
+    try db.setRemoteCalendarExecutionOwnership(workspaceID:workspace,state:.pending)
+    let run = WorkspaceCalendarRun(id:UUID().uuidString.lowercased(),eventID:id,occurrenceIndex:0,scheduledAt:start,
+      sessionID:UUID().uuidString.lowercased(),task:remoteTask,status:"accepted",title:"Remote")
+    let owner = UUID()
+    let updates = try JSONDecoder().decode([GatewayJSONValue].self, from: Data(#"[{"sessionUpdate":"agent_thought_chunk","content":{"text":"Check it."}},{"sessionUpdate":"tool_call","toolCallId":"tool-1","title":"Read file","status":"completed"},{"sessionUpdate":"agent_message_chunk","content":{"text":"Done."}}]"#.utf8))
+    for _ in 0..<2 {
+      try db.importRemoteCalendarRun(run,workspaceID:workspace,eventRevision:0)
+      try db.importRemoteCalendarTranscript(receiptID:"receipt-1",run:run,workspaceID:workspace,workspaceName:"Fixture",
+        ownerDeviceID:owner,nativeSessionID:"native-1",updates:updates,error:nil,completedAt:start.addingTimeInterval(5))
+    }
+    #expect(try db.calendarRuns().count == 1)
+    #expect(try db.calendarRuns().first?.id == run.id)
+    #expect(try db.calendarRuns().first?.status == "accepted")
+    let messages = try db.withLock { try db.historyRowsUnlocked("SELECT id FROM dashboard_messages WHERE conversation_id=?",values:[run.sessionID]) }
+    #expect(messages.count == 2)
+    let activities = try db.withLock { try db.historyRowsUnlocked("SELECT id FROM dashboard_run_events WHERE conversation_id=?",values:[run.sessionID]) }
+    #expect(activities.count == 2)
+    let native = try db.withLock { try db.historyRowsUnlocked("SELECT acp_session_id FROM desktop_local_acp_sessions WHERE conversation_id=?",values:[run.sessionID]).first?.objectValue?["acp_session_id"]?.stringValue }
+    #expect(native == "native-1")
+    #expect(try db.dueCalendarRuns(now:start.addingTimeInterval(100)).isEmpty)
+  }
+}
+
+
+extension WorkspaceCalendarTests {
+  @Test func remoteDisableRestoresCheckpointBeforeReleasingFence() throws {
+    let (db,directory) = try fixture(); defer { try? FileManager.default.removeItem(at:directory) }
+    let workspace = UUID(),start = date("2026-09-22T12:00:00Z")
+    var remoteTask = task(); remoteTask.configuration.workspaceID = workspace
+    let id = try db.saveCalendarEvent(draft:.init(title:"Remote",startsAt:start,timeZoneID:"UTC",recurrence:.init(unit:.day),task:remoteTask),creating:true,now:start)
+    try db.setRemoteCalendarExecutionOwnership(workspaceID:workspace,state:.pending)
+    try db.setRemoteCalendarExecutionOwnership(workspaceID:workspace,state:.remote)
+    let checkpoint = RemoteTaskGatewaySchedule(id:id,title:"Remote",startsAt:start,timeZoneID:"UTC",recurrence:.init(unit:.day),revision:0,
+      nextFireAt:start.addingTimeInterval(86_400),taskSessionID:UUID().uuidString.lowercased(),task:remoteTask)
+    try db.restoreRemoteCalendarExecutionCheckpoint(workspaceID:workspace,schedules:[checkpoint])
+    #expect(try db.dueCalendarRuns(now:start).isEmpty)
+    try db.setRemoteCalendarExecutionOwnership(workspaceID:workspace,state:.local)
+    #expect(try db.dueCalendarRuns(now:start).isEmpty)
+    let run = try #require(db.dueCalendarRuns(now:start.addingTimeInterval(86_400)).first)
+    #expect(run.sessionID == checkpoint.taskSessionID)
   }
 }

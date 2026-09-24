@@ -1,6 +1,6 @@
 import Foundation
 
-public enum GrokSpeechError: LocalizedError, Equatable, Sendable {
+public enum GrokSpeechError: LocalizedError, Equatable, Sendable, Codable {
     case signInRequired, restricted, exhausted, throttled, unavailable, incomplete, audioBacklog
     public var errorDescription: String? {
         switch self {
@@ -29,7 +29,7 @@ public enum GrokSpeechError: LocalizedError, Equatable, Sendable {
     }
 }
 
-public enum GrokSpeechEvent: Equatable, Sendable {
+public enum GrokSpeechEvent: Equatable, Sendable, Codable {
     case ready
     case partial(String)
     case done(String, duration: Double?)

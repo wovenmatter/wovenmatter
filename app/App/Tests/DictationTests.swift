@@ -263,3 +263,146 @@ private actor DelayedSpeechFixture: GrokSpeechTransport {
         #expect(view.string == "Draft current")
     }
 }
+
+@MainActor @Test func backendSpeechProxyKeepsCredentialsOnOwner() async throws {
+    let fixture = SpeechFixture()
+    let service = BackendSpeechService(credential: {
+        var value = DefaultAgentCredential(type: "oauth")
+        value.access = "fixture-private-access"
+        value.displayName = "Fixture account"
+        return value
+    }, makeTransport: { fixture })
+    let request: BackendSpeechTransport.Request = { method, payload in
+        try await service.handle(method: method, payload: payload)
+    }
+    let availability = try await service.handle(method: "speech.availability", payload: JSONEncoder().encode(BackendSpeechRequest()))
+    #expect(!String(decoding: availability, as: UTF8.self).contains("fixture-private-access"))
+    #expect(try await BackendSpeechTransport.availability(request: request) == "Fixture account")
+    let proxy = BackendSpeechTransport(request: request)
+    try await proxy.connect(credential: DefaultAgentCredential(type: "oauth"))
+    #expect(await fixture.credentials.first?.access == "fixture-private-access")
+    try await proxy.send(Data([0, 1, 0, 1]))
+    await fixture.emit(.partial("hello"))
+    #expect(try await proxy.next(timeout: .seconds(1)) == .partial("hello"))
+    try await proxy.finish()
+    await fixture.emit(.done("hello", duration: 1))
+    #expect(try await proxy.next(timeout: .seconds(1)) == .done("hello", duration: 1))
+    await proxy.cancel()
+}
+
+@MainActor @Test func backendSpeechProxyRejectsOversizedAudio() async throws {
+    let proxy = BackendSpeechTransport(request: { _, _ in
+        Issue.record("Oversized audio must never cross the RPC boundary")
+        return Data()
+    })
+    await #expect(throws: GrokSpeechError.audioBacklog) {
+        try await proxy.send(Data(count: 65_537))
+    }
+}
+
+/// Keep cleanup suspended so a second start can overtake an older start.
+private actor DelayedCancellationSpeechFixture: GrokSpeechTransport {
+    private var cancellation: CheckedContinuation<Void, Never>?
+    private(set) var isCancelling = false
+    func connect(credential: DefaultAgentCredential) {}
+    func send(_ audio: Data) {}
+    func finish() {}
+    func next(timeout: Duration) async -> GrokSpeechEvent? {
+        try? await Task.sleep(for: .seconds(60))
+        return nil
+    }
+    func cancel() async {
+        isCancelling = true
+        await withCheckedContinuation { cancellation = $0 }
+    }
+    func finishCancellation() {
+        cancellation?.resume()
+        cancellation = nil
+    }
+}
+
+private final class SpeechSequenceFixture: @unchecked Sendable {
+    private let lock = NSLock()
+    private var first: (any GrokSpeechTransport)?
+    private let subsequent: any GrokSpeechTransport
+    init(first: any GrokSpeechTransport, subsequent: any GrokSpeechTransport) {
+        self.first = first; self.subsequent = subsequent
+    }
+    func make() -> any GrokSpeechTransport {
+        lock.withLock {
+            defer { first = nil }
+            return first ?? subsequent
+        }
+    }
+}
+
+@Test(.timeLimit(.minutes(1))) func newerBackendRecordingSurvivesEarlierStartCleanup() async throws {
+    let original = DelayedCancellationSpeechFixture()
+    let current = SpeechFixture()
+    let sequence = SpeechSequenceFixture(first: original, subsequent: current)
+    let service = BackendSpeechService(credential: { .init(type: "oauth") }, makeTransport: { sequence.make() })
+    let initialID = UUID(), obsoleteID = UUID(), currentID = UUID()
+    func payload(_ id: UUID) throws -> Data { try JSONEncoder().encode(BackendSpeechRequest(id: id)) }
+    _ = try await service.handle(method: "speech.start", payload: payload(initialID))
+    let obsolete = Task { try await service.handle(method: "speech.start", payload: payload(obsoleteID)) }
+    for _ in 0..<1_000 {
+        if await original.isCancelling { break }
+        try await Task.sleep(for: .milliseconds(1))
+    }
+    #expect(await original.isCancelling)
+    _ = try await service.handle(method: "speech.start", payload: payload(currentID))
+    await original.finishCancellation()
+    do {
+        _ = try await obsolete.value
+        Issue.record("A superseded recording start should be cancelled")
+    } catch is CancellationError {}
+    await current.emit(.partial("current recording"))
+    let result = try JSONDecoder().decode(BackendSpeechReply.self,
+        from: await service.handle(method: "speech.next", payload: payload(currentID)))
+    #expect(result.failure == nil)
+    #expect(result.event == .partial("current recording"))
+    _ = try await service.handle(method: "speech.cancel", payload: payload(currentID))
+}
+
+private actor DelayedSendSpeechFixture: GrokSpeechTransport {
+    private var pending: CheckedContinuation<Void, Never>?
+    private(set) var isSending = false
+    func connect(credential: DefaultAgentCredential) {}
+    func send(_ audio: Data) async {
+        isSending = true
+        await withCheckedContinuation { pending = $0 }
+    }
+    func finish() {}
+    func next(timeout: Duration) async -> GrokSpeechEvent? {
+        try? await Task.sleep(for: .seconds(60))
+        return nil
+    }
+    func cancel() {}
+    func finishSend() { pending?.resume(); pending = nil }
+}
+
+@Test(.timeLimit(.minutes(1))) func previousBackendRecordingDoesNotBlockNewAudio() async throws {
+    let original = DelayedSendSpeechFixture()
+    let current = SpeechFixture()
+    let sequence = SpeechSequenceFixture(first: original, subsequent: current)
+    let service = BackendSpeechService(credential: { .init(type: "oauth") }, makeTransport: { sequence.make() })
+    let initialID = UUID(), currentID = UUID()
+    func payload(_ id: UUID, audio: Data? = nil) throws -> Data {
+        try JSONEncoder().encode(BackendSpeechRequest(id: id, audio: audio))
+    }
+    _ = try await service.handle(method: "speech.start", payload: payload(initialID))
+    let oldSend = Task { try await service.handle(method: "speech.send", payload: payload(initialID, audio: Data([0, 1]))) }
+    for _ in 0..<1_000 {
+        if await original.isSending { break }
+        try await Task.sleep(for: .milliseconds(1))
+    }
+    #expect(await original.isSending)
+    _ = try await service.handle(method: "speech.start", payload: payload(currentID))
+    let reply = try JSONDecoder().decode(BackendSpeechReply.self,
+        from: await service.handle(method: "speech.send", payload: payload(currentID, audio: Data([0, 1]))))
+    #expect(reply.failure == nil)
+    #expect(await service.isActive)
+    await original.finishSend()
+    _ = try await oldSend.value
+    _ = try await service.handle(method: "speech.cancel", payload: payload(currentID))
+}

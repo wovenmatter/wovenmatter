@@ -3,7 +3,7 @@ import Foundation
 import WovenMatterCore
 
 /// A native session offered by the Gateway import library.
-public struct OpenClawGatewaySession: Identifiable, Equatable, Sendable {
+public struct OpenClawGatewaySession: Identifiable, Equatable, Codable, Sendable {
   public let key: String
   public let title: String
   public var id: String { key }

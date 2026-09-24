@@ -31,6 +31,7 @@ public actor LibraryService {
   }
 
   public func synchronize(locations: [LibraryLocation], remoteWorkspace: RemoteWorkspaceLookup) async throws {
+    guard !database.isReadOnlyProjection else { throw WorkspaceDatabaseError.readOnlyProjection }
     guard !synchronizing else { return }
     synchronizing = true
     defer { synchronizing = false }

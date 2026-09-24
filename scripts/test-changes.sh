@@ -41,6 +41,7 @@ run_package_tests() {
     SWIFTPM_MODULECACHE_OVERRIDE="${cache_root}/ModuleCache" \
     swift test --package-path app --scratch-path "$swift_scratch"
   WOVENMATTER_TEST_CACHE_DIR="$cache_root" scripts/test-application-usage.sh
+  WOVENMATTER_TEST_CACHE_DIR="$cache_root" scripts/test-backend-process.sh
 }
 
 run_default_agent_tests() {

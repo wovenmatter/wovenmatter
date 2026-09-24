@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		F2F8DB61A6E248D0FCD77382 /* BackendOpenCodeService.swift in Sources */ = {isa = PBXBuildFile; fileRef = F178B05B2AE0D773B0C59957 /* BackendOpenCodeService.swift */; };
 		A71B00000000000000000101 /* LibraryModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A71B00000000000000000102 /* LibraryModel.swift */; };
 		A71B00000000000000000001 /* DashboardLibraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A71B00000000000000000002 /* DashboardLibraryView.swift */; };
 		0890236A7DEEC4A26AB512AB /* DictationModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E4AE75EDB3C1EE9E7043F59 /* DictationModel.swift */; };
@@ -88,9 +89,20 @@
 		22101ADAF84DA8CEE85A4AB8 /* DashboardCalendarTaskFields.swift in Sources */ = {isa = PBXBuildFile; fileRef = D6DCB1F7BFAF35416DF437EE /* DashboardCalendarTaskFields.swift */; };
 		C47EAA780000000000000001 /* DashboardCalendarFormControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = C47EAA780000000000000002 /* DashboardCalendarFormControls.swift */; };
 		C47EAA780000000000000003 /* DashboardCalendarColors.swift in Sources */ = {isa = PBXBuildFile; fileRef = C47EAA780000000000000004 /* DashboardCalendarColors.swift */; };
+		CE19449AB0FFF6A1E12E4D48 /* BackendApplicationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1A63205C0811CE6DBAD590C /* BackendApplicationService.swift */; };
+		B6231CA12C591F524524199B /* BackendWorkspaceMutations.swift in Sources */ = {isa = PBXBuildFile; fileRef = 35A700A1F4344E51450A9C54 /* BackendWorkspaceMutations.swift */; };
+		A7DC09137B7808A179245C1D /* BackendToolsService.swift in Sources */ = {isa = PBXBuildFile; fileRef = D84D7A0E10812D5E772A19B5 /* BackendToolsService.swift */; };
+		B2F8DB61A6E248D0FCD77382 /* BackendRuntimeService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A176B05B2AE0D773B0C59957 /* BackendRuntimeService.swift */; };
+		C83FDB61A6E248D0FCD77382 /* BackendCronService.swift in Sources */ = {isa = PBXBuildFile; fileRef = C976B05B2AE0D773B0C59957 /* BackendCronService.swift */; };
+		D83FDB61A6E248D0FCD77382 /* BackendWorkspaceServices.swift in Sources */ = {isa = PBXBuildFile; fileRef = D976B05B2AE0D773B0C59957 /* BackendWorkspaceServices.swift */; };
+		418BBA8DFF633653485A4615 /* BackendRemoteWorkspaceService.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD21F9E9ECE4C0B47F05B64B /* BackendRemoteWorkspaceService.swift */; };
+		4ECDD63540C793A047BDD9CC /* BackendConnectionsService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 296D14690B191EF43D51603C /* BackendConnectionsService.swift */; };
+		CBCBD600AB92468988000001 /* BackendSpeechService.swift in Sources */ = {isa = PBXBuildFile; fileRef = CBCBD600AB92468988000002 /* BackendSpeechService.swift */; };
+		281F6DF22C3AE19CCE3FC99D /* BackendLibraryService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 753DF034EE6D727B6091929D /* BackendLibraryService.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		F178B05B2AE0D773B0C59957 /* BackendOpenCodeService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BackendOpenCodeService.swift"; sourceTree = "<group>"; };
 		A71B00000000000000000102 /* LibraryModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryModel.swift; sourceTree = "<group>"; };
 		A71B00000000000000000002 /* DashboardLibraryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardLibraryView.swift; sourceTree = "<group>"; };
 		7E4AE75EDB3C1EE9E7043F59 /* DictationModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictationModel.swift; sourceTree = "<group>"; };
@@ -173,6 +185,16 @@
 		D6DCB1F7BFAF35416DF437EE /* DashboardCalendarTaskFields.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DashboardCalendarTaskFields.swift"; sourceTree = "<group>"; };
 		C47EAA780000000000000002 /* DashboardCalendarFormControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DashboardCalendarFormControls.swift"; sourceTree = "<group>"; };
 		C47EAA780000000000000004 /* DashboardCalendarColors.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DashboardCalendarColors.swift"; sourceTree = "<group>"; };
+		E1A63205C0811CE6DBAD590C /* BackendApplicationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BackendApplicationService.swift"; sourceTree = "<group>"; };
+		35A700A1F4344E51450A9C54 /* BackendWorkspaceMutations.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BackendWorkspaceMutations.swift"; sourceTree = "<group>"; };
+		D84D7A0E10812D5E772A19B5 /* BackendToolsService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BackendToolsService.swift"; sourceTree = "<group>"; };
+		A176B05B2AE0D773B0C59957 /* BackendRuntimeService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BackendRuntimeService.swift"; sourceTree = "<group>"; };
+		C976B05B2AE0D773B0C59957 /* BackendCronService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BackendCronService.swift"; sourceTree = "<group>"; };
+		D976B05B2AE0D773B0C59957 /* BackendWorkspaceServices.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BackendWorkspaceServices.swift"; sourceTree = "<group>"; };
+		DD21F9E9ECE4C0B47F05B64B /* BackendRemoteWorkspaceService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BackendRemoteWorkspaceService.swift"; sourceTree = "<group>"; };
+		296D14690B191EF43D51603C /* BackendConnectionsService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BackendConnectionsService.swift"; sourceTree = "<group>"; };
+		CBCBD600AB92468988000002 /* BackendSpeechService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BackendSpeechService.swift"; sourceTree = "<group>"; };
+		753DF034EE6D727B6091929D /* BackendLibraryService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BackendLibraryService.swift"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -237,6 +259,17 @@
 				A14000000000000000000002 /* ApplicationModel+SessionSelections.swift */,
 				3CE258FB55B3D55A39972D5B /* OpenCodeModel.swift */,
 				D472AB9160464F1FAB826C11 /* ApplicationModel+AgentTools.swift */,
+				E1A63205C0811CE6DBAD590C /* BackendApplicationService.swift */,
+				35A700A1F4344E51450A9C54 /* BackendWorkspaceMutations.swift */,
+				D84D7A0E10812D5E772A19B5 /* BackendToolsService.swift */,
+				F178B05B2AE0D773B0C59957 /* BackendOpenCodeService.swift */,
+				A176B05B2AE0D773B0C59957 /* BackendRuntimeService.swift */,
+				C976B05B2AE0D773B0C59957 /* BackendCronService.swift */,
+				D976B05B2AE0D773B0C59957 /* BackendWorkspaceServices.swift */,
+				DD21F9E9ECE4C0B47F05B64B /* BackendRemoteWorkspaceService.swift */,
+				296D14690B191EF43D51603C /* BackendConnectionsService.swift */,
+				CBCBD600AB92468988000002 /* BackendSpeechService.swift */,
+				753DF034EE6D727B6091929D /* BackendLibraryService.swift */,
 				B88F25850147F01B163EDF7E /* ApplicationModel+Calendar.swift */,
 				20E807F893654CD4A1F24D40 /* WorkspaceAgentToolsModel.swift */,
 				7C678F616FB535F772A00598 /* WorkspaceAgentToolsModel+Calendar.swift */,
@@ -474,6 +507,17 @@
 				F10100000000000000000001 /* ArtifactEditor.swift in Sources */,
 				F10200000000000000000001 /* DashboardDatabasesView.swift in Sources */,
 				D472AB9160464F1FAB826C12 /* ApplicationModel+AgentTools.swift in Sources */,
+				CE19449AB0FFF6A1E12E4D48 /* BackendApplicationService.swift in Sources */,
+				B6231CA12C591F524524199B /* BackendWorkspaceMutations.swift in Sources */,
+				A7DC09137B7808A179245C1D /* BackendToolsService.swift in Sources */,
+				F2F8DB61A6E248D0FCD77382 /* BackendOpenCodeService.swift in Sources */,
+				B2F8DB61A6E248D0FCD77382 /* BackendRuntimeService.swift in Sources */,
+				C83FDB61A6E248D0FCD77382 /* BackendCronService.swift in Sources */,
+				D83FDB61A6E248D0FCD77382 /* BackendWorkspaceServices.swift in Sources */,
+				418BBA8DFF633653485A4615 /* BackendRemoteWorkspaceService.swift in Sources */,
+				4ECDD63540C793A047BDD9CC /* BackendConnectionsService.swift in Sources */,
+				CBCBD600AB92468988000001 /* BackendSpeechService.swift in Sources */,
+				281F6DF22C3AE19CCE3FC99D /* BackendLibraryService.swift in Sources */,
 				A13EC094A3DEA4F302868640 /* ApplicationModel+Calendar.swift in Sources */,
 				5C84BF439B9047118002DD70 /* WorkspaceAgentToolsModel.swift in Sources */,
 				E9A58E7B05C5C2726FA4EE82 /* WorkspaceAgentToolsModel+Calendar.swift in Sources */,

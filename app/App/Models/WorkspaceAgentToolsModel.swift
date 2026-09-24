@@ -4,6 +4,15 @@ import WovenMatterCore
 import WovenMatterClient
 import WovenMatterDashboardStore
 
+enum BackendToolsMutation: Codable, Sendable {
+    case saveSettings(WorkspaceToolSettings)
+    case setEnabled(group: WorkspaceToolGroup, enabled: Bool, sessionID: String, confirmedPausingTimers: Bool)
+    case endCoordination(sessionID: String)
+    case notifications(sessionID: String, enabled: Bool)
+    case pauseTimer(id: String, paused: Bool)
+    case removeTimer(id: String)
+}
+
 @MainActor @Observable
 final class WorkspaceAgentToolsModel {
     typealias SessionHandler = @MainActor (String, WovenMatterToolCommand, WovenMatterToolRequest) async throws -> WovenMatterToolResponse
@@ -11,6 +20,9 @@ final class WorkspaceAgentToolsModel {
     typealias NoteRestoreHandler = @MainActor (String, String, String, String, String) async throws -> NoteEditingResponse
     typealias UsageHandler = @MainActor (WovenMatterToolCommand) async throws -> WovenMatterToolResponse
     typealias CalendarTaskHandler = @MainActor (String, WovenMatterToolCommand, WorkspaceCalendarTask?) async throws -> WorkspaceCalendarTask
+    var backendMutation: (@MainActor (BackendToolsMutation) async throws -> Void)?
+    private let passiveProjection: Bool
+    private var mutationTask: Task<Void, Never>?
     let calendarTaskHandler: CalendarTaskHandler?
     let database: WorkspaceDatabase
     private(set) var settings: WorkspaceToolSettings
@@ -35,7 +47,8 @@ final class WorkspaceAgentToolsModel {
 
     init(database: WorkspaceDatabase, sessionHandler: @escaping SessionHandler,
          noteHandler: @escaping NoteHandler, noteRestoreHandler: @escaping NoteRestoreHandler, usageHandler: @escaping UsageHandler,
-         calendarTaskHandler: CalendarTaskHandler? = nil, onMutation: @escaping @MainActor () async -> Void) throws {
+         calendarTaskHandler: CalendarTaskHandler? = nil, passiveProjection: Bool = false, onMutation: @escaping @MainActor () async -> Void) throws {
+        self.passiveProjection = passiveProjection
         self.calendarTaskHandler = calendarTaskHandler
         self.database = database
         self.settings = try database.toolSettings()
@@ -45,8 +58,41 @@ final class WorkspaceAgentToolsModel {
         self.usageHandler = usageHandler
         self.onMutation = onMutation
         endpointDirectory = URL(fileURLWithPath: "/private/tmp/wmtools-" + UUID().uuidString.replacingOccurrences(of: "-", with: ""))
-        try FileManager.default.createDirectory(at: endpointDirectory, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+        if !passiveProjection {
+            try FileManager.default.createDirectory(at: endpointDirectory, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+        }
         try reload()
+    }
+
+    convenience init(projection database: WorkspaceDatabase,
+                     send: @escaping @MainActor (BackendToolsMutation) async throws -> Void) throws {
+        try self.init(database: database,
+            sessionHandler: { _, _, _ in throw CancellationError() },
+            noteHandler: { _, _, _ in throw CancellationError() },
+            noteRestoreHandler: { _, _, _, _, _ in throw CancellationError() },
+            usageHandler: { _ in throw CancellationError() }, passiveProjection: true, onMutation: {})
+        backendMutation = send
+    }
+
+    private func enqueue(_ mutation: BackendToolsMutation) {
+        guard let backendMutation else { return }
+        let previous = mutationTask
+        mutationTask = Task {
+            await previous?.value
+            do {
+                try await backendMutation(mutation)
+                try reload()
+                error = nil
+            } catch { self.error = error.localizedDescription }
+        }
+    }
+
+    func setEnabledFromUI(_ group: WorkspaceToolGroup, enabled: Bool, sessionID: String, confirmedPausingTimers: Bool = false) async throws {
+        if let backendMutation {
+            try await backendMutation(.setEnabled(group: group, enabled: enabled,
+                sessionID: sessionID, confirmedPausingTimers: confirmedPausingTimers))
+            try reload()
+        } else { try setEnabled(group, enabled: enabled, sessionID: sessionID, confirmedPausingTimers: confirmedPausingTimers) }
     }
 
     func reload() throws {
@@ -109,11 +155,13 @@ final class WorkspaceAgentToolsModel {
     }
 
     func endCoordination(sessionID: String) {
+        if passiveProjection { enqueue(.endCoordination(sessionID: sessionID)); return }
         do { try database.endCoordination(targetID: sessionID); try reload(); error = nil }
         catch { self.error = error.localizedDescription }
     }
 
     func setNotifications(sessionID: String, enabled: Bool) {
+        if passiveProjection { enqueue(.notifications(sessionID: sessionID, enabled: enabled)); return }
         do {
             if let source = try database.sessionRelationship(sessionID).coordinatorID {
                 try database.setCoordinationNotifications(sourceID: source, targetID: sessionID, enabled: enabled)
@@ -123,11 +171,13 @@ final class WorkspaceAgentToolsModel {
     }
 
     func pauseTimer(_ timer: WorkspaceSessionTimer, paused: Bool) {
+        if passiveProjection { enqueue(.pauseTimer(id: timer.id, paused: paused)); return }
         do { try database.pauseSessionTimer(id: timer.id, paused: paused); try reload(); error = nil }
         catch { self.error = error.localizedDescription }
     }
 
     func removeTimer(_ timer: WorkspaceSessionTimer) {
+        if passiveProjection { enqueue(.removeTimer(id: timer.id)); return }
         do { try database.removeSessionTimer(id: timer.id); try reload(); error = nil }
         catch { self.error = error.localizedDescription }
     }
@@ -142,11 +192,13 @@ final class WorkspaceAgentToolsModel {
     }
 
     func saveSettings(_ value: WorkspaceToolSettings) {
+        if passiveProjection { settings = value; enqueue(.saveSettings(value)); return }
         do { try database.saveToolSettings(value); settings = value; error = nil }
         catch { self.error = error.localizedDescription }
     }
 
     func setEnabled(_ group: WorkspaceToolGroup, enabled: Bool, sessionID: String, confirmedPausingTimers: Bool = false) throws {
+        guard !passiveProjection else { throw WorkspaceToolError.invalid("Use the background service to change session tools.") }
         var policy = try database.sessionTools(sessionID)
         if enabled { policy.enabled.insert(group) } else { policy.enabled.remove(group) }
         try database.setSessionTools(policy, sessionID: sessionID, confirmedPausingTimers: confirmedPausingTimers)
@@ -155,6 +207,7 @@ final class WorkspaceAgentToolsModel {
     }
 
     func endpoint(for sessionID: String) throws -> String {
+        guard !passiveProjection else { throw CancellationError() }
         guard !stopped else { throw CancellationError() }
         _ = try database.sessionTools(sessionID)
         if let service = services[sessionID] { return service.socketURL.path }
@@ -176,7 +229,7 @@ final class WorkspaceAgentToolsModel {
         remoteBridges.removeAll()
         for service in services.values { try? service.stop() }
         services.removeAll()
-        try? FileManager.default.removeItem(at: endpointDirectory)
+        if !passiveProjection { try? FileManager.default.removeItem(at: endpointDirectory) }
     }
 
     func discovery(sessionID: String, remote: RemoteWorkspaceConfiguration? = nil, noteID: String? = nil) async throws -> String {
@@ -231,6 +284,7 @@ final class WorkspaceAgentToolsModel {
     private static func quote(_ value: String) -> String { "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'" }
 
     func handle(_ request: WovenMatterToolRequest, callerID: String) async -> WovenMatterToolResponse {
+        guard !passiveProjection else { return .init(success: false, error: "Tool execution belongs to the background service.") }
         do {
             guard request.schemaVersion == 1, UUID(uuidString: request.requestID) != nil else {
                 throw WorkspaceToolError.invalid("Unsupported tool request.")

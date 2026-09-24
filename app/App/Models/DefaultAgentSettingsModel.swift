@@ -6,13 +6,13 @@ import WovenMatterCore
 
 @MainActor @Observable
 final class DefaultAgentSettingsModel {
-    struct Model: Decodable, Identifiable {
+    struct Model: Codable, Equatable, Identifiable {
         let id: String
         let name: String
         let provider: String
         let providerName: String
     }
-    struct Provider: Decodable, Identifiable {
+    struct Provider: Codable, Equatable, Identifiable {
         let id: String
         let name: String
         let connected: Bool
@@ -24,6 +24,95 @@ final class DefaultAgentSettingsModel {
         let providers: [Provider]
         let models: [Model]
         let searchConfigured: Bool
+    }
+    private var connectionChangesTask: Task<Void, Never>?
+    init() {
+        guard LocalExecutionRole.current != .frontend else { return }
+        connectionChangesTask = Task { [weak self] in
+            for await _ in NotificationCenter.default.notifications(named: DefaultAgentSupport.credentialsChanged) {
+                guard let self else { return }
+                self.reloadStoredConnectionState()
+            }
+        }
+    }
+    func reloadStoredConnectionState() {
+        guard backendRequest == nil, LocalExecutionRole.current != .frontend else { return }
+        settings = DefaultAgentSupport.settings
+        localServers = LocalModelServerStore.servers
+        loadAccounts()
+    }
+    var localServers: [LocalModelServer] = []
+    var backendRequest: ((String, Data) async throws -> Data)?
+    private var backendCommandTask: Task<Void, Never>?
+    private var backendPollTask: Task<Void, Never>?
+
+    private func forward(_ command: BackendConnectionsCommand) -> Bool {
+        guard let request = backendRequest else {
+            if LocalExecutionRole.current == .frontend {
+                error = "The background service is not connected."
+                return true
+            }
+            return false
+        }
+        backendPollTask?.cancel()
+        let previous = backendCommandTask
+        backendCommandTask = Task { [weak self] in
+            await previous?.value
+            guard let self else { return }
+            do {
+                let result = try await request("connections.command", JSONEncoder().encode(command))
+                self.applyBackendSnapshot(try JSONDecoder().decode(BackendConnectionsSnapshot.self, from: result))
+                self.pollBackendIfNeeded()
+            } catch { self.error = error.localizedDescription; self.busy = false }
+        }
+        return true
+    }
+    private func pollBackendIfNeeded() {
+        guard busy, let request = backendRequest else { return }
+        backendPollTask?.cancel()
+        backendPollTask = Task { [weak self] in
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(for: .milliseconds(250))
+                    let data = try await request("connections.snapshot", Data())
+                    try Task.checkCancellation()
+                    guard let self else { return }
+                    self.applyBackendSnapshot(try JSONDecoder().decode(BackendConnectionsSnapshot.self, from: data))
+                    if !self.busy { return }
+                } catch is CancellationError { return }
+                catch { self?.error = error.localizedDescription; self?.busy = false; return }
+            }
+        }
+    }
+    func applyBackendSnapshot(_ value: BackendConnectionsSnapshot) {
+        localServers = value.localServers
+        scope = value.scope; settings = value.settings; catalog = value.catalog; providers = value.providers
+        searchConfigured = value.searchConfigured; accounts = value.accounts
+        cursorAccountStatus = value.cursorAccountStatus; signInProvider = value.signInProvider
+        busy = value.busy; error = value.error; notice = value.notice
+        signInURL = value.signInURL; signInCode = value.signInCode; prompt = value.prompt; promptID = value.promptID
+        promptOptions = value.promptOptions.map { ($0.id, $0.label) }
+    }
+    func reloadLocalServers() async throws {
+        try await localServerCommand(.init(action: "localServers"))
+    }
+    func connectLocalServer(url: String, key: String, replacing server: LocalModelServer?) async throws {
+        try await localServerCommand(.init(action: "connectServer", value: key, label: url, server: server))
+    }
+    func removeLocalServer(_ server: LocalModelServer) async throws {
+        try await localServerCommand(.init(action: "removeServer", server: server))
+    }
+    private func localServerCommand(_ command: BackendConnectionsCommand) async throws {
+        let payload = try JSONEncoder().encode(command)
+        let data: Data
+        if let backendRequest {
+            await backendCommandTask?.value
+            data = try await backendRequest("connections.command", payload)
+        } else {
+            guard LocalExecutionRole.current != .frontend else { throw BackendRPCError.remote("The background service is not connected.") }
+            data = try await BackendConnectionsService.handle(method: "connections.command", payload: payload, model: self)
+        }
+        applyBackendSnapshot(try JSONDecoder().decode(BackendConnectionsSnapshot.self, from: data))
     }
     var scope = "global"
     var settings = DefaultAgentSupport.settings
@@ -64,6 +153,11 @@ final class DefaultAgentSettingsModel {
     var configuration: DefaultAgentSettings {
         get { scope == "global" ? settings.global : settings.resolved(scope) }
         set {
+            if backendRequest != nil || LocalExecutionRole.current == .frontend {
+                if scope == "global" { settings.global = newValue } else { settings.workspaces[scope] = newValue }
+                _ = forward(.init(action: "configuration", configuration: newValue))
+                return
+            }
             settings = DefaultAgentSupport.settings
             if scope == "global" { settings.global = newValue } else { settings.workspaces[scope] = newValue }
             DefaultAgentSupport.settings = settings
@@ -76,6 +170,7 @@ final class DefaultAgentSettingsModel {
         DefaultAgentModelCatalog.visibleIDs(explicit: configuration.models, defaultModel: effectiveDefaultModel, catalog: catalog.map(\.id)).compactMap { id in catalog.first { $0.id == id } }
     }
     func setInherits(_ value: Bool) {
+        if forward(.init(action: "inherits", flag: value)) { return }
         settings = DefaultAgentSupport.settings
         if value {
             settings.workspaces.removeValue(forKey: scope)
@@ -84,7 +179,21 @@ final class DefaultAgentSettingsModel {
         }
         DefaultAgentSupport.settings = settings
     }
+    func saveKeyConfirmed(_ key: String, provider: String, label: String? = nil) async -> Bool {
+        guard backendRequest != nil else {
+            guard LocalExecutionRole.current != .frontend else {
+                error = "The background service is not connected."
+                return false
+            }
+            return saveKey(key, provider: provider, label: label)
+        }
+        busy = true
+        _ = forward(.init(action: "saveKey", provider: provider, value: key, label: label))
+        await backendCommandTask?.value
+        return error == nil
+    }
     @discardableResult func saveKey(_ key: String, provider: String, label: String? = nil) -> Bool {
+        if forward(.init(action: "saveKey", provider: provider, value: key, label: label)) { return true }
         guard !inherits else { return false }
         signInProvider = nil
         do {
@@ -101,22 +210,26 @@ final class DefaultAgentSettingsModel {
         }
     }
     func loadAccounts() {
+        if forward(.init(action: "accounts")) { return }
         for provider in ["openai-codex", "openai", "claude-subscription", "anthropic", "xai", "xai-api", "openrouter", "opencode-go", "exa", "cursor"] {
             do { accounts[provider] = try ProviderConnectionAccounts.list(provider: provider, scope: keyScope) }
             catch { self.error = error.localizedDescription }
         }
     }
     func selectAccount(_ id: String, provider: String, remote: RemoteWorkspaceConfiguration? = nil) {
+        if forward(.init(action: "select", provider: provider, value: id, remote: remote)) { return }
         guard !inherits else { return }
         do { try ProviderConnectionAccounts.select(id, provider: provider, scope: keyScope); invalidateConnection(provider); refresh(remote: remote) }
         catch { self.error = error.localizedDescription }
     }
     func moveAccount(_ id: String, provider: String, offset: Int) {
+        if forward(.init(action: "move", provider: provider, value: id, offset: offset)) { return }
         guard !inherits else { return }
         do { try ProviderConnectionAccounts.move(id, offset: offset, provider: provider, scope: keyScope); loadAccounts() }
         catch { self.error = error.localizedDescription }
     }
     func removeAccount(_ id: String, provider: String, remote: RemoteWorkspaceConfiguration? = nil) {
+        if forward(.init(action: "remove", provider: provider, value: id, remote: remote)) { return }
         guard !inherits else { return }
         if provider == "claude-subscription" {
             do {
@@ -129,6 +242,7 @@ final class DefaultAgentSettingsModel {
         catch { self.error = error.localizedDescription }
     }
     func reconnectAccount(_ id: String, provider: String, remote: RemoteWorkspaceConfiguration?) {
+        if forward(.init(action: "reconnect", provider: provider, value: id, remote: remote)) { return }
         guard !inherits else { return }
         do {
             let profile = provider == "claude-subscription" ? try ProviderConnectionAccounts.nativeProfile(id, provider: provider, scope: keyScope) : nil
@@ -136,6 +250,7 @@ final class DefaultAgentSettingsModel {
         } catch { self.error = error.localizedDescription }
     }
     func signOut(_ provider: String, remote: RemoteWorkspaceConfiguration?) {
+        if forward(.init(action: "signOut", provider: provider, remote: remote)) { return }
         if provider == "claude-subscription" {
             refresh(remote: remote, login: provider, action: "logout")
             return
@@ -157,11 +272,13 @@ final class DefaultAgentSettingsModel {
         }
     }
     func signInClaude(remote: RemoteWorkspaceConfiguration?) {
+        if forward(.init(action: "claude", remote: remote)) { return }
         guard !inherits else { return }
         enableProvider("claude-subscription")
         refresh(remote: remote, login: "claude-subscription")
     }
     func refreshCursorStatus() async {
+        if forward(.init(action: "cursorStatus")) { return }
         guard let executable = LocalACPRuntimeResolver.resolveExecutable(named: "cursor-agent")
             ?? LocalACPRuntimeResolver.resolveExecutable(named: "agent") else {
             cursorAccountStatus = "Cursor CLI is not installed"
@@ -190,6 +307,7 @@ final class DefaultAgentSettingsModel {
         cursorAccountStatus = status
     }
     func signInCursor() {
+        if forward(.init(action: "cursorSignIn")) { return }
         cancel()
         signInProvider = "cursor"
         error = nil
@@ -274,6 +392,7 @@ final class DefaultAgentSettingsModel {
         configuration = value
     }
     func changeScope(_ scope: String) {
+        if backendRequest != nil { self.scope = scope; _ = forward(.init(action: "scope", value: scope)); return }
         cancel()
         settings = DefaultAgentSupport.settings
         self.scope = scope
@@ -283,6 +402,7 @@ final class DefaultAgentSettingsModel {
         error = nil
     }
     func cancel() {
+        if forward(.init(action: "cancel")) { return }
         generation = UUID()
         operationTask?.cancel()
         operationTask = nil
@@ -304,6 +424,7 @@ final class DefaultAgentSettingsModel {
         signInLease = nil
     }
     func respond(_ answer: String) {
+        if forward(.init(action: "respond", value: answer)) { return }
         guard let id = promptID else { return }
         write(["answerTo": id, "answer": answer])
         promptID = nil
@@ -311,6 +432,7 @@ final class DefaultAgentSettingsModel {
         promptOptions = []
     }
     func refresh(remote: RemoteWorkspaceConfiguration? = nil, login: String? = nil, action: String? = nil, profile: String? = nil, removingAccount: String? = nil, reconnectingAccount: String? = nil) {
+        if forward(.init(action: "refresh", provider: login, value: action, remote: remote, profile: profile, removingAccount: removingAccount, reconnectingAccount: reconnectingAccount)) { return }
         guard login == nil || !inherits else { return }
         cancel()
         self.activeRemote = remote

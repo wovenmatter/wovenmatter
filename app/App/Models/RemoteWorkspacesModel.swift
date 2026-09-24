@@ -24,13 +24,13 @@ struct RemoteHarnessChatTarget: Equatable, Identifiable {
 @MainActor
 @Observable
 final class RemoteWorkspacesModel {
-    struct PendingHostPreparation: Equatable, Identifiable {
+    struct PendingHostPreparation: Codable, Equatable, Identifiable {
         let configuration: RemoteWorkspaceConfiguration
         let inspection: RemoteWorkspacePreflight
         var id: UUID { configuration.id }
     }
 
-    struct PreparedHarnessAction: Equatable, Identifiable {
+    struct PreparedHarnessAction: Codable, Equatable, Identifiable {
         let action: String
         let harness: RemoteHarnessStatus
         let configuration: RemoteWorkspaceConfiguration
@@ -41,6 +41,10 @@ final class RemoteWorkspacesModel {
     }
 
     private(set) var workspaces: [RemoteWorkspaceConfiguration] = []
+    private(set) var taskGatewayStatuses: [UUID: RemoteTaskGatewayStatus] = [:]
+    private(set) var taskGatewayErrors: [UUID: String] = [:]
+    private(set) var changingTaskGatewayIDs: Set<UUID> = []
+    var onTaskGatewayChangeRequested: (@MainActor (RemoteWorkspaceConfiguration, Bool) async throws -> RemoteTaskGatewayStatus)?
     private(set) var machineCandidates: [RemoteMachineCandidate] = []
     private(set) var statuses: [UUID: RemoteWorkspaceStatus] = [:]
     private(set) var harnesses: [UUID: [RemoteHarnessStatus]] = [:]
@@ -71,6 +75,8 @@ final class RemoteWorkspacesModel {
     private(set) var isCredentialAccessEnabled = false
     private var checkedHostKey: String?
 
+    let isBackendProjection: Bool
+    var backendRequest: (@MainActor (String, Data) async throws -> Data)?
     private let sshClient = RemoteWorkspaceSSHClient()
     private let credentials = RemoteWorkspaceCredentialStore()
     private var tunnels: [UUID: RemoteWorkspaceTunnel] = [:]
@@ -91,6 +97,7 @@ final class RemoteWorkspacesModel {
     private(set) var signInErrors: [UUID: String] = [:]
 
     func startDefaultAgentMaintenance() {
+        guard !isBackendProjection else { return }
         guard defaultAgentObservers.isEmpty else { return }
         ProviderAccountCoordinator.shared.start()
         for name in [DefaultAgentSupport.credentialsChanged, Notification.Name("wovenmatter.default-agent.snapshot-ready")] {
@@ -113,6 +120,7 @@ final class RemoteWorkspacesModel {
         })
     }
     private func relayDefaultAgentCredentials() async {
+        guard !isBackendProjection else { return }
         _ = try? await ProviderAccountCoordinator.shared.prepare("local")
         guard isCredentialAccessEnabled else { return }
         for workspace in workspaces where tunnels[workspace.id] != nil {
@@ -121,6 +129,7 @@ final class RemoteWorkspacesModel {
         }
     }
     func refreshSignInStatus(_ configuration: RemoteWorkspaceConfiguration) async {
+        if isBackendProjection { await forwardToBackendAndWait(.refreshSignIn(configuration.id)); return }
         guard !checkingSignIn.contains(configuration.id), let identity = try? requestIdentity(configuration) else { return }
         checkingSignIn.insert(configuration.id)
         defer { checkingSignIn.remove(configuration.id) }
@@ -136,8 +145,10 @@ final class RemoteWorkspacesModel {
         }
     }
 
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = .standard, backendProjection: Bool = LocalExecutionRole.current == .frontend) {
         self.defaults = defaults
+        self.isBackendProjection = backendProjection
+        guard !backendProjection else { return }
         isCredentialAccessEnabled = defaults.bool(
             forKey: credentialAccessDefaultsKey
         )
@@ -145,6 +156,7 @@ final class RemoteWorkspacesModel {
     }
 
     func enableCredentialAccess() {
+        if forwardToBackend(.enableCredentialAccess) { return }
         guard !isCredentialAccessEnabled else { return }
         isCredentialAccessEnabled = true
         defaults.set(true, forKey: credentialAccessDefaultsKey)
@@ -186,6 +198,7 @@ final class RemoteWorkspacesModel {
     }
 
     func reconnect(_ configuration: RemoteWorkspaceConfiguration) {
+        if forwardToBackend(.reconnect(configuration.id)) { return }
         guard isCredentialAccessEnabled else { return }
         performBusy(configuration) {
             try await self.authorizeCredentialAccess(for: configuration)
@@ -195,6 +208,7 @@ final class RemoteWorkspacesModel {
     }
 
     func disableCredentialAccess() {
+        if forwardToBackend(.disableCredentialAccess) { return }
         credentialEpoch = UUID()
         isCredentialAccessEnabled = false
         preparedHarnessAction = nil
@@ -263,6 +277,7 @@ final class RemoteWorkspacesModel {
         of input: AgentMessageInput,
         in workspaceID: UUID?
     ) async throws -> AgentMessageInput {
+        guard !isBackendProjection else { throw BackendRPCError.remote("Remote connections are owned by the background service.") }
         guard let workspaceID, !input.files.isEmpty else { return input }
         guard let configuration = configuration(id: workspaceID) else {
             throw AgentMessageAttachmentError.unsupportedForAgent(
@@ -296,6 +311,7 @@ final class RemoteWorkspacesModel {
     }
 
     func refreshAll() {
+        if forwardToBackend(.refreshAll) { return }
         guard isCredentialAccessEnabled else { return }
         for workspace in workspaces { refresh(workspace) }
     }
@@ -323,6 +339,7 @@ final class RemoteWorkspacesModel {
 
     /// Called at startup/reopen only; never installs, upgrades, or launches runtimes.
     func checkRuntimeMaintenanceOnActivation() {
+        guard !isBackendProjection else { return }
         guard isCredentialAccessEnabled else { return }
         for workspace in workspaces {
             performBusy(workspace) {
@@ -343,6 +360,7 @@ final class RemoteWorkspacesModel {
     }
 
     func checkRuntimeUpdates(_ kind: AgentRuntimeKind, configuration: RemoteWorkspaceConfiguration) {
+        if forwardToBackend(.checkRuntimeUpdates(configuration.id, kind)) { return }
         guard let identity = try? requestIdentity(configuration),
               !busyWorkspaceIDs.contains(configuration.id),
               runtimeMaintenance[configuration.id]?.first(where: { $0.id == kind })?.operation?.status != "running",
@@ -379,6 +397,7 @@ final class RemoteWorkspacesModel {
         _ runtime: RemoteRuntimeMaintenance, configuration: RemoteWorkspaceConfiguration,
         enabled: Bool? = nil, visible: Bool? = nil
     ) {
+        if forwardToBackend(.setRuntimePreferences(configuration.id, runtime.id, enabled: enabled, visible: visible)) { return }
         guard enabled != true || runtime.installed else { return }
         performBusy(configuration) {
             let identity = try self.requestIdentity(configuration)
@@ -392,6 +411,7 @@ final class RemoteWorkspacesModel {
 
     func refreshWorkspaceInstance(_ kind: AgentRuntimeKind, configuration: RemoteWorkspaceConfiguration,
                                   action: String? = nil) {
+        if forwardToBackend(.workspaceInstance(configuration.id, kind, action: action)) { return }
         performBusy(configuration) {
             let identity = try self.requestIdentity(configuration)
             let client = try await self.serviceClient(for: configuration)
@@ -499,22 +519,102 @@ final class RemoteWorkspacesModel {
     // Validate both sides of every suspension so credentials or destination changes
     // cannot publish a result belonging to an obsolete workspace connection.
     func databases(for configuration: RemoteWorkspaceConfiguration) async throws -> [RemoteAgentDatabase] {
-        try await databaseRequest(configuration) { try await $0.databases() }
+        if isBackendProjection {
+            let response = try await requestBackend(.databases(configuration.id))
+            guard let value = response.databases else { throw BackendRPCError.remote("The background service returned no database result.") }; return value
+        }
+        return try await databaseRequest(configuration) { try await $0.databases() }
     }
 
     func createDatabase(name: String, preference: AgentDatabasePreference,
                         in configuration: RemoteWorkspaceConfiguration) async throws -> RemoteAgentDatabase {
-        try await databaseRequest(configuration) { try await $0.createDatabase(name: name, preference: preference) }
+        if isBackendProjection {
+            let response = try await requestBackend(.createDatabase(configuration.id, name: name, preference: preference))
+            guard let value = response.database else { throw BackendRPCError.remote("The background service returned no database result.") }; return value
+        }
+        return try await databaseRequest(configuration) { try await $0.createDatabase(name: name, preference: preference) }
     }
 
     func setDatabasePreference(_ preference: AgentDatabasePreference, databaseID: String,
                                in configuration: RemoteWorkspaceConfiguration) async throws {
+        if isBackendProjection { _ = try await requestBackend(.databasePreference(configuration.id, databaseID, preference)); return }
         _ = try await databaseRequest(configuration) { try await $0.setDatabasePreference(preference, databaseID: databaseID) }
     }
 
     func databaseData(for link: DatabaseArtifactLink,
                       in configuration: RemoteWorkspaceConfiguration) async throws -> RemoteDatabaseData {
-        try await databaseRequest(configuration) { try await $0.databaseData(for: link) }
+        if isBackendProjection {
+            let response = try await requestBackend(.databaseData(configuration.id, link))
+            guard let value = response.databaseData else { throw BackendRPCError.remote("The background service returned no database result.") }; return value
+        }
+        return try await databaseRequest(configuration) { try await $0.databaseData(for: link) }
+    }
+
+    func publishTaskGatewaySchedules(_ publication: RemoteTaskGatewayPublication,
+                                     for configuration: RemoteWorkspaceConfiguration) async throws -> RemoteTaskGatewayStatus {
+        try await databaseRequest(configuration) { try await $0.publishTaskGatewaySchedules(publication) }
+    }
+
+    func taskGatewaySchedules(for configuration: RemoteWorkspaceConfiguration) async throws -> RemoteTaskGatewaySchedules {
+        try await databaseRequest(configuration) { try await $0.taskGatewaySchedules() }
+    }
+
+    func taskGatewayResults(after cursor: String = "0", for configuration: RemoteWorkspaceConfiguration) async throws -> RemoteTaskGatewayResults {
+        try await databaseRequest(configuration) { try await $0.taskGatewayResults(after: cursor) }
+    }
+
+    func taskGatewayStatus(for configuration: RemoteWorkspaceConfiguration) async throws -> RemoteTaskGatewayStatus {
+        try await databaseRequest(configuration) { try await $0.taskGatewayStatus() }
+    }
+
+    func setTaskGatewayEnabled(_ enabled: Bool, for configuration: RemoteWorkspaceConfiguration) async throws -> RemoteTaskGatewayStatus {
+        try await databaseRequest(configuration) { try await $0.setTaskGatewayEnabled(enabled) }
+    }
+
+    func refreshTaskGateway(_ configuration: RemoteWorkspaceConfiguration) async {
+        if isBackendProjection { await forwardToBackendAndWait(.refreshTaskGateway(configuration.id)); return }
+        guard let identity = try? requestIdentity(configuration) else { return }
+        do {
+            let status = try await taskGatewayStatus(for: configuration)
+            try requireCurrent(identity)
+            taskGatewayStatuses[configuration.id] = status
+            taskGatewayErrors[configuration.id] = nil
+        } catch {
+            guard (try? requireCurrent(identity)) != nil else { return }
+            taskGatewayErrors[configuration.id] = error.localizedDescription
+        }
+    }
+
+    func setBackgroundExecution(_ enabled: Bool, for configuration: RemoteWorkspaceConfiguration) {
+        if forwardToBackend(.backgroundExecution(configuration.id, enabled)) { return }
+        guard !changingTaskGatewayIDs.contains(configuration.id),
+              (try? requestIdentity(configuration)) != nil,
+              let index = workspaces.firstIndex(where: { $0.id == configuration.id }) else { return }
+        // Persist intent before contacting the service: a disconnected disable must
+        // not be undone by the next synchronization tick or app restart.
+        workspaces[index].backgroundExecutionEnabled = enabled
+        save()
+        let updated = workspaces[index]
+        guard let identity = try? requestIdentity(updated) else { return }
+        changingTaskGatewayIDs.insert(configuration.id)
+        Task {
+            defer { changingTaskGatewayIDs.remove(configuration.id) }
+            do {
+                guard let onTaskGatewayChangeRequested else {
+                    throw RemoteWorkspaceClientError.invalidResponse("Background execution is not ready. Try again shortly.")
+                }
+                let status = try await onTaskGatewayChangeRequested(updated, enabled)
+                try requireCurrent(identity)
+                guard status.enabled == enabled else {
+                    throw RemoteWorkspaceClientError.invalidResponse("The remote gateway did not confirm this setting.")
+                }
+                taskGatewayStatuses[configuration.id] = status
+                taskGatewayErrors[configuration.id] = nil
+            } catch {
+                guard (try? requireCurrent(identity)) != nil else { return }
+                taskGatewayErrors[configuration.id] = error.localizedDescription
+            }
+        }
     }
 
     private func databaseRequest<Value: Sendable>(
@@ -533,6 +633,7 @@ final class RemoteWorkspacesModel {
     }
 
     private func requestIdentity(_ configuration: RemoteWorkspaceConfiguration) throws -> RemoteWorkspaceRequestIdentity {
+        guard !isBackendProjection else { throw BackendRPCError.remote("Remote connections are owned by the background service.") }
         let epoch = workspaceEpochs[configuration.id] ?? UUID()
         workspaceEpochs[configuration.id] = epoch
         let identity = RemoteWorkspaceRequestIdentity(configuration: configuration,
@@ -606,6 +707,7 @@ final class RemoteWorkspacesModel {
     }
 
     func discoverMachines() {
+        if forwardToBackend(.discoverMachines) { return }
         guard !isDiscovering else { return }
         isDiscovering = true
         errorMessage = nil
@@ -634,6 +736,7 @@ final class RemoteWorkspacesModel {
     }
 
     func checkHost(hostName: String, userName: String) {
+        if forwardToBackend(.checkHost(hostName: hostName, userName: userName)) { return }
         guard !isCheckingHost else { return }
         let cleanHost = hostName.trimmingCharacters(in: .whitespacesAndNewlines)
         let cleanUser = userName.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -674,6 +777,7 @@ final class RemoteWorkspacesModel {
         memoryLimit: String,
         swapLimit: String
     ) {
+        if forwardToBackend(.create(name: name, workspaceID: workspaceID, hostName: hostName, userName: userName, port: port, memoryLimit: memoryLimit, swapLimit: swapLimit)) { return }
         guard isCredentialAccessEnabled else {
             errorMessage = "Enable credential access before creating a remote workspace."
             return
@@ -777,6 +881,7 @@ final class RemoteWorkspacesModel {
     }
 
     func authorizeHostPreparation() {
+        if forwardToBackend(.authorizeHostPreparation) { return }
         guard let pending = pendingHostPreparation, !isCreating else { return }
         pendingHostPreparation = nil
         isCreating = true
@@ -821,10 +926,12 @@ final class RemoteWorkspacesModel {
     }
 
     func cancelHostPreparation() {
+        if forwardToBackend(.cancelHostPreparation) { return }
         pendingHostPreparation = nil
     }
 
     func refresh(_ configuration: RemoteWorkspaceConfiguration) {
+        if forwardToBackend(.refresh(configuration.id)) { return }
         guard isCredentialAccessEnabled else { return }
         performBusy(configuration) {
             self.statuses[configuration.id] = try await self.sshClient.status(
@@ -838,6 +945,7 @@ final class RemoteWorkspacesModel {
         _ action: RemoteWorkspaceLifecycleAction,
         configuration: RemoteWorkspaceConfiguration
     ) {
+        if forwardToBackend(.lifecycle(configuration.id, action.rawValue)) { return }
         performBusy(configuration) {
             self.statuses[configuration.id] = try await self.sshClient.lifecycle(
                 action,
@@ -848,6 +956,7 @@ final class RemoteWorkspacesModel {
     }
 
     func updateContainer(_ configuration: RemoteWorkspaceConfiguration) {
+        if forwardToBackend(.updateContainer(configuration.id)) { return }
         performBusy(configuration) {
             self.progress = "Building the updated workspace image…"
             defer { self.progress = nil }
@@ -868,6 +977,7 @@ final class RemoteWorkspacesModel {
         memoryLimit: String,
         swapLimit: String
     ) {
+        if forwardToBackend(.resources(configuration.id, memoryLimit: memoryLimit, swapLimit: swapLimit)) { return }
         var updated = configuration
         updated.memoryLimit = memoryLimit
             .trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
@@ -903,6 +1013,7 @@ final class RemoteWorkspacesModel {
         _ configuration: RemoteWorkspaceConfiguration,
         removePersistentData: Bool
     ) {
+        if forwardToBackend(.delete(configuration.id, removePersistentData: removePersistentData)) { return }
         guard isCredentialAccessEnabled else {
             errorMessage = "Enable credential access before deleting a remote workspace."
             return
@@ -936,6 +1047,7 @@ final class RemoteWorkspacesModel {
         harness: RemoteHarnessStatus,
         configuration: RemoteWorkspaceConfiguration
     ) {
+        if forwardToBackend(.performHarness(configuration.id, harness.id, action)) { return }
         performBusy(configuration) {
             let client = try await self.serviceClient(for: configuration)
             var operation = try await client.perform(
@@ -959,6 +1071,7 @@ final class RemoteWorkspacesModel {
         harness: RemoteHarnessStatus,
         configuration: RemoteWorkspaceConfiguration
     ) {
+        if forwardToBackend(.prepareHarness(configuration.id, harness.id, action)) { return }
         guard action == "install" || action == "update",
               checkingRuntimeIDs[configuration.id]?.contains(harness.id) != true else { return }
         if action == "update", harness.id == .hermes,
@@ -994,6 +1107,7 @@ final class RemoteWorkspacesModel {
         harnessID: AgentRuntimeKind? = nil,
         action: String? = nil
     ) {
+        if forwardToBackend(.confirmHarness(workspaceID, harnessID, action)) { return }
         guard let preparedHarnessAction,
               workspaceID == nil || preparedHarnessAction.configuration.id == workspaceID,
               harnessID == nil || preparedHarnessAction.harness.id == harnessID,
@@ -1044,6 +1158,7 @@ final class RemoteWorkspacesModel {
         harnessID: AgentRuntimeKind? = nil,
         action: String? = nil
     ) {
+        if forwardToBackend(.cancelHarness(workspaceID, harnessID, action)) { return }
         guard let preparedHarnessAction,
               workspaceID == nil || preparedHarnessAction.configuration.id == workspaceID,
               harnessID == nil || preparedHarnessAction.harness.id == harnessID,
@@ -1056,6 +1171,7 @@ final class RemoteWorkspacesModel {
         method: RemoteHarnessSetupMethod,
         configuration: RemoteWorkspaceConfiguration
     ) {
+        if forwardToBackend(.signIn(configuration.id, harness.id, method.id)) { return }
         performBusy(configuration) {
             let client = try await self.serviceClient(for: configuration)
             var session = try await client.startSignIn(
@@ -1078,6 +1194,7 @@ final class RemoteWorkspacesModel {
         _ code: String,
         configuration: RemoteWorkspaceConfiguration
     ) {
+        if forwardToBackend(.authorizationCode(configuration.id, code)) { return }
         guard let session = authenticationSessions[configuration.id],
               session.state == "waiting_for_user",
               session.acceptsAuthorizationCode else { return }
@@ -1096,6 +1213,7 @@ final class RemoteWorkspacesModel {
     }
 
     func cancelHarnessSignIn(configuration: RemoteWorkspaceConfiguration) {
+        if forwardToBackend(.cancelSignIn(configuration.id)) { return }
         guard let session = authenticationSessions[configuration.id] else { return }
         Task {
             do {
@@ -1137,6 +1255,7 @@ final class RemoteWorkspacesModel {
     }
 
     func synchronizeDefaultAgent(_ configuration: RemoteWorkspaceConfiguration) async throws {
+        if isBackendProjection { _ = try await requestBackend(.synchronizeDefaultAgent(configuration.id)); return }
         try await waitForDefaultAgentSync(configuration.id)
         defaultAgentAcknowledgments.removeValue(forKey: configuration.id)
         try await ensureDefaultAgent(configuration)
@@ -1200,6 +1319,7 @@ final class RemoteWorkspacesModel {
             harnesses[configuration.id] = inventory
             if inventory.contains(where: { $0.id == .defaultAgent }) { try await synchronizeDefaultAgent(configuration) }
             await refreshRuntimeMaintenance(configuration)
+            await refreshTaskGateway(configuration)
         } catch {
             guard (try? requireCurrent(identity)) != nil else { return }
             errorMessage = error.localizedDescription
@@ -1231,6 +1351,7 @@ final class RemoteWorkspacesModel {
     private func serviceClient(
         for configuration: RemoteWorkspaceConfiguration
     ) async throws -> RemoteWorkspaceServiceClient {
+        guard !isBackendProjection else { throw BackendRPCError.remote("Remote connections are owned by the background service.") }
         let identity = try requestIdentity(configuration)
         guard isCredentialAccessEnabled else {
             throw RemoteWorkspaceClientError.invalidResponse(
@@ -1289,8 +1410,144 @@ final class RemoteWorkspacesModel {
     }
 
     private func save() {
+        guard !isBackendProjection else { return }
         guard let data = try? JSONEncoder().encode(workspaces) else { return }
         defaults.set(data, forKey: storageKey)
+    }
+
+
+    struct BackendSnapshot: Codable {
+        let workspaces: [RemoteWorkspaceConfiguration]
+        let taskGatewayStatuses: [UUID: RemoteTaskGatewayStatus]
+        let taskGatewayErrors: [UUID: String]
+        let changingTaskGatewayIDs: Set<UUID>
+        let machineCandidates: [RemoteMachineCandidate]
+        let statuses: [UUID: RemoteWorkspaceStatus]
+        let harnesses: [UUID: [RemoteHarnessStatus]]
+        let workspaceEpochs: [UUID: UUID]
+        let invalidatingWorkspaceIDs: Set<UUID>
+        let workspaceRoots: [UUID: String]
+        let runtimeMaintenance: [UUID: [RemoteRuntimeMaintenance]]
+        let runtimeChecksVerifiedAfterError: [UUID: Set<AgentRuntimeKind>]
+        let checkingRuntimeIDs: [UUID: Set<AgentRuntimeKind>]
+        let runtimeCheckErrors: [UUID: [AgentRuntimeKind: String]]
+        let runtimeErrors: [UUID: String]
+        let actionErrors: [UUID: [AgentRuntimeKind: String]]
+        let workspaceInstances: [UUID: [AgentRuntimeKind: RemoteWorkspaceInstanceStatus]]
+        let operations: [UUID: RemoteHarnessOperation]
+        let authenticationSessions: [UUID: RemoteHarnessAuthenticationSession]
+        let busyWorkspaceIDs: Set<UUID>
+        let signInStatuses: [UUID: [AgentSignInStatus]]
+        let checkingSignIn: Set<UUID>
+        let signInErrors: [UUID: String]
+        let credentialEpoch: UUID
+        let preparedHarnessAction: PreparedHarnessAction?
+        let pendingHostPreparation: PendingHostPreparation?
+        let isDiscovering: Bool
+        let isCheckingHost: Bool
+        let isCreating: Bool
+        let progress: String?
+        let errorMessage: String?
+        let checkedPreflight: RemoteWorkspacePreflight?
+        let isCredentialAccessEnabled: Bool
+        let checkedHostKey: String?
+    }
+
+    func backendSnapshot() -> BackendSnapshot {
+        BackendSnapshot(
+            workspaces: workspaces,
+            taskGatewayStatuses: taskGatewayStatuses,
+            taskGatewayErrors: taskGatewayErrors,
+            changingTaskGatewayIDs: changingTaskGatewayIDs,
+            machineCandidates: machineCandidates,
+            statuses: statuses,
+            harnesses: harnesses,
+            workspaceEpochs: workspaceEpochs,
+            invalidatingWorkspaceIDs: invalidatingWorkspaceIDs,
+            workspaceRoots: workspaceRoots,
+            runtimeMaintenance: runtimeMaintenance,
+            runtimeChecksVerifiedAfterError: runtimeChecksVerifiedAfterError,
+            checkingRuntimeIDs: checkingRuntimeIDs,
+            runtimeCheckErrors: runtimeCheckErrors,
+            runtimeErrors: runtimeErrors,
+            actionErrors: actionErrors,
+            workspaceInstances: workspaceInstances,
+            operations: operations,
+            authenticationSessions: authenticationSessions,
+            busyWorkspaceIDs: busyWorkspaceIDs,
+            signInStatuses: signInStatuses,
+            checkingSignIn: checkingSignIn,
+            signInErrors: signInErrors,
+            credentialEpoch: credentialEpoch,
+            preparedHarnessAction: preparedHarnessAction,
+            pendingHostPreparation: pendingHostPreparation,
+            isDiscovering: isDiscovering,
+            isCheckingHost: isCheckingHost,
+            isCreating: isCreating,
+            progress: progress,
+            errorMessage: errorMessage,
+            checkedPreflight: checkedPreflight,
+            isCredentialAccessEnabled: isCredentialAccessEnabled,
+            checkedHostKey: checkedHostKey)
+    }
+
+    func applyBackendSnapshot(_ snapshot: BackendSnapshot) {
+        guard isBackendProjection else { return }
+        workspaces = snapshot.workspaces
+        taskGatewayStatuses = snapshot.taskGatewayStatuses
+        taskGatewayErrors = snapshot.taskGatewayErrors
+        changingTaskGatewayIDs = snapshot.changingTaskGatewayIDs
+        machineCandidates = snapshot.machineCandidates
+        statuses = snapshot.statuses
+        harnesses = snapshot.harnesses
+        workspaceEpochs = snapshot.workspaceEpochs
+        invalidatingWorkspaceIDs = snapshot.invalidatingWorkspaceIDs
+        workspaceRoots = snapshot.workspaceRoots
+        runtimeMaintenance = snapshot.runtimeMaintenance
+        runtimeChecksVerifiedAfterError = snapshot.runtimeChecksVerifiedAfterError
+        checkingRuntimeIDs = snapshot.checkingRuntimeIDs
+        runtimeCheckErrors = snapshot.runtimeCheckErrors
+        runtimeErrors = snapshot.runtimeErrors
+        actionErrors = snapshot.actionErrors
+        workspaceInstances = snapshot.workspaceInstances
+        operations = snapshot.operations
+        authenticationSessions = snapshot.authenticationSessions
+        busyWorkspaceIDs = snapshot.busyWorkspaceIDs
+        signInStatuses = snapshot.signInStatuses
+        checkingSignIn = snapshot.checkingSignIn
+        signInErrors = snapshot.signInErrors
+        credentialEpoch = snapshot.credentialEpoch
+        preparedHarnessAction = snapshot.preparedHarnessAction
+        pendingHostPreparation = snapshot.pendingHostPreparation
+        isDiscovering = snapshot.isDiscovering
+        isCheckingHost = snapshot.isCheckingHost
+        isCreating = snapshot.isCreating
+        progress = snapshot.progress
+        errorMessage = snapshot.errorMessage
+        checkedPreflight = snapshot.checkedPreflight
+        isCredentialAccessEnabled = snapshot.isCredentialAccessEnabled
+        checkedHostKey = snapshot.checkedHostKey
+    }
+
+    private func forwardToBackend(_ command: BackendRemoteWorkspaceCommand) -> Bool {
+        guard isBackendProjection else { return false }
+        Task { await forwardToBackendAndWait(command) }
+        return true
+    }
+
+    private func forwardToBackendAndWait(_ command: BackendRemoteWorkspaceCommand) async {
+        do { _ = try await requestBackend(command) }
+        catch { errorMessage = error.localizedDescription }
+    }
+
+    private func requestBackend(_ command: BackendRemoteWorkspaceCommand) async throws -> BackendRemoteWorkspaceResponse {
+        guard isBackendProjection, let backendRequest else {
+            throw BackendRPCError.remote("The background service is not connected.")
+        }
+        let data = try await backendRequest("remoteWorkspaces.command", JSONEncoder().encode(command))
+        let response = try JSONDecoder().decode(BackendRemoteWorkspaceResponse.self, from: data)
+        applyBackendSnapshot(response.snapshot)
+        return response
     }
 
     private static func localPort(for id: UUID) -> Int {

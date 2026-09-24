@@ -7,6 +7,7 @@ public enum WorkspaceDatabaseError: Error, Equatable {
   case prepare(String)
   case bind(String)
   case step(String)
+  case readOnlyProjection
   case corruptRow
 }
 
@@ -15,12 +16,14 @@ public enum WorkspaceDatabaseError: Error, Equatable {
 public final class WorkspaceDatabase: @unchecked Sendable {
   private let lock = NSLock()
   private var connection: OpaquePointer?
+  public let isReadOnlyProjection: Bool
   let libraryFiles: LibraryFileStore
 
-  public init(url: URL) throws {
-    libraryFiles = LibraryFileStore(supportDirectory: url.deletingLastPathComponent())
+  public init(url: URL, readOnlyProjection: Bool = false) throws {
+    isReadOnlyProjection = readOnlyProjection
+    libraryFiles = LibraryFileStore(supportDirectory: url.deletingLastPathComponent(), readOnlyProjection: readOnlyProjection)
     var database: OpaquePointer?
-    let flags = SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX
+    let flags = (readOnlyProjection ? SQLITE_OPEN_READONLY : SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE) | SQLITE_OPEN_FULLMUTEX
     guard sqlite3_open_v2(url.path, &database, flags, nil) == SQLITE_OK, let database else {
       let message = database.map { String(cString: sqlite3_errmsg($0)) } ?? "Unable to allocate SQLite connection"
       if let database { sqlite3_close(database) }
@@ -29,6 +32,11 @@ public final class WorkspaceDatabase: @unchecked Sendable {
     connection = database
 
     do {
+      if readOnlyProjection {
+        try execute("PRAGMA query_only = ON")
+        try execute("PRAGMA busy_timeout = 5000")
+        return
+      }
       try execute("PRAGMA journal_mode = WAL")
       try execute("PRAGMA foreign_keys = ON")
       try execute("PRAGMA busy_timeout = 5000")
@@ -50,7 +58,7 @@ public final class WorkspaceDatabase: @unchecked Sendable {
 
   func transaction<T>(_ operation: () throws -> T) throws -> T {
     try lock.withLock {
-      try executeUnlocked("BEGIN IMMEDIATE")
+      try executeUnlocked(isReadOnlyProjection ? "BEGIN DEFERRED" : "BEGIN IMMEDIATE")
       do {
         let result = try operation()
         try executeUnlocked("COMMIT")

@@ -128,5 +128,12 @@ export function createDefaultAgentService({ cwd, directory }) {
     let updates = []; try { updates = (await readFile(join(directory, `run-${id}.jsonl`), 'utf8')).trim().split('\n').filter(Boolean).map(JSON.parse); } catch (error) { if (error.code !== 'ENOENT') throw error; }
     return { updates: updates.slice(after, after + 200), cursor: Math.min(updates.length, after + 200), done: after + 200 >= updates.length, ...completion };
   }
-  return { engine, configure, invoke, poll, status };
+  async function cancelActive() {
+    const running = [...operations.values()].filter(operation => !operation.done);
+    if (!running.length) return;
+    const e = await engine();
+    await Promise.all(running.map(operation => e.handle('session/cancel', { sessionId: operation.sessionID })));
+    await Promise.allSettled(running.map(operation => operation.completion));
+  }
+  return { engine, configure, invoke, poll, status, cancelActive };
 }

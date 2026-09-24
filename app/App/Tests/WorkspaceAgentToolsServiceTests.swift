@@ -582,3 +582,33 @@ extension WorkspaceAgentToolsServiceTests {
         #expect(!denied.success)
     }
 }
+
+extension WorkspaceAgentToolsServiceTests {
+    @Test func passiveToolsProjectionForwardsMutationsAndCannotServeTools() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let database = try WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
+        let caller = try database.createLocalACPSession(runtimeKind: .codex, title: "Caller", ownerDeviceID: UUID())
+        let original = try database.sessionTools(caller)
+        var forwarded = 0
+        let projection = try WorkspaceAgentToolsModel(projection: database) { command in
+            guard case .setEnabled(.timers, false, caller, false) = command else {
+                throw WorkspaceToolError.invalid("Unexpected command")
+            }
+            forwarded += 1
+            throw WorkspaceToolError.timerPauseConfirmation
+        }
+        defer { projection.stop() }
+        #expect(throws: (any Error).self) { try projection.endpoint(for: caller) }
+        #expect(throws: (any Error).self) { try projection.setEnabled(.timers, enabled: false, sessionID: caller) }
+        do {
+            try await projection.setEnabledFromUI(.timers, enabled: false, sessionID: caller)
+            Issue.record("Expected timer confirmation")
+        } catch WorkspaceToolError.timerPauseConfirmation { }
+        #expect(forwarded == 1)
+        #expect(try database.sessionTools(caller) == original)
+        let response = await projection.handle(.init(arguments: ["timers", "list"]), callerID: caller)
+        #expect(!response.success)
+    }
+}

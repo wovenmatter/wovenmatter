@@ -31,12 +31,14 @@ struct SettingsGeneralView: View {
             reservesRailControlSpace: reservesRailControlSpace,
             onBack: onBack
         ) {
-            appearanceCard
             releaseUpdateCard
+            sidebarLayoutCard
+            appearanceCard
+            backgroundExecutionCard
+            credentialAccessCard
             dictationCard
             conversationTitlesCard
             if let tools = model.agentTools { WorkspaceToolDefaultsCard(tools: tools) }
-            credentialAccessCard
         }
         .onChange(of: storedTheme) { _, _ in
             model.persistMacSurfaceProfileFromUserDefaults()
@@ -53,6 +55,41 @@ struct SettingsGeneralView: View {
                 },
                 onCancel: { showsCredentialDisclosure = false }
             )
+        }
+    }
+
+    private var backgroundExecutionCard: some View {
+        let background = LocalBackgroundExecution.shared
+        return SettingsCard(title: "Background execution",
+                            detail: "Keep scheduled tasks and sessions running on this Mac while the app is closed.") {
+            Toggle("Keep tasks and sessions running in the background", isOn: Binding(
+                get: { background.pendingEnabled ?? background.isEnabled }, set: { background.setEnabled($0) }
+            ))
+            .toggleStyle(DashboardSwitchToggleStyle())
+            .disabled(background.isChanging || !background.isAvailable)
+            if !background.isAvailable {
+                Text("Background execution is not available in this build.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            if let enabled = background.pendingEnabled {
+                HStack {
+                    Text("Restart Woven Matter to change execution ownership. Finish active runs first.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    Button(background.isChanging ? "Restarting…" : enabled ? "Enable and restart" : "Disable and restart") {
+                        Task { await background.applyPendingChange() }
+                    }
+                    .buttonStyle(SettingsQuietButtonStyle())
+                    .disabled(background.isChanging)
+                }
+            }
+            Text(background.isEnabled
+                 ? "A separate backend starts at login and keeps tasks, sessions, and connections running after you quit the app. This Mac must remain awake and logged in."
+                 : "Tasks and sessions run while Woven Matter is open. Background execution is off on this Mac.")
+                .font(.caption).foregroundStyle(.secondary)
+            if let message = background.errorMessage {
+                Text(message).font(.caption).foregroundStyle(.red)
+            }
         }
     }
 
@@ -190,13 +227,14 @@ struct SettingsGeneralView: View {
         releaseUpdateState = .installing(release)
         Task {
             do {
+                try await model.prepareBackendForUpdate()
                 try await releaseUpdateInstaller.beginInstallation(of: release)
                 WovenMatterLifecycleDelegate.requestTerminationAfterUpdate()
             } catch {
-                releaseUpdateState = .installFailed(
-                    release,
-                    error.localizedDescription
-                )
+                var message = error.localizedDescription
+                do { try await model.recoverBackendAfterFailedUpdate() }
+                catch { message += " " + error.localizedDescription }
+                releaseUpdateState = .installFailed(release, message)
             }
         }
     }
@@ -215,19 +253,11 @@ struct SettingsGeneralView: View {
                 }
             }
 
-            Divider()
-                .overlay(theme.palette.border)
-                .padding(.vertical, 2)
-
-            sidebarLayoutSelector
         }
     }
 
-    private var sidebarLayoutSelector: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Sidebar layout")
-                .font(.system(size: 13, weight: .medium))
-
+    private var sidebarLayoutCard: some View {
+        SettingsCard(title: "Sidebar layout") {
             DashboardSegmentedSelector(
                 options: DashboardSidebarStyle.allCases,
                 selection: sidebarStyleBinding

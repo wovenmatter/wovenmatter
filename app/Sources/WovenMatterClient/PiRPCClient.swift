@@ -80,6 +80,8 @@ public actor PiRPCClient {
     private var nextID = 0
     private var closed = false
     private var sessionID: String?
+    private var runID: String?
+    private var recoveredRuns: [DefaultAgentRunSnapshot] = []
     private var configuration = LocalACPSessionConfiguration.empty
     private var pendingResponses: [String: CheckedContinuation<[String: Any], any Error>] = [:]
     private var promptEvents: LocalACPClient.EventHandler?
@@ -193,9 +195,12 @@ public actor PiRPCClient {
         return LocalACPInitializedSession(
             sessionID: sessionID,
             loadedExistingSession: existingSessionID != nil,
-            configuration: configuration
+            configuration: configuration,
+            recoveredDefaultAgentRuns: recoveredRuns
         )
     }
+
+    public func setRunID(_ value: String) { runID = value }
 
     public func sessionConfiguration() -> LocalACPSessionConfiguration {
         configuration
@@ -293,11 +298,13 @@ public actor PiRPCClient {
         }
         return try await withTaskCancellationHandler {
             do {
-                let response = try await sendCommand([
-                    "type": "prompt",
-                    "message": text,
-                    "images": images,
-                ])
+                var command: [String: Any] = [
+                    "type": "prompt", "message": text, "images": images,
+                ]
+                if launch.environment["WOVEN_DURABLE_REMOTE_ACP"] == "1" {
+                    command["_meta"] = ["wovenRunID": runID ?? UUID().uuidString.lowercased()]
+                }
+                let response = try await sendCommand(command)
                 if response["success"] as? Bool != true {
                     throw PiRPCClientError.commandFailed(
                         string(response["error"]) ?? "Pi rejected the prompt."
@@ -411,20 +418,29 @@ public actor PiRPCClient {
         await task.value
     }
 
+    static func sessionLaunchArguments(_ launch: LocalACPRuntimeLaunchConfiguration, sessionID: String?) -> [String] {
+        var arguments = launch.arguments
+        guard let sessionID, !sessionID.isEmpty else { return arguments }
+        if let wrapped = launch.wrappedCommand {
+            let command = wrapped.command + ["--session", sessionID]
+            arguments[wrapped.argumentIndex] = command.map {
+                "'" + $0.replacingOccurrences(of: "'", with: "'\"'\"'") + "'"
+            }.joined(separator: " ")
+        } else { arguments += ["--session", sessionID] }
+        return arguments
+    }
+
     private func spawn(sessionID: String?) throws {
         guard !closed else { throw PiRPCClientError.processExited() }
         guard process == nil, input == nil else { return }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/sh")
-        var arguments = [
+        let arguments = [
             "-c",
             #"set -m; exec "$@""#,
             "wovenmatter-local-pi",
             launch.executableURL.path,
-        ] + launch.arguments
-        if let sessionID, !sessionID.isEmpty {
-            arguments += ["--session", sessionID]
-        }
+        ] + Self.sessionLaunchArguments(launch, sessionID: sessionID)
         process.arguments = arguments
         process.currentDirectoryURL = launch.processWorkingDirectoryURL
             ?? workingDirectory
@@ -544,6 +560,11 @@ public actor PiRPCClient {
         let thinking = try await sendCommand(["type": "get_available_thinking_levels"])
         let commands = try await sendCommand(["type": "get_commands"])
         let data = dictionary(state["data"])
+        if launch.environment["WOVEN_DURABLE_REMOTE_ACP"] == "1",
+           let recovery = dictionary(data?["_meta"])?["recoveredRuns"] {
+            recoveredRuns = try JSONDecoder().decode([DefaultAgentRunSnapshot].self,
+                from: JSONSerialization.data(withJSONObject: recovery))
+        }
         sessionID = string(data?["sessionId"]) ?? string(data?["session_id"]) ?? sessionID
         let model = dictionary(data?["model"]).flatMap { model in
             guard let id = string(model["id"]) else { return nil as String? }

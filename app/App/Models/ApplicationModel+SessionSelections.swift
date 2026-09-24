@@ -31,6 +31,11 @@ extension ApplicationModel {
     /// Called only by explicit new-chat creation. Capturing before applying the
     /// values makes retries independent of subsequent edits to defaults.
     func prepareNewSessionSelections(conversationID: String, capturedDefaults: SessionSelections? = nil) async throws {
+        if isBackendFrontend {
+            _ = try await sendBackendCommand(.prepareSelections(conversationID: conversationID, defaults: capturedDefaults))
+            return
+        }
+
         guard let dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
         let context = try sessionSelectionContext(conversationID: conversationID)
         let native = try dashboardStore.database.localACPSession(conversationID: conversationID)
@@ -46,6 +51,11 @@ extension ApplicationModel {
 
     /// Recovery applies an already captured snapshot, never today's defaults.
     func applyPendingSessionSelections(conversationID: String) async throws {
+        if isBackendFrontend {
+            _ = try await sendBackendCommand(.applySelections(conversationID: conversationID))
+            return
+        }
+
         if let pending = applyingSessionSelectionTasks[conversationID] {
             try await pending.value
             return
@@ -132,6 +142,14 @@ extension ApplicationModel {
     /// initial bundle. The remaining captured defaults still need confirmation.
     @discardableResult
     func retryPendingSessionSelections(conversationID: String, selections: SessionSelections) -> Bool {
+        if isBackendFrontend {
+            Task {
+                do { _ = try await sendBackendCommand(.retrySelections(conversationID: conversationID, selections: selections)) }
+                catch { ensureConversationState(id: conversationID).setError(error.localizedDescription) }
+            }
+            return true
+        }
+
         guard let pending = sessionSelectionPreferences.conversation(id: conversationID),
               pending.requiresApplication else { return false }
         guard !localRunningConversationIDs.contains(conversationID),
@@ -155,6 +173,12 @@ extension ApplicationModel {
     }
 
     func recordConfirmedSessionSelections(conversationID: String, metadata: LocalACPSessionMetadata) {
+        if isBackendFrontend {
+            // Confirmation belongs to the execution owner; a stale UI snapshot must
+            // never overwrite newer backend model/permission preferences.
+            return
+        }
+
         guard let context = try? sessionSelectionContext(conversationID: conversationID) else { return }
         let selections = SessionSelections(model: metadata.model, thinking: metadata.thinking,
             permission: context.harness == AgentRuntimeKind.pi.rawValue ? nil : metadata.permission,

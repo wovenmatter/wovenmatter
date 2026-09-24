@@ -25,6 +25,14 @@ fi
 app="${derived_data}/Build/Products/Debug/${product_name}.app"
 executable="${app}/Contents/MacOS/${product_name}"
 
+# Replacing the executable of an active execution owner can interrupt sessions.
+# Its lifetime is independent of the UI; disabling background execution performs
+# the app's idle check and graceful ownership handoff before a development rebuild.
+if pgrep -f "^${executable} --backend$" >/dev/null 2>&1; then
+  printf '%s\n' 'Disable background execution in this Dev app before rebuilding so its sessions can stop safely.' >&2
+  exit 75
+fi
+
 mkdir -p "$derived_data" "$package_cache"
 # A stable certificate-backed identity lets macOS recognize subsequent Dev
 # builds. Linker/ad-hoc signatures change identity whenever the binary changes.

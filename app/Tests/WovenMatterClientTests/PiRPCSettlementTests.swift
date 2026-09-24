@@ -5,6 +5,21 @@ import WovenMatterCore
 @testable import WovenMatterClient
 
 struct PiRPCSettlementTests {
+  @Test func durableRelayCarriesStableRunAndReturnsRecovery() async throws {
+    let capture = PiWireCapture()
+    let fixture = PiPipeFixture(recorder: { capture.append($0,$1) }, durable: true)
+    let server = Task { try await fixture.serve(settles: true, recovery: true) }
+    let initialized = try await fixture.client.initializeSession(workingDirectory: URL(filePath:"/private/tmp"),
+      existingSessionID:"fixture-session",title:nil,systemPrompt:nil)
+    #expect(initialized.recoveredDefaultAgentRuns.first?.runID == "prior-run")
+    #expect(initialized.recoveredDefaultAgentRuns.first?.content == "saved result")
+    await fixture.client.setRunID("current-run")
+    #expect(try await fixture.client.prompt("fixture") == .endTurn)
+    try await server.value
+    await fixture.client.shutdown()
+    #expect(capture.values.contains { $0.0 == "out" && $0.1.contains("wovenRunID") && $0.1.contains("current-run") })
+  }
+
   @Test func capturesUnknownNativeEventsAndOutboundPromptsBeforeProjection() async throws {
     let capture=PiWireCapture()
     let fixture=PiPipeFixture(recorder:{ direction,data in capture.append(direction,data) })
@@ -153,9 +168,10 @@ private struct PiPipeFixture: Sendable {
   let commands = Pipe()
   let events = Pipe()
   let client: PiRPCClient
-  init(recorder: WorkspaceWireRecorder? = nil) {
+  init(recorder: WorkspaceWireRecorder? = nil, durable: Bool = false) {
     var launch=LocalACPRuntimeLaunchConfiguration(runtimeKind:.pi,
-      executableURL:URL(filePath:"/nonexistent-test-pi"),arguments:[])
+      executableURL:URL(filePath:"/nonexistent-test-pi"),arguments:[],
+      environment: durable ? ["WOVEN_DURABLE_REMOTE_ACP":"1"] : [:])
     launch.historyRecorder=recorder
     client = PiRPCClient(launch: launch,
       workingDirectory: URL(filePath: "/private/tmp"), input: commands.fileHandleForWriting,
@@ -166,13 +182,13 @@ private struct PiPipeFixture: Sendable {
       existingSessionID: nil, title: nil, systemPrompt: nil)
   }
   func serve(settles: Bool, accepts: Bool = true, hold: PiPromptGate? = nil,
-             streamLines: [String] = [], advertisesConfiguration: Bool = false) async throws {
+             streamLines: [String] = [], advertisesConfiguration: Bool = false, recovery: Bool = false) async throws {
     defer { try? events.fileHandleForWriting.close() }
     let cursor = FixtureCommandReader(handle: commands.fileHandleForReading)
     while let line = try await cursor.next() {
       let command = try JSONSerialization.jsonObject(with: line) as! [String: Any]
       let type = command["type"] as! String
-      let data: [String: Any]
+      var data: [String: Any]
       switch type {
       case "get_state":
         data = advertisesConfiguration ? [
@@ -207,6 +223,9 @@ private struct PiPipeFixture: Sendable {
         data = ["levels": ["off", "high", "max"]]
       default:
         data = [:]
+      }
+      if recovery, type == "get_state" {
+        data["_meta"] = ["recoveredRuns": [["runID":"prior-run","content":"saved result"]]]
       }
       var response: [String: Any] = ["type": "response", "id": command["id"]!, "success": true, "data": data]
       if type == "prompt", !accepts { response["success"] = false; response["error"] = "fixture rejection" }

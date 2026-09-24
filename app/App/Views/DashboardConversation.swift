@@ -316,7 +316,7 @@ struct DashboardCloudConversation: View {
                 }
                 .onChange(of: conversation.flatMap { model.pendingComposerPrefills[$0.id] }, initial: true) { _, text in
                     guard let text, let conversationID = conversation?.id else { return }
-                    model.pendingComposerPrefills.removeValue(forKey: conversationID)
+                    model.consumeComposerPrefill(conversationID: conversationID, expected: text)
                     guard !text.isEmpty else { return }
                     draft = draft.isEmpty ? text : draft + "\n" + text
                 }
@@ -756,7 +756,7 @@ struct DashboardCloudConversation: View {
            let openCode = workspaceOpenCode, openCode.isLocalSession(conversation.id),
            let link = openCode.links[conversation.id], openCode.snapshots[conversation.id]?.olderCursor != nil {
             do {
-                try await openCode.coordinator.loadOlder(link)
+                try await openCode.loadOlder(link)
                 await model.refreshConversation(id: conversation.id)
             } catch { openCode.error = error.localizedDescription }
         }

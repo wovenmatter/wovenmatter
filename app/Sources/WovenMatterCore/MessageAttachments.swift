@@ -7,7 +7,7 @@ public enum AgentMessageAttachmentKind: String, Codable, Equatable, Sendable {
   case conversation
 }
 
-public struct AgentFileAttachmentDraft: Equatable, Identifiable, Sendable {
+public struct AgentFileAttachmentDraft: Codable, Equatable, Identifiable, Sendable {
   public let id: String
   public let kind: AgentMessageAttachmentKind
   public let fileName: String
@@ -50,7 +50,7 @@ public struct AgentFileAttachmentDraft: Equatable, Identifiable, Sendable {
   }
 }
 
-public struct AgentMessageReferenceDraft: Equatable, Identifiable, Sendable {
+public struct AgentMessageReferenceDraft: Codable, Equatable, Identifiable, Sendable {
   public let id: String
   public let kind: AgentMessageAttachmentKind
   public let resourceID: String
@@ -85,7 +85,7 @@ public struct AgentMessageReferenceDraft: Equatable, Identifiable, Sendable {
   }
 }
 
-public enum AgentMessageAttachmentDraft: Equatable, Identifiable, Sendable {
+public enum AgentMessageAttachmentDraft: Codable, Equatable, Identifiable, Sendable {
   case file(AgentFileAttachmentDraft)
   case reference(AgentMessageReferenceDraft)
 
@@ -111,7 +111,7 @@ public enum AgentMessageAttachmentDraft: Equatable, Identifiable, Sendable {
   }
 }
 
-public struct AgentMessageInput: Equatable, Sendable {
+public struct AgentMessageInput: Codable, Equatable, Sendable {
   public let text: String
   public private(set) var attachments: [AgentMessageAttachmentDraft]
 

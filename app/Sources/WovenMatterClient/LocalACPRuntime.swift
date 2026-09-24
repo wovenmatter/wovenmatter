@@ -252,8 +252,8 @@ public struct LocalACPRuntimePreferences {
     }
 }
 
-public struct LocalACPRuntimeAvailability: Equatable, Identifiable, Sendable {
-    public enum State: String, Equatable, Sendable {
+public struct LocalACPRuntimeAvailability: Codable, Equatable, Identifiable, Sendable {
+    public enum State: String, Codable, Equatable, Sendable {
         case ready
         case cliMissing = "cli_missing"
         case adapterMissing = "adapter_missing"
