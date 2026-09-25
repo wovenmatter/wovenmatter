@@ -141,7 +141,7 @@ export async function inlineClaudeLogin(runtime, profile, { signal, notify, spaw
       for (const match of buffer.matchAll(/https:\/\/[^\s<>"\x1b]+/g)) {
         try {
           const url = new URL(match[0]);
-          if (['claude.ai', 'console.anthropic.com', 'platform.claude.com'].includes(url.hostname)) {
+          if (['claude.ai', 'claude.com', 'console.anthropic.com', 'platform.claude.com'].includes(url.hostname)) {
             notify?.({ url: url.href, message: 'Open this link to complete Claude sign-in. Claude manages the account securely.' });
           }
         } catch {}

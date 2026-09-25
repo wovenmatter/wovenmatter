@@ -108,3 +108,40 @@ test('cancelling inline native login terminates its child and does not report su
   await assert.rejects(result, /Sign-in cancelled/);
   assert.deepEqual(signals, ['SIGTERM']);
 });
+
+for (const host of ['claude.com', 'claude.ai', 'platform.claude.com', 'console.anthropic.com']) {
+  test(`inline Claude login forwards the authorization link on ${host}`, async () => {
+    const child = new EventEmitter(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
+    const notifications = [];
+    const url = `https://${host}/cai/oauth/authorize?state=fixture&code_challenge=fixture`;
+    const result = inlineClaudeLogin({ environment: async () => ({}), status: async () => ({ connected: true }) }, 'fixture', {
+      notify: value => notifications.push(value),
+      spawnCommand: () => {
+        setImmediate(() => {
+          child.stderr.write(`Opening browser: ${url}\n`);
+          child.emit('exit', 0);
+        });
+        return child;
+      },
+    });
+    await result;
+    assert.equal(notifications.length, 1);
+    assert.equal(notifications[0].url, url);
+  });
+}
+
+test('inline Claude login does not forward unrelated or lookalike domains', async () => {
+  const child = new EventEmitter(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
+  const notifications = [];
+  await inlineClaudeLogin({ environment: async () => ({}), status: async () => ({ connected: true }) }, 'fixture', {
+    notify: value => notifications.push(value),
+    spawnCommand: () => {
+      setImmediate(() => {
+        child.stdout.write('https://claude.com.example.test/cai/oauth/authorize https://example.test/\n');
+        child.emit('exit', 0);
+      });
+      return child;
+    },
+  });
+  assert.deepEqual(notifications, []);
+});
