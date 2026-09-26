@@ -52,15 +52,12 @@ struct BackendApplicationReadiness: Codable, Sendable {
     let capabilities: [String]
 }
 
-/// A separate backend owns this dispatcher and the full ApplicationModel. Installing
-/// this service alone does not authorize the UI to skip its execution startup: the
-/// lifecycle handshake must also verify completeClientRouting.
+/// Dispatches frontend commands to the backend-owned application model.
 @MainActor
 final class BackendApplicationService {
     let instanceID = UUID()
     let invalidations: BackendInvalidationJournal
     let model: ApplicationModel
-    private let completeClientRouting: Bool
     private struct PendingCommand {
         let identity: BackendRPCCommandIdentity
         let task: Task<BackendRPCResponse, Never>
@@ -69,10 +66,9 @@ final class BackendApplicationService {
     private var completed: [String: (BackendRPCCommandIdentity, BackendRPCResponse)] = [:]
     private var completionOrder: [String] = []
 
-    init(model: ApplicationModel, completeClientRouting: Bool = false) {
+    init(model: ApplicationModel) {
         self.invalidations = BackendInvalidationJournal(instanceID: instanceID)
         self.model = model
-        self.completeClientRouting = completeClientRouting
     }
 
     func handle(_ request: BackendRPCRequest) async -> BackendRPCResponse {
@@ -103,7 +99,7 @@ final class BackendApplicationService {
             case "application.readiness":
                 return try response(request, BackendApplicationReadiness(protocolVersion: 1,
                     instanceID: instanceID, ready: model.state == .ready,
-                    completeClientRouting: completeClientRouting,
+                    completeClientRouting: true,
                     capabilities: ["session.create", "session.send", "session.configure", "session.tools",
                                    "session.cancel", "session.permission", "session.interaction", "calendar.write",
                                    "calendar.metadata"]))

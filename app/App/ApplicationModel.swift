@@ -4930,9 +4930,6 @@ struct BackendApplicationState: Codable, Sendable {
 }
 
 extension ApplicationModel {
-    // Raised only after every frontend surface has a backend route and the
-    // split-process acceptance suite passes. A partial client must never launch.
-    static var backendClientCapabilitiesComplete: Bool { true }
     var isBackendFrontend: Bool { LocalExecutionRole.current == .frontend }
     private var executionHasPendingOperations: Bool {
         !installingLocalACPRuntimeKinds.isEmpty || !updatingRuntimeKinds.isEmpty
@@ -4955,8 +4952,7 @@ extension ApplicationModel {
 
     func startBackendService() async {
         do {
-            let service = BackendApplicationService(model: self,
-                completeClientRouting: Self.backendClientCapabilitiesComplete)
+            let service = BackendApplicationService(model: self)
             let server = BackendRPCServer(socketURL: LocalExecutionRole.backendSocketURL(workspaceDirectory: try Self.dashboardSupportDirectory()))
             backendApplicationService = service
             backendRPCServer = server
@@ -5243,7 +5239,6 @@ extension ApplicationModel {
 
     func changeLocalBackgroundExecution(enabled: Bool) async throws {
         guard !DictationModel.shared.isBusy else { throw BackendRPCError.remote("Finish dictation before switching execution modes.") }
-        guard Self.backendClientCapabilitiesComplete else { throw BackendRPCError.remote("Background execution is not ready in this build.") }
         guard !executionHasPendingOperations, localRunningConversationIDs.isEmpty, pendingLocalACPPermissions.isEmpty,
               pendingLocalACPInteractions.isEmpty, pendingSessionAccess.isEmpty else {
             throw BackendRPCError.remote("Wait for running sessions and pending approvals before switching execution modes.")

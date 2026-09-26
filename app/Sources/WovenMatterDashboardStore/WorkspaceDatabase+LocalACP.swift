@@ -1537,13 +1537,6 @@ extension WorkspaceDatabase {
 
   /// Reconcile only the exact remote run identities that this Mac submitted.
   /// A disconnected transport may have marked them failed while the workspace kept running.
-  public func recoverDefaultAgentRuns(conversationID: String, snapshots: [DefaultAgentRunSnapshot]) throws {
-    guard try localACPSession(conversationID: conversationID).runtimeKind == .defaultAgent else {
-      throw LocalACPSessionDatabaseError.runtimeUnavailable
-    }
-    try recoverRemoteAgentRuns(conversationID: conversationID, snapshots: snapshots)
-  }
-
   public func recoverRemoteAgentRuns(conversationID: String, snapshots: [DefaultAgentRunSnapshot]) throws {
     try transaction {
       let route = try prepareUnlocked("SELECT 1 FROM desktop_local_acp_sessions WHERE conversation_id=? AND (runtime_kind='default_agent' OR remote_workspace_id IS NOT NULL)")
