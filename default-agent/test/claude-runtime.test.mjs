@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { ClaudeRuntime, claudeDirectories, claudeEnvironment } from '../src/claude-runtime.mjs';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
+import { createSignInPrompt } from '../src/sign-in-interaction.mjs';
 import { inlineClaudeLogin } from '../src/claude-runtime.mjs';
 import { PermissionRequests } from '../src/permissions.mjs';
 
@@ -89,7 +90,7 @@ test('inline native login exposes only provider link and returns native account 
   const result = inlineClaudeLogin(runtime, 'fixture-profile', { notify: value => notifications.push(value), spawnCommand: (_path, args, options) => {
     assert.deepEqual(args, ['auth', 'login', '--claudeai']);
     assert.equal(options.env.PROFILE, 'fixture-profile');
-    setImmediate(() => { child.stdout.write('Ignore secret output. https://claude.ai/oauth/authorize?state=fixture\n'); child.emit('exit', 0); });
+    setImmediate(() => { child.stdout.write('Ignore secret output. https://claude.ai/oauth/authorize?state=fixture\n'); child.emit('close', 0); });
     return child;
   } });
   assert.deepEqual(await result, { connected: true, account: 'fixture-profile' });
@@ -101,7 +102,7 @@ test('cancelling inline native login terminates its child and does not report su
   const controller = new AbortController();
   const child = new EventEmitter(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
   const signals = [];
-  child.kill = signal => { signals.push(signal); setImmediate(() => child.emit('exit', 0)); };
+  child.kill = signal => { signals.push(signal); setImmediate(() => child.emit('close', 0)); };
   const result = inlineClaudeLogin({ environment: async () => ({}), status: async () => { throw Error('must not check status'); } }, 'fixture', {
     signal: controller.signal, spawnCommand: () => { setImmediate(() => controller.abort()); return child; },
   });
@@ -119,7 +120,7 @@ for (const host of ['claude.com', 'claude.ai', 'platform.claude.com', 'console.a
       spawnCommand: () => {
         setImmediate(() => {
           child.stderr.write(`Opening browser: ${url}\n`);
-          child.emit('exit', 0);
+          child.emit('close', 0);
         });
         return child;
       },
@@ -137,11 +138,84 @@ test('inline Claude login does not forward unrelated or lookalike domains', asyn
     notify: value => notifications.push(value),
     spawnCommand: () => {
       setImmediate(() => {
-        child.stdout.write('https://claude.com.example.test/cai/oauth/authorize https://example.test/\n');
-        child.emit('exit', 0);
+        child.stdout.write('https://claude.com.example.test/cai/oauth/authorize https://example.test/ https://claude.com/help\n');
+        child.emit('close', 0);
       });
       return child;
     },
   });
   assert.deepEqual(notifications, []);
+});
+
+test('Claude sign-in joins streamed links and forwards the UI code only to native stdin', { timeout: 2000 }, async () => {
+  const child = new EventEmitter();
+  child.stdin = new PassThrough(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
+  const controller = new AbortController();
+  const pending = new Map(), messages = [], notifications = [], input = [];
+  const url = 'https://claude.com/cai/oauth/authorize?state=fixture&code_challenge=fixture';
+  const prompt = createSignInPrompt({ provider: 'claude-subscription', signal: controller.signal, pending,
+    send: message => {
+      messages.push(message);
+      queueMicrotask(() => pending.get(message.id)(messages.length === 1 ? 'incomplete' : 'fixture-code#fixture-state'));
+    },
+  });
+  child.stdin.on('data', data => { input.push(data.toString()); setImmediate(() => child.emit('close', 0)); });
+  await inlineClaudeLogin({ environment: async () => ({}), status: async () => ({ connected: true }) }, 'fixture', {
+    signal: controller.signal, prompt, notify: value => notifications.push(value),
+    spawnCommand: (_path, _args, options) => {
+      assert.equal(options.stdio[0], 'pipe');
+      setImmediate(() => {
+        child.stdout.write('If the browser did not open: ' + url.slice(0, 55));
+        assert.equal(notifications.length, 0, 'a partial URL must not reach the UI');
+        child.stderr.write('Native progress on a separate stream\n');
+        child.stdout.write(url.slice(55) + '\n');
+        child.stdout.write(`\x1b]8;;${url}\x07${url}\x1b]8;;\x07\nPaste code here if prompted > `);
+      });
+      return child;
+    },
+  });
+  assert.deepEqual(input, ['fixture-code#fixture-state\n']);
+  assert.deepEqual(notifications.map(value => value.url), [url]);
+  assert.equal(messages.length, 2);
+  assert.match(messages[1].prompt.message, /full code/);
+  assert.equal(pending.size, 0);
+  assert.ok(!JSON.stringify(messages).includes('fixture-code'));
+});
+
+test('native completion and cancellation retire a pending sign-in prompt', async () => {
+  for (const cancel of [false, true]) {
+    const controller = new AbortController();
+    const child = new EventEmitter();
+    child.stdin = new PassThrough(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
+    child.stdin.on('data', () => assert.fail('a retired prompt must not forward a code'));
+    child.kill = () => setImmediate(() => child.emit('close', 0));
+    const pending = new Map();
+    let staleReply;
+    const prompt = createSignInPrompt({ provider: 'claude-subscription', signal: controller.signal, pending,
+      send: message => {
+        staleReply = pending.get(message.id);
+        if (cancel) controller.abort();
+        else setImmediate(() => child.emit('close', 0));
+      },
+    });
+    const result = inlineClaudeLogin({ environment: async () => ({}), status: async () => ({ connected: true }) }, 'fixture', {
+      signal: controller.signal, prompt,
+      spawnCommand: () => {
+        setImmediate(() => child.stdout.write('https://claude.com/cai/oauth/authorize?state=fixture\n'));
+        return child;
+      },
+    });
+    if (cancel) await assert.rejects(result, /cancelled/);
+    else assert.deepEqual(await result, { connected: true });
+    assert.equal(pending.size, 0);
+    staleReply('late-code#fixture');
+    await new Promise(resolve => setImmediate(resolve));
+  }
+});
+
+test('cancellation during native environment preparation never starts a login process', async () => {
+  const controller = new AbortController();
+  await assert.rejects(inlineClaudeLogin({ environment: async () => { controller.abort(); return {}; } }, 'fixture', {
+    signal: controller.signal, spawnCommand: () => assert.fail('cancelled sign-in must not spawn'),
+  }), /cancelled/);
 });

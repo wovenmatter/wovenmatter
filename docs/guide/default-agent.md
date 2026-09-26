@@ -102,9 +102,10 @@ a separate boundary: interrupted sends are not automatically repeated. See
 ## Claude models
 
 In **Settings → Connections → Anthropic**, expand **Claude subscriptions** and click
-**Sign in with Claude**. Complete Anthropic’s own flow using the inline link, then click
-**Refresh connections**. Woven Matter bundles the unmodified official runtime;
-this sign-in is separate from an independently installed Claude Code harness.
+**Sign in with Claude**. Open the inline link and complete Anthropic’s sign-in flow.
+Paste the full code returned by Claude into Connections and click **Continue**.
+Connections refreshes when sign-in completes. Woven Matter bundles the unmodified
+official runtime; this sign-in is separate from an independently installed Claude Code harness.
 An API key uses the separate **Claude API key** option and is billed separately.
 
 Claude provides model responses while Built-in retains its tools, approvals,
