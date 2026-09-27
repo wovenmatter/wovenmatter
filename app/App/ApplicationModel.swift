@@ -2099,6 +2099,16 @@ final class ApplicationModel {
             if !steering { localRunningConversationIDs.remove(conversation.id) }
             throw error
         }
+        // A workspace refresh may have cleared the provisional running ID while
+        // session setup awaited. Reconcile accepted work before its dispatch
+        // lease ends, including runs that already completed during submission.
+        if let running = try? await dashboardStore.activeAgentConversationIDs() {
+            localRunningConversationIDs = running
+        } else {
+            // Acceptance already succeeded. Keep protection until the next
+            // successful refresh without reporting a retryable send failure.
+            localRunningConversationIDs.insert(conversation.id)
+        }
         scheduleConversationTitleGeneration(conversation: conversation, firstPrompt: normalized.previewText)
         return true
     }

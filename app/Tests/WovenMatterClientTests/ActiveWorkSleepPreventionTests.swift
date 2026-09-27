@@ -69,9 +69,27 @@ struct ActiveWorkSleepPreventionTests {
         let owner = activities.makeOwner()
         let dispatch = owner.beginDispatch()
         // A workspace refresh can still report no runs during session setup.
+        owner.setRunningConversationIDs(["preparing"])
+        owner.setRunningConversationIDs([])
+        #expect(activities.ends == 0)
+        // Acceptance must restore authoritative run state before ending dispatch.
+        owner.setRunningConversationIDs(["accepted"])
+        owner.endDispatch(dispatch)
+        #expect(activities.starts == 1)
+        #expect(activities.ends == 0)
+        owner.setRunningConversationIDs([])
+        #expect(activities.ends == 1)
+    }
+
+    @Test func runFinishingBeforeSendReturnsKeepsProtectionUntilDispatchCompletes() {
+        let activities = Activities()
+        let owner = activities.makeOwner()
+        let dispatch = owner.beginDispatch()
+        owner.setRunningConversationIDs(["fast-run"])
         owner.setRunningConversationIDs([])
         #expect(activities.ends == 0)
         owner.endDispatch(dispatch)
+        #expect(activities.starts == 1)
         #expect(activities.ends == 1)
     }
 
