@@ -6,6 +6,144 @@ import WovenMatterClient
 
 @Suite("Agent tools access, coordination and timers")
 struct WorkspaceAgentToolTests {
+  @Test func linkedSQLiteQueriesHaveExecutionAndResultBudgets() throws {
+    let (db, dir, _, _) = try fixture()
+    _ = db
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let url = dir.appending(path: "workspace.sqlite")
+    #expect(throws: DatabaseLinkedDataError.sqliteResultTooLarge) {
+      try DatabaseLinkedData.load(from: url, preference: .sqlite,
+        sqliteQuery: "SELECT hex(randomblob(300000)) AS payload")
+    }
+    #expect(throws: DatabaseLinkedDataError.sqliteQueryLimitExceeded) {
+      try DatabaseLinkedData.load(from: url, preference: .sqlite,
+        sqliteQuery: "WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<100000000) SELECT sum(x) FROM n")
+    }
+    #expect(throws: DatabaseLinkedDataError.sqliteResultTooLarge) {
+      try DatabaseLinkedData.load(queryResponse: .init(columns: ["value"],
+        rows: [[String(repeating: "x", count: DatabaseLinkedData.maximumSQLiteCellBytes + 1)]]))
+    }
+  }
+
+  @Test func coordinationEpochsMakeReleaseAndNotificationRetriesSafe() throws {
+    let (db, dir, source, target) = try fixture()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    try db.beginCoordination(sourceID: source, targetID: target, purpose: "First assignment")
+    let firstEpoch = try #require(db.sessionRelationship(target).coordinationEpoch)
+    let notificationID = UUID().uuidString
+    let changed = try db.setAgentCoordinationNotifications(sourceID: source, targetID: target,
+      epoch: firstEpoch, enabled: false, requestID: notificationID)
+    let notificationReplay = try db.setAgentCoordinationNotifications(sourceID: source, targetID: target,
+      epoch: firstEpoch, enabled: false, requestID: notificationID.lowercased())
+    #expect(!changed.replayed && notificationReplay.replayed)
+
+    let releaseID = UUID().uuidString
+    let released = try db.releaseAgentCoordination(sourceID: source, targetID: target,
+      epoch: firstEpoch, requestID: releaseID)
+    #expect(!released.replayed)
+    try db.beginCoordination(sourceID: source, targetID: target, purpose: "New assignment")
+    let secondEpoch = try #require(db.sessionRelationship(target).coordinationEpoch)
+    #expect(secondEpoch != firstEpoch)
+    let replay = try db.releaseAgentCoordination(sourceID: source, targetID: target,
+      epoch: firstEpoch, requestID: releaseID.lowercased())
+    #expect(replay.replayed)
+    #expect(try db.sessionRelationship(target).coordinationEpoch == secondEpoch)
+    #expect(throws: WorkspaceToolError.revisionConflict(
+      "The coordination epoch is stale. Read sessions status and retry with its current epoch.")) {
+      try db.releaseAgentCoordination(sourceID: source, targetID: target,
+        epoch: firstEpoch, requestID: UUID().uuidString)
+    }
+    #expect(try db.sessionRelationship(target).coordinationEpoch == secondEpoch)
+  }
+
+  @Test func noteMutationLimitsRejectOversizedAndInvalidWorkAtomically() throws {
+    let (db, dir, caller, _) = try fixture()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let note = try db.createNote(folderID: nil, callerConversationID: caller,
+      requestID: UUID().uuidString)
+    let original = try db.readNoteForEditing(id: note)
+    #expect(throws: (any Error).self) {
+      try db.applyNoteEdits(.init(command: .apply, noteID: note,
+        operations: Array(repeating: .appendText("x", .paragraph), count: 129)),
+        callerConversationID: caller, requestID: UUID().uuidString)
+    }
+    #expect(throws: (any Error).self) {
+      try db.applyNoteEdits(.init(command: .apply, noteID: note,
+        operations: [.createTable(afterBlockID: nil, rows: -1, columns: 2, headerRow: false)]),
+        callerConversationID: caller, requestID: UUID().uuidString)
+    }
+    #expect(throws: (any Error).self) {
+      try db.applyNoteEdits(.init(command: .apply, noteID: note,
+        expectedRevision: original.revision, operations: [.setTitle(String(repeating: "t", count: 1_025))]),
+        callerConversationID: caller, requestID: UUID().uuidString)
+    }
+    let table = try db.applyNoteEdits(.init(command: .apply, noteID: note,
+      operations: [.createTable(afterBlockID: nil, rows: 1, columns: 1, headerRow: false)]),
+      callerConversationID: caller, requestID: UUID().uuidString)
+    let tableID = try #require(table.document?.blocks.last?.id)
+    #expect(throws: (any Error).self) {
+      try db.applyNoteEdits(.init(command: .apply, noteID: note,
+        operations: [.addTableRow(tableID: tableID, after: Int.max)]),
+        callerConversationID: caller, requestID: UUID().uuidString)
+    }
+    let beforeAtomicFailure = try db.readNoteForEditing(id: note)
+    #expect(throws: (any Error).self) {
+      try db.applyNoteEdits(.init(command: .apply, noteID: note,
+        expectedRevision: beforeAtomicFailure.revision,
+        operations: [.appendText("must roll back", .paragraph), .deleteBlock(id: "missing")]),
+        callerConversationID: caller, requestID: UUID().uuidString)
+    }
+    #expect(try db.readNoteForEditing(id: note) == beforeAtomicFailure)
+  }
+
+  @Test func discoveryPaginationAndRequestIDCanonicalizationAreConsistent() throws {
+    let (db, dir, caller, _) = try fixture()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let expectedFolders = [
+      try db.createFolder(name: "Discoverable"),
+      try db.createFolder(name: "Second folder"),
+      try db.createFolder(name: "Third folder")
+    ]
+    let note = try db.createNote(folderID: nil, title: "Deep search", kind: .note,
+      callerConversationID: caller, requestID: UUID().uuidString)
+    let requestID = UUID().uuidString
+    let text = String(repeating: "prefix ", count: 100) + "distantneedle"
+    _ = try db.applyNoteEdits(.init(command: .apply, noteID: note,
+      operations: [.appendText(text, .paragraph)]), callerConversationID: caller, requestID: requestID)
+    _ = try db.applyNoteEdits(.init(command: .apply, noteID: note,
+      operations: [.appendText(text, .paragraph)]), callerConversationID: caller,
+      requestID: requestID.lowercased())
+    #expect(try db.readNoteForEditing(id: note).document?.plainText
+      .components(separatedBy: "distantneedle").count == 2)
+    let notes = try db.listAgentNotes(callerID: caller, search: "distantneedle", limit: 1)
+    #expect(notes.objectValue?["rows"]?.arrayValue?.first?.objectValue?["kind"]?.stringValue == "note")
+    let newer = try db.createNote(folderID: nil, title: "Newer", callerConversationID: caller,
+      requestID: UUID().uuidString)
+    let newest = try db.listAgentNotes(callerID: caller, limit: 1)
+    let oldest = try db.listAgentNotes(callerID: caller, after: 0, limit: 1, newestFirst: false)
+    #expect(newest.objectValue?["rows"]?.arrayValue?.first?.objectValue?["id"]?.stringValue == newer)
+    #expect(oldest.objectValue?["rows"]?.arrayValue?.first?.objectValue?["id"]?.stringValue == note)
+
+    try db.setSessionTools(.init(enabled: [.notes, .timers]), sessionID: caller)
+    let folders = try db.listAgentFolders(callerID: caller, requiredTool: .notes, limit: 1)
+    #expect(folders.objectValue?["rows"]?.arrayValue?.count == 1)
+    let firstFolder = folders.objectValue?["rows"]?.arrayValue?.first?.objectValue?["id"]?.stringValue
+    let folderCursor = Int64(folders.objectValue?["nextCursor"]?.intValue ?? 0)
+    let remainingFolders = try db.listAgentFolders(callerID: caller, requiredTool: .notes,
+      after: folderCursor, limit: 200)
+    let folderIDs = ([firstFolder] + (remainingFolders.objectValue?["rows"]?.arrayValue?.map {
+      $0.objectValue?["id"]?.stringValue
+    } ?? [])).compactMap { $0 }
+    #expect(folderIDs == expectedFolders)
+    for index in 0..<3 {
+      try db.saveSessionTimer(.init(sessionID: caller, instruction: "Timer \(index)",
+        nextFireAt: Date(timeIntervalSince1970: 4_000_000_000 + Double(index))), callerID: caller)
+    }
+    let timers = try db.querySessionTimers(callerID: caller, sessionID: caller, limit: 1)
+    #expect(timers.objectValue?["rows"]?.arrayValue?.count == 1)
+    #expect(timers.objectValue?["hasMore"]?.boolValue == true)
+  }
+
   @Test func builtInClaudeUsageKeepsSubscriptionAndAPIKeyBillingDistinct() async throws {
     let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -522,14 +660,16 @@ extension WorkspaceAgentToolTests {
     #expect(responses.filter { $0.replayed != true }.count == 1)
     #expect(Set(responses.compactMap(\.revision)).count == 1)
     #expect(try db.noteAssetVersions(id: note).count == before + 1)
-    let userEdit = try db.applyNoteEdits(.init(command: .apply, noteID: note, operations: [.setTitle("Later user edit")]))
+    let userEdit = try db.applyNoteEdits(.init(command: .apply, noteID: note,
+      expectedRevision: responses.first?.revision, operations: [.setTitle("Later user edit")]))
     let reopened = try WorkspaceDatabase(url: dir.appending(path: "workspace.sqlite"))
     let replay = try reopened.applyNoteEdits(request, callerConversationID: caller, requestID: requestID)
     #expect(replay.replayed == true && replay.document == nil && replay.title == nil)
     #expect(replay.revision == responses.first?.revision)
     #expect(try reopened.readNoteForEditing(id: note) == userEdit)
     #expect(throws: (any Error).self) {
-      try reopened.applyNoteEdits(.init(command: .apply, noteID: note, operations: [.setTitle("Changed payload")]),
+      try reopened.applyNoteEdits(.init(command: .apply, noteID: note,
+        expectedRevision: userEdit.revision, operations: [.setTitle("Changed payload")]),
         callerConversationID: caller, requestID: requestID)
     }
     try reopened.setSessionTools(.init(enabled: []), sessionID: caller)
@@ -546,13 +686,16 @@ extension WorkspaceAgentToolTests {
     #expect(try db.createNote(folderID: nil, title: "Original", callerConversationID: caller, requestID: creationID) == note)
     #expect(try db.listAgentNotes(callerID: caller).objectValue?["rows"]?.arrayValue?.count == 1)
     let version = try #require(db.noteAssetVersions(id: note).first)
-    let edited = try db.applyNoteEdits(.init(command: .apply, noteID: note, operations: [.setTitle("Second")]))
+    let initialRevision = try #require(db.readNoteForEditing(id: note).revision)
+    let edited = try db.applyNoteEdits(.init(command: .apply, noteID: note,
+      expectedRevision: initialRevision, operations: [.setTitle("Second")]))
     let expected = try #require(edited.revision)
     let restoreID = UUID().uuidString
     let restored = try db.restoreNoteAssetVersion(noteID: note, versionID: version.id, expectedRevision: expected,
       callerConversationID: caller, requestID: restoreID)
     #expect(restored.title == "Original")
-    let latest = try db.applyNoteEdits(.init(command: .apply, noteID: note, operations: [.setTitle("Third")]))
+    let latest = try db.applyNoteEdits(.init(command: .apply, noteID: note,
+      expectedRevision: restored.revision, operations: [.setTitle("Third")]))
     // A receipt remains usable after its old version has been pruned.
     try db.transaction { try db.toolsExecuteUnlocked("DELETE FROM note_asset_versions WHERE id=?", [version.id]) }
     let replay = try db.restoreNoteAssetVersion(noteID: note, versionID: version.id, expectedRevision: expected,
@@ -571,15 +714,16 @@ extension WorkspaceAgentToolTests {
     defer { try? FileManager.default.removeItem(at: dir) }
     let note = try db.createNote(folderID: nil)
     let requestID = UUID().uuidString
-    let request = NoteEditingRequest(command: .apply, noteID: note,
-      operations: [.appendText("Must roll back", .paragraph), .deleteBlock(id: "missing-block")])
     let original = try db.readNoteForEditing(id: note)
+    let request = NoteEditingRequest(command: .apply, noteID: note, expectedRevision: original.revision,
+      operations: [.appendText("Must roll back", .paragraph), .deleteBlock(id: "missing-block")])
     let versions = try db.noteAssetVersions(id: note)
     #expect(throws: (any Error).self) { try db.applyNoteEdits(request, callerConversationID: caller, requestID: requestID) }
     #expect(try db.readNoteForEditing(id: note) == original)
     #expect(try db.noteAssetVersions(id: note).map(\.id) == versions.map(\.id))
     // A failed transaction did not burn the request ID.
-    let success = try db.applyNoteEdits(.init(command: .apply, noteID: note, operations: [.setTitle("Recovered")]),
+    let success = try db.applyNoteEdits(.init(command: .apply, noteID: note,
+      expectedRevision: original.revision, operations: [.setTitle("Recovered")]),
       callerConversationID: caller, requestID: requestID)
     #expect(success.title == "Recovered" && success.replayed != true)
   }

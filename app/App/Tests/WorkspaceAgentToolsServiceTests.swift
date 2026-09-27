@@ -44,10 +44,14 @@ struct WorkspaceAgentToolsServiceTests {
         }
         let audit = try await request(["history", "events", "--conversation", caller, "--kind", "cli.request"])
         #expect(audit.success)
-        #expect((audit.result?.objectValue?["rows"]?.arrayValue?.count ?? 0) >= 2)
+        #expect(audit.result?.objectValue?["rows"]?.arrayValue?.isEmpty == true)
+        let reads = try await request(["history", "events", "--conversation", caller, "--kind", "cli.history.read"])
+        #expect((reads.result?.objectValue?["rows"]?.arrayValue?.count ?? 0) >= 2)
+        #expect(reads.result?.objectValue?["rows"]?.arrayValue?.allSatisfy {
+            $0.objectValue?["payload"]?.stringValue?.contains("rare-search-phrase") == false
+        } == true)
         let explicitAudit = try await request(["history", "search", "rare-search-phrase", "--kind", "cli.request"])
-        #expect(explicitAudit.result?.objectValue?["scope"]?.stringValue == "folder")
-        #expect(explicitAudit.result?.objectValue?["rows"]?.arrayValue?.isEmpty == false)
+        #expect(explicitAudit.result?.objectValue?["rows"]?.arrayValue?.isEmpty == true)
         try database.recordHistory(.init(id: "local-result", conversationID: caller, harness: "codex",
             kind: "wire.in", payload: "rare-search-phrase now exists locally"))
         let localResponse = try await request(["history", "search", "rare-search-phrase"])
@@ -57,6 +61,110 @@ struct WorkspaceAgentToolsServiceTests {
 }
 
 extension WorkspaceAgentToolsServiceTests {
+    @Test(.timeLimit(.minutes(1)))
+    func localSocketOverloadReturnsStructuredBusyResponse() async throws {
+        let root = URL(fileURLWithPath: "/private/tmp/wm-overload-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let endpoint = root.appending(path: "rpc.sock")
+        let gate = RelayServiceGate()
+        let service = WovenMatterToolService(socketURL: endpoint, maximumConnections: 1) { request in
+            if request.arguments.contains("slow") { await gate.pause() }
+            return .init(result: .object(["ok": .bool(true)]), requestID: request.requestID)
+        }
+        try service.start(); defer { try? service.stop() }
+        let slow = try JSONEncoder().encode(WovenMatterToolRequest(arguments: ["slow"]))
+        let fast = try JSONEncoder().encode(WovenMatterToolRequest(arguments: ["fast"]))
+        let first = Task.detached { try WovenMatterCommandLine.forward(slow, to: endpoint.path, timeout: 5) }
+        await gate.waitUntilPaused()
+        let overloaded = try await runBlockingToolFixture {
+            try WovenMatterCommandLine.forward(fast, to: endpoint.path, timeout: 2)
+        }
+        let response = try JSONDecoder().decode(WovenMatterToolResponse.self, from: overloaded)
+        #expect(!response.success && response.code == "busy")
+        await gate.release()
+        _ = try await first.value
+    }
+
+    @Test func mutationHistoryIsMetadataOnlyAndNoteReadsAreChunked() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "cli-hardening-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let database = try WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
+        let caller = try database.createLocalACPSession(runtimeKind: .codex, title: "Writer", ownerDeviceID: UUID())
+        let historian = try database.createLocalACPSession(runtimeKind: .pi, title: "Historian", ownerDeviceID: UUID())
+        try database.setSessionTools(.init(enabled: [.history]), sessionID: historian)
+        let model = try WorkspaceAgentToolsModel(database: database,
+            sessionHandler: { _, _, _ in throw CancellationError() },
+            noteHandler: { caller, request, id in
+                switch request.command {
+                case .read: return try database.readNoteForEditing(id: request.noteID, callerConversationID: caller)
+                case .apply: return try database.applyNoteEdits(request, callerConversationID: caller, requestID: id)
+                }
+            },
+            noteRestoreHandler: { _, _, _, _, _ in throw CancellationError() },
+            usageHandler: { _ in throw CancellationError() }, onMutation: {})
+        defer { model.stop() }
+        try database.beginCoordination(sourceID: caller, targetID: historian, purpose: "Audit")
+        let status = await model.handle(.init(arguments: ["sessions", "status", historian]), callerID: caller)
+        #expect(status.result?.objectValue?["relationship"]?.objectValue?["coordinationEpoch"]?.stringValue != nil)
+        let note = try database.createNote(folderID: nil, title: "Private", callerConversationID: caller,
+            requestID: UUID().uuidString)
+        let missingRevision = await model.handle(.init(arguments: ["notes", "set-title", "--note-id", note,
+            "--title", "Unsafe overwrite"]), callerID: caller)
+        #expect(!missingRevision.success && missingRevision.code == "revision_required")
+        let secret = "private-body-" + UUID().uuidString.lowercased() + String(repeating: "x", count: 100)
+        let requestID = UUID().uuidString
+        let arguments = ["notes", "append", "--note-id", note, "--text", secret]
+        let first = await model.handle(.init(arguments: arguments, requestID: requestID), callerID: caller)
+        let replay = await model.handle(.init(arguments: arguments, requestID: requestID.lowercased()), callerID: caller)
+        #expect(first.success && replay.success)
+        #expect(first.result?.objectValue?["document"] == nil)
+        #expect(replay.result?.objectValue?["replayed"]?.boolValue == true)
+        #expect(try database.readNoteForEditing(id: note).document?.plainText
+            .components(separatedBy: secret).count == 2)
+
+        let mismatchedID = UUID().uuidString.lowercased()
+        let mismatch = await model.handle(.init(arguments: arguments + ["--request-id", mismatchedID],
+            requestID: UUID().uuidString), callerID: caller)
+        #expect(!mismatch.success && mismatch.code == "invalid_request")
+        #expect(mismatch.error?.contains("match the request envelope") == true)
+        #expect(try database.readNoteForEditing(id: note).document?.plainText
+            .components(separatedBy: secret).count == 2)
+
+        let read = await model.handle(.init(arguments: ["notes", "read", note,
+            "--characters", "10"]), callerID: caller)
+        #expect(read.result?.objectValue?["content"]?.stringValue?.count == 10)
+        #expect(read.result?.objectValue?["hasMore"]?.boolValue == true)
+        let audit = await model.handle(.init(arguments: ["history", "events", "--conversation", caller,
+            "--kind", "cli.mutation"]), callerID: historian)
+        let payloads = audit.result?.objectValue?["rows"]?.arrayValue?.compactMap {
+            $0.objectValue?["payload"]?.stringValue
+        } ?? []
+        #expect(!payloads.isEmpty && payloads.allSatisfy { !$0.contains(secret) })
+        let oldBodies = await model.handle(.init(arguments: ["history", "events", "--conversation", caller,
+            "--kind", "cli.response"]), callerID: historian)
+        #expect(oldBodies.result?.objectValue?["rows"]?.arrayValue?.isEmpty == true)
+
+        let missing = await model.handle(.init(arguments: ["history", "message", UUID().uuidString]),
+            callerID: historian)
+        #expect(!missing.success && missing.code == "not_found")
+    }
+
+    @Test func legacyNoteCLIUsesCurrentEnvironmentNameAndExplainsMalformedJSON() throws {
+        let noteID = UUID().uuidString.lowercased()
+        let read = try WovenNoteCommandLine.request(arguments: ["read"],
+            environment: ["WOVENMATTER_NOTE_ID": noteID])
+        #expect(read.noteID == noteID)
+        do {
+            _ = try WovenNoteCommandLine.request(arguments: ["apply", "--json", "{"],
+                environment: ["WOVENMATTER_NOTE_ID": noteID])
+            Issue.record("Expected malformed JSON to fail")
+        } catch {
+            #expect(error.localizedDescription.contains("Invalid operations JSON"))
+        }
+    }
+
     @Test(.timeLimit(.minutes(1)))
     func relayResponseCanHandItsSlotToTheNextRequestBeforeWriteReturns() async throws {
         let fixture = try RelayForwardingFixture()
@@ -176,7 +284,7 @@ extension WorkspaceAgentToolsServiceTests {
         let packet = try JSONDecoder().decode(GatewayJSONValue.self, from: #require(output.lines.first))
         let responseData = try #require(packet.objectValue?["payload"]?.stringValue.flatMap { Data(base64Encoded: $0) })
         let response = try JSONDecoder().decode(WovenMatterToolResponse.self, from: responseData)
-        #expect(!response.success && response.requestID == requestID)
+        #expect(!response.success && response.requestID == requestID.lowercased())
         forwarder.stop()
         await fixture.gate.release()
         let broken = WovenMatterRelayForwarder(localSocket: fixture.endpoint.path,
@@ -493,7 +601,7 @@ extension WorkspaceAgentToolsServiceTests {
         defer { service.stop() }
         let endpoint = try service.endpoint(for: caller)
         func request(_ arguments: [String], id: String = UUID().uuidString.lowercased()) async throws -> WovenMatterToolResponse {
-            let data = try JSONEncoder().encode(WovenMatterToolRequest(arguments: arguments + ["--request-id", id], requestID: id))
+            let data = try JSONEncoder().encode(WovenMatterToolRequest(arguments: arguments, requestID: id))
             let response = try await runBlockingToolFixture { try WovenMatterCommandLine.forward(data, to: endpoint) }
             return try JSONDecoder().decode(WovenMatterToolResponse.self, from: response)
         }
@@ -509,8 +617,9 @@ extension WorkspaceAgentToolsServiceTests {
         let listing = try await request(["calendar", "list", "--since", "2026-09-15T00:00:00Z"])
         #expect(listing.result?.objectValue?["rows"]?.arrayValue?.first?.objectValue?["calendar"]?.objectValue?["task"] != nil)
         let occurrences = try await request(["calendar", "occurrences", id, "--since", "2026-09-01T00:00:00Z", "--until", "2026-09-08T00:00:00Z"])
-        #expect(occurrences.result?.arrayValue?.count == 4)
-        #expect(try await request(["calendar", "update", id, "--description", "Edited from a session"]).success)
+        #expect(occurrences.result?.objectValue?["rows"]?.arrayValue?.count == 4)
+        #expect(try await request(["calendar", "update", id, "--revision", String(event.calendar.revision),
+            "--description", "Edited from a session"]).success)
         let updated = try database.calendarEvent(id: id, callerID: caller)
         #expect(updated.calendar.task?.configuration.permission == "read-only")
         #expect(updated.calendar.task?.prompt == "Review changes")
@@ -518,27 +627,33 @@ extension WorkspaceAgentToolsServiceTests {
         #expect(updated.calendar.editedBy?.sessionID == caller)
         #expect(try await !request(["calendar", "update", id, "--revision", "0", "--title", "Stale edit"]).success)
         #expect(try await !request(["calendar", "update", id, "--occurrence", "1", "--title", "Linked exception"]).success)
-        let detached = try await request(["calendar", "detach", id, "--occurrence", "1", "--title", "Independent review"])
+        let detached = try await request(["calendar", "detach", id, "--occurrence", "1",
+            "--revision", String(updated.calendar.revision), "--title", "Independent review"])
         #expect(detached.success)
         let detachedID = try #require(detached.result?.objectValue?["id"]?.stringValue)
         let independent = try database.calendarEvent(id: detachedID, callerID: caller)
         #expect(independent.calendar.recurrence == nil)
         #expect(independent.calendar.task?.prompt == "Review changes")
         #expect(independent.calendar.task?.configuration.tools.enabled == [.notes])
-        #expect(try await !request(["calendar", "remove", detachedID, "--occurrence", "1"]).success)
+        #expect(try await !request(["calendar", "remove", detachedID, "--occurrence", "1",
+            "--revision", String(independent.calendar.revision)]).success)
         #expect(try await request(["calendar", "read", detachedID]).success)
         #expect(try database.calendarEvent(id: id, callerID: caller).calendar.excludedOccurrences == [1])
         let copyID = UUID().uuidString.lowercased()
         let copy = ["calendar", "copy", detachedID, "--starts-at", "2026-09-20T13:00:00Z"]
         #expect(try await request(copy, id: copyID).success)
-        #expect(try await request(["calendar", "remove", copyID]).success)
+        let copied = try database.calendarEvent(id: copyID, callerID: caller)
+        #expect(try await request(["calendar", "remove", copyID,
+            "--revision", String(copied.calendar.revision)]).success)
         // Replay succeeds even after the copy was deleted, without re-resolving defaults.
         let beforeReplay = resolution.count
         #expect(try await request(copy, id: copyID).result?.objectValue?["id"]?.stringValue == copyID)
         #expect(resolution.count == beforeReplay)
         #expect(try await !request(copy + ["--title", "Different input"], id: copyID).success)
         resolution.editsEvent = true
-        #expect(try await !request(["calendar", "update", id, "--description", "Stale agent edit"]).success)
+        let beforeRace = try database.calendarEvent(id: id, callerID: caller)
+        #expect(try await !request(["calendar", "update", id, "--revision", String(beforeRace.calendar.revision),
+            "--description", "Stale agent edit"]).success)
         #expect(try database.calendarEvent(id: id, callerID: caller).details == "A newer user edit")
         resolution.editsEvent = false
         var settings = try database.toolSettings(); settings.calendarAccess = .readOnly

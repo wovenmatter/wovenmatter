@@ -54,6 +54,39 @@ struct WovenMatterToolProtocolTests {
       #expect(throws: (any Error).self) { try WovenMatterToolCommand(arguments) }
     }
   }
+
+  @Test func actionSpecificOptionsContradictionsAndHelpAreExplicit() throws {
+    for arguments in [
+      ["history", "runs", "--since", "2026-01-01T00:00:00Z"],
+      ["history", "conversation", "session", "--kind", "wire.in"],
+      ["sessions", "list", "--harness", "codex"],
+      ["sessions", "send", "first", "--id", "second", "--text", "ambiguous"],
+      ["notes", "apply", "--note-id", "note", "--json", "[]", "--file", "/tmp/edit.json"],
+      ["calendar", "create", "--title", "Conflict", "--starts-at", "2026-01-01T00:00:00Z", "--all-day", "--timed"],
+      ["calendar", "create", "--title", "Conflict", "--starts-at", "2026-01-01T00:00:00Z", "--no-repeat", "--repeat-unit", "day"],
+      ["calendar", "update", "event", "--regular-event", "--model", "ignored"]
+    ] {
+      #expect(throws: (any Error).self) { try WovenMatterToolCommand(arguments) }
+    }
+    let apply = try WovenMatterToolCommand(["notes", "apply", "--help"])
+    #expect(WovenMatterToolCommand.help(for: apply).contains("Operations are a JSON array"))
+    let table = try WovenMatterToolCommand(["notes", "table", "set-cell", "--help"])
+    #expect(WovenMatterToolCommand.help(for: table).contains("--table-id"))
+    #expect(try WovenMatterToolCommand(["notes", "table", "help"]).wantsHelp)
+    let release = try WovenMatterToolCommand(["sessions", "release", "--help"])
+    #expect(WovenMatterToolCommand.help(for: release).contains("--epoch"))
+  }
+
+  @Test func requestIDsAndResponseCodesRoundTripCanonically() throws {
+    let uppercase = UUID().uuidString
+    let request = WovenMatterToolRequest(arguments: ["notes", "list"], requestID: uppercase)
+    #expect(request.requestID == uppercase.lowercased())
+    let response = WovenMatterToolResponse(success: false, error: "Busy", code: "busy",
+      requestID: request.requestID)
+    let decoded = try JSONDecoder().decode(WovenMatterToolResponse.self,
+      from: JSONEncoder().encode(response))
+    #expect(decoded.code == "busy" && decoded.requestID == uppercase.lowercased())
+  }
 }
 
 

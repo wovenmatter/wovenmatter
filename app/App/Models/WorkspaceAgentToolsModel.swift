@@ -57,7 +57,7 @@ final class WorkspaceAgentToolsModel {
         self.noteRestoreHandler = noteRestoreHandler
         self.usageHandler = usageHandler
         self.onMutation = onMutation
-        endpointDirectory = URL(fileURLWithPath: "/private/tmp/wmtools-" + UUID().uuidString.replacingOccurrences(of: "-", with: ""))
+        endpointDirectory = URL(fileURLWithPath: "/private/tmp/wmtools-" + UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased())
         if !passiveProjection {
             try FileManager.default.createDirectory(at: endpointDirectory, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
         }
@@ -211,7 +211,7 @@ final class WorkspaceAgentToolsModel {
         guard !stopped else { throw CancellationError() }
         _ = try database.sessionTools(sessionID)
         if let service = services[sessionID] { return service.socketURL.path }
-        let path = endpointDirectory.appending(path: UUID().uuidString.replacingOccurrences(of: "-", with: "") + ".sock")
+        let path = endpointDirectory.appending(path: UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased() + ".sock")
         let service = WovenMatterToolService(socketURL: path, maximumConnections: 4) { [weak self] request in
             guard let self else { return WovenMatterToolResponse(success: false, error: "Woven Matter closed this endpoint.") }
             return await self.handle(request, callerID: sessionID)
@@ -285,20 +285,28 @@ final class WorkspaceAgentToolsModel {
 
     func handle(_ request: WovenMatterToolRequest, callerID: String) async -> WovenMatterToolResponse {
         guard !passiveProjection else { return .init(success: false, error: "Tool execution belongs to the background service.") }
+        var parsedCommand: WovenMatterToolCommand?
         do {
-            guard request.schemaVersion == 1, UUID(uuidString: request.requestID) != nil else {
+            guard request.schemaVersion == 1, let requestUUID = UUID(uuidString: request.requestID) else {
                 throw WorkspaceToolError.invalid("Unsupported tool request.")
             }
+            var request = request
+            request.requestID = requestUUID.uuidString.lowercased()
             let command = try WovenMatterToolCommand(request.arguments)
+            parsedCommand = command
+            if let suppliedRequestID = command.options["request-id"] {
+                guard let suppliedUUID = UUID(uuidString: suppliedRequestID),
+                      suppliedUUID.uuidString.lowercased() == request.requestID else {
+                    throw WorkspaceToolError.invalid("--request-id must match the request envelope.")
+                }
+            }
             if command.wantsHelp {
-                return .init(result: .object(["help": .string(command.group.map(WovenMatterToolCommand.help) ?? WovenMatterToolCommand.usage)]))
+                return .init(result: .object(["help": .string(WovenMatterToolCommand.help(for: command))]))
             }
             guard let group = command.group else { throw WorkspaceToolError.invalid("Choose a tool group.") }
             // Scoped history reads have their own independent attachment/management
             // checks. All other commands require the group's current capability.
             if group != .history { try database.requireTool(group, sessionID: callerID) }
-            try database.recordHistory(.init(conversationID: callerID, harness: "wovenmatter", kind: "cli.request",
-                payload: String(decoding: try JSONEncoder().encode(request), as: UTF8.self)))
             let result: WovenMatterToolResponse
             switch group {
             case .history:
@@ -310,29 +318,78 @@ final class WorkspaceAgentToolsModel {
                     var query = try historyQuery(command)
                     query.command = "conversations"
                     if command.action == "status" { query.id = try command.required("id", allowPositional: true) }
-                    result = .init(result: try database.queryAgentHistory(query, callerID: callerID,
-                        allWorkspace: command.options["all-workspace"] != nil))
+                    var page = try database.queryAgentHistory(query, callerID: callerID,
+                        allWorkspace: command.options["all-workspace"] != nil)
+                    if command.action == "status", var object = page.objectValue, let id = query.id {
+                        object["relationship"] = try WovenMatterToolResponse.value(
+                            database.sessionRelationship(id)).result ?? .null
+                        page = .object(object)
+                    }
+                    result = .init(result: page)
                 } else if command.action == "folders" {
-                    result = .init(result: try database.listAgentFolders(callerID: callerID))
+                    result = .init(result: try database.listAgentFolders(callerID: callerID,
+                        after: Int64(command.integer("after", default: 0, range: 0...Int.max)),
+                        limit: command.integer("limit", default: 100, range: 1...200)))
                 } else { result = try await sessionHandler(callerID, command, request) }
             case .timers: result = try timer(command, callerID: callerID, requestID: request.requestID)
             case .calendar: result = try await calendar(command, callerID: callerID, requestID: request.requestID)
             case .usage: result = try await usageHandler(command)
             case .library: result = try library(command, callerID: callerID)
             }
-            // History queries persist reference IDs in the database's query
-            // path. Re-journaling their full response recursively copies history.
-            if group != .history {
-                try database.recordHistory(.init(conversationID: callerID, harness: "wovenmatter", kind: "cli.response",
-                    payload: String(decoding: try JSONEncoder().encode(result), as: UTF8.self)))
+            if command.isMutation {
+                try recordCLIMutation(command: command, callerID: callerID, requestID: request.requestID,
+                    success: result.success, code: result.code)
             }
             try reload()
             await onMutation()
-            return .init(success: result.success, result: result.result, error: result.error, silent: result.silent, requestID: request.requestID)
+            return .init(success: result.success, result: result.result, error: result.error,
+                code: result.code, silent: result.silent, requestID: request.requestID)
         } catch {
-            try? database.recordHistory(.init(conversationID: callerID, harness: "wovenmatter", kind: "cli.error", payload: error.localizedDescription))
-            return .init(success: false, error: error.localizedDescription, requestID: request.requestID)
+            let code = Self.errorCode(error)
+            if let command = parsedCommand, command.isMutation {
+                let canonicalID = UUID(uuidString: request.requestID)?.uuidString.lowercased() ?? request.requestID
+                try? recordCLIMutation(command: command, callerID: callerID, requestID: canonicalID,
+                    success: false, code: code)
+            }
+            return .init(success: false, error: error.localizedDescription, code: code,
+                requestID: UUID(uuidString: request.requestID)?.uuidString.lowercased() ?? request.requestID)
         }
+    }
+
+    private func recordCLIMutation(command: WovenMatterToolCommand, callerID: String,
+                                   requestID: String, success: Bool, code: String?) throws {
+        var payload: [String: String] = [
+            "group": command.group?.rawValue ?? "unknown", "action": command.action,
+            "requestID": requestID, "success": success ? "true" : "false"
+        ]
+        if let code { payload["code"] = code }
+        try database.recordHistory(.init(conversationID: callerID, harness: "wovenmatter",
+            kind: "cli.mutation", payload: String(decoding: try JSONEncoder().encode(payload), as: UTF8.self)))
+    }
+
+    private static func errorCode(_ error: any Error) -> String {
+        if let error = error as? WorkspaceToolError {
+            switch error {
+            case .disabled: return "tool_disabled"
+            case .accessRequired: return "access_required"
+            case .coordinationConflict: return "coordination_conflict"
+            case .managedLimit: return "managed_limit"
+            case .atCapacity: return "at_capacity"
+            case .notFound: return "not_found"
+            case .revisionRequired: return "revision_required"
+            case .revisionConflict: return "revision_conflict"
+            case .timerPauseConfirmation: return "confirmation_required"
+            case .invalid: return "invalid_request"
+            }
+        }
+        if let error = error as? WorkspaceNoteMutationError {
+            switch error {
+            case .folderNotFound, .noteNotFound: return "not_found"
+            case .revisionConflict: return "revision_conflict"
+            }
+        }
+        if error is CancellationError { return "cancelled" }
+        return "operation_failed"
     }
 
     private func historyQuery(_ command: WovenMatterToolCommand) throws -> WorkspaceHistoryQuery {
@@ -346,7 +403,10 @@ final class WorkspaceAgentToolsModel {
         query.kind = command.options["kind"]
         query.since = command.options["since"]
         query.until = command.options["until"]
-        query.after = Int64(try command.integer("after", default: 0, range: 0...Int.max))
+        query.sort = command.options["sort"] ?? (command.action == "conversations" ||
+            (command.group == .sessions && command.action == "list") ? "newest" : "oldest")
+        let initialCursor = query.sort == "newest" ? Int.max : 0
+        query.after = Int64(try command.integer("after", default: initialCursor, range: 0...Int.max))
         query.limit = try command.integer("limit", default: 50, range: 1...200)
         query.offset = try command.integer("offset", default: 0, range: 0...(Int.max - 1))
         query.characters = try command.integer("characters", default: 65_536, range: 1...65_536)
@@ -356,23 +416,75 @@ final class WorkspaceAgentToolsModel {
     private func notes(_ command: WovenMatterToolCommand, request: WovenMatterToolRequest, callerID: String) async throws -> WovenMatterToolResponse {
         switch command.action {
         case "list":
+            let newest = (command.options["sort"] ?? "newest") == "newest"
+            let initialCursor = newest ? Int.max : 0
             return .init(result: try database.listAgentNotes(callerID: callerID, search: command.options["search"], folderID: command.options["folder"],
-                after: Int64(try command.integer("after", default: 0, range: 0...Int.max)), limit: try command.integer("limit", default: 50, range: 1...200)))
+                after: Int64(try command.integer("after", default: initialCursor, range: 0...Int.max)),
+                limit: try command.integer("limit", default: 50, range: 1...200), newestFirst: newest))
+        case "folders":
+            return .init(result: try database.listAgentFolders(callerID: callerID, requiredTool: .notes,
+                after: Int64(command.integer("after", default: 0, range: 0...Int.max)),
+                limit: command.integer("limit", default: 100, range: 1...200)))
         case "create":
             guard let kind = NoteArtifactKind(rawValue: command.options["kind"] ?? "note") else { throw WorkspaceToolError.invalid("Choose note, spreadsheet or html.") }
             let id = try database.createNote(folderID: command.options["folder"], title: command.required("title"), kind: kind, callerConversationID: callerID, requestID: request.requestID)
             return .init(result: .object(["id": .string(id)]))
         case "versions", "version":
-            return .init(result: try database.queryAgentHistory(historyQuery(command), callerID: callerID))
+            var query = try historyQuery(command)
+            query.id = command.options[command.action == "versions" ? "note-id" : "version"]
+                ?? command.options["id"] ?? command.positional.first
+            return .init(result: try database.queryAgentHistory(query, callerID: callerID))
         case "restore":
-            return try .note(await noteRestoreHandler(callerID, command.required("note-id", allowPositional: true),
-                command.required("version"), command.required("revision"), request.requestID))
+            return try noteMutationAcknowledgement(await noteRestoreHandler(callerID,
+                command.required("note-id", allowPositional: true), command.required("version"),
+                command.required("revision"), request.requestID))
         default:
             guard command.options["file"] == nil else { throw WorkspaceToolError.invalid("Read input files on the CLI host before sending the request.") }
-            let args = Array(request.operationArguments.dropFirst())
+            var args = Array(request.operationArguments.dropFirst())
+            if command.options["note-id"] == nil, let noteID = command.positional.first {
+                args += ["--note-id", noteID]
+            }
             let edit = try WovenNoteCommandLine.request(arguments: args, environment: [:])
-            return try .note(await noteHandler(callerID, edit, request.requestID))
+            let response = try await noteHandler(callerID, edit, request.requestID)
+            if command.action == "read" {
+                return try noteReadChunk(response,
+                    offset: command.integer("offset", default: 0, range: 0...(Int.max - 1)),
+                    characters: command.integer("characters", default: 65_536, range: 1...65_536))
+            }
+            return try noteMutationAcknowledgement(response)
         }
+    }
+
+    private func noteMutationAcknowledgement(_ response: NoteEditingResponse) throws -> WovenMatterToolResponse {
+        var object: [String: GatewayJSONValue] = ["id": .string(response.noteID)]
+        object["title"] = response.title.map(GatewayJSONValue.string) ?? .null
+        object["revision"] = response.revision.map(GatewayJSONValue.string) ?? .null
+        object["replayed"] = .bool(response.replayed == true)
+        return .init(success: response.success, result: .object(object), error: response.error,
+            code: response.success ? nil : "mutation_failed")
+    }
+
+    private func noteReadChunk(_ response: NoteEditingResponse, offset: Int,
+                               characters: Int) throws -> WovenMatterToolResponse {
+        guard response.success, let document = response.document else {
+            return .init(success: false, error: response.error ?? "The note could not be read.", code: "read_failed")
+        }
+        let content = try document.encoded()
+        let actualOffset = min(offset, content.count)
+        let start = content.index(content.startIndex, offsetBy: actualOffset)
+        let end = content.index(start, offsetBy: min(characters, content.distance(from: start, to: content.endIndex)))
+        let next = content.distance(from: content.startIndex, to: end)
+        return .init(result: .object([
+            "id": .string(response.noteID),
+            "title": response.title.map(GatewayJSONValue.string) ?? .null,
+            "revision": response.revision.map(GatewayJSONValue.string) ?? .null,
+            "kind": .string(document.kind.rawValue),
+            "content": .string(String(content[start..<end])),
+            "contentCharacters": .number(Double(content.count)),
+            "offset": .number(Double(actualOffset)),
+            "hasMore": .bool(next < content.count),
+            "nextOffset": .number(Double(next))
+        ]))
     }
 
     private func timer(_ command: WovenMatterToolCommand, callerID: String, requestID: String) throws -> WovenMatterToolResponse {
@@ -381,7 +493,11 @@ final class WorkspaceAgentToolsModel {
             try database.requireTool(.sessions, sessionID: callerID)
             guard try database.sessionRelationship(target).coordinatorID == callerID else { throw WorkspaceToolError.accessRequired(target) }
         }
-        if command.action == "list" { return try .value(database.sessionTimers(sessionID: target)) }
+        if command.action == "list" {
+            return .init(result: try database.querySessionTimers(callerID: callerID, sessionID: target,
+                after: Int64(command.integer("after", default: 0, range: 0...Int.max)),
+                limit: command.integer("limit", default: 100, range: 1...200)))
+        }
         if command.action == "create" || command.action == "update" {
             let id = command.action == "create" ? requestID : try command.required("id", allowPositional: true)
             let interval: Double?
@@ -420,6 +536,9 @@ final class WorkspaceAgentToolsModel {
         }
         query.since = try command.options["since"].map(Self.date)
         query.until = try command.options["until"].map(Self.date)
+        if let since = query.since, let until = query.until, until < since {
+            throw WorkspaceToolError.invalid("--until must be at or after --since.")
+        }
         return .init(result: try database.queryAgentLibrary(callerID: callerID,
             id: command.action == "read" ? try command.required("id", allowPositional: true) : nil,
             query: query, limit: command.integer("limit", default: 100, range: 1...200),

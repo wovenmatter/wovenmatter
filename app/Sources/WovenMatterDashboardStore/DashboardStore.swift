@@ -765,18 +765,25 @@ public actor DashboardStore {
   public func handleNoteEditingRequest(
     _ request: NoteEditingRequest
   ) throws -> NoteEditingResponse {
-    try database.recordHistory(WorkspaceHistoryEvent(harness:"woven-note",kind:"cli.request",
-      payload:String(decoding:try JSONEncoder().encode(request),as:UTF8.self)))
     do {
       let response: NoteEditingResponse = switch request.command {
       case .read: try database.readNoteForEditing(id:request.noteID)
       case .apply: try database.applyNoteEdits(request)
       }
-      try database.recordHistory(WorkspaceHistoryEvent(harness:"woven-note",kind:"cli.response",
-        payload:String(decoding:try JSONEncoder().encode(response),as:UTF8.self)))
+      if case .apply = request.command {
+        try database.recordHistory(WorkspaceHistoryEvent(harness:"woven-note",kind:"cli.mutation",
+          payload:String(decoding:try JSONEncoder().encode([
+            "action":"apply", "noteID":request.noteID, "success":"true"
+          ]),as:UTF8.self)))
+      }
       return response
     } catch {
-      try database.recordHistory(WorkspaceHistoryEvent(harness:"woven-note",kind:"cli.error",payload:error.localizedDescription))
+      if case .apply = request.command {
+        try database.recordHistory(WorkspaceHistoryEvent(harness:"woven-note",kind:"cli.mutation",
+          payload:String(decoding:try JSONEncoder().encode([
+            "action":"apply", "noteID":request.noteID, "success":"false"
+          ]),as:UTF8.self)))
+      }
       throw error
     }
   }

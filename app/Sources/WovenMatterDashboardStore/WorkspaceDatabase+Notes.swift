@@ -321,11 +321,17 @@ extension WorkspaceDatabase {
   ) throws -> String {
     try transaction {
       if let callerConversationID { try requireToolUnlocked(.notes, sessionID: callerConversationID) }
+      guard title.utf8.count <= 1_024 else {
+        throw WorkspaceToolError.invalid("A note title must be at most 1,024 bytes.")
+      }
       return try performToolMutationUnlocked(callerID: callerConversationID, requestID: requestID,
         operation: "notes.create", input: [folderID, title, content, kind.rawValue]) {
         let content = try (content.isEmpty
           ? NoteDocument(kind: kind)
           : NoteDocument.decode(content)).encoded()
+        guard content.utf8.count <= RemoteNoteEditEnvelope.maximumEnvelopeBytes else {
+          throw WorkspaceToolError.invalid("A note document must be at most 1 MiB.")
+        }
         let noteID = id.uuidString.lowercased()
         let operatorID = try localMutationOperatorIDUnlocked()
         try validateFolderUnlocked(id: folderID, operatorID: operatorID)
@@ -474,6 +480,10 @@ extension WorkspaceDatabase {
                              requestID: String? = nil) throws -> NoteEditingResponse {
     try transaction {
       if let callerConversationID { try requireToolUnlocked(.notes, sessionID: callerConversationID) }
+      if RemoteNoteEditEnvelope.requiresRevision(request.operations),
+         request.expectedRevision == nil {
+        throw WorkspaceToolError.revisionRequired("This note operation requires --revision. Read the note again and pass its current revision.")
+      }
       return try performToolMutationUnlocked(callerID: callerConversationID, requestID: requestID,
         operation: "notes.apply", input: request, receipt: noteMutationReceipt) {
           try applyNoteEditsUnlocked(request)
@@ -495,8 +505,10 @@ extension WorkspaceDatabase {
         revision: note.revision, document: NoteDocument.decode(note.content)
       )
     }
+    let currentDocument = NoteDocument.decode(note.content)
+    try RemoteNoteEditEnvelope.validate(operations: request.operations, applyingTo: currentDocument)
     try checkpointNoteUnlocked(id: request.noteID, source: "before-agent-edit", force: true)
-    var document = NoteDocument.decode(note.content)
+    var document = currentDocument
     if document.kind == .html,
        request.operations.contains(where: {
          if case .setTitle = $0 { true } else { false }

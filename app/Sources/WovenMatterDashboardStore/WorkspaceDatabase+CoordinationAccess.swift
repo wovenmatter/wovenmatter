@@ -10,7 +10,8 @@ extension WorkspaceDatabase {
                                        notifications: Bool = true, requestID: String) throws -> WorkspaceCoordinationAccessRequest {
     try transaction {
       try requireToolUnlocked(.sessions, sessionID: sourceID)
-      guard UUID(uuidString: requestID) != nil, !purpose.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+      let requestID = try canonicalToolRequestID(requestID)
+      guard !purpose.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
             purpose.utf8.count <= 65_536 else { throw WorkspaceToolError.invalid("A valid request ID and management purpose are required.") }
       if let existing = try coordinationAccessRequestUnlocked(requestID) {
         guard existing.sourceID == sourceID, existing.targetID == targetID,
@@ -50,6 +51,7 @@ extension WorkspaceDatabase {
   /// repeated inside the same transaction as acquiring coordination.
   public func resolveCoordinationAccess(requestID: String, allowed: Bool) throws -> WorkspaceCoordinationAccessRequest {
     try transaction {
+      let requestID = try canonicalToolRequestID(requestID)
       guard let request = try coordinationAccessRequestUnlocked(requestID) else { throw WorkspaceToolError.invalid("The access request is unavailable.") }
       guard request.state == "pending" else { return request }
       var state = "rejected"
@@ -84,8 +86,10 @@ extension WorkspaceDatabase {
 
   private var coordinationAccessSelect: String {
     """
-      SELECT r.*,s.title AS source_title,t.title AS target_title FROM workspace_coordination_access_requests r
+      SELECT r.*,s.title AS source_title,t.title AS target_title,rel.coordination_epoch
+      FROM workspace_coordination_access_requests r
       JOIN dashboard_conversations s ON s.id=r.source_id JOIN dashboard_conversations t ON t.id=r.target_id
+      LEFT JOIN workspace_session_relationships rel ON rel.session_id=r.target_id AND rel.coordinator_id=r.source_id
       """
   }
 
@@ -98,6 +102,7 @@ extension WorkspaceDatabase {
     func text(_ key: String) -> String { value[key]?.stringValue ?? "" }
     return .init(id: text("id"), sourceID: text("source_id"), targetID: text("target_id"),
       sourceTitle: text("source_title"), targetTitle: text("target_title"), purpose: text("purpose"),
-      notifications: value["notifications"]?.intValue == 1, state: text("state"), error: value["error"]?.stringValue)
+      notifications: value["notifications"]?.intValue == 1, state: text("state"), error: value["error"]?.stringValue,
+      coordinationEpoch: value["coordination_epoch"]?.stringValue)
   }
 }

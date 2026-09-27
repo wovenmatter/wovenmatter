@@ -5,7 +5,10 @@ import WovenMatterClient
 
 extension WovenMatterToolResponse: WovenSocketResponse {
     static func socketError(_ error: any Error) -> Self {
-        Self(success: false, error: error.localizedDescription)
+        let code: String
+        if let socketError = error as? WovenNoteSocketError, case .busy = socketError { code = "busy" }
+        else { code = "transport_error" }
+        return Self(success: false, error: error.localizedDescription, code: code)
     }
 }
 
@@ -17,7 +20,7 @@ enum WovenMatterCommandLine {
         do {
             let command = try WovenMatterToolCommand(arguments)
             if command.wantsHelp {
-                let help = command.group.map(WovenMatterToolCommand.help) ?? WovenMatterToolCommand.usage
+                let help = WovenMatterToolCommand.help(for: command)
                 FileHandle.standardOutput.write(Data(help.utf8))
                 return EXIT_SUCCESS
             }
@@ -41,8 +44,9 @@ enum WovenMatterCommandLine {
                !["list", "create", "versions", "version", "restore"].contains(command.action) {
                 args += ["--note-id", noteID]
             }
-            let requestID = command.options["request-id"] ?? UUID().uuidString.lowercased()
-            guard UUID(uuidString: requestID) != nil else { throw WorkspaceToolError.invalid("--request-id must be a UUID.") }
+            let rawRequestID = command.options["request-id"] ?? UUID().uuidString.lowercased()
+            guard let requestUUID = UUID(uuidString: rawRequestID) else { throw WorkspaceToolError.invalid("--request-id must be a UUID.") }
+            let requestID = requestUUID.uuidString.lowercased()
             guard let socketPath = environment["WOVENMATTER_SOCKET"], !socketPath.isEmpty else {
                 throw WorkspaceToolError.invalid("WOVENMATTER_SOCKET is missing. Use the invocation supplied by this Woven Matter session.")
             }
@@ -58,11 +62,16 @@ enum WovenMatterCommandLine {
         } catch {
             if let dispatchedRequestID,
                let data = try? JSONEncoder().encode(WovenMatterToolResponse(success: false,
-                   error: error.localizedDescription, requestID: dispatchedRequestID)) {
+                   error: error.localizedDescription, code: "invalid_request", requestID: dispatchedRequestID)) {
                 FileHandle.standardOutput.write(data + Data("\n".utf8))
                 return EXIT_FAILURE
             }
-            FileHandle.standardError.write(Data("wovenmatter: \(error.localizedDescription)\n".utf8))
+            if let data = try? JSONEncoder().encode(WovenMatterToolResponse(success: false,
+                error: error.localizedDescription, code: "invalid_request")) {
+                FileHandle.standardOutput.write(data + Data("\n".utf8))
+            } else {
+                FileHandle.standardError.write(Data("wovenmatter: \(error.localizedDescription)\n".utf8))
+            }
             return EXIT_FAILURE
         }
     }
@@ -82,7 +91,16 @@ enum WovenMatterCommandLine {
                 Darwin.connect(descriptor, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
             }
         }
-        guard status == 0 else { throw WovenNoteSocketError.system(errno) }
+        if status != 0 {
+            guard errno == EINPROGRESS else { throw WovenNoteSocketError.system(errno) }
+            try waitForSocket(descriptor, events: POLLOUT, deadline: deadline)
+            var error: Int32 = 0
+            var length = socklen_t(MemoryLayout<Int32>.size)
+            guard getsockopt(descriptor, SOL_SOCKET, SO_ERROR, &error, &length) == 0 else {
+                throw WovenNoteSocketError.system(errno)
+            }
+            guard error == 0 else { throw WovenNoteSocketError.system(error) }
+        }
         try writeMessage(data, to: descriptor, timeout: min(30, deadline - ProcessInfo.processInfo.systemUptime))
         _ = Darwin.shutdown(descriptor, SHUT_WR)
         let response = try readMessage(from: descriptor, timeout: deadline - ProcessInfo.processInfo.systemUptime,

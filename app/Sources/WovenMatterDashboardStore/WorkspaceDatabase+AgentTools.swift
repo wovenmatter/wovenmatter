@@ -5,6 +5,13 @@ import WovenMatterCore
 import WovenMatterClient
 
 extension WorkspaceDatabase {
+  func canonicalToolRequestID(_ value: String) throws -> String {
+    guard let id = UUID(uuidString: value) else {
+      throw WorkspaceToolError.invalid("A mutation request needs a UUID request ID.")
+    }
+    return id.uuidString.lowercased()
+  }
+
   func migrateAgentTools() throws {
     try transaction {
       try executeUnlocked("""
@@ -77,7 +84,8 @@ extension WorkspaceDatabase {
       for (name, type) in [("kind", "TEXT NOT NULL DEFAULT 'message'"), ("purpose", "TEXT"),
                            ("target_title", "TEXT"), ("target_harness", "TEXT"), ("target_model", "TEXT"), ("event_key", "TEXT"),
                            ("transport_started", "INTEGER NOT NULL DEFAULT 1"), ("retry_after", "REAL"),
-                           ("native_command", "TEXT")] where !columns.contains(name) {
+                           ("native_command", "TEXT"), ("failure_code", "TEXT"),
+                           ("failure_reason", "TEXT")] where !columns.contains(name) {
         try executeUnlocked("ALTER TABLE workspace_session_deliveries ADD COLUMN \(name) \(type)")
       }
       try executeUnlocked("CREATE UNIQUE INDEX IF NOT EXISTS workspace_delivery_event ON workspace_session_deliveries(event_key) WHERE event_key IS NOT NULL")
@@ -149,7 +157,7 @@ extension WorkspaceDatabase {
         try toolsExecuteUnlocked("UPDATE workspace_session_timers SET is_paused=1,pending_delivery_id=NULL WHERE session_id=?", [sessionID])
       }
       if !tools.enabled.contains(.sessions) {
-        try toolsExecuteUnlocked("UPDATE workspace_session_relationships SET coordinator_id=NULL WHERE coordinator_id=?", [sessionID])
+        try toolsExecuteUnlocked("UPDATE workspace_session_relationships SET coordinator_id=NULL,coordination_epoch=NULL,coordination_since=NULL WHERE coordinator_id=?", [sessionID])
         // Approved access lasts for a management assignment; attachments are independent.
         try toolsExecuteUnlocked("DELETE FROM workspace_session_grants WHERE source_id=? AND kind='approved'", [sessionID])
       }
@@ -233,7 +241,9 @@ extension WorkspaceDatabase {
     let r = value.objectValue ?? [:]
     return WorkspaceSessionRelationship(sessionID: r["session_id"]?.stringValue ?? "",
       createdBy: r["created_by"]?.stringValue, coordinatorID: r["coordinator_id"]?.stringValue,
-      purpose: r["purpose"]?.stringValue, notificationsEnabled: r["notifications_enabled"]?.intValue == 1)
+      purpose: r["purpose"]?.stringValue, notificationsEnabled: r["notifications_enabled"]?.intValue == 1,
+      coordinationEpoch: r["coordination_epoch"]?.stringValue,
+      coordinationSince: r["coordination_since"]?.stringValue)
   }
 
   /// Called only after app-owned session creation succeeds. Origin cannot be reassigned.
@@ -324,6 +334,57 @@ extension WorkspaceDatabase {
     }
   }
 
+  public func setAgentCoordinationNotifications(sourceID: String, targetID: String, epoch: String,
+                                                 enabled: Bool, requestID: String) throws -> WorkspaceCoordinationMutationReceipt {
+    try transaction {
+      try requireToolUnlocked(.sessions, sessionID: sourceID)
+      let input = CoordinationMutationInput(targetID: targetID, epoch: epoch, enabled: enabled)
+      let outcome = try performToolMutationUnlocked(callerID: sourceID, requestID: requestID,
+        operation: "sessions.notifications", input: input, receipt: { (value: WorkspaceCoordinationMutationReceipt) in
+          var stored = value; stored.replayed = true; return stored
+        }) {
+          let relationship = try relationshipUnlocked(targetID)
+          guard relationship.coordinatorID == sourceID else {
+            throw WorkspaceToolError.accessRequired(targetID)
+          }
+          guard !epoch.isEmpty, epoch.utf8.count <= 128,
+                relationship.coordinationEpoch == epoch else {
+            throw WorkspaceToolError.revisionConflict("The coordination epoch is stale. Read sessions status and retry with its current epoch.")
+          }
+          try toolsExecuteUnlocked("UPDATE workspace_session_relationships SET notifications_enabled=? WHERE session_id=?", [enabled ? "1" : "0", targetID])
+          return WorkspaceCoordinationMutationReceipt(sessionID: targetID,
+            coordinationEpoch: epoch, action: "notifications", notificationsEnabled: enabled)
+        }
+      return outcome.result
+    }
+  }
+
+  public func releaseAgentCoordination(sourceID: String, targetID: String, epoch: String,
+                                       requestID: String) throws -> WorkspaceCoordinationMutationReceipt {
+    try transaction {
+      try requireToolUnlocked(.sessions, sessionID: sourceID)
+      let input = CoordinationMutationInput(targetID: targetID, epoch: epoch, enabled: nil)
+      let outcome = try performToolMutationUnlocked(callerID: sourceID, requestID: requestID,
+        operation: "sessions.release", input: input, receipt: { (value: WorkspaceCoordinationMutationReceipt) in
+          var stored = value; stored.replayed = true; return stored
+        }) {
+          let relationship = try relationshipUnlocked(targetID)
+          guard relationship.coordinatorID == sourceID else {
+            throw WorkspaceToolError.accessRequired(targetID)
+          }
+          guard !epoch.isEmpty, epoch.utf8.count <= 128,
+                relationship.coordinationEpoch == epoch else {
+            throw WorkspaceToolError.revisionConflict("The coordination epoch is stale. Read sessions status and retry with its current epoch.")
+          }
+          try toolsExecuteUnlocked("UPDATE workspace_session_relationships SET coordinator_id=NULL,coordination_epoch=NULL,coordination_since=NULL WHERE session_id=?", [targetID])
+          try toolsExecuteUnlocked("DELETE FROM workspace_session_grants WHERE target_id=? AND kind='approved'", [targetID])
+          return WorkspaceCoordinationMutationReceipt(sessionID: targetID,
+            coordinationEpoch: epoch, action: "released")
+        }
+      return outcome.result
+    }
+  }
+
   /// sourceID is bound by the endpoint. The user may stop any assignment through the UI.
   public func endCoordination(targetID: String, sourceID: String? = nil) throws {
     try transaction {
@@ -333,7 +394,7 @@ extension WorkspaceDatabase {
           throw WorkspaceToolError.coordinationConflict(existing)
         }
       }
-      try toolsExecuteUnlocked("UPDATE workspace_session_relationships SET coordinator_id=NULL WHERE session_id=?", [targetID])
+      try toolsExecuteUnlocked("UPDATE workspace_session_relationships SET coordinator_id=NULL,coordination_epoch=NULL,coordination_since=NULL WHERE session_id=?", [targetID])
       try toolsExecuteUnlocked("DELETE FROM workspace_session_grants WHERE target_id=? AND kind='approved'", [targetID])
     }
   }
@@ -350,6 +411,12 @@ extension WorkspaceDatabase {
   }
 }
 
+private struct CoordinationMutationInput: Codable {
+  let targetID: String
+  let epoch: String
+  let enabled: Bool?
+}
+
 
 extension WorkspaceDatabase {
   /// Must run inside the mutation's transaction. A receipt and its write commit
@@ -359,10 +426,11 @@ extension WorkspaceDatabase {
     callerID: String?, requestID: String?, operation: String, input: Input,
     receipt: (Output) -> Output = { $0 }, mutation: () throws -> Output
   ) throws -> (result: Output, replayed: Bool) {
-    guard let requestID else { return (try mutation(), false) }
-    guard let callerID, UUID(uuidString: requestID) != nil else {
+    guard let rawRequestID = requestID else { return (try mutation(), false) }
+    guard let callerID else {
       throw WorkspaceToolError.invalid("A mutation request needs a bound caller and UUID request ID.")
     }
+    let requestID = try canonicalToolRequestID(rawRequestID)
     let encoder = JSONEncoder()
     encoder.outputFormatting = [.sortedKeys]
     let digest = SHA256.hash(data: try encoder.encode(input)).map { String(format: "%02x", $0) }.joined()

@@ -520,6 +520,14 @@ struct WorkspaceLibraryTests {
     try f.db.applyInitialSessionTools(.init(enabled: [.library]), sessionID: chat)
     let result = try f.db.queryAgentLibrary(callerID: chat)
     #expect(result.objectValue?["items"]?.arrayValue?.count == 1)
+    do {
+      _ = try f.db.queryAgentLibrary(callerID: chat, id: UUID().uuidString)
+      Issue.record("Expected a missing library item to fail")
+    } catch WorkspaceToolError.notFound(let message) {
+      #expect(message == "Library item not found.")
+    } catch {
+      Issue.record("Expected not_found, received \(error)")
+    }
     try f.db.setSessionTools(.init(enabled: []), sessionID: chat)
     #expect(throws: WorkspaceToolError.self) { try f.db.queryAgentLibrary(callerID: chat) }
   }

@@ -8,6 +8,65 @@ import WovenMatterCore
 
 @Suite("Workspace history and bounded versions")
 struct WorkspaceHistoryTests {
+  @Test func uppercaseSessionEndpointsAreRedacted() {
+    let owner = String(repeating: "A", count: 32)
+    let endpoint = String(repeating: "B", count: 32)
+    let local = "/private/tmp/wmtools-\(owner)/\(endpoint).sock"
+    let remote = "/home/.wmt/\(owner)/\(endpoint)/rpc.sock"
+    let redacted = WorkspaceHistoryPrivacy.redactingToolEndpoints("local=\(local) remote=\(remote)")
+    #expect(!redacted.contains(local) && !redacted.contains(remote))
+    #expect(redacted.components(separatedBy: "[Woven Matter session tool endpoint]").count == 3)
+  }
+
+  @Test func terminalStreamSnapshotsAreSearchableWithoutPerChunkHistory() throws {
+    let (db, url) = try database()
+    defer { try? FileManager.default.removeItem(at: url) }
+    let session = try db.createLocalACPSession(runtimeKind: .codex, title: "Stream", ownerDeviceID: UUID())
+    let run = try db.beginLocalACPRun(conversationID: session, content: "Prompt")
+    for chunk in ["violet ", "harbor", " final"] {
+      try db.appendLocalACPAssistantChunk(runID: run.runID, chunk: chunk)
+    }
+    try db.completeLocalACPRun(runID: run.runID)
+    let updates = rows(try db.queryHistory(.init(command: "events", runID: run.runID,
+      kind: "message.update", limit: 20)))
+    #expect(updates.count == 1)
+    let matches = rows(try db.queryHistory(.init(command: "search", search: "violet harbor",
+      conversationID: session)))
+    #expect(matches.contains { $0.objectValue?["kind"]?.stringValue == "message.update" })
+  }
+
+  @Test func legacyCLIContentIsScrubbedBeforeSearchRebuild() throws {
+    let url = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: url) }
+    let secret = "legacy-secret-" + UUID().uuidString.lowercased()
+    let endpoint = "/private/tmp/wmtools-" + String(repeating: "A", count: 32)
+      + "/" + String(repeating: "B", count: 32) + ".sock"
+    let endpointEventID = UUID().uuidString.lowercased()
+    do {
+      let db = try WorkspaceDatabase(url: url.appending(path: "workspace.sqlite"))
+      try db.transaction {
+        try db.toolsExecuteUnlocked("DELETE FROM workspace_history_schema WHERE version=2")
+      try db.toolsExecuteUnlocked("INSERT INTO workspace_history_events(id,harness,kind,payload) VALUES(?,?,?,?)",
+          [UUID().uuidString.lowercased(), "wovenmatter", "cli.response", secret + " " + endpoint])
+        try db.toolsExecuteUnlocked("INSERT INTO workspace_history_events(id,harness,kind,payload) VALUES(?,?,?,?)",
+          [UUID().uuidString.lowercased(), "woven-history", "cli.query", secret])
+        try db.toolsExecuteUnlocked("INSERT INTO workspace_history_events(id,harness,kind,payload) VALUES(?,?,?,?)",
+          [endpointEventID, "pi", "wire.in", endpoint])
+      }
+    }
+    let reopened = try WorkspaceDatabase(url: url.appending(path: "workspace.sqlite"))
+    let events = rows(try reopened.queryHistory(.init(command: "events", harness: "wovenmatter",
+      kind: "cli.response")))
+    #expect(events.last?.objectValue?["payload"]?.stringValue == #"{"legacyRedacted":true}"#)
+    let queries = rows(try reopened.queryHistory(.init(command: "events", harness: "woven-history",
+      kind: "cli.query")))
+    #expect(queries.first?.objectValue?["payload"]?.stringValue == #"{"legacyRedacted":true}"#)
+    #expect(rows(try reopened.queryHistory(.init(command: "search", search: secret))).isEmpty)
+    let endpointEvent = rows(try reopened.queryHistory(.init(command: "event", id: endpointEventID))).first
+    #expect(endpointEvent?.objectValue?["payload"]?.stringValue == "[Woven Matter session tool endpoint]")
+  }
+
   @Test func nativeHTTPHistoryIsAdoptedOnlyByTheMatchingWorkspaceImport() throws {
     let (db, url) = try database()
     defer { try? FileManager.default.removeItem(at: url) }
@@ -161,9 +220,12 @@ struct WorkspaceHistoryTests {
     let restored = try db.restoreNoteAssetVersion(
       noteID: note, versionID: original.id, expectedRevision: try #require(current.revision))
     #expect(restored.document?.plainText == NoteDocument.decode(original.content).plainText)
+    var revision = try #require(restored.revision)
     for n in 0..<65 {
-      _ = try db.applyNoteEdits(
-        .init(command: .apply, noteID: note, operations: [.setTitle("Version \(n)")]))
+      let response = try db.applyNoteEdits(
+        .init(command: .apply, noteID: note, expectedRevision: revision,
+          operations: [.setTitle("Version \(n)")]))
+      revision = try #require(response.revision)
     }
     #expect(try db.noteAssetVersions(id: note).count == 50)
     #expect(try db.readNoteForEditing(id: note).title == "Version 64")
@@ -183,11 +245,15 @@ struct WorkspaceHistoryTests {
       try db.checkpointNote(id: note)
       #expect(try db.noteAssetVersions(id: note).count == 2)
       if kind == .html {
+        let revision = try #require(db.readNoteForEditing(id: note).revision)
         _ = try db.applyNoteEdits(
-          .init(command: .apply, noteID: note, operations: [.setHTML("<h1>Changed</h1>")]))
+          .init(command: .apply, noteID: note, expectedRevision: revision,
+            operations: [.setHTML("<h1>Changed</h1>")]))
       } else {
+        let revision = try #require(db.readNoteForEditing(id: note).revision)
         _ = try db.applyNoteEdits(
-          .init(command: .apply, noteID: note, operations: [.setTitle("Agent title")]))
+          .init(command: .apply, noteID: note, expectedRevision: revision,
+            operations: [.setTitle("Agent title")]))
       }
       #expect(try db.noteAssetVersions(id: note).count == 3)
     }
@@ -213,7 +279,7 @@ struct WorkspaceHistoryTests {
     defer { try? FileManager.default.removeItem(at: url) }
     let note = try db.createNote(folderID: nil, title: "Large HTML", kind: .html)
     var previous = try #require(db.readNoteForEditing(id: note).revision)
-    let body = String(repeating: "x", count: 1024 * 1024)
+    let body = String(repeating: "x", count: 900 * 1024)
     for n in 0..<23 {
       let response = try db.applyNoteEdits(
         .init(
