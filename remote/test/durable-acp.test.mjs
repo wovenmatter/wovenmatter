@@ -280,14 +280,18 @@ test('same-run steering is forwarded once and all prompt responses own completio
   assert.equal(f.received().trim().split('\n').length, 3)
 })
 
-for (const fast of [false, true]) test(`Codex detached steering retains recovery through native idle (fast=${fast})`, async t => {
+for (const mode of ['ordinary', 'fast', 'late-active', 'old-idle']) test(`Codex detached steering retains recovery through native idle (${mode})`, async t => {
+  const fast = mode === 'fast'
   const f = await fixture(t)
   await f.call('attach')
   const send = message => f.child.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...message }) + '\n')
   const status = type => send({ method: 'session/update', params: { sessionId: 'native', update: { sessionUpdate: 'session_info_update', _meta: { codex: { threadStatus: { type } } } } } })
   await f.call('message', { deliveryID: 'initial', message: { jsonrpc: '2.0', id: 1, method: 'session/prompt', params: { sessionId: 'native', _meta: { wovenRunID: 'run' } } } })
+  if (mode === 'old-idle') { status('active'); status('idle'); await new Promise(resolve => setImmediate(resolve)) }
   await f.call('message', { deliveryID: 'steer', message: { jsonrpc: '2.0', id: 2, method: '_session/steering', params: { sessionId: 'native', prompt: [{ type: 'text', text: 'continue' }] } } })
-  status('active'); send({ id: 1, result: { stopReason: 'end_turn' } }); status('idle'); status('active')
+  if (mode !== 'old-idle') status('active')
+  send({ id: 1, result: { stopReason: 'end_turn' } }); status('idle')
+  if (mode !== 'late-active') status('active')
   const finish = () => {
     send({ method: 'session/update', params: { sessionId: 'native', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'continuation' } } } })
     status('idle')
@@ -298,6 +302,7 @@ for (const fast of [false, true]) test(`Codex detached steering retains recovery
   if (!fast) {
     assert.equal((await f.call('attach')).snapshot.busy, true)
     assert.deepEqual((await f.call('attach')).snapshot.recoveredRuns, [])
+    if (mode === 'late-active') status('active')
     finish()
     await new Promise(resolve => setImmediate(resolve))
   }
@@ -347,4 +352,23 @@ test('late same-run ACP continuation extends recovery instead of duplicating or 
     await new Promise(resolve => setImmediate(resolve))
   }
   assert.deepEqual((await f.call('attach')).snapshot.recoveredRuns, [{ runID: 'run', content: '1 2 ' }])
+})
+
+test('late Codex steering reclaims completed recovery before starting its detached turn', async t => {
+  const f = await fixture(t)
+  await f.call('attach')
+  const send = message => f.child.stdout.write(JSON.stringify(message) + '\n')
+  const status = type => send({ method: 'session/update', params: { sessionId: 'native', update: { _meta: { codex: { threadStatus: { type } } } } } })
+  const chunk = text => send({ method: 'session/update', params: { sessionId: 'native', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } } } })
+  await f.call('message', { deliveryID: 'original', message: { jsonrpc: '2.0', id: 1, method: 'session/prompt', params: { sessionId: 'native', _meta: { wovenRunID: 'run' } } } })
+  status('active'); chunk('before '); status('idle'); send({ id: 1, result: { stopReason: 'end_turn' } })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal((await f.call('attach')).snapshot.busy, false)
+  await f.call('message', { deliveryID: 'late', message: { jsonrpc: '2.0', id: 2, method: '_session/steering', params: { sessionId: 'native', _meta: { wovenRunID: 'run' } } } })
+  send({ id: 2, result: { outcome: 'startedNewTurn' } })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal((await f.call('attach')).snapshot.busy, true)
+  status('active'); chunk('after'); status('idle')
+  await new Promise(resolve => setImmediate(resolve))
+  assert.deepEqual((await f.call('attach')).snapshot.recoveredRuns, [{ runID: 'run', content: 'before after' }])
 })

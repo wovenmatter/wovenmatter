@@ -12,7 +12,7 @@ function newSnapshot(history) {
   const state = { initialized: null, session: null, recoveredRuns: [], busy: false, pendingRequests: [] }
   Object.defineProperties(state, {
     requests: { value: new Map() }, runs: { value: new Map() }, callbacks: { value: new Map() },
-    steers: { value: new Map() },
+    steers: { value: new Map() }, codexStatuses: { value: new Map() },
   })
   for (const item of history) updateSnapshot(state, item)
   return state
@@ -99,7 +99,9 @@ function updateSnapshot(state, item) {
   if (message.type) { updatePiSnapshot(state, item); return }
   if (item.type === 'accepted') {
     if (message.method && message.id !== undefined) {
-      state.requests.set(message.id, message)
+      const status = state.codexStatuses.get(message.params?.sessionId)
+      state.requests.set(message.id, message.method === 'session/prompt'
+        ? { ...message, codexExpectedGeneration: (status?.generation ?? 0) + (status?.active ? 0 : 1) } : message)
       if (message.method === 'session/prompt') {
         const runID = message.params?._meta?.wovenRunID
         // Concurrent ACP prompts steer one logical run. Share its accumulator
@@ -108,10 +110,16 @@ function updateSnapshot(state, item) {
         state.runs.set(message.id, existing ?? resumeRun(state, runID, message.params?.sessionId))
       }
       if (message.method === '_session/steering') {
+        const runID = message.params?._meta?.wovenRunID
         const run = [...state.runs.values()].find(run => run.sessionID === message.params?.sessionId)
+          ?? (typeof runID === 'string' ? resumeRun(state, runID, message.params?.sessionId) : undefined)
         if (run) {
           state.runs.set(message.id, run)
-          state.steers.set(message.id, { started: false, settled: false, detached: false })
+          const status = state.codexStatuses.get(run.sessionID)
+          const previousGeneration = Math.max(status?.generation ?? 0, ...[...state.requests.values()]
+            .filter(request => request.method === 'session/prompt' && request.params?.sessionId === run.sessionID)
+            .map(request => request.codexExpectedGeneration ?? 0))
+          state.steers.set(message.id, { previousGeneration, started: false, settled: false, detached: false })
         }
       }
     } else if (message.id !== undefined) state.callbacks.delete(message.id)
@@ -123,11 +131,16 @@ function updateSnapshot(state, item) {
     }
     const status = message.params?.update?._meta?.codex?.threadStatus?.type
     if (message.method === 'session/update' && status) {
+      const sessionID = message.params.sessionId
+      const previous = state.codexStatuses.get(sessionID)
+      const active = status === 'active'
+      const generation = (previous?.generation ?? 0) + (active && !previous?.active ? 1 : 0)
+      state.codexStatuses.set(sessionID, { active, generation })
       for (const [id, steer] of state.steers) {
-        if (state.runs.get(id)?.sessionID !== message.params.sessionId) continue
-        if (status === 'active') { steer.started = true; steer.settled = false; steer.error = undefined }
+        if (state.runs.get(id)?.sessionID !== sessionID) continue
+        if (status === 'active' && generation > steer.previousGeneration) { steer.started = true; steer.settled = false; steer.error = undefined }
         if (status === 'idle' && steer.started) steer.settled = true
-        if (status === 'systemError' || status === 'notLoaded') {
+        if (steer.started && (status === 'systemError' || status === 'notLoaded')) {
           steer.settled = true; steer.error = 'Codex stopped before completing the steering message'
         }
         if (steer.detached && steer.settled) finishACPInput(state, id, steer.error)

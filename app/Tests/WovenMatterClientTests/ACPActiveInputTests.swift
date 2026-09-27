@@ -26,7 +26,7 @@ struct ACPActiveInputTests {
         #expect(!requests.contains { $0["method"] as? String == "session/cancel" })
     }
 
-    @Test(arguments: ["detached", "detached-fast", "fallback"])
+    @Test(arguments: ["detached", "detached-fast", "detached-late-active", "detached-old-idle", "fallback"])
     func aSteerRacingCompletionRetainsHandlersAndWaitsForItsOwnOutput(mode: String) async throws {
         let f = try ActiveInputFixture(mode: mode)
         defer { f.remove() }
@@ -96,14 +96,18 @@ private struct ActiveInputFixture {
                 prompts=[]
             elif method=='session/prompt' and original is None:
                 original=i; prompts.append(i); text('before')
+                if mode=='detached-old-idle': status('active'); status('idle')
                 open('ready','w').close()
             elif method in ['_session/steering','_x.ai/interject','session/prompt']:
                 if mode=='rejected': send(dict(id=i,error=dict(code=-32602,message='Steer rejected'))); continue
                 if mode.startswith('detached'):
-                    status('active'); result(original,dict(stopReason='end_turn')); status('idle'); status('active')
+                    if mode!='detached-old-idle': status('active')
+                    result(original,dict(stopReason='end_turn')); status('idle')
+                    if mode!='detached-late-active': status('active')
                     if mode=='detached-fast': text('continued'); status('idle')
                     result(i,dict(outcome='startedNewTurn'))
-                    if mode=='detached': time.sleep(.03); text('continued'); status('idle')
+                    if mode=='detached-late-active': time.sleep(.03); status('active')
+                    if mode!='detached-fast': time.sleep(.03); text('continued'); status('idle')
                 elif mode=='fallback':
                     if method=='_session/steering':
                         result(original,dict(stopReason='end_turn')); result(i,dict(outcome='promptRequired'))

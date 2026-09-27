@@ -566,6 +566,7 @@ public actor LocalACPClient {
     }
     private var pendingCursorRequests: [PendingCursorRequest] = []
     private struct PendingRequest {
+        let codexExpectedGeneration: Int64?
         let continuation: AsyncThrowingStream<ACPRequestResponse, any Error>.Continuation
     }
     private struct ACPRequestResponse: Sendable {
@@ -583,6 +584,8 @@ public actor LocalACPClient {
     // A steer receipt is separate from completion. In particular Codex can
     // start a continuation when the original turn ends during admission.
     private var codexSteeringObservers: [UUID: AsyncThrowingStream<ACPRequestResponse, any Error>.Continuation] = [:]
+    private var codexNativeGeneration: Int64 = 0
+    private var codexThreadIsActive = false
     // ACP does not provide an identifier for thought chunks. Keep one stable
     // identity for adjacent deltas, then advance it when another stream kind
     // separates reasoning phases so distinct commentary is not merged.
@@ -1173,6 +1176,10 @@ public actor LocalACPClient {
             // steering acknowledgement reaches us. Buffer native lifecycle
             // events without blocking their ordered transcript processing.
             let observerID = UUID()
+            // Ignore the old turn's idle event even if it arrives before the
+            // receipt and the continuation's active event arrives after it.
+            let previousGeneration = max(codexNativeGeneration,
+                pendingRequests.values.compactMap(\.codexExpectedGeneration).max() ?? codexNativeGeneration)
             let lifecycle = AsyncThrowingStream<ACPRequestResponse, any Error>.makeStream()
             if runtimeKind == .codex { codexSteeringObservers[observerID] = lifecycle.continuation }
             var followsDetachedTurn = false
@@ -1181,16 +1188,18 @@ public actor LocalACPClient {
                     codexSteeringObservers.removeValue(forKey: observerID)?.finish()
                 }
             }
+            var steeringMetadata: [String: ACPJSONValue] = [
+                "steering": .object(["idleBehavior": .string("promptRequired")]),
+            ]
+            if durableRemoteACP, let defaultAgentRunID {
+                steeringMetadata["wovenRunID"] = .string(defaultAgentRunID)
+            }
             let response = try await request(
                 method: "_session/steering",
                 params: .object([
                     "sessionId": .string(sessionID),
                     "prompt": try Self.promptBlocks(input),
-                    "_meta": .object([
-                        "steering": .object([
-                            "idleBehavior": .string("promptRequired"),
-                        ]),
-                    ]),
+                    "_meta": .object(steeringMetadata),
                 ]),
                 waitsForNotifications: false
             )
@@ -1209,9 +1218,10 @@ public actor LocalACPClient {
                     var terminal: ACPRequestResponse?
                     for try await status in lifecycle.stream {
                         switch status.value?["type"]?.stringValue {
-                        case "active": started = true; terminal = nil
+                        case "active" where (status.value?["wovenGeneration"]?.integerValue ?? 0) > previousGeneration:
+                            started = true; terminal = nil
                         case "idle" where started: terminal = status
-                        case "systemError", "notLoaded": terminal = status
+                        case "systemError", "notLoaded": if started { terminal = status }
                         case "steeringAccepted": acknowledged = true
                         default: break
                         }
@@ -1549,7 +1559,10 @@ public actor LocalACPClient {
         let id = nextID
         nextID += 1
         let pair = AsyncThrowingStream<ACPRequestResponse, any Error>.makeStream()
-        pendingRequests[id] = PendingRequest(continuation: pair.continuation)
+        pendingRequests[id] = PendingRequest(
+            codexExpectedGeneration: method == "session/prompt" ? codexNativeGeneration + (codexThreadIsActive ? 0 : 1) : nil,
+            continuation: pair.continuation
+        )
         do {
             try write(ACPEnvelope(
                 id: .integer(id),
@@ -1631,8 +1644,15 @@ public actor LocalACPClient {
         enqueueNotification(envelope)
         if runtimeKind == .codex, envelope.method == "session/update", belongsToActiveSession(envelope),
            let status = envelope.params?["update"]?["_meta"]?["codex"]?["threadStatus"] {
+            let isActive = status["type"]?.stringValue == "active"
+            if isActive && !codexThreadIsActive { codexNativeGeneration += 1 }
+            codexThreadIsActive = isActive
+            let sequencedStatus: ACPJSONValue = .object([
+                "type": status["type"] ?? .null,
+                "wovenGeneration": .integer(codexNativeGeneration),
+            ])
             for observer in codexSteeringObservers.values {
-                observer.yield(ACPRequestResponse(value: status, notificationBarrier: notificationTask))
+                observer.yield(ACPRequestResponse(value: sequencedStatus, notificationBarrier: notificationTask))
             }
         }
     }
