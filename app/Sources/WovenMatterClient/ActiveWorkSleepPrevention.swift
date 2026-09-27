@@ -15,19 +15,24 @@ public final class ActiveWorkSleepPrevention {
     private var dispatches: Set<UUID> = []
     private var runningConversationIDs: Set<String> = []
     private var stopped = false
+    private let onWorkChanged: (Bool) -> Void
+    private var wasWorking = false
 
-    public convenience init(ownsExecution: Bool) {
+    public convenience init(ownsExecution: Bool, onWorkChanged: @escaping (Bool) -> Void = { _ in }) {
         self.init(ownsExecution: ownsExecution,
                   beginActivity: { ProcessInfo.processInfo.beginActivity(options: $0, reason: $1) },
-                  endActivity: { ProcessInfo.processInfo.endActivity($0) })
+                  endActivity: { ProcessInfo.processInfo.endActivity($0) },
+                  onWorkChanged: onWorkChanged)
     }
 
     init(ownsExecution: Bool,
          beginActivity: @escaping (ProcessInfo.ActivityOptions, String) -> any NSObjectProtocol,
-         endActivity: @escaping (any NSObjectProtocol) -> Void) {
+         endActivity: @escaping (any NSObjectProtocol) -> Void,
+         onWorkChanged: @escaping (Bool) -> Void = { _ in }) {
         self.ownsExecution = ownsExecution
         self.beginActivity = beginActivity
         self.endActivity = endActivity
+        self.onWorkChanged = onWorkChanged
     }
 
     public func beginDispatch() -> UUID {
@@ -60,6 +65,10 @@ public final class ActiveWorkSleepPrevention {
     private func synchronize() {
         let needsActivity = ownsExecution && !stopped
             && (!dispatches.isEmpty || !runningConversationIDs.isEmpty)
+        if wasWorking != needsActivity {
+            wasWorking = needsActivity
+            onWorkChanged(needsActivity)
+        }
         if needsActivity {
             if activity == nil { activity = beginActivity(Self.options, Self.reason) }
         } else if let activity {

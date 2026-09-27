@@ -282,9 +282,10 @@ final class ApplicationModel {
         PreparedLocalACPRuntimeInstall?
     private(set) var pendingLocalACPPermissions: [PendingLocalACPPermission] = []
     private(set) var pendingLocalACPInteractions: [PendingLocalACPInteraction] = []
-    @ObservationIgnored private let activeWorkSleepPrevention = ActiveWorkSleepPrevention(
-        ownsExecution: LocalExecutionRole.current.ownsExecution
-    )
+    let closedLidProtection: ClosedLidWorkProtection
+    private(set) var isChangingClosedLidPolicy = false
+    private(set) var closedLidSettingsError: String?
+    @ObservationIgnored private let activeWorkSleepPrevention: ActiveWorkSleepPrevention
     private(set) var localRunningConversationIDs: Set<String> = [] {
         didSet { activeWorkSleepPrevention.setRunningConversationIDs(runningToolSessionIDs) }
     }
@@ -395,6 +396,12 @@ final class ApplicationModel {
         startsAutomatically: Bool? = nil
     ) {
         self.applicationDefaults = applicationDefaults
+        let closedLidProtection = ClosedLidWorkProtection(
+            ownsExecution: LocalExecutionRole.current.ownsExecution, defaults: applicationDefaults)
+        self.closedLidProtection = closedLidProtection
+        self.activeWorkSleepPrevention = ActiveWorkSleepPrevention(
+            ownsExecution: LocalExecutionRole.current.ownsExecution,
+            onWorkChanged: { [weak closedLidProtection] in closedLidProtection?.setWorking($0) })
         self.usage = ApplicationUsageModel(applicationDefaults: applicationDefaults)
         self.sessionSelectionPreferences = SessionSelectionPreferences(defaults: applicationDefaults)
         self.localACPRuntimePreferences = LocalACPRuntimePreferences(
@@ -3390,6 +3397,7 @@ final class ApplicationModel {
 
     func shutdownLocalACPSessions() {
         activeWorkSleepPrevention.stop()
+        closedLidProtection.stop()
         library.stop()
         toolRuntimeTask?.cancel()
         agentTools?.stop()
@@ -4945,6 +4953,7 @@ struct BackendApplicationState: Codable, Sendable {
     let sessionAccess: [WorkspaceCoordinationAccessRequest]
     let sessionAccessError: String?
     let executionErrors: [String: String]
+    let closedLidProtection: ClosedLidProtectionSnapshot?
 }
 
 extension ApplicationModel {
@@ -5084,7 +5093,8 @@ extension ApplicationModel {
               permissions: pendingLocalACPPermissions, interactions: pendingLocalACPInteractions,
               composerPrefills: pendingComposerPrefills, calendarErrors: remoteCalendarGatewayErrors,
               sessionAccess: pendingSessionAccess, sessionAccessError: sessionAccessError,
-              executionErrors: conversationStatesByID.compactMapValues { $0.error })
+              executionErrors: conversationStatesByID.compactMapValues { $0.error },
+              closedLidProtection: closedLidProtection.snapshot)
     }
 
     private func observeBackendApplicationState() {
@@ -5241,6 +5251,7 @@ extension ApplicationModel {
 
     private func refreshBackendApplicationState() async throws {
         let snapshot = try JSONDecoder().decode(BackendApplicationState.self, from: await callBackend(method: "application.state"))
+        closedLidProtection.applyBackendSnapshot(snapshot.closedLidProtection ?? .init())
         localRunningConversationIDs = snapshot.runningConversationIDs
         localACPSessionMetadata = snapshot.metadata
         pendingLocalACPPermissions = snapshot.permissions
@@ -5257,6 +5268,29 @@ extension ApplicationModel {
         backendExecutionErrorIDs = Set(snapshot.executionErrors.keys)
         applyBackendRuntimeSnapshot(try JSONDecoder().decode(BackendRuntimeSnapshot.self,
             from: await callBackend(method: "runtime.snapshot")))
+    }
+
+    func setClosedLidPolicyFromSettings(_ policy: ClosedLidPolicy) async {
+        guard !isChangingClosedLidPolicy else { return }
+        isChangingClosedLidPolicy = true
+        closedLidSettingsError = nil
+        defer { isChangingClosedLidPolicy = false }
+        do {
+            let previous = closedLidProtection.snapshot.policy
+            let enablesSource = (policy.externalPower && !previous.externalPower)
+                || (policy.batteryPower && !previous.batteryPower)
+            // Turning a switch off must work even if the helper was removed or
+            // approval revoked. An unchanged enabled policy is the setup retry.
+            if enablesSource || (policy.isEnabled && policy == previous) {
+                try ClosedLidHelperRegistration.prepareFromUserAction()
+            }
+            if isBackendFrontend {
+                _ = try await sendBackendCommand(.setClosedLidPolicy(policy))
+                try await refreshBackendApplicationState()
+            } else {
+                closedLidProtection.setPolicy(policy)
+            }
+        } catch { closedLidSettingsError = error.localizedDescription }
     }
 
     func changeLocalBackgroundExecution(enabled: Bool) async throws {

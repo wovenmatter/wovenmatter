@@ -46,9 +46,63 @@ share one activity, released when the last finishes. Shutdown releases it and
 ignores late callbacks. Idle open sessions, future calendar tasks, and merely
 having background execution enabled do not keep the Mac awake.
 
-Explicit system sleep, closing the lid, logout, shutdown, and depleted battery
-can still suspend or stop local execution. This feature does not wake a sleeping
-Mac for future scheduled tasks or make a remote host stay awake.
+Without the optional closed-lid settings below, explicit system sleep and closing
+the lid can still suspend local execution. Logout, shutdown, and depleted battery
+can stop it regardless of settings. Neither feature wakes a sleeping Mac for
+future scheduled tasks or makes a remote host stay awake.
+
+### Optional closed-lid protection
+
+General settings contains **Keep working when the lid is closed**, with independent
+**When connected to external power** and **When running on battery** switches. Both
+default to off. Enabling both covers both sources; neither applies when work is
+idle. The execution owner persists the policy. Frontends route changes to the
+backend and display its protection snapshot, so quitting a frontend does not
+release backend-owned protection.
+
+Normal sleep assertions cannot prevent forced sleep from closing the lid or
+choosing Sleep. The optional feature instead uses a bundled, privileged
+`SMAppService` daemon to temporarily set macOS `SleepDisabled`, using the fixed
+`/usr/bin/pmset -a disablesleep 1` operation. This also prevents Apple-menu Sleep
+while protection is active; settings explain that effect. The display can still
+sleep. The system-wide flag cannot distinguish Woven Matter from other software.
+
+The signed helper is bundled at `Contents/Library/LaunchServices/WovenMatterPowerHelper`
+with its daemon plist under `Contents/Library/LaunchDaemons`. It is registered only
+from an explicit settings action and requires macOS approval. Task execution,
+backend startup, building, and testing never register it. Ad-hoc builds cannot
+enable it. The daemon and client authenticate each other with XPC code-signing
+requirements for specific identifiers and the same Apple signing team; there is
+no sudoers change, shell execution, or general-purpose privileged command API.
+
+The helper serializes all power changes. Each XPC connection has a 15-second
+lease, renewed every three seconds while work is active. A two-second independent
+watchdog expires stale leases and reads the actual power source. Unknown power
+sources release protection. Disconnecting the client releases its lease; stopping
+work closes the connection. Concurrent owners share the helper and cannot release
+one another's protection. `pmset` calls have bounded timeouts and verify their
+result before reporting protection as active.
+
+Before a false-to-true change, a root-owned, exclusive recovery journal is synced
+to disk under `/private/var/db/wovenmatter-power-helper`. The helper restores false
+before clearing that journal. A restarted daemon restores an unfinished transaction
+before accepting new work; failed restoration retains the journal and is retried.
+The launch daemon stays available while idle so recovery does not depend on the
+UI. A pre-existing `SleepDisabled=1` is never claimed or reset. Other utilities
+changing the same global flag concurrently cannot be fully coordinated.
+
+If the helper is manually removed, denied execution, or its bundle deleted while
+an override is active, automatic restoration may be unavailable. Recovery is to
+restore the approved helper or have an administrator run
+`sudo /usr/bin/pmset -a disablesleep 0`. That command affects the system-wide sleep
+setting, including settings from other utilities; inspect `pmset -g` first.
+Normal app updates must finish work before replacement. No future tasks are kept
+awake merely because these preferences are enabled.
+
+Apple's [pmset implementation](https://github.com/apple-oss-distributions/PowerManagement/blob/main/pmset/pmset.m)
+provides the system-setting mechanism. [Amphetamine Power Protect](https://github.com/x74353/Amphetamine-Power-Protect)
+is a relevant reference for the additional privilege needed for reliable
+closed-display behavior on Apple silicon. No Amphetamine code is included.
 
 ### Codex research
 
@@ -99,3 +153,18 @@ run handoff, failures/cancellation, frontend ownership, and shutdown. On a Mac,
 `pmset -g assertions` can verify the named Woven Matter idle-system assertion
 while work runs and its removal after the last run. A display-off provider run
 remains a separate manual acceptance check.
+
+Closed-lid tests use fake power settings and a temporary user-owned journal. They
+cover both policy switches, AC/battery changes, multiple clients, lease expiry,
+helper restart, mutation/journal failures, pre-existing overrides, peer identity
+validation, frontend ownership, approval waiting, and late callbacks. Native
+build validation checks the bundled executable and launchd configuration without
+registering or running the daemon.
+
+Manual acceptance on a signed build remains required: approve the helper, start
+a long provider run, close the lid on AC and battery according to each switch,
+change power source while closed, then verify completion/stop restores sleep.
+Repeat with background execution enabled and the frontend closed, and verify
+recovery after terminating the owner/helper. Confirm `pmset -g` and
+`pmset -g assertions` before and after each case. Do not infer hardware acceptance
+from the provider-free tests.

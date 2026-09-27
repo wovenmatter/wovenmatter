@@ -143,6 +143,24 @@ struct ActiveWorkSleepPreventionTests {
         #expect(activities.token == nil)
     }
 
+    @Test func workObserverCoversPreparationHandoffAndTerminalShutdown() {
+        var changes: [Bool] = []
+        let owner = ActiveWorkSleepPrevention(ownsExecution: true,
+            beginActivity: { _, _ in NSObject() }, endActivity: { _ in },
+            onWorkChanged: { changes.append($0) })
+        let dispatch = owner.beginDispatch()
+        owner.setRunningConversationIDs([])
+        owner.setRunningConversationIDs(["accepted"])
+        owner.endDispatch(dispatch)
+        #expect(changes == [true])
+        owner.setRunningConversationIDs([])
+        #expect(changes == [true, false])
+        _ = owner.beginDispatch()
+        owner.stop()
+        _ = owner.beginDispatch()
+        #expect(changes == [true, false, true, false])
+    }
+
     @Test func releasingOwnerReleasesFoundationActivityToken() {
         let activities = Activities()
         var owner: ActiveWorkSleepPrevention? = activities.makeOwner()
