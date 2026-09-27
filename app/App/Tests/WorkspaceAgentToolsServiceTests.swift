@@ -75,7 +75,11 @@ extension WorkspaceAgentToolsServiceTests {
         try service.start(); defer { try? service.stop() }
         let slow = try JSONEncoder().encode(WovenMatterToolRequest(arguments: ["slow"]))
         let fast = try JSONEncoder().encode(WovenMatterToolRequest(arguments: ["fast"]))
-        let first = Task.detached { try WovenMatterCommandLine.forward(slow, to: endpoint.path, timeout: 5) }
+        let first = Task {
+            try await runBlockingToolFixture {
+                try WovenMatterCommandLine.forward(slow, to: endpoint.path, timeout: 5)
+            }
+        }
         await gate.waitUntilPaused()
         let overloaded = try await runBlockingToolFixture {
             try WovenMatterCommandLine.forward(fast, to: endpoint.path, timeout: 2)
@@ -300,7 +304,7 @@ extension WorkspaceAgentToolsServiceTests {
 // the server tasks being tested need those workers to produce their responses.
 private func runBlockingToolFixture<T: Sendable>(_ body: @escaping @Sendable () throws -> T) async throws -> T {
     try await withCheckedThrowingContinuation { continuation in
-        DispatchQueue.global(qos: .userInitiated).async {
+        Thread.detachNewThread {
             do { continuation.resume(returning: try body()) }
             catch { continuation.resume(throwing: error) }
         }
