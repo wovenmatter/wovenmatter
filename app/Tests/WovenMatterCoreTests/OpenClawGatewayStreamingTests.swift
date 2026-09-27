@@ -196,6 +196,64 @@ struct OpenClawGatewayStreamingTests {
     await second.shutdown()
   }
 
+  @Test func overlappingUnsequencedEventsKeepEveryDeltaAcrossDatabaseWaits() async throws {
+    let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let url = directory.appending(path: "streaming.sqlite")
+    let database = try await WorkspaceDatabase(url: url)
+    _ = try await database.createLocalACPSession(runtimeKind: .openclaw, title: "Fixture", ownerDeviceID: UUID())
+    let agentID = try await #require(database.dashboardAgents().first?.id)
+    try await database.saveOpenClawGatewayLink(OpenClawGatewayLink(agentID: agentID,
+      location: .localAgentWorkspace, endpoint: .init(url: URL(string: "ws://127.0.0.1:1")!, authorization: .localService)))
+    let session = try #require(OpenClawGatewaySession(payload: .object(["key": .string("agent:fixture:overlap")])))
+    let conversationID = try await database.importOpenClawGatewaySession(agentID: agentID, session: session)
+    let started = AsyncStream<Void>.makeStream()
+    let finish = AsyncStream<Void>.makeStream()
+    defer { finish.continuation.finish() }
+    let coordinator = OpenClawGatewayCoordinator(database: database, runExecutor: { _, _, _, _ in
+      started.continuation.yield(())
+      var iterator = finish.stream.makeAsyncIterator()
+      await iterator.next()
+    })
+    let run = try await coordinator.accept(conversationID: conversationID, content: "Hello")
+    var runStarted = started.stream.makeAsyncIterator()
+    await runStarted.next()
+    let entered = AsyncStream<Void>.makeStream()
+    let release = DispatchSemaphore(value: 0)
+    defer { release.signal() }
+    let blocked = Task { try await database.write { _ in
+      entered.continuation.yield(())
+      #expect(release.wait(timeout: .now() + 60) == .success)
+    } }
+    var iterator = entered.stream.makeAsyncIterator()
+    await iterator.next()
+    func delta(_ text: String) -> OpenClawGatewayEvent {
+      .init(name: "agent", payload: .object(["runId": .string(run.runID), "stream": .string("assistant"),
+        "data": .object(["delta": .string(text)])]), sequence: nil)
+    }
+    let first = Task { await coordinator.receiveGatewayEventForTesting(delta("first"), agentID: agentID) }
+    let deadline = ContinuousClock.now + .seconds(60)
+    while database.workerMetrics[0].pending < 2 {
+      guard ContinuousClock.now < deadline else { throw DatabaseWorkerError.timedOut }
+      try await Task.sleep(for: .milliseconds(1))
+    }
+    let second = Task { await coordinator.receiveGatewayEventForTesting(delta(" second"), agentID: agentID) }
+    // Wait until the second event has reached the coordinator's gate.
+    while await coordinator.pendingGatewayEventCountForTesting == 0 {
+      guard ContinuousClock.now < deadline else { throw DatabaseWorkerError.timedOut }
+      try await Task.sleep(for: .milliseconds(1))
+    }
+    release.signal()
+    try await blocked.value
+    await first.value
+    await second.value
+    #expect(try await database.conversationContent(id: conversationID).messages.last?.content == "first second")
+    #expect(try await database.deviceOwnedGatewayTraceEvents(runID: run.runID).map(\.sequence) == [1, 2])
+    await coordinator.shutdown()
+    finish.continuation.finish()
+  }
+
   private func project(
     _ name: String,
     _ payload: [String: GatewayJSONValue]

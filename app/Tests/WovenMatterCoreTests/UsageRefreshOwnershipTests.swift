@@ -142,7 +142,8 @@ struct UsageRefreshOwnershipTests {
     try store.saveUsageLimitAccounts([prior], storedAt: now)
     let service = LocalUsageService(
       homeDirectory: fixture.url, fileManager: .default, credentialStore: UsageNoCredentials(),
-      usageDatabaseURL: fixture.databaseURL, usesSharedConnections: true, limitCollector: { _ in
+      usageDatabaseURL: fixture.databaseURL, usesSharedConnections: true,
+      sharedConnectionRevision: { 0 }, limitCollector: { _ in
         [UsageLimitAccount(provider: .grok, accountScopeID: "wovenmatter.shared.xai",
           accountLabel: "current-account", status: .unavailable, source: "fixture", detail: "", observedAt: now)]
       })
@@ -150,6 +151,30 @@ struct UsageRefreshOwnershipTests {
     #expect(result.accounts.first?.accountLabel == "current-account")
     #expect(result.accounts.first?.status == .unavailable)
     #expect(result.codexWorkspaces.isEmpty)
+  }
+
+  @Test("shared account changes invalidate a suspended refresh without touching real accounts")
+  func changedSharedConnectionRejectsOldLimits() async throws {
+    final class Revision: @unchecked Sendable {
+      let lock = NSLock()
+      private var value: UInt64 = 0
+      func read() -> UInt64 { lock.withLock { value } }
+      func advance() { lock.withLock { value += 1 } }
+    }
+    let fixture = try UsageOwnershipDirectory()
+    let revision = Revision()
+    let gate = UsageCompletionGate<[UsageLimitAccount]>()
+    let service = LocalUsageService(homeDirectory: fixture.url, fileManager: .default,
+      credentialStore: UsageNoCredentials(), usageDatabaseURL: fixture.databaseURL,
+      usesSharedConnections: true, sharedConnectionRevision: { revision.read() },
+      limitCollector: { _ in await gate.load() })
+    let pending = Task { try await service.limitsSnapshot(refresh: true,
+      enabledProviders: [.cursor], allowCredentialAccess: false) }
+    await gate.waitForStarts(1)
+    revision.advance()
+    await gate.release(1, value: [account("old-account", now: Date())])
+    await #expect(throws: CancellationError.self) { try await pending.value }
+    #expect(try UsageStore(databaseURL: fixture.databaseURL).usageLimitAccounts(providers: [.cursor]).isEmpty)
   }
 
   private func account(_ label: String, now: Date) -> UsageLimitAccount {

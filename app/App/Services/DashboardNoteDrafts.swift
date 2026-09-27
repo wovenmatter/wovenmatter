@@ -499,18 +499,6 @@ struct DashboardNoteDraft: Equatable {
         }
     }
 
-    mutating func adoptEditingResponse(_ response: NoteEditingResponse, content: String) {
-        // Awaiting SQLite or backend RPC lets typing continue. A response to an
-        // earlier operation must not replace edits that still need to be saved.
-        guard persistedRevision >= editRevision else { return }
-        title = response.title ?? title
-        self.content = content
-        saveState = .saved
-        editRevision = 0
-        persistedRevision = 0
-        sourceUpdatedAt = response.revision
-    }
-
     mutating func edit(title: String? = nil, content: String? = nil) {
         if let title { self.title = title }
         if let content { self.content = content }

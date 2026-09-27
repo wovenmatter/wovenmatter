@@ -234,7 +234,11 @@ extension WorkspaceDatabase {
   }
 
   public func saveOpenCodeSubmission(conversationID: String, id: String, payload: OpenCodeValue, status: String, visibleText: String? = nil, deliveryID: String? = nil, input: AgentMessageInput? = nil) async throws {
-    try await write { try $0.saveOpenCodeSubmission(conversationID: conversationID, id: id, payload: payload, status: status, visibleText: visibleText, deliveryID: deliveryID, input: input) }
+    let operation: @Sendable (WorkspaceDatabaseConnection) throws -> Void = {
+      try $0.saveOpenCodeSubmission(conversationID: conversationID, id: id, payload: payload, status: status, visibleText: visibleText, deliveryID: deliveryID, input: input)
+    }
+    if status == "sending" { try await write(operation) }
+    else { try await finishWrite(operation) }
   }
 
   public func openCodeUncertainSubmissions(conversationID: String) async throws -> [OpenCodeValue] {

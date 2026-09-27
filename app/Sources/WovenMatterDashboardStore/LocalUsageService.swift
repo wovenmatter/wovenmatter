@@ -159,6 +159,7 @@ public actor LocalUsageService {
   private let credentialStore: any UsageCredentialStoring
   private let databaseURL: URL
   private let usesSharedConnections: Bool
+  private let sharedConnectionRevision: @Sendable () -> UInt64
   private let limitCollector: @Sendable (UsageLimitsRequest) async -> [UsageLimitAccount]
   private let openRouterActivityFetcher: @Sendable (String) async throws -> OpenRouterActivityResult
   private var limitsGeneration = UUID()
@@ -178,7 +179,7 @@ public actor LocalUsageService {
   // A successful read or explicit save authorizes this app session. Do not ask
   // Keychain again during the refresh triggered by a one-time Allow response.
   private var openRouterAPIKey: String?
-  private var openRouterCredentialRevision = DefaultAgentSupport.revision
+  private var openRouterCredentialRevision: UInt64
   private var openRouterStatus: UsageSourceStatus = .unavailable
   private var openRouterDetail = "Add an OpenRouter management key to import official account activity."
   private var cursorAccountStatus: UsageSourceStatus = .unavailable
@@ -194,6 +195,8 @@ public actor LocalUsageService {
     self.fileManager = fileManager
     credentialStore = UsageCredentialStore(service: credentialService)
     usesSharedConnections = true
+    sharedConnectionRevision = { DefaultAgentSupport.revision }
+    openRouterCredentialRevision = DefaultAgentSupport.revision
     limitCollector = { request in
       var credentials = request.allowCredentialAccess ? ((try? await ProviderAccountCoordinator.shared.appCredentials()) ?? [:]) : [:]
       if request.allowCredentialAccess {
@@ -221,6 +224,7 @@ public actor LocalUsageService {
     credentialStore: any UsageCredentialStoring,
     usageDatabaseURL: URL,
     usesSharedConnections: Bool = false,
+    sharedConnectionRevision: @escaping @Sendable () -> UInt64 = { DefaultAgentSupport.revision },
     limitCollector: @escaping @Sendable (UsageLimitsRequest) async -> [UsageLimitAccount] = {
       await $0.collect()
     },
@@ -232,6 +236,8 @@ public actor LocalUsageService {
     self.fileManager = fileManager
     self.credentialStore = credentialStore
     self.usesSharedConnections = usesSharedConnections
+    self.sharedConnectionRevision = sharedConnectionRevision
+    openRouterCredentialRevision = sharedConnectionRevision()
     self.limitCollector = limitCollector
     self.openRouterActivityFetcher = openRouterActivityFetcher
     databaseURL = usageDatabaseURL
@@ -314,7 +320,7 @@ public actor LocalUsageService {
         connectionChoices.filter { $0.provider == provider }, selectedID: selectedConnections[provider.rawValue])
     }
     let selectionIDs = Dictionary(uniqueKeysWithValues: resolvedConnections.map { ($0.key.rawValue, $0.value.id) })
-    let connectionRevision = DefaultAgentSupport.revision
+    let connectionRevision = sharedConnectionRevision()
     let generation = UUID()
     limitsGeneration = generation
     let codexSources = !usesSharedConnections && enabledProviders.contains(.codex)
@@ -341,10 +347,13 @@ public actor LocalUsageService {
       // snapshot. Their live limits are cheap to re-fetch; keep only this session
       // cache, fenced by the shared connection revision.
       let sharedProviders: Set<ProviderKind> = usesSharedConnections ? Set(ProviderKind.supportedAccounts) : []
-      let persistent = (try? await openUsageStore()?.usageLimitAccounts(
+      let store = await openUsageStore()
+      try checkCurrentLimits(generation, connectionRevision: connectionRevision)
+      let persistent = (try? await store?.usageLimitAccounts(
         providers: enabledProviders.subtracting(sharedProviders),
         accountScopes: resolvedCodexWorkspaceID.map { [.codex: $0] } ?? [:]
       )) ?? []
+      try checkCurrentLimits(generation, connectionRevision: connectionRevision)
       let persistentByProvider = Dictionary(
         uniqueKeysWithValues: persistent.map { ($0.provider, $0) }
       )
@@ -370,10 +379,7 @@ public actor LocalUsageService {
           now: now,
           selectedConnections: resolvedConnections
         ))
-        guard limitsGeneration == generation, !Task.isCancelled,
-              !usesSharedConnections || connectionRevision == DefaultAgentSupport.revision else {
-          throw CancellationError()
-        }
+        try checkCurrentLimits(generation, connectionRevision: connectionRevision)
         accounts = refreshed.map { refreshedAccount in
           let account: UsageLimitAccount
           if refreshedAccount.provider == .openRouter, let credentialError {
@@ -393,7 +399,8 @@ public actor LocalUsageService {
           else { return account }
           return prior.retainingLastGood(after: account)
         }
-        try? await openUsageStore()?.saveUsageLimitAccounts(accounts, storedAt: now)
+        try? await store?.saveUsageLimitAccounts(accounts, storedAt: now)
+        try checkCurrentLimits(generation, connectionRevision: connectionRevision)
         cachedLimits = (now, enabledProviders, resolvedCodexWorkspaceID, connectionRevision, selectionIDs, accounts)
       } else {
         let placeholders = ProviderLimitCollector.placeholderAccounts(
@@ -406,6 +413,7 @@ public actor LocalUsageService {
         }
       }
     }
+    try checkCurrentLimits(generation, connectionRevision: connectionRevision)
     return LocalUsageLimitsSnapshot(
       accounts: accounts,
       hasOpenRouterCredential: allowCredentialAccess
@@ -416,6 +424,13 @@ public actor LocalUsageService {
       connectionChoices: connectionChoices,
       selectedConnections: selectionIDs
     )
+  }
+
+  private func checkCurrentLimits(_ generation: UUID, connectionRevision: UInt64) throws {
+    guard limitsGeneration == generation, !Task.isCancelled,
+          !usesSharedConnections || connectionRevision == sharedConnectionRevision() else {
+      throw CancellationError()
+    }
   }
 
   public func analyticsSnapshot(
@@ -430,6 +445,7 @@ public actor LocalUsageService {
     analyticsGeneration = generation
     let interval = range.interval(relativeTo: now)
     guard let store = await openUsageStore() else {
+      guard isCurrentAnalytics(generation) else { throw CancellationError() }
       return UsageAnalyticsSnapshot(
         range: range,
         generatedAt: now,
@@ -463,6 +479,7 @@ public actor LocalUsageService {
         store: store,
         cutoff: requestedImportCutoff,
         enabledProviders: enabledProviders,
+        generation: generation,
         now: now
       ) {
         guard isCurrentAnalytics(generation) else { throw CancellationError() }
@@ -475,15 +492,18 @@ public actor LocalUsageService {
         try? await store.prune(before: now.addingTimeInterval(-Self.retention))
       }
     }
+    guard isCurrentAnalytics(generation) else { throw CancellationError() }
     if enabledProviders.contains(.openRouter),
        allowCredentialAccess,
        await shouldImportOpenRouter(store: store, reason: refreshReason, now: now) {
+      guard isCurrentAnalytics(generation) else { throw CancellationError() }
       await importOpenRouterActivity(store: store, generation: generation, now: now)
       guard isCurrentAnalytics(generation) else { throw CancellationError() }
       try? await store.setMetadataDate(now, for: "usage.openrouter-attempt-at")
     }
     if enabledProviders.contains(.cursor),
        await shouldImportCursorAccount(store: store, reason: refreshReason, now: now) {
+      guard isCurrentAnalytics(generation) else { throw CancellationError() }
       await importCursorAccountActivity(
         store: store,
         cutoff: now.addingTimeInterval(-Self.retention),
@@ -502,17 +522,15 @@ public actor LocalUsageService {
     ).sorted { lhs, rhs in
       lhs.timestamp == rhs.timestamp ? lhs.id < rhs.id : lhs.timestamp < rhs.timestamp
     }
-    return await UsageAnalyticsSnapshot(
-      range: range,
-      generatedAt: now,
-      samples: samples,
-      sources: coverage(
-        store: store,
-        interval: interval,
-        enabledProviders: enabledProviders,
-        allowCredentialAccess: allowCredentialAccess
-      )
+    guard isCurrentAnalytics(generation) else { throw CancellationError() }
+    let sources = await coverage(
+      store: store,
+      interval: interval,
+      enabledProviders: enabledProviders,
+      allowCredentialAccess: allowCredentialAccess
     )
+    guard isCurrentAnalytics(generation) else { throw CancellationError() }
+    return UsageAnalyticsSnapshot(range: range, generatedAt: now, samples: samples, sources: sources)
   }
 
   public func saveOpenRouterAPIKey(_ value: String) throws {
@@ -520,6 +538,7 @@ public actor LocalUsageService {
     guard !key.isEmpty else { throw LocalUsageServiceError.emptyCredential }
     try credentialStore.saveOpenRouterAPIKey(key)
     openRouterAPIKey = key
+    openRouterCredentialRevision = sharedConnectionRevision()
     limitsGeneration = UUID()
     analyticsGeneration = UUID()
     cachedLimits = nil
@@ -565,14 +584,15 @@ public actor LocalUsageService {
       throw LocalUsageServiceError.missingCredential
     }
     openRouterAPIKey = key
+    openRouterCredentialRevision = sharedConnectionRevision()
     limitsGeneration = UUID()
     analyticsGeneration = UUID()
     cachedLimits = nil
   }
 
   private func loadOpenRouterAPIKey() throws -> String? {
-    let revision = DefaultAgentSupport.revision
-    if revision != openRouterCredentialRevision {
+    let revision = sharedConnectionRevision()
+    if usesSharedConnections && revision != openRouterCredentialRevision {
       openRouterAPIKey = nil; openRouterCredentialRevision = revision
     }
     if let openRouterAPIKey { return openRouterAPIKey }
@@ -676,6 +696,7 @@ public actor LocalUsageService {
         end: now
       )
       let retained = (try? await store.samples(in: retainedInterval, sourceID: "cursor:account")) ?? []
+      guard isCurrentAnalytics(generation) else { return }
       var samplesByEvent = Dictionary(
         uniqueKeysWithValues: retained.map { ($0.sourceEventID, $0) }
       )
@@ -692,6 +713,7 @@ public actor LocalUsageService {
         samples: Array(samplesByEvent.values),
         importedAt: now
       )
+      guard isCurrentAnalytics(generation) else { return }
       cursorAccountStatus = .available
       cursorAccountDetail = "Account-wide usage from Cursor's dashboard API, authenticated by Cursor.app's local sign-in."
     } catch CursorAccountClientError.notSignedIn {
@@ -706,7 +728,7 @@ public actor LocalUsageService {
   }
 
   private func importLocalSources(store: AsyncUsageStore, cutoff: Date,
-    enabledProviders: Set<ProviderKind>, now: Date) async -> Bool {
+    enabledProviders: Set<ProviderKind>, generation: UUID, now: Date) async -> Bool {
     let home = homeDirectory
     let outcomes = importOutcomes
     do {
@@ -715,9 +737,11 @@ public actor LocalUsageService {
         let succeeded = importer.run(store: connection, cutoff: cutoff, enabledProviders: enabledProviders, now: now)
         return (succeeded, importer.importOutcomes)
       }
+      guard isCurrentAnalytics(generation) else { return false }
       importOutcomes = result.1
       return result.0
     } catch {
+      guard isCurrentAnalytics(generation) else { return false }
       importOutcomes["wovenmatter:index"] = .init(failures: 1)
       return false
     }
@@ -737,6 +761,7 @@ public actor LocalUsageService {
       let activity = try await openRouterActivityFetcher(key)
       guard isCurrentAnalytics(generation) else { return }
       for (date, samples) in activity.samplesByUTCDate {
+        guard isCurrentAnalytics(generation) else { return }
         try await store.replace(
           sourceID: "openrouter:activity:\(date)",
           sourceName: "OpenRouter activity",
@@ -748,6 +773,7 @@ public actor LocalUsageService {
           importedAt: now
         )
       }
+      guard isCurrentAnalytics(generation) else { return }
       openRouterStatus = .available
       openRouterDetail = activity.detail
     } catch {

@@ -55,7 +55,11 @@ Stream writers serialize their buffer transitions across awaits. Accepted chunks
 and terminal run cleanup finish even when the driving task is cancelled. Tool toggles
 perform their read/modify/write sequence in one writer job. Refresh generations
 and pagination identity checks prevent older async results replacing newer UI
-state.
+state. ACP prompt handlers and initial instructions are reserved before outbound
+history waits. Gateway events serialize per run and merge stream updates without
+overwriting concurrent steering or cancellation. Connection lifecycle checks run
+after database waits as well as network waits. Note-edit replies trigger a fresh
+workspace snapshot, so delayed replies cannot replace newer saved drafts.
 
 `workerMetrics` reports pending/high-water counts, finished and failed jobs,
 cancellation, timeout and rejection counts, and maximum queue/execution time. It
@@ -69,7 +73,11 @@ executing read cancellation, queue/read deadlines, definitive write completion,
 transaction rollback, connection teardown, cancelled-run tail preservation, stream
 flush ordering, and shared usage/workspace lanes. Note writer tests cover async
 flush ordering, journal failure and replay; transport tests cover delayed history
-recording across timeout and disconnect.
+recording across timeout and disconnect, overlapping ACP prompts, failed history
+writes, and shutdown during a pending connection read. Usage tests suspend a save
+and supersede its refresh to check that stale results cannot replace the current
+cache. Gateway tests overlap unsequenced events behind a blocked writer and verify
+that both deltas and their ordered trace records survive.
 
 ```sh
 swift test --package-path app --filter AsyncDatabaseWorkerTests

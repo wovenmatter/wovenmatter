@@ -75,6 +75,8 @@ public actor OpenClawGatewayCoordinator {
   private var steeringWaiters: [String: [CheckedContinuation<Void, Never>]] = [:]
   private var promptReadyRunIDs: Set<String> = []
   private var promptReadyWaiters: [String: [CheckedContinuation<Bool, Never>]] = [:]
+  private var applyingGatewayEventRunIDs: Set<String> = []
+  private var gatewayEventWaiters: [String: [CheckedContinuation<Void, Never>]] = [:]
   private var pausedGatewayEventRunIDs: Set<String> = []
   private var bufferedGatewayEventsByRunID: [
     String: [(OpenClawGatewayEvent, UUID, UUID)]
@@ -303,12 +305,19 @@ public actor OpenClawGatewayCoordinator {
     onPermission: PermissionHandler?,
     onUpdate: UpdateHandler?
   ) async throws -> (LocalACPRunIdentifiers, Task<Void, any Error>) {
+    guard !isShuttingDown else { throw CancellationError() }
     let descriptor = try await database.openClawGatewaySession(conversationID: conversationID)
+    try Task.checkCancellation()
+    guard !isShuttingDown else { throw CancellationError() }
     let run = try await database.beginLocalACPRun(
       conversationID: conversationID,
       input: input,
       noteContext: noteContext
     )
+    guard !isShuttingDown, !Task.isCancelled else {
+      try await database.cancelLocalACPRun(runID: run.runID)
+      throw CancellationError()
+    }
     activeRuns[run.runID] = ActiveRun(
       runID: run.runID,
       conversationID: conversationID,
@@ -749,6 +758,21 @@ public actor OpenClawGatewayCoordinator {
     receipt.objectValue?["aborted"]?.boolValue == true
   }
 
+  private func acquireGatewayEvent(runID: String) async {
+    guard !applyingGatewayEventRunIDs.insert(runID).inserted else { return }
+    await withCheckedContinuation { gatewayEventWaiters[runID, default: []].append($0) }
+  }
+
+  private func releaseGatewayEvent(runID: String) {
+    guard var waiters = gatewayEventWaiters[runID], !waiters.isEmpty else {
+      applyingGatewayEventRunIDs.remove(runID)
+      return
+    }
+    let next = waiters.removeFirst()
+    gatewayEventWaiters[runID] = waiters.isEmpty ? nil : waiters
+    next.resume()
+  }
+
   private func handleGatewayEvent(
     _ event: OpenClawGatewayEvent,
     agentID: UUID,
@@ -765,7 +789,13 @@ public actor OpenClawGatewayCoordinator {
       }
     }
     guard let projection = OpenClawGatewayEventProjection.project(event),
-          let runID = activeRunID(for: projection, agentID: agentID),
+          let runID = activeRunID(for: projection, agentID: agentID) else { return }
+    // Live and buffered events must reserve their sequence and source together
+    // across the async transaction. Other runs remain independent.
+    await acquireGatewayEvent(runID: runID)
+    var holdsEvent = true
+    defer { if holdsEvent { releaseGatewayEvent(runID: runID) } }
+    guard !Task.isCancelled, isCurrentConnection(agentID, generation: generation),
           var active = activeRuns[runID] else { return }
     if pausedGatewayEventRunIDs.contains(runID) {
       bufferedGatewayEventsByRunID[runID, default: []].append((event, agentID, generation))
@@ -836,19 +866,29 @@ public actor OpenClawGatewayCoordinator {
         generation: generation)
       return
     }
+    guard isCurrentConnection(agentID, generation: generation),
+          var current = activeRuns[runID] else { return }
+    // Cancellation and steering can change the run while SQLite is working.
+    // Merge only the stream state this event owns, preserving their changes.
+    current.eventFence = active.eventFence
+    current.assistantSource = active.assistantSource
+    current.fallbackSequence = active.fallbackSequence
+    active = current
     if let activity {
       if activity.kind == .tool,
          projection.eventType == "tool_call" || projection.eventType == "tool_result" {
         active.liveToolCallIDs.insert(activity.id)
       }
     }
-    if projection.terminalState != nil, let payload = event.payload, let assistantMessageID {
-      try? await database.captureGatewayLibraryFiles(payload, messageID: assistantMessageID, conversationID: active.conversationID)
-    }
     if let terminal = projection.terminalState {
       active.assistantSource.finish(runID: remoteRunID)
       active.terminalStatesByRemoteRunID[remoteRunID] = terminal
     }
+    activeRuns[runID] = active
+    if projection.terminalState != nil, let payload = event.payload, let assistantMessageID {
+      try? await database.captureGatewayLibraryFiles(payload, messageID: assistantMessageID, conversationID: active.conversationID)
+    }
+    guard isCurrentConnection(agentID, generation: generation), activeRuns[runID] != nil else { return }
     if let approval = projection.approval {
       if approval.resolvedDecision != nil {
         approvalTasks[approval.id]?.cancel()
@@ -866,7 +906,10 @@ public actor OpenClawGatewayCoordinator {
     let reachedBoundary = projection.activity != nil
       || projection.terminalState != nil
       || projection.approval != nil
-    activeRuns[runID] = active
+    // Release before calling an app callback that may itself steer a run and
+    // drain buffered events.
+    releaseGatewayEvent(runID: runID)
+    holdsEvent = false
     if reachedBoundary {
       contentPublicationTasks.removeValue(forKey: runID)?.cancel()
       await publishUpdate(runID: runID, phase: .content)
@@ -876,6 +919,8 @@ public actor OpenClawGatewayCoordinator {
   }
 
 #if DEBUG
+  var pendingGatewayEventCountForTesting: Int { gatewayEventWaiters.values.reduce(0) { $0 + $1.count } }
+
   func receiveGatewayEventForTesting(
     _ event: OpenClawGatewayEvent,
     agentID: UUID
@@ -2253,6 +2298,7 @@ public actor OpenClawGatewayCoordinator {
           assistantMessageIDsByRemoteRunID: inputs
         )
         try await hydrateGatewayStreamingState(runID: run.runID, active: &active)
+        guard !isShuttingDown, activeRuns[run.runID] == nil else { continue }
         activeRuns[run.runID] = active
         markPromptReady(runID: run.runID)
         runTasks[run.runID] = Task { [weak self] in

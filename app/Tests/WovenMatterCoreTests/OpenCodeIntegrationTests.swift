@@ -7,6 +7,39 @@ import WovenMatterCore
 
 @Suite(.serialized)
 struct OpenCodeIntegrationTests {
+    @Test func shutdownInvalidatesConnectionWaitingForDatabase() async throws {
+        let fixture = OpenCodeFixture(); FixtureProtocol.fixture = fixture
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appending(path: "workspace.sqlite")
+        let database = try await WorkspaceDatabase(url: url)
+        let session = fixtureSession()
+        let coordinator = OpenCodeSessionCoordinator(database: database,
+            clientFactory: { OpenCodeHTTPClient(connection: $0, session: session) })
+        let workers = DatabaseWorkers.shared(url: url)
+        let entered = AsyncStream<Void>.makeStream()
+        let release = DispatchSemaphore(value: 0)
+        defer { for _ in workers.readers { release.signal() } }
+        let blockers = workers.readers.map { worker in Task { try await worker.perform { _ in
+            entered.continuation.yield(())
+            #expect(release.wait(timeout: .now() + 60) == .success)
+        } } }
+        var iterator = entered.stream.makeAsyncIterator()
+        for _ in workers.readers { await iterator.next() }
+        let pending = Task { try await coordinator.connect(connection()) }
+        let deadline = ContinuousClock.now + .seconds(60)
+        while workers.readers.reduce(0, { $0 + $1.metrics.pending }) < workers.readers.count + 1 {
+            guard ContinuousClock.now < deadline else { throw DatabaseWorkerError.timedOut }
+            try await Task.sleep(for: .milliseconds(1))
+        }
+        await coordinator.shutdown()
+        for _ in workers.readers { release.signal() }
+        for blocker in blockers { try await blocker.value }
+        await #expect(throws: CancellationError.self) { try await pending.value }
+        await #expect(throws: OpenCodeError.self) { try await coordinator.call(connectionID: "fixture", path: "/api/session") }
+    }
+
     @Test func importPageExcludesKnownAndNativeSessionsAndStopsAtOnePage() async throws {
         let fixture = OpenCodeFixture(); FixtureProtocol.fixture = fixture
         fixture.sessions = (0..<60).map { ["id": .string("ses_\($0)"), "title": .string("Session \($0)")] }

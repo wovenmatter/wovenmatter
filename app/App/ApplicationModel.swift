@@ -1021,9 +1021,7 @@ final class ApplicationModel {
         }
         do {
             if let response = try await processPendingRemoteNoteEdit(pending, store: store) {
-                if adoptNoteEditingResponseDraft(response) {
-                    Task { await refreshWorkspace() }
-                }
+                await adoptNoteEditingResponse(response)
             }
         } catch {
             try? await store.database.dismissPendingRemoteNoteEdit(runID: runID)
@@ -1599,19 +1597,11 @@ final class ApplicationModel {
     }
 
     func adoptNoteEditingResponse(_ response: NoteEditingResponse) async {
-        guard adoptNoteEditingResponseDraft(response) else { return }
+        guard response.success, response.document != nil else { return }
+        // A reply describes the revision at commit time. Typing and another
+        // save can finish before it arrives, so reconcile from a fresh snapshot
+        // instead of putting the reply's older document into the editor.
         await refreshWorkspace()
-    }
-
-    @discardableResult
-    private func adoptNoteEditingResponseDraft(_ response: NoteEditingResponse) -> Bool {
-        guard response.success, let document = response.document,
-              let content = try? document.encoded() else { return false }
-        if var draft = noteDrafts[response.noteID] {
-            draft.adoptEditingResponse(response, content: content)
-            noteDrafts[response.noteID] = draft
-        }
-        return true
     }
 
     func prepareNoteDraft(_ note: WorkspaceNoteRecord) {
@@ -2155,9 +2145,7 @@ final class ApplicationModel {
         for pending in (try? await store.database.pendingRemoteNoteEdits()) ?? [] {
             do {
                 if let response = try await processPendingRemoteNoteEdit(pending, store: store) {
-                    if adoptNoteEditingResponseDraft(response) {
-                        Task { await refreshWorkspace() }
-                    }
+                    await adoptNoteEditingResponse(response)
                 }
             } catch {
                 try? await store.database.dismissPendingRemoteNoteEdit(runID: pending.runID)

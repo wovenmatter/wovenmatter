@@ -53,6 +53,75 @@ struct ACPHarnessStreamingReviewTests {
     }
   }
 
+  @Test func overlappingPromptsReserveInstructionsBeforeHistorySuspends() async throws {
+    let fixture = try ACPHarnessFixture(kind: .cursor, initialize: #"{"protocolVersion":1}"#,
+      session: #"{"sessionId":"overlap"}"#, extras: ["authenticate": "{}", "cursor/list_available_models": "{}"])
+    defer { fixture.remove() }
+    let entered = AsyncStream<Void>.makeStream()
+    let release = AsyncStream<Void>.makeStream()
+    defer { release.continuation.finish() }
+    let client = try fixture.client { direction, data in
+      guard direction == "out",
+            let value = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+            value["method"] as? String == "session/prompt" else { return }
+      let params = value["params"] as? [String: Any]
+      let blocks = params?["prompt"] as? [[String: Any]]
+      if (blocks?.first?["text"] as? String)?.hasSuffix("first") == true {
+        entered.continuation.yield(())
+        var iterator = release.stream.makeAsyncIterator()
+        await iterator.next()
+      }
+    }
+    _ = try await client.initializeSession(workingDirectory: fixture.root, existingSessionID: nil,
+      title: nil, systemPrompt: "Unique initial instructions")
+    let events = ACPReviewEvents()
+    let first = Task { try await client.prompt("first") { await events.record($0) } }
+    var iterator = entered.stream.makeAsyncIterator()
+    await iterator.next()
+    // Active input must inherit the first prompt's handlers even while its
+    // outbound history is suspended, and it must not repeat the prefix.
+    let second = Task { try await client.beginActiveInput("second") }
+    let deadline = ContinuousClock.now + .seconds(60)
+    while await client.activePromptRequestCount != 2 {
+      guard ContinuousClock.now < deadline else { throw LocalACPClientError.processExited }
+      try await Task.sleep(for: .milliseconds(1))
+    }
+    release.continuation.yield(())
+    #expect(try await first.value == .endTurn)
+    let receipt = try await second.value
+    _ = try await receipt.completion.value
+    #expect(await client.activePromptRequestCount == 0)
+    #expect(await events.values().count > 0)
+    await client.shutdown()
+    #expect(try fixture.log().components(separatedBy: "Unique initial instructions").count - 1 == 1)
+  }
+
+  @Test func rejectedHistoryWriteReleasesInitialInstructionsForRetry() async throws {
+    actor Recorder {
+      var reject = true
+      func record(_ direction: String, _ data: Data) throws {
+        guard direction == "out", reject,
+          let value = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+          value["method"] as? String == "session/prompt" else { return }
+        reject = false
+        throw Failure.expected
+      }
+    }
+    enum Failure: Error { case expected }
+    let fixture = try ACPHarnessFixture(kind: .codex, initialize: #"{"protocolVersion":1}"#,
+      session: #"{"sessionId":"retry"}"#, extras: [:])
+    defer { fixture.remove() }
+    let recorder = Recorder()
+    let client = try fixture.client { try await recorder.record($0, $1) }
+    _ = try await client.initializeSession(workingDirectory: fixture.root, existingSessionID: nil,
+      title: nil, systemPrompt: "Retry instructions")
+    await #expect(throws: Failure.expected) { try await client.prompt("rejected") }
+    #expect(await client.activePromptRequestCount == 0)
+    #expect(try await client.prompt("retry") == .endTurn)
+    await client.shutdown()
+    #expect(try fixture.log().components(separatedBy: "Retry instructions").count - 1 == 1)
+  }
+
   @Test func configurationNotificationsCarrySnapshotsWithoutAnotherPreparation() async throws {
     let fixture = try ACPHarnessFixture(kind: .codex,
       initialize: #"{"protocolVersion":2}"#,
@@ -366,9 +435,10 @@ private struct ACPHarnessFixture {
     try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
   }
 
-  func client() throws -> LocalACPClient {
-    try LocalACPClient.start(launch: .init(runtimeKind: kind, executableURL: executable, arguments: []),
-                             workingDirectory: root)
+  func client(historyRecorder: WorkspaceWireRecorder? = nil) throws -> LocalACPClient {
+    var launch = LocalACPRuntimeLaunchConfiguration(runtimeKind: kind, executableURL: executable, arguments: [])
+    launch.historyRecorder = historyRecorder
+    return try LocalACPClient.start(launch: launch, workingDirectory: root)
   }
   func log() throws -> String {
     try String(contentsOf: logURL, encoding: .utf8)

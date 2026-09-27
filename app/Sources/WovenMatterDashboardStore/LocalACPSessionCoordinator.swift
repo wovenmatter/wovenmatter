@@ -422,7 +422,7 @@ public actor LocalACPSessionCoordinator {
                 input: input,
                 noteContext: noteContext
             )
-            if isShutDown || cancelledAdmissions.contains(conversationID) {
+            if isShutDown || Task.isCancelled || cancelledAdmissions.contains(conversationID) {
                 try await database.cancelLocalACPRun(runID: run.runID)
                 throw CancellationError()
             }
@@ -1380,6 +1380,8 @@ public actor LocalACPSessionCoordinator {
                 configuration,
                 conversationID: descriptor.conversationID
             )
+            try Task.checkCancellation()
+            guard !isShutDown else { throw LifecycleError.shutDown }
             let observationID = UUID()
             activeSessions[descriptor.conversationID] = ActiveSession(
                 client: started,
@@ -1418,6 +1420,8 @@ public actor LocalACPSessionCoordinator {
         if !permissionMutationConversationIDs.contains(conversationID) {
             try? await persistConfiguration(configuration, conversationID: conversationID)
         }
+        guard activeSessions[conversationID]?.configurationObservationID == observationID,
+              !isShutDown else { return }
         onChange?(DashboardConversationChange(conversationID: conversationID,
             runID: runID, phase: .configuration(configuration)))
     }

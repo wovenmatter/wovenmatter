@@ -576,11 +576,18 @@ public actor LocalACPClient {
     private var readerTask: Task<Void, Never>?
     private var notificationTask: Task<Void, any Error>?
     private let historyRecorder: WorkspaceWireRecorder?
-    private var activeEventHandler: EventHandler?
-    private var activePermissionHandler: PermissionHandler?
+    private struct ActivePrompt {
+        let id: UUID
+        let onEvent: EventHandler?
+        let onPermission: PermissionHandler?
+        let onInteraction: InteractionHandler?
+    }
+    private var activePrompts: [ActivePrompt] = []
+    private var activeEventHandler: EventHandler? { activePrompts.last?.onEvent }
+    private var activePermissionHandler: PermissionHandler? { activePrompts.last?.onPermission }
     private var resumePermissionHandler: PermissionHandler?
-    private var activeInteractionHandler: InteractionHandler?
-    private var activePromptRequestCount = 0
+    private var activeInteractionHandler: InteractionHandler? { activePrompts.last?.onInteraction }
+    var activePromptRequestCount: Int { activePrompts.count }
     // ACP does not provide an identifier for thought chunks. Keep one stable
     // identity for adjacent deltas, then advance it when another stream kind
     // separates reasoning phases so distinct commentary is not merged.
@@ -1269,23 +1276,28 @@ public actor LocalACPClient {
         let prefixedText = initialSystemPrompt.map {
             "[System]\n\($0)\n\n\(outboundText)"
         } ?? outboundText
-        let response = try await beginRequest(
-            method: "session/prompt",
-            params: .object([
-                "sessionId": .string(sessionID),
-                "prompt": try Self.promptBlocks(input, text: prefixedText),
-                "_meta": (runtimeKind == .defaultAgent || durableRemoteACP) ? .object(["wovenRunID": .string(defaultAgentRunID ?? UUID().uuidString.lowercased())]) : .object([:]),
-            ])
-        )
-        if initialSystemPrompt != nil {
-            // A second accepted message must not duplicate the definition,
-            // but a transport or agent failure must make it retryable.
-            initialSystemPromptInFlight = true
+        // Validate attachments before reserving state, then reserve before the
+        // async history write. Another prompt or notification can arrive there.
+        let blocks = try Self.promptBlocks(input, text: prefixedText)
+        let promptID = UUID()
+        if initialSystemPrompt != nil { initialSystemPromptInFlight = true }
+        activePrompts.append(ActivePrompt(id: promptID, onEvent: onEvent,
+            onPermission: onPermission, onInteraction: onInteraction))
+        let response: Task<ACPRequestResponse, any Error>
+        do {
+            response = try await beginRequest(
+                method: "session/prompt",
+                params: .object([
+                    "sessionId": .string(sessionID),
+                    "prompt": blocks,
+                    "_meta": (runtimeKind == .defaultAgent || durableRemoteACP) ? .object(["wovenRunID": .string(defaultAgentRunID ?? UUID().uuidString.lowercased())]) : .object([:]),
+                ])
+            )
+        } catch {
+            if initialSystemPrompt != nil { resolveInitialSystemPrompt(succeeded: false) }
+            promptRequestFinished(promptID)
+            throw error
         }
-        activeEventHandler = onEvent
-        activePermissionHandler = onPermission
-        activeInteractionHandler = onInteraction
-        activePromptRequestCount += 1
         return Task {
             do {
                 let result = try await response.value
@@ -1297,25 +1309,22 @@ public actor LocalACPClient {
                 if initialSystemPrompt != nil {
                     self.resolveInitialSystemPrompt(succeeded: true)
                 }
-                self.promptRequestFinished()
+                self.promptRequestFinished(promptID)
                 return reason
             } catch {
                 if initialSystemPrompt != nil {
                     self.resolveInitialSystemPrompt(succeeded: false)
                 }
-                self.promptRequestFinished()
+                self.promptRequestFinished(promptID)
                 throw error
             }
         }
     }
 
-    private func promptRequestFinished() {
-        activePromptRequestCount = max(0, activePromptRequestCount - 1)
-        if activePromptRequestCount == 0 {
-            activeEventHandler = nil
-            activePermissionHandler = nil
-            activeInteractionHandler = nil
-        }
+    private func promptRequestFinished(_ id: UUID) {
+        // Removing one request must preserve handlers owned by other prompts,
+        // including when a queued send fails or replies finish out of order.
+        activePrompts.removeAll { $0.id == id }
     }
 
     private func resolveInitialSystemPrompt(succeeded: Bool) {
@@ -2223,9 +2232,11 @@ public actor LocalACPClient {
         await acquireOutgoing()
         defer { releaseOutgoing() }
         guard !closed else { throw LocalACPClientError.processExited }
+        if envelope.method == "session/prompt" { try Task.checkCancellation() }
         var data = try JSONEncoder().encode(envelope)
         if runtimeKind != .defaultAgent { try await historyRecorder?("out", data) }
         guard !closed else { throw LocalACPClientError.processExited }
+        if envelope.method == "session/prompt" { try Task.checkCancellation() }
         data.append(0x0A)
         try input.write(contentsOf: data)
     }

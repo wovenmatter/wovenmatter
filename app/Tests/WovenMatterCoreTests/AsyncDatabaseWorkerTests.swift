@@ -3,7 +3,7 @@ import Testing
 import WovenMatterCore
 @testable import WovenMatterDashboardStore
 
-@Suite("Async internal database workers")
+@Suite("Async internal database workers", .serialized)
 struct AsyncDatabaseWorkerTests {
   private func fixture() async throws -> (WorkspaceDatabase, URL, UUID) {
     let root = FileManager.default.temporaryDirectory.appending(path: "wm-async-" + UUID().uuidString)
@@ -15,10 +15,10 @@ struct AsyncDatabaseWorkerTests {
   }
 
   private func waitUntil(_ condition: @Sendable () -> Bool) async throws {
-    let deadline = ContinuousClock.now + .seconds(5)
+    let deadline = ContinuousClock.now + .seconds(60)
     while !condition() {
       guard ContinuousClock.now < deadline else { throw DatabaseWorkerError.timedOut }
-      await Task.yield()
+      try await Task.sleep(for: .milliseconds(1))
     }
   }
 
@@ -96,16 +96,17 @@ struct AsyncDatabaseWorkerTests {
       try await database.write { connection in
         try connection.transaction {
           entered.continuation.yield(())
-          #expect(release.wait(timeout: .now() + 5) == .success)
+          #expect(release.wait(timeout: .now() + 60) == .success)
         }
       }
     }
     var iterator = entered.stream.makeAsyncIterator()
     await iterator.next()
-    let began = ContinuousClock.now
     _ = try await database.workspaceOverview()
     await MainActor.run { #expect(Thread.isMainThread) }
-    #expect(began.duration(to: .now) < .seconds(2))
+    // Verify progress while the writer is still held, without depending on
+    // wall-clock scheduling when other suites share a small CI runner.
+    #expect(database.workerMetrics[0].pending == 1)
     release.signal()
     try await blocked.value
   }
@@ -117,7 +118,7 @@ struct AsyncDatabaseWorkerTests {
     defer { release.signal() }
     let first = Task { try await worker.perform { _ in
       entered.continuation.yield(())
-      #expect(release.wait(timeout: .now() + 5) == .success)
+      #expect(release.wait(timeout: .now() + 60) == .success)
     } }
     var iterator = entered.stream.makeAsyncIterator()
     await iterator.next()
@@ -140,7 +141,7 @@ struct AsyncDatabaseWorkerTests {
     defer { release.signal() }
     let task = Task { try await database.write { connection in
       entered.continuation.yield(())
-      #expect(release.wait(timeout: .now() + 5) == .success)
+      #expect(release.wait(timeout: .now() + 60) == .success)
       return try connection.createFolder(name: "Committed")
     } }
     var iterator = entered.stream.makeAsyncIterator()
@@ -158,7 +159,7 @@ struct AsyncDatabaseWorkerTests {
     defer { release.signal() }
     let first = Task { try await worker.perform { _ in
       entered.continuation.yield(())
-      #expect(release.wait(timeout: .now() + 5) == .success)
+      #expect(release.wait(timeout: .now() + 60) == .success)
     } }
     var iterator = entered.stream.makeAsyncIterator()
     await iterator.next()
@@ -211,7 +212,7 @@ struct AsyncDatabaseWorkerTests {
     defer { release.signal() }
     let blocked = Task { try await database.write { _ in
       entered.continuation.yield(())
-      #expect(release.wait(timeout: .now() + 5) == .success)
+      #expect(release.wait(timeout: .now() + 60) == .success)
     } }
     var iterator = entered.stream.makeAsyncIterator()
     await iterator.next()
@@ -235,7 +236,7 @@ struct AsyncDatabaseWorkerTests {
     defer { release.signal() }
     let blocked = Task { try await database.write { _ in
       entered.continuation.yield(())
-      #expect(release.wait(timeout: .now() + 5) == .success)
+      #expect(release.wait(timeout: .now() + 60) == .success)
     } }
     var iterator = entered.stream.makeAsyncIterator()
     await iterator.next()
@@ -276,6 +277,25 @@ struct AsyncDatabaseWorkerTests {
     try await task.value
     #expect(try await database.conversationContent(id: id).messages.last?.content == "Unflushed tail")
     #expect(try await database.activeDeviceOwnedConversationIDs().isEmpty)
+  }
+
+  @Test func cancelledDriverStillRecordsConfirmedSubmissionAndDelivery() async throws {
+    let (database, root, owner) = try await fixture()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let source = try await database.createLocalACPSession(runtimeKind: .codex, title: "Source", ownerDeviceID: owner)
+    let target = try await database.createLocalACPSession(runtimeKind: .opencode, title: "Target", ownerDeviceID: owner,
+      openCodeAssociation: ("fixture", "session"))
+    let delivery = try await database.reserveToolDelivery(sourceID: source, targetID: target, text: "Hello", requestID: UUID().uuidString)
+    _ = try await database.claimToolDelivery(id: delivery.id)
+    try await database.saveOpenCodeSubmission(conversationID: target, id: "input", payload: [:], status: "sending")
+    let task = Task {
+      withUnsafeCurrentTask { $0?.cancel() }
+      try await database.saveOpenCodeSubmission(conversationID: target, id: "input", payload: [:], status: "accepted")
+      try await database.setToolDeliveryStatus(id: delivery.id, status: "accepted")
+    }
+    try await task.value
+    #expect(try await database.openCodeUncertainSubmissions(conversationID: target).isEmpty)
+    #expect(try await database.toolDelivery(id: delivery.id)?.status == "accepted")
   }
 
   @Test func cancellingExecutingReadInterruptsSQLite() async throws {

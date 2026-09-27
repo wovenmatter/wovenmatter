@@ -8,9 +8,14 @@ struct DashboardNoteWriteBehindTests {
         var values: [String] = []
         var fail = false
         let gate: AsyncStream<Void>?
-        init(gate: AsyncStream<Void>? = nil) { self.gate = gate }
+        let started: AsyncStream<Void>.Continuation?
+        init(gate: AsyncStream<Void>? = nil, started: AsyncStream<Void>.Continuation? = nil) {
+            self.gate = gate
+            self.started = started
+        }
         func append(_ entry: DashboardNoteJournalEntry) async throws {
             values.append(entry.content)
+            started?.yield(())
             if values.count == 1, let gate {
                 var iterator = gate.makeAsyncIterator()
                 await iterator.next()
@@ -19,7 +24,7 @@ struct DashboardNoteWriteBehindTests {
         }
         func setFailure(_ value: Bool) { fail = value }
     }
-    private enum Failure: Error { case expected, timedOut }
+    private enum Failure: Error { case expected }
     private func entry(_ content: String, revision: UInt64) -> DashboardNoteJournalEntry {
         .init(noteID: "note", title: "Draft", content: content, revision: revision)
     }
@@ -28,30 +33,26 @@ struct DashboardNoteWriteBehindTests {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         return root
     }
-    private func waitForFirstWrite(_ writes: Writes) async throws {
-        let deadline = ContinuousClock.now + .seconds(5)
-        while await writes.values.isEmpty {
-            guard ContinuousClock.now < deadline else { throw Failure.timedOut }
-            await Task.yield()
+    @Test func snapshotReconciliationPreservesUnsavedTextAndAdoptsCurrentSavedText() throws {
+        func note(_ content: String, revision: String) throws -> WorkspaceNoteRecord {
+            let data = try JSONSerialization.data(withJSONObject: [
+                "id": "note", "title": "Draft", "content": content, "updated_at": revision,
+            ])
+            return try JSONDecoder().decode(WorkspaceNoteRecord.self, from: data)
         }
-    }
-
-    @Test func delayedEditingResponsePreservesNewerUnsavedText() {
-        var draft = DashboardNoteDraft(title: "Draft", content: "Already saved", saveState: .saved,
-            editRevision: 1, persistedRevision: 1, sourceUpdatedAt: "initial")
+        var draft = DashboardNoteDraft.initial(for: try note("Initial", revision: "initial"))
         draft.edit(content: "Typed while the database was waiting")
-        let response = NoteEditingResponse(success: true, noteID: "note", title: "Agent title", revision: "agent-revision")
-        draft.adoptEditingResponse(response, content: "Earlier agent edit")
+        draft.reconcile(with: try note("Earlier agent edit", revision: "agent"))
         #expect(draft.content == "Typed while the database was waiting")
-        #expect(draft.title == "Draft")
         #expect(draft.saveState == .saving)
-        #expect(draft.editRevision == 2)
-        #expect(draft.persistedRevision == 1)
-        draft.persistedRevision = 2
-        draft.adoptEditingResponse(response, content: "A later confirmed edit")
-        #expect(draft.content == "A later confirmed edit")
-        #expect(draft.title == "Agent title")
+        draft.persistedRevision = draft.editRevision
+        draft.reconcile(with: try note("Typed while the database was waiting", revision: "saved"))
+        #expect(draft.content == "Typed while the database was waiting")
+        #expect(draft.sourceUpdatedAt == "saved")
         #expect(draft.saveState == .saved)
+        draft.reconcile(with: try note("Latest committed agent edit", revision: "latest"))
+        #expect(draft.content == "Latest committed agent edit")
+        #expect(draft.sourceUpdatedAt == "latest")
     }
 
     @Test func flushWaitsForSuspendedWriteAndSubsequentEditsRemainOrdered() async throws {
@@ -59,13 +60,15 @@ struct DashboardNoteWriteBehindTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let gate = AsyncStream<Void>.makeStream()
         defer { gate.continuation.finish() }
-        let writes = Writes(gate: gate.stream)
+        let started = AsyncStream<Void>.makeStream()
+        let writes = Writes(gate: gate.stream, started: started.continuation)
         let journal = DashboardNoteDraftJournal(fileURL: root.appending(path: "drafts.ndjson"))
         let writer = DashboardNoteWriteBehind(journal: journal, coalescingDelay: .seconds(60),
             update: { try await writes.append($0) }, completion: { _, _ in })
         writer.submit(entry("first", revision: 1))
         let first = Task { try await writer.flush() }
-        try await waitForFirstWrite(writes)
+        var iterator = started.stream.makeAsyncIterator()
+        await iterator.next()
         writer.submit(entry("second", revision: 2))
         writer.submit(entry("third", revision: 3))
         #expect(await writer.hasOutstandingWork())

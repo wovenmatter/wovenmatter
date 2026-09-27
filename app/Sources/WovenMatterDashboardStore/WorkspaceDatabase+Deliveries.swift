@@ -248,11 +248,13 @@ extension WorkspaceDatabase {
   }
 
   public func failToolDeliveryAttempt(id: String, now: Date = Date()) async throws {
-    try await write { try $0.failToolDeliveryAttempt(id: id, now: now) }
+    try await finishWrite { try $0.failToolDeliveryAttempt(id: id, now: now) }
   }
 
   public func setToolDeliveryStatus(id: String, status: String, messageID: String? = nil) async throws {
-    try await write { try $0.setToolDeliveryStatus(id: id, status: status, messageID: messageID) }
+    // Resolving an already claimed delivery is cleanup, including returning a
+    // known-unsent attempt to the queue. Preserve its outcome on cancellation.
+    try await finishWrite { try $0.setToolDeliveryStatus(id: id, status: status, messageID: messageID) }
   }
 
   public func recoverToolDeliveries() async throws {

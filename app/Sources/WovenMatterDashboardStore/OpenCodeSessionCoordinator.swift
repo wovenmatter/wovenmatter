@@ -38,19 +38,39 @@ public actor OpenCodeSessionCoordinator {
         updates = stream.stream; continuation = stream.continuation
     }
     public func connect(_ connection: OpenCodeConnection) async throws {
-        for link in (try? await database.openCodeLinks()) ?? [] where link.connectionID == connection.identity {
+        let token = UUID(); connectionTokens[connection.identity] = token
+        let links = (try? await database.openCodeLinks()) ?? []
+        try Task.checkCancellation()
+        guard connectionTokens[connection.identity] == token else { throw CancellationError() }
+        for link in links where link.connectionID == connection.identity {
             stopAutomaticApprovals(link.conversationID)
         }
-        let token = UUID(); connectionTokens[connection.identity] = token
-        let client = clientFactory(connection).recording(database.openCodeHistoryRecorder(connectionID: connection.identity))
+        let client = recordedClient(connection, token: token)
         _ = try await client.health()
         try Task.checkCancellation()
         guard connectionTokens[connection.identity] == token else { throw CancellationError() }
         clients[connection.identity] = client
     }
+    private func isCurrentConnection(_ id: String, token: UUID) -> Bool {
+        connectionTokens[id] == token
+    }
+    private func recordedClient(_ connection: OpenCodeConnection, token: UUID) -> OpenCodeHTTPClient {
+        let recorder = database.openCodeHistoryRecorder(connectionID: connection.identity)
+        return clientFactory(connection).recording { [weak self] direction, data in
+            guard await self?.isCurrentConnection(connection.identity, token: token) == true else { throw CancellationError() }
+            try await recorder(direction, data)
+            // A disconnect may occur while outbound history is queued. Never
+            // send that old client's request after the replacement takes over.
+            guard await self?.isCurrentConnection(connection.identity, token: token) == true else { throw CancellationError() }
+        }
+    }
     public func disconnect(connectionID: String) async {
         connectionTokens.removeValue(forKey: connectionID)
-        for link in (try? await database.openCodeLinks()) ?? [] where link.connectionID == connectionID {
+        clients.removeValue(forKey: connectionID)
+        let links = (try? await database.openCodeLinks()) ?? []
+        // A replacement connection may have started during the database read.
+        guard connectionTokens[connectionID] == nil else { return }
+        for link in links where link.connectionID == connectionID {
             stopAutomaticApprovals(link.conversationID)
             workers.removeValue(forKey: link.conversationID)?.cancel()
             eventRefreshes.removeValue(forKey: link.conversationID)?.cancel()
@@ -60,7 +80,6 @@ public actor OpenCodeSessionCoordinator {
             pendingCursors.removeValue(forKey: link.conversationID)
             emit(link.conversationID, status: "Disconnected")
         }
-        clients.removeValue(forKey: connectionID)
     }
     public func shutdown() { automaticApprovalTasks.values.forEach { $0.cancel() }; automaticApprovalTasks.removeAll(); automaticApprovalEpochs.removeAll(); automaticallyReplied.removeAll(); automaticApprovalFailures.removeAll(); workers.values.forEach { $0.cancel() }; eventRefreshes.values.forEach { $0.cancel() }; workers.removeAll(); eventRefreshes.removeAll(); eventRefreshTokens.removeAll(); eventRefreshDirty.removeAll(); generations.removeAll(); clients.removeAll(); connectionTokens.removeAll(); pendingCursors.removeAll() }
     public func call(connectionID: String, method: String = "GET", path: String,
@@ -268,7 +287,11 @@ public actor OpenCodeSessionCoordinator {
     }
     public func watch(_ link: OpenCodeSessionLink) async {
         guard workers[link.conversationID] == nil, clients[link.connectionID] != nil else { return }
-        snapshots[link.conversationID] = (try? await database.openCodeSnapshot(conversationID: link.conversationID)) ?? OpenCodeSessionSnapshot()
+        let token = connectionTokens[link.connectionID]
+        let snapshot = (try? await database.openCodeSnapshot(conversationID: link.conversationID)) ?? OpenCodeSessionSnapshot()
+        guard !Task.isCancelled, token == connectionTokens[link.connectionID],
+              clients[link.connectionID] != nil, workers[link.conversationID] == nil else { return }
+        snapshots[link.conversationID] = snapshot
         let generation = UUID(); generations[link.conversationID] = generation
         workers[link.conversationID] = Task { await self.follow(link, generation: generation) }
     }
@@ -278,9 +301,9 @@ public actor OpenCodeSessionCoordinator {
             let connectedAt = ContinuousClock.now
             do {
                 guard var client = clients[link.connectionID] else { return }
-                let token = connectionTokens[link.connectionID]
+                guard let token = connectionTokens[link.connectionID] else { return }
                 if let registration = client.connection.registration {
-                    client = clientFactory(try .discover(file: registration))
+                    client = recordedClient(try .discover(file: registration), token: token)
                     _ = try await client.health()
                     try Task.checkCancellation()
                     guard generations[link.conversationID] == generation, token == connectionTokens[link.connectionID] else { continue }
@@ -342,8 +365,13 @@ public actor OpenCodeSessionCoordinator {
     }
     func receiveLogEvent(_ event: OpenCodeValue, link: OpenCodeSessionLink) async {
         if generations[link.conversationID] == nil {
-            snapshots[link.conversationID] = (try? await database.openCodeSnapshot(conversationID: link.conversationID)) ?? OpenCodeSessionSnapshot()
-            generations[link.conversationID] = UUID()
+            let token = connectionTokens[link.connectionID]
+            let snapshot = (try? await database.openCodeSnapshot(conversationID: link.conversationID)) ?? OpenCodeSessionSnapshot()
+            guard !Task.isCancelled, token != nil, token == connectionTokens[link.connectionID] else { return }
+            if generations[link.conversationID] == nil {
+                snapshots[link.conversationID] = snapshot
+                generations[link.conversationID] = UUID()
+            }
         }
         guard let generation = generations[link.conversationID] else { return }
         logEvent(event, link: link, generation: generation)
@@ -391,6 +419,8 @@ public actor OpenCodeSessionCoordinator {
         try Task.checkCancellation()
         guard capturedGeneration == generations[link.conversationID], token == connectionTokens[link.connectionID] else { throw CancellationError() }
         let persisted = try await database.openCodeSnapshot(conversationID: link.conversationID)
+        try Task.checkCancellation()
+        guard capturedGeneration == generations[link.conversationID], token == connectionTokens[link.connectionID] else { throw CancellationError() }
         var snapshot = snapshots[link.conversationID] ?? persisted ?? OpenCodeSessionSnapshot()
         snapshot.info = responses.0["data"]
         guard snapshot.info["id"].text == link.sessionID else { throw OpenCodeError.message("OpenCode returned a different session identity.") }
@@ -435,12 +465,15 @@ public actor OpenCodeSessionCoordinator {
         guard capturedGeneration == generations[link.conversationID], token == connectionTokens[link.connectionID] else { throw CancellationError() }
         if snapshots[link.conversationID] != snapshot {
             try await database.saveOpenCodeSnapshot(snapshot, conversationID: link.conversationID)
+            try Task.checkCancellation()
+            guard capturedGeneration == generations[link.conversationID], token == connectionTokens[link.connectionID] else { throw CancellationError() }
             snapshots[link.conversationID] = snapshot
             emit(link.conversationID, status: "Connected")
         }
         try await reconcileSubmissions(link, client: client, snapshot: snapshot, token: token)
         guard capturedGeneration == generations[link.conversationID], token == connectionTokens[link.connectionID] else { throw CancellationError() }
         await scheduleAutomaticApprovals(link)
+        guard !Task.isCancelled, capturedGeneration == generations[link.conversationID], token == connectionTokens[link.connectionID] else { throw CancellationError() }
         emit(link.conversationID, status: "Connected")
     }
     public func loadOlder(_ link: OpenCodeSessionLink) async throws {
@@ -459,6 +492,8 @@ public actor OpenCodeSessionCoordinator {
         snapshot.mergeMessages(Array(page["data"].array.reversed()), older: true)
         snapshot.olderCursor = page["data"].array.count == 100 ? page["cursor"]["next"].string : nil
         try await database.saveOpenCodeSnapshot(snapshot, conversationID: link.conversationID)
+        try Task.checkCancellation()
+        guard generation == generations[link.conversationID], token == connectionTokens[link.connectionID] else { throw CancellationError() }
         snapshots[link.conversationID] = snapshot; emit(link.conversationID, status: "Connected")
     }
     public func prompt(_ link: OpenCodeSessionLink, input: AgentMessageInput, discovery: String? = nil) async throws {
