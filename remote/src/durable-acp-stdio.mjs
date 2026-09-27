@@ -78,7 +78,12 @@ export async function runStdioRelay({ channelID, harnessID, cwd, permission, nat
         }
         if (message.method === 'session/prompt' || message.method === '_session/steering' || (pi && message.type === 'prompt')) observingRun = true
         dispatched = true
-        await call('message', { deliveryID: randomUUID(), message })
+        const receipt = await call('message', { deliveryID: randomUUID(), message })
+        if (pi && receipt.stoppedPreflight) {
+          const id = requestIDs.get(message.id) ?? message.id
+          requestIDs.delete(message.id); requestMethods.delete(message.id)
+          await write({ type: 'response', id, command: 'abort', success: true })
+        }
       } catch (error) {
         const originalID = requestIDs.get(message.id) ?? message.id
         requestIDs.delete(message.id)

@@ -370,7 +370,21 @@ export function createDurableACP({ catalog, workspaceRoot, environment, isEnable
         updateSnapshot(channel.snapshot, accepted)
         channel.accepted.add(body.deliveryID)
         channel.process.stdin.write(line)
-        return { accepted: true }
+        const stoppedPreflight = channel.harnessID === 'pi' && body.message.type === 'abort'
+          && body.message._meta?.wovenStopPreflight === true
+        // Pi aborts the active loop, but an extension preflight can otherwise
+        // finish later and start another loop. Explicit Stop retires this
+        // service-owned process just as local cancellation retires local Pi.
+        if (stoppedPreflight) {
+          channel.state = 'stopped'
+          const child = channel.process
+          await new Promise(resolve => {
+            const timer = setTimeout(() => { if (channel.process === child) child.kill('SIGKILL') }, 1500)
+            child.once('close', () => { clearTimeout(timer); resolve() })
+            child.kill('SIGTERM')
+          })
+        }
+        return { accepted: true, ...(stoppedPreflight ? { stoppedPreflight: true } : {}) }
       }
       const after = body.after ?? 0
       if (!Number.isSafeInteger(after) || after < 0) throw new Error('Invalid output cursor')

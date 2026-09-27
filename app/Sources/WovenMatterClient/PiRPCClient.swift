@@ -384,6 +384,11 @@ public actor PiRPCClient {
             // Retire that transport so its late
             // ACK/output cannot leak into a subsequent run. The coordinator
             // recreates the same durable session after this cancellation error.
+            if launch.environment["WOVEN_DURABLE_REMOTE_ACP"] == "1" {
+                // The workspace owns the native process. Closing this SSH
+                // attachment alone cannot fence a late preflight there.
+                _ = try? await sendCommand(["type": "abort", "_meta": ["wovenStopPreflight": true]])
+            }
             failPending(CancellationError())
             await shutdown()
             return

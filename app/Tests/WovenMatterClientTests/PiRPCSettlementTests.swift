@@ -236,10 +236,17 @@ private struct PiPipeFixture: Sendable {
     }
     var started = false
     var steered = false
+    var pendingPreflight: Task<Void, Never>?
     while let line = try await cursor.next() {
       let command = try #require(JSONSerialization.jsonObject(with: line) as? [String: Any])
       let type = command["type"] as? String
       var response: [String: Any] = ["type": "response", "id": command["id"]!, "success": true, "data": [:]]
+      if type == "abort", let pendingPreflight {
+        #expect((command["_meta"] as? [String: Bool])?["wovenStopPreflight"] == true)
+        try emit(response)
+        await pendingPreflight.value
+        return
+      }
       if type == "get_state" {
         response["data"] = ["sessionId": "fixture-session", "isStreaming": started && !steered,
                             "isCompacting": false, "pendingMessageCount": 0]
@@ -256,7 +263,7 @@ private struct PiPipeFixture: Sendable {
         #expect(command["streamingBehavior"] as? String == "steer")
         #expect((command["_meta"] as? [String: String])?["wovenRunID"] == "same-run")
         steered = true
-        if let pending { await pending.pause(); return }
+        if let pending { pendingPreflight = Task { await pending.pause() }; continue }
         // The old loop ends while the native extension input hook is running.
         try emit(["type": "agent_settled"])
         if rejected { response["success"] = false; response["error"] = "rejected correction" }
