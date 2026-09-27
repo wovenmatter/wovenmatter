@@ -285,7 +285,9 @@ final class ApplicationModel {
     let closedLidProtection: ClosedLidWorkProtection
     private(set) var isChangingClosedLidPolicy = false
     private(set) var closedLidSettingsError: String?
-    @ObservationIgnored private let activeWorkSleepPrevention: ActiveWorkSleepPrevention
+    private(set) var isChangingIdleSleepPolicy = false
+    private(set) var idleSleepSettingsError: String?
+    let activeWorkSleepPrevention: ActiveWorkSleepPrevention
     private(set) var localRunningConversationIDs: Set<String> = [] {
         didSet { activeWorkSleepPrevention.setRunningConversationIDs(runningToolSessionIDs) }
     }
@@ -400,7 +402,8 @@ final class ApplicationModel {
             ownsExecution: LocalExecutionRole.current.ownsExecution, defaults: applicationDefaults)
         self.closedLidProtection = closedLidProtection
         self.activeWorkSleepPrevention = ActiveWorkSleepPrevention(
-            ownsExecution: LocalExecutionRole.current.ownsExecution,
+            ownsExecution: LocalExecutionRole.current.ownsExecution, defaults: applicationDefaults,
+            closedLidPolicy: closedLidProtection.snapshot.policy,
             onWorkChanged: { [weak closedLidProtection] in closedLidProtection?.setWorking($0) })
         self.usage = ApplicationUsageModel(applicationDefaults: applicationDefaults)
         self.sessionSelectionPreferences = SessionSelectionPreferences(defaults: applicationDefaults)
@@ -4954,6 +4957,7 @@ struct BackendApplicationState: Codable, Sendable {
     let sessionAccessError: String?
     let executionErrors: [String: String]
     let closedLidProtection: ClosedLidProtectionSnapshot?
+    let idleSleepProtection: IdleSleepProtectionSnapshot?
 }
 
 extension ApplicationModel {
@@ -5094,7 +5098,8 @@ extension ApplicationModel {
               composerPrefills: pendingComposerPrefills, calendarErrors: remoteCalendarGatewayErrors,
               sessionAccess: pendingSessionAccess, sessionAccessError: sessionAccessError,
               executionErrors: conversationStatesByID.compactMapValues { $0.error },
-              closedLidProtection: closedLidProtection.snapshot)
+              closedLidProtection: closedLidProtection.snapshot,
+              idleSleepProtection: activeWorkSleepPrevention.snapshot)
     }
 
     private func observeBackendApplicationState() {
@@ -5251,6 +5256,7 @@ extension ApplicationModel {
 
     private func refreshBackendApplicationState() async throws {
         let snapshot = try JSONDecoder().decode(BackendApplicationState.self, from: await callBackend(method: "application.state"))
+        activeWorkSleepPrevention.applyBackendSnapshot(snapshot.idleSleepProtection ?? .init())
         closedLidProtection.applyBackendSnapshot(snapshot.closedLidProtection ?? .init())
         localRunningConversationIDs = snapshot.runningConversationIDs
         localACPSessionMetadata = snapshot.metadata
@@ -5270,7 +5276,27 @@ extension ApplicationModel {
             from: await callBackend(method: "runtime.snapshot")))
     }
 
-    func setClosedLidPolicyFromSettings(_ policy: ClosedLidPolicy) async {
+    func setIdleSleepPolicyFromSettings(_ policy: WorkPowerPolicy) async {
+        guard !isChangingIdleSleepPolicy else { return }
+        isChangingIdleSleepPolicy = true
+        idleSleepSettingsError = nil
+        defer { isChangingIdleSleepPolicy = false }
+        do {
+            if isBackendFrontend {
+                _ = try await sendBackendCommand(.setIdleSleepPolicy(policy))
+                try await refreshBackendApplicationState()
+            } else {
+                activeWorkSleepPrevention.setPolicy(policy)
+            }
+        } catch { idleSleepSettingsError = error.localizedDescription }
+    }
+
+    func applyClosedLidPolicy(_ policy: WorkPowerPolicy) {
+        activeWorkSleepPrevention.setClosedLidPolicy(policy)
+        closedLidProtection.setPolicy(policy)
+    }
+
+    func setClosedLidPolicyFromSettings(_ policy: WorkPowerPolicy) async {
         guard !isChangingClosedLidPolicy else { return }
         isChangingClosedLidPolicy = true
         closedLidSettingsError = nil
@@ -5288,7 +5314,7 @@ extension ApplicationModel {
                 _ = try await sendBackendCommand(.setClosedLidPolicy(policy))
                 try await refreshBackendApplicationState()
             } else {
-                closedLidProtection.setPolicy(policy)
+                applyClosedLidPolicy(policy)
             }
         } catch { closedLidSettingsError = error.localizedDescription }
     }

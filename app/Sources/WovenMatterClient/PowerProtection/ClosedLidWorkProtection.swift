@@ -35,7 +35,7 @@ public enum ClosedLidHelperRegistration {
 
 @MainActor
 protocol ClosedLidLeaseSending: AnyObject {
-    func renew(_ policy: ClosedLidPolicy, completion: @escaping @MainActor (Bool, String?) -> Void)
+    func renew(_ policy: WorkPowerPolicy, completion: @escaping @MainActor (Bool, String?) -> Void)
     func close()
 }
 
@@ -52,7 +52,7 @@ private final class ClosedLidXPCConnection: ClosedLidLeaseSending {
         connection.resume()
     }
 
-    func renew(_ policy: ClosedLidPolicy, completion: @escaping @MainActor (Bool, String?) -> Void) {
+    func renew(_ policy: WorkPowerPolicy, completion: @escaping @MainActor (Bool, String?) -> Void) {
         let proxy = connection.remoteObjectProxyWithErrorHandler { _ in
             Task { @MainActor in completion(false, "The power helper is disconnected. Retrying…") }
         } as? any ClosedLidPowerProtocol
@@ -98,7 +98,7 @@ public final class ClosedLidWorkProtection {
                                      batteryPower: defaults.bool(forKey: Self.batteryKey)))
     }
 
-    public func setPolicy(_ policy: ClosedLidPolicy) {
+    public func setPolicy(_ policy: WorkPowerPolicy) {
         guard ownsExecution, !stopped else { return }
         defaults.set(policy.externalPower, forKey: Self.externalKey)
         defaults.set(policy.batteryPower, forKey: Self.batteryKey)

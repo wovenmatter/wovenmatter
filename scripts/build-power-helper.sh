@@ -33,7 +33,7 @@ for architecture in $architectures; do
   xcrun swiftc -swift-version 6 -parse-as-library -O \
     -target "$architecture-apple-macos26.0" \
     -module-cache-path "$scratch/ModuleCache" \
-    "$power_sources/ClosedLidPolicy.swift" \
+    "$power_sources/WorkPowerPolicy.swift" \
     "$power_sources/ClosedLidLeaseController.swift" \
     "$power_sources/ClosedLidPowerProtocol.swift" \
     "$power_sources/ClosedLidSystemPower.swift" \

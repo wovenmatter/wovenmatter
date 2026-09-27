@@ -36,6 +36,7 @@ struct SettingsGeneralView: View {
             sidebarLayoutCard
             appearanceCard
             backgroundExecutionCard
+            idleSleepProtectionCard
             closedLidProtectionCard
             credentialAccessCard
             dictationCard
@@ -89,7 +90,7 @@ struct SettingsGeneralView: View {
                  ? "A separate backend starts at login and keeps tasks, sessions, and connections running after you quit the app. This Mac must remain logged in."
                  : "Tasks and sessions run while Woven Matter is open. Background execution is off on this Mac.")
                 .font(.caption).foregroundStyle(.secondary)
-            Text("Active sessions keep this Mac awake while the display sleeps. Closed-lid protection is configured below.")
+            Text("Choose sleep protection below for work running in either mode.")
                 .font(.caption).foregroundStyle(.secondary)
             if let message = background.errorMessage {
                 Text(message).font(.caption).foregroundStyle(.red)
@@ -97,10 +98,37 @@ struct SettingsGeneralView: View {
         }
     }
 
+    private var idleSleepProtectionCard: some View {
+        SettingsCard(title: "Keep working when the screen sleeps",
+                     detail: "Prevent automatic system sleep only while agent work is running.") {
+            Toggle("When connected to external power", isOn: idleSleepBinding(externalPower: true))
+                .toggleStyle(DashboardSwitchToggleStyle())
+            Toggle("When running on battery", isOn: idleSleepBinding(externalPower: false))
+                .toggleStyle(DashboardSwitchToggleStyle())
+            Text("The screen can turn off and lock while work continues. At this level, closing the lid or choosing Sleep can still pause work.")
+                .font(.caption).foregroundStyle(.secondary)
+            if let message = model.idleSleepSettingsError {
+                Text(message).font(.caption).foregroundStyle(.red)
+            }
+        }
+        .disabled(model.isChangingIdleSleepPolicy)
+    }
+
+    private func idleSleepBinding(externalPower: Bool) -> Binding<Bool> {
+        Binding(get: {
+            let policy = model.activeWorkSleepPrevention.snapshot.policy
+            return externalPower ? policy.externalPower : policy.batteryPower
+        }, set: { enabled in
+            var policy = model.activeWorkSleepPrevention.snapshot.policy
+            if externalPower { policy.externalPower = enabled } else { policy.batteryPower = enabled }
+            Task { await model.setIdleSleepPolicyFromSettings(policy) }
+        })
+    }
+
     private var closedLidProtectionCard: some View {
         let snapshot = model.closedLidProtection.snapshot
         return SettingsCard(title: "Keep working when the lid is closed",
-                            detail: "Apply only while agent work is running on this Mac.") {
+                            detail: "A higher level that includes display-sleep protection while agent work is running.") {
             Toggle("When connected to external power", isOn: closedLidBinding(externalPower: true))
                 .toggleStyle(DashboardSwitchToggleStyle())
             Toggle("When running on battery", isOn: closedLidBinding(externalPower: false))

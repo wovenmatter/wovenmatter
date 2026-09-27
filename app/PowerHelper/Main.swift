@@ -66,7 +66,7 @@ final class PowerHelper: NSObject, NSXPCListenerDelegate, @unchecked Sendable {
         return true
     }
 
-    func renew(id: UUID, policy: ClosedLidPolicy, reply: @escaping @Sendable (Bool, String?) -> Void) {
+    func renew(id: UUID, policy: WorkPowerPolicy, reply: @escaping @Sendable (Bool, String?) -> Void) {
         queue.async {
             guard self.sessions.contains(id) else { reply(false, "The power helper connection closed."); return }
             self.controller.renew(id, policy: policy, now: Self.now, source: ClosedLidSystemPower.source())

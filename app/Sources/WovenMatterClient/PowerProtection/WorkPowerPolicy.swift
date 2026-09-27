@@ -1,6 +1,6 @@
 import Foundation
 
-public struct ClosedLidPolicy: Codable, Equatable, Sendable {
+public struct WorkPowerPolicy: Codable, Equatable, Sendable {
     public var externalPower: Bool
     public var batteryPower: Bool
 
@@ -8,6 +8,8 @@ public struct ClosedLidPolicy: Codable, Equatable, Sendable {
         self.externalPower = externalPower
         self.batteryPower = batteryPower
     }
+
+    public static let displaySleepDefault = Self(externalPower: true, batteryPower: true)
 
     public var isEnabled: Bool { externalPower || batteryPower }
 
@@ -23,11 +25,11 @@ public struct ClosedLidPolicy: Codable, Equatable, Sendable {
 enum WorkPowerSource { case external, battery, unknown }
 
 public struct ClosedLidProtectionSnapshot: Codable, Equatable, Sendable {
-    public var policy: ClosedLidPolicy
+    public var policy: WorkPowerPolicy
     public var isProtecting: Bool
     public var message: String?
 
-    public init(policy: ClosedLidPolicy = .init(), isProtecting: Bool = false, message: String? = nil) {
+    public init(policy: WorkPowerPolicy = .init(), isProtecting: Bool = false, message: String? = nil) {
         self.policy = policy
         self.isProtecting = isProtecting
         self.message = message

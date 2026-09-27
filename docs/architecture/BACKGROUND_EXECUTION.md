@@ -32,12 +32,24 @@ Quitting the frontend does not shut down backend-owned sessions.
 
 ## Active work and display sleep
 
-The execution owner automatically holds a Foundation `ProcessInfo` activity with
-`.userInitiated` while agent work is active. This prevents App Nap and idle system
-sleep, on battery as well as external power, while allowing display sleep and
-screen locking. It applies in standalone and backend modes; the frontend never
-owns an assertion. Keeping the backend awake lets active work continue after the
-frontend quits.
+General settings offers two levels of work sleep protection. **Keep working when
+the screen sleeps** controls the normal level, with independent **When connected
+to external power** and **When running on battery** switches. Both normal-level
+switches default to on, preserving existing behavior; explicit off choices persist.
+The higher **Keep working when the lid is closed** level is described below.
+
+The execution owner holds a Foundation `ProcessInfo` activity with `.userInitiated`
+while work is active and either level selects the current power source. This
+prevents App Nap and idle system sleep while allowing display sleep and screen
+locking. Power-source notifications reconcile the activity immediately during a
+run, without waiting for conversation updates. An unknown source is not eligible.
+When neither level selects the current source, the owner uses
+`.userInitiatedAllowingIdleSystemSleep`, preserving App Nap protection while allowing
+system sleep. This does not end the work or its dispatch leases.
+
+Both levels apply in standalone and backend modes; the frontend never owns an
+assertion. Preferences and actual protection state are published by the execution
+owner. Keeping the backend awake lets active work continue after the frontend quits.
 
 A dispatch lease starts before asynchronous session preparation and ends on every
 return, error, or cancellation. Running conversation state retains the same
@@ -56,8 +68,11 @@ future scheduled tasks or makes a remote host stay awake.
 General settings contains **Keep working when the lid is closed**, with independent
 **When connected to external power** and **When running on battery** switches. Both
 default to off. Enabling both covers both sources; neither applies when work is
-idle. The execution owner persists the policy. Frontends route changes to the
-backend and display its protection snapshot, so quitting a frontend does not
+idle. The higher level includes normal idle-sleep protection on its selected power
+sources even if the separate normal-level switch is off. It does not rewrite the
+normal-level preferences, so disabling the higher level restores the selected
+normal behavior. Pending helper approval still permits normal-level protection.
+The execution owner persists the policy. Frontends route changes to the backend and display its protection snapshot, so quitting a frontend does not
 release backend-owned protection.
 
 Normal sleep assertions cannot prevent forced sleep from closing the lid or
@@ -155,13 +170,17 @@ while work runs and its removal after the last run. A display-off provider run
 remains a separate manual acceptance check.
 
 Closed-lid tests use fake power settings and a temporary user-owned journal. They
-cover both policy switches, AC/battery changes, multiple clients, lease expiry,
+cover both levels and their independent source policies, persisted off choices,
+live policy and AC/battery changes, multiple clients, lease expiry,
 helper restart, mutation/journal failures, pre-existing overrides, peer identity
 validation, frontend ownership, approval waiting, and late callbacks. Native
 build validation checks the bundled executable and launchd configuration without
 registering or running the daemon.
 
-Manual acceptance on a signed build remains required: approve the helper, start
+Manual acceptance on a signed build remains required: verify the normal-level
+switches on each source using display sleep, including a power-source change during
+a run. Turning both levels off must remove Woven Matter's idle-sleep assertion.
+Then approve the higher level's helper, start
 a long provider run, close the lid on AC and battery according to each switch,
 change power source while closed, then verify completion/stop restores sleep.
 Repeat with background execution enabled and the frontend closed, and verify

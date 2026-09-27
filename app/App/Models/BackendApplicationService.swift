@@ -11,7 +11,8 @@ struct BackendAttachmentSource: Codable, Sendable {
 }
 
 enum BackendApplicationCommand: Codable, Sendable {
-    case setClosedLidPolicy(ClosedLidPolicy)
+    case setIdleSleepPolicy(WorkPowerPolicy)
+    case setClosedLidPolicy(WorkPowerPolicy)
     case stageAttachments(files: [BackendAttachmentSource])
     case toolsMutation(BackendToolsMutation)
     case prepareSelections(conversationID: String, defaults: SessionSelections?)
@@ -152,8 +153,11 @@ final class BackendApplicationService {
 
     private func execute(_ command: BackendApplicationCommand) async throws -> BackendApplicationResult {
         switch command {
+        case .setIdleSleepPolicy(let policy):
+            model.activeWorkSleepPrevention.setPolicy(policy)
+            return .init()
         case .setClosedLidPolicy(let policy):
-            model.closedLidProtection.setPolicy(policy)
+            model.applyClosedLidPolicy(policy)
             return .init()
         case let .stageAttachments(files):
             return try await .init(attachments: model.stageMessageAttachments(files.map { (url: $0.url, mimeType: $0.mimeType) }))

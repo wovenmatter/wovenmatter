@@ -5,7 +5,7 @@ import Foundation
 final class ClosedLidLeaseController {
     static let leaseLifetime: TimeInterval = 15
     private struct Lease {
-        var policy: ClosedLidPolicy
+        var policy: WorkPowerPolicy
         var expires: TimeInterval
     }
     private var leases: [UUID: Lease] = [:]
@@ -25,7 +25,7 @@ final class ClosedLidLeaseController {
         self.writeJournal = writeJournal
     }
 
-    func renew(_ id: UUID, policy: ClosedLidPolicy, now: TimeInterval, source: WorkPowerSource) {
+    func renew(_ id: UUID, policy: WorkPowerPolicy, now: TimeInterval, source: WorkPowerSource) {
         if policy.isEnabled {
             leases[id] = Lease(policy: policy, expires: now + Self.leaseLifetime)
         } else {

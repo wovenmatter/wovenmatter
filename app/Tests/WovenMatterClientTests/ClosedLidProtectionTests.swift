@@ -25,13 +25,13 @@ private final class FakePower {
 struct ClosedLidProtectionTests {
     @Test func powerPoliciesAreIndependentAndOffByDefault() {
         for source in [WorkPowerSource.external, .battery, .unknown] {
-            #expect(!ClosedLidPolicy().permits(source))
+            #expect(!WorkPowerPolicy().permits(source))
         }
-        #expect(ClosedLidPolicy(externalPower: true).permits(.external))
-        #expect(!ClosedLidPolicy(externalPower: true).permits(.battery))
-        #expect(ClosedLidPolicy(batteryPower: true).permits(.battery))
-        #expect(!ClosedLidPolicy(batteryPower: true).permits(.external))
-        #expect(!ClosedLidPolicy(externalPower: true, batteryPower: true).permits(.unknown))
+        #expect(WorkPowerPolicy(externalPower: true).permits(.external))
+        #expect(!WorkPowerPolicy(externalPower: true).permits(.battery))
+        #expect(WorkPowerPolicy(batteryPower: true).permits(.battery))
+        #expect(!WorkPowerPolicy(batteryPower: true).permits(.external))
+        #expect(!WorkPowerPolicy(externalPower: true, batteryPower: true).permits(.unknown))
     }
 
     @Test func powerTransitionsAndLastLeaseReleaseRestoreSleep() {
@@ -147,10 +147,10 @@ struct ClosedLidProtectionTests {
 }
 
 @MainActor private final class FakeLeaseConnection: ClosedLidLeaseSending {
-    var policies: [ClosedLidPolicy] = []
+    var policies: [WorkPowerPolicy] = []
     var isClosed = false
     var reply: (@MainActor (Bool, String?) -> Void)?
-    func renew(_ policy: ClosedLidPolicy, completion: @escaping @MainActor (Bool, String?) -> Void) {
+    func renew(_ policy: WorkPowerPolicy, completion: @escaping @MainActor (Bool, String?) -> Void) {
         policies.append(policy)
         reply = completion
     }
