@@ -100,13 +100,15 @@ final class WovenSocketService<Request: Decodable & Sendable, Response: WovenSoc
             guard client >= 0 else { return }
             guard connections.count < maximumConnections else {
                 let response = Response.socketError(WovenNoteSocketError.busy)
-                Task.detached {
-                    defer { Darwin.close(client) }
-                    guard (try? configureSocket(client)) != nil,
-                          let data = try? JSONEncoder().encode(response) else { return }
-                    try? writeMessage(data, to: client, timeout: 1)
-                    _ = Darwin.shutdown(client, SHUT_WR)
-                }
+                defer { Darwin.close(client) }
+                guard (try? configureSocket(client)) != nil,
+                      let data = try? JSONEncoder().encode(response) else { return }
+                // Keep overload handling independent of Swift's cooperative executor,
+                // which may itself be saturated by the work we are rejecting. The
+                // reply is small and the nonblocking write has a strict deadline, so
+                // an unresponsive caller cannot occupy the listener indefinitely.
+                try? writeMessage(data, to: client, timeout: min(ioTimeout, 0.25))
+                _ = Darwin.shutdown(client, SHUT_WR)
                 return
             }
             do { try configureSocket(client) }
