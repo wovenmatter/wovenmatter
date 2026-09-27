@@ -25,6 +25,7 @@ export function createDefaultAgentService({ cwd, directory }) {
   const epoch = crypto.randomUUID();
   let configurationQueue = Promise.resolve();
   let generation = 0;
+  let lastPromptStartedAt = 0;
   const operations = new Map();
   const admissions = new Map();
   const permissions = new PermissionRequests();
@@ -81,11 +82,17 @@ export function createDefaultAgentService({ cwd, directory }) {
         for (const [id, operation] of operations) {
           if (operation.sessionID === message.params.sessionId && !operation.done) return { operationID: id, loadingSessionID: operation.sessionID };
         }
-        const recoveredRuns = [];
+        const savedRuns = [];
         for (const file of (await readdir(directory)).filter(f => /^run-[0-9a-f-]+\.json$/.test(f))) {
           const saved = await readJSON(join(directory, file));
-          if (saved.sessionID === message.params.sessionId && saved.snapshot) recoveredRuns.push(saved.snapshot);
+          if (saved.sessionID === message.params.sessionId && saved.snapshot) savedRuns.push(saved);
         }
+        const byRun = new Map();
+        for (const saved of savedRuns.sort((a, b) => (a.startedAt ?? 0) - (b.startedAt ?? 0))) {
+          const snapshot = saved.snapshot, previous = byRun.get(snapshot.runID);
+          byRun.set(snapshot.runID, { ...snapshot, content: (previous?.content ?? '') + snapshot.content });
+        }
+        const recoveredRuns = [...byRun.values()];
         const record = await e.create(message.params.sessionId);
         Object.assign(result, e.configuration(record));
         result._meta = { ...result._meta, recoveredRuns };
@@ -97,7 +104,8 @@ export function createDefaultAgentService({ cwd, directory }) {
     const existing = operations.get(id) ?? await readJSON(join(directory, `run-${id}.json`), null);
     if (existing) { verifyRetry(existing, fingerprint); return { operationID: id }; }
     if (await readJSON(join(directory, `accepted-${id}.json`), null)) throw new Error('This run was interrupted by a workspace restart. Submit a new message to retry.');
-    const operation = { fingerprint, updates: [], done: false, result: null, error: null, sessionID: message.params.sessionId };
+    lastPromptStartedAt = Math.max(Date.now(), lastPromptStartedAt + 1);
+    const operation = { fingerprint, startedAt: lastPromptStartedAt, updates: [], done: false, result: null, error: null, sessionID: message.params.sessionId };
     await writePrivateJSON(join(directory, `accepted-${id}.json`), { sessionID: operation.sessionID, fingerprint });
     operations.set(id, operation);
     const path = join(directory, `run-${id}.jsonl`);
@@ -112,7 +120,7 @@ export function createDefaultAgentService({ cwd, directory }) {
         if (journalError) throw journalError;
         const record = e.sessions.get(operation.sessionID);
         const snapshot = { runID: message.params?._meta?.wovenRunID ?? id, content: operation.updates.filter(u => u.sessionUpdate === 'agent_message_chunk').map(u => u.content.text).join(''), error: operation.error, model: record?.selected };
-        await writePrivateJSON(join(directory, `run-${id}.json`), { sessionID: operation.sessionID, fingerprint, snapshot, result: operation.result, error: operation.error });
+        await writePrivateJSON(join(directory, `run-${id}.json`), { sessionID: operation.sessionID, startedAt: operation.startedAt, fingerprint, snapshot, result: operation.result, error: operation.error });
       }
       catch { operation.error = 'The workspace could not save the completed run.'; }
       operation.done = true;

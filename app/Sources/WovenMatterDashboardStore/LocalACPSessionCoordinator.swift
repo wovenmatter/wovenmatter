@@ -28,6 +28,7 @@ struct LocalACPSessionDriver: Sendable {
     let cancel: @Sendable () async throws -> Void
     let setRunID: (@Sendable (String) async throws -> Void)?
     let setResumePermissionHandler: (@Sendable (@escaping LocalACPClient.PermissionHandler) async -> Void)?
+    let finishRun: (@Sendable () async -> Void)?
     let shutdown: @Sendable () async -> Void
 
     init(
@@ -55,6 +56,7 @@ struct LocalACPSessionDriver: Sendable {
         ) async throws -> LocalACPActiveInputReceipt)? = nil,
         cancel: @escaping @Sendable () async throws -> Void,
         shutdown: @escaping @Sendable () async -> Void,
+        finishRun: (@Sendable () async -> Void)? = nil,
         setRunID: (@Sendable (String) async throws -> Void)? = nil,
         setResumePermissionHandler: (@Sendable (@escaping LocalACPClient.PermissionHandler) async -> Void)? = nil
     ) {
@@ -69,6 +71,7 @@ struct LocalACPSessionDriver: Sendable {
         self.setRunID = setRunID
         self.setResumePermissionHandler = setResumePermissionHandler
         self.shutdown = shutdown
+        self.finishRun = finishRun
     }
 
     static func start(
@@ -126,10 +129,7 @@ struct LocalACPSessionDriver: Sendable {
                     )
                 },
                 activeInput: { input in
-                    try await client.steer(input)
-                    return LocalACPActiveInputReceipt(
-                        completion: Task { nil }
-                    )
+                    try await client.beginActiveInput(input)
                 },
                 cancel: {
                     await client.cancel()
@@ -137,6 +137,7 @@ struct LocalACPSessionDriver: Sendable {
                 shutdown: {
                     await client.shutdown()
                 },
+                finishRun: { await client.finishRun() },
                 setRunID: { await client.setRunID($0) }
             )
         }
@@ -187,6 +188,7 @@ struct LocalACPSessionDriver: Sendable {
             shutdown: {
                 await client.shutdown()
             },
+            finishRun: { await client.finishRun() },
             setRunID: { value in try await client.setDefaultAgentRunID(value) },
             setResumePermissionHandler: { handler in
                 await client.setResumePermissionHandler(handler)
@@ -268,6 +270,7 @@ public actor LocalACPSessionCoordinator {
     private var runIDsByConversation: [String: String] = [:]
     private var cancellationRequestedRunIDs: Set<String> = []
     private var streamWritersByRunID: [String: LocalACPAssistantStreamWriter] = [:]
+    private var eventBuffersByRunID: [String: LocalACPRunEventBuffer] = [:]
     private var acceptingActiveInputRunIDs: Set<String> = []
     private struct ActiveInputTask {
         let assistantMessageID: String
@@ -486,12 +489,10 @@ public actor LocalACPSessionCoordinator {
                 conversationID: descriptor.conversationID,
                 onChange: onChange
             )
-            streamWritersByRunID[run.runID] = streamWriter
-            resumeStreamWriterWaiters(runID: run.runID, writer: streamWriter)
             let permissionHandler: LocalACPClient.PermissionHandler?
             if let onPermission {
                 permissionHandler = { request in
-                    try? await streamWriter.finishSegment()
+                    try? await streamWriter.finishSegmentForDecision()
                     return await onPermission(request)
                 }
             } else {
@@ -500,78 +501,86 @@ public actor LocalACPSessionCoordinator {
             let interactionHandler: LocalACPClient.InteractionHandler?
             if let onInteraction {
                 interactionHandler = { request in
-                    try? await streamWriter.finishSegment()
+                    try? await streamWriter.finishSegmentForDecision()
                     return await onInteraction(request)
                 }
             } else {
                 interactionHandler = nil
             }
             try await client.setRunID?(run.runID)
-            var stopReason = try await client.prompt(
-                input,
-                { event in
-                    switch event {
-                    case .assistantAsset(let asset):
-                        try await streamWriter.finishSegment()
-                        try self.database.recordLibraryOutput(runID: run.runID, asset: asset)
-                        let label = asset.title.replacingOccurrences(of: "[", with: "").replacingOccurrences(of: "]", with: "")
-                        if !asset.source.isEmpty {
-                            try await streamWriter.append("\n[" + label + "](" + asset.source + ")\n")
-                        } else {
-                            try await streamWriter.append("\nAttached " + label + " — open in Library.\n")
-                        }
-                    case .assistantChunk(let chunk):
-                        try await streamWriter.append(chunk)
-                    case .sessionIdentity(let sessionID):
-                        try await self.persistSessionIdentity(sessionID, conversationID: descriptor.conversationID, runID: run.runID)
-                    case .assistantSnapshot(let content):
-                        try await streamWriter.replace(content)
-                    case .assistantBoundary:
-                        try await streamWriter.finishSegment()
-                    case .activity(let activity, let appendsContent):
-                        try await streamWriter.finishSegment(for: activity)
-                        try self.database.upsertDeviceOwnedRunActivity(
-                            runID: run.runID,
-                            activity: activity,
-                            appendingContent: appendsContent
-                        )
-                        await self.publishChange(
-                            conversationID: descriptor.conversationID,
-                            runID: run.runID,
-                            phase: .content
-                        )
-                    case .composerPrefill(let text):
-                        await self.publishChange(
-                            conversationID: descriptor.conversationID,
-                            runID: run.runID,
-                            phase: .composerPrefill(text)
-                        )
-                    case .usage(let tokens):
-                        let configuration = await client.configuration()
-                        let sessionID = await self.usageSessionID(
-                            descriptor: descriptor
-                        )
-                        await self.onUsage?(UsageRunRecorder.Observation(
-                            runID: run.runID,
-                            timestamp: Date(),
-                            runtimeKind: descriptor.runtimeKind,
-                            sessionID: sessionID,
-                            model: configuration.model ?? descriptor.model,
-                            reasoningLevel: configuration.thinking ?? descriptor.thinking,
-                            agent: descriptor.buzzAgentID,
-                            workspace: workspace.rootURL.path,
-                            tokens: tokens,
-                            costUSD: nil
-                        ))
+            let eventBuffer = LocalACPRunEventBuffer(deliver: { event in
+                switch event {
+                case .assistantAsset(let asset):
+                    try await streamWriter.finishSegment()
+                    try self.database.recordLibraryOutput(runID: run.runID, asset: asset)
+                    let label = asset.title.replacingOccurrences(of: "[", with: "").replacingOccurrences(of: "]", with: "")
+                    if !asset.source.isEmpty {
+                        try await streamWriter.append("\n[" + label + "](" + asset.source + ")\n")
+                    } else {
+                        try await streamWriter.append("\nAttached " + label + " — open in Library.\n")
                     }
-                },
-                permissionHandler,
-                interactionHandler
-            )
-            stopReason = try await drainActiveInputs(
+                case .assistantChunk(let chunk):
+                    try await streamWriter.append(chunk)
+                case .sessionIdentity(let sessionID):
+                    try await self.persistSessionIdentity(sessionID, conversationID: descriptor.conversationID, runID: run.runID)
+                case .assistantSnapshot(let content):
+                    try await streamWriter.replace(content)
+                case .assistantBoundary:
+                    try await streamWriter.finishSegment()
+                case .activity(let activity, let appendsContent):
+                    try await streamWriter.finishSegment(for: activity)
+                    try self.database.upsertDeviceOwnedRunActivity(
+                        runID: run.runID,
+                        activity: activity,
+                        appendingContent: appendsContent
+                    )
+                    await self.publishChange(
+                        conversationID: descriptor.conversationID,
+                        runID: run.runID,
+                        phase: .content
+                    )
+                case .composerPrefill(let text):
+                    await self.publishChange(
+                        conversationID: descriptor.conversationID,
+                        runID: run.runID,
+                        phase: .composerPrefill(text)
+                    )
+                case .usage(let tokens):
+                    let configuration = await client.configuration()
+                    let sessionID = await self.usageSessionID(
+                        descriptor: descriptor
+                    )
+                    await self.onUsage?(UsageRunRecorder.Observation(
+                        runID: run.runID,
+                        timestamp: Date(),
+                        runtimeKind: descriptor.runtimeKind,
+                        sessionID: sessionID,
+                        model: configuration.model ?? descriptor.model,
+                        reasoningLevel: configuration.thinking ?? descriptor.thinking,
+                        agent: descriptor.buzzAgentID,
+                        workspace: workspace.rootURL.path,
+                        tokens: tokens,
+                        costUSD: nil
+                    ))
+                }
+            })
+            eventBuffersByRunID[run.runID] = eventBuffer
+            streamWritersByRunID[run.runID] = streamWriter
+            resumeStreamWriterWaiters(runID: run.runID, writer: streamWriter)
+            let initialResult: Result<LocalACPStopReason, any Error>
+            do {
+                let reason = try await client.prompt(
+                    input,
+                    { try await eventBuffer.receive($0) },
+                    permissionHandler,
+                    interactionHandler
+                )
+                initialResult = .success(reason)
+            } catch { initialResult = .failure(error) }
+            let stopReason = try await drainActiveInputs(
                 runID: run.runID,
                 conversationID: descriptor.conversationID,
-                initialStopReason: stopReason
+                initialResult: initialResult
             )
             // Hermes slash commands need not create a durable native row. Its
             // client publishes the identity immediately before a provider submit.
@@ -586,6 +595,7 @@ public actor LocalACPSessionCoordinator {
                 conversationID: descriptor.conversationID
             )
             try await streamWriter.finish()
+            await client.finishRun?()
             switch stopReason {
             case .endTurn, .maxTokens, .maxTurnRequests:
                 try database.completeLocalACPRun(runID: run.runID)
@@ -634,6 +644,7 @@ public actor LocalACPSessionCoordinator {
     private func finishAcceptedRun(conversationID: String, runID: String) {
         runTasks.removeValue(forKey: runID)
         streamWritersByRunID.removeValue(forKey: runID)
+        eventBuffersByRunID.removeValue(forKey: runID)
         acceptingActiveInputRunIDs.remove(runID)
         let activeInputs = activeInputTasksByRunID.removeValue(forKey: runID) ?? []
         for input in activeInputs { input.task.cancel() }
@@ -851,36 +862,42 @@ public actor LocalACPSessionCoordinator {
         defer { releaseSteeringLock(conversationID: conversationID) }
         guard let runID = runIDsByConversation[conversationID],
               acceptingActiveInputRunIDs.contains(runID),
+              !cancellationRequestedRunIDs.contains(runID),
               let streamWriter = await streamWriter(runID: runID),
+              acceptingActiveInputRunIDs.contains(runID),
+              !cancellationRequestedRunIDs.contains(runID),
+              let eventBuffer = eventBuffersByRunID[runID],
               let active = activeSessions[conversationID],
               let activeInput = active.client.activeInput else {
             throw LocalACPSessionDatabaseError.steeringUnsupported
         }
-        try await streamWriter.finishSegmentAndPause()
+        await eventBuffer.pause()
+        do { try await streamWriter.finishSegmentAndPause() }
+        catch { try? await eventBuffer.resume(); throw error }
+        guard !cancellationRequestedRunIDs.contains(runID) else {
+            await streamWriter.resumeAfterSegmentBoundary()
+            try await eventBuffer.resume()
+            throw LocalACPSessionDatabaseError.steeringUnsupported
+        }
         let identifiers: LocalACPSteeringIdentifiers
         do {
-            identifiers = try database.beginLocalACPSteeringTurn(
-                runID: runID,
-                input: input
-            )
+            // Keep the run and its event handlers alive until the harness has
+            // actually accepted the input. Completion belongs to the run, not
+            // to the composer submission (which must become usable again).
+            let receipt = try await activeInput(AgentMessageInput(
+                text: deliveryContent ?? input.text,
+                attachments: input.attachments
+            ))
+            identifiers = try database.beginLocalACPSteeringTurn(runID: runID, input: input)
+            activeInputTasksByRunID[runID, default: []].append(ActiveInputTask(
+                assistantMessageID: identifiers.assistantMessageID,
+                task: receipt.completion
+            ))
         } catch {
             await streamWriter.resumeAfterSegmentBoundary()
+            try await eventBuffer.resume()
             throw error
         }
-        let deliveryInput = AgentMessageInput(
-            text: deliveryContent ?? input.text,
-            attachments: input.attachments
-        )
-        let task = Task {
-            let receipt = try await activeInput(deliveryInput)
-            return try await receipt.completion.value
-        }
-        activeInputTasksByRunID[runID, default: []].append(
-            ActiveInputTask(
-                assistantMessageID: identifiers.assistantMessageID,
-                task: task
-            )
-        )
         publishChange(
             conversationID: conversationID,
             runID: runID,
@@ -889,49 +906,50 @@ public actor LocalACPSessionCoordinator {
         await streamWriter.resumeAfterSegmentBoundary(
             assistantMessageID: identifiers.assistantMessageID
         )
+        try await eventBuffer.resume()
         return identifiers
     }
 
     private func drainActiveInputs(
         runID: String,
         conversationID: String,
-        initialStopReason: LocalACPStopReason
+        initialResult: Result<LocalACPStopReason, any Error>
     ) async throws -> LocalACPStopReason {
-        var stopReason = initialStopReason
-        var latestCompletionFailed = false
-        var latestError: (any Error)?
+        var stopReason: LocalACPStopReason = .endTurn
+        var initialError: (any Error)?
+        switch initialResult {
+        case .success(let reason): stopReason = reason
+        case .failure(let error): initialError = error
+        }
         while true {
             await acquireSteeringLock(conversationID: conversationID)
             let tasks = activeInputTasksByRunID.removeValue(forKey: runID) ?? []
             if tasks.isEmpty {
                 acceptingActiveInputRunIDs.remove(runID)
                 releaseSteeringLock(conversationID: conversationID)
-                if latestCompletionFailed, let latestError {
-                    throw latestError
-                }
-                return stopReason
+                if let initialError { throw initialError }
+                return cancellationRequestedRunIDs.contains(runID) ? .cancelled : stopReason
             }
             releaseSteeringLock(conversationID: conversationID)
             for input in tasks {
                 do {
                     if let activeStopReason = try await input.task.value {
                         stopReason = activeStopReason
+                        initialError = nil
                         completeAssistantSegment(
                             runID: runID,
                             assistantMessageID: input.assistantMessageID,
                             stopReason: activeStopReason
                         )
                     }
-                    latestCompletionFailed = false
-                    latestError = nil
                 } catch {
+                    initialError = error
                     try? database.completeLocalACPAssistantMessage(
                         runID: runID,
                         assistantMessageID: input.assistantMessageID,
                         error: error.localizedDescription
                     )
-                    latestCompletionFailed = true
-                    latestError = error
+                    publishChange(conversationID: conversationID, runID: runID, phase: .content)
                 }
             }
         }
@@ -1554,6 +1572,46 @@ public actor LocalACPSessionCoordinator {
     }
 }
 
+/// Admission must not block the transport's ordered notification queue: native
+/// preflight may need to emit output or request permission before its receipt.
+/// Hold transcript events locally, then deliver them into the accepted segment
+/// (or the original segment on rejection), preserving wire order.
+private actor LocalACPRunEventBuffer {
+    let deliver: LocalACPClient.EventHandler
+    private var paused = false
+    private var delivering = 0
+    private var pending: [LocalACPEvent] = []
+    private var pauseWaiters: [CheckedContinuation<Void, Never>] = []
+
+    init(deliver: @escaping LocalACPClient.EventHandler) { self.deliver = deliver }
+
+    func receive(_ event: LocalACPEvent) async throws {
+        if paused { pending.append(event); return }
+        delivering += 1
+        defer {
+            delivering -= 1
+            if delivering == 0 {
+                let waiters = pauseWaiters; pauseWaiters.removeAll()
+                for waiter in waiters { waiter.resume() }
+            }
+        }
+        try await deliver(event)
+    }
+
+    func pause() async {
+        paused = true
+        if delivering > 0 { await withCheckedContinuation { pauseWaiters.append($0) } }
+    }
+
+    func resume() async throws {
+        defer { paused = false }
+        while !pending.isEmpty {
+            let events = pending; pending.removeAll(keepingCapacity: true)
+            for event in events { try await deliver(event) }
+        }
+    }
+}
+
 actor LocalACPAssistantStreamWriter {
     private static let immediateFlushCharacters = 4_096
     private static let coalescingDelay = Duration.milliseconds(75)
@@ -1655,6 +1713,13 @@ actor LocalACPAssistantStreamWriter {
         )
     }
 
+    func finishSegmentForDecision() async throws {
+        // The pre-admission boundary is already durable. The native decision
+        // must remain available while later transcript events are buffered.
+        guard !isPausedAtSegmentBoundary else { return }
+        try await finishSegment()
+    }
+
     func finishSegmentAndPause() throws {
         flushTask?.cancel()
         flushTask = nil
@@ -1665,12 +1730,12 @@ actor LocalACPAssistantStreamWriter {
             assistantMessageID: assistantMessageID,
             updatedAt: Date()
         )
-        completedSegmentPrefix = accumulatedText
         isPausedAtSegmentBoundary = true
     }
 
     func resumeAfterSegmentBoundary(assistantMessageID: String? = nil) {
         if let assistantMessageID {
+            completedSegmentPrefix = accumulatedText
             self.assistantMessageID = assistantMessageID
         }
         isPausedAtSegmentBoundary = false

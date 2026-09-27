@@ -97,6 +97,8 @@ public actor PiRPCClient {
     private var promptAcknowledged = false
     private var sawAgentStart = false
     private var hasQueuedSettlement = false
+    private var steeringRequestID: String?
+    private var settlementGeneration = 0
     private var settlement: Result<Void, any Error>?
     private var transportError: (any Error)?
     private var settledWaiters: [CheckedContinuation<Void, any Error>] = []
@@ -247,8 +249,12 @@ public actor PiRPCClient {
     }
 
     public func steer(_ input: AgentMessageInput) async throws {
+        _ = try await beginActiveInput(input)
+    }
+
+    public func beginActiveInput(_ input: AgentMessageInput) async throws -> LocalACPActiveInputReceipt {
         let payload = try Self.attachmentPayload(input)
-        try await steer(payload.text, images: payload.images)
+        return try await beginActiveInput(payload.text, images: payload.images)
     }
 
     static func attachmentPayload(_ input: AgentMessageInput) throws -> (text: String, images: [[String: String]]) {
@@ -293,8 +299,6 @@ public actor PiRPCClient {
         promptPermission = onPermission
         defer {
             promptGeneration = nil
-            promptEvents = nil
-            promptPermission = nil
         }
         return try await withTaskCancellationHandler {
             do {
@@ -329,17 +333,42 @@ public actor PiRPCClient {
     }
 
     public func steer(_ text: String, images: [[String: String]] = []) async throws {
-        let response = try await sendCommand([
-            "type": "steer",
-            "message": text,
-            "images": images,
-        ])
-        guard response["success"] as? Bool == true else {
-            throw PiRPCClientError.commandFailed(
-                string(response["error"])
-                    ?? "Pi could not steer the active turn."
-            )
+        _ = try await beginActiveInput(text, images: images)
+    }
+
+    private func beginActiveInput(_ text: String, images: [[String: String]]) async throws -> LocalACPActiveInputReceipt {
+        guard !cancelled else { throw CancellationError() }
+        settlementGeneration += 1
+        settlement = nil
+        sawAgentStart = false
+        hasQueuedSettlement = false
+        var command: [String: Any] = ["type": "prompt", "streamingBehavior": "steer", "message": text, "images": images]
+        if launch.environment["WOVEN_DURABLE_REMOTE_ACP"] == "1" {
+            command["_meta"] = ["wovenRunID": runID ?? UUID().uuidString.lowercased()]
         }
+        do {
+            // Native prompt preflight atomically steers a running loop or starts
+            // an idle one. `steer` alone can strand a late message in Pi's queue.
+            let response = try await sendCommand(command)
+            guard response["success"] as? Bool == true else {
+                throw PiRPCClientError.commandFailed(string(response["error"]) ?? "Pi rejected the steering input.")
+            }
+        } catch {
+            steeringRequestID = nil
+            Task { try? await self.settleHandledInputIfIdle(forceStateCheck: true) }
+            throw error
+        }
+        return LocalACPActiveInputReceipt(completion: Task {
+            try await self.settleHandledInputIfIdle(forceStateCheck: true)
+            try await self.waitUntilSettled()
+            if let error = self.latestTerminalError { throw PiRPCClientError.commandFailed(error) }
+            return self.cancelled ? .cancelled : (self.latestStopReason ?? .endTurn)
+        })
+    }
+
+    public func finishRun() {
+        promptEvents = nil
+        promptPermission = nil
     }
 
     public func cancel() async {
@@ -520,6 +549,7 @@ public actor PiRPCClient {
         let type = string(object["type"])
         if type == "response" {
             let id = string(object["id"]) ?? ""
+            if steeringRequestID == id { steeringRequestID = nil }
             if let waiter = pendingResponses.removeValue(forKey: id) {
                 waiter.resume(returning: object)
             }
@@ -532,7 +562,11 @@ public actor PiRPCClient {
         guard extensionRequest != nil
                 || type == "agent_settled"
                 || !events.isEmpty else { return }
+        // A previous loop may settle while the native prompt preflight is
+        // admitting its continuation. Only post-ack settlement owns this input.
+        if type == "agent_settled", steeringRequestID != nil { return }
         if type == "agent_settled" { hasQueuedSettlement = true }
+        let generation = settlementGeneration
         let previous = eventTask
         eventTask = Task { [weak self] in
             await previous?.value
@@ -545,7 +579,7 @@ public actor PiRPCClient {
                         try await self.promptEvents?(event)
                     }
                     if type == "agent_settled" {
-                        await self.finishSettledWaiters()
+                        await self.finishSettledWaiters(generation: generation)
                     }
                 }
             } catch {
@@ -643,6 +677,7 @@ public actor PiRPCClient {
         }
         nextID += 1
         let id = "wm-\(nextID)"
+        if payload["streamingBehavior"] as? String == "steer" { steeringRequestID = id }
         var body = payload
         body["id"] = id
         let data = try JSONSerialization.data(withJSONObject: body)
@@ -660,8 +695,9 @@ public actor PiRPCClient {
         }
     }
 
-    private func settleHandledInputIfIdle() async throws {
-        guard !sawAgentStart, !hasQueuedSettlement, settlement == nil else { return }
+    private func settleHandledInputIfIdle(forceStateCheck: Bool = false) async throws {
+        guard (!sawAgentStart || forceStateCheck), !hasQueuedSettlement, settlement == nil else { return }
+        let generation = settlementGeneration
         // Pi acknowledges extension commands and handled input without an agent
         // turn. Ask native state after the ACK; an ACK alone is not completion.
         // Native prompt() sets _isAgentRunActive synchronously after preflight
@@ -685,8 +721,9 @@ public actor PiRPCClient {
               state["isCompacting"] as? Bool == false,
               Self.integer(state["pendingMessageCount"]) == 0 else { return }
         await eventTask?.value
-        guard !sawAgentStart, !hasQueuedSettlement else { return }
-        finishSettledWaiters()
+        guard (!sawAgentStart || forceStateCheck), !hasQueuedSettlement,
+              steeringRequestID == nil, generation == settlementGeneration else { return }
+        finishSettledWaiters(generation: generation)
     }
 
     private func waitUntilSettled() async throws {
@@ -696,7 +733,8 @@ public actor PiRPCClient {
         }
     }
 
-    private func finishSettledWaiters() {
+    private func finishSettledWaiters(generation: Int? = nil) {
+        if let generation, generation != settlementGeneration { return }
         guard settlement == nil else { return }
         settlement = .success(())
         let waiters = settledWaiters

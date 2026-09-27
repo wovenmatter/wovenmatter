@@ -329,3 +329,21 @@ test('native profile sharing includes only an identifier, never native credentia
   assert.deepEqual(sharedCredentials({ 'claude-subscription': { type: 'native', accountId: '../outside' } }), {});
   assert.deepEqual(sharedAccounts({ 'claude-subscription': [{ id: 'fixture', label: 'Invalid', credential: { type: 'native', accountId: '../outside' } }] }), { 'claude-subscription': [] });
 });
+
+test('remote recovery combines late continuation operations in submission order', async t => {
+  const directory = await temporary(t);
+  const service = createDefaultAgentService({ cwd: directory, directory });
+  await service.configure({ workspace: 'fixture', unlockKey: randomBytes(32).toString('base64'), config: {}, credentials: {}, revision: '1' });
+  const engine = await service.engine();
+  engine.handle = async () => ({});
+  engine.create = async () => ({});
+  engine.configuration = () => ({});
+  for (const [id, startedAt, content] of [
+    ['ffffffff-ffff-4fff-afff-ffffffffffff', 1, 'before '],
+    ['aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa', 2, 'after'],
+  ]) await writePrivateJSON(join(directory, `run-${id}.json`), {
+    sessionID: 'native', startedAt, snapshot: { runID: 'logical-run', content, error: null },
+  });
+  const loaded = await service.invoke({ method: 'session/load', params: { sessionId: 'native' } });
+  assert.deepEqual(loaded.result._meta.recoveredRuns, [{ runID: 'logical-run', content: 'before after', error: null }]);
+});

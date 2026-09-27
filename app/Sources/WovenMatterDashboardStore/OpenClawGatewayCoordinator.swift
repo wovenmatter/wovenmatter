@@ -483,7 +483,8 @@ public actor OpenClawGatewayCoordinator {
     sessionKey: String,
     content: String,
     runID: String,
-    attachments: [GatewayJSONValue]
+    attachments: [GatewayJSONValue],
+    steering: Bool = false
   ) -> [String: GatewayJSONValue] {
     var parameters: [String: GatewayJSONValue] = [
       "sessionKey": .string(sessionKey),
@@ -491,6 +492,7 @@ public actor OpenClawGatewayCoordinator {
       "deliver": .bool(false),
       "idempotencyKey": .string(runID),
     ]
+    if steering { parameters["queueMode"] = .string("steer") }
     if !attachments.isEmpty {
       parameters["attachments"] = .array(attachments)
     }
@@ -584,7 +586,7 @@ public actor OpenClawGatewayCoordinator {
     }
     guard let active = activeRuns.values.first(where: {
       $0.conversationID == conversationID
-    }), await waitUntilPromptReady(runID: active.runID) else {
+    }), !active.cancelRequested, await waitUntilPromptReady(runID: active.runID) else {
       throw LocalACPSessionDatabaseError.steeringUnsupported
     }
     let gatewayClient = try await client(agentID: active.agentID)
@@ -600,6 +602,9 @@ public actor OpenClawGatewayCoordinator {
       content: transportContent,
       attachments: attachments
     )
+    guard activeRuns[active.runID]?.cancelRequested == false else {
+      throw LocalACPSessionDatabaseError.steeringUnsupported
+    }
     pausedGatewayEventRunIDs.insert(active.runID)
     let identifiers: LocalACPSteeringIdentifiers
     do {
@@ -622,15 +627,19 @@ public actor OpenClawGatewayCoordinator {
     current.assistantMessageIDsByRemoteRunID[provisionalRemoteRunID] =
       identifiers.assistantMessageID
     activeRuns[active.runID] = current
-    let task = Task { [self] in
-      try await dispatchActiveInput(
-        localRunID: active.runID,
+    let admission = Task { [self] in
+      try await admitActiveInput(
         provisionalRemoteRunID: provisionalRemoteRunID,
         agentID: active.agentID,
         sessionKey: active.sessionKey,
         content: transportContent,
         attachments: attachments
       )
+    }
+    let task = Task { [self] in
+      try await admission.value
+      return try await waitForRun(localRunID: active.runID,
+        remoteRunID: provisionalRemoteRunID, agentID: active.agentID)
     }
     activeInputTasksByRunID[active.runID, default: []].append(ActiveInputTask(
       remoteRunID: provisionalRemoteRunID,
@@ -639,6 +648,17 @@ public actor OpenClawGatewayCoordinator {
     ))
     publishChange(runID: active.runID, phase: .content)
     await resumeGatewayEvents(runID: active.runID)
+    do { try await admission.value }
+    catch {
+      // A lost acknowledgement is uncertain, so the retained completion task
+      // observes the original input identity instead of inviting a duplicate.
+      if !Self.isRecoverableDeliveryError(error) {
+        try? database.completeLocalACPAssistantMessage(runID: active.runID,
+          assistantMessageID: identifiers.assistantMessageID, error: error.localizedDescription)
+        publishChange(runID: active.runID, phase: .content)
+        throw error
+      }
+    }
     return identifiers
   }
 
@@ -677,21 +697,21 @@ public actor OpenClawGatewayCoordinator {
     }
   }
 
-  private func dispatchActiveInput(
-    localRunID: String,
+  private func admitActiveInput(
     provisionalRemoteRunID: String,
     agentID: UUID,
     sessionKey: String,
     content: String,
     attachments: [GatewayJSONValue]
-  ) async throws -> OpenClawGatewayEventProjection.TerminalState {
+  ) async throws {
     let receipt = try await client(agentID: agentID).request(
       "chat.send",
       params: .object(Self.chatSendParameters(
         sessionKey: sessionKey,
         content: content,
         runID: provisionalRemoteRunID,
-        attachments: attachments
+        attachments: attachments,
+        steering: true
       ))
     )
     // Gateway v4 acknowledges the supplied idempotency key, just as it does
@@ -700,11 +720,6 @@ public actor OpenClawGatewayCoordinator {
           remoteRunID == provisionalRemoteRunID else {
       throw OpenClawGatewayClientError.malformedFrame
     }
-    return try await waitForRun(
-      localRunID: localRunID,
-      remoteRunID: remoteRunID,
-      agentID: agentID
-    )
   }
 
   private func acquireSteeringLock(conversationID: String) async {

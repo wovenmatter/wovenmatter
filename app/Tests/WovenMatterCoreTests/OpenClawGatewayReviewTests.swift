@@ -5,6 +5,39 @@ import WovenMatterCore
 @testable import WovenMatterDashboardStore
 
 struct OpenClawGatewayReviewTests {
+  @Test(.timeLimit(.minutes(1)), arguments: [false, true])
+  func composerSteeringWaitsForNativeAdmissionWithoutInterrupting(rejected: Bool) async throws {
+    let fixture = try ReviewGatewayFixture()
+    defer { fixture.remove() }
+    let id = try fixture.database.importOpenClawGatewaySession(agentID: fixture.agentID, session: fixture.session)
+    let run = try await fixture.coordinator.accept(conversationID: id, content: "start")
+    let completed = ReviewSteeringCompletion()
+    let input = Task {
+      do {
+        let result = try await fixture.coordinator.sendActiveInput(conversationID: id, input: .init(text: "correction"))
+        await completed.finish()
+        return result
+      } catch { await completed.finish(); throw error }
+    }
+    for _ in 0..<500 {
+      if await fixture.socket.pendingSteering != nil { break }
+      try await Task.sleep(for: .milliseconds(5))
+    }
+    let params = try #require(await fixture.socket.steeringParameters?.objectValue)
+    #expect(params["queueMode"] == .string("steer"))
+    #expect(params["message"] == .string("correction"))
+    #expect(await completed.finished == false)
+    try await fixture.socket.acknowledgeSteering(rejected: rejected)
+    if rejected {
+      await #expect(throws: OpenClawGatewayClientError.self) { try await input.value }
+    } else {
+      #expect(try await input.value.runID == run.runID)
+    }
+    #expect(!(await fixture.socket.requestMethods).contains("chat.abort"))
+    #expect(!(await fixture.socket.requestMethods).contains("sessions.steer"))
+    await fixture.coordinator.shutdown()
+  }
+
   @Test func keylessGatewayResponsesRemainScopedThroughImportAndDatabaseReopen() async throws {
     let fixture = try ReviewGatewayFixture()
     defer { fixture.remove() }
@@ -526,6 +559,15 @@ private actor ReviewGatewaySocket: OpenClawGatewaySocket {
   let modelThinkingLevels: GatewayJSONValue?
   var modelParameters: GatewayJSONValue?
   var creationParameters: GatewayJSONValue?
+  var steeringParameters: GatewayJSONValue?
+  var pendingSteering: GatewayJSONValue?
+  func acknowledgeSteering(rejected: Bool) throws {
+    guard let pending = pendingSteering?.objectValue else { return }
+    pendingSteering = nil
+    try push(.object(["type": .string("res"), "id": pending["id"] ?? .null,
+      "ok": .bool(!rejected), "payload": .object(["runId": pending["params"]?.objectValue?["idempotencyKey"] ?? .null]),
+      "error": rejected ? .object(["code": .string("INVALID_REQUEST"), "message": .string("Steering rejected")]) : .null]))
+  }
   var historyCalls = 0
   var requestMethods: [String] = []
   private var historyPayload: GatewayJSONValue?
@@ -552,8 +594,13 @@ private actor ReviewGatewaySocket: OpenClawGatewaySocket {
     if method == "chat.history" { historyCalls += 1 }
     if method == "models.list" { modelParameters = row["params"] }
     if method == "sessions.create" { creationParameters = row["params"] }
+    if method == "agent.wait" { return } // The test owns native completion.
+    if method == "chat.send", row["params"]?.objectValue?["queueMode"] == .string("steer") {
+      steeringParameters = row["params"]; pendingSteering = .object(row); return
+    }
     let payload: GatewayJSONValue
     switch method {
+    case "chat.send": payload = .object(["runId": row["params"]?.objectValue?["idempotencyKey"] ?? .null])
     case "connect": payload = .object(["protocol": .number(4)])
     case "sessions.describe" where row["params"]?.objectValue?["key"]?.stringValue?.contains(":wovenmatter:") == true:
       payload = .object(["session": workspaceSessions[row["params"]?.objectValue?["key"]?.stringValue ?? ""] ?? .null])
@@ -630,4 +677,9 @@ private actor ReviewConnectionGate {
     released = true
     continuation?.resume(); continuation = nil
   }
+}
+
+private actor ReviewSteeringCompletion {
+  var finished = false
+  func finish() { finished = true }
 }

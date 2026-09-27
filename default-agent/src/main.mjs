@@ -119,7 +119,7 @@ async function invoke(message) {
     }
     return (await engine()).handle(message.method, message.params, update, requestPermission);
   }
-  const response = await remoteRequest('rpc', { ...message, operationID: message.method === 'session/prompt' ? (message.params?._meta?.wovenRunID ?? crypto.randomUUID()) : undefined });
+  const response = await remoteRequest('rpc', { ...message, operationID: message.method === 'session/prompt' ? (message.params?._meta?.wovenInputID ?? message.params?._meta?.wovenRunID ?? crypto.randomUUID()) : undefined });
   if (!response.operationID) return response.result;
   let cursor = 0;
   const remotePermissions = new RemotePermissionRequests(requestPermission, (id, allowed) =>
