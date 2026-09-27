@@ -30,6 +30,42 @@ is fenced before shutdown. Notes flush before the frontend exits or switches
 modes. Failed transitions restore the previous preference and restart its owner.
 Quitting the frontend does not shut down backend-owned sessions.
 
+## Active work and display sleep
+
+The execution owner automatically holds a Foundation `ProcessInfo` activity with
+`.userInitiated` while agent work is active. This prevents App Nap and idle system
+sleep, on battery as well as external power, while allowing display sleep and
+screen locking. It applies in standalone and backend modes; the frontend never
+owns an assertion. Keeping the backend awake lets active work continue after the
+frontend quits.
+
+A dispatch lease starts before asynchronous session preparation and ends on every
+return, error, or cancellation. Running conversation state retains the same
+activity after an asynchronous send is accepted. Concurrent dispatches and runs
+share one activity, released when the last finishes. Shutdown releases it and
+ignores late callbacks. Idle open sessions, future calendar tasks, and merely
+having background execution enabled do not keep the Mac awake.
+
+Explicit system sleep, closing the lid, logout, shutdown, and depleted battery
+can still suspend or stop local execution. This feature does not wake a sleeping
+Mac for future scheduled tasks or make a remote host stay awake.
+
+### Codex research
+
+The installed Codex desktop app (ChatGPT bundle version `26.917.71314`, inspected
+2026-09-27) uses Electron `powerSaveBlocker.start('prevent-app-suspension')` for
+active-work sleep protection and stops the blocker when no requester needs it.
+Its separate display blocker is stronger and is not needed here. A read-only
+`pmset -g assertions` check during a Codex run showed an Electron
+`NoIdleSleepAssertion` with no display-sleep assertion.
+
+This behavior matches the official [Codex settings documentation](https://developers.openai.com/codex/app/settings/)
+and [Electron powerSaveBlocker contract](https://www.electronjs.org/docs/latest/api/power-save-blocker).
+Woven Matter uses the native [Foundation activity API](https://developer.apple.com/documentation/foundation/processinfo/beginactivity(options:reason:))
+to provide the equivalent system-sleep protection and prevent App Nap. The macOS
+SDK documents that `.userInitiated` includes idle-system-sleep prevention but not
+idle-display-sleep prevention. No Codex code is included in Woven Matter.
+
 ## Remote ownership
 
 Each remote workspace service owns its task schedule and durable session relay.
@@ -57,3 +93,9 @@ an isolated database and socket: frontend write rejection, continued backend wor
 after client exit, reconnect, and restart invalidation. These tests do not sign in
 to providers, install login jobs, or deploy remote workspaces. Live provider and
 remote-host acceptance remains separate from fixture validation.
+
+For sleep protection, the package tests cover concurrent dispatches, asynchronous
+run handoff, failures/cancellation, frontend ownership, and shutdown. On a Mac,
+`pmset -g assertions` can verify the named Woven Matter idle-system assertion
+while work runs and its removal after the last run. A display-off provider run
+remains a separate manual acceptance check.

@@ -84,8 +84,10 @@ struct SettingsGeneralView: View {
                 }
             }
             Text(background.isEnabled
-                 ? "A separate backend starts at login and keeps tasks, sessions, and connections running after you quit the app. This Mac must remain awake and logged in."
+                 ? "A separate backend starts at login and keeps tasks, sessions, and connections running after you quit the app. This Mac must remain logged in."
                  : "Tasks and sessions run while Woven Matter is open. Background execution is off on this Mac.")
+                .font(.caption).foregroundStyle(.secondary)
+            Text("Active sessions keep this Mac awake while the display sleeps. Closing the lid or choosing Sleep can pause work.")
                 .font(.caption).foregroundStyle(.secondary)
             if let message = background.errorMessage {
                 Text(message).font(.caption).foregroundStyle(.red)

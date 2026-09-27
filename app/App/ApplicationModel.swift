@@ -282,7 +282,12 @@ final class ApplicationModel {
         PreparedLocalACPRuntimeInstall?
     private(set) var pendingLocalACPPermissions: [PendingLocalACPPermission] = []
     private(set) var pendingLocalACPInteractions: [PendingLocalACPInteraction] = []
-    private(set) var localRunningConversationIDs: Set<String> = []
+    @ObservationIgnored private let activeWorkSleepPrevention = ActiveWorkSleepPrevention(
+        ownsExecution: LocalExecutionRole.current.ownsExecution
+    )
+    private(set) var localRunningConversationIDs: Set<String> = [] {
+        didSet { activeWorkSleepPrevention.setRunningConversationIDs(runningToolSessionIDs) }
+    }
     private(set) var conversationStatesByID: [String: DashboardConversationState] = [:]
     // Usage owns its observable state; these projections preserve the application API.
     private let usage: ApplicationUsageModel
@@ -2025,6 +2030,8 @@ final class ApplicationModel {
             return try await sendBackendCommand(.sendMessage(conversationID: conversation.id, input: input, noteID: note?.id)).accepted
         }
 
+        let activityID = activeWorkSleepPrevention.beginDispatch()
+        defer { activeWorkSleepPrevention.endDispatch(activityID) }
         guard let dashboardStore, let agentTools else { throw ApplicationModelError.dashboardStoreUnavailable }
         try await applyPendingSessionSelections(conversationID: conversation.id)
         guard !loadingLocalACPSessionIDs.contains(conversation.id),
@@ -3372,6 +3379,7 @@ final class ApplicationModel {
     }
 
     func shutdownLocalACPSessions() {
+        activeWorkSleepPrevention.stop()
         library.stop()
         toolRuntimeTask?.cancel()
         agentTools?.stop()
