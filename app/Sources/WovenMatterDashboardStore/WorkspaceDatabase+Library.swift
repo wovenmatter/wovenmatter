@@ -4,7 +4,7 @@ import SQLite3
 import WovenMatterClient
 import WovenMatterCore
 
-extension WorkspaceDatabase {
+extension WorkspaceDatabaseConnection {
   func migrateLibrary() throws {
     try transaction {
       try executeUnlocked(
@@ -495,5 +495,81 @@ extension WorkspaceDatabase {
         "hasMore": .bool(rows.count > page.count), "nextOffset": .number(Double(offset + page.count)),
       ])
     }
+  }
+}
+
+// MARK: - Async worker boundary
+
+extension WorkspaceDatabase {
+  @discardableResult
+  public func indexLibraryMessages(limit: Int = 50) async throws -> Int {
+    try await write { try $0.indexLibraryMessages(limit: limit) }
+  }
+
+  public func captureGatewayLibraryFiles(_ payload: GatewayJSONValue, messageID: String, conversationID: String) async throws {
+    try await write { try $0.captureGatewayLibraryFiles(payload, messageID: messageID, conversationID: conversationID) }
+  }
+
+  public func setLibraryLocation(conversationID: String, workspaceName: String, root: String) async throws {
+    try await write { try $0.setLibraryLocation(conversationID: conversationID, workspaceName: workspaceName, root: root) }
+  }
+
+  public func libraryRoot(conversationID: String) async throws -> String? {
+    try await read { try $0.libraryRoot(conversationID: conversationID) }
+  }
+
+  public func libraryRevision() async throws -> Int64 {
+    try await read { try $0.libraryRevision() }
+  }
+
+  public func libraryPage(query: LibraryQuery, count: Int) async throws -> LibraryPage {
+    try await read { try $0.libraryPage(query: query, count: count) }
+  }
+
+  public func libraryItems(query: LibraryQuery = .init(), limit: Int = 100, offset: Int = 0) async throws
+    -> [WorkspaceLibraryItem] {
+    try await read { try $0.libraryItems(query: query, limit: limit, offset: offset) }
+  }
+
+  public func libraryItem(id: String) async throws -> WorkspaceLibraryItem? {
+    try await read { try $0.libraryItem(id: id) }
+  }
+
+  public func libraryFacets() async throws -> [LibraryFacet] {
+    try await read { try $0.libraryFacets() }
+  }
+
+  public func pendingLibraryFiles(limit: Int = 8, now: Date = Date()) async throws -> [WorkspaceLibraryItem] {
+    try await read { try $0.pendingLibraryFiles(limit: limit, now: now) }
+  }
+
+  public func finishLibraryFile(id: String, hash: String?, size: Int64? = nil, error: String? = nil) async throws {
+    try await write { try $0.finishLibraryFile(id: id, hash: hash, size: size, error: error) }
+  }
+
+  public func retryLibraryFile(id: String) async throws {
+    try await write { try $0.retryLibraryFile(id: id) }
+  }
+
+  public func recordLibraryOutput(runID: String, asset: LibraryAsset) async throws {
+    try await write { try $0.recordLibraryOutput(runID: runID, asset: asset) }
+  }
+
+  public func retainedLibraryHashes() async throws -> Set<String> {
+    try await read { try $0.retainedLibraryHashes() }
+  }
+
+  public func librarySourceMessage(id: String) async throws -> String {
+    try await read { try $0.librarySourceMessage(id: id) }
+  }
+
+  public func queryAgentLibrary(
+    callerID: String, id: String? = nil, query: LibraryQuery = .init(), limit: Int = 100, offset: Int = 0
+  ) async throws -> GatewayJSONValue {
+    try await read { try $0.queryAgentLibrary(callerID: callerID, id: id, query: query, limit: limit, offset: offset) }
+  }
+
+  func cleanupLibraryFiles() async throws {
+    try await write { try $0.cleanupLibraryFiles() }
   }
 }

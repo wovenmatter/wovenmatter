@@ -60,7 +60,7 @@ struct WorkspaceNoteRecovery: View {
             }.frame(height: 330)
             if let error { Text(error).font(.system(size: 12)).foregroundStyle(DashboardPalette.danger) }
             HStack {
-                Button("Refresh") { load() }.buttonStyle(SettingsQuietButtonStyle())
+                Button("Refresh") { Task { await load() } }.buttonStyle(SettingsQuietButtonStyle())
                 Spacer()
                 Button("Restore version") { confirmsRestore = true }
                     .buttonStyle(DashboardPrimaryButtonStyle())
@@ -68,36 +68,36 @@ struct WorkspaceNoteRecovery: View {
             }
         }.padding(24).frame(width: 710)
         .foregroundStyle(DashboardPalette.foreground)
-        .onAppear { load() }
+        .task(id: noteID) { await load() }
         .alert("Restore this version?", isPresented: $confirmsRestore) {
             Button("Cancel", role: .cancel) { }
             Button("Restore") { restore() }
         } message: { Text("This replaces the document's title and content. Its current saved state is retained as a version before restoration.") }
     }
 
-    private func load() {
+    private func load() async {
         do {
-            guard model.flushNoteDrafts(), let database = model.dashboardStore?.database else {
+            guard await model.flushNoteDrafts(), let database = model.dashboardStore?.database else {
                 throw ApplicationModelError.noteDraftSaveFailed
             }
-            try database.checkpointNote(id: noteID)
-            expectedRevision = try database.readNoteForEditing(id: noteID).revision
-            versions = try database.noteAssetVersions(id: noteID)
+            try await model.checkpointNoteForHistory(id: noteID)
+            expectedRevision = try await database.readNoteForEditing(id: noteID).revision
+            versions = try await database.noteAssetVersions(id: noteID)
             if !versions.contains(where: { $0.id == selection }) { selection = versions.first?.id }
             error = nil
         } catch { self.error = error.localizedDescription }
     }
 
     private func restore() {
-        guard let selected, let expectedRevision, let database = model.dashboardStore?.database else { return }
+        guard let selected, let expectedRevision else { return }
         restores = true
         Task { @MainActor in
             defer { restores = false }
             do {
-                guard model.flushNoteDrafts() else { throw ApplicationModelError.noteDraftSaveFailed }
-                let result = try database.restoreNoteAssetVersion(noteID: noteID, versionID: selected.id, expectedRevision: expectedRevision)
+                guard await model.flushNoteDrafts() else { throw ApplicationModelError.noteDraftSaveFailed }
+                let result = try await model.restoreRetainedNote(id: noteID, versionID: selected.id, expectedRevision: expectedRevision)
                 await model.adoptNoteEditingResponse(result)
-                load()
+                await load()
             } catch { self.error = error.localizedDescription + " Refresh to review the current document before trying again." }
         }
     }

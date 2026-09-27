@@ -69,10 +69,10 @@ struct RuntimeLifecycleTests {
     let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: directory) }
-    let database = try WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+    let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
     let agentID = UUID()
     let endpoint = OpenClawGatewayEndpoint(url: URL(string: "ws://127.0.0.1:1")!, authorization: .localService)
-    try database.saveOpenClawGatewayLink(OpenClawGatewayLink(agentID: agentID, location: .localAgentWorkspace, endpoint: endpoint))
+    try await database.saveOpenClawGatewayLink(OpenClawGatewayLink(agentID: agentID, location: .localAgentWorkspace, endpoint: endpoint))
     let gate = RuntimeGate()
     let coordinator = OpenClawGatewayCoordinator(database: database, connectClient: { _ in
       await gate.pause()
@@ -88,7 +88,7 @@ struct RuntimeLifecycleTests {
     await gate.release(1)
     let expected = try await new.value
     #expect(try await coordinator.client(agentID: agentID) === expected)
-    #expect(try database.openClawGatewayLinks().first?.connectionStatus == .ready)
+    #expect(try await database.openClawGatewayLinks().first?.connectionStatus == .ready)
     await coordinator.disconnect(agentID: agentID)
   }
 
@@ -96,8 +96,8 @@ struct RuntimeLifecycleTests {
     let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: directory) }
-    let database = try WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
-    let conversation = try database.createLocalACPSession(runtimeKind: .codex, title: "fixture", ownerDeviceID: UUID())
+    let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+    let conversation = try await database.createLocalACPSession(runtimeKind: .codex, title: "fixture", ownerDeviceID: UUID())
     let gate = RuntimeGate()
     let state = FakeGatewayProcess()
     let coordinator = LocalACPSessionCoordinator(database: database, clientFactory: { _, _ in
@@ -164,9 +164,9 @@ struct RuntimeLifecycleTests {
     let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: directory) }
-    let database = try WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
-    let conversation = try database.createLocalACPSession(runtimeKind: .codex, title: "fixture", ownerDeviceID: UUID())
-    try database.updateLocalACPSessionConfiguration(conversationID: conversation, model: "wanted", thinking: "high")
+    let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+    let conversation = try await database.createLocalACPSession(runtimeKind: .codex, title: "fixture", ownerDeviceID: UUID())
+    try await database.updateLocalACPSessionConfiguration(conversationID: conversation, model: "wanted", thinking: "high")
     let gate = NoncooperatingConfigurationGate()
     let state = FakeGatewayProcess()
     let initial = LocalACPSessionConfiguration(model: stage == "model" ? "initial" : "wanted",
@@ -194,7 +194,7 @@ struct RuntimeLifecycleTests {
     await stop?.value
     #expect(!state.running)
     #expect(await gate.calls == 1)
-    let descriptor = try database.localACPSession(conversationID: conversation)
+    let descriptor = try await database.localACPSession(conversationID: conversation)
     #expect(descriptor.model == "wanted")
     #expect(descriptor.thinking == "high")
     await coordinator.shutdown()

@@ -5,7 +5,7 @@ import WovenMatterClient
 import WovenMatterCore
 
 // Gateway identity, imported history and scheduled-result persistence.
-extension WorkspaceDatabase {
+extension WorkspaceDatabaseConnection {
   public func saveOpenClawGatewayLink(_ link: OpenClawGatewayLink) throws {
     try withLock {
       let statement = try prepareUnlocked("""
@@ -1231,5 +1231,138 @@ extension WorkspaceDatabase {
         )
         """)
     }
+  }
+}
+
+// MARK: - Async worker boundary
+
+extension WorkspaceDatabase {
+  public func saveOpenClawGatewayLink(_ link: OpenClawGatewayLink) async throws {
+    try await write { try $0.saveOpenClawGatewayLink(link) }
+  }
+
+  public func openClawGatewayLinks() async throws -> [OpenClawGatewayLink] {
+    try await read { try $0.openClawGatewayLinks() }
+  }
+
+  public func removeOpenClawGatewayLink(agentID: UUID) async throws {
+    try await write { try $0.removeOpenClawGatewayLink(agentID: agentID) }
+  }
+
+  public func attachOpenClawGatewaySession(
+    conversationID: String,
+    agentID: UUID,
+    sessionKey: String,
+    createdAt: Date = Date()
+  ) async throws {
+    try await write { try $0.attachOpenClawGatewaySession(conversationID: conversationID, agentID: agentID, sessionKey: sessionKey, createdAt: createdAt) }
+  }
+
+  public func openClawGatewayConversationIDs() async throws -> Set<String> {
+    try await read { try $0.openClawGatewayConversationIDs() }
+  }
+
+  public func openClawGatewaySessions(agentID: UUID) async throws -> [(conversationID: String, sessionKey: String)] {
+    try await read { try $0.openClawGatewaySessions(agentID: agentID) }
+  }
+
+  public func importOpenClawGatewaySession(agentID: UUID, session: OpenClawGatewaySession) async throws -> String {
+    try await write { try $0.importOpenClawGatewaySession(agentID: agentID, session: session) }
+  }
+
+  public func knownOpenClawSessionKeys(agentID: UUID) async throws -> Set<String> {
+    try await read { try $0.knownOpenClawSessionKeys(agentID: agentID) }
+  }
+
+  public func openClawToolActivityIDs(runID: String) async throws -> Set<String> {
+    try await read { try $0.openClawToolActivityIDs(runID: runID) }
+  }
+
+  public func reconcileOpenClawAuditTool(runID: String, activity: AgentRunActivity) async throws {
+    try await write { try $0.reconcileOpenClawAuditTool(runID: runID, activity: activity) }
+  }
+
+  public func synchronizeOpenClawHistory(
+    conversationID: String, history: OpenClawGatewayHistory,
+    liveRunIDs: Set<String> = []
+  ) async throws {
+    try await write { try $0.synchronizeOpenClawHistory(conversationID: conversationID, history: history, liveRunIDs: liveRunIDs) }
+  }
+
+  public func interruptedOpenClawRuns(conversationID: String) async throws -> [LocalACPRunIdentifiers] {
+    try await read { try $0.interruptedOpenClawRuns(conversationID: conversationID) }
+  }
+
+  public func openClawRunAssistantIDs(runID: String) async throws -> [String: String] {
+    try await read { try $0.openClawRunAssistantIDs(runID: runID) }
+  }
+
+  public func openClawGatewaySession(
+    conversationID: String
+  ) async throws -> (agentID: UUID, sessionKey: String, preferences: OpenClawSessionPreferences) {
+    try await read { try $0.openClawGatewaySession(conversationID: conversationID) }
+  }
+
+  public func updateOpenClawGatewaySessionPreferences(
+    conversationID: String,
+    preferences: OpenClawSessionPreferences,
+    updatedAt: Date = Date()
+  ) async throws {
+    try await write { try $0.updateOpenClawGatewaySessionPreferences(conversationID: conversationID, preferences: preferences, updatedAt: updatedAt) }
+  }
+
+  public func openClawResultRoutes(agentID: UUID) async throws -> [String: String] {
+    try await read { try $0.openClawResultRoutes(agentID: agentID) }
+  }
+
+  public func setOpenClawResultRoute(agentID: UUID, jobID: String, destination: String) async throws {
+    try await write { try $0.setOpenClawResultRoute(agentID: agentID, jobID: jobID, destination: destination) }
+  }
+
+  public func collectedOpenClawResultIDs(agentID: UUID, jobID: String) async throws -> Set<String> {
+    try await read { try $0.collectedOpenClawResultIDs(agentID: agentID, jobID: jobID) }
+  }
+
+  @discardableResult
+  public func collectOpenClawResult(_ run: OpenClawCronRun, title: String, output: String,
+                                   destination: String, collectedAt: Date = Date()) async throws -> String? {
+    try await write { try $0.collectOpenClawResult(run, title: title, output: output, destination: destination, collectedAt: collectedAt) }
+  }
+
+  public func replaceOpenClawCronSnapshot(
+    agentID: UUID,
+    jobs: [OpenClawCronJob],
+    runs: [OpenClawCronRun],
+    updatedAt: Date = Date()
+  ) async throws {
+    try await write { try $0.replaceOpenClawCronSnapshot(agentID: agentID, jobs: jobs, runs: runs, updatedAt: updatedAt) }
+  }
+
+  public func retainedOpenClawResult(agentID: UUID, runID: String) async throws -> String? {
+    try await read { try $0.retainedOpenClawResult(agentID: agentID, runID: runID) }
+  }
+
+  public func retainOpenClawResult(_ run: OpenClawCronRun, title: String, output: String) async throws {
+    try await write { try $0.retainOpenClawResult(run, title: title, output: output) }
+  }
+
+  public func openClawCronJobs(agentID: UUID? = nil) async throws -> [OpenClawCronJob] {
+    try await read { try $0.openClawCronJobs(agentID: agentID) }
+  }
+
+  public func openClawCronRuns(agentID: UUID? = nil) async throws -> [OpenClawCronRun] {
+    try await read { try $0.openClawCronRuns(agentID: agentID) }
+  }
+
+  public func emptyOpenClawCronTrash(agentID: UUID? = nil) async throws {
+    try await write { try $0.emptyOpenClawCronTrash(agentID: agentID) }
+  }
+}
+
+extension WorkspaceDatabase {
+  func importOpenClawGatewaySession(agentID: UUID, session: OpenClawGatewaySession,
+    historyPages: [URL], liveRunIDs: Set<String>) async throws -> String {
+    try await write { try $0.importOpenClawGatewaySession(agentID: agentID, session: session,
+      historyPages: historyPages, liveRunIDs: liveRunIDs) }
   }
 }

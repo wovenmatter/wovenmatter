@@ -146,11 +146,7 @@ struct UsageLimitsRequest: Sendable {
 }
 
 public actor LocalUsageService {
-  private struct ImportOutcome: Sendable {
-    let failures: Int
-
-    static let empty = ImportOutcome(failures: 0)
-  }
+  private typealias ImportOutcome = UsageTranscriptImporter.Outcome
 
   private static let parserVersion = "usage-index-v3"
   private static let retention: TimeInterval = 120 * 24 * 60 * 60
@@ -167,7 +163,8 @@ public actor LocalUsageService {
   private let openRouterActivityFetcher: @Sendable (String) async throws -> OpenRouterActivityResult
   private var limitsGeneration = UUID()
   private var analyticsGeneration = UUID()
-  private var usageStore: UsageStore?
+  private var usageStore: AsyncUsageStore?
+  private var usageStoreOpening: Task<AsyncUsageStore, any Error>?
   private var usageStoreFailure: String?
   private var cachedLimits: (
     date: Date,
@@ -344,7 +341,7 @@ public actor LocalUsageService {
       // snapshot. Their live limits are cheap to re-fetch; keep only this session
       // cache, fenced by the shared connection revision.
       let sharedProviders: Set<ProviderKind> = usesSharedConnections ? Set(ProviderKind.supportedAccounts) : []
-      let persistent = (try? openUsageStore()?.usageLimitAccounts(
+      let persistent = (try? await openUsageStore()?.usageLimitAccounts(
         providers: enabledProviders.subtracting(sharedProviders),
         accountScopes: resolvedCodexWorkspaceID.map { [.codex: $0] } ?? [:]
       )) ?? []
@@ -396,7 +393,7 @@ public actor LocalUsageService {
           else { return account }
           return prior.retainingLastGood(after: account)
         }
-        try? openUsageStore()?.saveUsageLimitAccounts(accounts, storedAt: now)
+        try? await openUsageStore()?.saveUsageLimitAccounts(accounts, storedAt: now)
         cachedLimits = (now, enabledProviders, resolvedCodexWorkspaceID, connectionRevision, selectionIDs, accounts)
       } else {
         let placeholders = ProviderLimitCollector.placeholderAccounts(
@@ -432,7 +429,7 @@ public actor LocalUsageService {
     let generation = UUID()
     analyticsGeneration = generation
     let interval = range.interval(relativeTo: now)
-    guard let store = openUsageStore() else {
+    guard let store = await openUsageStore() else {
       return UsageAnalyticsSnapshot(
         range: range,
         generatedAt: now,
@@ -450,40 +447,43 @@ public actor LocalUsageService {
       )
     }
 
+    guard isCurrentAnalytics(generation) else { throw CancellationError() }
     let requestedImportCutoff = max(
       now.addingTimeInterval(-Self.retention),
       interval.start.addingTimeInterval(-36 * 60 * 60)
     )
-    if shouldImportLocal(
+    if await shouldImportLocal(
       store: store,
       reason: refreshReason,
       requestedCutoff: requestedImportCutoff,
       now: now
     ) {
-      if importLocalSources(
+      guard isCurrentAnalytics(generation) else { throw CancellationError() }
+      if await importLocalSources(
         store: store,
         cutoff: requestedImportCutoff,
         enabledProviders: enabledProviders,
         now: now
       ) {
-        try? store.setMetadataDate(now, for: "usage.local-import-at")
-        let previousCutoff = try? store.metadataDate("usage.local-indexed-after")
-        try? store.setMetadataDate(
+        guard isCurrentAnalytics(generation) else { throw CancellationError() }
+        try? await store.setMetadataDate(now, for: "usage.local-import-at")
+        let previousCutoff = try? await store.metadataDate("usage.local-indexed-after")
+        try? await store.setMetadataDate(
           min(previousCutoff ?? requestedImportCutoff, requestedImportCutoff),
           for: "usage.local-indexed-after"
         )
-        try? store.prune(before: now.addingTimeInterval(-Self.retention))
+        try? await store.prune(before: now.addingTimeInterval(-Self.retention))
       }
     }
     if enabledProviders.contains(.openRouter),
        allowCredentialAccess,
-       shouldImportOpenRouter(store: store, reason: refreshReason, now: now) {
+       await shouldImportOpenRouter(store: store, reason: refreshReason, now: now) {
       await importOpenRouterActivity(store: store, generation: generation, now: now)
       guard isCurrentAnalytics(generation) else { throw CancellationError() }
-      try? store.setMetadataDate(now, for: "usage.openrouter-attempt-at")
+      try? await store.setMetadataDate(now, for: "usage.openrouter-attempt-at")
     }
     if enabledProviders.contains(.cursor),
-       shouldImportCursorAccount(store: store, reason: refreshReason, now: now) {
+       await shouldImportCursorAccount(store: store, reason: refreshReason, now: now) {
       await importCursorAccountActivity(
         store: store,
         cutoff: now.addingTimeInterval(-Self.retention),
@@ -491,9 +491,10 @@ public actor LocalUsageService {
         now: now
       )
       guard isCurrentAnalytics(generation) else { throw CancellationError() }
-      try? store.setMetadataDate(now, for: "usage.cursor-attempt-at")
+      try? await store.setMetadataDate(now, for: "usage.cursor-attempt-at")
     }
-    let storedSamples = ((try? store.samples(in: interval)) ?? []).filter {
+    guard isCurrentAnalytics(generation) else { throw CancellationError() }
+    let storedSamples = ((try? await store.samples(in: interval)) ?? []).filter {
       enabledProviders.contains($0.provider)
     }
     let samples = Self.reconcileOpenRouter(
@@ -501,7 +502,7 @@ public actor LocalUsageService {
     ).sorted { lhs, rhs in
       lhs.timestamp == rhs.timestamp ? lhs.id < rhs.id : lhs.timestamp < rhs.timestamp
     }
-    return UsageAnalyticsSnapshot(
+    return await UsageAnalyticsSnapshot(
       range: range,
       generatedAt: now,
       samples: samples,
@@ -528,13 +529,13 @@ public actor LocalUsageService {
 
   /// Agent reads use only the existing index. They never refresh a provider,
   /// inspect credentials, ingest transcripts or change usage preferences.
-  public func recordedSamples(from start: Date, to end: Date, limit: Int = 101, offset: Int = 0) throws -> [UsageSample] {
+  public func recordedSamples(from start: Date, to end: Date, limit: Int = 101, offset: Int = 0) async throws -> [UsageSample] {
     guard start <= end, start.timeIntervalSince1970.isFinite, end.timeIntervalSince1970.isFinite,
           (1...201).contains(limit), offset >= 0 else { throw WorkspaceToolError.invalid("Invalid usage range or pagination.") }
-    guard let store = openUsageStore() else {
+    guard let store = await openUsageStore() else {
       throw WorkspaceToolError.invalid(usageStoreFailure ?? "The recorded usage index is unavailable.")
     }
-    return try store.samples(in: DateInterval(start: start, end: end), limit: limit, offset: offset)
+    return try await store.samples(in: DateInterval(start: start, end: end), limit: limit, offset: offset)
   }
 
   public func deleteOpenRouterAPIKey() throws {
@@ -580,31 +581,39 @@ public actor LocalUsageService {
     return key
   }
 
-  private func openUsageStore() -> UsageStore? {
+  private func openUsageStore() async -> AsyncUsageStore? {
     if let usageStore { return usageStore }
     if usageStoreFailure != nil { return nil }
+    let opening: Task<AsyncUsageStore, any Error>
+    if let pending = usageStoreOpening { opening = pending }
+    else {
+      let url = databaseURL
+      opening = Task { try await AsyncUsageStore(databaseURL: url) }
+      usageStoreOpening = opening
+    }
     do {
-      try fileManager.createDirectory(
-        at: databaseURL.deletingLastPathComponent(),
-        withIntermediateDirectories: true
-      )
-      let store = try UsageStore(databaseURL: databaseURL)
+      let store = try await opening.value
       usageStore = store
+      usageStoreOpening = nil
       return store
     } catch {
-      usageStoreFailure = error.localizedDescription
+      usageStoreOpening = nil
+      // Queue pressure and cancellation are retryable, not a corrupt index.
+      if !(error is CancellationError), !(error is DatabaseWorkerError) {
+        usageStoreFailure = error.localizedDescription
+      }
       return nil
     }
   }
 
   private func shouldImportLocal(
-    store: UsageStore,
+    store: AsyncUsageStore,
     reason: UsageRefreshReason,
     requestedCutoff: Date,
     now: Date
-  ) -> Bool {
-    let lastImport = try? store.metadataDate("usage.local-import-at")
-    let indexedAfter = try? store.metadataDate("usage.local-indexed-after")
+  ) async -> Bool {
+    let lastImport = try? await store.metadataDate("usage.local-import-at")
+    let indexedAfter = try? await store.metadataDate("usage.local-indexed-after")
     if indexedAfter == nil || (indexedAfter ?? .distantFuture) > requestedCutoff {
       return true
     }
@@ -621,11 +630,11 @@ public actor LocalUsageService {
   }
 
   private func shouldImportOpenRouter(
-    store: UsageStore,
+    store: AsyncUsageStore,
     reason: UsageRefreshReason,
     now: Date
-  ) -> Bool {
-    let lastAttempt = try? store.metadataDate("usage.openrouter-attempt-at")
+  ) async -> Bool {
+    let lastAttempt = try? await store.metadataDate("usage.openrouter-attempt-at")
     switch reason {
     case .rangeChanged, .runCompleted:
       return false
@@ -637,11 +646,11 @@ public actor LocalUsageService {
   }
 
   private func shouldImportCursorAccount(
-    store: UsageStore,
+    store: AsyncUsageStore,
     reason: UsageRefreshReason,
     now: Date
-  ) -> Bool {
-    let lastAttempt = try? store.metadataDate("usage.cursor-attempt-at")
+  ) async -> Bool {
+    let lastAttempt = try? await store.metadataDate("usage.cursor-attempt-at")
     switch reason {
     case .rangeChanged, .runCompleted:
       return false
@@ -653,7 +662,7 @@ public actor LocalUsageService {
   }
 
   private func importCursorAccountActivity(
-    store: UsageStore,
+    store: AsyncUsageStore,
     cutoff: Date,
     generation: UUID,
     now: Date
@@ -666,14 +675,14 @@ public actor LocalUsageService {
         start: now.addingTimeInterval(-Self.retention),
         end: now
       )
-      let retained = (try? store.samples(in: retainedInterval, sourceID: "cursor:account")) ?? []
+      let retained = (try? await store.samples(in: retainedInterval, sourceID: "cursor:account")) ?? []
       var samplesByEvent = Dictionary(
         uniqueKeysWithValues: retained.map { ($0.sourceEventID, $0) }
       )
       for sample in activity.samples {
         samplesByEvent[sample.sourceEventID] = sample
       }
-      try store.replace(
+      try await store.replace(
         sourceID: "cursor:account",
         sourceName: "Cursor account activity",
         location: "Cursor Usage API",
@@ -696,366 +705,21 @@ public actor LocalUsageService {
     }
   }
 
-  private func importLocalSources(
-    store: UsageStore,
-    cutoff: Date,
-    enabledProviders: Set<ProviderKind>,
-    now: Date
-  ) -> Bool {
+  private func importLocalSources(store: AsyncUsageStore, cutoff: Date,
+    enabledProviders: Set<ProviderKind>, now: Date) async -> Bool {
+    let home = homeDirectory
+    let outcomes = importOutcomes
     do {
-      try store.performTransaction {
-        importLocalSourcesWithinTransaction(
-          store: store,
-          cutoff: cutoff,
-          enabledProviders: enabledProviders,
-          now: now
-        )
+      let result = try await store.write { connection in
+        let importer = UsageTranscriptImporter(homeDirectory: home, fileManager: FileManager(), outcomes: outcomes)
+        let succeeded = importer.run(store: connection, cutoff: cutoff, enabledProviders: enabledProviders, now: now)
+        return (succeeded, importer.importOutcomes)
       }
-      importOutcomes.removeValue(forKey: "wovenmatter:index")
-      return true
+      importOutcomes = result.1
+      return result.0
     } catch {
-      importOutcomes["wovenmatter:index"] = ImportOutcome(
-        failures: 1
-      )
+      importOutcomes["wovenmatter:index"] = .init(failures: 1)
       return false
-    }
-  }
-
-  private func importLocalSourcesWithinTransaction(
-    store: UsageStore,
-    cutoff retentionCutoff: Date,
-    enabledProviders: Set<ProviderKind>,
-    now: Date
-  ) {
-    let providerFilterSignature = enabledProviders
-      .map(\.rawValue)
-      .sorted()
-      .joined(separator: ",")
-
-    if enabledProviders.contains(.codex) {
-      let codexRoot = homeDirectory.appending(path: ".codex/sessions", directoryHint: .isDirectory)
-      importOutcomes["codex:file:"] = importTranscriptFiles(
-        root: codexRoot,
-        prefix: "codex:file:",
-        sourceName: "Codex rollout",
-        provider: .codex,
-        harness: "Codex",
-        providerFilterSignature: providerFilterSignature,
-        store: store,
-        cutoff: retentionCutoff,
-        now: now
-      ) { url in
-        var state = CodexUsageScanState()
-        var records: [UsageSample] = []
-        let usageMarker = Data("\"token_count\"".utf8)
-        let contextMarker = Data("\"turn_context\"".utf8)
-        let metadataMarker = Data("\"session_meta\"".utf8)
-        try self.forEachLineData(in: url) { data, lineNumber in
-          guard data.range(of: usageMarker) != nil
-                  || data.range(of: contextMarker) != nil
-                  || data.range(of: metadataMarker) != nil else { return }
-          if let sample = LocalUsageTranscriptParser.parseCodex(
-            line: String(decoding: data, as: UTF8.self),
-            lineNumber: lineNumber,
-            state: &state
-          ) {
-            records.append(sample)
-          }
-        }
-        return records
-      }
-    }
-
-    if enabledProviders.contains(.claude) {
-      let claudeRoot = homeDirectory.appending(path: ".claude/projects", directoryHint: .isDirectory)
-      importOutcomes["claude:file:"] = importTranscriptFiles(
-        root: claudeRoot,
-        prefix: "claude:file:",
-        sourceName: "Claude transcript",
-        provider: .claude,
-        harness: "Claude Code",
-        providerFilterSignature: providerFilterSignature,
-        store: store,
-        cutoff: retentionCutoff,
-        now: now
-      ) { url in
-        var records: [UsageSample] = []
-        let usageMarker = Data("\"usage\"".utf8)
-        try self.forEachLineData(in: url) { data, lineNumber in
-          guard data.range(of: usageMarker) != nil else { return }
-          if let parsed = LocalUsageTranscriptParser.parseClaude(
-            line: String(decoding: data, as: UTF8.self),
-            lineNumber: lineNumber
-          ) {
-            records.append(parsed)
-          }
-        }
-        return records
-      }
-    }
-
-    if !enabledProviders.isEmpty {
-      let piRoot = homeDirectory.appending(path: ".pi/agent/sessions", directoryHint: .isDirectory)
-      importOutcomes["pi:file:"] = importHarnessFiles(
-        root: piRoot,
-        prefix: "pi:file:",
-        harness: "Pi",
-        enabledProviders: enabledProviders,
-        providerFilterSignature: providerFilterSignature,
-        store: store,
-        cutoff: retentionCutoff,
-        now: now
-      )
-
-      let openClawRoot = homeDirectory.appending(
-        path: ".openclaw/agents",
-        directoryHint: .isDirectory
-      )
-      importOutcomes["openclaw:file:"] = importHarnessFiles(
-        root: openClawRoot,
-        prefix: "openclaw:file:",
-        harness: "OpenClaw",
-        enabledProviders: enabledProviders,
-        providerFilterSignature: providerFilterSignature,
-        store: store,
-        cutoff: retentionCutoff,
-        now: now
-      ) { url in
-        url.path.contains("/sessions/")
-          && url.lastPathComponent.hasSuffix(".jsonl")
-          && !url.lastPathComponent.hasSuffix(".trajectory.jsonl")
-      }
-
-      let hermesDatabase = homeDirectory.appending(path: ".hermes/state.db")
-      importOutcomes["hermes:database"] = importDatabase(
-        databaseURL: hermesDatabase,
-        sourceID: "hermes:database",
-        sourceName: "Hermes usage ledger",
-        provider: .unknown,
-        harness: "Hermes",
-        providerFilterSignature: providerFilterSignature,
-        store: store,
-        cutoff: retentionCutoff,
-        now: now
-      ) { indexedAfter in
-        try HermesUsageDatabase(databaseURL: hermesDatabase)
-          .samples(cutoff: indexedAfter, now: now)
-          .filter { enabledProviders.contains($0.provider) }
-      }
-    }
-
-    if enabledProviders.contains(.grok) {
-      let grokRoot = homeDirectory.appending(path: ".grok/sessions", directoryHint: .isDirectory)
-      importOutcomes["grok:file:"] = importGrok(
-        root: grokRoot,
-        providerFilterSignature: providerFilterSignature,
-        store: store,
-        cutoff: retentionCutoff,
-        now: now
-      )
-    }
-
-    if enabledProviders.contains(.openCodeGo) {
-      let openCodeDatabase = homeDirectory.appending(path: ".local/share/opencode/opencode.db")
-      importOutcomes["opencode:database"] = importDatabase(
-        databaseURL: openCodeDatabase,
-        sourceID: "opencode:database",
-        sourceName: "OpenCode history",
-        provider: .openCodeGo,
-        harness: "OpenCode",
-        providerFilterSignature: providerFilterSignature,
-        store: store,
-        cutoff: retentionCutoff,
-        now: now
-      ) { indexedAfter in
-        try OpenCodeUsageDatabase(databaseURL: openCodeDatabase)
-          .samples(cutoff: indexedAfter, now: now)
-          .filter { $0.provider == .openCodeGo }
-      }
-    }
-  }
-
-  private func importTranscriptFiles(
-    root: URL,
-    prefix: String,
-    sourceName: String,
-    provider: ProviderKind,
-    harness: String,
-    providerFilterSignature: String,
-    store: UsageStore,
-    cutoff: Date,
-    now: Date,
-    predicate: (URL) -> Bool = { $0.pathExtension == "jsonl" },
-    fingerprint: ((URL) throws -> String)? = nil,
-    parser: (URL) throws -> [UsageSample]
-  ) -> ImportOutcome {
-    guard fileManager.fileExists(atPath: root.path) else { return .empty }
-    let files = files(root: root, cutoff: cutoff, predicate: predicate)
-    var failures = 0
-    for file in files {
-      do {
-        let currentFingerprint: String
-        if let fingerprint {
-          currentFingerprint = try fingerprint(file) + ":" + providerFilterSignature
-        } else {
-          currentFingerprint = try fileFingerprint(file) + ":" + providerFilterSignature
-        }
-        let sourceID = prefix + file.path
-        let stored = try store.source(sourceID)
-        let indexedAfter = min(stored?.indexedAfter ?? cutoff, cutoff)
-        guard stored?.fingerprint != currentFingerprint
-                || stored?.indexedAfter == nil
-                || (stored?.indexedAfter ?? .distantFuture) > cutoff else { continue }
-        let samples = try parser(file).filter {
-          $0.timestamp >= indexedAfter && $0.timestamp <= now
-        }
-        try store.replace(
-          sourceID: sourceID,
-          sourceName: sourceName,
-          location: abbreviated(file),
-          provider: provider,
-          harness: harness,
-          fingerprint: currentFingerprint,
-          samples: uniqueSourceEvents(samples),
-          importedAt: now,
-          indexedAfter: indexedAfter,
-          transactional: false
-        )
-      } catch {
-        failures += 1
-      }
-    }
-    return ImportOutcome(failures: failures)
-  }
-
-  private func importHarnessFiles(
-    root: URL,
-    prefix: String,
-    harness: String,
-    enabledProviders: Set<ProviderKind>,
-    providerFilterSignature: String,
-    store: UsageStore,
-    cutoff: Date,
-    now: Date,
-    predicate: (URL) -> Bool = { $0.pathExtension == "jsonl" }
-  ) -> ImportOutcome {
-    importTranscriptFiles(
-      root: root,
-      prefix: prefix,
-      sourceName: "\(harness) session",
-      provider: .unknown,
-      harness: harness,
-      providerFilterSignature: providerFilterSignature,
-      store: store,
-      cutoff: cutoff,
-      now: now,
-      predicate: predicate
-    ) { url in
-      var state = HarnessUsageScanState()
-      var records: [UsageSample] = []
-      let usageMarker = Data("\"usage\"".utf8)
-      let modelMarker = Data("\"model_change\"".utf8)
-      let thinkingMarker = Data("\"thinking_level_change\"".utf8)
-      let sessionMarker = Data("\"session\"".utf8)
-      try self.forEachLineData(in: url) { data, lineNumber in
-        guard data.range(of: usageMarker) != nil
-                || data.range(of: modelMarker) != nil
-                || data.range(of: thinkingMarker) != nil
-                || data.range(of: sessionMarker) != nil else { return }
-        if let parsed = LocalUsageTranscriptParser.parseHarness(
-          line: String(decoding: data, as: UTF8.self),
-          lineNumber: lineNumber,
-          harness: harness,
-          state: &state
-        ) {
-          records.append(parsed)
-        }
-      }
-      return records.filter { enabledProviders.contains($0.provider) }
-    }
-  }
-
-  private func importGrok(
-    root: URL,
-    providerFilterSignature: String,
-    store: UsageStore,
-    cutoff: Date,
-    now: Date
-  ) -> ImportOutcome {
-    importTranscriptFiles(
-      root: root,
-      prefix: "grok:file:",
-      sourceName: "Grok session",
-      provider: .grok,
-      harness: "Grok Build",
-      providerFilterSignature: providerFilterSignature,
-      store: store,
-      cutoff: cutoff,
-      now: now,
-      predicate: { $0.lastPathComponent == "updates.jsonl" },
-      fingerprint: { try self.grokFingerprint($0) }
-    ) { url in
-      let summaryURL = url.deletingLastPathComponent().appending(path: "summary.json")
-      let summary: [String: Any]
-      if let data = try? Data(contentsOf: summaryURL),
-         let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-        summary = object
-      } else {
-        summary = [:]
-      }
-      var records: [UsageSample] = []
-      let usageMarker = Data("\"usage\"".utf8)
-      try self.forEachLineData(in: url) { data, lineNumber in
-        guard data.range(of: usageMarker) != nil else { return }
-        records += LocalUsageTranscriptParser.parseGrok(
-          line: String(decoding: data, as: UTF8.self),
-          lineNumber: lineNumber,
-          summary: summary
-        )
-      }
-      return records
-    }
-  }
-
-  private func importDatabase(
-    databaseURL: URL,
-    sourceID: String,
-    sourceName: String,
-    provider: ProviderKind,
-    harness: String,
-    providerFilterSignature: String,
-    store: UsageStore,
-    cutoff: Date,
-    now: Date,
-    reader: (Date) throws -> [UsageSample]
-  ) -> ImportOutcome {
-    guard fileManager.fileExists(atPath: databaseURL.path) else { return .empty }
-    do {
-      let fingerprint = try databaseFingerprint(databaseURL) + ":" + providerFilterSignature
-      let stored = try store.source(sourceID)
-      let indexedAfter = min(stored?.indexedAfter ?? cutoff, cutoff)
-      if stored?.fingerprint != fingerprint
-          || stored?.indexedAfter == nil
-          || (stored?.indexedAfter ?? .distantFuture) > cutoff {
-        let samples = try reader(indexedAfter).filter {
-          $0.timestamp >= indexedAfter && $0.timestamp <= now
-        }
-        try store.replace(
-          sourceID: sourceID,
-          sourceName: sourceName,
-          location: abbreviated(databaseURL),
-          provider: provider,
-          harness: harness,
-          fingerprint: fingerprint,
-          samples: uniqueSourceEvents(samples),
-          importedAt: now,
-          indexedAfter: indexedAfter,
-          transactional: false
-        )
-      }
-      return ImportOutcome(failures: 0)
-    } catch {
-      return ImportOutcome(failures: 1)
     }
   }
 
@@ -1063,7 +727,7 @@ public actor LocalUsageService {
     analyticsGeneration == generation && !Task.isCancelled
   }
 
-  private func importOpenRouterActivity(store: UsageStore, generation: UUID, now: Date) async {
+  private func importOpenRouterActivity(store: AsyncUsageStore, generation: UUID, now: Date) async {
     do {
       guard let key = try loadOpenRouterAPIKey() else {
         openRouterStatus = .unavailable
@@ -1073,7 +737,7 @@ public actor LocalUsageService {
       let activity = try await openRouterActivityFetcher(key)
       guard isCurrentAnalytics(generation) else { return }
       for (date, samples) in activity.samplesByUTCDate {
-        try store.replace(
+        try await store.replace(
           sourceID: "openrouter:activity:\(date)",
           sourceName: "OpenRouter activity",
           location: "OpenRouter Activity API",
@@ -1094,13 +758,13 @@ public actor LocalUsageService {
   }
 
   private func coverage(
-    store: UsageStore,
+    store: AsyncUsageStore,
     interval: DateInterval,
     enabledProviders: Set<ProviderKind>,
     allowCredentialAccess: Bool
-  ) -> [UsageSourceCoverage] {
+  ) async -> [UsageSourceCoverage] {
     var sources: [UsageSourceCoverage] = []
-    if enabledProviders.contains(.codex) { sources.append(sourceCoverage(
+    if enabledProviders.contains(.codex) { await sources.append(sourceCoverage(
       id: "codex",
       prefix: "codex:file:",
       sourceName: "Codex",
@@ -1111,7 +775,7 @@ public actor LocalUsageService {
       interval: interval,
       detail: "Exact rollout token deltas with model and reasoning metadata; fork-copy and repeated-delta suppression is applied."
     )) }
-    if enabledProviders.contains(.claude) { sources.append(sourceCoverage(
+    if enabledProviders.contains(.claude) { await sources.append(sourceCoverage(
       id: "claude",
       prefix: "claude:file:",
       sourceName: "Claude Code",
@@ -1122,7 +786,7 @@ public actor LocalUsageService {
       interval: interval,
       detail: "Exact assistant-message token usage, globally deduplicated across resumed transcript copies."
     )) }
-    if enabledProviders.contains(.grok) { sources.append(sourceCoverage(
+    if enabledProviders.contains(.grok) { await sources.append(sourceCoverage(
       id: "grok",
       prefix: "grok:file:",
       sourceName: "Grok CLI",
@@ -1133,7 +797,7 @@ public actor LocalUsageService {
       interval: interval,
       detail: "Per-turn, per-model token usage from Grok session updates."
     )) }
-    if enabledProviders.contains(.openCodeGo) { sources.append(sourceCoverage(
+    if enabledProviders.contains(.openCodeGo) { await sources.append(sourceCoverage(
       id: "opencode",
       prefix: "opencode:database",
       sourceName: "OpenCode",
@@ -1144,7 +808,7 @@ public actor LocalUsageService {
       interval: interval,
       detail: "Exact step-finish usage from OpenCode SQLite, including OpenCode Go and other identifiable billing routes."
     )) }
-    if !enabledProviders.isEmpty { sources.append(sourceCoverage(
+    if !enabledProviders.isEmpty { await sources.append(sourceCoverage(
       id: "pi",
       prefix: "pi:file:",
       sourceName: "Pi",
@@ -1155,7 +819,7 @@ public actor LocalUsageService {
       interval: interval,
       detail: "Exact assistant-call tokens with model, provider route, cache, reasoning, and thinking-level metadata."
     ))
-    sources.append(sourceCoverage(
+    await sources.append(sourceCoverage(
       id: "openclaw",
       prefix: "openclaw:file:",
       sourceName: "OpenClaw",
@@ -1166,7 +830,7 @@ public actor LocalUsageService {
       interval: interval,
       detail: "Exact assistant-call tokens from active local OpenClaw session histories; trajectory and reset copies are excluded."
     ))
-    var hermes = sourceCoverage(
+    var hermes = await sourceCoverage(
       id: "hermes",
       prefix: "hermes:database",
       sourceName: "Hermes",
@@ -1192,11 +856,11 @@ public actor LocalUsageService {
     }
     sources.append(hermes) }
     if enabledProviders.contains(.cursor) {
-      sources.append(cursorCoverage(store: store, interval: interval))
+      await sources.append(cursorCoverage(store: store, interval: interval))
     }
 
     if enabledProviders.contains(.openRouter) {
-      let openRouterStats = try? store.statistics(
+      let openRouterStats = try? await store.statistics(
         sourceIDPrefix: "openrouter:activity:",
         in: interval
       )
@@ -1252,12 +916,12 @@ public actor LocalUsageService {
     provider: ProviderKind,
     harness: String,
     location: URL,
-    store: UsageStore,
+    store: AsyncUsageStore,
     interval: DateInterval,
     detail: String
-  ) -> UsageSourceCoverage {
+  ) async -> UsageSourceCoverage {
     let outcome = importOutcomes[prefix] ?? .empty
-    let stats = try? store.statistics(sourceIDPrefix: prefix, in: interval)
+    let stats = try? await store.statistics(sourceIDPrefix: prefix, in: interval)
     let exists = fileManager.fileExists(atPath: location.path)
     let status: UsageSourceStatus
     if outcome.failures > 0 {
@@ -1291,9 +955,9 @@ public actor LocalUsageService {
   }
 
   private func cursorCoverage(
-    store: UsageStore,
+    store: AsyncUsageStore,
     interval: DateInterval
-  ) -> UsageSourceCoverage {
+  ) async -> UsageSourceCoverage {
     let acpRoot = homeDirectory.appending(path: ".cursor/acp-sessions")
     let transcriptRoot = homeDirectory.appending(path: ".cursor/projects")
     let acpSessions = files(
@@ -1306,7 +970,7 @@ public actor LocalUsageService {
       cutoff: interval.start,
       predicate: { $0.pathExtension == "jsonl" && $0.path.contains("/agent-transcripts/") }
     ).count
-    let stats = try? store.statistics(sourceID: "cursor:account", in: interval)
+    let stats = try? await store.statistics(sourceID: "cursor:account", in: interval)
     let discovered = max(max(acpSessions, transcripts), stats?.sessions ?? 0)
     let found = fileManager.fileExists(atPath: acpRoot.path)
       || fileManager.fileExists(atPath: transcriptRoot.path)
@@ -1489,35 +1153,6 @@ public actor LocalUsageService {
     return samples.filter { seen.insert($0.sourceEventID).inserted }
   }
 
-  private func fileFingerprint(_ url: URL) throws -> String {
-    let values = try url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
-    return [
-      Self.parserVersion,
-      String(values.fileSize ?? 0),
-      String(values.contentModificationDate?.timeIntervalSince1970 ?? 0),
-    ].joined(separator: ":")
-  }
-
-  private func databaseFingerprint(_ url: URL) throws -> String {
-    var values = [try fileFingerprint(url)]
-    for suffix in ["-wal", "-shm"] {
-      let sidecar = URL(fileURLWithPath: url.path + suffix)
-      if fileManager.fileExists(atPath: sidecar.path) {
-        values.append(try fileFingerprint(sidecar))
-      }
-    }
-    return values.joined(separator: "|")
-  }
-
-  private func grokFingerprint(_ updatesURL: URL) throws -> String {
-    var values = [try fileFingerprint(updatesURL)]
-    let summaryURL = updatesURL.deletingLastPathComponent().appending(path: "summary.json")
-    if fileManager.fileExists(atPath: summaryURL.path) {
-      values.append(try fileFingerprint(summaryURL))
-    }
-    return values.joined(separator: "|")
-  }
-
   private func files(
     root: URL,
     cutoff: Date,
@@ -1540,32 +1175,6 @@ public actor LocalUsageService {
     return result.sorted { $0.path < $1.path }
   }
 
-  private func forEachLineData(
-    in url: URL,
-    body: (Data.SubSequence, Int) throws -> Void
-  ) throws {
-    let data = try Data(contentsOf: url, options: [.mappedIfSafe, .uncached])
-    try data.withUnsafeBytes { rawBuffer in
-      guard let base = rawBuffer.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return }
-      var start = 0
-      var lineNumber = 0
-      while start < rawBuffer.count {
-        let remaining = rawBuffer.count - start
-        let newlinePointer = Darwin.memchr(base.advanced(by: start), 0x0A, remaining)
-        let end: Int
-        if let newlinePointer {
-          end = base.distance(to: newlinePointer.assumingMemoryBound(to: UInt8.self))
-        } else {
-          end = rawBuffer.count
-        }
-        lineNumber += 1
-        try body(data[start..<end], lineNumber)
-        guard end < rawBuffer.count else { return }
-        start = end + 1
-      }
-    }
-  }
-
   private func abbreviated(_ url: URL) -> String {
     let home = homeDirectory.path
     return url.path.hasPrefix(home) ? "~" + url.path.dropFirst(home.count) : url.path
@@ -1584,7 +1193,7 @@ public enum LocalUsageServiceError: LocalizedError {
   }
 }
 
-private struct OpenCodeUsageDatabase {
+struct OpenCodeUsageDatabase {
   let databaseURL: URL
 
   func samples(cutoff: Date, now: Date) throws -> [UsageSample] {

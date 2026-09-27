@@ -40,8 +40,8 @@ final class WovenMatterLifecycleDelegate: NSObject, NSApplicationDelegate {
             }
             return .terminateLater
         }
-        model.flushNoteDrafts()
         Task {
+            _ = await model.flushNoteDrafts()
             do {
                 try await model.prepareOpenCodeInstancesToQuit()
                 sender.reply(toApplicationShouldTerminate: true)
@@ -66,7 +66,7 @@ final class WovenMatterLifecycleDelegate: NSObject, NSApplicationDelegate {
     }
     func applicationWillTerminate(_ notification: Notification) {
         if LocalExecutionRole.current == .backend {
-            model?.flushNoteDrafts()
+            // The asynchronous termination barrier already flushed note drafts.
             model?.shutdownLocalACPSessions()
         }
     }

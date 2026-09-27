@@ -10,7 +10,7 @@ private actor FixtureOwner {
     let database: WorkspaceDatabase
     let journal = BackendInvalidationJournal()
     var shouldStop = false
-    init(root: URL) throws { database = try WorkspaceDatabase(url: root.appending(path: "workspace.sqlite")) }
+    init(root: URL) async throws { database = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite")) }
     func handle(_ request: BackendRPCRequest) async -> BackendRPCResponse {
         do {
             switch request.method {
@@ -18,7 +18,7 @@ private actor FixtureOwner {
                 Task {
                     try? await Task.sleep(for: .milliseconds(250))
                     do {
-                        _ = try self.database.createFolder(name: "Completed after frontend exit")
+                        _ = try await self.database.createFolder(name: "Completed after frontend exit")
                         await self.journal.publish(scopes: [.workspace])
                     } catch { fatalError("Fixture write failed: \(error)") }
                 }
@@ -70,7 +70,7 @@ private actor FixtureOwner {
             let root = URL(fileURLWithPath: CommandLine.arguments[2])
             let endpoint = root.appending(path: "control.sock")
             if CommandLine.arguments[1] == "backend" {
-                let owner = try FixtureOwner(root: root)
+                let owner = try await FixtureOwner(root: root)
                 let server = BackendRPCServer(socketURL: endpoint)
                 try server.start { await owner.handle($0) }
                 while !(await owner.shouldStop) { try await Task.sleep(for: .milliseconds(25)) }
@@ -78,9 +78,9 @@ private actor FixtureOwner {
                 return
             }
             if CommandLine.arguments[1] == "frontend" {
-                let projection = try DashboardStore(supportDirectory: root, readOnlyProjection: true)
+                let projection = try await DashboardStore(supportDirectory: root, readOnlyProjection: true)
                 var refused = false
-                do { _ = try projection.database.createFolder(name: "Forbidden frontend write") }
+                do { _ = try await projection.database.createFolder(name: "Forbidden frontend write") }
                 catch { refused = true }
                 try require(refused, "Read-only frontend accepted a database mutation")
                 _ = try await BackendRPCClient(socketURL: endpoint).call(method: "admit")
@@ -100,7 +100,7 @@ private actor FixtureOwner {
         let frontend = try child("frontend", root: root)
         try await wait(frontend)
         try require(backend.isRunning, "Frontend exit stopped backend")
-        let projection = try DashboardStore(supportDirectory: root, readOnlyProjection: true)
+        let projection = try await DashboardStore(supportDirectory: root, readOnlyProjection: true)
         let changed = try JSONDecoder().decode(BackendInvalidations.self,
             from: await client.call(method: "changes", payload: JSONEncoder().encode(initial.cursor)))
         try require(changed.scopes.contains(.workspace), "Detached completion did not publish invalidation")

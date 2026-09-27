@@ -37,7 +37,7 @@ public struct BuzzLocalAgentLaunchSource: Equatable, Sendable {
 }
 
 // Buzz workspace links, enrollments and bound session creation.
-extension WorkspaceDatabase {
+extension WorkspaceDatabaseConnection {
   public func upsertBuzzWorkspaceLink(_ link: BuzzWorkspaceLink) throws {
     try withLock {
       try upsertBuzzWorkspaceLinkUnlocked(link)
@@ -528,5 +528,83 @@ extension WorkspaceDatabase {
 
       return conversationID
     }
+  }
+}
+
+// MARK: - Async worker boundary
+
+extension WorkspaceDatabase {
+  public func upsertBuzzWorkspaceLink(_ link: BuzzWorkspaceLink) async throws {
+    try await write { try $0.upsertBuzzWorkspaceLink(link) }
+  }
+
+  public func buzzWorkspaceLinks() async throws -> [BuzzWorkspaceLink] {
+    try await read { try $0.buzzWorkspaceLinks() }
+  }
+
+  public func deleteBuzzWorkspaceLink(id: UUID) async throws {
+    try await write { try $0.deleteBuzzWorkspaceLink(id: id) }
+  }
+
+  @discardableResult
+  public func enrollBuzzWorkspaceAgent(
+    _ candidate: BuzzWorkspaceAgentCandidate,
+    enrollmentID: UUID = UUID(),
+    at date: Date = Date()
+  ) async throws -> BuzzWorkspaceAgentEnrollment {
+    try await write { try $0.enrollBuzzWorkspaceAgent(candidate, enrollmentID: enrollmentID, at: date) }
+  }
+
+  public func buzzWorkspaceAgentEnrollments(
+    workspaceLinkID: UUID? = nil
+  ) async throws -> [BuzzWorkspaceAgentEnrollment] {
+    try await read { try $0.buzzWorkspaceAgentEnrollments(workspaceLinkID: workspaceLinkID) }
+  }
+
+  public func removeBuzzWorkspaceAgentEnrollment(id: UUID) async throws {
+    try await write { try $0.removeBuzzWorkspaceAgentEnrollment(id: id) }
+  }
+
+  public func buzzWorkspaceSnapshot() async throws -> BuzzWorkspaceSnapshot {
+    try await read { try $0.buzzWorkspaceSnapshot() }
+  }
+
+  public func buzzLocalAgentLaunchSource(
+    workspaceLinkID: UUID,
+    agentID: String
+  ) async throws -> BuzzLocalAgentLaunchSource {
+    try await read { try $0.buzzLocalAgentLaunchSource(workspaceLinkID: workspaceLinkID, agentID: agentID) }
+  }
+
+  public func buzzBoundLocalACPConversationIDs() async throws -> Set<String> {
+    try await read { try $0.buzzBoundLocalACPConversationIDs() }
+  }
+
+  public func reconcileBuzzWorkspaceAgent(
+    enrollment: BuzzWorkspaceAgentEnrollment,
+    ownerDeviceID: UUID,
+    status: AgentRuntimeStatus,
+    updatedAt: Date = Date()
+  ) async throws {
+    try await write { try $0.reconcileBuzzWorkspaceAgent(enrollment: enrollment, ownerDeviceID: ownerDeviceID, status: status, updatedAt: updatedAt) }
+  }
+
+  public func retireBuzzWorkspaceAgent(
+    enrollmentID: UUID,
+    ownerDeviceID: UUID,
+    updatedAt: Date = Date()
+  ) async throws {
+    try await write { try $0.retireBuzzWorkspaceAgent(enrollmentID: enrollmentID, ownerDeviceID: ownerDeviceID, updatedAt: updatedAt) }
+  }
+
+  @discardableResult
+  public func createBuzzLocalACPSession(
+    enrollmentID: UUID,
+    title: String,
+    ownerDeviceID: UUID,
+    model: String? = nil,
+    createdAt: Date = Date()
+  ) async throws -> String {
+    try await write { try $0.createBuzzLocalACPSession(enrollmentID: enrollmentID, title: title, ownerDeviceID: ownerDeviceID, model: model, createdAt: createdAt) }
   }
 }

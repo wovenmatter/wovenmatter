@@ -6,60 +6,60 @@ import WovenMatterCore
 @testable import WovenMatterDashboardStore
 
 struct HermesScheduledResultTests {
-  @Test func repeatedResultsAndRouteChangesDoNotDuplicateDelivery() throws {
+  @Test func repeatedResultsAndRouteChangesDoNotDuplicateDelivery() async throws {
     let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: root) }
     let url = root.appending(path: "workspace.sqlite")
-    let db = try WorkspaceDatabase(url: url)
+    let db = try await WorkspaceDatabase(url: url)
     let owner = UUID()
-    let existing = try db.createLocalACPSession(
+    let existing = try await db.createLocalACPSession(
       runtimeKind: .hermes, title: "Updates", ownerDeviceID: owner)
-    let agent = try #require(db.dashboardAgents().first { $0.runtimeKind == .hermes })
-    try db.setHermesResultRoute(agentID: agent.id, jobID: "job", destination: "new")
+    let agent = try await #require(db.dashboardAgents().first { $0.runtimeKind == .hermes })
+    try await db.setHermesResultRoute(agentID: agent.id, jobID: "job", destination: "new")
     let first = try #require(
-      try db.collectHermesResult(
+      try await db.collectHermesResult(
         agentID: agent.id, jobID: "job", runID: "run1", title: "Report", output: "Identical output",
         ownerDeviceID: owner))
-    #expect(try db.conversationContent(id: first).messages.map(\.content) == ["Identical output"])
-    try db.setHermesResultRoute(agentID: agent.id, jobID: "job", destination: existing)
-    let reopened = try WorkspaceDatabase(url: url)
+    #expect(try await db.conversationContent(id: first).messages.map(\.content) == ["Identical output"])
+    try await db.setHermesResultRoute(agentID: agent.id, jobID: "job", destination: existing)
+    let reopened = try await WorkspaceDatabase(url: url)
     #expect(
-      try reopened.collectHermesResult(
+      try await reopened.collectHermesResult(
         agentID: agent.id, jobID: "job", runID: "run1", title: "Report", output: "Identical output",
         ownerDeviceID: owner) == nil)
     #expect(
-      try reopened.collectHermesResult(
+      try await reopened.collectHermesResult(
         agentID: agent.id, jobID: "job", runID: "run2", title: "Report", output: "Identical output",
         ownerDeviceID: owner) == existing)
-    #expect(try reopened.conversationContent(id: existing).messages.count == 1)
+    #expect(try await reopened.conversationContent(id: existing).messages.count == 1)
   }
 
-  @Test func destinationCannotCrossRemoteWorkspaces() throws {
+  @Test func destinationCannotCrossRemoteWorkspaces() async throws {
     let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: root) }
-    let db = try WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
+    let db = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
     let owner = UUID()
     let workspace = UUID()
-    let local = try db.createLocalACPSession(
+    let local = try await db.createLocalACPSession(
       runtimeKind: .hermes, title: "Local", ownerDeviceID: owner)
-    _ = try db.createRemoteACPSession(
+    _ = try await db.createRemoteACPSession(
       runtimeKind: .hermes, remoteWorkspaceID: workspace, remoteWorkspaceName: "Remote",
       title: "Remote", ownerDeviceID: owner)
-    let agent = try #require(
+    let agent = try await #require(
       db.dashboardAgents().first { $0.runtimeKind == .hermes && $0.runtimeDeviceID == workspace })
-    #expect(throws: (any Error).self) {
-      try db.setHermesResultRoute(agentID: agent.id, jobID: "job", destination: local)
+    await #expect(throws: (any Error).self) {
+      try await db.setHermesResultRoute(agentID: agent.id, jobID: "job", destination: local)
     }
-    try db.setHermesResultRoute(agentID: agent.id, jobID: "job", destination: "new")
+    try await db.setHermesResultRoute(agentID: agent.id, jobID: "job", destination: "new")
     let result = try #require(
-      try db.collectHermesResult(
+      try await db.collectHermesResult(
         agentID: agent.id, jobID: "job", runID: "run", title: "Remote report",
         output: "Full output", ownerDeviceID: owner, remoteWorkspaceID: workspace,
         remoteWorkspaceName: "Remote"))
     #expect(
-      try db.workspaceOverview().conversations.first { $0.id == result }?.remoteWorkspaceID
+      try await db.workspaceOverview().conversations.first { $0.id == result }?.remoteWorkspaceID
         == workspace)
   }
 }

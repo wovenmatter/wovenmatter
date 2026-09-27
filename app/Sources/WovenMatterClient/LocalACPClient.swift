@@ -1185,7 +1185,7 @@ public actor LocalACPClient {
             case "injected", "startedNewTurn":
                 return LocalACPActiveInputReceipt(completion: Task { nil })
             case "promptRequired":
-                return LocalACPActiveInputReceipt(
+                return await LocalACPActiveInputReceipt(
                     completion: try beginActivePrompt(input)
                 )
             default:
@@ -1193,7 +1193,7 @@ public actor LocalACPClient {
             }
         case .grokInterjection:
             if !input.files.isEmpty {
-                return LocalACPActiveInputReceipt(
+                return await LocalACPActiveInputReceipt(
                     completion: try beginActivePrompt(input)
                 )
             }
@@ -1208,12 +1208,12 @@ public actor LocalACPClient {
                 )
                 return LocalACPActiveInputReceipt(completion: Task { nil })
             } catch LocalACPClientError.agent(let code, _) where code == -32_601 {
-                return LocalACPActiveInputReceipt(
+                return await LocalACPActiveInputReceipt(
                     completion: try beginActivePrompt(input)
                 )
             }
         case .concurrentPrompt:
-            return LocalACPActiveInputReceipt(
+            return await LocalACPActiveInputReceipt(
                 completion: try beginActivePrompt(input)
             )
         case .piRPC, .unsupported:
@@ -1241,8 +1241,8 @@ public actor LocalACPClient {
 
     private func beginActivePrompt(
         _ input: AgentMessageInput
-    ) throws -> Task<LocalACPStopReason?, any Error> {
-        let prompt = try beginPrompt(
+    ) async throws -> Task<LocalACPStopReason?, any Error> {
+        let prompt = try await beginPrompt(
             input,
             onEvent: activeEventHandler,
             onPermission: activePermissionHandler,
@@ -1256,7 +1256,7 @@ public actor LocalACPClient {
         onEvent: EventHandler?,
         onPermission: PermissionHandler?,
         onInteraction: InteractionHandler?
-    ) throws -> Task<LocalACPStopReason, any Error> {
+    ) async throws -> Task<LocalACPStopReason, any Error> {
         guard let sessionID else {
             throw LocalACPClientError.sessionNotInitialized
         }
@@ -1269,7 +1269,7 @@ public actor LocalACPClient {
         let prefixedText = initialSystemPrompt.map {
             "[System]\n\($0)\n\n\(outboundText)"
         } ?? outboundText
-        let response = try beginRequest(
+        let response = try await beginRequest(
             method: "session/prompt",
             params: .object([
                 "sessionId": .string(sessionID),
@@ -1415,21 +1415,21 @@ public actor LocalACPClient {
         )
     }
 
-    public func cancel() throws {
+    public func cancel() async throws {
         guard let sessionID else { return }
         sessionCancellationRequested = true
         for task in builtInPermissionTasks.values { task.cancel() }
         let pending = pendingPermissionRequestIDs
         pendingPermissionRequestIDs.removeAll()
         for id in pending {
-            try respondWithCancelledPermission(id: id)
+            try await respondWithCancelledPermission(id: id)
         }
         let cursorRequests = pendingCursorRequests
         pendingCursorRequests.removeAll()
         for request in cursorRequests {
-            try respondToCancelledCursorRequest(request)
+            try await respondToCancelledCursorRequest(request)
         }
-        try write(ACPEnvelope(
+        try await write(ACPEnvelope(
             method: "session/cancel",
             params: .object(["sessionId": .string(sessionID)])
         ))
@@ -1506,14 +1506,14 @@ public actor LocalACPClient {
     private func beginRequest(
         method: String,
         params: ACPJSONValue
-    ) throws -> Task<ACPRequestResponse, any Error> {
+    ) async throws -> Task<ACPRequestResponse, any Error> {
         startReaderIfNeeded()
         let id = nextID
         nextID += 1
         let pair = AsyncThrowingStream<ACPRequestResponse, any Error>.makeStream()
         pendingRequests[id] = PendingRequest(continuation: pair.continuation)
         do {
-            try write(ACPEnvelope(
+            try await write(ACPEnvelope(
                 id: .integer(id),
                 method: method,
                 params: params
@@ -1551,8 +1551,8 @@ public actor LocalACPClient {
         }
     }
 
-    private func receive(_ data: Data) throws {
-        if runtimeKind != .defaultAgent { try historyRecorder?("in", data) }
+    private func receive(_ data: Data) async throws {
+        if runtimeKind != .defaultAgent { try await historyRecorder?("in", data) }
         let envelope = try Self.decodeEnvelope(data)
         if runtimeKind == .defaultAgent, envelope.method == "woven/permission_cancel",
            let id = envelope.params?["requestID"]?.stringValue {
@@ -1587,7 +1587,7 @@ public actor LocalACPClient {
            !belongsToActiveSession(envelope) {
             // A child must not wait behind an unrelated parent approval. This
             // settles only foreign requests; parent delivery keeps its barrier.
-            if let id = envelope.id { try respondWithCancelledPermission(id: id) }
+            if let id = envelope.id { try await respondWithCancelledPermission(id: id) }
             return
         }
         enqueueNotification(envelope)
@@ -1616,9 +1616,9 @@ public actor LocalACPClient {
         if envelope.method == "woven/credentials", runtimeKind == .defaultAgent {
             do {
                 let payload = try await prepareCredentialPayload(defaultAgentScope)
-                try write(ACPEnvelope(id: envelope.id, result: JSONDecoder().decode(ACPJSONValue.self, from: payload.data())))
+                try await write(ACPEnvelope(id: envelope.id, result: JSONDecoder().decode(ACPJSONValue.self, from: payload.data())))
             } catch {
-                try write(ACPEnvelope(id: envelope.id, error: .init(code: -32000, message: "Built-in credentials are unavailable.")))
+                try await write(ACPEnvelope(id: envelope.id, error: .init(code: -32000, message: "Built-in credentials are unavailable.")))
             }
         } else if envelope.method == "session/update" {
             guard belongsToActiveSession(envelope) else { return }
@@ -1641,7 +1641,7 @@ public actor LocalACPClient {
             guard belongsToActiveSession(envelope) else {
                 // Multiplexed child requests must settle on the same connection,
                 // without exposing or authorizing them as this session's work.
-                if let id = envelope.id { try respondWithCancelledPermission(id: id) }
+                if let id = envelope.id { try await respondWithCancelledPermission(id: id) }
                 return
             }
             try await respondToPermissionRequest(
@@ -1666,7 +1666,7 @@ public actor LocalACPClient {
                 try await activeEventHandler?(event)
             }
         } else if envelope.method != nil, envelope.id != nil {
-            try write(ACPEnvelope(
+            try await write(ACPEnvelope(
                 id: envelope.id,
                 error: ACPErrorBody(code: -32601, message: "Method not found")
             ))
@@ -2006,7 +2006,7 @@ public actor LocalACPClient {
            let id = envelope.id,
            let requestSessionID = envelope.params?["sessionId"]?.stringValue,
            let sessionID, requestSessionID != sessionID {
-            try respondWithCancelledPermission(id: id)
+            try await respondWithCancelledPermission(id: id)
             return
         }
         guard let id = envelope.id,
@@ -2031,7 +2031,7 @@ public actor LocalACPClient {
         let request = LocalACPPermissionRequest(title: title, options: options)
 
         guard !sessionCancellationRequested else {
-            try respondWithCancelledPermission(id: id)
+            try await respondWithCancelledPermission(id: id)
             return
         }
         pendingPermissionRequestIDs.append(id)
@@ -2069,7 +2069,7 @@ public actor LocalACPClient {
         }
 
         if let selected {
-            try write(ACPEnvelope(
+            try await write(ACPEnvelope(
                 id: id,
                 result: .object([
                     "outcome": .object([
@@ -2079,7 +2079,7 @@ public actor LocalACPClient {
                 ])
             ))
         } else {
-            try respondWithCancelledPermission(id: id)
+            try await respondWithCancelledPermission(id: id)
         }
     }
 
@@ -2139,7 +2139,7 @@ public actor LocalACPClient {
         } else {
             answers = [:]
         }
-        try write(ACPEnvelope(
+        try await write(ACPEnvelope(
             id: id,
             result: .object(["answers": .object(answers)])
         ))
@@ -2171,7 +2171,7 @@ public actor LocalACPClient {
         } else {
             false
         }
-        try write(ACPEnvelope(
+        try await write(ACPEnvelope(
             id: id,
             result: .object(["accepted": .bool(accepted)])
         ))
@@ -2187,17 +2187,17 @@ public actor LocalACPClient {
 
     private func respondToCancelledCursorRequest(
         _ request: PendingCursorRequest
-    ) throws {
+    ) async throws {
         let result: ACPJSONValue = if request.method == "cursor/create_plan" {
             .object(["accepted": .bool(false)])
         } else {
             .object(["answers": .object([:])])
         }
-        try write(ACPEnvelope(id: request.id, result: result))
+        try await write(ACPEnvelope(id: request.id, result: result))
     }
 
-    private func respondWithCancelledPermission(id: ACPJSONValue) throws {
-        try write(ACPEnvelope(
+    private func respondWithCancelledPermission(id: ACPJSONValue) async throws {
+        try await write(ACPEnvelope(
             id: id,
             result: .object([
                 "outcome": .object(["outcome": .string("cancelled")])
@@ -2205,10 +2205,27 @@ public actor LocalACPClient {
         ))
     }
 
-    private func write(_ envelope: ACPEnvelope) throws {
+    private var outgoingBusy = false
+    private var outgoingWaiters: [CheckedContinuation<Void, Never>] = []
+
+    private func acquireOutgoing() async {
+        if outgoingBusy {
+            await withCheckedContinuation { outgoingWaiters.append($0) }
+        } else { outgoingBusy = true }
+    }
+
+    private func releaseOutgoing() {
+        if outgoingWaiters.isEmpty { outgoingBusy = false }
+        else { outgoingWaiters.removeFirst().resume() }
+    }
+
+    private func write(_ envelope: ACPEnvelope) async throws {
+        await acquireOutgoing()
+        defer { releaseOutgoing() }
         guard !closed else { throw LocalACPClientError.processExited }
         var data = try JSONEncoder().encode(envelope)
-        if runtimeKind != .defaultAgent { try historyRecorder?("out", data) }
+        if runtimeKind != .defaultAgent { try await historyRecorder?("out", data) }
+        guard !closed else { throw LocalACPClientError.processExited }
         data.append(0x0A)
         try input.write(contentsOf: data)
     }

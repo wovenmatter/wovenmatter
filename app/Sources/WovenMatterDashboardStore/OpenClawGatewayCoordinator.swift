@@ -136,7 +136,7 @@ public actor OpenClawGatewayCoordinator {
     attempts requestedAttempts: Int? = nil
   ) async throws -> OpenClawGatewayCapabilities {
     await invalidateConnection(agentID: agentID)?.disconnect()
-    let location = try database.openClawGatewayLinks().first(where: {
+    let location = try await database.openClawGatewayLinks().first(where: {
       $0.agentID == agentID
     })?.location
     let attempts = requestedAttempts ?? (location == .buzzLocal
@@ -146,7 +146,7 @@ public actor OpenClawGatewayCoordinator {
     let deadline = clock.now.advanced(
       by: requestedAttempts == nil ? .seconds(20) : .seconds(45)
     )
-    try? setLinkStatus(agentID: agentID, status: .reconnecting, error: nil)
+    try? await setLinkStatus(agentID: agentID, status: .reconnecting, error: nil)
     var lastError: any Error = OpenClawGatewayClientError.invalidEndpoint
     for attempt in 0..<attempts {
       do {
@@ -160,7 +160,7 @@ public actor OpenClawGatewayCoordinator {
         guard attempt + 1 < attempts,
               Self.shouldRetryConnection(error),
               clock.now < deadline else { break }
-        try? setLinkStatus(
+        try? await setLinkStatus(
           agentID: agentID,
           status: .reconnecting,
           error: error.localizedDescription
@@ -171,7 +171,7 @@ public actor OpenClawGatewayCoordinator {
         try await Task.sleep(for: min(retryDelay, remaining))
       }
     }
-    try? setLinkStatus(
+    try? await setLinkStatus(
       agentID: agentID,
       status: .unavailable,
       error: lastError.localizedDescription
@@ -264,7 +264,7 @@ public actor OpenClawGatewayCoordinator {
     onPermission: PermissionHandler? = nil,
     onUpdate: UpdateHandler? = nil
   ) async throws -> LocalACPRunIdentifiers {
-    let descriptor = try database.openClawGatewaySession(conversationID: conversationID)
+    let descriptor = try await database.openClawGatewaySession(conversationID: conversationID)
     let capabilities: OpenClawGatewayCapabilities?
     if runExecutor == nil {
       capabilities = try await client(agentID: descriptor.agentID).connect()
@@ -282,7 +282,7 @@ public actor OpenClawGatewayCoordinator {
       content: transportContent,
       attachments: attachments
     )
-    let (run, _) = try beginAcceptedRun(
+    let (run, _) = try await beginAcceptedRun(
       conversationID: conversationID,
       input: input,
       transportContent: transportContent,
@@ -302,9 +302,9 @@ public actor OpenClawGatewayCoordinator {
     attachments: [GatewayJSONValue],
     onPermission: PermissionHandler?,
     onUpdate: UpdateHandler?
-  ) throws -> (LocalACPRunIdentifiers, Task<Void, any Error>) {
-    let descriptor = try database.openClawGatewaySession(conversationID: conversationID)
-    let run = try database.beginLocalACPRun(
+  ) async throws -> (LocalACPRunIdentifiers, Task<Void, any Error>) {
+    let descriptor = try await database.openClawGatewaySession(conversationID: conversationID)
+    let run = try await database.beginLocalACPRun(
       conversationID: conversationID,
       input: input,
       noteContext: noteContext
@@ -345,7 +345,7 @@ public actor OpenClawGatewayCoordinator {
     do {
       if let runExecutor {
         try await runExecutor(run.runID, agentID, sessionKey, content)
-        try database.completeLocalACPRun(runID: run.runID)
+        try await database.completeLocalACPRun(runID: run.runID)
         await publishUpdate(runID: run.runID, phase: .terminal)
         return
       }
@@ -406,7 +406,7 @@ public actor OpenClawGatewayCoordinator {
         )
         let segmentTerminal = activeRuns[run.runID]?
           .terminalStatesByRemoteRunID[remoteRunID] ?? .completed
-        completeAssistantSegment(
+        await completeAssistantSegment(
           runID: run.runID,
           assistantMessageID: assistantMessageID,
           terminal: segmentTerminal
@@ -415,11 +415,11 @@ public actor OpenClawGatewayCoordinator {
       if Task.isCancelled { return }
       switch terminal {
       case .completed:
-        try database.completeLocalACPRun(runID: run.runID)
+        try await database.completeLocalACPRun(runID: run.runID)
       case .cancelled:
-        try database.cancelLocalACPRun(runID: run.runID)
+        try await database.cancelLocalACPRun(runID: run.runID)
       case .failed(let message):
-        try database.completeLocalACPRun(runID: run.runID, error: message)
+        try await database.completeLocalACPRun(runID: run.runID, error: message)
       }
       await publishUpdate(runID: run.runID, phase: .terminal)
     } catch {
@@ -429,9 +429,9 @@ public actor OpenClawGatewayCoordinator {
         return
       }
       if activeRuns[run.runID]?.cancelRequested == true {
-        try? database.cancelLocalACPRun(runID: run.runID)
+        try? await database.cancelLocalACPRun(runID: run.runID)
       } else {
-        try? database.completeLocalACPRun(
+        try? await database.completeLocalACPRun(
           runID: run.runID,
           error: error.localizedDescription
         )
@@ -528,7 +528,7 @@ public actor OpenClawGatewayCoordinator {
     guard let active = activeRuns.values.first(where: {
       $0.conversationID == conversationID
     }) else {
-      let descriptor = try database.openClawGatewaySession(conversationID: conversationID)
+      let descriptor = try await database.openClawGatewaySession(conversationID: conversationID)
       _ = try await client(agentID: descriptor.agentID).request("sessions.abort", params: .object([
         "key": .string(descriptor.sessionKey), "clearQueued": .bool(true)
       ]))
@@ -603,7 +603,7 @@ public actor OpenClawGatewayCoordinator {
     pausedGatewayEventRunIDs.insert(active.runID)
     let identifiers: LocalACPSteeringIdentifiers
     do {
-      identifiers = try database.beginLocalACPSteeringTurn(
+      identifiers = try await database.beginLocalACPSteeringTurn(
         runID: active.runID,
         input: input,
         completesPreviousAssistant: false
@@ -759,7 +759,7 @@ public actor OpenClawGatewayCoordinator {
       || (event.name == "chat" && ["final", "error", "aborted"].contains(event.payload?.objectValue?["state"]?.stringValue ?? "")) {
       let key = event.payload?.objectValue?["sessionKey"]?.stringValue
         ?? event.payload?.objectValue?["key"]?.stringValue
-      for session in (try? database.openClawGatewaySessions(agentID: agentID)) ?? []
+      for session in (try? await database.openClawGatewaySessions(agentID: agentID)) ?? []
       where key == nil || session.sessionKey == key {
         scheduleHistoryRefresh(conversationID: session.conversationID, agentID: agentID, generation: generation)
       }
@@ -808,7 +808,7 @@ public actor OpenClawGatewayCoordinator {
     guard let raw = Self.rawEventJSON(event) else { return }
     let application: WorkspaceDatabase.DeviceOwnedGatewayProjectionResult
     do {
-      application = try database.applyDeviceOwnedGatewayProjection(
+      application = try await database.applyDeviceOwnedGatewayProjection(
         runID: runID, remoteRunID: remoteRunID, eventName: event.name,
         eventStream: event.payload?.objectValue?["stream"]?.stringValue
           ?? (event.name == "session.tool" ? "tool" : nil),
@@ -843,7 +843,7 @@ public actor OpenClawGatewayCoordinator {
       }
     }
     if projection.terminalState != nil, let payload = event.payload, let assistantMessageID {
-      try? database.captureGatewayLibraryFiles(payload, messageID: assistantMessageID, conversationID: active.conversationID)
+      try? await database.captureGatewayLibraryFiles(payload, messageID: assistantMessageID, conversationID: active.conversationID)
     }
     if let terminal = projection.terminalState {
       active.assistantSource.finish(runID: remoteRunID)
@@ -997,7 +997,7 @@ public actor OpenClawGatewayCoordinator {
     } catch {
       guard !Task.isCancelled else { return }
       let message = error.localizedDescription
-      try? database.upsertDeviceOwnedRunActivity(
+      try? await database.upsertDeviceOwnedRunActivity(
         runID: runID,
         activity: AgentRunActivity(
           id: "approval:\(approval.id)",
@@ -1014,7 +1014,7 @@ public actor OpenClawGatewayCoordinator {
       return
     }
     let approvalNoun = approval.kind == "plugin" ? "Plugin" : "Command"
-    try? database.upsertDeviceOwnedRunActivity(
+    try? await database.upsertDeviceOwnedRunActivity(
       runID: runID,
       activity: AgentRunActivity(
         id: "approval:\(approval.id)",
@@ -1117,7 +1117,7 @@ public actor OpenClawGatewayCoordinator {
     agentID: UUID
   ) async {
     let generation = connectionGenerations[agentID]
-    let assistantIDs = (try? database.openClawRunAssistantIDs(runID: runID)) ?? [:]
+    let assistantIDs = (try? await database.openClawRunAssistantIDs(runID: runID)) ?? [:]
     let knownInputIDs = Set(assistantIDs.keys)
     if let response = await GatewayHistoryRecovery.assistantMessage(
       remoteRunID: remoteRunID,
@@ -1137,7 +1137,7 @@ public actor OpenClawGatewayCoordinator {
       }
     ) {
       guard !Task.isCancelled, generation == connectionGenerations[agentID] else { return }
-      try? database.replaceLocalACPAssistantMessage(
+      try? await database.replaceLocalACPAssistantMessage(
         runID: runID,
         assistantMessageID: assistantMessageID,
         content: response.text,
@@ -1150,21 +1150,21 @@ public actor OpenClawGatewayCoordinator {
     runID: String,
     assistantMessageID: String,
     terminal: OpenClawGatewayEventProjection.TerminalState
-  ) {
+  ) async {
     switch terminal {
     case .completed:
-      try? database.completeLocalACPAssistantMessage(
+      try? await database.completeLocalACPAssistantMessage(
         runID: runID,
         assistantMessageID: assistantMessageID
       )
     case .cancelled(let message):
-      try? database.completeLocalACPAssistantMessage(
+      try? await database.completeLocalACPAssistantMessage(
         runID: runID,
         assistantMessageID: assistantMessageID,
         error: message ?? "The OpenClaw Gateway run was cancelled."
       )
     case .failed(let message):
-      try? database.completeLocalACPAssistantMessage(
+      try? await database.completeLocalACPAssistantMessage(
         runID: runID,
         assistantMessageID: assistantMessageID,
         error: message
@@ -1191,7 +1191,7 @@ public actor OpenClawGatewayCoordinator {
         < ($1.objectValue?["sequence"]?.intValue ?? 0)
     }
     let liveToolCallIDs = (activeRuns[runID]?.liveToolCallIDs ?? [])
-      .union((try? database.openClawToolActivityIDs(runID: runID)) ?? [])
+      .union((try? await database.openClawToolActivityIDs(runID: runID)) ?? [])
     var recoveredActivity = false
     for value in events {
       guard let event = value.objectValue,
@@ -1210,7 +1210,7 @@ public actor OpenClawGatewayCoordinator {
       let canonicalID = liveToolCallIDs.first {
         GatewayAuditToolIdentity.matches(toolCallID, scopedID: $0, remoteRunID: remoteRunID)
       }
-      try? database.reconcileOpenClawAuditTool(
+      try? await database.reconcileOpenClawAuditTool(
         runID: runID,
         activity: AgentRunActivity(
           id: canonicalID ?? toolCallID,
@@ -1226,7 +1226,7 @@ public actor OpenClawGatewayCoordinator {
       recoveredActivity = true
       if let sequence = event["sequence"]?.intValue,
          let raw = Self.json(value) {
-        try? database.appendDeviceOwnedGatewayTraceEvent(
+        try? await database.appendDeviceOwnedGatewayTraceEvent(
           runID: runID,
           eventName: "audit",
           sequence: sequence,
@@ -1297,8 +1297,8 @@ public actor OpenClawGatewayCoordinator {
   private func hydrateGatewayStreamingState(
     runID: String,
     active: inout ActiveRun
-  ) throws {
-    for trace in try database.deviceOwnedGatewayTraceEvents(runID: runID) {
+  ) async throws {
+    for trace in try await database.deviceOwnedGatewayTraceEvents(runID: runID) {
       active.fallbackSequence = max(active.fallbackSequence, trace.sequence)
       guard let data = trace.rawEventJSON.data(using: .utf8),
             let value = try? JSONDecoder().decode(GatewayJSONValue.self, from: data),
@@ -1330,10 +1330,10 @@ public actor OpenClawGatewayCoordinator {
   public func sessionPreferences(
     conversationID: String
   ) async throws -> OpenClawSessionPreferences {
-    let descriptor = try database.openClawGatewaySession(conversationID: conversationID)
+    let descriptor = try await database.openClawGatewaySession(conversationID: conversationID)
     let value = try await client(agentID: descriptor.agentID)
       .sessionPreferences(key: descriptor.sessionKey)
-    try database.updateOpenClawGatewaySessionPreferences(
+    try await database.updateOpenClawGatewaySessionPreferences(
       conversationID: conversationID,
       preferences: value
     )
@@ -1344,12 +1344,12 @@ public actor OpenClawGatewayCoordinator {
     conversationID: String,
     preferences: OpenClawSessionPreferences
   ) async throws -> OpenClawSessionPreferences {
-    let descriptor = try database.openClawGatewaySession(conversationID: conversationID)
+    let descriptor = try await database.openClawGatewaySession(conversationID: conversationID)
     let value = try await client(agentID: descriptor.agentID).patchSession(
       key: descriptor.sessionKey,
       preferences: preferences
     )
-    try database.updateOpenClawGatewaySessionPreferences(
+    try await database.updateOpenClawGatewaySessionPreferences(
       conversationID: conversationID,
       preferences: value
     )
@@ -1361,10 +1361,10 @@ public actor OpenClawGatewayCoordinator {
     do {
       let client = try await client(agentID: agentID)
       _ = try await client.request("health", timeout: .seconds(5))
-      try setLinkStatus(agentID: agentID, status: .ready, error: nil)
-      return try linkedGateway(agentID: agentID)
+      try await setLinkStatus(agentID: agentID, status: .ready, error: nil)
+      return try await linkedGateway(agentID: agentID)
     } catch {
-      try? setLinkStatus(
+      try? await setLinkStatus(
         agentID: agentID,
         status: .unavailable,
         error: error.localizedDescription
@@ -1374,7 +1374,7 @@ public actor OpenClawGatewayCoordinator {
   }
 
   public func sessionMetadata(conversationID: String) async throws -> LocalACPSessionMetadata {
-    let descriptor = try database.openClawGatewaySession(conversationID: conversationID)
+    let descriptor = try await database.openClawGatewaySession(conversationID: conversationID)
     let client = try await client(agentID: descriptor.agentID)
     let description = try await client.request(
       "sessions.describe", params: .object(["key": .string(descriptor.sessionKey)])
@@ -1605,9 +1605,9 @@ public actor OpenClawGatewayCoordinator {
 
   @discardableResult
   public func restart(agentID: UUID) async throws -> OpenClawGatewayLink {
-    _ = try linkedGateway(agentID: agentID)
+    _ = try await linkedGateway(agentID: agentID)
     let client = try await client(agentID: agentID)
-    try setLinkStatus(agentID: agentID, status: .restarting, error: nil)
+    try await setLinkStatus(agentID: agentID, status: .restarting, error: nil)
     do {
       _ = try await client.request(
         Self.nativeRestartMethod,
@@ -1618,7 +1618,7 @@ public actor OpenClawGatewayCoordinator {
       _ = try await reconnect(agentID: agentID, attempts: 40)
       return try await refreshStatus(agentID: agentID)
     } catch {
-      try? setLinkStatus(
+      try? await setLinkStatus(
         agentID: agentID,
         status: .unavailable,
         error: error.localizedDescription
@@ -1645,7 +1645,7 @@ public actor OpenClawGatewayCoordinator {
       throw OpenClawGatewayClientError.malformedFrame
     }
     // A newly created job cannot fire before its local destination is saved.
-    try database.setOpenClawResultRoute(agentID: agentID, jobID: id, destination: destination)
+    try await database.setOpenClawResultRoute(agentID: agentID, jobID: id, destination: destination)
     _ = try await socket.request("cron.update", params: .object([
       "id": .string(id), "patch": .object(["enabled": .bool(true)])
     ]))
@@ -1685,30 +1685,30 @@ public actor OpenClawGatewayCoordinator {
       return run
     }
     guard generation == connectionGenerations[agentID], !Task.isCancelled else { throw CancellationError() }
-    try database.replaceOpenClawCronSnapshot(agentID: agentID, jobs: jobs, runs: runs)
-    let routes = try database.openClawResultRoutes(agentID: agentID)
+    try await database.replaceOpenClawCronSnapshot(agentID: agentID, jobs: jobs, runs: runs)
+    let routes = try await database.openClawResultRoutes(agentID: agentID)
     var receipts: [String: Set<String>] = [:]
     var failure: (any Error)?
     do { try await collectRetainedResults(agentID: agentID, socket: socket, generation: generation) }
     catch { failure = error }
     // Include cached pending runs even if OpenClaw has since pruned its run ledger.
-    for run in try database.openClawCronRuns(agentID: agentID).reversed() {
+    for run in try await database.openClawCronRuns(agentID: agentID).reversed() {
       guard let destination = routes[run.jobID], !destination.isEmpty else { continue }
       if receipts[run.jobID] == nil {
-        receipts[run.jobID] = try database.collectedOpenClawResultIDs(agentID: agentID, jobID: run.jobID)
+        receipts[run.jobID] = try await database.collectedOpenClawResultIDs(agentID: agentID, jobID: run.jobID)
       }
       guard receipts[run.jobID]?.contains(run.id) != true else { continue }
       do {
         let output: String
-        if let retained = try database.retainedOpenClawResult(agentID: agentID, runID: run.id) {
+        if let retained = try await database.retainedOpenClawResult(agentID: agentID, runID: run.id) {
           output = retained
         } else {
           output = try await scheduledOutput(run: run, socket: socket)
-          try database.retainOpenClawResult(run, title: jobs.first { $0.id == run.jobID }?.name ?? "Scheduled result", output: output)
+          try await database.retainOpenClawResult(run, title: jobs.first { $0.id == run.jobID }?.name ?? "Scheduled result", output: output)
         }
         guard generation == connectionGenerations[agentID], !Task.isCancelled else { throw CancellationError() }
         let title = jobs.first { $0.id == run.jobID }?.name ?? "Scheduled result"
-        if let conversationID = try database.collectOpenClawResult(run, title: title, output: output, destination: destination) {
+        if let conversationID = try await database.collectOpenClawResult(run, title: title, output: output, destination: destination) {
           receipts[run.jobID, default: []].insert(run.id)
           onChange?(DashboardConversationChange(conversationID: conversationID, runID: run.id, phase: .content))
         }
@@ -1741,7 +1741,7 @@ public actor OpenClawGatewayCoordinator {
           failure = failure ?? row["error"]?.stringValue ?? "A scheduled result is unavailable."
           continue
         }
-        if try database.retainedOpenClawResult(agentID: agentID, runID: run.id) == nil {
+        if try await database.retainedOpenClawResult(agentID: agentID, runID: run.id) == nil {
           var output = ""
           var offset = 0
           while true {
@@ -1755,7 +1755,7 @@ public actor OpenClawGatewayCoordinator {
             offset = next
           }
           guard generation == connectionGenerations[agentID], !Task.isCancelled else { throw CancellationError() }
-          try database.retainOpenClawResult(run, title: row["title"]?.stringValue ?? "Scheduled result", output: output)
+          try await database.retainOpenClawResult(run, title: row["title"]?.stringValue ?? "Scheduled result", output: output)
         }
         // The durable local history commit precedes the host receipt. A lost
         // acknowledgement is retried without another message or another run.
@@ -1902,7 +1902,7 @@ public actor OpenClawGatewayCoordinator {
     let connectClient = self.connectClient
     let database = self.database
     let task = Task<OpenClawGatewayClient, any Error> { [weak self] in
-      guard var link = try database.openClawGatewayLinks().first(where: {
+      guard var link = try await database.openClawGatewayLinks().first(where: {
         $0.agentID == agentID
       }) else { throw OpenClawGatewayClientError.invalidEndpoint }
       let transport = await self?.clientTransports[agentID]
@@ -1933,7 +1933,7 @@ public actor OpenClawGatewayCoordinator {
         link.lastConnectedAt = hello.connectedAt
         link.lastError = nil
         link.updatedAt = Date()
-        try database.saveOpenClawGatewayLink(link)
+        try await database.saveOpenClawGatewayLink(link)
         return client
       } catch {
         await client.disconnect()
@@ -1941,7 +1941,7 @@ public actor OpenClawGatewayCoordinator {
         link.lastError = error.localizedDescription
         link.updatedAt = Date()
         if await self?.isCurrentConnection(agentID, generation: generation) == true {
-          try? database.saveOpenClawGatewayLink(link)
+          try? await database.saveOpenClawGatewayLink(link)
         }
         throw error
       }
@@ -1970,8 +1970,8 @@ public actor OpenClawGatewayCoordinator {
     connectionGenerations[agentID] == generation
   }
 
-  private func linkedGateway(agentID: UUID) throws -> OpenClawGatewayLink {
-    guard let link = try database.openClawGatewayLinks().first(where: {
+  private func linkedGateway(agentID: UUID) async throws -> OpenClawGatewayLink {
+    guard let link = try await database.openClawGatewayLinks().first(where: {
       $0.agentID == agentID
     }) else {
       throw OpenClawGatewayClientError.invalidEndpoint
@@ -1983,18 +1983,18 @@ public actor OpenClawGatewayCoordinator {
     agentID: UUID,
     status: OpenClawGatewayConnectionStatus,
     error: String?
-  ) throws {
-    var link = try linkedGateway(agentID: agentID)
+  ) async throws {
+    var link = try await linkedGateway(agentID: agentID)
     link.status = status.rawValue
     link.lastError = error
     link.updatedAt = Date()
-    try database.saveOpenClawGatewayLink(link)
+    try await database.saveOpenClawGatewayLink(link)
   }
 
-  private func handleGatewayDisconnect(agentID: UUID, generation: UUID, detail: String) {
-    guard isCurrentConnection(agentID, generation: generation), let link = try? linkedGateway(agentID: agentID),
+  private func handleGatewayDisconnect(agentID: UUID, generation: UUID, detail: String) async {
+    guard isCurrentConnection(agentID, generation: generation), let link = try? await linkedGateway(agentID: agentID),
           link.connectionStatus != .restarting else { return }
-    try? setLinkStatus(agentID: agentID, status: .unavailable, error: detail)
+    try? await setLinkStatus(agentID: agentID, status: .unavailable, error: detail)
   }
 
   private func startMonitor(agentID: UUID, generation: UUID) {
@@ -2022,14 +2022,14 @@ public actor OpenClawGatewayCoordinator {
       let socket = try await client(agentID: agentID)
       _ = try await socket.request("health", timeout: .seconds(5))
       guard isCurrentConnection(agentID, generation: generation) else { return }
-      try setLinkStatus(agentID: agentID, status: .ready, error: nil)
+      try await setLinkStatus(agentID: agentID, status: .ready, error: nil)
       _ = try await socket.request("sessions.subscribe")
-      for session in try database.openClawGatewaySessions(agentID: agentID) {
+      for session in try await database.openClawGatewaySessions(agentID: agentID) {
         scheduleHistoryRefresh(conversationID: session.conversationID, agentID: agentID, generation: generation)
       }
     } catch {
       if isCurrentConnection(agentID, generation: generation) {
-        try? setLinkStatus(agentID: agentID, status: .unavailable, error: error.localizedDescription)
+        try? await setLinkStatus(agentID: agentID, status: .unavailable, error: error.localizedDescription)
       }
     }
   }
@@ -2056,10 +2056,10 @@ public actor OpenClawGatewayCoordinator {
       scheduleHistoryRefresh(conversationID: conversationID, agentID: agentID, generation: generation)
     }
   }
-  private func historyRefreshFailed(conversationID: String, agentID: UUID, generation: UUID, error: any Error) {
+  private func historyRefreshFailed(conversationID: String, agentID: UUID, generation: UUID, error: any Error) async {
     guard isCurrentConnection(agentID, generation: generation), !(error is CancellationError) else { return }
-    if let descriptor = try? database.openClawGatewaySession(conversationID: conversationID) {
-      try? setLinkStatus(agentID: descriptor.agentID, status: .unavailable, error: error.localizedDescription)
+    if let descriptor = try? await database.openClawGatewaySession(conversationID: conversationID) {
+      try? await setLinkStatus(agentID: descriptor.agentID, status: .unavailable, error: error.localizedDescription)
     }
   }
 
@@ -2100,7 +2100,7 @@ public actor OpenClawGatewayCoordinator {
     guard offset >= 0 else { throw OpenClawGatewayClientError.malformedFrame }
     let socket = try await client(agentID: agentID)
     let generation = connectionGenerations[agentID]
-    var excluded = try database.knownOpenClawSessionKeys(agentID: agentID)
+    var excluded = try await database.knownOpenClawSessionKeys(agentID: agentID)
     var eligible: [OpenClawGatewaySession] = []
     var position = offset
     while eligible.count < 25 {
@@ -2121,7 +2121,7 @@ public actor OpenClawGatewayCoordinator {
 
   public func importSession(agentID: UUID, session: OpenClawGatewaySession) async throws -> String {
     guard !session.key.contains(":wovenmatter:"),
-          !(try database.knownOpenClawSessionKeys(agentID: agentID)).contains(session.key) else {
+          !(try await database.knownOpenClawSessionKeys(agentID: agentID)).contains(session.key) else {
       throw NSError(domain: "OpenClawImport", code: 2, userInfo: [NSLocalizedDescriptionKey: "This session is already in Woven Matter. Refresh the list."])
     }
     let socket = try await client(agentID: agentID)
@@ -2163,9 +2163,9 @@ public actor OpenClawGatewayCoordinator {
     guard generation == connectionGenerations[agentID],
           transportGeneration == (await socket.connectedGeneration), !Task.isCancelled else { throw CancellationError() }
     let liveIDs = history.isIdle ? Set<String>() : Set(activeRuns.values.flatMap(\.remoteRunIDs))
-    let id = try database.importOpenClawGatewaySession(agentID: agentID, session: session,
+    let id = try await database.importOpenClawGatewaySession(agentID: agentID, session: session,
                                                       historyPages: pages, liveRunIDs: liveIDs)
-    try recoverSessionRuns(conversationID: id, history: history)
+    try await recoverSessionRuns(conversationID: id, history: history)
     onChange?(DashboardConversationChange(conversationID: id, runID: "", phase: .content))
     return id
   }
@@ -2195,23 +2195,23 @@ public actor OpenClawGatewayCoordinator {
 
   @discardableResult
   public func synchronizeSession(conversationID: String, offset: Int = 0) async throws -> OpenClawGatewayHistory {
-    let descriptor = try database.openClawGatewaySession(conversationID: conversationID)
+    let descriptor = try await database.openClawGatewaySession(conversationID: conversationID)
     let socket = try await client(agentID: descriptor.agentID)
     let generation = connectionGenerations[descriptor.agentID]
     let history = try await fetchHistory(sessionKey: descriptor.sessionKey, offset: offset, socket: socket)
     guard generation == connectionGenerations[descriptor.agentID], !Task.isCancelled else { throw CancellationError() }
     // Provider idle does not mean local reconciliation has finished. Protect
     // tracked and interrupted replies until their final segment is repaired.
-    let unfinishedRuns = try database.interruptedOpenClawRuns(conversationID: conversationID)
+    let unfinishedRuns = try await database.interruptedOpenClawRuns(conversationID: conversationID)
     var liveIDs = Set(activeRuns.values.filter { $0.conversationID == conversationID }.flatMap(\.remoteRunIDs))
     var inputsByRun: [String: [String: String]] = [:]
     for run in unfinishedRuns {
-      var inputs = try database.openClawRunAssistantIDs(runID: run.runID)
+      var inputs = try await database.openClawRunAssistantIDs(runID: run.runID)
       if inputs.isEmpty { inputs[run.runID] = run.assistantMessageID }
       inputsByRun[run.runID] = inputs
       liveIDs.formUnion(inputs.keys)
     }
-    try database.synchronizeOpenClawHistory(conversationID: conversationID, history: history, liveRunIDs: liveIDs)
+    try await database.synchronizeOpenClawHistory(conversationID: conversationID, history: history, liveRunIDs: liveIDs)
     if history.isIdle {
       for run in unfinishedRuns {
         let inputs = inputsByRun[run.runID] ?? [:]
@@ -2219,32 +2219,32 @@ public actor OpenClawGatewayCoordinator {
         if let final = history.messages.last(where: {
           $0.isAssistantResponse && !$0.isTruncated && $0.correlatedRunID(knownInputIDs: Set(inputs.keys)) == latestID
         }), !final.isTruncated, !final.text.isEmpty {
-          try database.replaceLocalACPAssistantMessage(runID: run.runID,
+          try await database.replaceLocalACPAssistantMessage(runID: run.runID,
             assistantMessageID: run.assistantMessageID, content: final.text,
             preservingStreamCommentary: final.isFinalOnlyAssistantTranscript)
         }
       }
     }
     if offset == 0 {
-      try recoverSessionRuns(conversationID: conversationID, history: history)
+      try await recoverSessionRuns(conversationID: conversationID, history: history)
     }
     onChange?(DashboardConversationChange(conversationID: conversationID, runID: "", phase: .content))
     return history
   }
 
-  func recoverSessionRuns(conversationID: String, history: OpenClawGatewayHistory) throws {
-    for run in try database.interruptedOpenClawRuns(conversationID: conversationID)
+  func recoverSessionRuns(conversationID: String, history: OpenClawGatewayHistory) async throws {
+    for run in try await database.interruptedOpenClawRuns(conversationID: conversationID)
     where activeRuns[run.runID] == nil {
-      var inputs = try database.openClawRunAssistantIDs(runID: run.runID)
+      var inputs = try await database.openClawRunAssistantIDs(runID: run.runID)
       if inputs.isEmpty { inputs[run.runID] = run.assistantMessageID }
       let latestRemoteID = inputs.first { $0.value == run.assistantMessageID }?.key ?? run.runID
       // Observe recovery by session. Never resend an input on ambiguous acceptance.
       if history.hasActiveRun || history.inFlightRunID != nil {
         if let remoteID = history.inFlightRunID, let assistantID = inputs[remoteID],
            let text = history.inFlightText, !history.inFlightIsTruncated, !text.isEmpty {
-          try database.replaceLocalACPAssistantMessage(runID: run.runID, assistantMessageID: assistantID, content: text)
+          try await database.replaceLocalACPAssistantMessage(runID: run.runID, assistantMessageID: assistantID, content: text)
         }
-        let descriptor = try database.openClawGatewaySession(conversationID: conversationID)
+        let descriptor = try await database.openClawGatewaySession(conversationID: conversationID)
         // An unrelated client may own inFlightRun. Never bind its output to our input.
         var active = ActiveRun(
           runID: run.runID, conversationID: conversationID, agentID: descriptor.agentID,
@@ -2252,7 +2252,7 @@ public actor OpenClawGatewayCoordinator {
           remoteRunIDs: Set(inputs.keys), lastRemoteRunID: latestRemoteID,
           assistantMessageIDsByRemoteRunID: inputs
         )
-        try hydrateGatewayStreamingState(runID: run.runID, active: &active)
+        try await hydrateGatewayStreamingState(runID: run.runID, active: &active)
         activeRuns[run.runID] = active
         markPromptReady(runID: run.runID)
         runTasks[run.runID] = Task { [weak self] in
@@ -2260,7 +2260,7 @@ public actor OpenClawGatewayCoordinator {
         }
       } else if history.isIdle {
         let final = history.messages.last { $0.correlatedRunID(knownInputIDs: Set(inputs.keys)) == latestRemoteID && $0.isAssistantResponse && !$0.isTruncated }
-        try database.completeLocalACPRun(runID: run.runID, error: final == nil
+        try await database.completeLocalACPRun(runID: run.runID, error: final == nil
           ? "OpenClaw delivery could not be confirmed after reconnect. Check the shared session before retrying; this input was not resent."
           : final?.terminalError)
         onChange?(DashboardConversationChange(conversationID: conversationID, runID: run.runID, phase: .terminal))
@@ -2276,9 +2276,9 @@ public actor OpenClawGatewayCoordinator {
         if history.isIdle {
           let cancelled = activeRuns[run.runID]?.cancelRequested == true
           let latestRemoteID = activeRuns[run.runID]?.lastRemoteRunID ?? run.runID
-          let inputs = try database.openClawRunAssistantIDs(runID: run.runID)
+          let inputs = try await database.openClawRunAssistantIDs(runID: run.runID)
           let final = history.messages.last { $0.isAssistantResponse && !$0.isTruncated && $0.correlatedRunID(knownInputIDs: Set(inputs.keys)) == latestRemoteID }
-          try database.completeLocalACPRun(runID: run.runID, error: cancelled
+          try await database.completeLocalACPRun(runID: run.runID, error: cancelled
             ? "The OpenClaw Gateway run was cancelled."
             : (final == nil ? "OpenClaw delivery could not be confirmed after reconnect. This input was not resent." : final?.terminalError))
           await publishUpdate(runID: run.runID, phase: .terminal)

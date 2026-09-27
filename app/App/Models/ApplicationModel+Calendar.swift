@@ -7,10 +7,10 @@ extension ApplicationModel {
     func resolveCalendarTask(callerID: String, command: WovenMatterToolCommand,
                              existing: WorkspaceCalendarTask?) async throws -> WorkspaceCalendarTask {
         guard let database = dashboardStore?.database,
-              let source = try database.workspaceOverview().conversations.first(where: { $0.id == callerID }) else {
+              let source = try await database.workspaceOverview().conversations.first(where: { $0.id == callerID }) else {
             throw WorkspaceToolError.invalid("The source session is unavailable.")
         }
-        try database.requireTool(.sessions, sessionID: callerID)
+        try await database.requireTool(.sessions, sessionID: callerID)
         let title = command.options["title"] ?? existing?.configuration.title ?? "Scheduled task"
         var config: WorkspaceSessionCreationConfiguration
         if let existing {
@@ -68,7 +68,7 @@ extension ApplicationModel {
         defer { isCreatingCalendarItem = false }
         do {
             guard let database = dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
-            try database.saveCalendarEvent(id: event?.id ?? UUID().uuidString.lowercased(), draft: draft,
+            try await database.saveCalendarEvent(id: event?.id ?? UUID().uuidString.lowercased(), draft: draft,
                 creating: event == nil, expectedRevision: event?.calendar.revision, detaching: occurrence)
             await refreshWorkspace()
             return true
@@ -87,7 +87,7 @@ extension ApplicationModel {
         calendarMutationError = nil
         do {
             guard let database = dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
-            try database.deleteCalendarEvent(id: event.id, occurrence: occurrence, expectedRevision: event.calendar.revision)
+            try await database.deleteCalendarEvent(id: event.id, occurrence: occurrence, expectedRevision: event.calendar.revision)
             await refreshWorkspace()
             return true
         } catch { calendarMutationError = error.localizedDescription; return false }
@@ -148,7 +148,7 @@ extension ApplicationModel {
             }
         } else {
             guard let local = localACPLaunchConfigurations[config.runtimeKind] else { throw ApplicationModelError.localACPRuntimeUnavailable }
-            if config.runtimeKind == .hermes { try requireLocalHermesLink() }
+            if config.runtimeKind == .hermes { try await requireLocalHermesLink() }
             launch = .init(runtimeKind: local.runtimeKind, executableURL: local.executableURL,
                 arguments: local.arguments, environment: local.environment,
                 environmentKeysToRemove: local.environmentKeysToRemove,
@@ -164,14 +164,14 @@ extension ApplicationModel {
     func runCalendarTasks() async {
         guard !backendStopping else { return }
         guard let store = dashboardStore else { return }
-        scheduleRemoteCalendarSynchronization()
+        await scheduleRemoteCalendarSynchronization()
         do {
             try await CalendarTaskRunner.tick(database: store.database,
                 isRunning: { self.runningToolSessionIDs.contains($0) },
                 hasCapacity: { self.runningToolSessionIDs.count < (self.agentTools?.settings.maximumRunningSessions ?? 16) },
                 prepare: { try await self.prepareCalendarSession($0) },
                 dispatch: { _ = try await self.dispatchToolDelivery($0) })
-            if try store.database.dashboardRevision() != workspaceRevision { await refreshWorkspace() }
+            if try await store.database.dashboardRevision() != workspaceRevision { await refreshWorkspace() }
         } catch is CancellationError { }
         catch { calendarMutationError = error.localizedDescription }
     }
@@ -188,9 +188,9 @@ extension ApplicationModel {
             permission: config.runtimeKind == .pi ? nil : config.permission, tools: config.tools.enabled.map(\.rawValue).sorted())
         sessionSelectionPreferences.stageCalendarSelections(id: run.sessionID, harness: config.runtimeKind.rawValue,
             workspace: scope, selections: selections)
-        if try store.database.workspaceOverview().conversations.first(where: { $0.id == run.sessionID }) == nil {
+        if try await store.database.workspaceOverview().conversations.first(where: { $0.id == run.sessionID }) == nil {
             // A deleted destination is not silently recreated under an old ID.
-            if (try? store.database.localACPSession(conversationID: run.sessionID)) != nil {
+            if (try? await store.database.localACPSession(conversationID: run.sessionID)) != nil {
                 throw WorkspaceToolError.invalid("The task's session was deleted. Edit the task to use a new session.")
             }
             let created: String?
@@ -207,20 +207,20 @@ extension ApplicationModel {
             }
             guard created == run.sessionID else { throw WorkspaceToolError.invalid(localRunError ?? "The scheduled session could not be created.") }
         }
-        guard let conversation = try store.database.workspaceOverview().conversations.first(where: { $0.id == run.sessionID }) else {
+        guard let conversation = try await store.database.workspaceOverview().conversations.first(where: { $0.id == run.sessionID }) else {
             throw WorkspaceToolError.invalid("The scheduled session is unavailable.")
         }
         guard conversation.localRuntimeKind == config.runtimeKind, conversation.remoteWorkspaceID == config.workspaceID else {
             throw WorkspaceToolError.invalid("The session does not match the task's agent and workspace.")
         }
-        guard try store.database.isCalendarRunActive(run.id) else { throw CancellationError() }
+        guard try await store.database.isCalendarRunActive(run.id) else { throw CancellationError() }
         if conversation.folderID != config.folderID {
-            guard try store.database.moveConversation(id: run.sessionID, toFolderID: config.folderID) else {
+            guard try await store.database.moveConversation(id: run.sessionID, toFolderID: config.folderID) else {
                 throw WorkspaceToolError.invalid("The scheduled session's folder could not be updated.")
             }
         }
         if config.runtimeKind == .openclaw { try await prepareCreatedOpenClawSession(conversation, configuration: config) }
-        try store.database.setSessionTools(config.tools, sessionID: run.sessionID, confirmedPausingTimers: true)
+        try await store.database.setSessionTools(config.tools, sessionID: run.sessionID, confirmedPausingTimers: true)
         try await applyPendingSessionSelections(conversationID: run.sessionID)
         guard sessionSelectionPreferences.conversation(id: run.sessionID)?.requiresApplication == false else {
             throw WorkspaceToolError.invalid("The saved session settings could not be applied. Check the agent connection.")
@@ -231,16 +231,16 @@ extension ApplicationModel {
 extension ApplicationModel {
     /// Fence local scheduling before the first network suspension. An unknown
     /// publication outcome leaves execution remote-owned until reconciliation.
-    func scheduleRemoteCalendarSynchronization() {
+    func scheduleRemoteCalendarSynchronization() async {
         guard let database = dashboardStore?.database else { return }
         for configuration in remoteWorkspaces.workspaces {
             do {
                 if configuration.backgroundExecutionEnabled,
-                   try database.remoteCalendarExecutionOwnership(workspaceID: configuration.id) == .local {
-                    try database.setRemoteCalendarExecutionOwnership(workspaceID: configuration.id, state: .pending)
+                   try await database.remoteCalendarExecutionOwnership(workspaceID: configuration.id) == .local {
+                    try await database.setRemoteCalendarExecutionOwnership(workspaceID: configuration.id, state: .pending)
                 }
                 if !configuration.backgroundExecutionEnabled,
-                   try database.remoteCalendarExecutionOwnership(workspaceID: configuration.id) == .local { continue }
+                   try await database.remoteCalendarExecutionOwnership(workspaceID: configuration.id) == .local { continue }
                 let interval: TimeInterval = remoteCalendarGatewayErrors[configuration.id] == nil ? 5 : 30
                 guard !remoteCalendarSyncInProgress.contains(configuration.id),
                       Date().timeIntervalSince(remoteCalendarLastSync[configuration.id] ?? .distantPast) >= interval else { continue }
@@ -280,8 +280,8 @@ extension ApplicationModel {
                                                    enabled: Bool) async throws -> RemoteTaskGatewayStatus {
         guard let store = dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
         let database = store.database
-        if enabled, try database.remoteCalendarExecutionOwnership(workspaceID: configuration.id) == .local {
-            try database.setRemoteCalendarExecutionOwnership(workspaceID: configuration.id, state: .pending)
+        if enabled, try await database.remoteCalendarExecutionOwnership(workspaceID: configuration.id) == .local {
+            try await database.setRemoteCalendarExecutionOwnership(workspaceID: configuration.id, state: .pending)
         }
         var status = try await remoteWorkspaces.taskGatewayStatus(for: configuration)
         if !enabled {
@@ -291,9 +291,9 @@ extension ApplicationModel {
                 throw WorkspaceToolError.invalid("Background execution is stopping. Existing remote tasks are finishing; reconnect to complete the handoff.")
             }
             let checkpoint = try await remoteWorkspaces.taskGatewaySchedules(for: configuration)
-            if try database.remoteCalendarExecutionOwnership(workspaceID: configuration.id) != .local {
-                try database.restoreRemoteCalendarExecutionCheckpoint(workspaceID: configuration.id, schedules: checkpoint.schedules)
-                try database.setRemoteCalendarExecutionOwnership(workspaceID: configuration.id, state: .local)
+            if try await database.remoteCalendarExecutionOwnership(workspaceID: configuration.id) != .local {
+                try await database.restoreRemoteCalendarExecutionCheckpoint(workspaceID: configuration.id, schedules: checkpoint.schedules)
+                try await database.setRemoteCalendarExecutionOwnership(workspaceID: configuration.id, state: .local)
             }
             remoteCalendarPublished[configuration.id] = nil
             return status
@@ -304,7 +304,7 @@ extension ApplicationModel {
             $0.calendar.task?.configuration.workspaceID == configuration.id
         }.map { ($0.id, $0.calendar.revision) })
         if remoteCalendarPublished[configuration.id] != revisions || !status.enabled {
-            let snapshot = try database.remoteCalendarExecutionSnapshot(workspaceID: configuration.id)
+            let snapshot = try await database.remoteCalendarExecutionSnapshot(workspaceID: configuration.id)
             let schedules = snapshot.compactMap { item -> RemoteTaskGatewaySchedule? in
                 guard let task = item.event.calendar.task, let start = item.event.startDate else { return nil }
                 return .init(id: item.event.id, title: item.event.title, startsAt: start,
@@ -318,7 +318,7 @@ extension ApplicationModel {
             remoteCalendarPublished[configuration.id] = Dictionary(uniqueKeysWithValues: schedules.map { ($0.id, $0.revision) })
         }
         if !status.enabled { status = try await remoteWorkspaces.setTaskGatewayEnabled(true, for: configuration) }
-        try database.setRemoteCalendarExecutionOwnership(workspaceID: configuration.id, state: .remote)
+        try await database.setRemoteCalendarExecutionOwnership(workspaceID: configuration.id, state: .remote)
         return status
     }
 
@@ -332,8 +332,8 @@ extension ApplicationModel {
             let previous = remoteCalendarResultCursors[configuration.id] ?? "0"
             let page = try await remoteWorkspaces.taskGatewayResults(after: previous, for: configuration)
             for entry in page.entries {
-                try store.database.importRemoteCalendarRun(entry.run, workspaceID: configuration.id, eventRevision: entry.eventRevision)
-                try store.database.importRemoteCalendarTranscript(receiptID: entry.id, run: entry.run,
+                try await store.database.importRemoteCalendarRun(entry.run, workspaceID: configuration.id, eventRevision: entry.eventRevision)
+                try await store.database.importRemoteCalendarTranscript(receiptID: entry.id, run: entry.run,
                     workspaceID: configuration.id, workspaceName: configuration.name, ownerDeviceID: owner,
                     nativeSessionID: entry.nativeSessionID, updates: entry.updates,
                     error: entry.error, completedAt: entry.completedAt)

@@ -18,18 +18,18 @@ actor UsageRunRecorder {
     let costUSD: Double?
   }
 
-  private let store: UsageStore
+  private let store: AsyncUsageStore
   private var sequence: Int64
 
-  init(databaseURL: URL) throws {
-    store = try UsageStore(databaseURL: databaseURL)
+  init(databaseURL: URL) async throws {
+    store = try await AsyncUsageStore(databaseURL: databaseURL)
     let wallClock = Int64(Date().timeIntervalSince1970 * 1_000_000)
-    let persisted = try store.runtimeSyncState(endpoint: "wovenmatter://local")
+    let persisted = try await store.runtimeSyncState(endpoint: "wovenmatter://local")
       .flatMap { Int64($0.cursor) } ?? 0
     sequence = max(wallClock, persisted)
   }
 
-  func record(_ observation: Observation) throws {
+  func record(_ observation: Observation) async throws {
     let next = sequence.addingReportingOverflow(1)
     guard !next.overflow else {
       throw UsageStoreError.step("Woven usage sequence is exhausted")
@@ -65,7 +65,7 @@ actor UsageRunRecorder {
       location: "This Mac",
       installationID: "wovenmatter-local"
     )
-    try store.ingest(
+    try await store.ingest(
       page: UsageIngestionPage(
         source: source,
         events: [event],

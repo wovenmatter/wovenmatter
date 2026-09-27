@@ -91,12 +91,32 @@ public actor HermesGatewayRPC: HermesGatewayTransport {
         failPending()
     }
 
+    private var outgoingBusy = false
+    private var outgoingWaiters: [CheckedContinuation<Void, Never>] = []
+
+    private func acquireOutgoing() async {
+        if outgoingBusy {
+            await withCheckedContinuation { outgoingWaiters.append($0) }
+        } else { outgoingBusy = true }
+    }
+
+    private func releaseOutgoing() {
+        if outgoingWaiters.isEmpty { outgoingBusy = false }
+        else { outgoingWaiters.removeFirst().resume() }
+    }
+
     public func call(_ method: String, _ params: HermesValue = [:]) async throws -> HermesValue {
         guard let socket else { throw HermesGatewayError.message("Hermes Gateway is disconnected.") }
         let id = UUID().uuidString
         let frame: HermesValue = ["jsonrpc": "2.0", "id": .string(id), "method": .string(method), "params": params]
         let text = String(decoding: try JSONEncoder().encode(frame), as: UTF8.self)
-        try record("out", data: Data(text.utf8))
+        let current = generation
+        await acquireOutgoing()
+        do {
+            try await record("out", data: Data(text.utf8))
+            try Task.checkCancellation()
+            guard current == generation else { throw HermesGatewayError.message("Hermes Gateway disconnected before sending the request.") }
+        } catch { releaseOutgoing(); throw error }
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 pending[id] = continuation
@@ -105,6 +125,8 @@ public actor HermesGatewayRPC: HermesGatewayTransport {
                     if !Task.isCancelled { await self?.expire(id) }
                 }
                 Task {
+                    defer { self.releaseOutgoing() }
+                    guard self.generation == current, self.pending[id] != nil else { return }
                     do { try await socket.send(.string(text)) }
                     catch { self.expire(id) }
                 }
@@ -117,15 +139,21 @@ public actor HermesGatewayRPC: HermesGatewayTransport {
     }
 
     private func send(_ frame: HermesValue) async throws {
+        let current = generation
+        await acquireOutgoing()
+        defer { releaseOutgoing() }
+        guard current == generation else { throw HermesGatewayError.message("Hermes Gateway disconnected before sending the response.") }
         guard let socket else { throw HermesGatewayError.message("Hermes Gateway is disconnected.") }
         let data = try JSONEncoder().encode(frame)
-        try record("out", data: data)
+        try await record("out", data: data)
+        try Task.checkCancellation()
+        guard current == generation else { throw HermesGatewayError.message("Hermes Gateway disconnected before sending the response.") }
         try await socket.send(.string(String(decoding: data, as: UTF8.self)))
     }
 
     // Authentication stays in HTTP headers; it never enters this recorder.
-    private func record(_ direction: String, data: Data) throws {
-        try historyRecorder?(direction, data)
+    private func record(_ direction: String, data: Data) async throws {
+        try await historyRecorder?(direction, data)
     }
 
     private func receive(_ frame: HermesValue, generation current: UUID) async {

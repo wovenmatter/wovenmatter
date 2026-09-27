@@ -10,13 +10,14 @@ struct ACPResumePermissionTests {
     let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: directory) }
-    let database = try WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
-    let conversations = try (0..<2).map { index in
-      let id = try database.createLocalACPSession(
+    let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+    var conversations: [String] = []
+    for index in 0..<2 {
+      let id = try await database.createLocalACPSession(
         runtimeKind: runtime, title: "Resume \(index)", ownerDeviceID: UUID()
       )
-      try database.updateLocalACPSessionID(conversationID: id, sessionID: "remote-\(index)")
-      return id
+      try await database.updateLocalACPSessionID(conversationID: id, sessionID: "remote-\(index)")
+      conversations.append(id)
     }
     let requests = ResumePermissionRecorder()
     let coordinator = LocalACPSessionCoordinator(database: database, clientFactory: { _, _ in

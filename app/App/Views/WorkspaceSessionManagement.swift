@@ -16,8 +16,8 @@ struct WorkspaceSessionManagementControls: View {
                 Button("Managed by \(title(coordinator))") { open(coordinator) }
                     .buttonStyle(.plain).font(.system(size: 12, weight: .medium))
                 Toggle("Notify coordinator", isOn: Binding(get: { tools.relationships[sessionID]?.notificationsEnabled ?? true },
-                    set: { tools.setNotifications(sessionID: sessionID, enabled: $0) }))
-                Button("End coordination") { tools.endCoordination(sessionID: sessionID) }
+                    set: { enabled in Task { await tools.setNotifications(sessionID: sessionID, enabled: enabled) } }))
+                Button("End coordination") { Task { await tools.endCoordination(sessionID: sessionID) } }
                     .buttonStyle(SettingsQuietButtonStyle())
             }
             let managed = tools.relationships.values.filter { $0.coordinatorID == sessionID }.sorted { title($0.sessionID) < title($1.sessionID) }
@@ -28,7 +28,7 @@ struct WorkspaceSessionManagementControls: View {
                     HStack {
                         Button(title(relation.sessionID)) { open(relation.sessionID) }.lineLimit(1).buttonStyle(.plain)
                         Spacer()
-                        Button("Release") { tools.endCoordination(sessionID: relation.sessionID) }.buttonStyle(.plain)
+                        Button("Release") { Task { await tools.endCoordination(sessionID: relation.sessionID) } }.buttonStyle(.plain)
                     }
                 }
             }
@@ -51,9 +51,9 @@ struct WorkspaceSessionManagementControls: View {
                             if timer.isPaused { Text("Paused") }
                             else { Text(timer.nextFireAt, format: .dateTime.month(.abbreviated).day().hour().minute()) }
                             Spacer()
-                            Button(timer.isPaused ? "Resume" : "Pause") { tools.pauseTimer(timer, paused: !timer.isPaused) }
+                            Button(timer.isPaused ? "Resume" : "Pause") { Task { await tools.pauseTimer(timer, paused: !timer.isPaused) } }
                                 .disabled(timer.isPaused && !enabled)
-                            Button { tools.removeTimer(timer) } label: { Image(systemName: "trash") }
+                            Button { Task { await tools.removeTimer(timer) } } label: { Image(systemName: "trash") }
                                 .accessibilityLabel("Remove timer: \(timer.instruction)")
                         }.font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground).buttonStyle(.plain)
                     }
@@ -104,11 +104,12 @@ private struct WorkspaceTimerEditor: View {
                 Spacer()
                 Button("Cancel", role: .cancel) { dismiss() }
                 Button("Save timer") {
-                    do {
-                        try tools.database.saveSessionTimer(draft.timer(), callerID: initial.sessionID)
-                        try tools.reload()
-                        dismiss()
-                    } catch { self.error = error.localizedDescription }
+                    Task {
+                        do {
+                            try await tools.saveTimer(draft.timer())
+                            dismiss()
+                        } catch { self.error = error.localizedDescription }
+                    }
                 }.buttonStyle(DashboardPrimaryButtonStyle())
                     .disabled((try? draft.timer()) == nil)
             }

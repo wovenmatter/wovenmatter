@@ -287,12 +287,14 @@ enum DashboardNoteJournalError: Error {
 }
 
 final class DashboardNoteWriteBehind: @unchecked Sendable {
-    typealias Update = @Sendable (DashboardNoteJournalEntry) throws -> Void
-    typealias Completion = @Sendable (
-        DashboardNoteJournalEntry,
-        Result<Void, any Error>
-    ) -> Void
+    typealias Update = @Sendable (DashboardNoteJournalEntry) async throws -> Void
+    typealias Completion = @Sendable (DashboardNoteJournalEntry, Result<Void, any Error>) -> Void
 
+    private struct Batch {
+        let entries: [DashboardNoteJournalEntry]
+        let journaled: Bool
+        let continuation: CheckedContinuation<Void, any Error>?
+    }
     private let journal: DashboardNoteDraftJournal
     private let update: Update
     private let completion: Completion
@@ -303,14 +305,13 @@ final class DashboardNoteWriteBehind: @unchecked Sendable {
     private var order: [String] = []
     private var scheduledGeneration: UInt64 = 0
     private var stickyAppendError: (any Error)?
+    private var batches: [Batch] = []
+    private var processing = false
 
-    init(
-        journal: DashboardNoteDraftJournal,
-        coalescingDelay: DispatchTimeInterval = .milliseconds(700),
-        writerSessionID: String = UUID().uuidString.lowercased(),
-        update: @escaping Update,
-        completion: @escaping Completion
-    ) {
+    init(journal: DashboardNoteDraftJournal,
+         coalescingDelay: DispatchTimeInterval = .milliseconds(700),
+         writerSessionID: String = UUID().uuidString.lowercased(),
+         update: @escaping Update, completion: @escaping Completion) {
         self.journal = journal
         self.coalescingDelay = coalescingDelay
         self.writerSessionID = writerSessionID
@@ -319,138 +320,123 @@ final class DashboardNoteWriteBehind: @unchecked Sendable {
     }
 
     func submit(_ entry: DashboardNoteJournalEntry) {
-        // Keystrokes update application state immediately and are coalesced on
-        // this serial queue. Lifecycle flush barriers close the short window
-        // before the latest entry reaches the recoverable on-disk journal.
-        let identifiedEntry = entry.identified(by: writerSessionID)
-        queue.async { [self] in
-            enqueue(identifiedEntry)
-            scheduleDrain()
-        }
+        let entry = entry.identified(by: writerSessionID)
+        queue.async { [self] in enqueue(entry); scheduleDrain() }
     }
 
     func replayAndFlush(_ entries: [DashboardNoteJournalEntry]) async throws {
-        return try await withCheckedThrowingContinuation {
-            (continuation: CheckedContinuation<Void, any Error>) in
+        try await withCheckedThrowingContinuation { continuation in
             queue.async { [self] in
                 scheduledGeneration &+= 1
-                if let error = processJournaled(latestNoteJournalEntries(from: entries)) {
-                    continuation.resume(throwing: error)
-                } else {
-                    continuation.resume()
-                }
+                batches.append(Batch(entries: latestNoteJournalEntries(from: entries),
+                    journaled: true, continuation: continuation))
+                startNextBatch()
             }
         }
     }
 
-    func flush() throws {
-        var failure: (any Error)?
-        queue.sync { [self] in
-            scheduledGeneration &+= 1
-            failure = drainPending()
-        }
-        if let failure {
-            throw failure
-        }
-    }
+    func flush() async throws { try await flushAsync() }
 
     func flushAsync() async throws {
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
+        try await withCheckedThrowingContinuation { continuation in
+            // A FIFO barrier includes every submission enqueued before this call.
+            // Awaiting the backend never blocks this queue or the caller's thread.
             queue.async { [self] in
                 scheduledGeneration &+= 1
-                if let failure = drainPending() { continuation.resume(throwing: failure) }
-                else { continuation.resume() }
+                batches.append(Batch(entries: takePending(), journaled: false, continuation: continuation))
+                startNextBatch()
             }
         }
     }
 
-    func hasOutstandingWork() -> Bool {
-        queue.sync {
-            guard pending.isEmpty else { return true }
-            do {
-                return try !journal.entries().isEmpty
-            } catch {
-                return true
+    func hasOutstandingWork() async -> Bool {
+        await withCheckedContinuation { continuation in
+            queue.async { [self] in
+                let outstanding = processing || !pending.isEmpty || !batches.isEmpty
+                    || ((try? journal.entries().isEmpty) != true)
+                continuation.resume(returning: outstanding)
             }
         }
     }
 
     private func enqueue(_ entry: DashboardNoteJournalEntry) {
         if pending[entry.noteID] == nil { order.append(entry.noteID) }
-        if pending[entry.noteID, default: entry].revision <= entry.revision {
-            pending[entry.noteID] = entry
-        }
+        if pending[entry.noteID, default: entry].revision <= entry.revision { pending[entry.noteID] = entry }
+    }
+
+    private func takePending() -> [DashboardNoteJournalEntry] {
+        let entries = order.compactMap { pending[$0] }
+        order.removeAll(keepingCapacity: true)
+        pending.removeAll(keepingCapacity: true)
+        return entries
     }
 
     private func scheduleDrain() {
         scheduledGeneration &+= 1
         let generation = scheduledGeneration
         queue.asyncAfter(deadline: .now() + coalescingDelay) { [self] in
-            guard generation == scheduledGeneration else { return }
-            _ = drainPending()
+            guard generation == scheduledGeneration, !processing else { return }
+            batches.append(Batch(entries: takePending(), journaled: false, continuation: nil))
+            startNextBatch()
         }
     }
 
-    private func drainPending() -> (any Error)? {
-        let entries = order.compactMap { pending[$0] }
-        order.removeAll(keepingCapacity: true)
-        pending.removeAll(keepingCapacity: true)
-        guard !entries.isEmpty else { return stickyAppendError }
+    private func startNextBatch() {
+        guard !processing, !batches.isEmpty else { return }
+        processing = true
+        let batch = batches.removeFirst()
+        persist(batch, index: 0, firstFailure: nil, appendFailure: nil)
+    }
 
-        var firstFailure: (any Error)?
-        var appendFailure: (any Error)?
-        for entry in entries {
-            do {
-                try journal.append(entry)
-            } catch {
-                enqueue(entry)
-                if appendFailure == nil { appendFailure = error }
-                if firstFailure == nil { firstFailure = error }
+    private func persist(_ batch: Batch, index: Int,
+                         firstFailure: (any Error)?, appendFailure: (any Error)?) {
+        dispatchPrecondition(condition: .onQueue(queue))
+        guard index < batch.entries.count else {
+            if !batch.entries.isEmpty, !batch.journaled { stickyAppendError = appendFailure }
+            let failure = firstFailure ?? stickyAppendError
+            if let failure { batch.continuation?.resume(throwing: failure) }
+            else { batch.continuation?.resume() }
+            processing = false
+            startNextBatch()
+            if !processing, !pending.isEmpty { scheduleDrain() }
+            return
+        }
+        let entry = batch.entries[index]
+        if !batch.journaled {
+            do { try journal.append(entry) }
+            catch {
+                // A later explicit flush may already own a newer edit. Never
+                // retry this older snapshot after that batch commits.
+                if pending[entry.noteID] == nil,
+                   !batches.contains(where: { $0.entries.contains(where: { $0.noteID == entry.noteID }) }) {
+                    enqueue(entry)
+                }
                 completion(entry, .failure(error))
-                continue
+                persist(batch, index: index + 1, firstFailure: firstFailure ?? error, appendFailure: appendFailure ?? error)
+                return
             }
-
-            let result = persistJournaled(entry)
-            if case .failure(let error) = result, firstFailure == nil {
-                firstFailure = error
-            }
-            completion(entry, result)
         }
-        stickyAppendError = appendFailure
-        return firstFailure
-    }
-
-    private func processJournaled(
-        _ entries: [DashboardNoteJournalEntry]
-    ) -> (any Error)? {
-        var firstFailure: (any Error)?
-        for entry in entries {
-            let result = persistJournaled(entry)
-            if case .failure(let error) = result, firstFailure == nil {
-                firstFailure = error
+        Task { [self] in
+            let result: Result<Void, any Error>
+            do { try await update(entry); result = .success(()) }
+            catch { result = .failure(error) }
+            queue.async { [self] in
+                let acknowledged: Result<Void, any Error>
+                do {
+                    try result.get()
+                    try journal.acknowledge(entry)
+                    acknowledged = .success(())
+                } catch {
+                    try? journal.compactToLatestEntries()
+                    acknowledged = .failure(error)
+                }
+                completion(entry, acknowledged)
+                let failure: (any Error)?
+                if case .failure(let error) = acknowledged { failure = error } else { failure = nil }
+                persist(batch, index: index + 1, firstFailure: firstFailure ?? failure, appendFailure: appendFailure)
             }
-            completion(entry, result)
-        }
-        return firstFailure
-    }
-
-    private func persistJournaled(
-        _ entry: DashboardNoteJournalEntry
-    ) -> Result<Void, any Error> {
-        do {
-            try update(entry)
-            try journal.acknowledge(entry)
-            return .success(())
-        } catch {
-            // Each record is a complete note snapshot. If SQLite remains
-            // unavailable, retaining only each note's latest durable snapshot
-            // prevents retry/edit traffic from growing the journal without
-            // bound while preserving the last-mutation order across notes.
-            try? journal.compactToLatestEntries()
-            return .failure(error)
         }
     }
-
 }
 
 enum DashboardNoteDraftSaveState: Equatable {
@@ -511,6 +497,18 @@ struct DashboardNoteDraft: Equatable {
             // A newer local writer (including woven-note) won the revision.
             adopt(note)
         }
+    }
+
+    mutating func adoptEditingResponse(_ response: NoteEditingResponse, content: String) {
+        // Awaiting SQLite or backend RPC lets typing continue. A response to an
+        // earlier operation must not replace edits that still need to be saved.
+        guard persistedRevision >= editRevision else { return }
+        title = response.title ?? title
+        self.content = content
+        saveState = .saved
+        editRevision = 0
+        persistedRevision = 0
+        sourceUpdatedAt = response.revision
     }
 
     mutating func edit(title: String? = nil, content: String? = nil) {

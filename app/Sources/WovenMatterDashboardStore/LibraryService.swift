@@ -37,7 +37,7 @@ public actor LibraryService {
     defer { synchronizing = false }
 
     for location in locations where knownLocations[location.conversationID] != location {
-      try database.setLibraryLocation(
+      try await database.setLibraryLocation(
         conversationID: location.conversationID, workspaceName: location.name, root: location.root)
       knownLocations[location.conversationID] = location
     }
@@ -46,11 +46,11 @@ public actor LibraryService {
 
     // Drain a bounded batch each pass so a message backlog cannot monopolize the store.
     for _ in 0..<4 {
-      if try database.indexLibraryMessages() < 50 { break }
+      if try await database.indexLibraryMessages() < 50 { break }
     }
-    for item in try database.pendingLibraryFiles() {
+    for item in try await database.pendingLibraryFiles() {
       try Task.checkCancellation()
-      guard let current = try database.libraryItem(id: item.id),
+      guard let current = try await database.libraryItem(id: item.id),
         current.storage == .pending || current.storage == .unavailable
       else { continue }
       do {
@@ -58,15 +58,15 @@ public actor LibraryService {
         try Task.checkCancellation()
         let hash = try files.retain(bytes)
         // An update cannot resurrect a message deleted while the read was in flight.
-        try database.finishLibraryFile(id: item.id, hash: hash, size: Int64(bytes.count))
+        try await database.finishLibraryFile(id: item.id, hash: hash, size: Int64(bytes.count))
       } catch is CancellationError {
         throw CancellationError()
       } catch {
-        try database.finishLibraryFile(id: item.id, hash: nil, error: String(error.localizedDescription.prefix(512)))
+        try await database.finishLibraryFile(id: item.id, hash: nil, error: String(error.localizedDescription.prefix(512)))
       }
     }
     if Date().timeIntervalSince(lastCleanup) >= 300 {
-      try database.cleanupLibraryFiles()
+      try await database.cleanupLibraryFiles()
       lastCleanup = Date()
     }
   }
@@ -74,7 +74,7 @@ public actor LibraryService {
   private func readFile(_ item: WorkspaceLibraryItem, remoteWorkspace: RemoteWorkspaceLookup) async throws -> Data {
     if item.workspaceID == "local" {
       let root =
-        try database.libraryRoot(conversationID: item.conversationID)
+        try await database.libraryRoot(conversationID: item.conversationID)
         ?? FileManager.default.homeDirectoryForCurrentUser.appending(path: ".woven-matter").path
       let files = files
       return try await Task.detached(priority: .utility) {
@@ -85,7 +85,7 @@ public actor LibraryService {
     guard let workspace = await remoteWorkspace(item.workspaceID) else {
       throw WorkspaceToolError.invalid("Reconnect this remote workspace to save the file.")
     }
-    let root = try database.libraryRoot(conversationID: item.conversationID) ?? "/home/.woven-matter"
+    let root = try await database.libraryRoot(conversationID: item.conversationID) ?? "/home/.woven-matter"
     let bytes = try await remoteFiles.read(source: item.source, root: root, configuration: workspace)
     // Credentials, host configuration, or availability may change during SSH.
     guard await remoteWorkspace(item.workspaceID) == workspace else {
@@ -94,22 +94,22 @@ public actor LibraryService {
     return bytes
   }
 
-  public func page(query: LibraryQuery, count: Int) throws -> LibraryPage {
-    try database.libraryPage(query: query, count: count)
+  public func page(query: LibraryQuery, count: Int) async throws -> LibraryPage {
+    try await database.libraryPage(query: query, count: count)
   }
 
-  public func revision() throws -> Int64 {
-    try database.libraryRevision()
+  public func revision() async throws -> Int64 {
+    try await database.libraryRevision()
   }
 
-  public func openURL(id: String) throws -> URL {
-    guard let item = try database.libraryItem(id: id) else {
+  public func openURL(id: String) async throws -> URL {
+    guard let item = try await database.libraryItem(id: id) else {
       throw WorkspaceToolError.invalid("This Library item was removed.")
     }
     return try files.url(for: item)
   }
 
-  public func retry(id: String) throws {
-    try database.retryLibraryFile(id: id)
+  public func retry(id: String) async throws {
+    try await database.retryLibraryFile(id: id)
   }
 }

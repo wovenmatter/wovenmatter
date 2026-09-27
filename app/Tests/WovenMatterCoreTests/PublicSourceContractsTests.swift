@@ -448,7 +448,7 @@ struct PublicSourceContractsTests {
   }
 
   @Test("local records and remote session identity survive reopen")
-  func databasePersistence() throws {
+  func databasePersistence() async throws {
     let directory = try TemporaryDirectory(prefix: "wovenmatter-database")
     defer { directory.remove() }
     let databaseURL = directory.url.appending(path: "workspace.sqlite")
@@ -459,14 +459,14 @@ struct PublicSourceContractsTests {
     let conversationID: String
 
     do {
-      let database = try WorkspaceDatabase(url: databaseURL)
-      folderID = try database.createFolder(name: "Research")
-      noteID = try database.createNote(
+      let database = try await WorkspaceDatabase(url: databaseURL)
+      folderID = try await database.createFolder(name: "Research")
+      noteID = try await database.createNote(
         folderID: folderID,
         title: "Durable note",
         content: "Remember this"
       )
-      conversationID = try database.createRemoteACPSession(
+      conversationID = try await database.createRemoteACPSession(
         runtimeKind: .codex,
         remoteWorkspaceID: workspaceID,
         remoteWorkspaceName: "Remote",
@@ -475,43 +475,43 @@ struct PublicSourceContractsTests {
       )
     }
 
-    let reopened = try WorkspaceDatabase(url: databaseURL)
-    let overview = try reopened.workspaceOverview()
+    let reopened = try await WorkspaceDatabase(url: databaseURL)
+    let overview = try await reopened.workspaceOverview()
     #expect(overview.folders.map(\.id) == [folderID])
     #expect(overview.notes.map(\.id) == [noteID])
-    #expect(try reopened.localACPSession(
+    #expect(try await reopened.localACPSession(
       conversationID: conversationID
     ).remoteWorkspaceID == workspaceID)
   }
 
   @Test("workspace conversations are ordered by latest message activity")
-  func conversationActivityOrdering() throws {
+  func conversationActivityOrdering() async throws {
     let directory = try TemporaryDirectory(prefix: "wovenmatter-conversation-order")
     defer { directory.remove() }
-    let database = try WorkspaceDatabase(
+    let database = try await WorkspaceDatabase(
       url: directory.url.appending(path: "workspace.sqlite")
     )
     let ownerDeviceID = UUID()
-    let oldest = try database.createLocalACPSession(
+    let oldest = try await database.createLocalACPSession(
       runtimeKind: .codex,
       title: "Oldest",
       ownerDeviceID: ownerDeviceID,
       createdAt: Date(timeIntervalSince1970: 100)
     )
-    let newest = try database.createLocalACPSession(
+    let newest = try await database.createLocalACPSession(
       runtimeKind: .codex,
       title: "Newest",
       ownerDeviceID: ownerDeviceID,
       createdAt: Date(timeIntervalSince1970: 300)
     )
-    let middle = try database.createLocalACPSession(
+    let middle = try await database.createLocalACPSession(
       runtimeKind: .codex,
       title: "Middle",
       ownerDeviceID: ownerDeviceID,
       createdAt: Date(timeIntervalSince1970: 200)
     )
 
-    #expect(try database.workspaceOverview().conversations.map(\.id) == [
+    #expect(try await database.workspaceOverview().conversations.map(\.id) == [
       newest,
       middle,
       oldest,

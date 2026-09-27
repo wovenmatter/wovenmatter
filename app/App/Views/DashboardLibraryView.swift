@@ -261,7 +261,7 @@ struct DashboardLibrarySourceSheet: View {
             .task {
                 do {
                     content =
-                        try model.dashboardStore?.database.librarySourceMessage(id: item.id)
+                        try await model.dashboardStore?.database.librarySourceMessage(id: item.id)
                         ?? "The workspace is unavailable."
                 } catch { content = error.localizedDescription }
             }

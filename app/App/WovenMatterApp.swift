@@ -437,7 +437,7 @@ struct WovenMatterApp: App {
                         for: NSApplication.didResignActiveNotification
                     )
                 ) { _ in
-                    applicationModel.flushNoteDrafts()
+                    Task { await applicationModel.flushNoteDrafts() }
                 }
                 .onReceive(
                     NotificationCenter.default.publisher(
@@ -445,7 +445,7 @@ struct WovenMatterApp: App {
                     )
                 ) { _ in
                     if LocalExecutionRole.current.ownsExecution {
-                        applicationModel.flushNoteDrafts()
+                        // Notes were flushed by the asynchronous termination barrier.
                         applicationModel.shutdownLocalACPSessions()
                     }
                 }

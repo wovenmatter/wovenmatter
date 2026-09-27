@@ -31,7 +31,7 @@ public struct PendingRemoteNoteEdit: Equatable, Sendable {
 }
 
 // Note drafts, editing and mediated edit recovery within the original transactions.
-extension WorkspaceDatabase {
+extension WorkspaceDatabaseConnection {
   func insertNoteContextUnlocked(
     _ context: AgentNoteContext?,
     identifiers: LocalACPRunIdentifiers,
@@ -600,5 +600,74 @@ extension WorkspaceDatabase {
       .joined(separator: " ")
       .trimmingCharacters(in: .whitespacesAndNewlines)
     return text.count > 180 ? "\(text.prefix(177))..." : text
+  }
+}
+
+// MARK: - Async worker boundary
+
+extension WorkspaceDatabase {
+  public func pendingRemoteNoteEdits() async throws -> [PendingRemoteNoteEdit] {
+    try await read { try $0.pendingRemoteNoteEdits() }
+  }
+
+  public func applyPendingRemoteNoteEdit(
+    _ pending: PendingRemoteNoteEdit,
+    envelope: RemoteNoteEditEnvelope,
+    visibleAssistantContent: String
+  ) async throws -> NoteEditingResponse {
+    try await write { try $0.applyPendingRemoteNoteEdit(pending, envelope: envelope, visibleAssistantContent: visibleAssistantContent) }
+  }
+
+  public func dismissPendingRemoteNoteEdit(runID: String) async throws {
+    try await write { try $0.dismissPendingRemoteNoteEdit(runID: runID) }
+  }
+
+  public func dismissTerminalRemoteNoteEdits() async throws {
+    try await write { try $0.dismissTerminalRemoteNoteEdits() }
+  }
+
+  @discardableResult
+  public func createNote(
+    id: UUID = UUID(),
+    folderID: String?,
+    title: String = "Untitled Note",
+    content: String = "",
+    kind: NoteArtifactKind = .note,
+    createdAt: Date = Date(),
+    callerConversationID: String? = nil,
+    requestID: String? = nil
+  ) async throws -> String {
+    try await write { try $0.createNote(id: id, folderID: folderID, title: title, content: content, kind: kind, createdAt: createdAt, callerConversationID: callerConversationID, requestID: requestID) }
+  }
+
+  @discardableResult
+  public func updateNote(
+    id: String,
+    title: String,
+    content: String,
+    updatedAt: Date = Date()
+  ) async throws -> Bool {
+    try await write { try $0.updateNote(id: id, title: title, content: content, updatedAt: updatedAt) }
+  }
+
+  @discardableResult
+  public func persistNoteDraft(
+    id: String,
+    title: String,
+    content: String,
+    folderID: String? = nil,
+    createdAt: String? = nil,
+    updatedAt: Date = Date()
+  ) async throws -> Bool {
+    try await write { try $0.persistNoteDraft(id: id, title: title, content: content, folderID: folderID, createdAt: createdAt, updatedAt: updatedAt) }
+  }
+
+  public func readNoteForEditing(id: String, callerConversationID: String? = nil) async throws -> NoteEditingResponse {
+    try await read { try $0.readNoteForEditing(id: id, callerConversationID: callerConversationID) }
+  }
+
+  public func applyNoteEdits(_ request: NoteEditingRequest, callerConversationID: String? = nil,
+                             requestID: String? = nil) async throws -> NoteEditingResponse {
+    try await write { try $0.applyNoteEdits(request, callerConversationID: callerConversationID, requestID: requestID) }
   }
 }

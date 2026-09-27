@@ -38,7 +38,7 @@ struct RootView: View {
             Button("OK", role: .cancel) { model.sessionAccessError = nil }
         } message: { Text(model.sessionAccessError ?? "") }
         .sheet(item: Binding(get: { model.pendingSessionAccess.first }, set: { value in
-            if value == nil, let request = model.pendingSessionAccess.first { model.resolveSessionToolAccess(id: request.id, allowed: false) }
+            if value == nil, let request = model.pendingSessionAccess.first { Task { await model.resolveSessionToolAccess(id: request.id, allowed: false) } }
         })) { request in
             VStack(alignment: .leading, spacing: 16) {
                 Text("Allow session access?").font(.headline)
@@ -46,8 +46,8 @@ struct RootView: View {
                     .fixedSize(horizontal: false, vertical: true)
                 HStack {
                     Spacer()
-                    Button("Cancel", role: .cancel) { model.resolveSessionToolAccess(id: request.id, allowed: false) }
-                    Button("Allow access") { model.resolveSessionToolAccess(id: request.id, allowed: true) }
+                    Button("Cancel", role: .cancel) { Task { await model.resolveSessionToolAccess(id: request.id, allowed: false) } }
+                    Button("Allow access") { Task { await model.resolveSessionToolAccess(id: request.id, allowed: true) } }
                         .buttonStyle(DashboardPrimaryButtonStyle())
                 }
             }.padding(24).frame(width: 440)

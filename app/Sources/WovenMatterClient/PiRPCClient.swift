@@ -513,7 +513,7 @@ public actor PiRPCClient {
     }
 
     private func handleLine(_ line: Data) async throws {
-        try launch.historyRecorder?("in", line)
+        try await launch.historyRecorder?("in", line)
         guard let object = try JSONSerialization.jsonObject(with: line) as? [String: Any] else {
             throw PiRPCClientError.invalidResponse("expected JSON object")
         }
@@ -635,6 +635,20 @@ public actor PiRPCClient {
         }
     }
 
+    private var outgoingBusy = false
+    private var outgoingWaiters: [CheckedContinuation<Void, Never>] = []
+
+    private func acquireOutgoing() async {
+        if outgoingBusy {
+            await withCheckedContinuation { outgoingWaiters.append($0) }
+        } else { outgoingBusy = true }
+    }
+
+    private func releaseOutgoing() {
+        if outgoingWaiters.isEmpty { outgoingBusy = false }
+        else { outgoingWaiters.removeFirst().resume() }
+    }
+
     private func sendCommand(_ payload: [String: Any]) async throws -> [String: Any] {
         try Task.checkCancellation()
         if let transportError { throw transportError }
@@ -646,10 +660,17 @@ public actor PiRPCClient {
         var body = payload
         body["id"] = id
         let data = try JSONSerialization.data(withJSONObject: body)
-        try launch.historyRecorder?("out", data)
+        await acquireOutgoing()
+        do {
+            try await launch.historyRecorder?("out", data)
+            try Task.checkCancellation()
+            if let transportError { throw transportError }
+            guard !closed else { throw PiRPCClientError.sessionNotInitialized }
+        } catch { releaseOutgoing(); throw error }
         var line = data
         line.append(0x0A)
         return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<[String: Any], any Error>) in
+            defer { releaseOutgoing() }
             pendingResponses[id] = continuation
             do {
                 try input.write(contentsOf: line)
@@ -788,9 +809,12 @@ public actor PiRPCClient {
         } else {
             payload["value"] = selected
         }
-        guard let input else { return }
+        await acquireOutgoing()
+        defer { releaseOutgoing() }
+        guard !closed, let input else { return }
         var data = try JSONSerialization.data(withJSONObject: payload)
-        try launch.historyRecorder?("out", data)
+        try await launch.historyRecorder?("out", data)
+        guard !closed else { throw PiRPCClientError.sessionNotInitialized }
         data.append(0x0A)
         try input.write(contentsOf: data)
     }

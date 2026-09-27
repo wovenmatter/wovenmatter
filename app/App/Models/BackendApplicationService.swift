@@ -37,6 +37,7 @@ struct BackendApplicationResult: Codable, Sendable {
     var surfaceProfile: SurfaceProfile?
     var accepted: Bool = true
     var entityID: String?
+    var noteResponse: NoteEditingResponse?
     var conversationID: String?
     var metadata: LocalACPSessionMetadata?
     var attachments: [AgentMessageAttachmentDraft]?
@@ -132,8 +133,8 @@ final class BackendApplicationService {
         BackendRPCResponse(id: request.id, result: try JSONEncoder().encode(result))
     }
 
-    private func conversation(_ id: String) throws -> WorkspaceConversationRecord {
-        guard let record = try model.dashboardStore?.database.workspaceOverview().conversations.first(where: { $0.id == id }) else {
+    private func conversation(_ id: String) async throws -> WorkspaceConversationRecord {
+        guard let record = try await model.dashboardStore?.database.workspaceOverview().conversations.first(where: { $0.id == id }) else {
             throw BackendRPCError.remote("This session is no longer available.")
         }
         return record
@@ -160,7 +161,7 @@ final class BackendApplicationService {
         case let .applySelections(id):
             try await model.applyPendingSessionSelections(conversationID: id)
         case let .recordSelections(id, metadata):
-            model.recordConfirmedSessionSelections(conversationID: id, metadata: metadata)
+            await model.recordConfirmedSessionSelections(conversationID: id, metadata: metadata)
         case let .retrySelections(id, selections):
             return .init(accepted: model.retryPendingSessionSelections(conversationID: id, selections: selections))
         case let .sessionMetadata(id):
@@ -185,24 +186,24 @@ final class BackendApplicationService {
             guard let id else { throw BackendRPCError.remote(model.localRunError ?? "The session could not be created.") }
             return .init(conversationID: id)
         case let .sendMessage(id, input, noteID):
-            let record = try conversation(id)
+            let record = try await conversation(id)
             let note = noteID.flatMap { id in model.workspaceOverview?.notes.first { $0.id == id } }
             guard noteID == nil || note != nil else { throw BackendRPCError.remote("The attached note is unavailable.") }
             return try await .init(accepted: model.dispatchAgentMessage(conversation: record, input: input, note: note))
         case let .configureSession(id, selectedModel, thinking, permission):
-            model.updateLocalACPSession(conversation: try conversation(id), model: selectedModel,
+            await model.updateLocalACPSession(conversation: try conversation(id), model: selectedModel,
                 thinking: thinking, permission: permission)
         case let .setSessionTools(id, tools, confirmed):
-            _ = try conversation(id)
+            _ = try await conversation(id)
             guard let database = model.dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
-            try database.setSessionTools(tools, sessionID: id, confirmedPausingTimers: confirmed)
-            try model.agentTools?.reload()
+            try await database.setSessionTools(tools, sessionID: id, confirmedPausingTimers: confirmed)
+            try await model.agentTools?.reload()
         case let .cancelSession(id):
-            _ = try conversation(id)
+            _ = try await conversation(id)
             if model.isOpenClawGatewayConversation(id) { model.cancelOpenClawGatewayPrompt(conversationID: id) }
             else { model.cancelLocalACPPrompt(conversationID: id) }
         case let .resolveSessionAccess(id, allowed):
-            model.resolveSessionToolAccess(id: id, allowed: allowed)
+            await model.resolveSessionToolAccess(id: id, allowed: allowed)
             await invalidations.publish(scopes: [.permissions, .settings])
             return .init()
         case let .resolvePermission(id, optionID):
@@ -217,7 +218,9 @@ final class BackendApplicationService {
             }
             model.resolveLocalACPInteraction(id: id, response: value)
         case let .saveCalendar(draft, eventID, revision, occurrence):
-            let event = try eventID.map { try calendarEvent($0, revision: revision) }
+            let event: WorkspaceCalendarItemRecord?
+            if let eventID { event = try calendarEvent(eventID, revision: revision) }
+            else { event = nil }
             guard await model.saveCalendarEvent(draft, event: event, detaching: occurrence) else {
                 throw BackendRPCError.remote(model.calendarMutationError ?? "The task or event could not be saved.")
             }

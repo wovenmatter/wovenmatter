@@ -122,25 +122,25 @@ struct OpenClawGatewayStreamingTests {
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: directory) }
     let url = directory.appending(path: "streaming.sqlite")
-    let database = try WorkspaceDatabase(url: url)
-    _ = try database.createLocalACPSession(
+    let database = try await WorkspaceDatabase(url: url)
+    _ = try await database.createLocalACPSession(
       runtimeKind: .openclaw, title: "Fixture", ownerDeviceID: UUID()
     )
-    let agentID = try #require(database.dashboardAgents().first?.id)
+    let agentID = try await #require(database.dashboardAgents().first?.id)
     let endpoint = OpenClawGatewayEndpoint(
       url: URL(string: "ws://127.0.0.1:1")!, authorization: .localService
     )
-    try database.saveOpenClawGatewayLink(OpenClawGatewayLink(
+    try await database.saveOpenClawGatewayLink(OpenClawGatewayLink(
       agentID: agentID, location: .localAgentWorkspace, endpoint: endpoint
     ))
     let session = try #require(OpenClawGatewaySession(payload: .object([
       "key": .string("agent:fixture:durable"),
     ])))
-    let conversationID = try database.importOpenClawGatewaySession(
+    let conversationID = try await database.importOpenClawGatewaySession(
       agentID: agentID, session: session
     )
-    let run = try database.beginLocalACPRun(conversationID: conversationID, content: "Hello")
-    let steering = try database.beginLocalACPSteeringTurn(
+    let run = try await database.beginLocalACPRun(conversationID: conversationID, content: "Hello")
+    let steering = try await database.beginLocalACPSteeringTurn(
       runID: run.runID, input: AgentMessageInput(text: "Then"),
       completesPreviousAssistant: false
     )
@@ -163,16 +163,16 @@ struct OpenClawGatewayStreamingTests {
       assistantEvent(runID: steering.userMessageID, name: "agent", sequence: 1, delta: "steered"),
       agentID: agentID
     )
-    #expect(try database.conversationContent(id: conversationID).messages.first {
+    #expect(try await database.conversationContent(id: conversationID).messages.first {
       $0.id == run.assistantMessageID
     }?.content == "one")
-    #expect(try database.conversationContent(id: conversationID).messages.first {
+    #expect(try await database.conversationContent(id: conversationID).messages.first {
       $0.id == steering.assistantMessageID
     }?.content == "steered")
-    #expect(try database.deviceOwnedGatewayTraceEvents(runID: run.runID).count == 3)
+    #expect(try await database.deviceOwnedGatewayTraceEvents(runID: run.runID).count == 3)
     await first.shutdown()
 
-    let reopened = try WorkspaceDatabase(url: url)
+    let reopened = try await WorkspaceDatabase(url: url)
     let second = OpenClawGatewayCoordinator(database: reopened, runExecutor: { _, _, _, _ in })
     try await second.recoverSessionRuns(conversationID: conversationID, history: activeHistory)
     await second.receiveGatewayEventForTesting(
@@ -187,10 +187,10 @@ struct OpenClawGatewayStreamingTests {
       assistantEvent(runID: run.runID, name: "agent", sequence: 2, delta: " two"),
       agentID: agentID
     )
-    #expect(try reopened.conversationContent(id: conversationID).messages.first {
+    #expect(try await reopened.conversationContent(id: conversationID).messages.first {
       $0.id == run.assistantMessageID
     }?.content == "one two")
-    #expect(try reopened.conversationContent(id: conversationID).messages.first {
+    #expect(try await reopened.conversationContent(id: conversationID).messages.first {
       $0.id == steering.assistantMessageID
     }?.content == "steered")
     await second.shutdown()

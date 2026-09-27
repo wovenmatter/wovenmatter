@@ -12,7 +12,7 @@ final class ApplicationModel {
     func refreshRuntimeInventory() {}
     func refreshLocalACPRuntimesNow() {}
     func refreshRuntimeMaintenanceAtStartup() {}
-    func flushNoteDrafts() { flushCount += 1 }
+    func flushNoteDrafts() async -> Bool { flushCount += 1; return true }
     func restoreOpenCodeInstances() async {}
     func shutdownLocalACPSessions() {}
     func flushNotesBeforeBackendClientQuit() async -> Bool { true }
