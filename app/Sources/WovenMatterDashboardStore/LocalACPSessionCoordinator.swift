@@ -881,6 +881,11 @@ public actor LocalACPSessionCoordinator {
         }
         let identifiers: LocalACPSteeringIdentifiers
         do {
+            if let deliveryID = input.historyDeliveryID {
+                // Revalidate tool/timer authority at the native dispatch
+                // boundary and prevent an ambiguous receipt from being replayed.
+                try database.markToolDeliveryTransportStarted(id: deliveryID, targetID: conversationID)
+            }
             // Keep the run and its event handlers alive until the harness has
             // actually accepted the input. Completion belongs to the run, not
             // to the composer submission (which must become usable again).

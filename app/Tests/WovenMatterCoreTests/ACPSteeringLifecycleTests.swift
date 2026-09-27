@@ -6,6 +6,33 @@ import WovenMatterCore
 
 @Suite(.timeLimit(.minutes(1)))
 struct ACPSteeringLifecycleTests {
+    @Test(arguments: [false, true])
+    func toolDeliveryAuthorityIsCheckedBeforeNativeSteering(revoked: Bool) async throws {
+        let f = try SteeringFixture()
+        defer { f.remove() }
+        _ = try await f.start()
+        await f.driver.waitForPrompt()
+        let source = try f.database.createLocalACPSession(runtimeKind: .codex, title: "Source", ownerDeviceID: UUID())
+        try f.database.setSessionTools(.init(enabled: [.sessions]), sessionID: source)
+        let deliveryID = UUID().uuidString.lowercased()
+        _ = try f.database.reserveToolDelivery(sourceID: source, targetID: f.id, text: "correction", requestID: deliveryID)
+        _ = try f.database.claimToolDelivery(id: deliveryID)
+        if revoked { try f.database.setSessionTools(.init(enabled: []), sessionID: source) }
+        let input = AgentMessageInput(text: "correction", historyDeliveryID: deliveryID)
+        if revoked {
+            await #expect(throws: WorkspaceToolError.self) {
+                try await f.coordinator.sendActiveInput(conversationID: f.id, input: input)
+            }
+            #expect(await f.driver.received.isEmpty)
+        } else {
+            _ = try await f.coordinator.sendActiveInput(conversationID: f.id, input: input)
+            #expect(await f.driver.received == ["correction"])
+            #expect(try f.database.toolDelivery(id: deliveryID)?.status == "accepted")
+        }
+        await f.driver.finishInitial()
+        try await f.waitForTerminal()
+        await f.coordinator.shutdown()
+    }
     @Test func outputAndDecisionBeforeAdmissionDoNotDeadlockOrLeakAcrossSegments() async throws {
         let f = try SteeringFixture()
         defer { f.remove() }
@@ -112,6 +139,7 @@ private actor SteeringDriver {
     let continuation = AsyncStream<Void>.makeStream()
     var event: LocalACPClient.EventHandler?
     var permission: LocalACPClient.PermissionHandler?
+    var received: [String] = []
     nonisolated func makeDriver() -> LocalACPSessionDriver {
         LocalACPSessionDriver(
             initializeSession: { _, _, _, _ in .init(sessionID: "native", loadedExistingSession: false, configuration: .init()) },
@@ -129,6 +157,7 @@ private actor SteeringDriver {
         return .endTurn
     }
     func steer(_ text: String) async throws -> LocalACPActiveInputReceipt {
+        received.append(text)
         if text.hasPrefix("preflight") {
             try await event?(.assistantChunk(text == "preflight" ? "accepted output" : "rejected output"))
             let answer = await permission?(.init(title: "Native decision", options: [.init(id: "allow", name: "Allow", kind: "allow_once")]))
