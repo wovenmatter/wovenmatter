@@ -100,7 +100,9 @@ final class PowerHelperSession: NSObject, ClosedLidPowerProtocol, @unchecked Sen
             listener.setConnectionCodeSigningRequirement(requirement)
             listener.delegate = helper
             listener.resume()
-            withExtendedLifetime((helper, listener)) { RunLoop.current.run() }
+            // launchd/XPC and the watchdog use dispatch sources. A Foundation
+            // run loop with no attached sources may return immediately.
+            withExtendedLifetime((helper, listener)) { dispatchMain() }
         } catch {
             Logger(subsystem: ClosedLidHelperIdentity.service, category: "startup")
                 .fault("Power helper startup failed: \(error.localizedDescription, privacy: .public)")
