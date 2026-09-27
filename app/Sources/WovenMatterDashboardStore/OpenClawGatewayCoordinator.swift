@@ -606,9 +606,9 @@ public actor OpenClawGatewayCoordinator {
       throw LocalACPSessionDatabaseError.steeringUnsupported
     }
     pausedGatewayEventRunIDs.insert(active.runID)
-    let identifiers: LocalACPSteeringIdentifiers
+    let reservation: WorkspaceDatabase.SteeringReservation
     do {
-      identifiers = try database.beginLocalACPSteeringTurn(
+      reservation = try database.reserveLocalACPSteeringTurn(
         runID: active.runID,
         input: input,
         completesPreviousAssistant: false
@@ -617,6 +617,7 @@ public actor OpenClawGatewayCoordinator {
       await resumeGatewayEvents(runID: active.runID)
       throw error
     }
+    let identifiers = reservation.identifiers
     let provisionalRemoteRunID = identifiers.userMessageID
     guard var current = activeRuns[active.runID] else {
       await resumeGatewayEvents(runID: active.runID)
@@ -629,6 +630,7 @@ public actor OpenClawGatewayCoordinator {
     activeRuns[active.runID] = current
     let admission = Task { [self] in
       try await admitActiveInput(
+        localRunID: active.runID,
         provisionalRemoteRunID: provisionalRemoteRunID,
         agentID: active.agentID,
         sessionKey: active.sessionKey,
@@ -646,19 +648,28 @@ public actor OpenClawGatewayCoordinator {
       assistantMessageID: identifiers.assistantMessageID,
       task: task
     ))
-    publishChange(runID: active.runID, phase: .content)
-    await resumeGatewayEvents(runID: active.runID)
     do { try await admission.value }
     catch {
       // A lost acknowledgement is uncertain, so the retained completion task
       // observes the original input identity instead of inviting a duplicate.
+      if case OpenClawGatewayClientError.rejected = error,
+         (try? database.rejectLocalACPSteeringTurn(reservation)) == true {
+        activeInputTasksByRunID[active.runID]?.removeAll { $0.assistantMessageID == identifiers.assistantMessageID }
+        activeRuns[active.runID]?.remoteRunIDs.remove(provisionalRemoteRunID)
+        activeRuns[active.runID]?.assistantMessageIDsByRemoteRunID.removeValue(forKey: provisionalRemoteRunID)
+        activeRuns[active.runID]?.lastRemoteRunID = active.lastRemoteRunID
+        await resumeGatewayEvents(runID: active.runID)
+        publishChange(runID: active.runID, phase: .content)
+        throw error
+      }
       if !Self.isRecoverableDeliveryError(error) {
         try? database.completeLocalACPAssistantMessage(runID: active.runID,
           assistantMessageID: identifiers.assistantMessageID, error: error.localizedDescription)
         publishChange(runID: active.runID, phase: .content)
-        throw error
       }
     }
+    publishChange(runID: active.runID, phase: .content)
+    await resumeGatewayEvents(runID: active.runID)
     return identifiers
   }
 
@@ -698,13 +709,16 @@ public actor OpenClawGatewayCoordinator {
   }
 
   private func admitActiveInput(
+    localRunID: String,
     provisionalRemoteRunID: String,
     agentID: UUID,
     sessionKey: String,
     content: String,
     attachments: [GatewayJSONValue]
   ) async throws {
-    let receipt = try await client(agentID: agentID).request(
+    let gatewayClient = try await client(agentID: agentID)
+    guard activeRuns[localRunID]?.cancelRequested == false else { throw CancellationError() }
+    let receipt = try await gatewayClient.request(
       "chat.send",
       params: .object(Self.chatSendParameters(
         sessionKey: sessionKey,

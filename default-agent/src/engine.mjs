@@ -300,11 +300,17 @@ export class DefaultAgentEngine {
           emit({ sessionUpdate: 'config_option_update', ...configuration, _meta: { ...configuration._meta, engineUsed: true } });
           const continuations = [];
           const acceptSteer = input => new Promise((resolve, reject) => {
+            controller.signal.throwIfAborted();
             let accepted = false;
             const task = withAccount(() => record.session.prompt(input, {
               streamingBehavior: 'steer',
               preflightResult: ok => {
-                if (ok) { accepted = true; steered = true; resolve({ outcome: 'injected' }); }
+                if (ok) {
+                  // Stop can arrive while extension preflight is suspended.
+                  // Prevent its late completion from starting a fresh loop.
+                  if (controller.signal.aborted) { record.session.clearQueue(); controller.signal.throwIfAborted(); }
+                  accepted = true; steered = true; resolve({ outcome: 'injected' });
+                }
               },
             }));
             // Native preflight either injects into the current loop or starts
@@ -319,13 +325,15 @@ export class DefaultAgentEngine {
             let initialError;
             try {
               await record.session.prompt(text, { preflightResult: ok => {
-                if (ok) { record.acceptSteer = acceptSteer; ready(); }
+                if (ok) { controller.signal.throwIfAborted(); record.acceptSteer = acceptSteer; ready(); }
               } });
             } catch (error) { initialError = error; }
+            let continuationError;
             while (continuations.length) {
               const errors = await Promise.all(continuations.splice(0));
-              if (errors.some(Boolean)) throw errors.find(Boolean);
+              continuationError ??= errors.find(Boolean);
             }
+            if (continuationError) throw continuationError;
             if (initialError) throw initialError;
           } finally { record.acceptSteer = undefined; }
           if (controller.signal.aborted) return { stopReason: 'cancelled', usage };
@@ -376,6 +384,7 @@ export class DefaultAgentEngine {
     if (method === 'session/set_config_option') return this.select(record, params.value, params.configId ?? params.id ?? 'model');
     if (method === 'session/cancel') {
       record.promptController?.abort();
+      record.session.clearQueue();
       await record.session.abort();
       return {};
     }

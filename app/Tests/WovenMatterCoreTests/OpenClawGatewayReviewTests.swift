@@ -30,6 +30,8 @@ struct OpenClawGatewayReviewTests {
     try await fixture.socket.acknowledgeSteering(rejected: rejected)
     if rejected {
       await #expect(throws: OpenClawGatewayClientError.self) { try await input.value }
+      #expect(try fixture.database.conversationContent(id: id).messages.filter { $0.role == "user" }.map(\.content) == ["start"])
+      #expect(try fixture.database.openClawRunAssistantIDs(runID: run.runID).count == 1)
     } else {
       #expect(try await input.value.runID == run.runID)
     }

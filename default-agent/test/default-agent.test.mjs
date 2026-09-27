@@ -101,6 +101,8 @@ test('cancel during credential preparation never starts a model turn or fallback
   let prompts = 0;
   record.session.prompt = async () => { prompts++; };
   record.session.abort = async () => {};
+  let cleared = false;
+  record.session.clearQueue = () => { cleared = true; };
   engine.sessions.set('fixture', record);
   const prompt = engine.prompt(record, 'do not send', () => {});
   await preparing;
@@ -108,6 +110,7 @@ test('cancel during credential preparation never starts a model turn or fallback
   release();
   assert.equal((await prompt).stopReason, 'cancelled');
   assert.equal(prompts, 0);
+  assert.equal(cleared, true);
   assert.deepEqual(selected, []);
   assert.equal(record.busy, false);
 });

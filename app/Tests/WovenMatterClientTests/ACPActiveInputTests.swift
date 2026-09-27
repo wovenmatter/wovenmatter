@@ -26,7 +26,7 @@ struct ACPActiveInputTests {
         #expect(!requests.contains { $0["method"] as? String == "session/cancel" })
     }
 
-    @Test(arguments: ["detached", "detached-fast", "detached-late-active", "detached-old-idle", "fallback"])
+    @Test(arguments: ["detached", "detached-fast", "detached-late-active", "detached-old-idle", "command-only", "fallback"])
     func aSteerRacingCompletionRetainsHandlersAndWaitsForItsOwnOutput(mode: String) async throws {
         let f = try ActiveInputFixture(mode: mode)
         defer { f.remove() }
@@ -35,22 +35,54 @@ struct ACPActiveInputTests {
         let events = ActiveInputEvents()
         let prompt = Task { try await client.prompt("start", onEvent: { await events.record($0) }) }
         try await f.waitForPrompt()
-        let receipt = try await client.beginActiveInput("continue")
+        let receipt = try await client.beginActiveInput(mode == "command-only" ? "/status" : "continue")
         #expect(try await prompt.value == .endTurn)
         #expect(try await receipt.completion.value == .endTurn)
         #expect(await events.text() == "beforecontinued")
         await client.shutdown()
     }
 
+    @Test func stopDuringAdmissionDoesNotStartTheFallbackPrompt() async throws {
+        let f = try ActiveInputFixture(mode: "cancel-fallback")
+        defer { f.remove() }
+        let client = try f.client(.claudeCode)
+        _ = try await client.initializeSession(workingDirectory: f.root, existingSessionID: nil, title: nil)
+        let prompt = Task { try await client.prompt("start") }
+        try await f.waitForPrompt()
+        let steering = Task { try await client.beginActiveInput("correction") }
+        for _ in 0..<500 {
+            if try f.requests().contains(where: { $0["method"] as? String == "_session/steering" }) { break }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        try await client.cancel()
+        await #expect(throws: CancellationError.self) { try await steering.value }
+        #expect(try await prompt.value == .cancelled)
+        #expect(try f.requests().filter { $0["method"] as? String == "session/prompt" }.count == 1)
+        await client.shutdown()
+    }
+
+    @Test func commandOnlyClassificationLeavesNativeWorkUnderObservation() {
+        for text in ["/status", "/STATUS", "/ status", "/plan", "/rename title", "/skills", "/mcp", "/goal pause", "/goal clear", "/review-branch"] {
+            #expect(LocalACPClient.codexCommandCompletesWithoutTurn(text))
+        }
+        for text in ["ordinary", "/compact", "/review", "/review-branch main", "/goal resume", "/goal implement this", "/skill:review"] {
+            #expect(!LocalACPClient.codexCommandCompletesWithoutTurn(text))
+        }
+    }
+
     @Test func unsupportedAndRejectedSteersThrowAtAdmission() async throws {
-        for mode in ["unsupported", "rejected"] {
+        for mode in ["unsupported", "rejected", "uncertain"] {
             let f = try ActiveInputFixture(mode: mode)
             defer { f.remove() }
             let client = try f.client(.codex)
             _ = try await client.initializeSession(workingDirectory: f.root, existingSessionID: nil, title: nil)
             let prompt = Task { try await client.prompt("start") }
             try await f.waitForPrompt()
-            await #expect(throws: LocalACPClientError.self) { try await client.beginActiveInput("reject") }
+            do { _ = try await client.beginActiveInput("reject"); Issue.record("Expected an admission error") }
+            catch let error as LocalACPClientError {
+                if case .deliveryUncertain = error { #expect(mode == "uncertain") }
+                else { #expect(mode != "uncertain") }
+            }
             try await client.cancel()
             _ = try await prompt.value
             await client.shutdown()
@@ -78,6 +110,7 @@ private struct ActiveInputFixture {
         mode = "MODE"
         original = None
         prompts = []
+        steering = None
         def send(v): print(json.dumps(dict(jsonrpc="2.0", **v)), flush=True)
         def result(i, v): send(dict(id=i, result=v))
         def update(v): send(dict(method="session/update", params=dict(sessionId="parent", update=v)))
@@ -94,13 +127,22 @@ private struct ActiveInputFixture {
             elif method=='session/cancel':
                 for pid in prompts: result(pid,dict(stopReason='cancelled'))
                 prompts=[]
+                if steering is not None: result(steering,dict(outcome='promptRequired'))
             elif method=='session/prompt' and original is None:
                 original=i; prompts.append(i); text('before')
                 if mode=='detached-old-idle': status('active'); status('idle')
                 open('ready','w').close()
             elif method in ['_session/steering','_x.ai/interject','session/prompt']:
-                if mode=='rejected': send(dict(id=i,error=dict(code=-32602,message='Steer rejected'))); continue
-                if mode.startswith('detached'):
+                if mode in ['rejected','uncertain']:
+                    send(dict(id=i,error=dict(code=-32602,message='Steer rejected',data=dict(deliveryUncertain=mode=='uncertain')))); continue
+                if mode=='cancel-fallback':
+                    if method=='_session/steering': steering=i
+                    else: result(i,dict(stopReason='end_turn'))
+                elif mode=='command-only':
+                    result(original,dict(stopReason='end_turn')); text('continued')
+                    assert p['_meta']['wovenCommandOnly'] == True
+                    result(i,dict(outcome='startedNewTurn'))
+                elif mode.startswith('detached'):
                     if mode!='detached-old-idle': status('active')
                     result(original,dict(stopReason='end_turn')); status('idle')
                     if mode!='detached-late-active': status('active')

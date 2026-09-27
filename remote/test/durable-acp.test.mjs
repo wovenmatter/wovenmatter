@@ -272,6 +272,11 @@ test('same-run steering is forwarded once and all prompt responses own completio
   assert.equal(active.snapshot.busy, true)
   assert.deepEqual(active.snapshot.recoveredRuns, [])
   await assert.rejects(f.call('message', { deliveryID: 'foreign', message: { ...prompt(4).message, params: { sessionId: 'other', _meta: { wovenRunID: 'run' } } } }), /still running/)
+  for (const params of [{ sessionId: 'other' }, { sessionId: 'native', _meta: { wovenRunID: 'other-run' } }]) {
+    await assert.rejects(f.call('message', { deliveryID: 'foreign-steer', message: {
+      jsonrpc: '2.0', id: 4, method: '_session/steering', params,
+    } }), /another remote task/)
+  }
   f.child.stdout.write('{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}\n')
   await new Promise(resolve => setImmediate(resolve))
   const done = await f.call('attach')
@@ -280,7 +285,7 @@ test('same-run steering is forwarded once and all prompt responses own completio
   assert.equal(f.received().trim().split('\n').length, 3)
 })
 
-for (const mode of ['ordinary', 'fast', 'late-active', 'old-idle']) test(`Codex detached steering retains recovery through native idle (${mode})`, async t => {
+for (const mode of ['ordinary', 'fast', 'late-active', 'old-idle', 'command-only']) test(`Codex detached steering retains recovery through native idle (${mode})`, async t => {
   const fast = mode === 'fast'
   const f = await fixture(t)
   await f.call('attach')
@@ -288,18 +293,18 @@ for (const mode of ['ordinary', 'fast', 'late-active', 'old-idle']) test(`Codex 
   const status = type => send({ method: 'session/update', params: { sessionId: 'native', update: { sessionUpdate: 'session_info_update', _meta: { codex: { threadStatus: { type } } } } } })
   await f.call('message', { deliveryID: 'initial', message: { jsonrpc: '2.0', id: 1, method: 'session/prompt', params: { sessionId: 'native', _meta: { wovenRunID: 'run' } } } })
   if (mode === 'old-idle') { status('active'); status('idle'); await new Promise(resolve => setImmediate(resolve)) }
-  await f.call('message', { deliveryID: 'steer', message: { jsonrpc: '2.0', id: 2, method: '_session/steering', params: { sessionId: 'native', prompt: [{ type: 'text', text: 'continue' }] } } })
+  await f.call('message', { deliveryID: 'steer', message: { jsonrpc: '2.0', id: 2, method: '_session/steering', params: { sessionId: 'native', prompt: [{ type: 'text', text: 'continue' }], _meta: { wovenCommandOnly: mode === 'command-only' } } } })
   if (mode !== 'old-idle') status('active')
   send({ id: 1, result: { stopReason: 'end_turn' } }); status('idle')
-  if (mode !== 'late-active') status('active')
+  if (!['late-active', 'command-only'].includes(mode)) status('active')
   const finish = () => {
     send({ method: 'session/update', params: { sessionId: 'native', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'continuation' } } } })
     status('idle')
   }
-  if (fast) finish()
+  if (fast || mode === 'command-only') finish()
   send({ id: 2, result: { outcome: 'startedNewTurn' } })
   await new Promise(resolve => setImmediate(resolve))
-  if (!fast) {
+  if (!fast && mode !== 'command-only') {
     assert.equal((await f.call('attach')).snapshot.busy, true)
     assert.deepEqual((await f.call('attach')).snapshot.recoveredRuns, [])
     if (mode === 'late-active') status('active')
@@ -309,6 +314,22 @@ for (const mode of ['ordinary', 'fast', 'late-active', 'old-idle']) test(`Codex 
   const done = await f.call('attach')
   assert.equal(done.snapshot.busy, false)
   assert.deepEqual(done.snapshot.recoveredRuns, [{ runID: 'run', content: 'continuation' }])
+})
+
+for (const latestFailed of [false, true]) test(`concurrent ACP recovery follows input order, not response order (failed=${latestFailed})`, async t => {
+  const f = await fixture(t)
+  await f.call('attach')
+  for (const id of [1, 2]) await f.call('message', { deliveryID: `input-${id}`, message: {
+    jsonrpc: '2.0', id, method: 'session/prompt', params: { sessionId: 'native', _meta: { wovenRunID: 'run' } },
+  } })
+  for (const id of [2, 1]) {
+    const failed = (id === 2) === latestFailed
+    f.child.stdout.write(JSON.stringify({ jsonrpc: '2.0', id, ...(failed ? { error: { code: -1, message: 'turn failed' } } : { result: { stopReason: 'end_turn' } }) }) + '\n')
+  }
+  await new Promise(resolve => setImmediate(resolve))
+  const done = await f.call('attach')
+  assert.equal(done.snapshot.busy, false)
+  assert.deepEqual(done.snapshot.recoveredRuns, [{ runID: 'run', content: '', ...(latestFailed ? { error: 'turn failed' } : {}) }])
 })
 
 for (const rejected of [false, true]) test(`Pi steering preflight retains one recovery through an old settlement (rejected=${rejected})`, async t => {
@@ -371,4 +392,89 @@ test('late Codex steering reclaims completed recovery before starting its detach
   status('active'); chunk('after'); status('idle')
   await new Promise(resolve => setImmediate(resolve))
   assert.deepEqual((await f.call('attach')).snapshot.recoveredRuns, [{ runID: 'run', content: 'before after' }])
+})
+
+for (const mode of ['codex', 'codex-paged', 'pi']) test(`stdio relay forwards continuation output after its last request receipt (${mode})`, { timeout: 5000 }, async t => {
+  const { runStdioRelay } = await import('../src/durable-acp-stdio.mjs')
+  const f = await fixture(t)
+  const pi = mode === 'pi', count = mode === 'codex-paged' ? 260 : 1
+  if (pi) f.options.catalog.set('pi', { transport: 'rpc', command: 'pi' })
+  const input = new PassThrough(), output = new PassThrough(), observed = []
+  let buffer = ''
+  output.on('data', bytes => {
+    buffer += bytes
+    while (buffer.includes('\n')) {
+      const end = buffer.indexOf('\n'); observed.push(JSON.parse(buffer.slice(0, end))); buffer = buffer.slice(end + 1)
+    }
+  })
+  const until = async predicate => {
+    for (let i = 0; i < 500; i++) {
+      if (predicate()) return
+      await new Promise(resolve => setTimeout(resolve, 5))
+    }
+    assert.fail('Timed out waiting for forwarded continuation output')
+  }
+  const request = async (url, options) => {
+    const work = f.relay.handle('POST', new URL(url).pathname, JSON.parse(options.body))
+    const result = await Promise.race([work, new Promise((_, reject) => {
+      if (options.signal.aborted) reject(options.signal.reason)
+      else options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true })
+    })])
+    return { ok: true, json: async () => result }
+  }
+  const running = runStdioRelay({ channelID: 'session', harnessID: pi ? 'pi' : 'test', token: 'fixture', input, output, request })
+  t.after(async () => { input.end(); await running })
+  const writeInput = message => input.write(JSON.stringify(message) + '\n')
+  const native = () => f.received().trim().split('\n').filter(Boolean).map(JSON.parse)
+  const emit = message => f.child.stdout.write(JSON.stringify(pi ? message : { jsonrpc: '2.0', ...message }) + '\n')
+  const status = type => emit({ method: 'session/update', params: { sessionId: 'native', update: { _meta: { codex: { threadStatus: { type } } } } } })
+  const text = value => emit(pi ? { type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: value } }
+    : { method: 'session/update', params: { sessionId: 'native', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: value } } } })
+  writeInput(pi ? { type: 'prompt', id: 1, message: 'start', _meta: { wovenRunID: 'run' } }
+    : { jsonrpc: '2.0', id: 1, method: 'session/prompt', params: { sessionId: 'native', _meta: { wovenRunID: 'run' } } })
+  await until(() => native().length === 1)
+  const original = native()[0].id
+  if (pi) { emit({ type: 'response', id: original, success: true }); emit({ type: 'agent_start' }) }
+  else status('active')
+  text('before')
+  await until(() => observed.some(message => JSON.stringify(message).includes('before')))
+  writeInput(pi ? { type: 'prompt', id: 2, streamingBehavior: 'steer', message: 'continue', _meta: { wovenRunID: 'run' } }
+    : { jsonrpc: '2.0', id: 2, method: '_session/steering', params: { sessionId: 'native', prompt: [{ type: 'text', text: 'continue' }], _meta: { wovenRunID: 'run' } } })
+  await until(() => native().length === 2)
+  const steering = native()[1].id
+  if (pi) {
+    emit({ type: 'agent_settled' }); emit({ type: 'response', id: steering, success: true })
+  } else {
+    emit({ id: original, result: { stopReason: 'end_turn' } }); status('idle'); status('active')
+    emit({ id: steering, result: { outcome: 'startedNewTurn' } })
+  }
+  await until(() => observed.some(message => message.id === 2))
+  await new Promise(resolve => setImmediate(resolve))
+  if (pi) emit({ type: 'agent_start' })
+  for (let i = 0; i < count; i++) text('continued')
+  if (pi) emit({ type: 'agent_settled' }); else status('idle')
+  await until(() => observed.filter(message => JSON.stringify(message).includes('continued')).length === count)
+  input.end()
+  await running
+  assert.equal(native().length, 2)
+  await f.relay.stopAll()
+  // Drain the natural-close journal entry queued by the fake child as well.
+  await f.call('poll', { harnessID: pi ? 'pi' : 'test' })
+})
+
+for (const pi of [false, true]) test(`stdio relay distinguishes a lost dispatch receipt from native rejection (pi=${pi})`, { timeout: 5000 }, async () => {
+  const { runStdioRelay } = await import('../src/durable-acp-stdio.mjs')
+  const input = new PassThrough(), output = new PassThrough()
+  let result
+  output.on('data', bytes => { result = JSON.parse(bytes); input.end() })
+  const request = async (url, options) => {
+    if (url.endsWith('/attach')) return { ok: true, json: async () => ({ state: 'running', snapshot: { busy: false }, events: [] }) }
+    if (url.endsWith('/message')) throw new Error('connection lost after dispatch')
+    return new Promise((_, reject) => options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true }))
+  }
+  input.write(JSON.stringify(pi ? { type: 'prompt', id: 1, streamingBehavior: 'steer', message: 'continue' }
+    : { jsonrpc: '2.0', id: 1, method: '_session/steering', params: { sessionId: 'native' } }) + '\n')
+  await runStdioRelay({ channelID: 'session', harnessID: pi ? 'pi' : 'test', token: 'fixture', input, output, request })
+  assert.equal(result.id, 1)
+  assert.equal(pi ? result._meta.deliveryUncertain : result.error.data.deliveryUncertain, true)
 })

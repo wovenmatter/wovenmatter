@@ -9,7 +9,7 @@ export async function runStdioRelay({ channelID, harnessID, cwd, permission, nat
   if (!/^\d+$/.test(String(port))) throw new Error('Invalid service port')
   const lifecycle = new AbortController()
   const pi = harnessID === 'pi'
-  let stopped = false, cursor = 0, state, activePiPrompt = false, piReconnecting = false, idleBackoff = 100
+  let stopped = false, cursor = 0, state, observingRun = false, piReconnecting = false, idleBackoff = 100
   const attachment = randomUUID(), requestIDs = new Map(), requestMethods = new Map(), incomingRequests = new Set()
   const write = message => new Promise((resolve, reject) => output.write(JSON.stringify(message) + '\n', error => error ? reject(error) : resolve()))
   async function call(operation, values = {}) {
@@ -36,6 +36,7 @@ export async function runStdioRelay({ channelID, harnessID, cwd, permission, nat
   const reader = createInterface({ input })
   const operations = new Set()
   async function handleMessage(message) {
+      let dispatched = false
       try {
         if (message.method === 'initialize' && state.initialized) {
           await write({ jsonrpc: '2.0', id: message.id, result: state.initialized }); return
@@ -75,19 +76,20 @@ export async function runStdioRelay({ channelID, harnessID, cwd, permission, nat
         } else if (!message.method && message.id !== undefined) {
           if (!incomingRequests.delete(message.id)) return
         }
-        if (pi && message.type === 'prompt') activePiPrompt = true
+        if (message.method === 'session/prompt' || message.method === '_session/steering' || (pi && message.type === 'prompt')) observingRun = true
+        dispatched = true
         await call('message', { deliveryID: randomUUID(), message })
       } catch (error) {
         const originalID = requestIDs.get(message.id) ?? message.id
         requestIDs.delete(message.id)
         requestMethods.delete(message.id)
         if (pi) {
-          if (message.type === 'prompt') activePiPrompt = false
-          if (message.id !== undefined) await write({ type: 'response', id: originalID, command: message.type, success: false, error: error.message })
+          if (message.id !== undefined) await write({ type: 'response', id: originalID, command: message.type, success: false,
+            error: error.message, _meta: { deliveryUncertain: dispatched } })
           return
         }
         if (message.id !== undefined) await write({ jsonrpc: '2.0', id: originalID,
-          error: { code: -32000, message: error.message } })
+          error: { code: -32000, message: error.message, data: { deliveryUncertain: dispatched } } })
       }
   }
   const sending = (async () => {
@@ -127,10 +129,14 @@ export async function runStdioRelay({ channelID, harnessID, cwd, permission, nat
             incomingRequests.add(message.id)
             await write(message)
           }
-        } else if (requestIDs.size || activePiPrompt) await write(message)
-        if (pi && message.type === 'agent_settled') activePiPrompt = false
+        } else if (requestIDs.size || observingRun) await write(message)
         cursor = event.sequence
       }
+      // Admission can remove the last request ID while a detached Codex turn
+      // or Pi continuation is still streaming. Keep forwarding through the
+      // complete terminal batch, including paginated output already journaled.
+      if (state.busy === false && batch.events.length < 256
+        && ![...requestMethods.values()].some(method => ['session/prompt', '_session/steering', 'prompt'].includes(method))) observingRun = false
       if (batch.state !== 'running') throw new Error('Remote process stopped; reconnect to recover its saved results')
       // An older service may ignore waitMs. Avoid spinning its idle endpoint.
       if (!batch.events.length && performance.now() - pollStarted < 25) {

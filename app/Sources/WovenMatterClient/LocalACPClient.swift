@@ -1191,6 +1191,11 @@ public actor LocalACPClient {
             var steeringMetadata: [String: ACPJSONValue] = [
                 "steering": .object(["idleBehavior": .string("promptRequired")]),
             ]
+            let promptBlocks = try Self.promptBlocks(input)
+            let commandOnly = runtimeKind == .codex && Self.codexCommandCompletesWithoutTurn(
+                promptBlocks.arrayValue?.first?["text"]?.stringValue ?? ""
+            )
+            if commandOnly { steeringMetadata["wovenCommandOnly"] = .bool(true) }
             if durableRemoteACP, let defaultAgentRunID {
                 steeringMetadata["wovenRunID"] = .string(defaultAgentRunID)
             }
@@ -1198,7 +1203,7 @@ public actor LocalACPClient {
                 method: "_session/steering",
                 params: .object([
                     "sessionId": .string(sessionID),
-                    "prompt": try Self.promptBlocks(input),
+                    "prompt": promptBlocks,
                     "_meta": .object(steeringMetadata),
                 ]),
                 waitsForNotifications: false
@@ -1207,6 +1212,16 @@ public actor LocalACPClient {
             case "injected":
                 return LocalACPActiveInputReceipt(completion: Task { nil })
             case "startedNewTurn" where runtimeKind == .codex:
+                // Codex ACP also uses this outcome after a command-only prompt
+                // has already completed. Those commands never emit active/idle.
+                if commandOnly {
+                    let barrier = notificationTask
+                    return LocalACPActiveInputReceipt(completion: Task {
+                        try await barrier?.value
+                        return self.sessionCancellationRequested ? .cancelled : .endTurn
+                    })
+                }
+                if sessionCancellationRequested { try cancel() }
                 followsDetachedTurn = true
                 lifecycle.continuation.yield(ACPRequestResponse(value: .object(["type": .string("steeringAccepted")]), notificationBarrier: nil))
                 return LocalACPActiveInputReceipt(completion: Task {
@@ -1291,6 +1306,9 @@ public actor LocalACPClient {
     private func beginActivePrompt(
         _ input: AgentMessageInput
     ) throws -> Task<LocalACPStopReason?, any Error> {
+        // A promptRequired receipt may arrive after Stop. Never start its
+        // fallback prompt after the native cancellation has already been sent.
+        guard !sessionCancellationRequested else { throw CancellationError() }
         let prompt = try beginPrompt(
             input,
             onEvent: activeEventHandler,
@@ -1298,6 +1316,24 @@ public actor LocalACPClient {
             onInteraction: activeInteractionHandler
         )
         return Task { try await prompt.value }
+    }
+
+    nonisolated static func codexCommandCompletesWithoutTurn(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix("/") else { return false }
+        let parts = trimmed.dropFirst().trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(maxSplits: 1, whereSeparator: \.isWhitespace)
+        guard let command = parts.first else { return false }
+        let argument = parts.dropFirst().first.map(String.init)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        // Codex ACP 1.13.1 CodexCommands: these branches are entirely local to
+        // the adapter. Review, compact, goal creation and unknown commands may
+        // start native work and must retain the lifecycle observer.
+        switch command.lowercased() {
+        case "plan", "status", "rename", "logout", "skills", "mcp": return true
+        case "review-branch", "review-commit": return argument.isEmpty
+        case "goal": return ["", "pause", "clear"].contains(argument.lowercased()) || argument.utf16.count > 4_000
+        default: return false
+        }
     }
 
     private func beginPrompt(
@@ -2288,6 +2324,9 @@ public actor LocalACPClient {
     }
 
     private static func agentError(_ error: ACPErrorBody) -> LocalACPClientError {
+        if error.data?["deliveryUncertain"]?.boolValue == true {
+            return .deliveryUncertain(error.message ?? "The remote steering receipt was lost.")
+        }
         let detail = error.data?["details"]?.stringValue
         let dataMessage = error.data?["message"]?.stringValue
         let message = [error.message, detail, dataMessage]
@@ -2564,6 +2603,7 @@ private extension String {
 }
 
 public enum LocalACPClientError: LocalizedError, Sendable {
+    case deliveryUncertain(String)
     case invalidLaunchConfiguration
     case lineTooLarge
     case processExited
@@ -2584,6 +2624,7 @@ public enum LocalACPClientError: LocalizedError, Sendable {
 
     public var errorDescription: String? {
         switch self {
+        case .deliveryUncertain(let message): message
         case .invalidLaunchConfiguration:
             "The local agent's wrapped launch command is invalid."
         case .lineTooLarge:

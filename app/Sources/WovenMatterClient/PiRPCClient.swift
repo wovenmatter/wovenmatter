@@ -45,6 +45,7 @@ public enum PiRPCSupport: Sendable {
 }
 
 public enum PiRPCClientError: LocalizedError, Sendable {
+    case deliveryUncertain(String)
     case processExited(String? = nil)
     case invalidResponse(String)
     case commandFailed(String)
@@ -53,6 +54,7 @@ public enum PiRPCClientError: LocalizedError, Sendable {
 
     public var errorDescription: String? {
         switch self {
+        case .deliveryUncertain(let message): message
         case .processExited(let detail):
             if let detail {
                 "The Pi RPC process exited unexpectedly: \(detail)"
@@ -351,6 +353,9 @@ public actor PiRPCClient {
             // an idle one. `steer` alone can strand a late message in Pi's queue.
             let response = try await sendCommand(command)
             guard response["success"] as? Bool == true else {
+                if dictionary(response["_meta"])?["deliveryUncertain"] as? Bool == true {
+                    throw PiRPCClientError.deliveryUncertain(string(response["error"]) ?? "The remote steering receipt was lost.")
+                }
                 throw PiRPCClientError.commandFailed(string(response["error"]) ?? "Pi rejected the steering input.")
             }
         } catch {
@@ -373,9 +378,10 @@ public actor PiRPCClient {
 
     public func cancel() async {
         cancelled = true
-        guard promptAcknowledged else {
+        guard promptAcknowledged, steeringRequestID == nil else {
             // Abort only stops native agent work, not an extension command that
-            // is still awaiting a UI decision. Retire that transport so its late
+            // is still awaiting a UI decision, including steering preflight.
+            // Retire that transport so its late
             // ACK/output cannot leak into a subsequent run. The coordinator
             // recreates the same durable session after this cancellation error.
             failPending(CancellationError())

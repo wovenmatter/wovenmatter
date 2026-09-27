@@ -327,7 +327,7 @@ test('Built-in steering reaches the next model call inside the same native run',
   assert.deepEqual(await engine.steer(record, 'idle'), { outcome: 'promptRequired' });
 });
 
-test('Built-in waits for a correction whose preflight overlaps the original loop ending', async t => {
+for (const stopped of [false, true]) test(`Built-in owns late steering preflight through completion or Stop (stopped=${stopped})`, { timeout: 5000 }, async t => {
   const { engine } = await fixture(t);
   const record = await engine.create();
   let finishFirst, preflightStarted, releasePreflight, originalSettled;
@@ -363,9 +363,38 @@ test('Built-in waits for a correction whose preflight overlaps the original loop
   finishFirst();
   await originalDone;
   assert.equal(record.busy, true);
+  if (stopped) await engine.handle('session/cancel', { sessionId: record.session.sessionId });
+  const rejected = stopped ? assert.rejects(correction, /abort/i) : null;
   releasePreflight();
-  assert.deepEqual(await correction, { outcome: 'injected' });
-  assert.equal((await turn).stopReason, 'end_turn');
-  assert.equal(calls, 2);
-  assert.equal(record.session.messages.filter(message => message.role === 'user').length, 2);
+  if (stopped) await rejected;
+  else assert.deepEqual(await correction, { outcome: 'injected' });
+  assert.equal((await turn).stopReason, stopped ? 'cancelled' : 'end_turn');
+  assert.equal(calls, stopped ? 1 : 2);
+  assert.equal(record.session.messages.filter(message => message.role === 'user').length, stopped ? 1 : 2);
+  assert.equal(record.session.pendingMessageCount, 0);
+});
+
+test('an accepted continuation failure drains newer inputs before retiring the run', { timeout: 5000 }, async t => {
+  const { engine } = await fixture(t);
+  const record = await engine.create();
+  const gate = () => Promise.withResolvers();
+  const initial = gate(), first = gate(), second = gate(), ready = gate();
+  record.session.prompt = async (text, options) => {
+    options.preflightResult(true);
+    if (text === 'start') { ready.resolve(); await initial.promise; }
+    else await (text === 'first' ? first : second).promise;
+  };
+  const turn = engine.prompt(record, 'start', () => {});
+  const failed = assert.rejects(turn, /model request failed/i);
+  await ready.promise;
+  await engine.steer(record, 'first');
+  initial.resolve();
+  await new Promise(resolve => setImmediate(resolve));
+  await engine.steer(record, 'second');
+  first.reject(new Error('late failure'));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(record.busy, true);
+  second.resolve();
+  await failed;
+  assert.equal(record.busy, false);
 });

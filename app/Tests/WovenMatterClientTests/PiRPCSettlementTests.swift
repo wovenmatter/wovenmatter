@@ -5,19 +5,41 @@ import WovenMatterCore
 @testable import WovenMatterClient
 
 struct PiRPCSettlementTests {
-  @Test(.timeLimit(.minutes(1)), arguments: [false, true])
-  func steeringOwnsSettlementAfterNativePreflight(rejected: Bool) async throws {
+  @Test(.timeLimit(.minutes(1)))
+  func stopDuringSteeringPreflightRetiresTheTransport() async throws {
     let fixture = PiPipeFixture(durable: true)
     let ready = AsyncStream<Void>.makeStream()
-    let server = Task { try await fixture.serveSteering(ready: ready.continuation, rejected: rejected) }
+    let preflight = PiPromptGate()
+    let server = Task { try await fixture.serveSteering(ready: ready.continuation, rejected: false, pending: preflight) }
+    try await fixture.initialize()
+    await fixture.client.setRunID("same-run")
+    let original = Task { try await fixture.client.prompt("start") }
+    for await _ in ready.stream { break }
+    let input = Task { try await fixture.client.beginActiveInput(.init(text: "correction")) }
+    await preflight.waitForPrompt()
+    await fixture.client.cancel()
+    await #expect(throws: CancellationError.self) { try await input.value }
+    await #expect(throws: CancellationError.self) { try await original.value }
+    await preflight.release()
+    try await server.value
+    await fixture.client.shutdown()
+  }
+  @Test(.timeLimit(.minutes(1)), arguments: ["accepted", "rejected", "uncertain"])
+  func steeringOwnsSettlementAfterNativePreflight(outcome: String) async throws {
+    let rejected = outcome != "accepted"
+    let fixture = PiPipeFixture(durable: true)
+    let ready = AsyncStream<Void>.makeStream()
+    let server = Task { try await fixture.serveSteering(ready: ready.continuation, rejected: rejected, uncertain: outcome == "uncertain") }
     try await fixture.initialize()
     await fixture.client.setRunID("same-run")
     let collector = PiEventCollector()
     let original = Task { try await fixture.client.prompt("start", onEvent: { await collector.record($0) }) }
     for await _ in ready.stream { break }
     if rejected {
-      await #expect(throws: PiRPCClientError.self) {
-        try await fixture.client.beginActiveInput(.init(text: "correction"))
+      do { _ = try await fixture.client.beginActiveInput(.init(text: "correction")); Issue.record("Expected admission error") }
+      catch let error as PiRPCClientError {
+        if case .deliveryUncertain = error { #expect(outcome == "uncertain") }
+        else { #expect(outcome == "rejected") }
       }
     } else {
       let receipt = try await fixture.client.beginActiveInput(.init(text: "correction"))
@@ -205,7 +227,7 @@ private struct PiPipeFixture: Sendable {
     _ = try await client.initializeSession(workingDirectory: URL(filePath: "/private/tmp"),
       existingSessionID: nil, title: nil, systemPrompt: nil)
   }
-  func serveSteering(ready: AsyncStream<Void>.Continuation, rejected: Bool) async throws {
+  func serveSteering(ready: AsyncStream<Void>.Continuation, rejected: Bool, pending: PiPromptGate? = nil, uncertain: Bool = false) async throws {
     defer { try? events.fileHandleForWriting.close() }
     let cursor = FixtureCommandReader(handle: commands.fileHandleForReading)
     func emit(_ object: [String: Any]) throws {
@@ -234,9 +256,11 @@ private struct PiPipeFixture: Sendable {
         #expect(command["streamingBehavior"] as? String == "steer")
         #expect((command["_meta"] as? [String: String])?["wovenRunID"] == "same-run")
         steered = true
+        if let pending { await pending.pause(); return }
         // The old loop ends while the native extension input hook is running.
         try emit(["type": "agent_settled"])
         if rejected { response["success"] = false; response["error"] = "rejected correction" }
+        if uncertain { response["_meta"] = ["deliveryUncertain": true] }
         try emit(response)
         if !rejected {
           try emit(["type": "agent_start"])

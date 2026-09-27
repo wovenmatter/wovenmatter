@@ -1,4 +1,5 @@
 import Foundation
+import SQLite3
 import Testing
 import WovenMatterClient
 import WovenMatterCore
@@ -6,6 +7,65 @@ import WovenMatterCore
 
 @Suite(.timeLimit(.minutes(1)))
 struct ACPSteeringLifecycleTests {
+    @Test func persistenceFailurePreventsNativeDispatch() async throws {
+        let f = try SteeringFixture()
+        defer { f.remove() }
+        _ = try await f.start()
+        await f.driver.waitForPrompt()
+        try f.execute("""
+            CREATE TRIGGER reject_correction BEFORE INSERT ON dashboard_messages
+            WHEN NEW.role='user' AND NEW.content='correction'
+            BEGIN SELECT RAISE(ABORT, 'injected storage failure'); END;
+            """)
+        await #expect(throws: WorkspaceDatabaseError.self) {
+            try await f.coordinator.sendActiveInput(conversationID: f.id, content: "correction")
+        }
+        #expect(await f.driver.received.isEmpty)
+        #expect(try f.messages().filter { $0.role == "user" }.map(\.content) == ["start"])
+        await f.driver.finishInitial()
+        try await f.waitForTerminal()
+        await f.coordinator.shutdown()
+    }
+
+    @Test(arguments: ["uncertain", "uncertain-acp-relay", "uncertain-pi-relay"])
+    func uncertainNativeReceiptKeepsTheDurableInput(text: String) async throws {
+        let f = try SteeringFixture()
+        defer { f.remove() }
+        _ = try await f.start()
+        await f.driver.waitForPrompt()
+        await f.driver.setBeforeAdmission {
+            let messages = try f.messages()
+            #expect(messages.last(where: { $0.role == "user" })?.content == text)
+        }
+        let input = try await f.coordinator.sendActiveInput(conversationID: f.id, content: text)
+        #expect(try f.messages().contains { $0.id == input.userMessageID })
+        await f.driver.finishInitial()
+        try await f.waitForTerminal()
+        #expect(try f.messages().last?.status == "failed")
+        await f.coordinator.shutdown()
+    }
+
+    @Test func revokingToolAccessAfterDispatchDoesNotDiscardAnAcceptedInput() async throws {
+        let f = try SteeringFixture()
+        defer { f.remove() }
+        _ = try await f.start()
+        await f.driver.waitForPrompt()
+        let source = try f.database.createLocalACPSession(runtimeKind: .codex, title: "Source", ownerDeviceID: UUID())
+        try f.database.setSessionTools(.init(enabled: [.sessions]), sessionID: source)
+        let deliveryID = UUID().uuidString.lowercased()
+        _ = try f.database.reserveToolDelivery(sourceID: source, targetID: f.id, text: "correction", requestID: deliveryID)
+        _ = try f.database.claimToolDelivery(id: deliveryID)
+        await f.driver.setBeforeAdmission {
+            #expect(try f.database.toolDelivery(id: deliveryID)?.status == "accepted")
+            try f.database.setSessionTools(.init(enabled: []), sessionID: source)
+        }
+        _ = try await f.coordinator.sendActiveInput(conversationID: f.id,
+            input: .init(text: "correction", historyDeliveryID: deliveryID))
+        #expect(try f.messages().filter { $0.role == "user" }.map(\.content) == ["start", "correction"])
+        await f.driver.finishInitial()
+        try await f.waitForTerminal()
+        await f.coordinator.shutdown()
+    }
     @Test(arguments: [false, true])
     func toolDeliveryAuthorityIsCheckedBeforeNativeSteering(revoked: Bool) async throws {
         let f = try SteeringFixture()
@@ -123,6 +183,14 @@ private struct SteeringFixture {
             workspace: .init(rootURL: root, repositoriesURL: root), onPermission: { _ in "allow" })
     }
     func messages() throws -> [WorkspaceMessageRecord] { try database.conversationContent(id: id).messages }
+    func execute(_ sql: String) throws {
+        var connection: OpaquePointer?
+        #expect(sqlite3_open(root.appending(path: "workspace.sqlite").path, &connection) == SQLITE_OK)
+        defer { sqlite3_close(connection) }
+        guard sqlite3_exec(connection, sql, nil, nil, nil) == SQLITE_OK else {
+            throw WorkspaceDatabaseError.execute("Fixture SQL failed")
+        }
+    }
     func waitForTerminal() async throws {
         for _ in 0..<500 {
             if try !database.activeDeviceOwnedConversationIDs().contains(id) { return }
@@ -140,6 +208,8 @@ private actor SteeringDriver {
     var event: LocalACPClient.EventHandler?
     var permission: LocalACPClient.PermissionHandler?
     var received: [String] = []
+    var beforeAdmission: (@Sendable () throws -> Void)?
+    func setBeforeAdmission(_ action: @escaping @Sendable () throws -> Void) { beforeAdmission = action }
     nonisolated func makeDriver() -> LocalACPSessionDriver {
         LocalACPSessionDriver(
             initializeSession: { _, _, _, _ in .init(sessionID: "native", loadedExistingSession: false, configuration: .init()) },
@@ -157,7 +227,11 @@ private actor SteeringDriver {
         return .endTurn
     }
     func steer(_ text: String) async throws -> LocalACPActiveInputReceipt {
+        try beforeAdmission?()
         received.append(text)
+        if text == "uncertain-acp-relay" { throw LocalACPClientError.deliveryUncertain("Lost receipt") }
+        if text == "uncertain-pi-relay" { throw PiRPCClientError.deliveryUncertain("Lost receipt") }
+        if text == "uncertain" { throw LocalACPClientError.processExited }
         if text.hasPrefix("preflight") {
             try await event?(.assistantChunk(text == "preflight" ? "accepted output" : "rejected output"))
             let answer = await permission?(.init(title: "Native decision", options: [.init(id: "allow", name: "Allow", kind: "allow_once")]))

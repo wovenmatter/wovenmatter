@@ -879,6 +879,92 @@ extension WorkspaceDatabase {
     createdAt: Date = Date()
   ) throws -> LocalACPSteeringIdentifiers {
     try transaction {
+      try beginLocalACPSteeringTurnUnlocked(runID: runID, input: input,
+        completesPreviousAssistant: completesPreviousAssistant, createdAt: createdAt)
+    }
+  }
+
+  struct SteeringReservation: Sendable {
+    let identifiers: LocalACPSteeringIdentifiers
+    let previous: [String: String?]
+    let deliveryID: String?
+    let newAttachmentGrants: Set<String>
+  }
+
+  /// Commit the input before native dispatch. A definitive rejection may undo
+  /// this reservation; an uncertain receipt must retain the original identity.
+  func reserveLocalACPSteeringTurn(runID: String, input: AgentMessageInput,
+                                   completesPreviousAssistant: Bool = true) throws -> SteeringReservation {
+    try transaction {
+      guard let previous = try historyRowsUnlocked("""
+        SELECT r.assistant_message_id, r.updated_at AS run_updated_at,
+          m.status AS assistant_status, m.updated_at AS assistant_updated_at,
+          c.id AS conversation_id, c.last_message_preview, c.last_message_at,
+          c.updated_at AS conversation_updated_at
+        FROM dashboard_runs r JOIN dashboard_messages m ON m.id=r.assistant_message_id
+        JOIN dashboard_conversations c ON c.id=r.conversation_id
+        WHERE r.id=? AND r.desktop_owned=1 AND r.status='running'
+        """, values: [runID]).first?.objectValue else { throw LocalACPSessionDatabaseError.runNotFound }
+      if let deliveryID = input.historyDeliveryID {
+        let target = try historyRowsUnlocked("SELECT target_id FROM workspace_session_deliveries WHERE id=?", values: [deliveryID])
+          .first?.objectValue?["target_id"]?.stringValue
+        guard target == previous["conversation_id"]?.stringValue else {
+          throw WorkspaceToolError.invalid("This delivery is not reserved for this session.")
+        }
+        try markToolDeliveryTransportStartedUnlocked(id: deliveryID)
+      }
+      let existingGrants = Set(try historyRowsUnlocked(
+        "SELECT target_id FROM workspace_session_grants WHERE source_id=? AND kind='attachment'",
+        values: [previous["conversation_id"]?.stringValue]).compactMap { $0.objectValue?["target_id"]?.stringValue })
+      let newGrants = Set(input.references.filter { $0.kind == .conversation }.map(\.resourceID)).subtracting(existingGrants)
+      let identifiers = try beginLocalACPSteeringTurnUnlocked(runID: runID, input: input,
+        completesPreviousAssistant: completesPreviousAssistant, createdAt: Date())
+      return SteeringReservation(identifiers: identifiers,
+        previous: previous.mapValues { $0.stringValue }, deliveryID: input.historyDeliveryID, newAttachmentGrants: newGrants)
+    }
+  }
+
+  /// Only remove an untouched, latest segment after a definitive native refusal.
+  /// If output or another owner advanced it, preserve the durable receipt instead.
+  @discardableResult
+  func rejectLocalACPSteeringTurn(_ reservation: SteeringReservation) throws -> Bool {
+    try transaction {
+      let ids = reservation.identifiers
+      guard !(try historyRowsUnlocked("""
+        SELECT 1 FROM dashboard_runs r JOIN dashboard_messages m ON m.id=r.assistant_message_id
+        WHERE r.id=? AND r.status='running' AND r.assistant_message_id=? AND m.content=''
+        """, values: [ids.runID, ids.assistantMessageID])).isEmpty else { return false }
+      func value(_ key: String) -> String? { reservation.previous[key] ?? nil }
+      try toolsExecuteUnlocked("UPDATE dashboard_runs SET assistant_message_id=?,updated_at=? WHERE id=?",
+        [value("assistant_message_id"), value("run_updated_at"), ids.runID])
+      try toolsExecuteUnlocked("UPDATE dashboard_messages SET status=?,updated_at=? WHERE id=?",
+        [value("assistant_status"), value("assistant_updated_at"), value("assistant_message_id")])
+      if let deliveryID = reservation.deliveryID {
+        try toolsExecuteUnlocked("UPDATE workspace_session_deliveries SET message_id=NULL,status='sending',transport_started=0 WHERE id=? AND message_id=?",
+          [deliveryID, ids.userMessageID])
+      }
+      try toolsExecuteUnlocked("DELETE FROM desktop_openclaw_run_inputs WHERE local_run_id=? AND user_message_id=?",
+        [ids.runID, ids.userMessageID])
+      for table in ["dashboard_message_attachments", "dashboard_message_references"] {
+        try toolsExecuteUnlocked("DELETE FROM \(table) WHERE message_id IN (?,?)", [ids.userMessageID, ids.assistantMessageID])
+      }
+      try toolsExecuteUnlocked("DELETE FROM dashboard_messages WHERE id IN (?,?)", [ids.userMessageID, ids.assistantMessageID])
+      for target in reservation.newAttachmentGrants {
+        try toolsExecuteUnlocked("""
+          DELETE FROM workspace_session_grants WHERE source_id=? AND target_id=? AND kind='attachment'
+            AND NOT EXISTS (SELECT 1 FROM dashboard_message_references WHERE conversation_id=? AND resource_type='conversation' AND resource_id=?)
+          """, [value("conversation_id"), target, value("conversation_id"), target])
+      }
+      try toolsExecuteUnlocked("""
+        UPDATE dashboard_conversations SET last_message_preview=?,last_message_at=?,updated_at=? WHERE id=?
+        """, [value("last_message_preview"), value("last_message_at"), value("conversation_updated_at"), value("conversation_id")])
+      return true
+    }
+  }
+
+  private func beginLocalACPSteeringTurnUnlocked(
+    runID: String, input: AgentMessageInput, completesPreviousAssistant: Bool, createdAt: Date
+  ) throws -> LocalACPSteeringIdentifiers {
       let authority = try localRunAuthorityUnlocked(runID: runID)
       let active = try prepareUnlocked("""
         SELECT 1 FROM dashboard_runs
@@ -1008,7 +1094,6 @@ extension WorkspaceDatabase {
       try recordOpenClawInputUnlocked(conversationID: authority.conversationID, localRunID: runID,
         remoteRunID: identifiers.userMessageID, userMessageID: identifiers.userMessageID, assistantMessageID: identifiers.assistantMessageID)
       return identifiers
-    }
   }
 
   public enum DeviceOwnedAssistantMutation: Sendable {

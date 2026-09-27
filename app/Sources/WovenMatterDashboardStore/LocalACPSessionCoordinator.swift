@@ -879,40 +879,61 @@ public actor LocalACPSessionCoordinator {
             try await eventBuffer.resume()
             throw LocalACPSessionDatabaseError.steeringUnsupported
         }
-        let identifiers: LocalACPSteeringIdentifiers
+        let reservation: WorkspaceDatabase.SteeringReservation
         do {
-            if let deliveryID = input.historyDeliveryID {
-                // Revalidate tool/timer authority at the native dispatch
-                // boundary and prevent an ambiguous receipt from being replayed.
-                try database.markToolDeliveryTransportStarted(id: deliveryID, targetID: conversationID)
-            }
-            // Keep the run and its event handlers alive until the harness has
-            // actually accepted the input. Completion belongs to the run, not
-            // to the composer submission (which must become usable again).
-            let receipt = try await activeInput(AgentMessageInput(
-                text: deliveryContent ?? input.text,
-                attachments: input.attachments
-            ))
-            identifiers = try database.beginLocalACPSteeringTurn(runID: runID, input: input)
-            activeInputTasksByRunID[runID, default: []].append(ActiveInputTask(
-                assistantMessageID: identifiers.assistantMessageID,
-                task: receipt.completion
-            ))
+            reservation = try database.reserveLocalACPSteeringTurn(runID: runID, input: input)
         } catch {
             await streamWriter.resumeAfterSegmentBoundary()
             try await eventBuffer.resume()
             throw error
         }
-        publishChange(
-            conversationID: conversationID,
-            runID: runID,
-            phase: .content
-        )
-        await streamWriter.resumeAfterSegmentBoundary(
-            assistantMessageID: identifiers.assistantMessageID
-        )
-        try await eventBuffer.resume()
+        let identifiers = reservation.identifiers
+        let completion: Task<LocalACPStopReason?, any Error>
+        do {
+            let receipt = try await activeInput(AgentMessageInput(
+                text: deliveryContent ?? input.text,
+                attachments: input.attachments
+            ))
+            completion = receipt.completion
+        } catch {
+            if Self.isDefinitiveSteeringRejection(error),
+               (try? database.rejectLocalACPSteeringTurn(reservation)) == true {
+                await streamWriter.resumeAfterSegmentBoundary()
+                try await eventBuffer.resume()
+                throw error
+            }
+            // Dispatch may have succeeded. Keep the durable input and let the
+            // run report the error; restoring its draft would invite a duplicate.
+            completion = Task { throw error }
+        }
+        activeInputTasksByRunID[runID, default: []].append(ActiveInputTask(
+            assistantMessageID: identifiers.assistantMessageID, task: completion
+        ))
+        publishChange(conversationID: conversationID, runID: runID, phase: .content)
+        await streamWriter.resumeAfterSegmentBoundary(assistantMessageID: identifiers.assistantMessageID)
+        do { try await eventBuffer.resume() }
+        catch {
+            // Projection failed after acceptance. Retain native completion
+            // ownership and surface this as a run failure, not an unsent draft.
+            activeInputTasksByRunID[runID, default: []].append(ActiveInputTask(
+                assistantMessageID: identifiers.assistantMessageID, task: Task { throw error }
+            ))
+        }
         return identifiers
+    }
+
+    private static func isDefinitiveSteeringRejection(_ error: any Error) -> Bool {
+        if error is AgentMessageAttachmentError { return true }
+        if let error = error as? LocalACPSessionDatabaseError { return error == .steeringUnsupported }
+        if let error = error as? LocalACPClientError {
+            switch error {
+            case .agent, .activeInputUnsupported, .sessionNotInitialized: return true
+            default: return false
+            }
+        }
+        if case PiRPCClientError.commandFailed = error { return true }
+        if case HermesGatewayError.rpc = error { return true }
+        return false
     }
 
     private func drainActiveInputs(

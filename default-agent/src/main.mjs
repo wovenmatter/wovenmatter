@@ -119,7 +119,13 @@ async function invoke(message) {
     }
     return (await engine()).handle(message.method, message.params, update, requestPermission);
   }
-  const response = await remoteRequest('rpc', { ...message, operationID: message.method === 'session/prompt' ? (message.params?._meta?.wovenInputID ?? message.params?._meta?.wovenRunID ?? crypto.randomUUID()) : undefined });
+  let response;
+  try {
+    response = await remoteRequest('rpc', { ...message, operationID: message.method === 'session/prompt' ? (message.params?._meta?.wovenInputID ?? message.params?._meta?.wovenRunID ?? crypto.randomUUID()) : undefined });
+  } catch (error) {
+    if (message.method === '_session/steering') error.deliveryUncertain = true;
+    throw error;
+  }
   if (!response.operationID) return response.result;
   let cursor = 0;
   const remotePermissions = new RemotePermissionRequests(requestPermission, (id, allowed) =>
@@ -160,7 +166,8 @@ lines.on('line', line => {
   }, error => {
     const messageText = operationErrorMessage(error);
     if (control) send({ error: messageText }, () => process.exit(1));
-    else if (message.id !== undefined) send({ jsonrpc: '2.0', id: message.id, error: { code: -32000, message: messageText } });
+    else if (message.id !== undefined) send({ jsonrpc: '2.0', id: message.id, error: { code: -32000, message: messageText,
+      ...(error.deliveryUncertain ? { data: { deliveryUncertain: true } } : {}) } });
   });
 });
 lines.on('close', () => { if (!control) process.exit(0); });
