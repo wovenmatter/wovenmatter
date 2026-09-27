@@ -260,6 +260,14 @@ extension ApplicationModel {
             guard let id = reservation.objectValue?["target_id"]?.stringValue, let uuid = UUID(uuidString: id) else {
                 throw WorkspaceToolError.invalid("Unable to reserve the new session.")
             }
+            // Completed delivery receipts must replay before admission: unrelated
+            // running sessions cannot turn a successful creation into at_capacity.
+            if reservation.objectValue?["status"]?.stringValue == "ready",
+               try store.database.toolDelivery(id: request.requestID) != nil {
+                let delivery = try store.database.reserveToolDelivery(sourceID: source.id, targetID: id, text: text,
+                    requestID: request.requestID, kind: .created, purpose: purpose)
+                return try await self.dispatchToolDelivery(delivery)
+            }
             guard let agentTools = self.agentTools else { throw ApplicationModelError.dashboardStoreUnavailable }
             let admission = self.toolSessionAdmission.begin(id, running: self.runningToolSessionIDs,
                 limit: agentTools.settings.maximumRunningSessions)

@@ -107,8 +107,12 @@ final class WovenSocketService<Request: Decodable & Sendable, Response: WovenSoc
                 // which may itself be saturated by the work we are rejecting. The
                 // reply is small and the nonblocking write has a strict deadline, so
                 // an unresponsive caller cannot occupy the listener indefinitely.
-                try? writeMessage(data, to: client, timeout: min(ioTimeout, 0.25))
+                let deadline = ProcessInfo.processInfo.systemUptime + min(ioTimeout, 0.25)
+                try? writeMessage(data, to: client, timeout: deadline - ProcessInfo.processInfo.systemUptime)
                 _ = Darwin.shutdown(client, SHUT_WR)
+                // The CLI writes its request before reading. Drain within the same
+                // deadline so closing unread input does not replace busy with EPIPE.
+                _ = try? readMessage(from: client, timeout: deadline - ProcessInfo.processInfo.systemUptime)
                 return
             }
             do { try configureSocket(client) }

@@ -58,10 +58,11 @@ public enum DatabaseLinkedData {
       resultBytes = next
     }
     for row in queryResponse.rows {
-      for value in row {
-        let (cellBytes, cellOverflow) = value.utf8.count.addingReportingOverflow(8)
+      for (index, value) in row.enumerated() {
+        let (namedBytes, nameOverflow) = value.utf8.count.addingReportingOverflow(queryResponse.columns[index].utf8.count)
+        let (cellBytes, cellOverflow) = namedBytes.addingReportingOverflow(8)
         let (next, totalOverflow) = resultBytes.addingReportingOverflow(cellBytes)
-        guard !cellOverflow, !totalOverflow, value.utf8.count <= maximumSQLiteCellBytes,
+        guard !nameOverflow, !cellOverflow, !totalOverflow, value.utf8.count <= maximumSQLiteCellBytes,
               next <= maximumSQLiteResultBytes else {
           throw DatabaseLinkedDataError.sqliteResultTooLarge
         }

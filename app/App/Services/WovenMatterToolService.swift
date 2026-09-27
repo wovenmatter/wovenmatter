@@ -41,7 +41,8 @@ enum WovenMatterCommandLine {
                 args.replaceSubrange(index...index + 1, with: [command.action == "set-html" ? "--html" : "--json", value])
             }
             if command.group == .notes, command.options["note-id"] == nil, let noteID = environment["WOVENMATTER_NOTE_ID"],
-               !["list", "create", "versions", "version", "restore"].contains(command.action) {
+               !(command.action == "read" && !command.positional.isEmpty),
+               !["list", "folders", "create", "versions", "version", "restore"].contains(command.action) {
                 args += ["--note-id", noteID]
             }
             let rawRequestID = command.options["request-id"] ?? UUID().uuidString.lowercased()
@@ -62,7 +63,7 @@ enum WovenMatterCommandLine {
         } catch {
             if let dispatchedRequestID,
                let data = try? JSONEncoder().encode(WovenMatterToolResponse(success: false,
-                   error: error.localizedDescription, code: "invalid_request", requestID: dispatchedRequestID)) {
+                   error: error.localizedDescription, code: "transport_error", requestID: dispatchedRequestID)) {
                 FileHandle.standardOutput.write(data + Data("\n".utf8))
                 return EXIT_FAILURE
             }

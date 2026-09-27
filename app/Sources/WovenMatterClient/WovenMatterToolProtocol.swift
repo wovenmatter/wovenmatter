@@ -37,6 +37,23 @@ public struct WovenMatterToolResponse: Codable, Sendable {
     self.success = success; self.result = result; self.error = error; self.code = code
     self.silent = silent; self.requestID = requestID
   }
+  public static let maximumResponseBytes = 1_048_576
+
+  /// Apply the same encoded-byte ceiling to local and relayed tool responses.
+  /// A caller can retry large reads with a smaller page or character window.
+  public func bounded() -> Self {
+    guard let encoded = try? JSONEncoder().encode(self) else {
+      return Self(success: false, error: "The tool response could not be encoded.",
+        code: "response_encoding_failed", requestID: UUID(uuidString: requestID ?? "")?.uuidString.lowercased())
+    }
+    guard encoded.count <= Self.maximumResponseBytes else {
+      return Self(success: false,
+        error: "The response exceeds 1 MiB. Retry reads with a smaller --limit or --characters value.",
+        code: "response_too_large", requestID: UUID(uuidString: requestID ?? "")?.uuidString.lowercased())
+    }
+    return self
+  }
+
   public static func note(_ response: NoteEditingResponse) throws -> Self {
     let encoded = try value(response)
     return Self(success: response.success, result: encoded.result, error: response.error)
@@ -300,12 +317,13 @@ public struct WovenMatterToolCommand: Sendable {
       read --note-id ID [--offset N --characters 1...65536]
       append --note-id ID --text TEXT [--revision REVISION]
       apply --note-id ID --json OPERATIONS_JSON [--revision REVISION]
-      set-html --note-id ID --file PATH [--revision REVISION]
+      set-html --note-id ID --file PATH --revision REVISION
       table create|set-cell|add-row|remove-row|add-column|remove-column [OPTIONS]
       versions NOTE_ID | version VERSION_ID [--offset N --characters N]
       restore NOTE_ID --version VERSION_ID --revision CURRENT_REVISION
       Note edits also support insert, replace-block, delete-block, format, set-title, link and unlink.
       Use read to obtain the current document, block/table IDs and revision before editing.
+      Destructive edits and table insertions with --after require --revision. Appending rows or columns without --after is revision-optional.
       Mutation retries accept --request-id UUID. A replayed edit/restore acknowledges its
       original revision without old content; read again for the current document.
       """
@@ -355,9 +373,9 @@ public struct WovenMatterToolCommand: Sendable {
       list [--since ISO8601 --until ISO8601 --after CURSOR --limit 1...200]
       read EVENT_ID | occurrences EVENT_ID --since ISO8601 --until ISO8601
       create --title TITLE --starts-at ISO8601 [--ends-at ISO8601 --description TEXT --all-day]
-      update EVENT_ID [--title TITLE --starts-at ISO8601 --ends-at ISO8601 --description TEXT --revision N]
-      detach EVENT_ID --occurrence INDEX [event changes] | copy EVENT_ID --starts-at ISO8601
-      remove EVENT_ID [--occurrence INDEX --revision N]
+      update EVENT_ID --revision N [--title TITLE --starts-at ISO8601 --ends-at ISO8601 --description TEXT]
+      detach EVENT_ID --occurrence INDEX --revision N [event changes] | copy EVENT_ID --starts-at ISO8601
+      remove EVENT_ID --revision N [--occurrence INDEX]
       Repetition: --repeat-unit day|week|month --repeat-interval N --time-zone IANA_ZONE; --no-repeat clears it.
       Tasks: --prompt TEXT [--harness NAME --model MODEL --thinking LEVEL --workspace local|ID --directory ABSOLUTE_PATH --folder all|ID]
         [--session-mode same|new]. Permissions and tools use user-controlled session defaults; edit them in Calendar.

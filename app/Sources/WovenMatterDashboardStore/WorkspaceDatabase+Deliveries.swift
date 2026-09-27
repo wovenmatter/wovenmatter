@@ -16,7 +16,7 @@ extension WorkspaceDatabase {
   func reserveToolDeliveryUnlocked(sourceID: String, targetID: String, text: String, requestID: String,
                                    kind: WorkspaceSessionDeliveryKind, purpose: String? = nil,
                                    eventKey: String? = nil) throws -> WorkspaceSessionDelivery {
-      let requestID = try canonicalToolRequestID(requestID)
+      let requestID = try persistedToolRequestID(requestID, in: .deliveries)
       guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
             text.utf8.count <= 65_536,
             purpose.map({ $0.utf8.count <= 65_536 }) ?? true,
@@ -59,7 +59,7 @@ extension WorkspaceDatabase {
   /// Preparation is safe to recover; an unconfirmed native submission is not.
   public func claimToolDelivery(id: String, now: Date = Date()) throws -> WorkspaceSessionDelivery? {
     try transaction {
-      let id = canonicalDeliveryID(id)
+      let id = try canonicalDeliveryID(id)
       guard let delivery = try deliveryUnlocked(id), delivery.status == "queued" else { return nil }
       let retryAfter = try historyRowsUnlocked("SELECT retry_after FROM workspace_session_deliveries WHERE id=?", values: [id])
         .first?.objectValue?["retry_after"]?.doubleValue
@@ -81,7 +81,7 @@ extension WorkspaceDatabase {
   /// boundary before issuing a request so a lost response can never be retried.
   public func markToolDeliveryTransportStarted(id: String, targetID: String? = nil, nativeCommand: String? = nil) throws {
     try transaction {
-      let id = canonicalDeliveryID(id)
+      let id = try canonicalDeliveryID(id)
       if let targetID, try deliveryUnlocked(id)?.targetID != targetID {
         throw WorkspaceToolError.invalid("This delivery is not reserved for this session.")
       }
@@ -94,7 +94,7 @@ extension WorkspaceDatabase {
   }
 
   func markToolDeliveryTransportStartedUnlocked(id: String) throws {
-    let id = canonicalDeliveryID(id)
+    let id = try canonicalDeliveryID(id)
     try validateClaimedToolDeliveryUnlocked(id: id)
     try toolsExecuteUnlocked("UPDATE workspace_session_deliveries SET transport_started=1 WHERE id=?", [id])
   }
@@ -103,7 +103,7 @@ extension WorkspaceDatabase {
   /// input could have reached the backend, only reconciliation can settle it.
   public func failToolDeliveryAttempt(id: String, now: Date = Date()) throws {
     try transaction {
-      let id = canonicalDeliveryID(id)
+      let id = try canonicalDeliveryID(id)
       guard let delivery = try deliveryUnlocked(id), delivery.status == "sending" else { return }
       let submitted = try historyRowsUnlocked("SELECT transport_started FROM workspace_session_deliveries WHERE id=?", values: [id])
         .first?.objectValue?["transport_started"]?.intValue != 0
@@ -121,7 +121,7 @@ extension WorkspaceDatabase {
   /// Call inside the final acceptance transaction, after asynchronous connection
   /// and attachment preparation. A prior app-level check is only a preflight.
   func validateClaimedToolDeliveryUnlocked(id: String) throws {
-    let id = canonicalDeliveryID(id)
+    let id = try canonicalDeliveryID(id)
     guard let delivery = try deliveryUnlocked(id), delivery.status == "sending",
           try toolDeliveryAuthorizedUnlocked(delivery) else {
       throw WorkspaceToolError.invalid("This delivery was cancelled or its access was revoked.")
@@ -163,7 +163,7 @@ extension WorkspaceDatabase {
       throw WorkspaceToolError.invalid("Invalid delivery failure details.")
     }
     try transaction {
-      let id = canonicalDeliveryID(id)
+      let id = try canonicalDeliveryID(id)
       guard let current = try deliveryUnlocked(id), current.status != "accepted" else { return }
       try toolsExecuteUnlocked("UPDATE workspace_session_deliveries SET status=?,message_id=coalesce(?,message_id),failure_code=?,failure_reason=? WHERE id=?",
         [status, messageID, failureCode, failureReason, id])
@@ -234,12 +234,13 @@ extension WorkspaceDatabase {
   }
 
   private func deliveryUnlocked(_ id: String) throws -> WorkspaceSessionDelivery? {
-    let id = canonicalDeliveryID(id)
+    let id = try canonicalDeliveryID(id)
     return try historyRowsUnlocked("SELECT rowid AS sequence,* FROM workspace_session_deliveries WHERE id=?", values: [id]).first.map(deliveryFromRow)
   }
 
-  private func canonicalDeliveryID(_ id: String) -> String {
-    UUID(uuidString: id)?.uuidString.lowercased() ?? id
+  func canonicalDeliveryID(_ id: String) throws -> String {
+    guard UUID(uuidString: id) != nil else { return id }
+    return try persistedToolRequestID(id, in: .deliveries)
   }
 
   private func deliveryFromRow(_ value: GatewayJSONValue) -> WorkspaceSessionDelivery {

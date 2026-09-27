@@ -61,8 +61,8 @@ struct WorkspaceAgentToolsServiceTests {
 }
 
 extension WorkspaceAgentToolsServiceTests {
-    @Test(.timeLimit(.minutes(1)))
-    func localSocketOverloadReturnsStructuredBusyResponse() async throws {
+    @Test(.timeLimit(.minutes(1)), arguments: [1, 65_536])
+    func localSocketOverloadReturnsStructuredBusyResponse(payloadBytes: Int) async throws {
         let root = URL(fileURLWithPath: "/private/tmp/wm-overload-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -74,7 +74,7 @@ extension WorkspaceAgentToolsServiceTests {
         }
         try service.start(); defer { try? service.stop() }
         let slow = try JSONEncoder().encode(WovenMatterToolRequest(arguments: ["slow"]))
-        let fast = try JSONEncoder().encode(WovenMatterToolRequest(arguments: ["fast"]))
+        let fast = try JSONEncoder().encode(WovenMatterToolRequest(arguments: [String(repeating: "f", count: payloadBytes)]))
         let first = Task {
             try await runBlockingToolFixture {
                 try WovenMatterCommandLine.forward(slow, to: endpoint.path, timeout: 5)
@@ -82,12 +82,12 @@ extension WorkspaceAgentToolsServiceTests {
         }
         await gate.waitUntilPaused()
         let overloaded = try await runBlockingToolFixture {
-            try WovenMatterCommandLine.forward(fast, to: endpoint.path, timeout: 2)
+            Result { try WovenMatterCommandLine.forward(fast, to: endpoint.path, timeout: 2) }
         }
-        let response = try JSONDecoder().decode(WovenMatterToolResponse.self, from: overloaded)
-        #expect(!response.success && response.code == "busy")
         await gate.release()
         _ = try await first.value
+        let response = try JSONDecoder().decode(WovenMatterToolResponse.self, from: overloaded.get())
+        #expect(!response.success && response.code == "busy")
     }
 
     @Test func mutationHistoryIsMetadataOnlyAndNoteReadsAreChunked() async throws {
@@ -152,6 +152,33 @@ extension WorkspaceAgentToolsServiceTests {
 
         let missing = await model.handle(.init(arguments: ["history", "message", UUID().uuidString]),
             callerID: historian)
+        #expect(!missing.success && missing.code == "not_found")
+    }
+
+    @Test func oversizedResponsesFailStructurallyAndCanBeReadInSmallerPages() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let database = try WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
+        let caller = try database.createLocalACPSession(runtimeKind: .codex, title: "Reader", ownerDeviceID: UUID())
+        let model = try WorkspaceAgentToolsModel(database: database,
+            sessionHandler: { _, _, _ in throw CancellationError() },
+            noteHandler: { _, _, _ in throw CancellationError() },
+            noteRestoreHandler: { _, _, _, _, _ in throw CancellationError() },
+            usageHandler: { _ in throw CancellationError() }, onMutation: {})
+        defer { model.stop() }
+        for _ in 0..<20 {
+            try database.saveSessionTimer(.init(sessionID: caller, instruction: String(repeating: "x", count: 65_536),
+                nextFireAt: Date(timeIntervalSince1970: 4_000_000_000)), callerID: caller)
+        }
+        let request = WovenMatterToolRequest(arguments: ["timers", "list"])
+        let response = await model.handle(request, callerID: caller)
+        #expect(!response.success && response.code == "response_too_large")
+        #expect(response.requestID == request.requestID)
+        #expect(try JSONEncoder().encode(response).count <= 1_048_576)
+        let smaller = await model.handle(.init(arguments: ["timers", "list", "--limit", "2"]), callerID: caller)
+        #expect(smaller.success && smaller.result?.objectValue?["hasMore"]?.boolValue == true)
+        let missing = await model.handle(.init(arguments: ["sessions", "status", UUID().uuidString]), callerID: caller)
         #expect(!missing.success && missing.code == "not_found")
     }
 

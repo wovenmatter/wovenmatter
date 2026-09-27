@@ -6,6 +6,118 @@ import WovenMatterClient
 
 @Suite("Agent tools access, coordination and timers")
 struct WorkspaceAgentToolTests {
+  @Test func replacementTablesAreValidatedBeforeApplyingABatch() throws {
+    let malformed = NoteTableBlock(id: "table", columns: [NoteTableColumn()],
+      rows: [NoteTableRow(cells: [])])
+    let operations: [NoteEditOperation] = [
+      .replaceBlock(id: "original", block: .table(malformed)),
+      .setTableCell(tableID: "table", row: 0, column: 0, runs: [.init(text: "value")])
+    ]
+    // Applying this malformed batch before validating its shape indexes an empty cell array.
+    #expect(throws: (any Error).self) {
+      try RemoteNoteEditEnvelope.validate(operations: operations, noteKind: .note)
+    }
+    var oversized = malformed
+    oversized.columns = Array(repeating: NoteTableColumn(), count: 129)
+    #expect(throws: (any Error).self) {
+      try RemoteNoteEditEnvelope.validate(operations: [.replaceBlock(id: "original", block: .table(oversized))], noteKind: .note)
+    }
+  }
+
+  @Test func indexedTableInsertionsRequireTheRevisionTheyWerePlannedAgainst() throws {
+    let (db, dir, caller, _) = try fixture()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let note = try db.createNote(folderID: nil, callerConversationID: caller, requestID: UUID().uuidString)
+    let table = try db.applyNoteEdits(.init(command: .apply, noteID: note,
+      operations: [.createTable(afterBlockID: nil, rows: 2, columns: 2, headerRow: false)]),
+      callerConversationID: caller, requestID: UUID().uuidString)
+    let tableID = try #require(table.document?.blocks.last?.id)
+    for operation: NoteEditOperation in [.addTableRow(tableID: tableID, after: 0), .addTableColumn(tableID: tableID, after: 0)] {
+      #expect(throws: (any Error).self) {
+        try db.applyNoteEdits(.init(command: .apply, noteID: note, operations: [operation]),
+          callerConversationID: caller, requestID: UUID().uuidString)
+      }
+    }
+    #expect(try db.readNoteForEditing(id: note) == table)
+    let appended = try db.applyNoteEdits(.init(command: .apply, noteID: note,
+      operations: [.addTableRow(tableID: tableID, after: nil)]), callerConversationID: caller, requestID: UUID().uuidString)
+    #expect(appended.success)
+  }
+
+  @Test func legacyUppercaseRequestIDsKeepTheirReceiptsAfterUpgrade() throws {
+    let (db, dir, caller, target) = try fixture()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let note = try db.createNote(folderID: nil)
+    let requestID = UUID().uuidString
+    let request = NoteEditingRequest(command: .apply, noteID: note, operations: [.appendText("one append", .paragraph)])
+    _ = try db.applyNoteEdits(request, callerConversationID: caller, requestID: requestID)
+    try db.transaction {
+      try db.toolsExecuteUnlocked("UPDATE workspace_tool_mutations SET request_id=upper(request_id) WHERE source_id=? AND request_id=?", [caller, requestID.lowercased()])
+    }
+    let replay = try db.applyNoteEdits(request, callerConversationID: caller, requestID: requestID.lowercased())
+    #expect(replay.replayed == true)
+    #expect(try db.readNoteForEditing(id: note).document?.plainText.components(separatedBy: "one append").count == 2)
+
+    try db.beginCoordination(sourceID: caller, targetID: target, purpose: "Retry")
+    let deliveryID = UUID().uuidString
+    _ = try db.reserveToolDelivery(sourceID: caller, targetID: target, text: "Delivered once", requestID: deliveryID)
+    try db.transaction {
+      try db.toolsExecuteUnlocked("UPDATE workspace_session_deliveries SET id=upper(id) WHERE id=?", [deliveryID.lowercased()])
+    }
+    #expect(try db.toolDelivery(id: deliveryID.lowercased()) != nil)
+    #expect(try db.claimToolDelivery(id: deliveryID.lowercased()) != nil)
+    try db.setToolDeliveryStatus(id: deliveryID.lowercased(), status: "accepted")
+    #expect(try db.reserveToolDelivery(sourceID: caller, targetID: target, text: "Delivered once", requestID: deliveryID.lowercased()).status == "accepted")
+
+    let creationID = UUID().uuidString
+    let arguments = ["sessions", "create", "--title", "Once"]
+    let reservation = try db.reserveToolSessionCreation(sourceID: caller, requestID: creationID, arguments: arguments, purpose: "Retry", managed: false)
+    try db.transaction {
+      try db.toolsExecuteUnlocked("UPDATE workspace_session_creations SET id=upper(id) WHERE id=?", [creationID.lowercased()])
+    }
+    let retry = try db.reserveToolSessionCreation(sourceID: caller, requestID: creationID.lowercased(), arguments: arguments, purpose: "Retry", managed: false)
+    #expect(retry.objectValue?["target_id"] == reservation.objectValue?["target_id"])
+    // Old builds could persist both spellings. Preserve that evidence and reject ambiguity.
+    try db.transaction {
+      try db.toolsExecuteUnlocked("INSERT INTO workspace_tool_mutations SELECT source_id,lower(request_id),operation,input_digest,result_json FROM workspace_tool_mutations WHERE source_id=? AND request_id=?", [caller, requestID])
+    }
+    #expect(throws: (any Error).self) {
+      _ = try db.applyNoteEdits(request, callerConversationID: caller, requestID: requestID.lowercased())
+    }
+  }
+
+  @Test func remoteSQLiteBudgetsIncludeRepeatedColumnNames() throws {
+    #expect(throws: DatabaseLinkedDataError.sqliteResultTooLarge) {
+      try DatabaseLinkedData.load(queryResponse: .init(columns: [String(repeating: "c", count: 3_000)],
+        rows: Array(repeating: ["v"], count: 1_000)))
+    }
+  }
+
+  @Test func managementReceiptKeepsItsOriginalCoordinationEpoch() throws {
+    let (db, dir, caller, target) = try fixture()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let requestID = UUID().uuidString
+    let first = try db.requestCoordinationAccess(sourceID: caller, targetID: target, purpose: "First", requestID: requestID)
+    let accepted = first.state == "pending" ? try db.resolveCoordinationAccess(requestID: requestID, allowed: true) : first
+    let epoch = try #require(accepted.coordinationEpoch)
+    try db.endCoordination(targetID: target, sourceID: caller)
+    try db.beginCoordination(sourceID: caller, targetID: target, purpose: "New", userApprovedAccess: true)
+    let replay = try db.requestCoordinationAccess(sourceID: caller, targetID: target, purpose: "First", requestID: requestID)
+    #expect(replay.coordinationEpoch == epoch)
+    #expect(try replay.coordinationEpoch != db.sessionRelationship(target).coordinationEpoch)
+  }
+
+  @Test func editBatchesCannotExceedDocumentLimitsBetweenOperations() throws {
+    let document = NoteDocument(blocks: [.richText(.init(id: "left")), .richText(.init(id: "right"))])
+    var left = NoteTableBlock(rows: 100, columns: 100); left.id = "left"
+    var right = left; right.id = "right"
+    let operations: [NoteEditOperation] = [.replaceBlock(id: "left", block: .table(left)),
+      .replaceBlock(id: "right", block: .table(right)), .deleteBlock(id: "right")]
+    #expect(throws: RemoteNoteEditError.operationTooLarge) {
+      try RemoteNoteEditEnvelope.validate(operations: operations, applyingTo: document)
+    }
+  }
+
   @Test func linkedSQLiteQueriesHaveExecutionAndResultBudgets() throws {
     let (db, dir, _, _) = try fixture()
     _ = db

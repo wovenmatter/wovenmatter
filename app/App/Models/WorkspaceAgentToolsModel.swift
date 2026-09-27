@@ -284,6 +284,10 @@ final class WorkspaceAgentToolsModel {
     private static func quote(_ value: String) -> String { "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'" }
 
     func handle(_ request: WovenMatterToolRequest, callerID: String) async -> WovenMatterToolResponse {
+        await execute(request, callerID: callerID).bounded()
+    }
+
+    private func execute(_ request: WovenMatterToolRequest, callerID: String) async -> WovenMatterToolResponse {
         guard !passiveProjection else { return .init(success: false, error: "Tool execution belongs to the background service.") }
         var parsedCommand: WovenMatterToolCommand?
         do {
@@ -321,6 +325,9 @@ final class WorkspaceAgentToolsModel {
                     var page = try database.queryAgentHistory(query, callerID: callerID,
                         allWorkspace: command.options["all-workspace"] != nil)
                     if command.action == "status", var object = page.objectValue, let id = query.id {
+                        guard object["rows"]?.arrayValue?.isEmpty == false else {
+                            throw WorkspaceToolError.notFound("The requested session was not found.")
+                        }
                         object["relationship"] = try WovenMatterToolResponse.value(
                             database.sessionRelationship(id)).result ?? .null
                         page = .object(object)

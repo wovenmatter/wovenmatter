@@ -16,7 +16,7 @@ extension WorkspaceDatabase {
   public func replayCalendarRequest(callerID: String, requestID: String, input: String) throws -> String? {
     try withLock {
       try requireToolUnlocked(.calendar, sessionID: callerID, writesCalendar: true)
-      let requestID = try canonicalToolRequestID(requestID)
+      let requestID = try persistedToolRequestID(requestID, in: .mutations, sourceID: callerID)
       guard let row = try historyRowsUnlocked("SELECT operation,input_digest,result_json FROM workspace_tool_mutations WHERE source_id=? AND request_id=?",
         values: [callerID, requestID]).first?.objectValue else { return nil }
       let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]

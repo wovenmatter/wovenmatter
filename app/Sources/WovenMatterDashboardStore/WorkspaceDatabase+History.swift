@@ -115,14 +115,6 @@ extension WorkspaceDatabase {
       // status even when an adapter fails before it emits a transport frame.
       for operation in ["INSERT", "UPDATE"] {
         let suffix = operation.lowercased()
-        let content =
-          operation == "INSERT"
-          ? "new.content"
-          : "new.content"
-        let contentMode =
-          operation == "INSERT"
-          ? "'snapshot'"
-          : "'snapshot'"
         if operation == "UPDATE" { try executeUnlocked("DROP TRIGGER IF EXISTS history_message_update") }
         let messageWhen = operation == "UPDATE" ? "WHEN new.status != 'streaming'" : ""
         try executeUnlocked(
@@ -132,7 +124,7 @@ extension WorkspaceDatabase {
             INSERT INTO workspace_history_events(id,conversation_id,run_id,harness,kind,payload)
             VALUES(lower(hex(randomblob(16))),new.conversation_id,new.run_id,
               coalesce((SELECT runtime_kind FROM desktop_local_acp_sessions WHERE conversation_id=new.conversation_id),'unknown'),
-              'message.\(suffix)',json_object('id',new.id,'role',new.role,'content',\(content),'contentMode',\(contentMode),'status',new.status));
+              'message.\(suffix)',json_object('id',new.id,'role',new.role,'content',new.content,'contentMode','snapshot','status',new.status));
           END;
           CREATE TRIGGER IF NOT EXISTS history_run_\(suffix) AFTER \(operation) ON dashboard_runs
           BEGIN
@@ -150,9 +142,17 @@ extension WorkspaceDatabase {
         try executeUnlocked("""
           UPDATE workspace_history_events SET payload='{"legacyRedacted":true}'
             WHERE kind IN ('cli.request','cli.response','cli.error','cli.query');
+          INSERT OR IGNORE INTO workspace_history_events(id,conversation_id,run_id,harness,kind,payload,completeness)
+            SELECT 'terminal-message:'||m.id,m.conversation_id,m.run_id,
+              coalesce(s.runtime_kind,'unknown'),'message.snapshot',
+              json_object('id',m.id,'role',m.role,'content',m.content,'contentMode','snapshot','status',m.status),
+              'legacy-partial'
+            FROM dashboard_messages m LEFT JOIN desktop_local_acp_sessions s ON s.conversation_id=m.conversation_id
+            WHERE m.status!='streaming';
           DELETE FROM workspace_history_events
             WHERE kind='message.update' AND json_valid(payload)
-              AND json_extract(payload,'$.status')='streaming';
+              AND json_extract(payload,'$.status')='streaming'
+              AND json_extract(payload,'$.id') IN (SELECT id FROM dashboard_messages WHERE status!='streaming');
           DELETE FROM workspace_history_events WHERE kind LIKE 'cli.%' AND sequence NOT IN (
             SELECT sequence FROM workspace_history_events WHERE kind LIKE 'cli.%'
               ORDER BY sequence DESC LIMIT 10000
@@ -666,7 +666,7 @@ extension WorkspaceDatabase {
 
 extension WorkspaceDatabase {
   func attachSessionMessageUnlocked(requestID: String, messageID: String) throws {
-    let requestID = try canonicalToolRequestID(requestID)
+    let requestID = try canonicalDeliveryID(requestID)
     try validateClaimedToolDeliveryUnlocked(id: requestID)
     let statement = try prepareUnlocked(
       """

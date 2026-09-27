@@ -8,6 +8,28 @@ import WovenMatterCore
 
 @Suite("Workspace history and bounded versions")
 struct WorkspaceHistoryTests {
+  @Test func legacyCompletedStreamsRemainSearchableAfterMigration() throws {
+    let (db, url) = try database()
+    defer { try? FileManager.default.removeItem(at: url) }
+    let session = try db.createLocalACPSession(runtimeKind: .codex, title: "Legacy", ownerDeviceID: UUID())
+    let run = try db.beginLocalACPRun(conversationID: session, content: "Prompt")
+    try db.appendLocalACPAssistantChunk(runID: run.runID, chunk: "legacy violet harbor")
+    try db.completeLocalACPRun(runID: run.runID)
+    try db.transaction {
+      // Old triggers stored deltas; their terminal event normally had no content.
+      try db.toolsExecuteUnlocked("UPDATE workspace_history_events SET payload=json_set(payload,'$.content','','$.contentMode','append') WHERE run_id=? AND kind='message.update'", [run.runID])
+      try db.toolsExecuteUnlocked("INSERT INTO workspace_history_events(id,conversation_id,run_id,harness,kind,payload) VALUES(?,?,?,?,?,?)",
+        [UUID().uuidString, session, run.runID, "codex", "message.update",
+         try db.toolsJSON(["id": run.assistantMessageID, "status": "streaming", "content": "legacy violet harbor", "contentMode": "append"])])
+      try db.toolsExecuteUnlocked("DELETE FROM workspace_history_schema WHERE version=2")
+    }
+    let reopened = try WorkspaceDatabase(url: url.appending(path: "workspace.sqlite"))
+    let matches = rows(try reopened.queryHistory(.init(command: "search", search: "legacy violet harbor", conversationID: session)))
+    #expect(matches.contains { $0.objectValue?["kind"]?.stringValue == "message.snapshot" })
+    #expect(rows(try reopened.queryHistory(.init(command: "events", runID: run.runID, kind: "message.update")))
+      .allSatisfy { $0.objectValue?["payload"]?.stringValue?.contains("streaming") == false })
+  }
+
   @Test func uppercaseSessionEndpointsAreRedacted() {
     let owner = String(repeating: "A", count: 32)
     let endpoint = String(repeating: "B", count: 32)

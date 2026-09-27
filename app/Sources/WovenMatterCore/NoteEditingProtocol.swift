@@ -119,7 +119,13 @@ public struct RemoteNoteEditEnvelope: Codable, Equatable, Sendable {
     }
     try validate(operations: operations, noteKind: document.kind)
     var result = document
-    _ = try result.apply(operations)
+    for operation in operations {
+      _ = try result.apply([operation], normalizingResult: false)
+      try validateResult(result)
+    }
+  }
+
+  private static func validateResult(_ result: NoteDocument) throws {
     guard result.blocks.count <= Self.maximumBlockCount,
           result.html.utf8.count <= Self.maximumEnvelopeBytes,
           (try result.encoded()).utf8.count <= Self.maximumEnvelopeBytes else {
@@ -165,7 +171,8 @@ public struct RemoteNoteEditEnvelope: Codable, Equatable, Sendable {
   public static func requiresRevision(_ operations: [NoteEditOperation]) -> Bool {
     operations.contains { operation in
       switch operation {
-      case .appendText, .insertText, .createTable, .addTableRow, .addTableColumn: false
+      case .appendText, .insertText, .createTable: false
+      case .addTableRow(_, let after), .addTableColumn(_, let after): after != nil
       case .setTitle, .replaceBlock, .deleteBlock, .setParagraphStyle, .setTableCell,
            .removeTableRow, .removeTableColumn, .setHTML, .setArtifactDatabaseLink,
            .setTableDatabaseLink: true
@@ -251,7 +258,24 @@ public struct RemoteNoteEditEnvelope: Codable, Equatable, Sendable {
         try Self.validate(link)
       case .setTableDatabaseLink(_, let link):
         try Self.validate(link)
-      case .replaceBlock, .deleteBlock, .setParagraphStyle:
+      case .replaceBlock(_, let block):
+        // Validate the raw block before apply/normalization can allocate a large
+        // rectangle or a later operation indexes a malformed cell array.
+        switch block {
+        case .richText(let text):
+          guard text.runs.count <= 4_096 else { throw RemoteNoteEditError.operationTooLarge }
+        case .table(let table):
+          let (cells, overflow) = table.rows.count.multipliedReportingOverflow(by: table.columns.count)
+          guard (1...Self.maximumTableRows).contains(table.rows.count),
+                (1...Self.maximumTableColumns).contains(table.columns.count),
+                !overflow, cells <= Self.maximumTableCells,
+                table.rows.allSatisfy({ $0.cells.count == table.columns.count &&
+                  $0.cells.allSatisfy({ $0.runs.count <= 4_096 }) }) else {
+            throw RemoteNoteEditError.operationNotAllowed
+          }
+          try Self.validate(table.databaseLink)
+        }
+      case .deleteBlock, .setParagraphStyle:
         break
       }
     }
@@ -513,6 +537,10 @@ public enum NoteEditOperation: Codable, Equatable, Sendable {
 
 public extension NoteDocument {
   mutating func apply(_ operations: [NoteEditOperation]) throws -> String? {
+    try apply(operations, normalizingResult: true)
+  }
+
+  fileprivate mutating func apply(_ operations: [NoteEditOperation], normalizingResult: Bool) throws -> String? {
     var title: String?
     for operation in operations {
       switch operation {
@@ -596,7 +624,7 @@ public extension NoteDocument {
         try mutateTable(id: tableID) { $0.databaseLink = link }
       }
     }
-    self = normalized()
+    if normalizingResult { self = normalized() }
     return title
   }
 

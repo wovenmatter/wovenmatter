@@ -12,6 +12,32 @@ extension WorkspaceDatabase {
     return id.uuidString.lowercased()
   }
 
+  enum ToolReceiptTable: String {
+    case mutations = "workspace_tool_mutations"
+    case deliveries = "workspace_session_deliveries"
+    case creations = "workspace_session_creations"
+    case coordination = "workspace_coordination_access_requests"
+  }
+
+  /// New IDs use lowercase UUIDs; existing IDs retain their spelling so all
+  /// persisted references continue to work. Never guess between legacy collisions.
+  func persistedToolRequestID(_ value: String, in table: ToolReceiptTable,
+                              sourceID: String? = nil) throws -> String {
+    let canonical = try canonicalToolRequestID(value)
+    let column = table == .mutations ? "request_id" : "id"
+    var sql = "SELECT \(column) AS id FROM \(table.rawValue) WHERE \(column)=? COLLATE NOCASE"
+    var values: [String?] = [canonical]
+    if table == .mutations {
+      guard let sourceID else { throw WorkspaceToolError.invalid("A mutation needs a bound caller.") }
+      sql += " AND source_id=?"; values.append(sourceID)
+    }
+    let matches = try historyRowsUnlocked(sql + " LIMIT 2", values: values)
+    guard matches.count <= 1 else {
+      throw WorkspaceToolError.invalid("This request ID has conflicting legacy receipts. Inspect the existing results before starting a new request.")
+    }
+    return matches.first?.objectValue?["id"]?.stringValue ?? canonical
+  }
+
   func migrateAgentTools() throws {
     try transaction {
       try executeUnlocked("""
@@ -54,6 +80,10 @@ extension WorkspaceDatabase {
           target_id TEXT NOT NULL UNIQUE, arguments_json TEXT NOT NULL,
           purpose TEXT NOT NULL, managed INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'planned');
         """)
+      for table in [ToolReceiptTable.mutations, .deliveries, .creations, .coordination] {
+        let columns = table == .mutations ? "source_id,request_id COLLATE NOCASE" : "id COLLATE NOCASE"
+        try executeUnlocked("CREATE INDEX IF NOT EXISTS \(table.rawValue)_request_case ON \(table.rawValue)(\(columns))")
+      }
       try toolsExecuteUnlocked("INSERT OR IGNORE INTO workspace_tool_settings(id,value) VALUES(1,?)",
                                [try toolsJSON(WorkspaceToolSettings())])
       let toolColumns = Set(try historyRowsUnlocked("PRAGMA table_info(workspace_session_tools)", values: []).compactMap { $0.objectValue?["name"]?.stringValue })
@@ -68,6 +98,11 @@ extension WorkspaceDatabase {
       }
       if !creationColumns.contains("configuration_applied") {
         try executeUnlocked("ALTER TABLE workspace_session_creations ADD COLUMN configuration_applied INTEGER NOT NULL DEFAULT 0")
+      }
+      let accessColumns = Set(try historyRowsUnlocked("PRAGMA table_info(workspace_coordination_access_requests)", values: [])
+        .compactMap { $0.objectValue?["name"]?.stringValue })
+      if !accessColumns.contains("coordination_epoch") {
+        try executeUnlocked("ALTER TABLE workspace_coordination_access_requests ADD COLUMN coordination_epoch TEXT")
       }
       let relationshipColumns = Set(try historyRowsUnlocked("PRAGMA table_info(workspace_session_relationships)", values: []).compactMap { $0.objectValue?["name"]?.stringValue })
       for column in ["coordination_epoch", "coordination_since"] where !relationshipColumns.contains(column) {
@@ -430,7 +465,7 @@ extension WorkspaceDatabase {
     guard let callerID else {
       throw WorkspaceToolError.invalid("A mutation request needs a bound caller and UUID request ID.")
     }
-    let requestID = try canonicalToolRequestID(rawRequestID)
+    let requestID = try persistedToolRequestID(rawRequestID, in: .mutations, sourceID: callerID)
     let encoder = JSONEncoder()
     encoder.outputFormatting = [.sortedKeys]
     let digest = SHA256.hash(data: try encoder.encode(input)).map { String(format: "%02x", $0) }.joined()
