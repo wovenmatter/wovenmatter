@@ -808,7 +808,7 @@ final class DefaultAgentSettingsModel {
         } catch is CancellationError { return }
         catch {
             guard generation == runID else { return }
-            error = "Sign-in completed but could not be saved in Keychain. Try again."
+            self.error = "Sign-in completed but could not be saved in Keychain. Try again."
         }
         guard generation == runID, !Task.isCancelled else { return }
         removingAccount = nil
