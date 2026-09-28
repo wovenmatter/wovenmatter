@@ -50,9 +50,61 @@ struct DefaultAgentCredentialTests {
             try DefaultAgentControl.readResponse(from: valid.fileHandleForReading, maximumBytes: response.count)
                 == response)
     }
+    @Test @MainActor func preferenceChangesReuseCredentialsAndUpdatePayloadRevision() async throws {
+        let fixture = CredentialRefreshFixture()
+        let preferences = CredentialRevisionFixture()
+        let coordinator = ProviderAccountCoordinator(
+            refresh: { try await fixture.refresh($0) }, version: { 0 },
+            configurationVersion: { preferences.current() }, scopeVersion: { 0 },
+            reconfigure: { value in
+                var updated = value
+                updated.config.defaultModel = "openai/preferred"
+                return updated
+            })
+        let first = try await coordinator.prepare("local")
+        preferences.advance()
+        let updated = try await coordinator.prepare("local")
+        #expect(await fixture.count() == 1)
+        #expect(updated.config.defaultModel == "openai/preferred")
+        #expect(updated.credentials == first.credentials)
+        #expect(updated.revision != first.revision)
+    }
+    @Test @MainActor func inheritanceChangesReloadCredentialOwnership() async throws {
+        let fixture = CredentialRefreshFixture()
+        let scopes = CredentialRevisionFixture()
+        let coordinator = ProviderAccountCoordinator(
+            refresh: { try await fixture.refresh($0) }, version: { 0 },
+            configurationVersion: { 0 }, scopeVersion: { scopes.current() }, reconfigure: { $0 })
+        _ = try await coordinator.prepare("local")
+        scopes.advance()
+        _ = try await coordinator.prepare("local")
+        #expect(await fixture.count() == 2)
+    }
+    @Test @MainActor func accountMetadataReadsAreOffMainAndReuseCredentialRevision() async throws {
+        let reads = CredentialRevisionFixture()
+        let revision = CredentialRevisionFixture()
+        let store = ProviderConnectionStore(read: { _ in
+            #expect(!Thread.isMainThread)
+            reads.advance()
+            return [:]
+        }, version: { revision.current() })
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            for _ in 0..<12 { group.addTask { _ = try await store.accounts(scope: "global") } }
+            try await group.waitForAll()
+        }
+        #expect(reads.current() == 1)
+        _ = try await store.perform(invalidatesAccounts: false) { true }
+        _ = try await store.accounts(scope: "global")
+        #expect(reads.current() == 1)
+        revision.advance()
+        _ = try await store.accounts(scope: "global")
+        #expect(reads.current() == 2)
+        _ = try await store.accounts(scope: "local")
+        #expect(reads.current() == 3)
+    }
     @Test @MainActor func healthyMessageChecksNeverReloadCredentials() async throws {
         let fixture = CredentialRefreshFixture()
-        let coordinator = ProviderAccountCoordinator(refresh: { try await fixture.refresh($0) }, version: { 0 })
+        let coordinator = ProviderAccountCoordinator(refresh: { try await fixture.refresh($0) }, version: { 0 }, configurationVersion: { 0 }, scopeVersion: { 0 }, reconfigure: { $0 })
         let first = try await coordinator.prepare("local")
         for _ in 0..<100 {
             let current = try await coordinator.prepare("local")
@@ -62,7 +114,7 @@ struct DefaultAgentCredentialTests {
     }
     @Test @MainActor func simultaneousMessagesShareOneRefresh() async throws {
         let fixture = CredentialRefreshFixture()
-        let coordinator = ProviderAccountCoordinator(refresh: { try await fixture.refresh($0) }, version: { 0 })
+        let coordinator = ProviderAccountCoordinator(refresh: { try await fixture.refresh($0) }, version: { 0 }, configurationVersion: { 0 }, scopeVersion: { 0 }, reconfigure: { $0 })
         try await withThrowingTaskGroup(of: String?.self) { group in
             for _ in 0..<12 { group.addTask { try await coordinator.prepare("local").revision } }
             var values: [String?] = []
@@ -75,7 +127,7 @@ struct DefaultAgentCredentialTests {
         let fixture = CredentialRefreshFixture()
         let revision = CredentialRevisionFixture()
         let coordinator = ProviderAccountCoordinator(
-            refresh: { try await fixture.refresh($0) }, version: { revision.current() })
+            refresh: { try await fixture.refresh($0) }, version: { revision.current() }, configurationVersion: { 0 }, scopeVersion: { 0 }, reconfigure: { $0 })
         let request = Task { try await coordinator.prepare("local") }
         try await Task.sleep(for: .milliseconds(5))
         revision.advance()
@@ -88,7 +140,7 @@ struct DefaultAgentCredentialTests {
         let fixture = RejectedCredentialFixture()
         let coordinator = ProviderAccountCoordinator(
             refresh: { await fixture.snapshot($0) },
-            renewRejected: { try await fixture.renew($0, access: $1) }, version: { 0 })
+            renewRejected: { try await fixture.renew($0, access: $1) }, version: { 0 }, configurationVersion: { 0 }, scopeVersion: { 0 }, reconfigure: { $0 })
         _ = try await coordinator.prepare("global")
         try await withThrowingTaskGroup(of: String?.self) { group in
             for _ in 0..<12 {
@@ -115,7 +167,7 @@ struct DefaultAgentCredentialTests {
     }
     @Test @MainActor func revisionsAreStableWhenCredentialsDoNotChange() async throws {
         let fixture = CredentialRefreshFixture()
-        let coordinator = ProviderAccountCoordinator(refresh: { try await fixture.refresh($0) }, version: { 0 })
+        let coordinator = ProviderAccountCoordinator(refresh: { try await fixture.refresh($0) }, version: { 0 }, configurationVersion: { 0 }, scopeVersion: { 0 }, reconfigure: { $0 })
         let first = try await coordinator.prepare("local")
         coordinator.invalidate()
         let second = try await coordinator.prepare("local")
@@ -192,7 +244,7 @@ extension DefaultAgentCredentialTests {
     }
     @Test @MainActor func endingAnOldSignInCannotReleaseANewerSignIn() async throws {
         let fixture = CredentialRefreshFixture()
-        let coordinator = ProviderAccountCoordinator(refresh: { try await fixture.refresh($0) }, version: { 0 })
+        let coordinator = ProviderAccountCoordinator(refresh: { try await fixture.refresh($0) }, version: { 0 }, configurationVersion: { 0 }, scopeVersion: { 0 }, reconfigure: { $0 })
         _ = try await coordinator.prepare("local")
         let old = try await coordinator.beginSignIn()
         coordinator.endSignIn(old)

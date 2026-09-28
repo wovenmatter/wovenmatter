@@ -60,26 +60,30 @@ struct BackendConnectionsSnapshot: Codable, Equatable {
             case "localServers": break
             case "connectServer":
                 let enteredKey = (c.value ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-                let savedKey = enteredKey.isEmpty ? try c.server.flatMap { try DefaultAgentSupport.key($0.id) } : enteredKey
+                let existingServerID = c.server?.id
+                let savedKey = try await ProviderConnectionStore.shared.perform(invalidatesAccounts: false) {
+                    enteredKey.isEmpty ? try existingServerID.flatMap { try DefaultAgentSupport.key($0) } : enteredKey
+                }
                 guard let savedKey, !savedKey.isEmpty else { throw DefaultAgentError.message("Enter the server API key.") }
                 _ = try await LocalModelServerStore.connect(url: c.label ?? "", key: savedKey, replacing: c.server)
             case "removeServer":
-                if let server = c.server { try LocalModelServerStore.remove(server) }
+                if let server = c.server { try await LocalModelServerStore.remove(server) }
             case "configuration": if let value = c.configuration { model.configuration = value }
             case "inherits": model.setInherits(c.flag ?? false)
-            case "saveKey": _ = model.saveKey(c.value ?? "", provider: c.provider ?? "", label: c.label)
-            case "accounts": model.loadAccounts()
-            case "select": model.selectAccount(c.value ?? "", provider: c.provider ?? "", remote: c.remote)
-            case "move": model.moveAccount(c.value ?? "", provider: c.provider ?? "", offset: c.offset ?? 0)
-            case "remove": model.removeAccount(c.value ?? "", provider: c.provider ?? "", remote: c.remote)
-            case "reconnect": model.reconnectAccount(c.value ?? "", provider: c.provider ?? "", remote: c.remote)
-            case "signOut": model.signOut(c.provider ?? "", remote: c.remote)
+            case "saveKey": _ = await model.saveKey(c.value ?? "", provider: c.provider ?? "", label: c.label)
+            case "accounts": await model.loadAccountsAndWait()
+            case "select": await model.selectAccount(c.value ?? "", provider: c.provider ?? "", remote: c.remote)
+            case "move": await model.moveAccount(c.value ?? "", provider: c.provider ?? "", offset: c.offset ?? 0)
+            case "remove": await model.removeAccount(c.value ?? "", provider: c.provider ?? "", remote: c.remote)
+            case "reconnect": await model.reconnectAccount(c.value ?? "", provider: c.provider ?? "", remote: c.remote)
+            case "signOut": await model.signOut(c.provider ?? "", remote: c.remote)
             case "claude": model.signInClaude(remote: c.remote)
             case "cursorStatus": await model.refreshCursorStatus()
             case "cursorSignIn": model.signInCursor()
             case "scope": model.changeScope(c.value ?? "global")
             case "cancel": model.cancel()
             case "respond": model.respond(c.value ?? "")
+            case "catalog": model.loadCatalog(remote: c.remote)
             case "refresh": model.refresh(remote: c.remote, login: c.provider, action: c.value, profile: c.profile,
                 removingAccount: c.removingAccount, reconnectingAccount: c.reconnectingAccount)
             default: throw CocoaError(.featureUnsupported)

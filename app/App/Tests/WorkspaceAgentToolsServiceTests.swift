@@ -57,6 +57,22 @@ struct WorkspaceAgentToolsServiceTests {
 }
 
 extension WorkspaceAgentToolsServiceTests {
+    @Test func policiesAreFailClosedUntilAsyncObservationAndRemovedPanelsStayRemoved() async throws {
+        let fixture = try ToolSnapshotFixture()
+        defer { fixture.stop() }
+        let model = fixture.model
+        #expect(model.sessionPolicies[fixture.caller] == nil)
+        #expect(model.policy(for: fixture.caller).enabled.isEmpty)
+        let token = UUID()
+        await model.observeSession(fixture.caller, token: token).value
+        #expect(model.policy(for: fixture.caller) == (try fixture.database.sessionTools(fixture.caller)))
+        let refresh = model.observeSession(fixture.caller, token: token)
+        await model.observeSession(nil, token: token).value
+        await refresh.value
+        #expect(model.receipts[fixture.caller] == nil)
+        #expect(!model.hasOlderReceipts.contains(fixture.caller))
+    }
+
     @Test(.timeLimit(.minutes(1)))
     func relayResponseCanHandItsSlotToTheNextRequestBeforeWriteReturns() async throws {
         let fixture = try RelayForwardingFixture()
@@ -276,12 +292,12 @@ private struct RelayForwardingFixture {
 }
 
 extension WorkspaceAgentToolsServiceTests {
-    @Test func unchangedToolSnapshotsDoNotInvalidateConversationObservers() throws {
+    @Test func unchangedToolSnapshotsDoNotInvalidateConversationObservers() async throws {
         let fixture = try ToolSnapshotFixture()
         defer { fixture.stop() }
         let model = fixture.model
         let token = UUID()
-        model.observeSession(fixture.caller, token: token)
+        await model.observeSession(fixture.caller, token: token).value
         try model.setEnabled(.calendar, enabled: false, sessionID: fixture.caller)
         let changes = observeToolSnapshotChanges {
             _ = model.settings
@@ -294,17 +310,17 @@ extension WorkspaceAgentToolsServiceTests {
         // Exercise the actual one-second scheduler's refresh entry point without
         // a timer, provider service, or UI. An empty chat must stay quiet too.
         for _ in 0..<20 { try model.reload() }
-        model.observeSession(fixture.caller, token: token)
+        await model.observeSession(fixture.caller, token: token).value
         #expect(changes.count == 0)
         #expect(model.receipts[fixture.caller]?.isEmpty == true)
         #expect(!model.hasOlderReceipts.contains(fixture.caller))
     }
 
-    @Test func receiptPayloadChangesPublishEvenWhenIDsAndCountsStayTheSame() throws {
+    @Test func receiptPayloadChangesPublishEvenWhenIDsAndCountsStayTheSame() async throws {
         let fixture = try ToolSnapshotFixture()
         defer { fixture.stop() }
         let model = fixture.model
-        model.observeSession(fixture.caller, token: UUID())
+        await model.observeSession(fixture.caller, token: UUID()).value
         let inserted = observeToolSnapshotChanges { _ = model.receipts }
         let delivery = try fixture.database.reserveToolDelivery(sourceID: fixture.caller,
             targetID: fixture.target, text: "Review the result", requestID: UUID().uuidString)
@@ -336,7 +352,7 @@ extension WorkspaceAgentToolsServiceTests {
         #expect(unchanged.count == 0)
     }
 
-    @Test func receiptObservationRetainsPagedWindowsAndSharedPanelOwnership() throws {
+    @Test func receiptObservationRetainsPagedWindowsAndSharedPanelOwnership() async throws {
         let fixture = try ToolSnapshotFixture()
         defer { fixture.stop() }
         let model = fixture.model
@@ -347,7 +363,7 @@ extension WorkspaceAgentToolsServiceTests {
             ids.append(delivery.id)
         }
         let firstPanel = UUID(), secondPanel = UUID()
-        model.observeSession(fixture.caller, token: firstPanel)
+        await model.observeSession(fixture.caller, token: firstPanel).value
         #expect(model.receipts[fixture.caller]?.map(\.id) == Array(ids.suffix(200).reversed()))
         #expect(model.hasOlderReceipts.contains(fixture.caller))
         let unchanged = observeToolSnapshotChanges {
@@ -355,12 +371,12 @@ extension WorkspaceAgentToolsServiceTests {
             _ = model.hasOlderReceipts
         }
         try model.reload()
-        model.observeSession(fixture.caller, token: secondPanel)
-        model.observeSession(nil, token: firstPanel)
+        await model.observeSession(fixture.caller, token: secondPanel).value
+        await model.observeSession(nil, token: firstPanel).value
         #expect(unchanged.count == 0)
 
         let olderChanged = observeToolSnapshotChanges { _ = model.hasOlderReceipts }
-        model.loadOlderReceipts(sessionID: fixture.caller)
+        await model.loadOlderReceipts(sessionID: fixture.caller).value
         #expect(olderChanged.count == 1)
         #expect(model.receipts[fixture.caller]?.map(\.id) == Array(ids.reversed()))
         #expect(!model.hasOlderReceipts.contains(fixture.caller))
@@ -368,7 +384,7 @@ extension WorkspaceAgentToolsServiceTests {
             _ = model.receipts
             _ = model.hasOlderReceipts
         }
-        model.loadOlderReceipts(sessionID: fixture.caller)
+        await model.loadOlderReceipts(sessionID: fixture.caller).value
         try model.reload()
         #expect(exhausted.count == 0)
 
@@ -379,7 +395,7 @@ extension WorkspaceAgentToolsServiceTests {
         #expect(model.receipts[fixture.caller]?.map(\.id) == [newest.id] + ids.reversed())
         #expect(model.receipts[fixture.caller]?.last?.status == "cancelled")
         let removed = observeToolSnapshotChanges { _ = model.receipts }
-        model.observeSession(nil, token: secondPanel)
+        await model.observeSession(nil, token: secondPanel).value
         #expect(removed.count == 1)
         #expect(model.receipts.isEmpty)
         #expect(model.hasOlderReceipts.isEmpty)

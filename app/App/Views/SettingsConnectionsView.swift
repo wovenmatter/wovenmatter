@@ -23,7 +23,7 @@ struct SettingsConnectionsView: View {
                 keyDrafts.removeAll()
                 answer = ""
                 agent.changeScope($0)
-                agent.refresh(remote: remote)
+                agent.loadAccounts()
             })) {
                 Text("Woven Matter · shared").tag("global")
                 Text("Local workspace overrides").tag("local")
@@ -33,7 +33,7 @@ struct SettingsConnectionsView: View {
                 Toggle("Use global workspace defaults", isOn: Binding(get: { agent.inherits }, set: {
                     keyDrafts.removeAll()
                     agent.setInherits($0)
-                    agent.refresh(remote: remote)
+                    agent.loadAccounts()
                 }))
                 Text("Dictation and app-wide Usage use the shared accounts. Workspace overrides apply to Built-in.").font(.callout).foregroundStyle(.secondary)
             }
@@ -59,7 +59,7 @@ struct SettingsConnectionsView: View {
             Text("Subscription sign-ins and API keys remain separate. Disconnecting a shared account affects every feature using it. Disabling dictation or usage tracking keeps the account connected.").font(.callout).foregroundStyle(.secondary)
             LocalModelServerConnections(agent: agent)
         }
-        .task { agent.changeScope(initialScope); agent.refresh(remote: remote) }
+        .task { agent.changeScope(initialScope); agent.loadAccounts() }
         .onDisappear { agent.cancel() }
         .confirmationDialog("Reset Built-in credentials in this workspace?", isPresented: $confirmingCredentialReset) {
             Button("Reset credentials", role: .destructive) { agent.refresh(remote: remote, action: "reset") }
@@ -108,12 +108,12 @@ struct SettingsConnectionsView: View {
                             Text(account.createdAt.map { "Added " + $0.formatted(date: .abbreviated, time: .shortened) } ?? "Existing connection")
                                 .font(.caption).foregroundStyle(.secondary)
                             HStack {
-                                Button("Use first") { agent.selectAccount(account.id, provider: id, remote: remote) }.disabled(account.isSelected)
-                                Button("Move up") { agent.moveAccount(account.id, provider: id, offset: -1) }.disabled(account.isSelected || index <= 1)
-                                Button("Move down") { agent.moveAccount(account.id, provider: id, offset: 1) }.disabled(account.isSelected || index == accounts.count - 1)
-                                if subscription { Button("Reconnect") { agent.reconnectAccount(account.id, provider: id, remote: remote) } }
+                                Button("Use first") { Task { await agent.selectAccount(account.id, provider: id, remote: remote) } }.disabled(account.isSelected)
+                                Button("Move up") { Task { await agent.moveAccount(account.id, provider: id, offset: -1) } }.disabled(account.isSelected || index <= 1)
+                                Button("Move down") { Task { await agent.moveAccount(account.id, provider: id, offset: 1) } }.disabled(account.isSelected || index == accounts.count - 1)
+                                if subscription { Button("Reconnect") { Task { await agent.reconnectAccount(account.id, provider: id, remote: remote) } } }
                                 Spacer()
-                                Button("Remove") { agent.removeAccount(account.id, provider: id, remote: remote) }
+                                Button("Remove") { Task { await agent.removeAccount(account.id, provider: id, remote: remote) } }
                             }.buttonStyle(SettingsQuietButtonStyle()).disabled(!editable || agent.busy)
                         }
                     } label: {
@@ -140,7 +140,7 @@ struct SettingsConnectionsView: View {
                 if remote != nil && ["openai-codex", "xai"].contains(id) {
                     Text("This workspace can own one independent sign-in, tried before its shared accounts.")
                         .font(.caption).foregroundStyle(.secondary)
-                    Button("Use shared sign-in") { agent.signOut(id, remote: remote) }
+                    Button("Use shared sign-in") { Task { await agent.signOut(id, remote: remote) } }
                         .buttonStyle(SettingsQuietButtonStyle()).disabled(agent.busy || !editable)
                 }
                 if agent.signInProvider == id { signInSection }

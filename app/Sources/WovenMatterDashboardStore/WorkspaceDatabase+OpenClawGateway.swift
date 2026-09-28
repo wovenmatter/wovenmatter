@@ -1169,23 +1169,26 @@ extension WorkspaceDatabase {
     }
   }
 
-  public func openClawCronRuns(agentID: UUID? = nil) throws -> [OpenClawCronRun] {
+  /// The unbounded default is required by durable result collection. UI callers
+  /// request a per-job window and explicitly expand it to see older history.
+  public func openClawCronRuns(agentID: UUID? = nil, jobID: String? = nil, limit: Int? = nil) throws -> [OpenClawCronRun] {
     try withLock {
-      let statement = try prepareUnlocked(agentID == nil ? """
+      var predicates: [String] = []
+      var values: [String] = []
+      if let agentID { predicates.append("agent_id = ?"); values.append(agentID.uuidString.lowercased()) }
+      if let jobID { predicates.append("remote_job_id = ?"); values.append(jobID) }
+      let filter = predicates.isEmpty ? "" : " WHERE " + predicates.joined(separator: " AND ")
+      let bound = limit.map { " LIMIT \(max(1, $0))" } ?? ""
+      let statement = try prepareUnlocked("""
         SELECT remote_run_id, remote_job_id, agent_id, status, output,
           native_session_id, native_session_key, started_at, completed_at,
           remote_payload
-        FROM desktop_openclaw_cron_runs
+        FROM desktop_openclaw_cron_runs\(filter)
         ORDER BY COALESCE(started_at, completed_at) DESC, remote_run_id DESC
-        """ : """
-        SELECT remote_run_id, remote_job_id, agent_id, status, output,
-          native_session_id, native_session_key, started_at, completed_at,
-          remote_payload
-        FROM desktop_openclaw_cron_runs WHERE agent_id = ?
-        ORDER BY COALESCE(started_at, completed_at) DESC, remote_run_id DESC
+        \(bound)
         """)
       defer { sqlite3_finalize(statement) }
-      if let agentID { try bind(agentID.uuidString.lowercased(), at: 1, to: statement) }
+      for (index, value) in values.enumerated() { try bind(value, at: Int32(index + 1), to: statement) }
       var runs: [OpenClawCronRun] = []
       while true {
         let code = sqlite3_step(statement)

@@ -357,6 +357,8 @@ extension WorkspaceDatabase {
         ON desktop_openclaw_cron_jobs(agent_id, archive_state, updated_at DESC);
       CREATE INDEX IF NOT EXISTS desktop_openclaw_cron_runs_job
         ON desktop_openclaw_cron_runs(agent_id, remote_job_id, started_at DESC);
+      CREATE INDEX IF NOT EXISTS desktop_openclaw_cron_runs_history
+        ON desktop_openclaw_cron_runs(agent_id, remote_job_id, COALESCE(started_at, completed_at) DESC, remote_run_id DESC);
       """)
   }
 

@@ -100,7 +100,7 @@ final class RemoteWorkspacesModel {
         guard !isBackendProjection else { return }
         guard defaultAgentObservers.isEmpty else { return }
         ProviderAccountCoordinator.shared.start()
-        for name in [DefaultAgentSupport.credentialsChanged, Notification.Name("wovenmatter.default-agent.snapshot-ready")] {
+        for name in [DefaultAgentSupport.credentialsChanged, DefaultAgentSupport.configurationChanged, Notification.Name("wovenmatter.default-agent.snapshot-ready")] {
             defaultAgentObservers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                 Task { @MainActor in await self?.relayDefaultAgentCredentials() }
             })
@@ -113,10 +113,7 @@ final class RemoteWorkspacesModel {
             }
         })
         defaultAgentObservers.append(NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
-            Task { @MainActor in
-                ProviderAccountCoordinator.shared.invalidate()
-                await self?.relayDefaultAgentCredentials()
-            }
+            Task { @MainActor in await self?.relayDefaultAgentCredentials() }
         })
     }
     private func relayDefaultAgentCredentials() async {

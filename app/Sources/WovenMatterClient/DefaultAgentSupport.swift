@@ -8,18 +8,28 @@ public enum DefaultAgentSupport {
         engine == "claude" ? "Built-in Claude SDK" : "Built-in Pi sdk"
     }
     public static let settingsKey = "wovenmatter.default-agent.settings.v1"
+    private static let settingsLock = NSLock()
+    private static func readSettings() -> DefaultAgentSettingsScope {
+        UserDefaults.standard.data(forKey: settingsKey).flatMap {
+            try? JSONDecoder().decode(DefaultAgentSettingsScope.self, from: $0)
+        } ?? .init()
+    }
     public static var settings: DefaultAgentSettingsScope {
-        get {
-            UserDefaults.standard.data(forKey: settingsKey).flatMap {
-                try? JSONDecoder().decode(DefaultAgentSettingsScope.self, from: $0)
-            } ?? .init()
+        get { settingsLock.withLock { readSettings() } }
+        set { updateSettings { $0 = newValue } }
+    }
+    /// Keep public preference mutations atomic without holding a lock during notifications.
+    @discardableResult public static func updateSettings(_ update: (inout DefaultAgentSettingsScope) -> Void) -> DefaultAgentSettingsScope {
+        let (value, changed, scopesChanged) = settingsLock.withLock {
+            let oldValue = readSettings()
+            var value = oldValue
+            update(&value)
+            guard value != oldValue, let data = try? JSONEncoder().encode(value) else { return (oldValue, false, false) }
+            UserDefaults.standard.set(data, forKey: settingsKey)
+            return (value, true, Set(oldValue.workspaces.keys) != Set(value.workspaces.keys))
         }
-        set {
-            if let data = try? JSONEncoder().encode(newValue) {
-                UserDefaults.standard.set(data, forKey: settingsKey)
-                changed()
-            }
-        }
+        if changed { configurationDidChange(scopesChanged: scopesChanged) }
+        return value
     }
     public static var resources: URL? {
         let roots = [
@@ -48,10 +58,30 @@ public enum DefaultAgentSupport {
                     arguments: [root!.appending(path: "src/main.mjs").path]) : nil)
     }
     public static let credentialsChanged = Notification.Name("wovenmatter.default-agent.credentials-changed")
+    public static let configurationChanged = Notification.Name("wovenmatter.default-agent.configuration-changed")
     private static let revisionLock = NSLock()
     static let credentialLock = NSRecursiveLock()
     nonisolated(unsafe) private static var changeRevision: UInt64 = 0
+    nonisolated(unsafe) private static var settingsRevision: UInt64 = 0
+    nonisolated(unsafe) private static var scopeRevision: UInt64 = 0
     public static var revision: UInt64 { revisionLock.withLock { changeRevision } }
+    public static var configurationRevision: UInt64 { revisionLock.withLock { settingsRevision } }
+    public static var credentialScopeRevision: UInt64 { revisionLock.withLock { scopeRevision } }
+    public static func configurationDidChange(scopesChanged: Bool = false) {
+        revisionLock.withLock {
+            settingsRevision &+= 1
+            if scopesChanged { scopeRevision &+= 1 }
+        }
+        NotificationCenter.default.post(name: configurationChanged, object: nil)
+    }
+    /// Rebuild only public preferences while retaining the current credential snapshot.
+    public static func applyingConfiguration(to payload: DefaultAgentPayload) -> DefaultAgentPayload {
+        var value = payload
+        let scope = settings
+        value.config = value.workspace == "global" ? scope.global : scope.resolved(value.workspace)
+        value.config.customServers = LocalModelServerStore.servers
+        return value
+    }
     public static func changed() {
         revisionLock.withLock { changeRevision &+= 1 }
         NotificationCenter.default.post(name: credentialsChanged, object: nil)

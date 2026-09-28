@@ -25,13 +25,44 @@ final class DefaultAgentSettingsModel {
         let models: [Model]
         let searchConfigured: Bool
     }
+    private struct ResultContext {
+        let keyScope: String
+        let removingAccount: String?
+        let reconnectingAccount: String?
+        let provider: String?
+        let catalogOnly: Bool
+        let catalogConfiguration: DefaultAgentSettings?
+        let catalogKey: String?
+    }
     private var connectionChangesTask: Task<Void, Never>?
+    private var configurationChangesTask: Task<Void, Never>?
+    private var accountsTask: Task<Void, Never>?
+    private var resultTask: Task<Void, Never>?
+    private var processingResult = false
+    private var receivedResult = false
+    private var outputEnded = false
+    private var terminationStatus: Int32?
+    private var outputTask: Task<Void, Never>?
+    private var output: FileHandle?
+    private var catalogOnly = false
+    private var catalogRequestConfiguration: DefaultAgentSettings?
+    private var catalogRequestKey: String?
+    private var catalogCache: [String: (configuration: DefaultAgentSettings, models: [Model])] = [:]
     init() {
         guard LocalExecutionRole.current != .frontend else { return }
         connectionChangesTask = Task { [weak self] in
             for await _ in NotificationCenter.default.notifications(named: DefaultAgentSupport.credentialsChanged) {
                 guard let self else { return }
                 self.reloadStoredConnectionState()
+            }
+        }
+        configurationChangesTask = Task { [weak self] in
+            for await _ in NotificationCenter.default.notifications(named: DefaultAgentSupport.configurationChanged) {
+                guard let self else { return }
+                let previousKeyScope = self.keyScope
+                self.settings = DefaultAgentSupport.settings
+                self.localServers = LocalModelServerStore.servers
+                if self.keyScope != previousKeyScope { self.loadAccounts() }
             }
         }
     }
@@ -45,6 +76,7 @@ final class DefaultAgentSettingsModel {
     var backendRequest: ((String, Data) async throws -> Data)?
     private var backendCommandTask: Task<Void, Never>?
     private var backendPollTask: Task<Void, Never>?
+    private var backendGeneration = UUID()
 
     private func forward(_ command: BackendConnectionsCommand) -> Bool {
         guard let request = backendRequest else {
@@ -55,36 +87,48 @@ final class DefaultAgentSettingsModel {
             return false
         }
         backendPollTask?.cancel()
+        backendGeneration = UUID()
+        let requestID = backendGeneration
         let previous = backendCommandTask
         backendCommandTask = Task { [weak self] in
             await previous?.value
             guard let self else { return }
             do {
                 let result = try await request("connections.command", JSONEncoder().encode(command))
+                guard self.backendGeneration == requestID, !Task.isCancelled else { return }
                 self.applyBackendSnapshot(try JSONDecoder().decode(BackendConnectionsSnapshot.self, from: result))
                 self.pollBackendIfNeeded()
-            } catch { self.error = error.localizedDescription; self.busy = false }
+            } catch {
+                guard self.backendGeneration == requestID else { return }
+                self.error = error.localizedDescription; self.busy = false
+            }
         }
         return true
     }
     private func pollBackendIfNeeded() {
         guard busy, let request = backendRequest else { return }
         backendPollTask?.cancel()
+        let requestID = backendGeneration
         backendPollTask = Task { [weak self] in
             while !Task.isCancelled {
                 do {
                     try await Task.sleep(for: .milliseconds(250))
                     let data = try await request("connections.snapshot", Data())
                     try Task.checkCancellation()
-                    guard let self else { return }
+                    guard let self, self.backendGeneration == requestID else { return }
                     self.applyBackendSnapshot(try JSONDecoder().decode(BackendConnectionsSnapshot.self, from: data))
                     if !self.busy { return }
                 } catch is CancellationError { return }
-                catch { self?.error = error.localizedDescription; self?.busy = false; return }
+                catch {
+                    guard let self, self.backendGeneration == requestID else { return }
+                    self.error = error.localizedDescription; self.busy = false; return
+                }
             }
         }
     }
-    func applyBackendSnapshot(_ value: BackendConnectionsSnapshot) {
+    var backendSnapshotGeneration: UUID { backendGeneration }
+    func applyBackendSnapshot(_ value: BackendConnectionsSnapshot, expectedGeneration: UUID? = nil) {
+        if let expectedGeneration, expectedGeneration != backendGeneration { return }
         localServers = value.localServers
         scope = value.scope; settings = value.settings; catalog = value.catalog; providers = value.providers
         searchConfigured = value.searchConfigured; accounts = value.accounts
@@ -103,17 +147,22 @@ final class DefaultAgentSettingsModel {
         try await localServerCommand(.init(action: "removeServer", server: server))
     }
     private func localServerCommand(_ command: BackendConnectionsCommand) async throws {
-        let payload = try JSONEncoder().encode(command)
-        let data: Data
-        if let backendRequest {
-            await backendCommandTask?.value
-            data = try await backendRequest("connections.command", payload)
-        } else {
-            guard LocalExecutionRole.current != .frontend else { throw BackendRPCError.remote("The background service is not connected.") }
-            data = try await BackendConnectionsService.handle(method: "connections.command", payload: payload, model: self)
+        if backendRequest != nil {
+            _ = forward(command)
+            let requestID = backendGeneration
+            let task = backendCommandTask
+            await task?.value
+            guard backendGeneration == requestID, !Task.isCancelled else { throw CancellationError() }
+            if let error { throw DefaultAgentError.message(error) }
+            return
         }
+        guard LocalExecutionRole.current != .frontend else { throw BackendRPCError.remote("The background service is not connected.") }
+        let runID = generation
+        let data = try await BackendConnectionsService.handle(method: "connections.command", payload: JSONEncoder().encode(command), model: self)
+        guard generation == runID, !Task.isCancelled else { throw CancellationError() }
         applyBackendSnapshot(try JSONDecoder().decode(BackendConnectionsSnapshot.self, from: data))
     }
+
     var scope = "global"
     var settings = DefaultAgentSupport.settings
     var catalog: [Model] = []
@@ -123,7 +172,8 @@ final class DefaultAgentSettingsModel {
         if let provider = providers.first(where: { $0.id == id }) {
             return provider.connected ? "Credentials present" : "Connect account"
         }
-        return (accounts[id] ?? []).isEmpty ? "Connect account" : "Credential saved · status unchecked"
+        guard let saved = accounts[id] else { return "Status unchecked" }
+        return saved.isEmpty ? "Connect account" : "Credential saved · status unchecked"
     }
     private func invalidateConnection(_ provider: String) {
         providers.removeAll { $0.id == provider }
@@ -158,26 +208,38 @@ final class DefaultAgentSettingsModel {
                 _ = forward(.init(action: "configuration", configuration: newValue))
                 return
             }
-            settings = DefaultAgentSupport.settings
-            if scope == "global" { settings.global = newValue } else { settings.workspaces[scope] = newValue }
-            DefaultAgentSupport.settings = settings
+            settings = DefaultAgentSupport.updateSettings { value in
+                if scope == "global" { value.global = newValue } else { value.workspaces[scope] = newValue }
+            }
         }
     }
     var inherits: Bool { scope != "global" && settings.workspaces[scope] == nil }
     var keyScope: String { inherits ? "global" : scope }
-    var effectiveDefaultModel: String? { configuration.defaultModel.flatMap { id in catalog.contains { $0.id == id } ? id : nil } ?? catalog.first { item in providers.contains { $0.id == item.provider && $0.connected } }?.id ?? catalog.first?.id }
+    var availableModelProviderIDs: Set<String> {
+        var result = Set(accounts.filter { !$0.value.isEmpty }.map(\.key))
+        for provider in providers {
+            if provider.connected { result.insert(provider.id) }
+            else { result.remove(provider.id) }
+        }
+        return result
+    }
+    var effectiveDefaultModel: String? {
+        let available = availableModelProviderIDs
+        return configuration.defaultModel.flatMap { id in catalog.contains { $0.id == id } ? id : nil }
+            ?? catalog.first { available.contains($0.provider) }?.id ?? catalog.first?.id
+    }
     var orderedModels: [Model] {
         DefaultAgentModelCatalog.visibleIDs(explicit: configuration.models, defaultModel: effectiveDefaultModel, catalog: catalog.map(\.id)).compactMap { id in catalog.first { $0.id == id } }
     }
     func setInherits(_ value: Bool) {
         if forward(.init(action: "inherits", flag: value)) { return }
-        settings = DefaultAgentSupport.settings
-        if value {
-            settings.workspaces.removeValue(forKey: scope)
-        } else {
-            settings.workspaces[scope] = settings.global
+        settings = DefaultAgentSupport.updateSettings { settings in
+            if value { settings.workspaces.removeValue(forKey: scope) }
+            else { settings.workspaces[scope] = settings.global }
         }
-        DefaultAgentSupport.settings = settings
+        providers = []
+        accounts = [:]
+        loadAccounts()
     }
     func saveKeyConfirmed(_ key: String, provider: String, label: String? = nil) async -> Bool {
         guard backendRequest != nil else {
@@ -185,84 +247,130 @@ final class DefaultAgentSettingsModel {
                 error = "The background service is not connected."
                 return false
             }
-            return saveKey(key, provider: provider, label: label)
+            return await saveKey(key, provider: provider, label: label)
         }
         busy = true
         _ = forward(.init(action: "saveKey", provider: provider, value: key, label: label))
-        await backendCommandTask?.value
-        return error == nil
+        let requestID = backendGeneration
+        let task = backendCommandTask
+        await task?.value
+        return backendGeneration == requestID && error == nil && !Task.isCancelled
     }
-    @discardableResult func saveKey(_ key: String, provider: String, label: String? = nil) -> Bool {
+    @discardableResult func saveKey(_ key: String, provider: String, label: String? = nil) async -> Bool {
         if forward(.init(action: "saveKey", provider: provider, value: key, label: label)) { return true }
-        guard !inherits else { return false }
+        guard !inherits, !busy else { return false }
+        let runID = generation, accountScope = keyScope
+        busy = true
+        defer { if generation == runID { busy = false } }
         signInProvider = nil
         do {
-            _ = try ProviderConnectionAccounts.addKey(
-                key.trimmingCharacters(in: .whitespacesAndNewlines), provider: provider, scope: keyScope, label: label)
-            notice = key.isEmpty ? "Key removed." : "Key saved."
-            if ["anthropic", "xai-api"].contains(provider), !key.isEmpty { enableProvider(provider) }
+            _ = try await ProviderConnectionStore.shared.perform {
+                try ProviderConnectionAccounts.addKey(
+                    key.trimmingCharacters(in: .whitespacesAndNewlines), provider: provider, scope: accountScope, label: label)
+            }
+            guard generation == runID, !Task.isCancelled else { return false }
+            notice = "Key saved."
+            if ["anthropic", "xai-api"].contains(provider) { enableProvider(provider) }
             error = nil
-            loadAccounts()
-            return true
+            await loadAccountsAndWait()
+            return generation == runID
         } catch {
-            self.error = error.localizedDescription
+            if generation == runID { self.error = error.localizedDescription }
             return false
         }
     }
-    func loadAccounts() {
+    func loadAccounts(force: Bool = false) {
         if forward(.init(action: "accounts")) { return }
-        for provider in ["openai-codex", "openai", "claude-subscription", "anthropic", "xai", "xai-api", "openrouter", "opencode-go", "exa", "cursor"] {
-            do { accounts[provider] = try ProviderConnectionAccounts.list(provider: provider, scope: keyScope) }
-            catch { self.error = error.localizedDescription }
-        }
+        accountsTask?.cancel()
+        accountsTask = Task { [weak self] in await self?.loadAccountsAndWait(force: force) }
     }
-    func selectAccount(_ id: String, provider: String, remote: RemoteWorkspaceConfiguration? = nil) {
+    func loadAccountsAndWait(force: Bool = false) async {
+        guard backendRequest == nil, LocalExecutionRole.current != .frontend else { return }
+        let runID = generation, accountScope = keyScope
+        do {
+            let value = try await ProviderConnectionStore.shared.accounts(scope: accountScope, force: force)
+            guard !Task.isCancelled, generation == runID, keyScope == accountScope,
+                value.revision == DefaultAgentSupport.revision else { return }
+            if accounts != value.accounts { accounts = value.accounts }
+            if !providers.contains(where: { $0.id == "exa" }) { searchConfigured = !(accounts["exa"] ?? []).isEmpty }
+        } catch is CancellationError { }
+        catch { if generation == runID, keyScope == accountScope { self.error = error.localizedDescription } }
+    }
+    func selectAccount(_ id: String, provider: String, remote: RemoteWorkspaceConfiguration? = nil) async {
         if forward(.init(action: "select", provider: provider, value: id, remote: remote)) { return }
-        guard !inherits else { return }
-        do { try ProviderConnectionAccounts.select(id, provider: provider, scope: keyScope); invalidateConnection(provider); refresh(remote: remote) }
-        catch { self.error = error.localizedDescription }
+        guard !inherits, !busy else { return }
+        let runID = generation, accountScope = keyScope
+        busy = true
+        defer { if generation == runID { busy = false } }
+        do {
+            try await ProviderConnectionStore.shared.perform { try ProviderConnectionAccounts.select(id, provider: provider, scope: accountScope) }
+            guard generation == runID, !Task.isCancelled else { return }
+            invalidateConnection(provider)
+            refresh(remote: remote)
+        } catch { if generation == runID { self.error = error.localizedDescription } }
     }
-    func moveAccount(_ id: String, provider: String, offset: Int) {
+    func moveAccount(_ id: String, provider: String, offset: Int) async {
         if forward(.init(action: "move", provider: provider, value: id, offset: offset)) { return }
-        guard !inherits else { return }
-        do { try ProviderConnectionAccounts.move(id, offset: offset, provider: provider, scope: keyScope); loadAccounts() }
-        catch { self.error = error.localizedDescription }
+        guard !inherits, !busy else { return }
+        let runID = generation, accountScope = keyScope
+        busy = true
+        defer { if generation == runID { busy = false } }
+        do {
+            try await ProviderConnectionStore.shared.perform { try ProviderConnectionAccounts.move(id, offset: offset, provider: provider, scope: accountScope) }
+            guard generation == runID, !Task.isCancelled else { return }
+            await loadAccountsAndWait()
+        } catch { if generation == runID { self.error = error.localizedDescription } }
     }
-    func removeAccount(_ id: String, provider: String, remote: RemoteWorkspaceConfiguration? = nil) {
+    func removeAccount(_ id: String, provider: String, remote: RemoteWorkspaceConfiguration? = nil) async {
         if forward(.init(action: "remove", provider: provider, value: id, remote: remote)) { return }
-        guard !inherits else { return }
-        if provider == "claude-subscription" {
-            do {
-                let profile = try ProviderConnectionAccounts.nativeProfile(id, provider: provider, scope: keyScope)
+        guard !inherits, !busy else { return }
+        let runID = generation, accountScope = keyScope
+        busy = true
+        defer { if generation == runID { busy = false } }
+        do {
+            if provider == "claude-subscription" {
+                let profile = try await ProviderConnectionStore.shared.perform(invalidatesAccounts: false) {
+                    try ProviderConnectionAccounts.nativeProfile(id, provider: provider, scope: accountScope)
+                }
+                guard generation == runID, !Task.isCancelled else { return }
                 refresh(remote: remote, login: provider, action: "logout", profile: profile, removingAccount: id)
-            } catch { self.error = error.localizedDescription }
-            return
-        }
-        do { try ProviderConnectionAccounts.remove(id, provider: provider, scope: keyScope); invalidateConnection(provider); refresh(remote: remote) }
-        catch { self.error = error.localizedDescription }
+            } else {
+                try await ProviderConnectionStore.shared.perform { try ProviderConnectionAccounts.remove(id, provider: provider, scope: accountScope) }
+                guard generation == runID, !Task.isCancelled else { return }
+                invalidateConnection(provider)
+                refresh(remote: remote)
+            }
+        } catch { if generation == runID { self.error = error.localizedDescription } }
     }
-    func reconnectAccount(_ id: String, provider: String, remote: RemoteWorkspaceConfiguration?) {
+    func reconnectAccount(_ id: String, provider: String, remote: RemoteWorkspaceConfiguration?) async {
         if forward(.init(action: "reconnect", provider: provider, value: id, remote: remote)) { return }
-        guard !inherits else { return }
+        guard !inherits, !busy else { return }
+        let runID = generation, accountScope = keyScope
+        busy = true
+        defer { if generation == runID { busy = false } }
         do {
-            let profile = provider == "claude-subscription" ? try ProviderConnectionAccounts.nativeProfile(id, provider: provider, scope: keyScope) : nil
+            let profile = try await ProviderConnectionStore.shared.perform(invalidatesAccounts: false) {
+                provider == "claude-subscription" ? try ProviderConnectionAccounts.nativeProfile(id, provider: provider, scope: accountScope) : nil
+            }
+            guard generation == runID, !Task.isCancelled else { return }
             refresh(remote: remote, login: provider, profile: profile, reconnectingAccount: id)
-        } catch { self.error = error.localizedDescription }
+        } catch { if generation == runID { self.error = error.localizedDescription } }
     }
-    func signOut(_ provider: String, remote: RemoteWorkspaceConfiguration?) {
+    func signOut(_ provider: String, remote: RemoteWorkspaceConfiguration?) async {
         if forward(.init(action: "signOut", provider: provider, remote: remote)) { return }
-        if provider == "claude-subscription" {
+        guard !inherits, !busy else { return }
+        if provider == "claude-subscription" || remote != nil {
             refresh(remote: remote, login: provider, action: "logout")
             return
         }
-        if let remote {
-            refresh(remote: remote, login: provider, action: "logout")
-            return
-        }
+        let runID = generation, accountScope = keyScope
+        busy = true
+        defer { if generation == runID { busy = false } }
         do {
-            try DefaultAgentSupport.saveKey("", provider: "oauth." + provider, scope: keyScope)
+            try await ProviderConnectionStore.shared.perform { try DefaultAgentSupport.saveKey("", provider: "oauth." + provider, scope: accountScope) }
+            guard generation == runID, !Task.isCancelled else { return }
             refresh()
-        } catch { self.error = error.localizedDescription }
+        } catch { if generation == runID { self.error = error.localizedDescription } }
     }
     private func enableProvider(_ id: String) {
         var config = configuration
@@ -392,12 +500,18 @@ final class DefaultAgentSettingsModel {
         configuration = value
     }
     func changeScope(_ scope: String) {
-        if backendRequest != nil { self.scope = scope; _ = forward(.init(action: "scope", value: scope)); return }
+        if backendRequest != nil {
+            if self.scope != scope { catalog = []; providers = []; accounts = [:] }
+            self.scope = scope
+            _ = forward(.init(action: "scope", value: scope))
+            return
+        }
+        let changedScope = self.scope != scope
         cancel()
         settings = DefaultAgentSupport.settings
+        localServers = LocalModelServerStore.servers
         self.scope = scope
-        catalog = []
-        providers = []
+        if changedScope { catalog = []; providers = []; accounts = [:] }
         notice = nil
         error = nil
     }
@@ -406,6 +520,16 @@ final class DefaultAgentSettingsModel {
         generation = UUID()
         operationTask?.cancel()
         operationTask = nil
+        accountsTask?.cancel()
+        accountsTask = nil
+        // A received terminal result owns its credential commit. Navigation only
+        // cancels presentation; a completed sign-in must remain connected.
+        resultTask = nil
+        processingResult = false
+        outputTask?.cancel()
+        outputTask = nil
+        try? output?.close()
+        output = nil
         finishSignIn()
         input?.closeFile()
         input = nil
@@ -431,6 +555,24 @@ final class DefaultAgentSettingsModel {
         prompt = nil
         promptOptions = []
     }
+    private var catalogConfiguration: DefaultAgentSettings {
+        var value = DefaultAgentSettings()
+        value.providers = configuration.providers
+        value.customServers = LocalModelServerStore.servers
+        return value
+    }
+    func loadCatalog(remote: RemoteWorkspaceConfiguration? = nil) {
+        if forward(.init(action: "catalog", remote: remote)) { return }
+        let config = catalogConfiguration
+        let cacheKey = scope + ":" + (remote?.id.uuidString ?? "local")
+        if let value = catalogCache[cacheKey], value.configuration == config {
+            if catalog != value.models { catalog = value.models }
+            loadAccounts()
+            return
+        }
+        refresh(remote: remote, action: "catalog")
+        loadAccounts()
+    }
     func refresh(remote: RemoteWorkspaceConfiguration? = nil, login: String? = nil, action: String? = nil, profile: String? = nil, removingAccount: String? = nil, reconnectingAccount: String? = nil) {
         if forward(.init(action: "refresh", provider: login, value: action, remote: remote, profile: profile, removingAccount: removingAccount, reconnectingAccount: reconnectingAccount)) { return }
         guard login == nil || !inherits else { return }
@@ -440,7 +582,17 @@ final class DefaultAgentSettingsModel {
         self.reconnectingAccount = reconnectingAccount
         busy = true
         signInProvider = login
-        loadAccounts()
+        receivedResult = false
+        outputEnded = false
+        terminationStatus = nil
+        catalogOnly = action == "catalog"
+        if catalogOnly {
+            catalogRequestConfiguration = catalogConfiguration
+            catalogRequestKey = scope + ":" + (remote?.id.uuidString ?? "local")
+        } else {
+            if login == nil { ProviderAccountCoordinator.shared.invalidate() }
+            loadAccounts(force: login == nil)
+        }
         notice = nil
         error = nil
         outputBuffer = Data()
@@ -448,7 +600,12 @@ final class DefaultAgentSettingsModel {
         activeKeyScope = keyScope
         operationTask = Task { [self] in
             do {
-                let prepared = try await ProviderAccountCoordinator.shared.prepare(scope)
+                let prepared: DefaultAgentPayload
+                if catalogOnly {
+                    prepared = .init(config: catalogRequestConfiguration ?? configuration, credentials: [:], workspace: scope)
+                } else {
+                    prepared = try await ProviderAccountCoordinator.shared.prepare(scope)
+                }
                 if login != nil {
                     let lease = try await ProviderAccountCoordinator.shared.beginSignIn()
                     guard generation == runID, !Task.isCancelled else {
@@ -493,30 +650,36 @@ final class DefaultAgentSettingsModel {
                 child.standardInput = stdin
                 child.standardOutput = stdout
                 child.standardError = FileHandle.nullDevice
-                stdout.fileHandleForReading.readabilityHandler = { [weak self] handle in
-                    let data = handle.availableData
-                    if data.isEmpty {
-                        handle.readabilityHandler = nil
-                        return
-                    }
-                    Task { @MainActor in
-                        guard self?.generation == runID else { return }
-                        self?.receive(data)
-                    }
-                }
+                let reader = stdout.fileHandleForReading
                 child.terminationHandler = { [weak self] child in
                     Task { @MainActor in
                         guard let self, self.generation == runID else { return }
-                        self.busy = false
-                        if child.terminationStatus != 0 { self.finishSignIn() }
-                        if child.terminationStatus != 0 && self.error == nil {
-                            self.error = "Built-in setup did not complete. Try again."
-                        }
+                        self.terminationStatus = child.terminationStatus
+                        self.finishHelperIfNeeded()
                     }
                 }
                 try child.run()
                 process = child
                 input = stdin.fileHandleForWriting
+                output = reader
+                // One reader delivers bytes and EOF in order; process exit alone
+                // cannot finish a result whose Keychain commit is still pending.
+                outputTask = Task.detached(priority: .utility) { [weak self] in
+                    defer { try? reader.close() }
+                    do {
+                        while !Task.isCancelled, let data = try reader.read(upToCount: 65_536), !data.isEmpty {
+                            await MainActor.run { [weak self] in
+                                guard let self, self.generation == runID else { return }
+                                self.receive(data)
+                            }
+                        }
+                    } catch { }
+                    await MainActor.run { [weak self] in
+                        guard let self, self.generation == runID else { return }
+                        self.outputEnded = true
+                        self.finishHelperIfNeeded()
+                    }
+                }
                 write(body)
             } catch {
                 guard generation == runID else { return }
@@ -525,6 +688,12 @@ final class DefaultAgentSettingsModel {
                 finishSignIn()
             }
         }
+    }
+    private func finishHelperIfNeeded() {
+        guard outputEnded, terminationStatus != nil, !processingResult, !receivedResult else { return }
+        if error == nil { error = "Built-in setup did not complete. Try again." }
+        busy = false
+        finishSignIn()
     }
     private func write(_ value: [String: Any]) {
         do {
@@ -538,88 +707,20 @@ final class DefaultAgentSettingsModel {
         while let newline = outputBuffer.firstIndex(of: 0x0a) {
             let line = outputBuffer[..<newline]
             outputBuffer.removeSubrange(...newline)
-            guard let object = try? JSONSerialization.jsonObject(with: line) as? [String: Any] else { continue }
+            guard !receivedResult, let object = try? JSONSerialization.jsonObject(with: line) as? [String: Any] else { continue }
             if let result = object["result"] as? [String: Any] {
-                if result["disconnected"] as? Bool == true, let id = removingAccount, let provider = signInProvider {
-                    do { try ProviderConnectionAccounts.remove(id, provider: provider, scope: activeKeyScope) }
-                    catch { self.error = error.localizedDescription }
-                    removingAccount = nil
-                }
-                if result["connected"] as? Bool == true,
-                    let profile = result["nativeProfile"] as? String, let provider = result["provider"] as? String {
-                    do {
-                        _ = try ProviderConnectionAccounts.addNative(profile: profile, provider: provider, scope: activeKeyScope, label: result["account"] as? String)
-                        invalidateConnection(provider)
-                    }
-                    catch { self.error = error.localizedDescription }
-                }
-                if let raw = result["credential"], let provider = result["provider"] as? String {
-                    do {
-                        let credential = try JSONDecoder().decode(
-                            DefaultAgentCredential.self, from: JSONSerialization.data(withJSONObject: raw))
-                        if let id = reconnectingAccount {
-                            try ProviderConnectionAccounts.replace(credential, accountID: id, provider: provider, scope: activeKeyScope)
-                        } else {
-                            _ = try ProviderConnectionAccounts.addOAuth(credential, provider: provider, scope: activeKeyScope)
-                        }
-                        invalidateConnection(provider)
-                    } catch {
-                        self.error = "Sign-in completed but could not be saved in Keychain. Try again."
-                        busy = false
-                        finishSignIn()
-                        continue
-                    }
-                }
-                loadAccounts()
-                finishSignIn()
-                if result["connected"] as? Bool == true {
-                    notice = "Connected. This account is shared with the features that use it."
-                }
-                if result["credential"] != nil || result["connected"] != nil || result["reset"] != nil
-                    || result["disconnected"] != nil
-                {
-                    DefaultAgentSupport.changed()
-                }
-                if let data = try? JSONSerialization.data(withJSONObject: result),
-                    let status = try? JSONDecoder().decode(Status.self, from: data)
-                {
-                    if let legacy = status.providers.first(where: { $0.id == "claude-subscription" && $0.connected }),
-                        (accounts["claude-subscription"] ?? []).isEmpty {
-                        do { _ = try ProviderConnectionAccounts.addNative(profile: "legacy", provider: "claude-subscription", scope: activeKeyScope, label: legacy.account); loadAccounts() }
-                        catch { self.error = error.localizedDescription }
-                    }
-                    providers = status.providers
-                    catalog = status.models
-                    searchConfigured = status.searchConfigured
-                } else if result["reset"] as? Bool == true {
-                    notice =
-                        "Workspace credentials reset. Shared connections are available; sign in again for independent workspace accounts."
-                } else if result["disconnected"] as? Bool == true {
-                    notice = "Workspace sign-in removed. Shared credentials will be used when available."
-                } else if result["connected"] as? Bool == true {
-                    notice = "Connected. This account is shared with the features that use it."
-                } else if result["connected"] as? Bool == false {
-                    notice = nil
-                    error = result["detail"] as? String ?? "Sign-in did not complete. Try again."
-                }
-                let shouldRefresh = result["connected"] as? Bool == true || result["disconnected"] as? Bool == true
-                if shouldRefresh, let provider = signInProvider { invalidateConnection(provider) }
-                busy = false
-                signInProvider = nil
-                signInURL = nil
-                signInCode = nil
-                prompt = nil
-                if shouldRefresh, error == nil {
-                    let completedGeneration = generation
-                    let remote = activeRemote
-                    Task { @MainActor [weak self] in
-                        await Task.yield()
-                        guard let self, self.generation == completedGeneration, !self.busy else { return }
-                        self.refresh(remote: remote)
-                    }
-                }
+                guard !processingResult else { continue }
+                processingResult = true
+                receivedResult = true
+                let runID = generation
+                let context = ResultContext(keyScope: activeKeyScope, removingAccount: removingAccount,
+                    reconnectingAccount: reconnectingAccount, provider: signInProvider, catalogOnly: catalogOnly,
+                    catalogConfiguration: catalogRequestConfiguration, catalogKey: catalogRequestKey)
+                resultTask = Task { [self] in await receiveResult(result, runID: runID, context: context) }
+                continue
             }
             if let error = object["error"] as? String {
+                receivedResult = true
                 self.error = error
                 busy = false
                 finishSignIn()
@@ -643,4 +744,103 @@ final class DefaultAgentSettingsModel {
             }
         }
     }
+    private func receiveResult(_ result: [String: Any], runID: UUID, context: ResultContext) async {
+        defer { if generation == runID { processingResult = false; finishHelperIfNeeded() } }
+        let data = try? JSONSerialization.data(withJSONObject: result)
+        if context.catalogOnly {
+            guard generation == runID else { return }
+            struct Catalog: Decodable { let models: [Model] }
+            if let data, let response = try? JSONDecoder().decode(Catalog.self, from: data) {
+                if let requested = context.catalogConfiguration, let cacheKey = context.catalogKey {
+                    catalogCache[cacheKey] = (requested, response.models)
+                    if catalogConfiguration != requested { loadCatalog(remote: activeRemote); return }
+                }
+                catalog = response.models
+            } else { error = "The model catalog could not be loaded. Try again." }
+            busy = false
+            return
+        }
+        let status = data.flatMap { try? JSONDecoder().decode(Status.self, from: $0) }
+        let accountScope = context.keyScope
+        let removeID = result["disconnected"] as? Bool == true ? context.removingAccount : nil
+        let removeProvider = context.provider
+        let profile = result["connected"] as? Bool == true ? result["nativeProfile"] as? String : nil
+        let provider = result["provider"] as? String
+        let label = result["account"] as? String
+        let reconnectID = context.reconnectingAccount
+        let legacy = status?.providers.first { $0.id == "claude-subscription" && $0.connected }
+        do {
+            let credential: DefaultAgentCredential?
+            if let raw = result["credential"] {
+                credential = try JSONDecoder().decode(DefaultAgentCredential.self, from: JSONSerialization.data(withJSONObject: raw))
+            } else { credential = nil }
+            let legacyLabel = legacy?.account
+            let needsLegacyCheck = legacy != nil && profile == nil
+            let changesCredentials = removeID != nil || profile != nil || credential != nil || needsLegacyCheck
+            if changesCredentials {
+                try await ProviderConnectionStore.shared.perform {
+                    if let removeID, let removeProvider {
+                        try ProviderConnectionAccounts.remove(removeID, provider: removeProvider, scope: accountScope)
+                    }
+                    if let profile, let provider {
+                        _ = try ProviderConnectionAccounts.addNative(profile: profile, provider: provider, scope: accountScope, label: label)
+                    }
+                    if let credential, let provider {
+                        if let reconnectID { try ProviderConnectionAccounts.replace(credential, accountID: reconnectID, provider: provider, scope: accountScope) }
+                        else { _ = try ProviderConnectionAccounts.addOAuth(credential, provider: provider, scope: accountScope) }
+                    }
+                    if needsLegacyCheck, try ProviderConnectionAccounts.list(provider: "claude-subscription", scope: accountScope).isEmpty {
+                        _ = try ProviderConnectionAccounts.addNative(profile: "legacy", provider: "claude-subscription", scope: accountScope, label: legacyLabel)
+                    }
+                }
+            }
+            guard generation == runID, !Task.isCancelled else { return }
+            if profile != nil || credential != nil, let provider { invalidateConnection(provider) }
+            // Local account mutations already publish one notification after committing.
+            if !changesCredentials, result["reset"] as? Bool == true || result["disconnected"] as? Bool == true {
+                DefaultAgentSupport.changed()
+            }
+            await loadAccountsAndWait()
+        } catch is CancellationError { return }
+        catch {
+            guard generation == runID else { return }
+            error = "Sign-in completed but could not be saved in Keychain. Try again."
+        }
+        guard generation == runID, !Task.isCancelled else { return }
+        removingAccount = nil
+        finishSignIn()
+        if let status {
+            catalogCache.removeValue(forKey: scope + ":" + (activeRemote?.id.uuidString ?? "local"))
+            providers = status.providers
+            catalog = status.models
+            searchConfigured = status.searchConfigured
+        }
+        if result["connected"] as? Bool == false {
+            error = result["detail"] as? String ?? "Sign-in did not complete. Try again."
+        }
+        if error != nil { notice = nil }
+        else if result["reset"] as? Bool == true {
+            notice = "Workspace credentials reset. Shared connections are available; sign in again for independent workspace accounts."
+        } else if result["disconnected"] as? Bool == true {
+            notice = "Workspace sign-in removed. Shared credentials will be used when available."
+        } else if result["connected"] as? Bool == true {
+            notice = "Connected. This account is shared with the features that use it."
+        }
+        let shouldRefresh = error == nil && (result["connected"] as? Bool == true || result["disconnected"] as? Bool == true)
+        if shouldRefresh, let provider = signInProvider { invalidateConnection(provider) }
+        busy = false
+        signInProvider = nil
+        signInURL = nil
+        signInCode = nil
+        prompt = nil
+        if shouldRefresh {
+            let remote = activeRemote
+            Task { @MainActor [weak self] in
+                await Task.yield()
+                guard let self, self.generation == runID, !self.busy else { return }
+                self.refresh(remote: remote)
+            }
+        }
+    }
+
 }
