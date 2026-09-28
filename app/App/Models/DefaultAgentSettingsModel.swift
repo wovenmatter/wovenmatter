@@ -70,6 +70,7 @@ final class DefaultAgentSettingsModel {
         guard backendRequest == nil, LocalExecutionRole.current != .frontend else { return }
         settings = DefaultAgentSupport.settings
         localServers = LocalModelServerStore.servers
+        providers = []
         loadAccounts()
     }
     var localServers: [LocalModelServer] = []
@@ -77,6 +78,7 @@ final class DefaultAgentSettingsModel {
     private var backendCommandTask: Task<Void, Never>?
     private var backendPollTask: Task<Void, Never>?
     private var backendGeneration = UUID()
+    private var backendCommandError: String?
 
     private func forward(_ command: BackendConnectionsCommand) -> Bool {
         guard let request = backendRequest else {
@@ -88,6 +90,7 @@ final class DefaultAgentSettingsModel {
         }
         backendPollTask?.cancel()
         backendGeneration = UUID()
+        backendCommandError = nil
         let requestID = backendGeneration
         let previous = backendCommandTask
         backendCommandTask = Task { [weak self] in
@@ -100,6 +103,7 @@ final class DefaultAgentSettingsModel {
                 self.pollBackendIfNeeded()
             } catch {
                 guard self.backendGeneration == requestID else { return }
+                self.backendCommandError = error.localizedDescription
                 self.error = error.localizedDescription; self.busy = false
             }
         }
@@ -153,7 +157,7 @@ final class DefaultAgentSettingsModel {
             let task = backendCommandTask
             await task?.value
             guard backendGeneration == requestID, !Task.isCancelled else { throw CancellationError() }
-            if let error { throw DefaultAgentError.message(error) }
+            if let backendCommandError { throw DefaultAgentError.message(backendCommandError) }
             return
         }
         guard LocalExecutionRole.current != .frontend else { throw BackendRPCError.remote("The background service is not connected.") }
