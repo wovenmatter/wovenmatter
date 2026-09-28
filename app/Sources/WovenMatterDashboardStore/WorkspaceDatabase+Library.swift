@@ -46,11 +46,13 @@ extension WorkspaceDatabase {
             OR message_id IN (SELECT id FROM dashboard_messages WHERE conversation_id=OLD.id);
           DELETE FROM library_locations WHERE conversation_id=OLD.id;
         END;
-        CREATE TRIGGER IF NOT EXISTS library_trashed_conversation AFTER UPDATE OF deleted_at ON dashboard_conversations
-        WHEN NEW.deleted_at IS NOT NULL
+        -- Trash is reversible: visibility filters hide items while their files and
+        -- locations stay retained. Permanent deletion still uses the triggers above.
+        DROP TRIGGER IF EXISTS library_trashed_conversation;
+        CREATE TRIGGER library_trashed_conversation AFTER UPDATE OF deleted_at ON dashboard_conversations
+        WHEN NEW.deleted_at IS NOT OLD.deleted_at
         BEGIN
-          DELETE FROM library_messages WHERE message_id IN (SELECT id FROM dashboard_messages WHERE conversation_id=NEW.id);
-          DELETE FROM library_locations WHERE conversation_id=NEW.id;
+          UPDATE library_settings SET value=CAST(value AS INTEGER)+1 WHERE key='revision';
         END;
         """)
       for operation in ["INSERT", "UPDATE", "DELETE"] {
@@ -407,6 +409,8 @@ extension WorkspaceDatabase {
         """
         UPDATE library_items SET content_hash=?,size_bytes=?,storage=?,error=?,retry_at=? WHERE id=?
         AND storage IN ('pending','unavailable') AND content_hash IS NULL
+        AND EXISTS (SELECT 1 FROM dashboard_conversations c
+          WHERE c.id=library_items.conversation_id AND c.deleted_at IS NULL)
         """,
         [
           hash, size.map(String.init), hash == nil ? "unavailable" : "retained", error,

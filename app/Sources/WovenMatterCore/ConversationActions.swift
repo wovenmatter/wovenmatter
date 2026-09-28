@@ -17,7 +17,16 @@ public enum WorkspaceConversationExportFormat: String, Codable, Sendable {
     let clean = title.components(separatedBy: CharacterSet(charactersIn: "/:\\")
       .union(.controlCharacters)).joined(separator: "-")
       .trimmingCharacters(in: .whitespacesAndNewlines.union(CharacterSet(charactersIn: ".")))
-    return String((clean.isEmpty ? "Chat" : clean).prefix(100))
+    // Bound bytes as well as visible characters, including filesystem normalization.
+    var basename = ""
+    var byteCount = 0
+    for character in clean.prefix(100) {
+      let bytes = String(character).decomposedStringWithCanonicalMapping.utf8.count
+      guard byteCount + bytes <= 200 else { break }
+      basename.append(character)
+      byteCount += bytes
+    }
+    return (basename.isEmpty ? "Chat" : basename)
       + (self == .fullRun ? "-full-run" : "-messages") + "." + fileExtension
   }
 }

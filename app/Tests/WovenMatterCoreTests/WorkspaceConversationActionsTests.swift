@@ -107,6 +107,74 @@ struct WorkspaceConversationActionsTests {
     #expect(try f.db.claimToolDelivery(id: deliveryID) == nil)
   }
 
+  @Test func trashRetainsLibraryFilesAcrossCleanupAndRestore() throws {
+    let f = try Fixture(); defer { f.close() }
+    try f.db.setLibraryLocation(conversationID: f.chat, workspaceName: "Original workspace", root: f.root.path)
+    let run = try f.db.beginLocalACPRun(conversationID: f.chat, content: "Keep the file")
+    try f.db.replaceLocalACPAssistantMessage(runID: run.runID, content: "[Report](./report.txt)")
+    try f.db.completeLocalACPRun(runID: run.runID)
+    try f.db.indexLibraryMessages()
+    let item = try #require(f.db.libraryItems().first)
+    let files = LibraryFileStore(supportDirectory: f.root)
+    let bytes = Data("Retained original file".utf8)
+    let hash = try files.retain(bytes)
+    try f.db.finishLibraryFile(id: item.id, hash: hash, size: Int64(bytes.count))
+    let blob = f.root.appending(path: "library-files/" + hash)
+    try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-7200)], ofItemAtPath: blob.path)
+    // Simulate upgrading a database that still has the old destructive trash trigger.
+    try f.db.transaction {
+      try f.db.executeUnlocked("""
+        DROP TRIGGER library_trashed_conversation;
+        CREATE TRIGGER library_trashed_conversation AFTER UPDATE OF deleted_at ON dashboard_conversations
+        WHEN NEW.deleted_at IS NOT NULL BEGIN
+          DELETE FROM library_messages WHERE message_id IN (SELECT id FROM dashboard_messages WHERE conversation_id=NEW.id);
+          DELETE FROM library_locations WHERE conversation_id=NEW.id;
+        END;
+        """)
+    }
+    let upgraded = try WorkspaceDatabase(url: f.root.appending(path: "workspace.sqlite"))
+    let revision = try upgraded.libraryRevision()
+    try upgraded.mutateConversation(id: f.chat, mutation: .moveToTrash)
+    #expect(try f.db.libraryItems().isEmpty)
+    #expect(try f.db.retainedLibraryHashes().contains(hash))
+    try f.db.cleanupLibraryFiles()
+    #expect(FileManager.default.fileExists(atPath: blob.path))
+    let reopened = try WorkspaceDatabase(url: f.root.appending(path: "workspace.sqlite"))
+    try reopened.mutateConversation(id: f.chat, mutation: .restore)
+    let restored = try #require(try reopened.libraryItem(id: item.id))
+    #expect(restored.workspaceName == "Original workspace")
+    #expect(try reopened.libraryRoot(conversationID: f.chat) == f.root.path)
+    #expect(try Data(contentsOf: files.url(for: restored)) == bytes)
+    #expect(try reopened.libraryRevision() > revision)
+  }
+
+  @Test func trashCancelsClaimedUnsentDeliveriesPermanently() throws {
+    let f = try Fixture(); defer { f.close() }
+    let other = try f.db.createLocalACPSession(runtimeKind: .pi, title: "Sender", ownerDeviceID: UUID())
+    let id = UUID().uuidString.lowercased()
+    _ = try f.db.reserveToolDelivery(sourceID: other, targetID: f.chat, text: "Deferred work", requestID: id)
+    #expect(try f.db.claimToolDelivery(id: id) != nil)
+    try f.db.mutateConversation(id: f.chat, mutation: .moveToTrash)
+    try f.db.mutateConversation(id: f.chat, mutation: .restore)
+    #expect(throws: WorkspaceToolError.self) { try f.db.validateClaimedToolDelivery(id: id) }
+    try f.db.failToolDeliveryAttempt(id: id)
+    try f.db.recoverToolDeliveries()
+    #expect(try f.db.claimToolDelivery(id: id) == nil)
+    #expect(try f.db.sessionDeliveries().first(where: { $0.id == id })?.status == "cancelled")
+  }
+
+  @Test func unicodeExportFilenamesFitTheFilesystem() throws {
+    let f = try Fixture(); defer { f.close() }
+    for title in [String(repeating: "🙂", count: 100), String(repeating: "界", count: 100),
+                  String(repeating: "a\u{0301}", count: 100)] {
+      let filename = WorkspaceConversationExportFormat.fullRun.suggestedFilename(title: title)
+      #expect(filename.utf8.count <= 255)
+      let file = f.root.appending(path: filename)
+      try Data("Export".utf8).write(to: file)
+      #expect(try Data(contentsOf: file) == Data("Export".utf8))
+    }
+  }
+
   @Test func exportsContainOlderMessagesReferencesAndUntruncatedRunHistory() throws {
     let f = try Fixture(); defer { f.close() }
     let reference = AgentMessageReferenceDraft(kind: .note, resourceID: "note", titleSnapshot: "Research note",

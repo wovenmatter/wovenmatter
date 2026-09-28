@@ -142,7 +142,7 @@ struct WorkspaceLibraryTests {
     #expect(try Data(contentsOf: opened) == Data([1, 2, 3]))
   }
 
-  @Test("archive preserves items, deletion removes items and defeats a late transfer")
+  @Test("archive preserves items, trash hides items and defeats a late transfer")
   func deletion() throws {
     let f = try Fixture()
     defer { f.close() }

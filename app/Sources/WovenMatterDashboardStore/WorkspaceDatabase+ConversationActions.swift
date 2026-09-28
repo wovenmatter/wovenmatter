@@ -43,7 +43,8 @@ extension WorkspaceDatabase {
           """, [id])
         try toolsExecuteUnlocked("""
           UPDATE workspace_session_deliveries SET status = 'cancelled'
-          WHERE (target_id = ? OR source_id = ?) AND status = 'queued'
+          WHERE (target_id = ? OR source_id = ?)
+            AND (status = 'queued' OR (status = 'sending' AND transport_started = 0))
           """, [id, id])
       case .restore:
         // A folder may have been removed while this chat was in Trash.

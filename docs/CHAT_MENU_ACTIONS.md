@@ -17,9 +17,11 @@ Right-click a chat in either sidebar layout:
   preparation reservation, so a new dispatch cannot race that operation.
 
 The **Trash** sidebar entry lists trashed chats and offers **Restore**. Restoring
-preserves the chat's name, pin, and messages, and returns it to its previous folder
-if that folder still exists. Otherwise it returns to Workspace. Trashing pauses
-session timers and cancels queued deliveries; restoration does not resume them.
+preserves the chat's name, pin, messages, and retained Library files, and returns
+it to its previous folder if that folder still exists. Otherwise it returns to Workspace. Trashing pauses
+session timers and cancels queued or claimed-but-unsent deliveries; restoration
+does not resume them. Library entries are hidden while in Trash, and their retained
+files are protected from cleanup while the chat is in Trash.
 
 Exports are local snapshots of what Woven Matter has retained. They do not fetch
 missing provider history or bundle attachment file bytes. The full-run JSON
