@@ -24,16 +24,16 @@ test('subscription runtime cannot inherit API keys, provider overrides, or anoth
   assert.equal(claudeEnvironment(paths, 'explicit-api-key', inherited).ANTHROPIC_API_KEY, 'explicit-api-key');
 });
 
-test('Mac native credential directory blocks disk fallback without making session storage read-only', async t => {
+test('Mac native credential directory blocks disk fallback without making session storage read-only', { skip: process.platform !== 'darwin' }, async t => {
   const root = await mkdtemp(join(tmpdir(), 'woven-claude-storage-'));
   t.after(async () => { await chmod(join(root, 'claude-keychain'), 0o700); await rm(root, { recursive: true, force: true }); });
   const paths = await claudeDirectories(root, { platform: 'darwin' });
-  assert.equal((await stat(paths.storage)).mode & 0o777, 0o500);
+  assert.equal((await stat(paths.storage)).mode & 0o777, 0o700);
   assert.equal((await stat(paths.config)).mode & 0o777, 0o700);
   if (process.getuid() !== 0) await assert.rejects(writeFile(join(paths.storage, '.credentials.json'), 'fixture'), /EACCES|EPERM/);
   await writeFile(join(paths.config, 'fixture-session'), 'nonsecret');
   await claudeDirectories(root, { platform: 'darwin' });
-  assert.equal((await stat(paths.storage)).mode & 0o777, 0o500);
+  assert.equal((await stat(paths.storage)).mode & 0o777, 0o700);
 });
 
 test('remote native storage rejects disk-backed directories', async () => {

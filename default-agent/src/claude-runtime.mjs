@@ -2,7 +2,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createRequire } from 'node:module';
-import { chmod, mkdir, lstat, statfs } from 'node:fs/promises';
+import { chmod, mkdir, lstat, readdir, statfs } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { createHash } from 'node:crypto';
 import { createInterface } from 'node:readline';
@@ -36,19 +36,31 @@ export async function claudeDirectories(directory, { platform = process.platform
   const config = join(directory, 'claude-runtime');
   const storage = join(directory, 'claude-keychain');
   await privateDirectory(config);
-  await privateDirectory(storage, 0o500);
-  // The pinned runtime keys its native Keychain entry to this path. A read-only
-  // storage directory makes its plaintext fallback fail if Keychain is locked.
-  // Session files and native settings remain writable in the separate config dir.
-  await chmod(storage, 0o500);
+  // Keep this path stable: Claude derives its native Keychain identity from it.
+  // Its Keychain writer also needs a .storage-write.lock directory here. Deny
+  // regular-file creation before allowing lock directories, so both direct and
+  // temporary-file plaintext fallback writes fail before writing credentials.
+  await mkdir(storage, { recursive: true, mode: 0o500 });
+  await requirePrivateDirectory(storage);
+  try { await execute('/bin/chmod', ['+a', 'everyone deny add_file', storage]); }
+  catch { throw new DefaultAgentError('Claude credential storage could not be protected. Sign-in was stopped.'); }
+  const entries = await readdir(storage, { withFileTypes: true });
+  if (entries.some(entry => !entry.isDirectory())) {
+    throw new DefaultAgentError('Claude credential storage contains an unexpected file. Sign-in was stopped to avoid using plaintext credentials.');
+  }
+  await chmod(storage, 0o700);
   return { config, storage };
 }
 
 async function privateDirectory(path, mode = 0o700) {
   await mkdir(path, { recursive: true, mode });
+  await requirePrivateDirectory(path);
+  await chmod(path, mode);
+}
+
+async function requirePrivateDirectory(path) {
   const info = await lstat(path);
   if (!info.isDirectory() || info.isSymbolicLink() || info.uid !== process.getuid()) throw new DefaultAgentError('The Claude runtime directory is not private to this user.');
-  await chmod(path, mode);
 }
 
 export function claudeEnvironment(paths, apiKey, source = process.env) {
@@ -154,7 +166,13 @@ export async function inlineClaudeLogin(runtime, profile, { signal, notify, prom
       inputController.abort();
       for (const reader of readers) reader.close();
       if (error) reject(error);
-      else Promise.resolve().then(() => runtime.status(profile)).then(resolve, reject);
+      else Promise.resolve().then(async () => {
+        const status = await runtime.status(profile);
+        if (status.connected) return status;
+        return { ...status, detail: status.state === 'check_failed'
+          ? 'Claude returned from sign-in, but its saved connection could not be verified. Refresh connections to retry.'
+          : 'Claude did not save the subscription connection. Try signing in again.' };
+      }).then(resolve, reject);
     };
     const requestCode = async () => {
       if (!prompt || requestedCode) return;
