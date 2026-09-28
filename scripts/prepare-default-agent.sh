@@ -28,7 +28,12 @@ dependency_root="${TMPDIR:-/tmp}/wovenmatter-agent-dependencies-$lock_hash"
 if [ ! -f "$dependency_root/node_modules/.woven-lock" ] || [ "$(cat "$dependency_root/node_modules/.woven-lock")" != "$lock_hash" ]; then
   mkdir -p "$dependency_root"
   cp "$agent_root/package.json" "$agent_root/package-lock.json" "$dependency_root/"
-  npm ci --prefix "$dependency_root" --omit=dev --ignore-scripts --no-audit --no-fund --cpu="$node_arch" --os=darwin
+  (
+    # npm must see the physical working directory on macOS, where TMPDIR
+    # commonly begins with the /var symlink to /private/var.
+    cd -P "$dependency_root"
+    npm ci --omit=dev --ignore-scripts --no-audit --no-fund --cpu="$node_arch" --os=darwin
+  )
   printf '%s' "$lock_hash" > "$dependency_root/node_modules/.woven-lock"
 fi
 output="${1:-$agent_root}"
