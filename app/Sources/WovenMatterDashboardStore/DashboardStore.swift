@@ -684,6 +684,22 @@ public actor DashboardStore {
     return try await snapshot()
   }
 
+  public func mutateConversation(id: String, mutation: WorkspaceConversationMutation) throws {
+    try database.mutateConversation(id: id, mutation: mutation)
+  }
+
+  public func trashedConversations() throws -> [WorkspaceTrashedConversation] {
+    try database.trashedConversations()
+  }
+
+  public func exportConversation(id: String, format: WorkspaceConversationExportFormat) throws -> URL {
+    let data = try database.conversationExport(id: id, format: format)
+    let url = FileManager.default.temporaryDirectory
+      .appending(path: "wovenmatter-export-" + UUID().uuidString + "." + format.fileExtension)
+    try data.write(to: url, options: [.atomic, .completeFileProtection])
+    return url
+  }
+
   public func conversationContent(id: String) throws -> WorkspaceConversationContent {
     try database.conversationContent(id: id)
   }

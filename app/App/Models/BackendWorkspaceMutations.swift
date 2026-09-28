@@ -11,6 +11,7 @@ enum BackendWorkspaceMutation: Codable, Sendable {
     case pinFolder(id: String, isPinned: Bool)
     case moveFolder(id: String, up: Bool)
     case deleteFolder(id: String)
+    case conversation(id: String, mutation: WorkspaceConversationMutation)
     case moveConversation(id: String, folderID: String?)
     case createNote(folderID: String?, kind: NoteArtifactKind)
     case persistNoteDraft(DashboardNoteJournalEntry)
@@ -37,6 +38,8 @@ extension BackendApplicationService {
             result.accepted = try await store.moveFolder(id: id, direction: up ? .up : .down)
         case let .deleteFolder(id):
             try await store.deleteFolder(id: id)
+        case let .conversation(id, mutation):
+            try await model.mutateConversation(id: id, mutation: mutation)
         case let .moveConversation(id, folder):
             result.accepted = try await store.moveConversation(id: id, toFolderID: folder)
         case let .createNote(folder, kind):

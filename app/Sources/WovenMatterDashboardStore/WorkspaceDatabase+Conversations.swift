@@ -57,6 +57,7 @@ extension WorkspaceDatabase {
         SET title = ?, updated_at = ?
         WHERE id = ? AND title = ? AND desktop_owned = 1
           AND authority_kind = 'device_owned' AND deleted_at IS NULL
+          AND NOT EXISTS (SELECT 1 FROM desktop_conversation_titles WHERE conversation_id = dashboard_conversations.id)
         """)
       defer { sqlite3_finalize(conversation) }
       try bind(cleanTitle, at: 1, to: conversation)
@@ -119,72 +120,74 @@ extension WorkspaceDatabase {
   }
 
   public func conversationContent(id: String) throws -> WorkspaceConversationContent {
-    try withLock {
-      guard let operatorID = try canonicalWorkspaceOperatorIDUnlocked() else {
-        return WorkspaceConversationContent(conversationID: id, messages: [], runs: [])
-      }
-      let messages = try decodeCanonicalRowsUnlocked(
-        """
-        SELECT json_object(
-          'id', message.id, 'conversation_id', message.conversation_id,
-          'client_message_id', message.client_message_id,
-          'sender_kind',(SELECT kind FROM workspace_session_deliveries WHERE message_id=message.id),
-          'sender_session_id',(SELECT source_id FROM workspace_session_deliveries WHERE message_id=message.id),
-          'sender_agent',(SELECT source_agent FROM workspace_session_deliveries WHERE message_id=message.id),
-          'sender_session_title',(SELECT source_title FROM workspace_session_deliveries WHERE message_id=message.id),
-          'run_id', message.run_id, 'role', message.role,
-          'governing_plane', message.governing_plane,
-          'authority_device_id', message.authority_device_id,
-          'content', message.content, 'status', message.status,
-          'created_at', message.created_at, 'updated_at', message.updated_at
-        )
-        FROM dashboard_messages AS message
-        JOIN dashboard_conversations AS conversation
-          ON conversation.id = message.conversation_id
-        WHERE (conversation.user_id = ? OR conversation.desktop_owned = 1)
-          AND conversation.id = ?
-          AND conversation.deleted_at IS NULL
-          AND conversation.is_archived = 0
-          AND conversation.governing_plane = 'wovenmatter_macos'
-        ORDER BY message.created_at, message.id
-        """,
-        bindings: [operatorID, id],
-        as: WorkspaceMessageRecord.self
-      )
-      let runs = try decodeCanonicalRowsUnlocked(
-        """
-        SELECT json_object(
-          'id', run.id, 'conversation_id', run.conversation_id,
-          'agent_id', run.agent_id,
-          'governing_plane', run.governing_plane,
-          'authority_device_id', run.authority_device_id,
-          'user_message_id', run.user_message_id,
-          'assistant_message_id', run.assistant_message_id,
-          'status', run.status, 'error', run.error,
-          'started_at', run.started_at, 'completed_at', run.completed_at,
-          'created_at', run.created_at, 'updated_at', run.updated_at
-        )
-        FROM dashboard_runs AS run
-        JOIN dashboard_conversations AS conversation
-          ON conversation.id = run.conversation_id
-        WHERE (conversation.user_id = ? OR conversation.desktop_owned = 1)
-          AND conversation.id = ?
-          AND conversation.deleted_at IS NULL
-          AND conversation.is_archived = 0
-          AND conversation.governing_plane = 'wovenmatter_macos'
-        ORDER BY run.created_at, run.id
-        """,
-        bindings: [operatorID, id],
-        as: WorkspaceRunRecord.self
-      )
-      return WorkspaceConversationContent(
-        conversationID: id,
-        messages: messages,
-        runs: runs,
-        attachments: try messageAttachmentRecordsUnlocked(messageIDs: messages.map(\.id)),
-        references: try messageReferenceRecordsUnlocked(messageIDs: messages.map(\.id))
-      )
+    try withLock { try conversationContentUnlocked(id: id) }
+  }
+
+  func conversationContentUnlocked(id: String) throws -> WorkspaceConversationContent {
+    guard let operatorID = try canonicalWorkspaceOperatorIDUnlocked() else {
+      return WorkspaceConversationContent(conversationID: id, messages: [], runs: [])
     }
+    let messages = try decodeCanonicalRowsUnlocked(
+      """
+      SELECT json_object(
+        'id', message.id, 'conversation_id', message.conversation_id,
+        'client_message_id', message.client_message_id,
+        'sender_kind',(SELECT kind FROM workspace_session_deliveries WHERE message_id=message.id),
+        'sender_session_id',(SELECT source_id FROM workspace_session_deliveries WHERE message_id=message.id),
+        'sender_agent',(SELECT source_agent FROM workspace_session_deliveries WHERE message_id=message.id),
+        'sender_session_title',(SELECT source_title FROM workspace_session_deliveries WHERE message_id=message.id),
+        'run_id', message.run_id, 'role', message.role,
+        'governing_plane', message.governing_plane,
+        'authority_device_id', message.authority_device_id,
+        'content', message.content, 'status', message.status,
+        'created_at', message.created_at, 'updated_at', message.updated_at
+      )
+      FROM dashboard_messages AS message
+      JOIN dashboard_conversations AS conversation
+        ON conversation.id = message.conversation_id
+      WHERE (conversation.user_id = ? OR conversation.desktop_owned = 1)
+        AND conversation.id = ?
+        AND conversation.deleted_at IS NULL
+        AND conversation.is_archived = 0
+        AND conversation.governing_plane = 'wovenmatter_macos'
+      ORDER BY message.created_at, message.id
+      """,
+      bindings: [operatorID, id],
+      as: WorkspaceMessageRecord.self
+    )
+    let runs = try decodeCanonicalRowsUnlocked(
+      """
+      SELECT json_object(
+        'id', run.id, 'conversation_id', run.conversation_id,
+        'agent_id', run.agent_id,
+        'governing_plane', run.governing_plane,
+        'authority_device_id', run.authority_device_id,
+        'user_message_id', run.user_message_id,
+        'assistant_message_id', run.assistant_message_id,
+        'status', run.status, 'error', run.error,
+        'started_at', run.started_at, 'completed_at', run.completed_at,
+        'created_at', run.created_at, 'updated_at', run.updated_at
+      )
+      FROM dashboard_runs AS run
+      JOIN dashboard_conversations AS conversation
+        ON conversation.id = run.conversation_id
+      WHERE (conversation.user_id = ? OR conversation.desktop_owned = 1)
+        AND conversation.id = ?
+        AND conversation.deleted_at IS NULL
+        AND conversation.is_archived = 0
+        AND conversation.governing_plane = 'wovenmatter_macos'
+      ORDER BY run.created_at, run.id
+      """,
+      bindings: [operatorID, id],
+      as: WorkspaceRunRecord.self
+    )
+    return WorkspaceConversationContent(
+      conversationID: id,
+      messages: messages,
+      runs: runs,
+      attachments: try messageAttachmentRecordsUnlocked(messageIDs: messages.map(\.id)),
+      references: try messageReferenceRecordsUnlocked(messageIDs: messages.map(\.id))
+    )
   }
 
   public func conversationHistoryPage(

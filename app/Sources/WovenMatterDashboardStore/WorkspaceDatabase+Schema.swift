@@ -91,6 +91,10 @@ extension WorkspaceDatabase {
         created_at TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL DEFAULT '',
         desktop_owned INTEGER NOT NULL DEFAULT 0
       );
+      CREATE TABLE IF NOT EXISTS desktop_conversation_titles (
+        conversation_id TEXT PRIMARY KEY REFERENCES dashboard_conversations(id) ON DELETE CASCADE,
+        title TEXT NOT NULL
+      );
       CREATE TABLE IF NOT EXISTS dashboard_messages (
         id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL DEFAULT '', client_message_id TEXT,
         run_id TEXT, role TEXT NOT NULL DEFAULT 'assistant',

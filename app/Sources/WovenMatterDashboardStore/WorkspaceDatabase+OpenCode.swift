@@ -131,7 +131,7 @@ extension WorkspaceDatabase {
           try bind(runStatus, at: 1, to: finish); try bind(runID, at: 2, to: finish); try stepDone(finish)
         }
       }
-      let update = try prepareUnlocked("UPDATE dashboard_conversations SET title=?, last_message_preview=?, last_message_at=MAX(?, COALESCE((SELECT imported_at FROM desktop_session_imports WHERE conversation_id=dashboard_conversations.id), '')), updated_at=? WHERE id=?")
+      let update = try prepareUnlocked("UPDATE dashboard_conversations SET title=COALESCE((SELECT title FROM desktop_conversation_titles WHERE conversation_id=dashboard_conversations.id), ?), last_message_preview=?, last_message_at=MAX(?, COALESCE((SELECT imported_at FROM desktop_session_imports WHERE conversation_id=dashboard_conversations.id), '')), updated_at=? WHERE id=?")
       defer { sqlite3_finalize(update) }
       try bind(snapshot.info["title"].string ?? fallbackTitle, at: 1, to: update)
       let lastID = snapshot.messages.last?["id"].text ?? ""

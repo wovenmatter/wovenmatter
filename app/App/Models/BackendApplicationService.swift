@@ -18,6 +18,8 @@ enum BackendApplicationCommand: Codable, Sendable {
     case recordSelections(conversationID: String, metadata: LocalACPSessionMetadata)
     case retrySelections(conversationID: String, selections: SessionSelections)
     case workspaceMutation(BackendWorkspaceMutation)
+    case exportConversation(id: String, format: WorkspaceConversationExportFormat)
+    case trashedConversations
     case sessionMetadata(conversationID: String)
     case createSession(runtime: AgentRuntimeKind, workspaceID: UUID?, conversationID: UUID,
                        workingDirectory: URL?, title: String?, nativeWorkspaceID: String?)
@@ -34,6 +36,8 @@ enum BackendApplicationCommand: Codable, Sendable {
 }
 
 struct BackendApplicationResult: Codable, Sendable {
+    var exportURL: URL?
+    var trashedConversations: [WorkspaceTrashedConversation]?
     var surfaceProfile: SurfaceProfile?
     var accepted: Bool = true
     var entityID: String?
@@ -163,6 +167,10 @@ final class BackendApplicationService {
             model.recordConfirmedSessionSelections(conversationID: id, metadata: metadata)
         case let .retrySelections(id, selections):
             return .init(accepted: model.retryPendingSessionSelections(conversationID: id, selections: selections))
+        case let .exportConversation(id, format):
+            return try await .init(exportURL: model.exportConversation(id: id, format: format))
+        case .trashedConversations:
+            return try await .init(trashedConversations: model.trashedConversations())
         case let .sessionMetadata(id):
             await model.refreshLocalACPSession(conversation: try conversation(id))
             return .init(metadata: model.localACPSessionMetadata[id] ?? model.openClawGatewaySessionMetadata[id])

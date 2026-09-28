@@ -381,7 +381,7 @@ struct DashboardConversationRow: View {
     @Binding var detailCardState: DashboardConversationDetailCardState
     let folders: [WorkspaceFolderRecord]
     let onMoveConversation: (String, String?) -> Void
-    let onUnavailableMutation: (String) -> Void
+    let onConversationAction: (WorkspaceConversationRecord, DashboardConversationMenuAction) -> Void
     let action: () -> Void
 
     var body: some View {
@@ -485,8 +485,8 @@ struct DashboardConversationRow: View {
             }
         }
         .contextMenu {
-            Button(conversation.isPinned ? "Unpin" : "Pin") { onUnavailableMutation("Conversation pinning") }
-            Button("Rename") { onUnavailableMutation("Conversation renaming") }
+            Button(conversation.isPinned ? "Unpin" : "Pin") { onConversationAction(conversation, .setPinned(!conversation.isPinned)) }
+            Button("Rename") { onConversationAction(conversation, .rename) }
             Menu("Move to Folder") {
                 moveTargetRow(title: "Workspace", folderID: nil, conversation: conversation)
                 ForEach(folders) { folder in
@@ -494,10 +494,12 @@ struct DashboardConversationRow: View {
                 }
             }
             Divider()
-            Button("Export messages") { onUnavailableMutation("Conversation export") }
-            Button("Export full run") { onUnavailableMutation("Conversation export") }
+            Button("Export messages") { onConversationAction(conversation, .export(.messages)) }
+            Button("Export full run") { onConversationAction(conversation, .export(.fullRun)) }
             Divider()
-            Button("Move to Trash", role: .destructive) { onUnavailableMutation("Conversation trash management") }
+            Button("Move to Trash", role: .destructive) { onConversationAction(conversation, .moveToTrash) }
+                .disabled(isRunning)
+                .help(isRunning ? "Stop this chat before moving it to Trash." : "Move this chat to Trash")
         }
         .onDisappear {
             hoverCardTask?.cancel()

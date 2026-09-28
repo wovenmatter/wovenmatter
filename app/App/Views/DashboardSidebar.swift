@@ -100,6 +100,8 @@ struct DashboardSidebarActions {
     let onSetFolderPinned: (String, Bool) -> Void
     let onMoveFolder: (String, WorkspaceFolderMoveDirection) -> Void
     let onDeleteFolder: (String) -> Void
+    let onShowTrash: () -> Void
+    let onConversationAction: (WorkspaceConversationRecord, DashboardConversationMenuAction) -> Void
     let onMoveConversation: (String, String?) -> Void
     let onUnavailableMutation: (String) -> Void
 }
@@ -176,6 +178,7 @@ struct DashboardSidebarRail: View {
             onSetFolderPinned: actions.onSetFolderPinned,
             onMoveFolder: actions.onMoveFolder,
             onDeleteFolder: actions.onDeleteFolder,
+            onShowTrash: actions.onShowTrash,
             onUnavailableMutation: actions.onUnavailableMutation
         )
     }
@@ -203,6 +206,7 @@ struct DashboardSidebarRail: View {
             onCreateNote: actions.onCreateNote,
             onSelectConversation: actions.onSelectConversation,
             onSelectNote: actions.onSelectNote,
+            onConversationAction: actions.onConversationAction,
             onMoveConversation: actions.onMoveConversation,
             onUnavailableMutation: actions.onUnavailableMutation,
             onSurfaceProfileChange: onSurfaceProfileChange
@@ -256,6 +260,7 @@ struct DashboardSidebarNavigationPage: View {
     let onSetFolderPinned: (String, Bool) -> Void
     let onMoveFolder: (String, WorkspaceFolderMoveDirection) -> Void
     let onDeleteFolder: (String) -> Void
+    let onShowTrash: () -> Void
     let onUnavailableMutation: (String) -> Void
 
     @AppStorage(DashboardWorkspaceSidebarVisibility.localWorkspace.storageKey)
@@ -803,7 +808,7 @@ struct DashboardSidebarNavigationPage: View {
                     title: "Trash",
                     hoverID: "folder:trash"
                 ) {
-                    onUnavailableMutation("Trash management")
+                    onShowTrash()
                 }
             }
         }
@@ -1451,6 +1456,7 @@ struct DashboardSidebarWorkspacePage: View {
     let onCreateNote: () -> Void
     let onSelectConversation: (String) -> Void
     let onSelectNote: (String) -> Void
+    let onConversationAction: (WorkspaceConversationRecord, DashboardConversationMenuAction) -> Void
     let onMoveConversation: (String, String?) -> Void
     let onUnavailableMutation: (String) -> Void
     let onSurfaceProfileChange: () -> Void
@@ -1761,7 +1767,7 @@ struct DashboardSidebarWorkspacePage: View {
             detailCardState: $conversationDetailCardState,
             folders: folders,
             onMoveConversation: onMoveConversation,
-            onUnavailableMutation: onUnavailableMutation
+            onConversationAction: onConversationAction
         ) {
             onSelectConversation(presentation.id)
         }

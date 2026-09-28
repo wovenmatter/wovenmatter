@@ -97,6 +97,8 @@ struct DashboardRunDisplayPolicy {
 
 struct WorkspaceView: View {
     @Bindable var model: ApplicationModel
+    @State private var conversationToRename: WorkspaceConversationRecord?
+    @State private var showsConversationTrash = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @AppStorage(DashboardTheme.storageKey) private var themeRawValue = DashboardTheme.green.rawValue
@@ -293,7 +295,11 @@ struct WorkspaceView: View {
             if value != .workspace { DictationModel.shared.leaveWorkspace() }
         }
         .onChange(of: allAgents.map(\.id)) { _, _ in selectDefaults() }
-        .onChange(of: model.workspaceOverview?.conversations.map(\.id) ?? []) { _, ids in
+        .onChange(of: model.workspaceOverview?.conversations.map(\.id) ?? []) { oldIDs, ids in
+            let removed = Set(oldIDs).subtracting(ids)
+            for panel in chatPanels.panels where panel.conversationID.map(removed.contains) == true {
+                _ = chatPanels.setConversation(nil, in: panel.id)
+            }
             selectDefaults()
         }
         .onChange(of: selectedConversationID) { _, conversationID in
@@ -323,6 +329,12 @@ struct WorkspaceView: View {
             model.persistMacSurfaceProfileFromUserDefaults()
         }
         .onDisappear { noticeTask?.cancel() }
+        .sheet(item: $conversationToRename) { conversation in
+            DashboardRenameConversationSheet(conversation: conversation, model: model)
+        }
+        .sheet(isPresented: $showsConversationTrash) {
+            DashboardConversationTrashSheet(model: model)
+        }
         .sheet(item: $archivedLibrarySource) { item in
             DashboardLibrarySourceSheet(item: item, model: model)
         }
@@ -578,6 +590,8 @@ struct WorkspaceView: View {
                 onSetFolderPinned: setFolderPinned,
                 onMoveFolder: moveFolder,
                 onDeleteFolder: deleteFolder,
+                onShowTrash: { showsConversationTrash = true },
+                onConversationAction: handleConversationAction,
                 onMoveConversation: moveConversation,
                 onUnavailableMutation: showUnavailableMutation
             ),
@@ -894,6 +908,36 @@ struct WorkspaceView: View {
             }
             if selectedFolderID == id {
                 selectFolder(nil)
+            }
+        }
+    }
+
+    private func handleConversationAction(_ conversation: WorkspaceConversationRecord, action: DashboardConversationMenuAction) {
+        if case .rename = action {
+            conversationToRename = conversation
+            return
+        }
+        Task {
+            do {
+                switch action {
+                case .rename: break
+                case .setPinned(let pinned):
+                    try await model.mutateConversation(id: conversation.id, mutation: .setPinned(pinned))
+                case .moveToTrash:
+                    try await model.mutateConversation(id: conversation.id, mutation: .moveToTrash)
+                    for panel in chatPanels.panels where panel.conversationID == conversation.id {
+                        _ = chatPanels.setConversation(nil, in: panel.id)
+                    }
+                    selectDefaults()
+                    showNotice("Chat moved to Trash.")
+                case .export(let format):
+                    let url = try await model.exportConversation(id: conversation.id, format: format)
+                    if try await DashboardConversationExport.save(url: url, title: conversation.title, format: format) {
+                        showNotice("Chat exported.")
+                    }
+                }
+            } catch {
+                showNotice(error.localizedDescription)
             }
         }
     }

@@ -2096,6 +2096,18 @@ final class ApplicationModel {
         return true
     }
 
+    // Share the send-preparation reservation so a trash write cannot race a new dispatch.
+    func beginConversationTrash(id: String) throws {
+        guard !runningToolSessionIDs.contains(id),
+              toolSessionAdmission.begin(id, running: runningToolSessionIDs, limit: Int.max) == .start else {
+            throw WorkspaceConversationActionError.running
+        }
+    }
+
+    func finishConversationTrash(id: String) {
+        toolSessionAdmission.finish(id)
+    }
+
     var runningToolSessionIDs: Set<String> {
         localRunningConversationIDs.union(openCodeInstances.flatMap { instance in
             instance.snapshots.filter { $0.value.active }.map(\.key)
