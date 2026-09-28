@@ -77,6 +77,7 @@ private enum DashboardConversationDisplayRow: Identifiable {
 
 struct DashboardCloudConversation: View {
     @Environment(\.dashboardTheme) private var theme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Bindable var model: ApplicationModel
     let agent: WorkspaceAgent?
     let conversation: WorkspaceConversationRecord?
@@ -115,6 +116,7 @@ struct DashboardCloudConversation: View {
     @State private var pendingBottomConversationID: String?
     @State private var bottomPositionRevision = 0
     @State private var scrollPositionID: String?
+    @State private var composerCollapseOverride: Bool?
     @State private var bottomStackHeight: CGFloat = 0
     @State private var scrollInteractionRevision = 0
     @State private var isUserScrolling = false
@@ -518,6 +520,7 @@ struct DashboardCloudConversation: View {
                                 || model.updatingLocalACPSessionIDs.contains($0.id)
                         } ?? false),
                         startsCollapsed: startsComposerCollapsed,
+                        collapseOverride: $composerCollapseOverride,
                         focusRequestGeneration: focusRequestGeneration,
                         onActivate: onActivatePanel,
                         onSelectModel: { selection in
@@ -598,6 +601,12 @@ struct DashboardCloudConversation: View {
                             .accessibilityHidden(true)
                     }
                 }
+                // Animate the whole row so the outside buttons follow the
+                // composer height in the same layout transaction.
+                .animation(
+                    reduceMotion ? nil : .easeOut(duration: 0.15),
+                    value: composerCollapseOverride ?? startsComposerCollapsed
+                )
             }
             .frame(maxWidth: .infinity)
             .padding(.horizontal, usesCompactPanelSpacing ? 12 : 32)

@@ -38,6 +38,7 @@ struct DashboardComposer: View {
     let sessionControlsDisabled: Bool
     let sendDisabled: Bool
     let startsCollapsed: Bool
+    @Binding var collapseOverride: Bool?
     let focusRequestGeneration: Int?
     let onActivate: () -> Void
     let onSelectModel: ((String) -> Void)?
@@ -50,6 +51,7 @@ struct DashboardComposer: View {
     let onCommandNavigation: (DashboardComposerNavigationDirection) -> Bool
     let onSend: () -> Void
     @Environment(\.dashboardTheme) private var theme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var selectedSlashCommandID: String?
     @State private var slashCommandsDismissed = false
     @State private var slashNavigationRequest = 0
@@ -60,7 +62,6 @@ struct DashboardComposer: View {
     @State private var dictationDraftID = UUID().uuidString
     @State private var openMenu: DashboardComposerMenuKind?
     @State private var isDropTarget = false
-    @State private var collapseOverride: Bool?
     @State private var permitsNarrowExpandedControls = false
 
     private var isCollapsed: Bool {
@@ -204,8 +205,7 @@ struct DashboardComposer: View {
                 focused = true
             }
         }
-        .animation(.easeOut(duration: 0.15), value: openMenu)
-        .animation(.easeOut(duration: 0.15), value: isCollapsed)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: openMenu)
     }
 
     private func composerTextEditor(maximumVisibleLines: Int) -> some View {
