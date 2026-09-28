@@ -132,6 +132,7 @@ struct DashboardComposer: View {
                 }
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
         .glassEffect(
@@ -228,6 +229,8 @@ struct DashboardComposer: View {
             dictationIdentity: sessionID ?? dictationDraftID
         )
         .frame(
+            minWidth: 0,
+            maxWidth: .infinity,
             minHeight: isCollapsed ? 36 : 32,
             alignment: .topLeading
         )

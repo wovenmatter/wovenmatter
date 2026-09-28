@@ -599,7 +599,7 @@ struct DashboardCloudConversation: View {
                     }
                 }
             }
-            .frame(maxWidth: 768)
+            .frame(maxWidth: .infinity)
             .padding(.horizontal, usesCompactPanelSpacing ? 12 : 32)
             .padding(.top, 8)
             .onGeometryChange(for: CGFloat.self) { geometry in
