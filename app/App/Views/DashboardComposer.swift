@@ -485,7 +485,6 @@ struct DashboardComposer: View {
 
     private var collapsedControls: some View {
         HStack(spacing: 4) {
-            toolsControl
             collapseControl
             voiceControl
             sendControl
