@@ -18,6 +18,36 @@ struct DefaultAgentSDKControlTests {
             try await Task.sleep(for: .milliseconds(10))
         }
     }
+    private func startFixture(
+        _ run: @escaping @Sendable () async throws -> DefaultAgentSDKStatus
+    ) async -> Task<DefaultAgentSDKStatus, any Error> {
+        let admitted = AsyncStream<Void>.makeStream()
+        let operation = Task {
+            // Swift Testing can queue this task behind unrelated test work.
+            // Start the fixture deadline only once this task actually runs.
+            admitted.continuation.yield(())
+            admitted.continuation.finish()
+            return try await run()
+        }
+        for await _ in admitted.stream { break }
+        return operation
+    }
+    private func awaitReady(_ root: URL, operation: Task<DefaultAgentSDKStatus, any Error>) async throws {
+        do { try await awaitFile(root.appending(path: "ready")) }
+        catch {
+            operation.cancel()
+            let outcome: String
+            switch await operation.result {
+            case .success(let result): outcome = "returned generation \(result.generation ?? "nil")"
+            case .failure(let failure): outcome = "failed: \(failure.localizedDescription)"
+            }
+            let phases = ["launch", "interpreter", "parent", "child", "ready"].filter {
+                FileManager.default.fileExists(atPath: root.appending(path: $0).path)
+            }.joined(separator: ", ")
+            let stderr = (try? String(contentsOf: root.appending(path: "stderr"), encoding: .utf8)) ?? ""
+            throw DefaultAgentError.message("Fixture did not become ready; phases=[\(phases)]; \(outcome); stderr=\(stderr.prefix(2048))")
+        }
+    }
     private func assertReaped(_ url: URL) throws {
         let text = try String(contentsOf: url, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
         let pid = try #require(Int32(text))
@@ -90,7 +120,7 @@ struct DefaultAgentSDKControlTests {
     @Test func taskCancellationTerminatesTheHelper() async throws {
         let root = try directory()
         defer { try? FileManager.default.removeItem(at: root) }
-        let operation = Task {
+        let operation = await startFixture {
             try await DefaultAgentSDKControl.run(.init(action: .check, id: "pi"), executable: URL(filePath: "/bin/sh"),
                 arguments: ["-c", hangingScript, "fixture", root.path], timeout: 30)
         }
@@ -123,8 +153,10 @@ extension DefaultAgentSDKControlTests {
         // disappears. Cleanup never signals a PID after its ownership can change.
         defer { try? FileManager.default.removeItem(at: root) }
         let script = #"""
-        import json, os, signal, sys, time
+        import sys
         root, mode = sys.argv[1:]
+        with open(root + '/interpreter', 'w') as output: output.write('started')
+        import json, os, signal, time
         child = os.fork()
         if child == 0:
             os.setsid()
@@ -140,15 +172,19 @@ extension DefaultAgentSDKControlTests {
         if mode == 'exit': os._exit(0)
         while True: time.sleep(0.01)
         """#
-        let operation = Task {
+        let launch = #"""
+        printf started > "$1/launch"
+        exec /usr/bin/python3 -c "$2" "$1" "$3" 2>"$1/stderr"
+        """#
+        let operation = await startFixture {
             try await DefaultAgentSDKControl.run(.init(action: .update, id: "claude"),
-                executable: URL(filePath: "/usr/bin/python3"),
-                arguments: ["-c", script, root.path, mode], timeout: 30)
+                executable: URL(filePath: "/bin/sh"),
+                arguments: ["-c", launch, "fixture", root.path, script, mode], timeout: 30)
         }
         defer { operation.cancel() }
         // This checks pipe teardown after a confirmed result, not Python's
         // cold startup speed. Timeout behavior has its own shell fixture above.
-        try await awaitFile(root.appending(path: "ready"))
+        try await awaitReady(root, operation: operation)
         let start = ContinuousClock.now
         if mode == "wait" { operation.cancel() }
         let result = try await operation.value
