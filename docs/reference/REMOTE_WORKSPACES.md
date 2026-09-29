@@ -67,9 +67,10 @@ limits the list to that workspace.
 The token-authenticated control API exposes `GET /v1/default-agent/sdks` for
 installed package metadata, without initializing an agent, unlocking credentials,
 or checking the network. `POST` to the same endpoint accepts
-`{"action":"check"}` for an explicit registry check, or
+`{"action":"check","id":"claude"}` for an explicit registry check, or
 `{"action":"update","id":"claude","version":"x.y.z"}` for an update.
-The SDK identifier is `pi` or `claude`; the checked version is optional. Responses contain `sdks` entries with `id`,
+The SDK identifier is `pi` or `claude`; omit it from a check to check both SDKs.
+The checked version is optional on updates. Responses contain `sdks` entries with `id`,
 `name`, `installedVersion`, `latestVersion`, and `updateAvailable`, plus the
 installation `generation` and an optional `notice`. Request bodies are bounded
 to 4 KiB. Disconnection cancels work before activation; an already activated
