@@ -5,6 +5,20 @@ import WovenMatterCore
 @testable import WovenMatterClient
 
 struct PiRPCSettlementTests {
+  @Test(arguments: [false, true])
+  func onlyDurableReconnectsRouteApprovalsBeforeTheNextPrompt(durable: Bool) async throws {
+    let fixture = PiPipeFixture(durable: durable)
+    await fixture.client.setResumePermissionHandler { request in
+      #expect(durable)
+      #expect(request.title == "Resume approval")
+      return "allow"
+    }
+    let server = Task { try await fixture.serve(settles: true, resumeApproval: durable) }
+    try await fixture.initialize()
+    await fixture.client.shutdown()
+    try await server.value
+  }
+
   @Test func durableRelayCarriesStableRunAndReturnsRecovery() async throws {
     let capture = PiWireCapture()
     let fixture = PiPipeFixture(recorder: { capture.append($0,$1) }, durable: true)
@@ -182,7 +196,7 @@ private struct PiPipeFixture: Sendable {
       existingSessionID: nil, title: nil, systemPrompt: nil)
   }
   func serve(settles: Bool, accepts: Bool = true, hold: PiPromptGate? = nil,
-             streamLines: [String] = [], advertisesConfiguration: Bool = false, recovery: Bool = false) async throws {
+             streamLines: [String] = [], advertisesConfiguration: Bool = false, recovery: Bool = false, resumeApproval: Bool? = nil) async throws {
     defer { try? events.fileHandleForWriting.close() }
     let cursor = FixtureCommandReader(handle: commands.fileHandleForReading)
     while let line = try await cursor.next() {
@@ -191,6 +205,15 @@ private struct PiPipeFixture: Sendable {
       var data: [String: Any]
       switch type {
       case "get_state":
+        if let resumeApproval {
+          try events.fileHandleForWriting.write(contentsOf: Data(
+            #"{"type":"extension_ui_request","id":"pending-approval","method":"confirm","title":"Resume approval"}"#.utf8) + Data([10]))
+          let reply = try #require(try await cursor.next())
+          let value = try JSONSerialization.jsonObject(with: reply) as! [String: Any]
+          #expect(value["type"] as? String == "extension_ui_response")
+          #expect(value["id"] as? String == "pending-approval")
+          #expect(value["confirmed"] as? Bool == resumeApproval)
+        }
         data = advertisesConfiguration ? [
           "sessionId": "fixture-session",
           "model": ["provider": "anthropic", "id": "shared-model"],

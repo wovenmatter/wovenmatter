@@ -5,22 +5,23 @@ import WovenMatterCore
 @testable import WovenMatterDashboardStore
 
 struct ACPResumePermissionTests {
-  @Test(arguments: [AgentRuntimeKind.defaultAgent, .codex])
-  func configurationLoadsRoutePendingBuiltInApprovalsToTheirConversation(runtime: AgentRuntimeKind) async throws {
+  @Test(arguments: [AgentRuntimeKind.defaultAgent, .codex, .pi], [false, true])
+  func configurationLoadsRouteDurableApprovalsToTheirConversation(runtime: AgentRuntimeKind, remote: Bool) async throws {
     let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: directory) }
     let database = try WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
     let conversations = try (0..<2).map { index in
-      let id = try database.createLocalACPSession(
-        runtimeKind: runtime, title: "Resume \(index)", ownerDeviceID: UUID()
-      )
+      let id = try remote
+        ? database.createRemoteACPSession(runtimeKind: runtime, remoteWorkspaceID: UUID(),
+            remoteWorkspaceName: "Fixture", title: "Resume \(index)", ownerDeviceID: UUID())
+        : database.createLocalACPSession(runtimeKind: runtime, title: "Resume \(index)", ownerDeviceID: UUID())
       try database.updateLocalACPSessionID(conversationID: id, sessionID: "remote-\(index)")
       return id
     }
     let requests = ResumePermissionRecorder()
     let coordinator = LocalACPSessionCoordinator(database: database, clientFactory: { _, _ in
-      ResumePermissionDriver(expectsHandler: runtime == .defaultAgent).driver()
+      ResumePermissionDriver(expectsHandler: runtime == .defaultAgent || remote).driver()
     })
     await coordinator.setResumePermissionHandler { conversationID, request in
       await requests.record(conversationID: conversationID, title: request.title)
@@ -43,7 +44,7 @@ struct ACPResumePermissionTests {
     }
 
     let observed = await requests.values
-    if runtime == .defaultAgent {
+    if runtime == .defaultAgent || remote {
       #expect(observed == [conversations[0]: "remote-0", conversations[1]: "remote-1"])
     } else {
       #expect(observed.isEmpty)
