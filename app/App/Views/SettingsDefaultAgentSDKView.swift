@@ -23,6 +23,7 @@ struct SettingsDefaultAgentSDKView: View {
     var body: some View {
         SettingsCard(title: "Agent SDKs", detail: "Running turns finish with their current SDK. Updates apply to subsequent turns.") {
             ForEach(workspaces) { workspace in
+                let state = connections.sdks.state(for: workspace.id)
                 DisclosureGroup(isExpanded: Binding(get: { expanded.contains(workspace.id) }, set: { value in
                     if value {
                         expanded.insert(workspace.id)
@@ -30,11 +31,13 @@ struct SettingsDefaultAgentSDKView: View {
                         if state.status == nil && !state.busy { perform(.status, in: workspace) }
                     } else { expanded.remove(workspace.id) }
                 })) {
-                    workspaceContent(workspace).padding(.top, 10).padding(.bottom, 4)
+                    if expanded.contains(workspace.id) {
+                        workspaceContent(workspace, state: state).padding(.top, 10).padding(.bottom, 4)
+                    }
                 } label: {
                     HStack {
                         Text(workspace.name).font(.callout.weight(.medium))
-                        if connections.sdks.state(for: workspace.id).busy { ProgressView().controlSize(.mini) }
+                        if state.busy { ProgressView().controlSize(.mini) }
                     }
                 }
                 .padding(.vertical, 3)
@@ -42,8 +45,7 @@ struct SettingsDefaultAgentSDKView: View {
         }
     }
 
-    @ViewBuilder private func workspaceContent(_ workspace: Workspace) -> some View {
-        let state = connections.sdks.state(for: workspace.id)
+    @ViewBuilder private func workspaceContent(_ workspace: Workspace, state: DefaultAgentSDKWorkspaceState) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             if let status = state.status {
                 ForEach(status.sdks) { sdk in
