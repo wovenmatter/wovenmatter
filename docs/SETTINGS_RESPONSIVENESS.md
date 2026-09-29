@@ -92,7 +92,7 @@ Three further changes remove identifiable repeated work:
 - `1569996` coalesces matching catalog requests already in flight. `27337c9`
   clears that request state on cancellation, errors, and completion, including
   when a superseding configuration resolves from the catalog cache.
-- PR #89's `aa4ff36` prevents duplicate SDK polling. This was verified by source
+- PR #89's `aa4ff36` skips publication of unchanged SDK polling results. This was verified by source
   review, not a live polling stress benchmark.
 
 The signed Dev build `8ab8e1b` compiled and launched successfully. A repeated-entry
