@@ -82,6 +82,32 @@ This is a targeted correction to measured presentation paths. It does not replac
 the entire SQLite ownership model; remaining synchronous scheduler mutations are
 part of the separate asynchronous-database work.
 
+## Follow-up Settings sanity pass
+
+Three further changes remove identifiable repeated work:
+
+- `094b275` retains one main-actor catalog metadata index across page entries,
+  reused only when every model field and its ordering match. Account, preference,
+  filter, and selection state are not shared in this memo.
+- `1569996` coalesces matching catalog requests already in flight. `27337c9`
+  clears that request state on cancellation, errors, and completion, including
+  when a superseding configuration resolves from the catalog cache.
+- PR #89's `aa4ff36` prevents duplicate SDK polling. This was verified by source
+  review, not a live polling stress benchmark.
+
+The signed Dev build `8ab8e1b` compiled and launched successfully. A repeated-entry
+sample captured 239 samples under synchronous click rendering, versus 237 in the
+preceding build: this does not demonstrate an overall latency improvement. The
+repeated catalog/lab classification previously represented by 17 samples was
+absent, as were model-row construction frames on entry.
+
+Manual checks covered SDK version expansion/collapse, the 421-model catalog,
+an Opus 5.5 search returning one match and clearing back to 421, opening/cancelling
+the default chooser, and switching All workspaces → Local → All workspaces until
+each scope settled. These checks did not modify drafts or saved preferences and
+did not run inference. Source/diff review passed; no CI, test suites, or session
+timers were run for this pass.
+
 ## Validation boundary
 
 This session deliberately runs no CI or test suites. Regression cases are added
