@@ -5,16 +5,16 @@ import WovenMatterClient
 extension WorkspaceAgentToolsModel {
     func calendar(_ command: WovenMatterToolCommand, callerID: String, requestID: String) async throws -> WovenMatterToolResponse {
         if command.action == "list" {
-            return .init(result: try database.listAgentCalendar(callerID: callerID,
+            return .init(result: try await database.listAgentCalendar(callerID: callerID,
                 since: command.options["since"].map(Self.date), until: command.options["until"].map(Self.date),
                 after: Int64(command.integer("after", default: 0, range: 0...Int.max)),
                 limit: command.integer("limit", default: 100, range: 1...200)))
         }
         if command.action == "read" || command.action == "occurrences" {
-            let event = try database.calendarEvent(id: command.required("id", allowPositional: true), callerID: callerID)
+            let event = try await database.calendarEvent(id: command.required("id", allowPositional: true), callerID: callerID)
             if command.action == "read" {
                 return .init(result: .object(["event": try WovenMatterToolResponse.value(event).result ?? .null,
-                    "runs": try WovenMatterToolResponse.value(database.calendarRuns().filter { $0.eventID == event.id }).result ?? .null]))
+                    "runs": try await WovenMatterToolResponse.value(database.calendarRuns().filter { $0.eventID == event.id }).result ?? .null]))
             }
             let since = try Self.date(command.required("since")), until = try Self.date(command.required("until"))
             guard until > since, until.timeIntervalSince(since) <= 366 * 86_400 else {
@@ -28,16 +28,16 @@ extension WorkspaceAgentToolsModel {
             }))
         }
         let input = String(decoding: try JSONEncoder().encode(command.operationArguments), as: UTF8.self)
-        if let id = try database.replayCalendarRequest(callerID: callerID, requestID: requestID, input: input) {
+        if let id = try await database.replayCalendarRequest(callerID: callerID, requestID: requestID, input: input) {
             return .init(result: .object(["id": .string(id)]))
         }
         let creating = command.action == "create"
         let id = creating ? requestID : try command.required("id", allowPositional: true)
-        let existing = creating ? nil : try database.calendarEvent(id: id, callerID: callerID)
+        let existing = creating ? nil : try await database.calendarEvent(id: id, callerID: callerID)
         let revision = try command.options["revision"].map { _ in try command.integer("revision", default: 0, range: 0...Int.max) }
         let occurrence = try command.options["occurrence"].map { _ in try command.integer("occurrence", default: 0, range: 0...Int.max) }
         if command.action == "remove" {
-            try database.deleteCalendarEvent(id: id, occurrence: occurrence, expectedRevision: revision,
+            try await database.deleteCalendarEvent(id: id, occurrence: occurrence, expectedRevision: revision,
                 callerID: callerID, requestID: requestID, requestInput: input)
             return .init(result: .object(["id": .string(id)]))
         }
@@ -80,7 +80,7 @@ extension WorkspaceAgentToolsModel {
             _ = try command.required("starts-at")
             targetID = requestID; create = true; draft.recurrence = nil
         } else if occurrence != nil { throw WorkspaceToolError.invalid("Use detach to change a single recurring occurrence, or update without --occurrence to change the series.") }
-        let saved = try database.saveCalendarEvent(id: targetID, draft: draft, creating: create,
+        let saved = try await database.saveCalendarEvent(id: targetID, draft: draft, creating: create,
             expectedRevision: create ? nil : revision ?? existing?.calendar.revision, detaching: detach,
             callerID: callerID, requestID: requestID, requestInput: input)
         return .init(result: .object(["id": .string(saved)]))

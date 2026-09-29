@@ -114,9 +114,9 @@ public actor DashboardStore {
   }
   private var localWorkspacePrepared = false
 
-  public init(supportDirectory: URL, readOnlyProjection: Bool = false) throws {
+  public init(supportDirectory: URL, readOnlyProjection: Bool = false) async throws {
     if readOnlyProjection {
-      let database = try WorkspaceDatabase(url: supportDirectory.appending(path: "workspace.sqlite"), readOnlyProjection: true)
+      let database = try await WorkspaceDatabase(url: supportDirectory.appending(path: "workspace.sqlite"), readOnlyProjection: true)
       self.database = database
       self.library = LibraryService(database: database)
       self.deviceIdentity = DashboardDeviceIdentity(fileURL: supportDirectory.appending(path: "dashboard-device-id"), readOnlyProjection: true)
@@ -131,14 +131,14 @@ public actor DashboardStore {
     // Complete usage DDL before opening the workspace owner and its recovery
     // transaction. A second handle changing schema after workspace triggers are
     // loaded can leave startup recovery with a stale schema on system SQLite.
-    let usageRecorder = try UsageRunRecorder(
+    let usageRecorder = try await UsageRunRecorder(
       databaseURL: supportDirectory.appending(path: "workspace.sqlite")
     )
-    let database = try WorkspaceDatabase(url: supportDirectory.appending(path: "workspace.sqlite"))
+    let database = try await WorkspaceDatabase(url: supportDirectory.appending(path: "workspace.sqlite"))
     let localProcessLease = try LocalACPProcessLease(
       fileURL: supportDirectory.appending(path: "local-acp-process.lock")
     )
-    try Self.recoverInterruptedLocalACPRuns(
+    try await Self.recoverInterruptedLocalACPRuns(
       database: database,
       processLease: localProcessLease
     )
@@ -181,7 +181,7 @@ public actor DashboardStore {
   static func recoverInterruptedLocalACPRuns(
     database: WorkspaceDatabase,
     processLease: any LocalACPProcessLeasing
-  ) throws {
+  ) async throws {
     let acquisition = try processLease.acquire()
     if acquisition == .retained {
       processLease.release()
@@ -189,31 +189,31 @@ public actor DashboardStore {
     }
     guard acquisition == .acquired else { return }
     defer { processLease.release() }
-    try database.recoverInterruptedLocalACPRuns()
+    try await database.recoverInterruptedLocalACPRuns()
   }
 
   public func prepareLocalWorkspace() async throws {
     guard !database.isReadOnlyProjection else { throw WorkspaceDatabaseError.readOnlyProjection }
     guard !localWorkspacePrepared else { return }
     let deviceID = try await deviceIdentity.id()
-    try database.bindDeviceOwnership(ownerDeviceID: deviceID)
-    try database.reconcileLocalCLIAgentCatalog(ownerDeviceID: deviceID)
+    try await database.bindDeviceOwnership(ownerDeviceID: deviceID)
+    try await database.reconcileLocalCLIAgentCatalog(ownerDeviceID: deviceID)
     localWorkspacePrepared = true
   }
 
-  public func buzzWorkspaceSnapshot() throws -> BuzzWorkspaceSnapshot {
-    try database.buzzWorkspaceSnapshot()
+  public func buzzWorkspaceSnapshot() async throws -> BuzzWorkspaceSnapshot {
+    try await database.buzzWorkspaceSnapshot()
   }
 
-  public func openClawGatewayLinks() throws -> [OpenClawGatewayLink] {
-    try database.openClawGatewayLinks()
+  public func openClawGatewayLinks() async throws -> [OpenClawGatewayLink] {
+    try await database.openClawGatewayLinks()
   }
 
   @discardableResult
   public func linkOpenClawGateway(_ link: OpenClawGatewayLink) async throws -> OpenClawGatewayLink {
-    try database.saveOpenClawGatewayLink(link)
+    try await database.saveOpenClawGatewayLink(link)
     _ = try await openClawGateway.reconnect(agentID: link.agentID)
-    return try database.openClawGatewayLinks().first(where: {
+    return try await database.openClawGatewayLinks().first(where: {
       $0.agentID == link.agentID
     }) ?? link
   }
@@ -225,7 +225,7 @@ public actor DashboardStore {
   public func unlinkOpenClawGateway(agentID: UUID) async throws {
     try await openClawGateway.disconnect(agentID: agentID)
     try await localOpenClawGateways.release(agentID: agentID)
-    try database.removeOpenClawGatewayLink(agentID: agentID)
+    try await database.removeOpenClawGatewayLink(agentID: agentID)
   }
 
   public func configureOpenClawGatewayTransport(
@@ -244,8 +244,8 @@ public actor DashboardStore {
   public func markOpenClawGateway(
     agentID: UUID,
     status: OpenClawGatewayConnectionStatus
-  ) throws -> OpenClawGatewayLink {
-    guard var link = try database.openClawGatewayLinks().first(where: {
+  ) async throws -> OpenClawGatewayLink {
+    guard var link = try await database.openClawGatewayLinks().first(where: {
       $0.agentID == agentID
     }) else {
       throw OpenClawGatewayClientError.invalidEndpoint
@@ -253,7 +253,7 @@ public actor DashboardStore {
     link.status = status.rawValue
     link.lastError = nil
     link.updatedAt = Date()
-    try database.saveOpenClawGatewayLink(link)
+    try await database.saveOpenClawGatewayLink(link)
     return link
   }
 
@@ -262,7 +262,7 @@ public actor DashboardStore {
     workspaceLinkID: UUID,
     remoteAgentID: String
   ) async throws -> OpenClawGatewayEndpoint {
-    let source = try database.buzzLocalAgentLaunchSource(
+    let source = try await database.buzzLocalAgentLaunchSource(
       workspaceLinkID: workspaceLinkID,
       agentID: remoteAgentID
     )
@@ -358,16 +358,16 @@ public actor DashboardStore {
     conversationID: String,
     agentID: UUID,
     sessionKey: String
-  ) throws {
-    try database.attachOpenClawGatewaySession(
+  ) async throws {
+    try await database.attachOpenClawGatewaySession(
       conversationID: conversationID,
       agentID: agentID,
       sessionKey: sessionKey
     )
   }
 
-  public func openClawGatewayConversationIDs() throws -> Set<String> {
-    try database.openClawGatewayConversationIDs()
+  public func openClawGatewayConversationIDs() async throws -> Set<String> {
+    try await database.openClawGatewayConversationIDs()
   }
 
   public func createOpenClawWorkspaceSession(agentID: UUID, sessionKey: String, cwd: URL, recover: Bool = false) async throws {
@@ -397,7 +397,8 @@ public actor DashboardStore {
     deliveryContent: String? = nil,
     noteContext: AgentNoteContext? = nil,
     onPermission: OpenClawGatewayCoordinator.PermissionHandler? = nil,
-    onUpdate: OpenClawGatewayCoordinator.UpdateHandler? = nil
+    onUpdate: OpenClawGatewayCoordinator.UpdateHandler? = nil,
+    dispatchFence: AgentDispatchFence? = nil
   ) async throws -> LocalACPRunIdentifiers {
     try await openClawGateway.accept(
       conversationID: conversationID,
@@ -405,7 +406,8 @@ public actor DashboardStore {
       deliveryContent: deliveryContent,
       noteContext: noteContext,
       onPermission: onPermission,
-      onUpdate: onUpdate
+      onUpdate: onUpdate,
+      dispatchFence: dispatchFence
     )
   }
 
@@ -416,7 +418,8 @@ public actor DashboardStore {
     deliveryContent: String? = nil,
     noteContext: AgentNoteContext? = nil,
     onPermission: OpenClawGatewayCoordinator.PermissionHandler? = nil,
-    onUpdate: OpenClawGatewayCoordinator.UpdateHandler? = nil
+    onUpdate: OpenClawGatewayCoordinator.UpdateHandler? = nil,
+    dispatchFence: AgentDispatchFence? = nil
   ) async throws -> LocalACPRunIdentifiers {
     try await openClawGateway.accept(
       conversationID: conversationID,
@@ -424,7 +427,8 @@ public actor DashboardStore {
       deliveryContent: deliveryContent,
       noteContext: noteContext,
       onPermission: onPermission,
-      onUpdate: onUpdate
+      onUpdate: onUpdate,
+      dispatchFence: dispatchFence
     )
   }
 
@@ -468,8 +472,8 @@ public actor DashboardStore {
     try await openClawGateway.calendarTaskMetadata(agentID: agentID, model: model)
   }
 
-  public func renameOpenClawAgent(agentID: UUID, displayName: String) throws {
-    try database.renameOpenClawAgent(id: agentID, displayName: displayName)
+  public func renameOpenClawAgent(agentID: UUID, displayName: String) async throws {
+    try await database.renameOpenClawAgent(id: agentID, displayName: displayName)
   }
 
   public func openClawHeartbeatConfiguration(
@@ -508,48 +512,48 @@ public actor DashboardStore {
     try await openClawGateway.performCronAction(agentID: job.agentID, jobID: job.id, action: action)
   }
 
-  public func openClawResultRoutes(agentID: UUID) throws -> [String: String] {
-    try database.openClawResultRoutes(agentID: agentID)
+  public func openClawResultRoutes(agentID: UUID) async throws -> [String: String] {
+    try await database.openClawResultRoutes(agentID: agentID)
   }
 
-  public func setOpenClawResultRoute(agentID: UUID, jobID: String, destination: String) throws {
-    try database.setOpenClawResultRoute(agentID: agentID, jobID: jobID, destination: destination)
+  public func setOpenClawResultRoute(agentID: UUID, jobID: String, destination: String) async throws {
+    try await database.setOpenClawResultRoute(agentID: agentID, jobID: jobID, destination: destination)
   }
 
-  public func openClawCronJobs(agentID: UUID? = nil) throws -> [OpenClawCronJob] {
-    try database.openClawCronJobs(agentID: agentID)
+  public func openClawCronJobs(agentID: UUID? = nil) async throws -> [OpenClawCronJob] {
+    try await database.openClawCronJobs(agentID: agentID)
   }
 
-  public func openClawCronRuns(agentID: UUID? = nil) throws -> [OpenClawCronRun] {
-    try database.openClawCronRuns(agentID: agentID)
+  public func openClawCronRuns(agentID: UUID? = nil) async throws -> [OpenClawCronRun] {
+    try await database.openClawCronRuns(agentID: agentID)
   }
 
-  public func emptyOpenClawCronTrash(agentID: UUID? = nil) throws {
-    try database.emptyOpenClawCronTrash(agentID: agentID)
+  public func emptyOpenClawCronTrash(agentID: UUID? = nil) async throws {
+    try await database.emptyOpenClawCronTrash(agentID: agentID)
   }
 
-  public func saveBuzzWorkspace(_ link: BuzzWorkspaceLink) throws {
-    try database.upsertBuzzWorkspaceLink(link)
+  public func saveBuzzWorkspace(_ link: BuzzWorkspaceLink) async throws {
+    try await database.upsertBuzzWorkspaceLink(link)
   }
 
   public func deleteBuzzWorkspace(id: UUID) async throws {
     try await prepareLocalWorkspace()
     let deviceID = try await deviceIdentity.id()
-    for enrollment in try database.buzzWorkspaceAgentEnrollments(
+    for enrollment in try await database.buzzWorkspaceAgentEnrollments(
       workspaceLinkID: id
     ) {
-      try database.retireBuzzWorkspaceAgent(
+      try await database.retireBuzzWorkspaceAgent(
         enrollmentID: enrollment.id,
         ownerDeviceID: deviceID
       )
     }
-    try database.deleteBuzzWorkspaceLink(id: id)
+    try await database.deleteBuzzWorkspaceLink(id: id)
   }
 
   public func discoverBuzzWorkspaceAgents(
     linkID: UUID
   ) async throws -> [BuzzWorkspaceAgentCandidate] {
-    guard let link = try database.buzzWorkspaceLinks().first(where: {
+    guard let link = try await database.buzzWorkspaceLinks().first(where: {
       $0.id == linkID
     }) else {
       throw BuzzWorkspaceDatabaseError.workspaceNotFound
@@ -562,17 +566,17 @@ public actor DashboardStore {
     _ candidate: BuzzWorkspaceAgentCandidate
   ) async throws -> BuzzWorkspaceAgentEnrollment {
     try await prepareLocalWorkspace()
-    let enrollment = try database.enrollBuzzWorkspaceAgent(candidate)
-    if try database.buzzWorkspaceLinks().contains(where: {
+    let enrollment = try await database.enrollBuzzWorkspaceAgent(candidate)
+    if try await database.buzzWorkspaceLinks().contains(where: {
       $0.id == enrollment.workspaceLinkID
     }), enrollment.runtimeKind != nil {
-      let resolved = try? resolvedBuzzLaunch(
+      let resolved = try? await resolvedBuzzLaunch(
         workspaceLinkID: enrollment.workspaceLinkID,
         agentID: enrollment.agentID
       )
       let status: AgentRuntimeStatus = resolved?.launch.runtimeKind == enrollment.runtimeKind
         ? .ready : .offline
-      try database.reconcileBuzzWorkspaceAgent(
+      try await database.reconcileBuzzWorkspaceAgent(
         enrollment: enrollment,
         ownerDeviceID: try await deviceIdentity.id(),
         status: status
@@ -584,34 +588,34 @@ public actor DashboardStore {
   public func removeBuzzWorkspaceAgentEnrollment(id: UUID) async throws {
     try await prepareLocalWorkspace()
     let deviceID = try await deviceIdentity.id()
-    try database.retireBuzzWorkspaceAgent(
+    try await database.retireBuzzWorkspaceAgent(
       enrollmentID: id,
       ownerDeviceID: deviceID
     )
-    try database.removeBuzzWorkspaceAgentEnrollment(id: id)
+    try await database.removeBuzzWorkspaceAgentEnrollment(id: id)
   }
 
   public func reconcileBuzzWorkspaceAgents() async throws -> Set<UUID> {
     try await prepareLocalWorkspace()
     let deviceID = try await deviceIdentity.id()
     let linksByID = Dictionary(
-      uniqueKeysWithValues: try database.buzzWorkspaceLinks().map { ($0.id, $0) }
+      uniqueKeysWithValues: try await database.buzzWorkspaceLinks().map { ($0.id, $0) }
     )
     var launchable: Set<UUID> = []
-    for enrollment in try database.buzzWorkspaceAgentEnrollments() {
+    for enrollment in try await database.buzzWorkspaceAgentEnrollments() {
       guard let link = linksByID[enrollment.workspaceLinkID],
         enrollment.runtimeKind != nil
       else {
         continue
       }
-      let resolved = try? resolvedBuzzLaunch(
+      let resolved = try? await resolvedBuzzLaunch(
         workspaceLinkID: enrollment.workspaceLinkID,
         agentID: enrollment.agentID
       )
       let isLaunchable = link.isEnabled
         && resolved?.launch.runtimeKind == enrollment.runtimeKind
       if isLaunchable { launchable.insert(enrollment.id) }
-      try database.reconcileBuzzWorkspaceAgent(
+      try await database.reconcileBuzzWorkspaceAgent(
         enrollment: enrollment,
         ownerDeviceID: deviceID,
         status: isLaunchable ? .ready : .offline
@@ -625,18 +629,18 @@ public actor DashboardStore {
     title: String
   ) async throws -> String {
     try await prepareLocalWorkspace()
-    guard let enrollment = try database.buzzWorkspaceAgentEnrollments()
+    guard let enrollment = try await database.buzzWorkspaceAgentEnrollments()
       .first(where: { $0.id == enrollmentID }) else {
       throw BuzzWorkspaceDatabaseError.enrollmentNotFound
     }
-    let resolved = try resolvedBuzzLaunch(
+    let resolved = try await resolvedBuzzLaunch(
       workspaceLinkID: enrollment.workspaceLinkID,
       agentID: enrollment.agentID
     )
     guard resolved.launch.runtimeKind == enrollment.runtimeKind else {
       throw BuzzWorkspaceDatabaseError.enrollmentRequiresRefresh
     }
-    return try database.createBuzzLocalACPSession(
+    return try await database.createBuzzLocalACPSession(
       enrollmentID: enrollmentID,
       title: title,
       ownerDeviceID: try await deviceIdentity.id(),
@@ -644,8 +648,8 @@ public actor DashboardStore {
     )
   }
 
-  public func buzzBoundLocalACPConversationIDs() throws -> Set<String> {
-    try database.buzzBoundLocalACPConversationIDs()
+  public func buzzBoundLocalACPConversationIDs() async throws -> Set<String> {
+    try await database.buzzBoundLocalACPConversationIDs()
   }
 
   public func start() async {
@@ -661,82 +665,83 @@ public actor DashboardStore {
     statuses: [AgentRuntimeKind: AgentRuntimeStatus]
   ) async throws {
     try await prepareLocalWorkspace()
-    try database.reconcileLocalCLIAgentCatalog(
+    try await database.reconcileLocalCLIAgentCatalog(
       ownerDeviceID: try await deviceIdentity.id(),
       statuses: statuses
     )
   }
 
   public func snapshot() async throws -> DashboardStoreSnapshot {
-    return DashboardStoreSnapshot(
-      agents: try database.dashboardAgents(),
-      workspace: try database.workspaceOverview(),
-      calendarItems: try database.calendarItems(),
-      calendarRuns: try database.calendarRuns(),
-      recordCounts: try database.dashboardRecordCounts(),
-      revision: try database.dashboardRevision()
-    )
+    try await database.read { try Self.snapshot(connection: $0) }
   }
 
   public func snapshot(ifChangedFrom revision: Int64?) async throws -> DashboardStoreSnapshot? {
-    let currentRevision = try database.dashboardRevision()
-    guard revision != currentRevision else { return nil }
-    return try await snapshot()
+    try await database.read { connection in
+      guard revision != (try connection.dashboardRevision()) else { return nil }
+      return try Self.snapshot(connection: connection)
+    }
   }
 
-  public func conversationContent(id: String) throws -> WorkspaceConversationContent {
-    try database.conversationContent(id: id)
+  private nonisolated static func snapshot(connection: WorkspaceDatabaseConnection) throws -> DashboardStoreSnapshot {
+    DashboardStoreSnapshot(agents: try connection.dashboardAgents(),
+      workspace: try connection.workspaceOverview(), calendarItems: try connection.calendarItems(),
+      calendarRuns: try connection.calendarRuns(), recordCounts: try connection.dashboardRecordCounts(),
+      revision: try connection.dashboardRevision())
+  }
+
+  public func conversationContent(id: String) async throws -> WorkspaceConversationContent {
+    try await database.conversationContent(id: id)
   }
 
   public func conversationHistoryPage(
     id: String,
     before cursor: WorkspaceConversationHistoryCursor? = nil,
     limit: Int
-  ) throws -> WorkspaceConversationHistoryPage {
-    try database.conversationHistoryPage(id: id, before: cursor, limit: limit)
+  ) async throws -> WorkspaceConversationHistoryPage {
+    try await database.conversationHistoryPage(id: id, before: cursor, limit: limit)
   }
 
   @discardableResult
-  public func markConversationRead(id: String) throws -> Bool {
-    try database.markConversationRead(id: id)
+  public func markConversationRead(id: String) async throws -> Bool {
+    try await database.markConversationRead(id: id)
   }
 
   @discardableResult
-  public func moveConversation(id: String, toFolderID folderID: String?) throws -> Bool {
-    try database.moveConversation(id: id, toFolderID: folderID)
+  public func moveConversation(id: String, toFolderID folderID: String?) async throws -> Bool {
+    try await database.moveConversation(id: id, toFolderID: folderID)
   }
 
   @discardableResult
-  public func createFolder(name: String) throws -> String {
-    try database.createFolder(name: name)
+  public func createFolder(name: String) async throws -> String {
+    try await database.createFolder(name: name)
   }
 
-  public func renameFolder(id: String, name: String) throws {
-    try database.renameFolder(id: id, name: name)
+  public func renameFolder(id: String, name: String) async throws {
+    try await database.renameFolder(id: id, name: name)
   }
 
-  public func setFolderPinned(id: String, isPinned: Bool) throws {
-    try database.setFolderPinned(id: id, isPinned: isPinned)
+  public func setFolderPinned(id: String, isPinned: Bool) async throws {
+    try await database.setFolderPinned(id: id, isPinned: isPinned)
   }
 
   @discardableResult
   public func moveFolder(
     id: String,
     direction: WorkspaceFolderMoveDirection
-  ) throws -> Bool {
-    try database.moveFolder(id: id, direction: direction)
+  ) async throws -> Bool {
+    try await database.moveFolder(id: id, direction: direction)
   }
 
-  public func deleteFolder(id: String) throws {
-    try database.deleteFolder(id: id)
+  public func deleteFolder(id: String) async throws {
+    try await database.deleteFolder(id: id)
   }
 
   @discardableResult
   public func createNote(
     folderID: String?,
     kind: NoteArtifactKind = .note
-  ) throws -> String {
-    try database.createNote(
+  ) async throws -> String {
+    try await database.createNote(
       folderID: folderID,
       title: kind == .note ? "Untitled Note" : "Untitled \(kind.displayName)",
       kind: kind
@@ -749,8 +754,8 @@ public actor DashboardStore {
     startsAt: Date,
     endsAt: Date?,
     allDay: Bool
-  ) throws -> String {
-    try database.createCalendarItem(
+  ) async throws -> String {
+    try await database.createCalendarItem(
       title: title,
       startsAt: startsAt,
       endsAt: endsAt,
@@ -758,25 +763,25 @@ public actor DashboardStore {
     )
   }
 
-  public func updateNote(id: String, title: String, content: String) throws {
-    try database.updateNote(id: id, title: title, content: content)
+  public func updateNote(id: String, title: String, content: String) async throws {
+    try await database.updateNote(id: id, title: title, content: content)
   }
 
   public func handleNoteEditingRequest(
     _ request: NoteEditingRequest
-  ) throws -> NoteEditingResponse {
-    try database.recordHistory(WorkspaceHistoryEvent(harness:"woven-note",kind:"cli.request",
+  ) async throws -> NoteEditingResponse {
+    try await database.recordHistory(WorkspaceHistoryEvent(harness:"woven-note",kind:"cli.request",
       payload:String(decoding:try JSONEncoder().encode(request),as:UTF8.self)))
     do {
       let response: NoteEditingResponse = switch request.command {
-      case .read: try database.readNoteForEditing(id:request.noteID)
-      case .apply: try database.applyNoteEdits(request)
+      case .read: try await database.readNoteForEditing(id:request.noteID)
+      case .apply: try await database.applyNoteEdits(request)
       }
-      try database.recordHistory(WorkspaceHistoryEvent(harness:"woven-note",kind:"cli.response",
+      try await database.recordHistory(WorkspaceHistoryEvent(harness:"woven-note",kind:"cli.response",
         payload:String(decoding:try JSONEncoder().encode(response),as:UTF8.self)))
       return response
     } catch {
-      try database.recordHistory(WorkspaceHistoryEvent(harness:"woven-note",kind:"cli.error",payload:error.localizedDescription))
+      try await database.recordHistory(WorkspaceHistoryEvent(harness:"woven-note",kind:"cli.error",payload:error.localizedDescription))
       throw error
     }
   }
@@ -786,8 +791,8 @@ public actor DashboardStore {
     id: String,
     expectedTitle: String,
     title: String
-  ) throws -> Bool {
-    try database.updateConversationTitleIfCurrent(
+  ) async throws -> Bool {
+    try await database.updateConversationTitleIfCurrent(
       id: id,
       expectedTitle: expectedTitle,
       title: title
@@ -800,7 +805,7 @@ public actor DashboardStore {
     title: String,
     requestedConversationID: UUID? = nil
   ) async throws -> String {
-    try database.createLocalACPSession(
+    try await database.createLocalACPSession(
       runtimeKind: runtimeKind,
       title: title,
       ownerDeviceID: try await deviceIdentity.id(),
@@ -816,7 +821,7 @@ public actor DashboardStore {
     title: String,
     requestedConversationID: UUID? = nil
   ) async throws -> String {
-    try database.createRemoteACPSession(
+    try await database.createRemoteACPSession(
       runtimeKind: runtimeKind,
       remoteWorkspaceID: remoteWorkspaceID,
       remoteWorkspaceName: remoteWorkspaceName,
@@ -832,7 +837,7 @@ public actor DashboardStore {
     remoteWorkspaceID: UUID,
     remoteWorkspaceName: String
   ) async throws -> UUID {
-    try database.ensureRemoteHarnessAgent(
+    try await database.ensureRemoteHarnessAgent(
       runtimeKind: runtimeKind,
       remoteWorkspaceID: remoteWorkspaceID,
       remoteWorkspaceName: remoteWorkspaceName,
@@ -840,15 +845,15 @@ public actor DashboardStore {
     )
   }
 
-  public func activeAgentConversationIDs() throws -> Set<String> {
-    try database.activeDeviceOwnedConversationIDs()
+  public func activeAgentConversationIDs() async throws -> Set<String> {
+    try await database.activeDeviceOwnedConversationIDs()
   }
 
   public func macSurfaceProfile(
     bootstrap: SurfaceProfile
   ) async throws -> SurfaceProfile {
     let deviceID = try await deviceIdentity.id()
-    return try database.macSurfaceProfile(
+    return try await database.macSurfaceProfile(
       ownerDeviceID: deviceID,
       bootstrap: bootstrap
     )
@@ -858,7 +863,7 @@ public actor DashboardStore {
     _ profile: SurfaceProfile
   ) async throws -> SurfaceProfile {
     let deviceID = try await deviceIdentity.id()
-    return try database.updateMacSurfaceProfile(
+    return try await database.updateMacSurfaceProfile(
       profile,
       ownerDeviceID: deviceID
     )
@@ -877,7 +882,8 @@ public actor DashboardStore {
     launch: LocalACPRuntimeLaunchConfiguration?,
     workspace: LocalACPWorkspaceLaunchConfiguration?,
     onPermission: LocalACPSessionCoordinator.PermissionHandler? = nil,
-    onInteraction: LocalACPSessionCoordinator.InteractionHandler? = nil
+    onInteraction: LocalACPSessionCoordinator.InteractionHandler? = nil,
+    dispatchFence: AgentDispatchFence? = nil
   ) async throws -> LocalACPRunIdentifiers {
     try await acceptLocalACPPrompt(
       conversationID: conversationID,
@@ -887,7 +893,8 @@ public actor DashboardStore {
       launch: launch,
       workspace: workspace,
       onPermission: onPermission,
-      onInteraction: onInteraction
+      onInteraction: onInteraction,
+      dispatchFence: dispatchFence
     )
   }
 
@@ -900,13 +907,16 @@ public actor DashboardStore {
     launch: LocalACPRuntimeLaunchConfiguration?,
     workspace: LocalACPWorkspaceLaunchConfiguration?,
     onPermission: LocalACPSessionCoordinator.PermissionHandler? = nil,
-    onInteraction: LocalACPSessionCoordinator.InteractionHandler? = nil
+    onInteraction: LocalACPSessionCoordinator.InteractionHandler? = nil,
+    dispatchFence: AgentDispatchFence? = nil
   ) async throws -> LocalACPRunIdentifiers {
-    let context = try localACPLaunchContext(
+    try dispatchFence?.check()
+    let context = try await localACPLaunchContext(
       conversationID: conversationID,
       directLaunch: launch,
       directWorkspace: workspace
     )
+    try dispatchFence?.check()
     return try await localSessions.accept(
       conversationID: conversationID,
       input: input,
@@ -916,7 +926,8 @@ public actor DashboardStore {
       workspace: context.workspace,
       systemPrompt: context.systemPrompt,
       onPermission: onPermission,
-      onInteraction: onInteraction
+      onInteraction: onInteraction,
+      dispatchFence: dispatchFence
     )
   }
 
@@ -924,12 +935,14 @@ public actor DashboardStore {
   public func sendActiveLocalACPPrompt(
     conversationID: String,
     content: String,
-    deliveryContent: String? = nil
+    deliveryContent: String? = nil,
+    dispatchFence: AgentDispatchFence? = nil
   ) async throws -> LocalACPSteeringIdentifiers {
     try await sendActiveLocalACPPrompt(
       conversationID: conversationID,
       input: AgentMessageInput(text: content),
-      deliveryContent: deliveryContent
+      deliveryContent: deliveryContent,
+      dispatchFence: dispatchFence
     )
   }
 
@@ -937,12 +950,14 @@ public actor DashboardStore {
   public func sendActiveLocalACPPrompt(
     conversationID: String,
     input: AgentMessageInput,
-    deliveryContent: String? = nil
+    deliveryContent: String? = nil,
+    dispatchFence: AgentDispatchFence? = nil
   ) async throws -> LocalACPSteeringIdentifiers {
     return try await localSessions.sendActiveInput(
       conversationID: conversationID,
       input: input,
-      deliveryContent: deliveryContent
+      deliveryContent: deliveryContent,
+      dispatchFence: dispatchFence
     )
   }
 
@@ -950,12 +965,14 @@ public actor DashboardStore {
   public func sendActiveOpenClawGatewayPrompt(
     conversationID: String,
     content: String,
-    deliveryContent: String? = nil
+    deliveryContent: String? = nil,
+    dispatchFence: AgentDispatchFence? = nil
   ) async throws -> LocalACPSteeringIdentifiers {
     try await sendActiveOpenClawGatewayPrompt(
       conversationID: conversationID,
       input: AgentMessageInput(text: content),
-      deliveryContent: deliveryContent
+      deliveryContent: deliveryContent,
+      dispatchFence: dispatchFence
     )
   }
 
@@ -963,12 +980,14 @@ public actor DashboardStore {
   public func sendActiveOpenClawGatewayPrompt(
     conversationID: String,
     input: AgentMessageInput,
-    deliveryContent: String? = nil
+    deliveryContent: String? = nil,
+    dispatchFence: AgentDispatchFence? = nil
   ) async throws -> LocalACPSteeringIdentifiers {
     try await openClawGateway.sendActiveInput(
       conversationID: conversationID,
       input: input,
-      deliveryContent: deliveryContent
+      deliveryContent: deliveryContent,
+      dispatchFence: dispatchFence
     )
   }
 
@@ -983,7 +1002,7 @@ public actor DashboardStore {
     launch: LocalACPRuntimeLaunchConfiguration?,
     workspace: LocalACPWorkspaceLaunchConfiguration?
   ) async throws -> LocalACPSessionConfiguration {
-    let context = try localACPLaunchContext(
+    let context = try await localACPLaunchContext(
       conversationID: conversationID,
       directLaunch: launch,
       directWorkspace: workspace
@@ -1004,7 +1023,7 @@ public actor DashboardStore {
     launch: LocalACPRuntimeLaunchConfiguration?,
     workspace: LocalACPWorkspaceLaunchConfiguration?
   ) async throws -> LocalACPSessionConfiguration {
-    let context = try localACPLaunchContext(
+    let context = try await localACPLaunchContext(
       conversationID: conversationID,
       directLaunch: launch,
       directWorkspace: workspace
@@ -1024,15 +1043,15 @@ public actor DashboardStore {
     conversationID: String,
     directLaunch: LocalACPRuntimeLaunchConfiguration?,
     directWorkspace: LocalACPWorkspaceLaunchConfiguration?
-  ) throws -> (
+  ) async throws -> (
     launch: LocalACPRuntimeLaunchConfiguration,
     workspace: LocalACPWorkspaceLaunchConfiguration,
     systemPrompt: String?
   ) {
-    let descriptor = try database.localACPSession(conversationID: conversationID)
+    let descriptor = try await database.localACPSession(conversationID: conversationID)
     if let workspaceLinkID = descriptor.buzzWorkspaceLinkID,
        let buzzAgentID = descriptor.buzzAgentID {
-      let resolved = try resolvedBuzzLaunch(
+      let resolved = try await resolvedBuzzLaunch(
         workspaceLinkID: workspaceLinkID,
         agentID: buzzAgentID
       )
@@ -1057,8 +1076,8 @@ public actor DashboardStore {
   private func resolvedBuzzLaunch(
     workspaceLinkID: UUID,
     agentID: String
-  ) throws -> BuzzLocalAgentLaunch {
-    let source = try database.buzzLocalAgentLaunchSource(
+  ) async throws -> BuzzLocalAgentLaunch {
+    let source = try await database.buzzLocalAgentLaunchSource(
       workspaceLinkID: workspaceLinkID,
       agentID: agentID
     )
@@ -1070,6 +1089,10 @@ public actor DashboardStore {
 
   public func cancelLocalACPPrompt(conversationID: String) async {
     await ownedLocalSessions?.cancel(conversationID: conversationID)
+  }
+
+  public func stopLocalACPPrompt(conversationID: String) async throws {
+    try await ownedLocalSessions?.stop(conversationID: conversationID)
   }
 
   public func shutdownLocalACPSessions() async {

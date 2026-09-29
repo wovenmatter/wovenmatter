@@ -4,7 +4,7 @@ import WovenMatterClient
 import WovenMatterCore
 
 // Canonical OpenCode projections; legacy ACP rows are never migrated.
-extension WorkspaceDatabase {
+extension WorkspaceDatabaseConnection {
   public func knownOpenCodeSessionIDs(connectionID: String) throws -> Set<String> {
     try knownSessionIDs(sql: "SELECT session_id FROM desktop_opencode_sessions WHERE connection_id = ?", scope: connectionID)
   }
@@ -208,4 +208,44 @@ extension WorkspaceDatabase {
     }
   }
 
+}
+
+// MARK: - Async worker boundary
+
+extension WorkspaceDatabase {
+  public func knownOpenCodeSessionIDs(connectionID: String) async throws -> Set<String> {
+    try await read { try $0.knownOpenCodeSessionIDs(connectionID: connectionID) }
+  }
+
+  public func openCodeLinks() async throws -> [OpenCodeSessionLink] {
+    try await read { try $0.openCodeLinks() }
+  }
+
+  public func attachOpenCodeSession(_ link: OpenCodeSessionLink) async throws {
+    try await write { try $0.attachOpenCodeSession(link) }
+  }
+
+  public func openCodeSnapshot(conversationID: String) async throws -> OpenCodeSessionSnapshot? {
+    try await read { try $0.openCodeSnapshot(conversationID: conversationID) }
+  }
+
+  public func saveOpenCodeSnapshot(_ snapshot: OpenCodeSessionSnapshot, conversationID: String) async throws {
+    try await write { try $0.saveOpenCodeSnapshot(snapshot, conversationID: conversationID) }
+  }
+
+  public func saveOpenCodeSubmission(conversationID: String, id: String, payload: OpenCodeValue, status: String, visibleText: String? = nil, deliveryID: String? = nil, input: AgentMessageInput? = nil) async throws {
+    let operation: @Sendable (WorkspaceDatabaseConnection) throws -> Void = {
+      try $0.saveOpenCodeSubmission(conversationID: conversationID, id: id, payload: payload, status: status, visibleText: visibleText, deliveryID: deliveryID, input: input)
+    }
+    if status == "sending" { try await write(operation) }
+    else { try await finishWrite(operation) }
+  }
+
+  public func openCodeUncertainSubmissions(conversationID: String) async throws -> [OpenCodeValue] {
+    try await read { try $0.openCodeUncertainSubmissions(conversationID: conversationID) }
+  }
+
+  public func openCodeDisplaySnapshot(_ snapshot: OpenCodeSessionSnapshot, conversationID: String) async throws -> OpenCodeSessionSnapshot {
+    try await read { try $0.openCodeDisplaySnapshot(snapshot, conversationID: conversationID) }
+  }
 }

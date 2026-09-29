@@ -16,7 +16,7 @@ struct OpenCodeConversationControls: View {
                     Text(error).foregroundStyle(.red).font(.caption).textSelection(.enabled)
                 }
                 OpenCodeInteractions(model: model, conversationID: conversationID)
-                ForEach((try? model.store.database.openCodeUncertainSubmissions(conversationID: conversationID)) ?? [], id: \.self) { item in
+                ForEach(model.uncertainSubmissions[conversationID] ?? [], id: \.self) { item in
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Input outcome is uncertain").fontWeight(.semibold)
                         Text(item["payload"]["text"].text).textSelection(.enabled)

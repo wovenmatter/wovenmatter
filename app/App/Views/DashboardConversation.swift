@@ -202,7 +202,7 @@ struct DashboardCloudConversation: View {
                             }
                             if let sessionID = conversation?.id, model.agentTools?.hasOlderReceipts.contains(sessionID) == true {
                                 Button("Load earlier session activity") {
-                                    model.agentTools?.loadOlderReceipts(sessionID: sessionID)
+                                    Task { await model.agentTools?.loadOlderReceipts(sessionID: sessionID) }
                                 }
                                 .buttonStyle(SettingsQuietButtonStyle())
                                 .padding(.bottom, 32)
@@ -259,7 +259,7 @@ struct DashboardCloudConversation: View {
                 .task(id: [model.libraryMessageTarget?.id, conversation?.id]) {
                     await scrollToLibraryMessage(using: proxy)
                 }
-                .onDisappear { model.agentTools?.observeSession(nil, token: toolObservationToken) }
+                .onDisappear { model.agentTools?.observeSessionFromUI(nil, token: toolObservationToken) }
                 .environment(\.conversationTranscriptInteraction) {
                     transcriptOwnsScroll = true
                     scrollInteractionRevision += 1
@@ -321,7 +321,7 @@ struct DashboardCloudConversation: View {
                     draft = draft.isEmpty ? text : draft + "\n" + text
                 }
                 .onChange(of: conversation?.id, initial: true) { _, conversationID in
-                    model.agentTools?.observeSession(conversationID, token: toolObservationToken)
+                    model.agentTools?.observeSessionFromUI(conversationID, token: toolObservationToken)
                     isUserScrolling = false
                     transcriptOwnsScroll = model.libraryMessageTarget?.conversationID == conversationID
                     scrollInteractionRevision += 1
@@ -532,10 +532,9 @@ struct DashboardCloudConversation: View {
                                 return
                             }
                             if conversation.localRuntimeKind != nil {
-                                model.updateLocalACPSession(
-                                    conversation: conversation,
-                                    model: selection
-                                )
+                                Task { await model.updateLocalACPSession(
+                                    conversation: conversation, model: selection
+                                ) }
                                 return
                             }
                         },
@@ -551,10 +550,9 @@ struct DashboardCloudConversation: View {
                                 return
                             }
                             if conversation.localRuntimeKind != nil {
-                                model.updateLocalACPSession(
-                                    conversation: conversation,
-                                    thinking: selection
-                                )
+                                Task { await model.updateLocalACPSession(
+                                    conversation: conversation, thinking: selection
+                                ) }
                                 return
                             }
                         },
@@ -574,7 +572,7 @@ struct DashboardCloudConversation: View {
                                 return
                             }
                             if let runtimeKind = conversation.localRuntimeKind, runtimeKind != .pi {
-                                model.updateLocalACPSession(conversation: conversation, permission: selection)
+                                Task { await model.updateLocalACPSession(conversation: conversation, permission: selection) }
                             }
                         },
                         onAttachmentAction: onAttachmentAction,

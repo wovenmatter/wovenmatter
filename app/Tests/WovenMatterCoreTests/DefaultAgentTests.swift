@@ -38,26 +38,26 @@ struct DefaultAgentTests {
         #expect(settings.resolved("remote") == settings.global)
     }
 
-    @Test func completedRemoteRunsRecoverOnlyTheirOwnConversationOnce() throws {
+    @Test func completedRemoteRunsRecoverOnlyTheirOwnConversationOnce() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: "woven-default-agent-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
-        let database = try WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
+        let database = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
         let owner = UUID()
-        let first = try database.createLocalACPSession(runtimeKind: .defaultAgent, title: "First", ownerDeviceID: owner)
-        let second = try database.createLocalACPSession(runtimeKind: .defaultAgent, title: "Second", ownerDeviceID: owner)
-        let run = try database.beginLocalACPRun(conversationID: first, content: "Work remotely")
-        try database.completeLocalACPRun(runID: run.runID, error: "Disconnected")
+        let first = try await database.createLocalACPSession(runtimeKind: .defaultAgent, title: "First", ownerDeviceID: owner)
+        let second = try await database.createLocalACPSession(runtimeKind: .defaultAgent, title: "Second", ownerDeviceID: owner)
+        let run = try await database.beginLocalACPRun(conversationID: first, content: "Work remotely")
+        try await database.completeLocalACPRun(runID: run.runID, error: "Disconnected")
         let snapshot = DefaultAgentRunSnapshot(runID: run.runID, content: "Finished remotely", model: "openrouter/fallback")
-        try database.recoverRemoteAgentRuns(conversationID: second, snapshots: [snapshot])
-        #expect(try database.conversationHistoryPage(id: first, limit: 20).runs.first?.status == "failed")
-        try database.recoverRemoteAgentRuns(conversationID: first, snapshots: [snapshot])
-        let recovered = try database.conversationHistoryPage(id: first, limit: 20)
+        try await database.recoverRemoteAgentRuns(conversationID: second, snapshots: [snapshot])
+        #expect(try await database.conversationHistoryPage(id: first, limit: 20).runs.first?.status == "failed")
+        try await database.recoverRemoteAgentRuns(conversationID: first, snapshots: [snapshot])
+        let recovered = try await database.conversationHistoryPage(id: first, limit: 20)
         #expect(recovered.runs.first?.status == "completed")
         #expect(recovered.messages.first { $0.id == run.assistantMessageID }?.content == "Finished remotely")
-        try database.recoverRemoteAgentRuns(conversationID: first, snapshots: [.init(runID: run.runID, content: "stale")])
-        #expect(try database.conversationHistoryPage(id: first, limit: 20) == recovered)
-        let external = try database.createLocalACPSession(runtimeKind: .pi, title: "External Pi", ownerDeviceID: owner)
-        #expect(throws: (any Error).self) { try database.recoverRemoteAgentRuns(conversationID: external, snapshots: [snapshot]) }
+        try await database.recoverRemoteAgentRuns(conversationID: first, snapshots: [.init(runID: run.runID, content: "stale")])
+        #expect(try await database.conversationHistoryPage(id: first, limit: 20) == recovered)
+        let external = try await database.createLocalACPSession(runtimeKind: .pi, title: "External Pi", ownerDeviceID: owner)
+        await #expect(throws: (any Error).self) { try await database.recoverRemoteAgentRuns(conversationID: external, snapshots: [snapshot]) }
     }
 }

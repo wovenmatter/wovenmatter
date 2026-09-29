@@ -4,7 +4,7 @@ import WovenMatterClient
 import WovenMatterCore
 
 // Conversation metadata and read projections for messages, references and activity.
-extension WorkspaceDatabase {
+extension WorkspaceDatabaseConnection {
   public func dashboardRevision() throws -> Int64 {
     try withLock {
       let statement = try prepareUnlocked(
@@ -574,5 +574,49 @@ extension WorkspaceDatabase {
         )
       }
     }
+  }
+}
+
+// MARK: - Async worker boundary
+
+extension WorkspaceDatabase {
+  public func dashboardRevision() async throws -> Int64 {
+    try await read { try $0.dashboardRevision() }
+  }
+
+  @discardableResult
+  public func markConversationRead(id: String) async throws -> Bool {
+    try await write { try $0.markConversationRead(id: id) }
+  }
+
+  @discardableResult
+  public func updateConversationTitleIfCurrent(
+    id: String,
+    expectedTitle: String,
+    title: String,
+    updatedAt: Date = Date()
+  ) async throws -> Bool {
+    try await write { try $0.updateConversationTitleIfCurrent(id: id, expectedTitle: expectedTitle, title: title, updatedAt: updatedAt) }
+  }
+
+  @discardableResult
+  public func moveConversation(
+    id: String,
+    toFolderID folderID: String?,
+    updatedAt: Date = Date()
+  ) async throws -> Bool {
+    try await write { try $0.moveConversation(id: id, toFolderID: folderID, updatedAt: updatedAt) }
+  }
+
+  public func conversationContent(id: String) async throws -> WorkspaceConversationContent {
+    try await read { try $0.conversationContent(id: id) }
+  }
+
+  public func conversationHistoryPage(
+    id: String,
+    before cursor: WorkspaceConversationHistoryCursor? = nil,
+    limit: Int
+  ) async throws -> WorkspaceConversationHistoryPage {
+    try await read { try $0.conversationHistoryPage(id: id, before: cursor, limit: limit) }
   }
 }
