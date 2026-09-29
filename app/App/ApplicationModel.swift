@@ -5213,7 +5213,7 @@ extension ApplicationModel {
                 return .init(id: request.id, result: try JSONEncoder().encode(macSurfaceProfile))
             }
             if request.method.hasPrefix("connections.") {
-                return .init(id: request.id, result: try await BackendConnectionsService.handle(method: request.method, payload: request.payload, model: connections))
+                return .init(id: request.id, result: try await BackendConnectionsService.handle(method: request.method, payload: request.payload, model: connections, remoteWorkspaces: remoteWorkspaces))
             }
             if request.method == "opencode.snapshot" {
                 return .init(id: request.id, result: try JSONEncoder().encode(backendOpenCodeSnapshot()))
@@ -5261,7 +5261,7 @@ extension ApplicationModel {
                 guard await !backendSpeech.isActive else {
                     throw BackendRPCError.remote("Finish dictation before stopping the background service.")
                 }
-                guard backendCommandsInFlight == 0, !executionHasPendingOperations, !connections.busy, remoteWorkspaces.busyWorkspaceIDs.isEmpty,
+                guard backendCommandsInFlight == 0, !executionHasPendingOperations, !connections.busy, !connections.sdks.isBusy, remoteWorkspaces.busyWorkspaceIDs.isEmpty,
                       !remoteWorkspaces.isCreating, runningToolSessionIDs.isEmpty, pendingLocalACPPermissions.isEmpty,
                       pendingLocalACPInteractions.isEmpty, pendingSessionAccess.isEmpty else {
                     throw BackendRPCError.remote("Wait for running sessions and pending approvals before stopping the background service.")

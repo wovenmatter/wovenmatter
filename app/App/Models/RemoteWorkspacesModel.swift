@@ -629,6 +629,12 @@ final class RemoteWorkspacesModel {
         return value
     }
 
+    func defaultAgentSDKs(_ request: DefaultAgentSDKRequest, configuration: RemoteWorkspaceConfiguration) async throws -> DefaultAgentSDKStatus {
+        try await databaseRequest(configuration) { client in
+            try await client.defaultAgentSDKs(request)
+        }
+    }
+
     private func requestIdentity(_ configuration: RemoteWorkspaceConfiguration) throws -> RemoteWorkspaceRequestIdentity {
         guard !isBackendProjection else { throw BackendRPCError.remote("Remote connections are owned by the background service.") }
         let epoch = workspaceEpochs[configuration.id] ?? UUID()

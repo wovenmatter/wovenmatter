@@ -18,6 +18,7 @@ struct SettingsDefaultAgentView: View {
     var body: some View {
         SettingsPage(title: "Built-in Agent", detail: "A built-in agent for every workspace.", reservesRailControlSpace: reservesRailControlSpace, onBack: onBack) {
             scopeSection
+            SettingsDefaultAgentSDKView(connections: agent, remoteWorkspaces: model.remoteWorkspaces)
             connectionsSection
             searchSection
             if let notice = agent.notice { Text(notice).font(.callout).foregroundStyle(.secondary) }

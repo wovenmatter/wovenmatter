@@ -82,9 +82,15 @@ export class ClaudeRuntime {
     return join(this.directory, 'claude-accounts', profile);
   }
   async environment(key, profile) { return claudeEnvironment(await this.directories(this.profileDirectory(profile)), key); }
+  async sdkVersion() {
+    return (await readJSON(new URL('../node_modules/@anthropic-ai/claude-agent-sdk/package.json', import.meta.url))).version;
+  }
   async loadModels() {
-    const saved = await readJSON(join(this.directory, 'claude-models.json'), []);
-    if (Array.isArray(saved) && saved.length && saved.every(m => typeof m.value === 'string' && typeof m.displayName === 'string')) this.models = saved;
+    const saved = await readJSON(join(this.directory, 'claude-models.json'), {});
+    const version = await this.sdkVersion();
+    // Legacy unversioned catalogs can resolve aliases to an older Claude model.
+    // Keep safe aliases until the user explicitly refreshes connection metadata.
+    if (saved.runtimeVersion === version && Array.isArray(saved.models) && saved.models.length && saved.models.every(m => typeof m.value === 'string' && typeof m.displayName === 'string')) this.models = saved.models;
   }
   async status(profile, { signal } = {}) {
     signal?.throwIfAborted();
@@ -133,7 +139,7 @@ export class ClaudeRuntime {
       signal?.throwIfAborted();
       if (models.length) {
         this.models = models;
-        await writePrivateJSON(join(this.directory, 'claude-models.json'), models);
+        await writePrivateJSON(join(this.directory, 'claude-models.json'), { runtimeVersion: await this.sdkVersion(), models });
       }
     } finally {
       signal?.removeEventListener('abort', abort);

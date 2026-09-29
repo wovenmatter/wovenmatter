@@ -139,5 +139,18 @@ export function createDefaultAgentService({ cwd, directory }) {
     await Promise.all(running.map(operation => e.handle('session/cancel', { sessionId: operation.sessionID })));
     await Promise.allSettled(running.map(operation => operation.completion));
   }
-  return { engine, configure, invoke, poll, status, cancelActive };
+  let inFlight = 0, retiring = false;
+  const tracked = fn => async (...args) => {
+    if (retiring) throw new DefaultAgentError('The Built-in runtime is updating. Retry after it finishes.');
+    inFlight++;
+    try { return await fn(...args); } finally { inFlight--; }
+  };
+  // The proxy serializes admission while asking this question. Once retired,
+  // this generation cannot admit another prompt while the replacement starts.
+  function prepareRetirement() {
+    if (inFlight || admissions.size || permissions.pending.size || [...operations.values()].some(operation => !operation.done)) return false;
+    retiring = true; return true;
+  }
+  return { engine, configure: tracked(configure), invoke: tracked(invoke), poll: tracked(poll), status: tracked(status), cancelActive: tracked(cancelActive), prepareRetirement };
+
 }

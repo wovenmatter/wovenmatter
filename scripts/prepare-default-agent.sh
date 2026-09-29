@@ -39,7 +39,7 @@ fi
 output="${1:-$agent_root}"
 if [ "$output" != "$agent_root" ]; then
   mkdir -p "$output"
-  rsync -a --delete --exclude=/bin --exclude=/node_modules --exclude=/test --exclude=/.build --exclude=.DS_Store "$agent_root/" "$output/"
+  rsync -a --delete --exclude=/bin --exclude=/lib --exclude=/node_modules --exclude=/test --exclude=/.build --exclude=.DS_Store "$agent_root/" "$output/"
 fi
 mkdir -p "$output/node_modules"
 rsync -a --delete "$dependency_root/node_modules/" "$output/node_modules/"
@@ -51,6 +51,9 @@ codesign --verify --strict "$claude_binary"
 mkdir -p "$output/bin"
 cp "$cache/bin/node" "$output/bin/node"
 cp "$cache/LICENSE" "$output/bin/NODE-LICENSE"
+# SDK maintenance runs npm with the signed bundled Node, without relying on a host install.
+mkdir -p "$output/lib/npm"
+rsync -a --delete "$cache/lib/node_modules/npm/" "$output/lib/npm/"
 if [ "${CODE_SIGNING_ALLOWED:-NO}" = YES ] && [ -n "${EXPANDED_CODE_SIGN_IDENTITY:-}" ]; then
   codesign --force --sign "$EXPANDED_CODE_SIGN_IDENTITY" --options runtime --entitlements "$repo_root/default-agent/node-entitlements.plist" "$output/bin/node"
 fi
