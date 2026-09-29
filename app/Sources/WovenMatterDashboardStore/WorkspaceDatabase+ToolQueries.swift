@@ -75,3 +75,12 @@ extension WorkspaceDatabaseConnection {
     }
   }
 }
+
+// MARK: - Async worker boundary
+
+extension WorkspaceDatabase {
+  public func queryAgentHistory(_ input: WorkspaceHistoryQuery, callerID: String,
+                                allWorkspace: Bool = false) async throws -> GatewayJSONValue {
+    try await write { try $0.queryAgentHistory(input, callerID: callerID, allWorkspace: allWorkspace) }
+  }
+}

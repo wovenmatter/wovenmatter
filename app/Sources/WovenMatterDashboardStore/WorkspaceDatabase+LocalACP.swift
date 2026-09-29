@@ -92,7 +92,7 @@ public enum LocalACPSessionDatabaseError: LocalizedError, Equatable, Sendable {
 }
 
 // Device-owned sessions and run writes, including streaming and steering.
-extension WorkspaceDatabase {
+extension WorkspaceDatabaseConnection {
   func knownSessionIDs(sql: String, scope: String) throws -> Set<String> {
     try withLock {
       let statement = try prepareUnlocked(sql)
@@ -1011,16 +1011,8 @@ extension WorkspaceDatabase {
     }
   }
 
-  public enum DeviceOwnedAssistantMutation: Sendable {
-    case append(String)
-    case replace(String)
-  }
-
-  public enum DeviceOwnedGatewayProjectionResult: Equatable, Sendable {
-    case applied
-    case duplicate
-    case legacyUncertain
-  }
+  typealias DeviceOwnedAssistantMutation = WorkspaceDatabase.DeviceOwnedAssistantMutation
+  typealias DeviceOwnedGatewayProjectionResult = WorkspaceDatabase.DeviceOwnedGatewayProjectionResult
 
   public func appendLocalACPAssistantChunk(
     runID: String,
@@ -1537,13 +1529,6 @@ extension WorkspaceDatabase {
 
   /// Reconcile only the exact remote run identities that this Mac submitted.
   /// A disconnected transport may have marked them failed while the workspace kept running.
-  public func recoverDefaultAgentRuns(conversationID: String, snapshots: [DefaultAgentRunSnapshot]) throws {
-    guard try localACPSession(conversationID: conversationID).runtimeKind == .defaultAgent else {
-      throw LocalACPSessionDatabaseError.runtimeUnavailable
-    }
-    try recoverRemoteAgentRuns(conversationID: conversationID, snapshots: snapshots)
-  }
-
   public func recoverRemoteAgentRuns(conversationID: String, snapshots: [DefaultAgentRunSnapshot]) throws {
     try transaction {
       let route = try prepareUnlocked("SELECT 1 FROM desktop_local_acp_sessions WHERE conversation_id=? AND (runtime_kind='default_agent' OR remote_workspace_id IS NOT NULL)")
@@ -1720,5 +1705,235 @@ extension WorkspaceDatabase {
       .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
       .trimmingCharacters(in: .whitespacesAndNewlines)
     return String(compact.prefix(240))
+  }
+}
+
+// MARK: - Async worker boundary
+
+extension WorkspaceDatabase {
+  public enum DeviceOwnedAssistantMutation: Sendable {
+    case append(String)
+    case replace(String)
+  }
+
+  public enum DeviceOwnedGatewayProjectionResult: Equatable, Sendable {
+    case applied
+    case duplicate
+    case legacyUncertain
+  }
+
+  @discardableResult
+  public func createLocalACPSession(
+    runtimeKind: AgentRuntimeKind,
+    title: String,
+    ownerDeviceID: UUID,
+    createdAt: Date = Date(),
+    openCodeAssociation: (connectionID: String, sessionID: String)? = nil,
+    importedOpenCodeSnapshot: OpenCodeSessionSnapshot? = nil,
+    hermesImport: HermesSessionImport? = nil,
+    requestedConversationID: UUID? = nil
+  ) async throws -> String {
+    try await write { try $0.createLocalACPSession(runtimeKind: runtimeKind, title: title, ownerDeviceID: ownerDeviceID, createdAt: createdAt, openCodeAssociation: openCodeAssociation, importedOpenCodeSnapshot: importedOpenCodeSnapshot, hermesImport: hermesImport, requestedConversationID: requestedConversationID) }
+  }
+
+  @discardableResult
+  public func createRemoteACPSession(
+    runtimeKind: AgentRuntimeKind,
+    remoteWorkspaceID: UUID,
+    remoteWorkspaceName: String,
+    title: String,
+    ownerDeviceID: UUID,
+    createdAt: Date = Date(),
+    openCodeAssociation: (connectionID: String, sessionID: String)? = nil,
+    requestedConversationID: UUID? = nil
+  ) async throws -> String {
+    try await write { try $0.createRemoteACPSession(runtimeKind: runtimeKind, remoteWorkspaceID: remoteWorkspaceID, remoteWorkspaceName: remoteWorkspaceName, title: title, ownerDeviceID: ownerDeviceID, createdAt: createdAt, openCodeAssociation: openCodeAssociation, requestedConversationID: requestedConversationID) }
+  }
+
+  @discardableResult
+  public func localACPSession(
+    conversationID: String
+  ) async throws -> LocalACPSessionDescriptor {
+    try await read { try $0.localACPSession(conversationID: conversationID) }
+  }
+
+  public func updateLocalACPSessionID(
+    conversationID: String,
+    runID: String? = nil,
+    sessionID: String,
+    updatedAt: Date = Date()
+  ) async throws {
+    try await write { try $0.updateLocalACPSessionID(conversationID: conversationID, runID: runID, sessionID: sessionID, updatedAt: updatedAt) }
+  }
+
+  public func updateLocalACPSessionConfiguration(
+    conversationID: String,
+    model: String?,
+    thinking: String?,
+    permission: String? = nil,
+    updatedAt: Date = Date()
+  ) async throws {
+    try await write { try $0.updateLocalACPSessionConfiguration(conversationID: conversationID, model: model, thinking: thinking, permission: permission, updatedAt: updatedAt) }
+  }
+
+  public func beginLocalACPRun(
+    conversationID: String,
+    content: String,
+    noteContext: AgentNoteContext? = nil,
+    createdAt: Date = Date()
+  ) async throws -> LocalACPRunIdentifiers {
+    try await write { try $0.beginLocalACPRun(conversationID: conversationID, content: content, noteContext: noteContext, createdAt: createdAt) }
+  }
+
+  public func beginLocalACPRun(
+    conversationID: String,
+    input: AgentMessageInput,
+    noteContext: AgentNoteContext? = nil,
+    createdAt: Date = Date()
+  ) async throws -> LocalACPRunIdentifiers {
+    try await write { try $0.beginLocalACPRun(conversationID: conversationID, input: input, noteContext: noteContext, createdAt: createdAt) }
+  }
+
+  public func activeDeviceOwnedConversationIDs() async throws -> Set<String> {
+    try await read { try $0.activeDeviceOwnedConversationIDs() }
+  }
+
+  public func beginLocalACPSteeringTurn(
+    runID: String,
+    content: String,
+    createdAt: Date = Date()
+  ) async throws -> LocalACPSteeringIdentifiers {
+    try await write { try $0.beginLocalACPSteeringTurn(runID: runID, content: content, createdAt: createdAt) }
+  }
+
+  public func beginLocalACPSteeringTurn(
+    runID: String,
+    input: AgentMessageInput,
+    completesPreviousAssistant: Bool = true,
+    createdAt: Date = Date()
+  ) async throws -> LocalACPSteeringIdentifiers {
+    try await write { try $0.beginLocalACPSteeringTurn(runID: runID, input: input, completesPreviousAssistant: completesPreviousAssistant, createdAt: createdAt) }
+  }
+
+  public func appendLocalACPAssistantChunk(
+    runID: String,
+    chunk: String,
+    updatedAt: Date = Date()
+  ) async throws {
+    try await write { try $0.appendLocalACPAssistantChunk(runID: runID, chunk: chunk, updatedAt: updatedAt) }
+  }
+
+  public func replaceLocalACPAssistantMessage(
+    runID: String,
+    content: String,
+    updatedAt: Date = Date()
+  ) async throws {
+    try await write { try $0.replaceLocalACPAssistantMessage(runID: runID, content: content, updatedAt: updatedAt) }
+  }
+
+  public func appendLocalACPAssistantChunk(
+    runID: String,
+    assistantMessageID: String,
+    chunk: String,
+    updatedAt: Date = Date()
+  ) async throws {
+    try await write { try $0.appendLocalACPAssistantChunk(runID: runID, assistantMessageID: assistantMessageID, chunk: chunk, updatedAt: updatedAt) }
+  }
+
+  public func replaceLocalACPAssistantMessage(
+    runID: String,
+    assistantMessageID: String,
+    content: String,
+    preservingStreamCommentary: Bool = false,
+    updatedAt: Date = Date()
+  ) async throws {
+    try await write { try $0.replaceLocalACPAssistantMessage(runID: runID, assistantMessageID: assistantMessageID, content: content, preservingStreamCommentary: preservingStreamCommentary, updatedAt: updatedAt) }
+  }
+
+  public func completeLocalACPAssistantMessage(
+    runID: String,
+    assistantMessageID: String,
+    error: String? = nil,
+    completedAt: Date = Date()
+  ) async throws {
+    try await finishWrite { try $0.completeLocalACPAssistantMessage(runID: runID, assistantMessageID: assistantMessageID, error: error, completedAt: completedAt) }
+  }
+
+  public func recordAssistantStreamBoundary(
+    runID: String,
+    assistantMessageID requestedMessageID: String? = nil,
+    finalSegment: Bool = false,
+    updatedAt: Date = Date()
+  ) async throws {
+    try await write { try $0.recordAssistantStreamBoundary(runID: runID, assistantMessageID: requestedMessageID, finalSegment: finalSegment, updatedAt: updatedAt) }
+  }
+
+  public func upsertDeviceOwnedRunActivity(
+    runID: String,
+    activity update: AgentRunActivity,
+    appendingContent: Bool = false,
+    updatedAt: Date = Date()
+  ) async throws {
+    try await write { try $0.upsertDeviceOwnedRunActivity(runID: runID, activity: update, appendingContent: appendingContent, updatedAt: updatedAt) }
+  }
+
+  public func appendDeviceOwnedGatewayTraceEvent(
+    runID: String,
+    remoteRunID: String? = nil,
+    eventName: String,
+    eventStream: String? = nil,
+    sequence: Int,
+    eventType: String,
+    eventPhase: String?,
+    toolName: String?,
+    content: String?,
+    rawEventJSON: String,
+    createdAt: Date = Date()
+  ) async throws {
+    try await write { try $0.appendDeviceOwnedGatewayTraceEvent(runID: runID, remoteRunID: remoteRunID, eventName: eventName, eventStream: eventStream, sequence: sequence, eventType: eventType, eventPhase: eventPhase, toolName: toolName, content: content, rawEventJSON: rawEventJSON, createdAt: createdAt) }
+  }
+
+  @discardableResult
+  public func applyDeviceOwnedGatewayProjection(
+    runID: String, remoteRunID: String, eventName: String, eventStream: String? = nil,
+    sequence: Int, eventType: String,
+    eventPhase: String?, toolName: String?, content: String?, rawEventJSON: String,
+    assistantMessageID: String?, assistantMutation: DeviceOwnedAssistantMutation?,
+    streamBoundary: Bool = false, finalAssistantSegment: Bool = false,
+    activity: AgentRunActivity?, appendingActivity: Bool = false,
+    createdAt: Date = Date()
+  ) async throws -> DeviceOwnedGatewayProjectionResult {
+    try await write { try $0.applyDeviceOwnedGatewayProjection(runID: runID, remoteRunID: remoteRunID, eventName: eventName, eventStream: eventStream, sequence: sequence, eventType: eventType, eventPhase: eventPhase, toolName: toolName, content: content, rawEventJSON: rawEventJSON, assistantMessageID: assistantMessageID, assistantMutation: assistantMutation, streamBoundary: streamBoundary, finalAssistantSegment: finalAssistantSegment, activity: activity, appendingActivity: appendingActivity, createdAt: createdAt) }
+  }
+
+  public func deviceOwnedGatewayTraceEvents(
+    runID: String
+  ) async throws -> [(sequence: Int, rawEventJSON: String)] {
+    try await read { try $0.deviceOwnedGatewayTraceEvents(runID: runID) }
+  }
+
+  public func recoverRemoteAgentRuns(conversationID: String, snapshots: [DefaultAgentRunSnapshot]) async throws {
+    try await write { try $0.recoverRemoteAgentRuns(conversationID: conversationID, snapshots: snapshots) }
+  }
+
+  public func completeLocalACPRun(
+    runID: String,
+    error: String? = nil,
+    completedAt: Date = Date()
+  ) async throws {
+    try await finishWrite { try $0.completeLocalACPRun(runID: runID, error: error, completedAt: completedAt) }
+  }
+
+  public func cancelLocalACPRun(
+    runID: String,
+    completedAt: Date = Date()
+  ) async throws {
+    try await finishWrite { try $0.cancelLocalACPRun(runID: runID, completedAt: completedAt) }
+  }
+
+  public func recoverInterruptedLocalACPRuns(
+    recoveredAt: Date = Date()
+  ) async throws {
+    try await write { try $0.recoverInterruptedLocalACPRuns(recoveredAt: recoveredAt) }
   }
 }

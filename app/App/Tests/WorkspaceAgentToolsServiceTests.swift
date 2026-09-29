@@ -415,13 +415,13 @@ private struct RelayForwardingFixture {
 }
 
 extension WorkspaceAgentToolsServiceTests {
-    @Test func unchangedToolSnapshotsDoNotInvalidateConversationObservers() throws {
-        let fixture = try ToolSnapshotFixture()
+    @Test func unchangedToolSnapshotsDoNotInvalidateConversationObservers() async throws {
+        let fixture = try await ToolSnapshotFixture()
         defer { fixture.stop() }
         let model = fixture.model
         let token = UUID()
-        model.observeSession(fixture.caller, token: token)
-        try model.setEnabled(.calendar, enabled: false, sessionID: fixture.caller)
+        await model.observeSession(fixture.caller, token: token)
+        try await model.setEnabled(.calendar, enabled: false, sessionID: fixture.caller)
         let changes = observeToolSnapshotChanges {
             _ = model.settings
             _ = model.relationships
@@ -432,28 +432,28 @@ extension WorkspaceAgentToolsServiceTests {
         }
         // Exercise the actual one-second scheduler's refresh entry point without
         // a timer, provider service, or UI. An empty chat must stay quiet too.
-        for _ in 0..<20 { try model.reload() }
-        model.observeSession(fixture.caller, token: token)
+        for _ in 0..<20 { try await model.reload() }
+        await model.observeSession(fixture.caller, token: token)
         #expect(changes.count == 0)
         #expect(model.receipts[fixture.caller]?.isEmpty == true)
         #expect(!model.hasOlderReceipts.contains(fixture.caller))
     }
 
-    @Test func receiptPayloadChangesPublishEvenWhenIDsAndCountsStayTheSame() throws {
-        let fixture = try ToolSnapshotFixture()
+    @Test func receiptPayloadChangesPublishEvenWhenIDsAndCountsStayTheSame() async throws {
+        let fixture = try await ToolSnapshotFixture()
         defer { fixture.stop() }
         let model = fixture.model
-        model.observeSession(fixture.caller, token: UUID())
+        await model.observeSession(fixture.caller, token: UUID())
         let inserted = observeToolSnapshotChanges { _ = model.receipts }
-        let delivery = try fixture.database.reserveToolDelivery(sourceID: fixture.caller,
+        let delivery = try await fixture.database.reserveToolDelivery(sourceID: fixture.caller,
             targetID: fixture.target, text: "Review the result", requestID: UUID().uuidString)
-        try model.reload()
+        try await model.reload()
         #expect(inserted.count == 1)
         #expect(model.receipts[fixture.caller]?.map(\.id) == [delivery.id])
 
         let statusChanged = observeToolSnapshotChanges { _ = model.receipts }
-        try fixture.database.setToolDeliveryStatus(id: delivery.id, status: "failed")
-        try model.reload()
+        try await fixture.database.setToolDeliveryStatus(id: delivery.id, status: "failed")
+        try await model.reload()
         #expect(statusChanged.count == 1)
         #expect(model.receipts[fixture.caller]?.first?.status == "failed")
 
@@ -461,8 +461,8 @@ extension WorkspaceAgentToolsServiceTests {
         // identity/status-only comparison either.
         let payloadChanged = observeToolSnapshotChanges { _ = model.receipts }
         let messageID = UUID().uuidString
-        try fixture.database.setToolDeliveryStatus(id: delivery.id, status: "failed", messageID: messageID)
-        try model.reload()
+        try await fixture.database.setToolDeliveryStatus(id: delivery.id, status: "failed", messageID: messageID)
+        try await model.reload()
         #expect(payloadChanged.count == 1)
         #expect(model.receipts[fixture.caller]?.first?.messageID == messageID)
         #expect(model.receipts[fixture.caller]?.map(\.id) == [delivery.id])
@@ -471,35 +471,35 @@ extension WorkspaceAgentToolsServiceTests {
             _ = model.receipts
             _ = model.hasOlderReceipts
         }
-        for _ in 0..<5 { try model.reload() }
+        for _ in 0..<5 { try await model.reload() }
         #expect(unchanged.count == 0)
     }
 
-    @Test func receiptObservationRetainsPagedWindowsAndSharedPanelOwnership() throws {
-        let fixture = try ToolSnapshotFixture()
+    @Test func receiptObservationRetainsPagedWindowsAndSharedPanelOwnership() async throws {
+        let fixture = try await ToolSnapshotFixture()
         defer { fixture.stop() }
         let model = fixture.model
         var ids: [String] = []
         for index in 0..<205 {
-            let delivery = try fixture.database.reserveToolDelivery(sourceID: fixture.caller,
+            let delivery = try await fixture.database.reserveToolDelivery(sourceID: fixture.caller,
                 targetID: fixture.target, text: "Instruction \(index)", requestID: UUID().uuidString)
             ids.append(delivery.id)
         }
         let firstPanel = UUID(), secondPanel = UUID()
-        model.observeSession(fixture.caller, token: firstPanel)
+        await model.observeSession(fixture.caller, token: firstPanel)
         #expect(model.receipts[fixture.caller]?.map(\.id) == Array(ids.suffix(200).reversed()))
         #expect(model.hasOlderReceipts.contains(fixture.caller))
         let unchanged = observeToolSnapshotChanges {
             _ = model.receipts
             _ = model.hasOlderReceipts
         }
-        try model.reload()
-        model.observeSession(fixture.caller, token: secondPanel)
-        model.observeSession(nil, token: firstPanel)
+        try await model.reload()
+        await model.observeSession(fixture.caller, token: secondPanel)
+        await model.observeSession(nil, token: firstPanel)
         #expect(unchanged.count == 0)
 
         let olderChanged = observeToolSnapshotChanges { _ = model.hasOlderReceipts }
-        model.loadOlderReceipts(sessionID: fixture.caller)
+        await model.loadOlderReceipts(sessionID: fixture.caller)
         #expect(olderChanged.count == 1)
         #expect(model.receipts[fixture.caller]?.map(\.id) == Array(ids.reversed()))
         #expect(!model.hasOlderReceipts.contains(fixture.caller))
@@ -507,40 +507,40 @@ extension WorkspaceAgentToolsServiceTests {
             _ = model.receipts
             _ = model.hasOlderReceipts
         }
-        model.loadOlderReceipts(sessionID: fixture.caller)
-        try model.reload()
+        await model.loadOlderReceipts(sessionID: fixture.caller)
+        try await model.reload()
         #expect(exhausted.count == 0)
 
-        let newest = try fixture.database.reserveToolDelivery(sourceID: fixture.caller,
+        let newest = try await fixture.database.reserveToolDelivery(sourceID: fixture.caller,
             targetID: fixture.target, text: "Latest", requestID: UUID().uuidString)
-        try fixture.database.setToolDeliveryStatus(id: ids[0], status: "cancelled")
-        try model.reload()
+        try await fixture.database.setToolDeliveryStatus(id: ids[0], status: "cancelled")
+        try await model.reload()
         #expect(model.receipts[fixture.caller]?.map(\.id) == [newest.id] + ids.reversed())
         #expect(model.receipts[fixture.caller]?.last?.status == "cancelled")
         let removed = observeToolSnapshotChanges { _ = model.receipts }
-        model.observeSession(nil, token: secondPanel)
+        await model.observeSession(nil, token: secondPanel)
         #expect(removed.count == 1)
         #expect(model.receipts.isEmpty)
         #expect(model.hasOlderReceipts.isEmpty)
     }
 
-    @Test func changedSettingsPoliciesAndTimersStillPublish() throws {
-        let fixture = try ToolSnapshotFixture()
+    @Test func changedSettingsPoliciesAndTimersStillPublish() async throws {
+        let fixture = try await ToolSnapshotFixture()
         defer { fixture.stop() }
         let model = fixture.model
-        try model.setEnabled(.calendar, enabled: false, sessionID: fixture.caller)
+        try await model.setEnabled(.calendar, enabled: false, sessionID: fixture.caller)
         let settingsChanged = observeToolSnapshotChanges { _ = model.settings }
         let policiesChanged = observeToolSnapshotChanges { _ = model.sessionPolicies }
         let timersChanged = observeToolSnapshotChanges { _ = model.timers }
         var settings = model.settings
         settings.maximumManagedSessions += 1
-        try fixture.database.saveToolSettings(settings)
+        try await fixture.database.saveToolSettings(settings)
         let policy = WorkspaceSessionTools(enabled: [.sessions, .timers])
-        try fixture.database.setSessionTools(policy, sessionID: fixture.caller)
+        try await fixture.database.setSessionTools(policy, sessionID: fixture.caller)
         let timer = WorkspaceSessionTimer(sessionID: fixture.caller, instruction: "Check the result",
             nextFireAt: Date(timeIntervalSince1970: 4_000_000_000))
-        try fixture.database.saveSessionTimer(timer, callerID: fixture.caller)
-        try model.reload()
+        try await fixture.database.saveSessionTimer(timer, callerID: fixture.caller)
+        try await model.reload()
         #expect(settingsChanged.count == 1)
         #expect(policiesChanged.count == 1)
         #expect(timersChanged.count == 1)
@@ -553,7 +553,7 @@ extension WorkspaceAgentToolsServiceTests {
             _ = model.timers
             _ = model.sessionPolicies
         }
-        for _ in 0..<5 { try model.reload() }
+        for _ in 0..<5 { try await model.reload() }
         #expect(unchanged.count == 0)
     }
 }
@@ -580,13 +580,13 @@ private struct ToolSnapshotFixture {
     let target: String
     let model: WorkspaceAgentToolsModel
 
-    init() throws {
+    init() async throws {
         root = FileManager.default.temporaryDirectory.appending(path: "wm-tool-snapshot-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        database = try WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
-        caller = try database.createLocalACPSession(runtimeKind: .codex, title: "Caller", ownerDeviceID: UUID())
-        target = try database.createLocalACPSession(runtimeKind: .pi, title: "Target", ownerDeviceID: UUID())
-        model = try WorkspaceAgentToolsModel(database: database,
+        database = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
+        caller = try await database.createLocalACPSession(runtimeKind: .codex, title: "Caller", ownerDeviceID: UUID())
+        target = try await database.createLocalACPSession(runtimeKind: .pi, title: "Target", ownerDeviceID: UUID())
+        model = try await WorkspaceAgentToolsModel(database: database,
             sessionHandler: { _, _, _ in throw CancellationError() },
             noteHandler: { _, _, _ in throw CancellationError() },
             noteRestoreHandler: { _, _, _, _, _ in throw CancellationError() },
@@ -604,14 +604,14 @@ extension WorkspaceAgentToolsServiceTests {
         let root = FileManager.default.temporaryDirectory.appending(path: "calendar-cli-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
-        let database = try WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
-        let caller = try database.createLocalACPSession(runtimeKind: .codex, title: "Planner", ownerDeviceID: UUID())
+        let database = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
+        let caller = try await database.createLocalACPSession(runtimeKind: .codex, title: "Planner", ownerDeviceID: UUID())
         @MainActor final class ResolutionState {
             var count = 0
             var editsEvent = false
         }
         let resolution = ResolutionState()
-        let service = try WorkspaceAgentToolsModel(database: database,
+        let service = try await WorkspaceAgentToolsModel(database: database,
             sessionHandler: { _, _, _ in throw CancellationError() },
             noteHandler: { _, _, _ in throw CancellationError() },
             noteRestoreHandler: { _, _, _, _, _ in throw CancellationError() },
@@ -619,9 +619,9 @@ extension WorkspaceAgentToolsServiceTests {
             calendarTaskHandler: { _, command, existing in
                 resolution.count += 1
                 if resolution.editsEvent {
-                    let event = try database.calendarEvent(id: command.required("id", allowPositional: true), callerID: caller)
+                    let event = try await database.calendarEvent(id: command.required("id", allowPositional: true), callerID: caller)
                     var draft = WorkspaceCalendarDraft(event); draft.details = "A newer user edit"
-                    try database.saveCalendarEvent(id: event.id, draft: draft, creating: false, expectedRevision: event.calendar.revision)
+                    try await database.saveCalendarEvent(id: event.id, draft: draft, creating: false, expectedRevision: event.calendar.revision)
                 }
                 var task = existing ?? WorkspaceCalendarTask(prompt: "", configuration: .init(runtimeKind: .codex,
                     title: "Review", model: "fixture-model", thinking: "high", permission: "read-only", tools: .init(enabled: [.notes])))
@@ -630,7 +630,7 @@ extension WorkspaceAgentToolsServiceTests {
                 return task
             }, onMutation: {})
         defer { service.stop() }
-        let endpoint = try service.endpoint(for: caller)
+        let endpoint = try await service.endpoint(for: caller)
         func request(_ arguments: [String], id: String = UUID().uuidString.lowercased()) async throws -> WovenMatterToolResponse {
             let data = try JSONEncoder().encode(WovenMatterToolRequest(arguments: arguments, requestID: id))
             let response = try await runBlockingToolFixture { try WovenMatterCommandLine.forward(data, to: endpoint) }
@@ -641,7 +641,7 @@ extension WorkspaceAgentToolsServiceTests {
                         "--time-zone", "America/New_York", "--repeat-unit", "day", "--repeat-interval", "2",
                         "--prompt", "Review changes", "--session-mode", "new"]
         #expect(try await request(creation, id: id).success)
-        let event = try database.calendarEvent(id: id, callerID: caller)
+        let event = try await database.calendarEvent(id: id, callerID: caller)
         #expect(event.calendar.recurrence == .init(unit: .day, interval: 2))
         #expect(event.calendar.createdBy.agent == "codex")
         #expect(event.calendar.task?.sessionMode == .new)
@@ -651,7 +651,7 @@ extension WorkspaceAgentToolsServiceTests {
         #expect(occurrences.result?.objectValue?["rows"]?.arrayValue?.count == 4)
         #expect(try await request(["calendar", "update", id, "--revision", String(event.calendar.revision),
             "--description", "Edited from a session"]).success)
-        let updated = try database.calendarEvent(id: id, callerID: caller)
+        let updated = try await database.calendarEvent(id: id, callerID: caller)
         #expect(updated.calendar.task?.configuration.permission == "read-only")
         #expect(updated.calendar.task?.prompt == "Review changes")
         #expect(updated.calendar.recurrence == event.calendar.recurrence)
@@ -662,18 +662,18 @@ extension WorkspaceAgentToolsServiceTests {
             "--revision", String(updated.calendar.revision), "--title", "Independent review"])
         #expect(detached.success)
         let detachedID = try #require(detached.result?.objectValue?["id"]?.stringValue)
-        let independent = try database.calendarEvent(id: detachedID, callerID: caller)
+        let independent = try await database.calendarEvent(id: detachedID, callerID: caller)
         #expect(independent.calendar.recurrence == nil)
         #expect(independent.calendar.task?.prompt == "Review changes")
         #expect(independent.calendar.task?.configuration.tools.enabled == [.notes])
         #expect(try await !request(["calendar", "remove", detachedID, "--occurrence", "1",
             "--revision", String(independent.calendar.revision)]).success)
         #expect(try await request(["calendar", "read", detachedID]).success)
-        #expect(try database.calendarEvent(id: id, callerID: caller).calendar.excludedOccurrences == [1])
+        #expect(try await database.calendarEvent(id: id, callerID: caller).calendar.excludedOccurrences == [1])
         let copyID = UUID().uuidString.lowercased()
         let copy = ["calendar", "copy", detachedID, "--starts-at", "2026-09-20T13:00:00Z"]
         #expect(try await request(copy, id: copyID).success)
-        let copied = try database.calendarEvent(id: copyID, callerID: caller)
+        let copied = try await database.calendarEvent(id: copyID, callerID: caller)
         #expect(try await request(["calendar", "remove", copyID,
             "--revision", String(copied.calendar.revision)]).success)
         // Replay succeeds even after the copy was deleted, without re-resolving defaults.
@@ -682,32 +682,32 @@ extension WorkspaceAgentToolsServiceTests {
         #expect(resolution.count == beforeReplay)
         #expect(try await !request(copy + ["--title", "Different input"], id: copyID).success)
         resolution.editsEvent = true
-        let beforeRace = try database.calendarEvent(id: id, callerID: caller)
+        let beforeRace = try await database.calendarEvent(id: id, callerID: caller)
         #expect(try await !request(["calendar", "update", id, "--revision", String(beforeRace.calendar.revision),
             "--description", "Stale agent edit"]).success)
-        #expect(try database.calendarEvent(id: id, callerID: caller).details == "A newer user edit")
+        #expect(try await database.calendarEvent(id: id, callerID: caller).details == "A newer user edit")
         resolution.editsEvent = false
-        var settings = try database.toolSettings(); settings.calendarAccess = .readOnly
-        try database.saveToolSettings(settings)
+        var settings = try await database.toolSettings(); settings.calendarAccess = .readOnly
+        try await database.saveToolSettings(settings)
         #expect(try await request(["calendar", "read", id]).success)
         #expect(try await !request(creation, id: id).success)
         #expect(try await !request(["calendar", "remove", id]).success)
-        settings.calendarAccess = .full; try database.saveToolSettings(settings)
-        try database.setSessionTools(.init(enabled: [.calendar]), sessionID: caller)
+        settings.calendarAccess = .full; try await database.saveToolSettings(settings)
+        try await database.setSessionTools(.init(enabled: [.calendar]), sessionID: caller)
         #expect(try await !request(creation, id: UUID().uuidString.lowercased()).success)
         #expect(try await request(["calendar", "create", "--title", "Ordinary event", "--starts-at", "2026-09-22T13:00:00Z"]).success)
-        try database.setSessionTools(.init(enabled: []), sessionID: caller)
+        try await database.setSessionTools(.init(enabled: []), sessionID: caller)
         #expect(try await !request(["calendar", "list"]).success)
     }
 
     @Test func librarySocketAcceptsReturnedDatesAndRejectsInvalidPagination() async throws {
-        let fixture = try ToolSnapshotFixture()
+        let fixture = try await ToolSnapshotFixture()
         defer { fixture.stop() }
-        let run = try fixture.database.beginLocalACPRun(conversationID: fixture.caller, content: "https://example.com/shared")
-        try fixture.database.completeLocalACPRun(runID: run.runID)
-        try fixture.database.indexLibraryMessages()
-        let item = try #require(fixture.database.libraryItems().first)
-        let endpoint = try fixture.model.endpoint(for: fixture.caller)
+        let run = try await fixture.database.beginLocalACPRun(conversationID: fixture.caller, content: "https://example.com/shared")
+        try await fixture.database.completeLocalACPRun(runID: run.runID)
+        try await fixture.database.indexLibraryMessages()
+        let item = try await #require(fixture.database.libraryItems().first)
+        let endpoint = try await fixture.model.endpoint(for: fixture.caller)
         func request(_ arguments: [String]) async throws -> WovenMatterToolResponse {
             let data = try JSONEncoder().encode(WovenMatterToolRequest(arguments: ["library"] + arguments))
             let response = try await runBlockingToolFixture { try WovenMatterCommandLine.forward(data, to: endpoint) }
@@ -723,7 +723,7 @@ extension WorkspaceAgentToolsServiceTests {
             let malformed = try await request(["list", "--" + option, "invalid"])
             #expect(!malformed.success)
         }
-        try fixture.model.setEnabled(.library, enabled: false, sessionID: fixture.caller)
+        try await fixture.model.setEnabled(.library, enabled: false, sessionID: fixture.caller)
         let denied = try await request(["read", item.id])
         #expect(!denied.success)
     }
@@ -734,11 +734,11 @@ extension WorkspaceAgentToolsServiceTests {
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
-        let database = try WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
-        let caller = try database.createLocalACPSession(runtimeKind: .codex, title: "Caller", ownerDeviceID: UUID())
-        let original = try database.sessionTools(caller)
+        let database = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
+        let caller = try await database.createLocalACPSession(runtimeKind: .codex, title: "Caller", ownerDeviceID: UUID())
+        let original = try await database.sessionTools(caller)
         var forwarded = 0
-        let projection = try WorkspaceAgentToolsModel(projection: database) { command in
+        let projection = try await WorkspaceAgentToolsModel(projection: database) { command in
             guard case .setEnabled(.timers, false, caller, false) = command else {
                 throw WorkspaceToolError.invalid("Unexpected command")
             }
@@ -746,15 +746,111 @@ extension WorkspaceAgentToolsServiceTests {
             throw WorkspaceToolError.timerPauseConfirmation
         }
         defer { projection.stop() }
-        #expect(throws: (any Error).self) { try projection.endpoint(for: caller) }
-        #expect(throws: (any Error).self) { try projection.setEnabled(.timers, enabled: false, sessionID: caller) }
+        await #expect(throws: (any Error).self) { try await projection.endpoint(for: caller) }
+        await #expect(throws: (any Error).self) { try await projection.setEnabled(.timers, enabled: false, sessionID: caller) }
         do {
             try await projection.setEnabledFromUI(.timers, enabled: false, sessionID: caller)
             Issue.record("Expected timer confirmation")
         } catch WorkspaceToolError.timerPauseConfirmation { }
         #expect(forwarded == 1)
-        #expect(try database.sessionTools(caller) == original)
+        #expect(try await database.sessionTools(caller) == original)
         let response = await projection.handle(.init(arguments: ["timers", "list"]), callerID: caller)
         #expect(!response.success)
+    }
+}
+
+extension WorkspaceAgentToolsServiceTests {
+    @Test(arguments: [false, true])
+    func failedSettingsSaveRestoresTheCommittedProjection(replyLostAfterCommit: Bool) async throws {
+        let fixture = try await ToolSnapshotFixture()
+        defer { fixture.stop() }
+        let original = try await fixture.database.toolSettings()
+        let projection = try await WorkspaceAgentToolsModel(projection: fixture.database) { mutation in
+            if replyLostAfterCommit, case let .saveSettings(value) = mutation {
+                try await fixture.database.saveToolSettings(value)
+            }
+            throw ToolSettingsSaveFailure()
+        }
+        defer { projection.stop() }
+        var edited = original
+        edited.maximumManagedSessions = original.maximumManagedSessions == 16 ? 15 : original.maximumManagedSessions + 1
+        await projection.saveSettings(edited)
+        #expect(projection.settings == (replyLostAfterCommit ? edited : original))
+        #expect(try await fixture.database.toolSettings() == projection.settings)
+        #expect(projection.error == ToolSettingsSaveFailure().localizedDescription)
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func failedQueuedSettingsSavePreservesNewerEditAndLastSuccessfulValue() async throws {
+        let fixture = try await ToolSnapshotFixture()
+        defer { fixture.stop() }
+        let gate = ToolSettingsSaveGate()
+        let projection = try await WorkspaceAgentToolsModel(projection: fixture.database) { mutation in
+            try await gate.pause()
+            if case let .saveSettings(value) = mutation { try await fixture.database.saveToolSettings(value) }
+        }
+        defer { projection.stop(); gate.finishAll() }
+        var first = projection.settings
+        first.maximumManagedSessions = 7
+        var latest = first
+        latest.maximumManagedSessions = 9
+        let oldSave = Task { await projection.saveSettings(first) }
+        await gate.waitForStarts(1)
+        let newestSave = Task { await projection.saveSettings(latest) }
+        let deadline = ContinuousClock.now + .seconds(5)
+        while projection.settings != latest, ContinuousClock.now < deadline { await Task.yield() }
+        #expect(projection.settings == latest)
+        gate.finish(1, failure: true)
+        await gate.waitForStarts(2)
+        #expect(projection.settings == latest)
+        gate.finish(2, failure: false)
+        await oldSave.value
+        await newestSave.value
+        #expect(projection.settings == latest)
+        #expect(try await fixture.database.toolSettings() == latest)
+        #expect(projection.error == nil)
+
+        var rejected = latest
+        rejected.maximumManagedSessions = 11
+        let failedSave = Task { await projection.saveSettings(rejected) }
+        await gate.waitForStarts(3)
+        gate.finish(3, failure: true)
+        await failedSave.value
+        #expect(projection.settings == latest)
+        #expect(projection.error == ToolSettingsSaveFailure().localizedDescription)
+    }
+}
+
+private struct ToolSettingsSaveFailure: LocalizedError {
+    var errorDescription: String? { "The fixture save failed." }
+}
+
+@MainActor
+private final class ToolSettingsSaveGate {
+    private var starts = 0
+    private var pending: [Int: CheckedContinuation<Void, any Error>] = [:]
+    private var observers: [(Int, CheckedContinuation<Void, Never>)] = []
+    func pause() async throws {
+        starts += 1
+        let id = starts
+        try await withCheckedThrowingContinuation { continuation in
+            pending[id] = continuation
+            let ready = observers.filter { $0.0 <= starts }
+            observers.removeAll { $0.0 <= starts }
+            ready.forEach { $0.1.resume() }
+        }
+    }
+    func waitForStarts(_ count: Int) async {
+        if starts >= count { return }
+        await withCheckedContinuation { observers.append((count, $0)) }
+    }
+    func finish(_ id: Int, failure: Bool) {
+        if failure { pending.removeValue(forKey: id)?.resume(throwing: ToolSettingsSaveFailure()) }
+        else { pending.removeValue(forKey: id)?.resume() }
+    }
+    func finishAll() {
+        let remaining = pending.values
+        pending.removeAll()
+        remaining.forEach { $0.resume(throwing: CancellationError()) }
     }
 }

@@ -266,6 +266,7 @@ final class DashboardNoteEditorController {
 }
 
 struct DashboardNoteEditor: NSViewRepresentable {
+    @Environment(\.isEnabled) private var isEnabled
     @Binding var document: NoteDocument
     let controller: DashboardNoteEditorController
     var dictationEditor: DictationEditor? = nil
@@ -284,6 +285,7 @@ struct DashboardNoteEditor: NSViewRepresentable {
         textView.delegate = context.coordinator
         textView.drawsBackground = false
         textView.isRichText = true
+        textView.isEditable = isEnabled
         textView.importsGraphics = false
         textView.allowsUndo = true
         textView.isAutomaticLinkDetectionEnabled = true
@@ -308,6 +310,7 @@ struct DashboardNoteEditor: NSViewRepresentable {
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         context.coordinator.parent = self
         guard let textView = scrollView.documentView as? NSTextView else { return }
+        textView.isEditable = isEnabled
         dictationEditor?.bind(textView, identity: dictationIdentity)
         controller.bind(textView: textView, document: document) { updated in
             context.coordinator.emit(updated)

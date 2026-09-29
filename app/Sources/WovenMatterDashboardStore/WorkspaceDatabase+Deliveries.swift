@@ -303,3 +303,51 @@ extension WorkspaceDatabase {
     try await read { try $0.sessionActivityWindow(sessionID: sessionID, throughID: throughID) }
   }
 }
+
+// MARK: - Async worker boundary
+
+extension WorkspaceDatabase {
+  public func reserveToolDelivery(sourceID: String, targetID: String, text: String, requestID: String,
+                                  kind: WorkspaceSessionDeliveryKind = .message, purpose: String? = nil,
+                                  eventKey: String? = nil) async throws -> WorkspaceSessionDelivery {
+    try await write { try $0.reserveToolDelivery(sourceID: sourceID, targetID: targetID, text: text, requestID: requestID, kind: kind, purpose: purpose, eventKey: eventKey) }
+  }
+
+  public func claimToolDelivery(id: String, now: Date = Date()) async throws -> WorkspaceSessionDelivery? {
+    try await write { try $0.claimToolDelivery(id: id, now: now) }
+  }
+
+  public func validateClaimedToolDelivery(id: String) async throws {
+    try await read { try $0.validateClaimedToolDelivery(id: id) }
+  }
+
+  public func markToolDeliveryTransportStarted(id: String, targetID: String? = nil, nativeCommand: String? = nil) async throws {
+    try await write { try $0.markToolDeliveryTransportStarted(id: id, targetID: targetID, nativeCommand: nativeCommand) }
+  }
+
+  public func failToolDeliveryAttempt(id: String, now: Date = Date()) async throws {
+    try await finishWrite { try $0.failToolDeliveryAttempt(id: id, now: now) }
+  }
+
+  public func setToolDeliveryStatus(id: String, status: String, messageID: String? = nil) async throws {
+    // Resolving an already claimed delivery is cleanup, including returning a
+    // known-unsent attempt to the queue. Preserve its outcome on cancellation.
+    try await finishWrite { try $0.setToolDeliveryStatus(id: id, status: status, messageID: messageID) }
+  }
+
+  public func recoverToolDeliveries() async throws {
+    try await write { try $0.recoverToolDeliveries() }
+  }
+
+  public func toolDelivery(id: String) async throws -> WorkspaceSessionDelivery? {
+    try await read { try $0.toolDelivery(id: id) }
+  }
+
+  public func sessionDeliveries(sessionID: String? = nil, queuedOnly: Bool = false, limit: Int = 200, beforeID: String? = nil, outgoingOnly: Bool = false, activityOnly: Bool = false, includeCalendar: Bool = true) async throws -> [WorkspaceSessionDelivery] {
+    try await read { try $0.sessionDeliveries(sessionID: sessionID, queuedOnly: queuedOnly, limit: limit, beforeID: beforeID, outgoingOnly: outgoingOnly, activityOnly: activityOnly, includeCalendar: includeCalendar) }
+  }
+
+  public func sessionActivityWindow(sessionID: String, throughID: String) async throws -> [WorkspaceSessionDelivery] {
+    try await read { try $0.sessionActivityWindow(sessionID: sessionID, throughID: throughID) }
+  }
+}

@@ -9,8 +9,8 @@ struct HermesIntegrationTests {
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
-        let database = try WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
-        let id = try database.createLocalACPSession(runtimeKind: .hermes, title: "Draft", ownerDeviceID: UUID())
+        let database = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
+        let id = try await database.createLocalACPSession(runtimeKind: .hermes, title: "Draft", ownerDeviceID: UUID())
         let identity = HermesGatewayClient.identity(home: root.path, storedID: "native-id")
         let (events, continuation) = AsyncStream<Void>.makeStream()
         var iterator = events.makeAsyncIterator()
@@ -27,7 +27,7 @@ struct HermesIntegrationTests {
                         return .endTurn
                     }
                     try await onEvent?(.sessionIdentity(identity))
-                    #expect(try database.localACPSession(conversationID: id).acpSessionID == identity)
+                    #expect(try await database.localACPSession(conversationID: id).acpSessionID == identity)
                     throw HermesGatewayError.message("Submit acknowledgement lost")
                 }, configuration: { .empty }, setConfiguration: { _, _ in .empty }, cancel: {}, shutdown: {})
             })
@@ -35,23 +35,23 @@ struct HermesIntegrationTests {
         let workspace = LocalACPWorkspaceLaunchConfiguration(rootURL: root, repositoriesURL: root)
         for _ in 0..<2 {
             _ = try await coordinator.configuration(conversationID: id, launch: launch, workspace: workspace)
-            #expect(try database.localACPSession(conversationID: id).acpSessionID == nil)
+            #expect(try await database.localACPSession(conversationID: id).acpSessionID == nil)
         }
         _ = try await coordinator.accept(conversationID: id, content: "/help", launch: launch, workspace: workspace)
         _ = await iterator.next()
-        #expect(try database.localACPSession(conversationID: id).acpSessionID == nil)
+        #expect(try await database.localACPSession(conversationID: id).acpSessionID == nil)
         _ = try await coordinator.accept(conversationID: id, content: "Hello", launch: launch, workspace: workspace)
         _ = await iterator.next()
-        #expect(try database.localACPSession(conversationID: id).acpSessionID == identity)
+        #expect(try await database.localACPSession(conversationID: id).acpSessionID == identity)
         await coordinator.shutdown()
         continuation.finish()
     }
 
-    @Test func importsKeepDistinctProfilesAndAreAtomicAndIdempotent() throws {
+    @Test func importsKeepDistinctProfilesAndAreAtomicAndIdempotent() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
-        let database = try WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
+        let database = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
         let owner = UUID()
         let firstHome = "/tmp/hermes-profile"
         let secondHome = "/tmp/hermes-profile/profiles/work"
@@ -63,66 +63,66 @@ struct HermesIntegrationTests {
             ["id": .number(3), "role": "tool", "tool_call_id": "call-1", "content": "Full tool output", "timestamp": .number(102)]
         ]
         let imported = HermesSessionImport(identity: identity, title: "Imported", createdAt: Date(timeIntervalSince1970: 100), messages: rows)
-        let id = try database.createLocalACPSession(runtimeKind: .hermes, title: imported.title, ownerDeviceID: owner, createdAt: imported.createdAt, hermesImport: imported)
-        let repeated = try database.createLocalACPSession(runtimeKind: .hermes, title: "Repeated", ownerDeviceID: owner, hermesImport: imported)
+        let id = try await database.createLocalACPSession(runtimeKind: .hermes, title: imported.title, ownerDeviceID: owner, createdAt: imported.createdAt, hermesImport: imported)
+        let repeated = try await database.createLocalACPSession(runtimeKind: .hermes, title: "Repeated", ownerDeviceID: owner, hermesImport: imported)
         #expect(id == repeated)
-        #expect(try database.conversationContent(id: id).messages.map(\.content) == ["Question", "Answer"])
-        #expect(try database.conversationHistoryPage(id: id, limit: 100).activities.first { $0.activity.kind == .tool }?.activity.content == "Full tool output")
-        let tools = try database.conversationHistoryPage(id: id, limit: 100).activities.filter { $0.activity.kind == .tool }
+        #expect(try await database.conversationContent(id: id).messages.map(\.content) == ["Question", "Answer"])
+        #expect(try await database.conversationHistoryPage(id: id, limit: 100).activities.first { $0.activity.kind == .tool }?.activity.content == "Full tool output")
+        let tools = try await database.conversationHistoryPage(id: id, limit: 100).activities.filter { $0.activity.kind == .tool }
         #expect(tools.count == 1)
         #expect(tools.first?.activity.rawInputJSON?.contains("fixture") == true)
-        #expect(try database.localACPSession(conversationID: id).acpSessionID == identity)
-        #expect(try database.knownHermesSessionIDs(home: firstHome) == ["shared-id"])
-        #expect(try database.knownHermesSessionIDs(home: secondHome).isEmpty)
+        #expect(try await database.localACPSession(conversationID: id).acpSessionID == identity)
+        #expect(try await database.knownHermesSessionIDs(home: firstHome) == ["shared-id"])
+        #expect(try await database.knownHermesSessionIDs(home: secondHome).isEmpty)
         let other = HermesSessionImport(identity: HermesGatewayClient.identity(home: secondHome, storedID: "shared-id", imported: true), title: "Other profile", createdAt: imported.createdAt, messages: rows)
-        let otherID = try database.createLocalACPSession(runtimeKind: .hermes, title: other.title, ownerDeviceID: owner, hermesImport: other)
+        let otherID = try await database.createLocalACPSession(runtimeKind: .hermes, title: other.title, ownerDeviceID: owner, hermesImport: other)
         #expect(otherID != id)
         let broken = HermesSessionImport(identity: HermesGatewayClient.identity(home: firstHome, storedID: "invalid", imported: true), title: "Broken", createdAt: imported.createdAt, messages: [rows[0], rows[0]])
-        #expect(throws: WorkspaceDatabaseError.corruptRow) {
-            try database.createLocalACPSession(runtimeKind: .hermes, title: broken.title, ownerDeviceID: owner, hermesImport: broken)
+        await #expect(throws: WorkspaceDatabaseError.corruptRow) {
+            try await database.createLocalACPSession(runtimeKind: .hermes, title: broken.title, ownerDeviceID: owner, hermesImport: broken)
         }
-        #expect(try !database.knownHermesSessionIDs(home: firstHome).contains("invalid"))
-        #expect(try database.conversationContent(id: id).messages.count == 2)
-        let record = try #require(database.workspaceOverview().conversations.first { $0.id == id })
+        #expect(try await !database.knownHermesSessionIDs(home: firstHome).contains("invalid"))
+        #expect(try await database.conversationContent(id: id).messages.count == 2)
+        let record = try await #require(database.workspaceOverview().conversations.first { $0.id == id })
         let importedAt = try #require(record.importedAt)
         #expect(record.lastMessageAt == importedAt)
-        let reopened = try WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
-        #expect(try reopened.workspaceOverview().conversations.first { $0.id == id }?.importedAt == importedAt)
+        let reopened = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
+        #expect(try await reopened.workspaceOverview().conversations.first { $0.id == id }?.importedAt == importedAt)
         // Old transcript/turn timestamps must not move an imported conversation back down the sidebar.
-        let run = try reopened.beginLocalACPRun(conversationID: id, content: "Continue", createdAt: Date(timeIntervalSince1970: 200))
-        try reopened.appendLocalACPAssistantChunk(runID: run.runID, chunk: "Reply", updatedAt: Date(timeIntervalSince1970: 201))
-        #expect(try reopened.workspaceOverview().conversations.first { $0.id == id }?.lastMessageAt == importedAt)
+        let run = try await reopened.beginLocalACPRun(conversationID: id, content: "Continue", createdAt: Date(timeIntervalSince1970: 200))
+        try await reopened.appendLocalACPAssistantChunk(runID: run.runID, chunk: "Reply", updatedAt: Date(timeIntervalSince1970: 201))
+        #expect(try await reopened.workspaceOverview().conversations.first { $0.id == id }?.lastMessageAt == importedAt)
         // A genuinely newer turn still advances recency without changing import provenance.
-        try reopened.replaceLocalACPAssistantMessage(runID: run.runID, content: "Later reply", updatedAt: Date().addingTimeInterval(60))
-        let later = try #require(reopened.workspaceOverview().conversations.first { $0.id == id })
+        try await reopened.replaceLocalACPAssistantMessage(runID: run.runID, content: "Later reply", updatedAt: Date().addingTimeInterval(60))
+        let later = try await #require(reopened.workspaceOverview().conversations.first { $0.id == id })
         #expect(later.importedAt == importedAt)
         #expect(try #require(later.lastMessageAt) > importedAt)
     }
 
-    @Test func hermesDisplayNameSurvivesCatalogRefresh() throws {
+    @Test func hermesDisplayNameSurvivesCatalogRefresh() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
-        let database = try WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
+        let database = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
         let owner = UUID()
-        _ = try database.createLocalACPSession(runtimeKind: .hermes, title: "Chat", ownerDeviceID: owner)
-        let agent = try #require(database.dashboardAgents().first { $0.runtimeKind == .hermes })
-        try database.renameHermesAgent(id: agent.id, displayName: "  My Hermes  ")
-        try database.reconcileLocalCLIAgentCatalog(ownerDeviceID: owner)
-        #expect(try database.dashboardAgents().first { $0.id == agent.id }?.displayName == "My Hermes")
-        #expect(throws: (any Error).self) { try database.renameHermesAgent(id: UUID(), displayName: "Other") }
+        _ = try await database.createLocalACPSession(runtimeKind: .hermes, title: "Chat", ownerDeviceID: owner)
+        let agent = try await #require(database.dashboardAgents().first { $0.runtimeKind == .hermes })
+        try await database.renameHermesAgent(id: agent.id, displayName: "  My Hermes  ")
+        try await database.reconcileLocalCLIAgentCatalog(ownerDeviceID: owner)
+        #expect(try await database.dashboardAgents().first { $0.id == agent.id }?.displayName == "My Hermes")
+        await #expect(throws: (any Error).self) { try await database.renameHermesAgent(id: UUID(), displayName: "Other") }
     }
 
-    @Test func importingAnAlreadyLinkedNativeConversationDoesNotDuplicateIt() throws {
+    @Test func importingAnAlreadyLinkedNativeConversationDoesNotDuplicateIt() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
-        let database = try WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
+        let database = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
         let owner = UUID(), home = "/tmp/hermes-profile"
-        let id = try database.createLocalACPSession(runtimeKind: .hermes, title: "Existing", ownerDeviceID: owner)
-        try database.updateLocalACPSessionID(conversationID: id, sessionID: HermesGatewayClient.identity(home: home, storedID: "native"))
+        let id = try await database.createLocalACPSession(runtimeKind: .hermes, title: "Existing", ownerDeviceID: owner)
+        try await database.updateLocalACPSessionID(conversationID: id, sessionID: HermesGatewayClient.identity(home: home, storedID: "native"))
         let imported = HermesSessionImport(identity: HermesGatewayClient.identity(home: home, storedID: "native", imported: true), title: "Import", createdAt: Date(), messages: [])
-        #expect(try database.createLocalACPSession(runtimeKind: .hermes, title: imported.title, ownerDeviceID: owner, hermesImport: imported) == id)
+        #expect(try await database.createLocalACPSession(runtimeKind: .hermes, title: imported.title, ownerDeviceID: owner, hermesImport: imported) == id)
         #expect(HermesGatewayClient.parseIdentity("legacy-acp-session").storedID == "legacy-acp-session")
         #expect(HermesGatewayClient.parseIdentity("hermes-gateway:invalid:session").storedID.isEmpty)
     }
@@ -130,23 +130,23 @@ struct HermesIntegrationTests {
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
-        let database = try WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
-        let id = try database.createLocalACPSession(runtimeKind: .hermes, title: "Streaming", ownerDeviceID: UUID())
-        let run = try database.beginLocalACPRun(conversationID: id, content: "Start")
+        let database = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
+        let id = try await database.createLocalACPSession(runtimeKind: .hermes, title: "Streaming", ownerDeviceID: UUID())
+        let run = try await database.beginLocalACPRun(conversationID: id, content: "Start")
         let writer = LocalACPAssistantStreamWriter(database: database, runID: run.runID,
             assistantMessageID: run.assistantMessageID, conversationID: id, onChange: nil)
         try await writer.append("Before steering. ")
         try await writer.finishSegmentAndPause()
-        let steering = try database.beginLocalACPSteeringTurn(runID: run.runID, content: "Continue")
+        let steering = try await database.beginLocalACPSteeringTurn(runID: run.runID, content: "Continue")
         await writer.resumeAfterSegmentBoundary(assistantMessageID: steering.assistantMessageID)
         try await writer.append("Draft")
         try await writer.replace("Before steering. Final answer")
         await #expect(throws: (any Error).self) { try await writer.replace("Changed earlier text") }
         try await writer.finish()
-        let assistants = try database.conversationContent(id: id).messages.filter { $0.role == "assistant" }.map(\.content)
+        let assistants = try await database.conversationContent(id: id).messages.filter { $0.role == "assistant" }.map(\.content)
         #expect(assistants == ["Before steering. ", "Final answer"])
         try await writer.replace("Ignored after completion")
-        #expect(try database.conversationContent(id: id).messages.filter { $0.role == "assistant" }.map(\.content) == assistants)
+        #expect(try await database.conversationContent(id: id).messages.filter { $0.role == "assistant" }.map(\.content) == assistants)
     }
 
 }

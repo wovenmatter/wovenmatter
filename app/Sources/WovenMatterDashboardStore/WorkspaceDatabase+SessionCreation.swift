@@ -144,3 +144,37 @@ extension WorkspaceDatabaseConnection {
     }
   }
 }
+
+// MARK: - Async worker boundary
+
+extension WorkspaceDatabase {
+  public func toolSessionCreationConfiguration(targetID: String) async throws -> WorkspaceSessionCreationConfiguration? {
+    try await read { try $0.toolSessionCreationConfiguration(targetID: targetID) }
+  }
+
+  public func reserveToolSessionCreation(sourceID: String, requestID: String, arguments: [String], purpose: String, managed: Bool) async throws -> GatewayJSONValue {
+    try await write { try $0.reserveToolSessionCreation(sourceID: sourceID, requestID: requestID, arguments: arguments, purpose: purpose, managed: managed) }
+  }
+
+  public func saveToolSessionCreationConfiguration(requestID: String, sourceID: String,
+      configuration: WorkspaceSessionCreationConfiguration) async throws -> WorkspaceSessionCreationConfiguration {
+    try await write { try $0.saveToolSessionCreationConfiguration(requestID: requestID, sourceID: sourceID, configuration: configuration) }
+  }
+
+  public func markToolSessionCreationConfigured(requestID: String, sourceID: String) async throws {
+    try await write { try $0.markToolSessionCreationConfigured(requestID: requestID, sourceID: sourceID) }
+  }
+
+  public func failToolSessionCreation(requestID: String) async throws {
+    // Release the durable fanout reservation even when setup's owner is cancelled.
+    try await finishWrite { try $0.failToolSessionCreation(requestID: requestID) }
+  }
+
+  public func recoverToolSessionCreations() async throws {
+    try await write { try $0.recoverToolSessionCreations() }
+  }
+
+  public func completeToolSessionCreation(requestID: String, sourceID: String) async throws {
+    try await write { try $0.completeToolSessionCreation(requestID: requestID, sourceID: sourceID) }
+  }
+}

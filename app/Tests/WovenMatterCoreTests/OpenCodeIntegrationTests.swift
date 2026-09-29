@@ -7,6 +7,99 @@ import WovenMatterCore
 
 @Suite(.serialized)
 struct OpenCodeIntegrationTests {
+    @Test func dispatchFenceIsCheckedAfterOutboundHistory() async throws {
+        let fixture = OpenCodeFixture(); FixtureProtocol.fixture = fixture
+        let fence = AgentDispatchFence()
+        let client = OpenCodeHTTPClient(connection: try connection(), session: fixtureSession()).recording { direction, _ in
+            if direction == "out" { fence.cancel() }
+        }
+        await #expect(throws: CancellationError.self) {
+            _ = try await client.call("POST", "/api/session/ses_fixture/prompt",
+                body: ["id": "msg_stopped", "text": "Never send"], dispatchFence: fence)
+        }
+        #expect(!fence.hasDispatched)
+        #expect(fixture.promptCount == 0)
+    }
+
+    @Test(arguments: [false, true])
+    func stopDuringAdmissionRejectsOnlyDefinitelyUnsentInput(isCommand: Bool) async throws {
+        let fixture = OpenCodeFixture(); FixtureProtocol.fixture = fixture
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+        let id = try await database.createLocalACPSession(runtimeKind: .opencode, title: "Stopped admission", ownerDeviceID: UUID(), openCodeAssociation: ("fixture", "ses_fixture"))
+        let source = try await database.createLocalACPSession(runtimeKind: .codex, title: "Coordinator", ownerDeviceID: UUID())
+        let deliveryID = UUID().uuidString.lowercased()
+        _ = try await database.reserveToolDelivery(sourceID: source, targetID: id, text: "Never send", requestID: deliveryID)
+        _ = try await database.claimToolDelivery(id: deliveryID)
+        let link = OpenCodeSessionLink(conversationID: id, connectionID: "fixture", sessionID: "ses_fixture")
+        let session = fixtureSession()
+        let coordinator = OpenCodeSessionCoordinator(database: database,
+            clientFactory: { OpenCodeHTTPClient(connection: $0, session: session) })
+        try await coordinator.connect(connection())
+        let entered = AsyncStream<Void>.makeStream()
+        let release = DispatchSemaphore(value: 0)
+        defer { release.signal() }
+        let blocked = Task { try await database.write { _ in
+            entered.continuation.yield(())
+            #expect(release.wait(timeout: .now() + 60) == .success)
+        } }
+        var iterator = entered.stream.makeAsyncIterator()
+        await iterator.next()
+        let pending = Task {
+            let input = AgentMessageInput(text: "Never send", historyDeliveryID: deliveryID)
+            if isCommand { try await coordinator.command(link, name: "review", input: input) }
+            else { try await coordinator.prompt(link, input: input) }
+        }
+        let deadline = ContinuousClock.now + .seconds(60)
+        while database.workerMetrics[0].pending < 2 {
+            guard ContinuousClock.now < deadline else { throw DatabaseWorkerError.timedOut }
+            try await Task.sleep(for: .milliseconds(1))
+        }
+        await coordinator.cancelPendingInput(conversationID: id)
+        release.signal()
+        try await blocked.value
+        await #expect(throws: CancellationError.self) { try await pending.value }
+        #expect(fixture.promptCount == 0 && fixture.commandCount == 0)
+        #expect(try await database.openCodeUncertainSubmissions(conversationID: id).isEmpty)
+        #expect(try await database.toolDelivery(id: deliveryID)?.status == "failed")
+        await coordinator.shutdown()
+    }
+
+    @Test func shutdownInvalidatesConnectionWaitingForDatabase() async throws {
+        let fixture = OpenCodeFixture(); FixtureProtocol.fixture = fixture
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appending(path: "workspace.sqlite")
+        let database = try await WorkspaceDatabase(url: url)
+        let session = fixtureSession()
+        let coordinator = OpenCodeSessionCoordinator(database: database,
+            clientFactory: { OpenCodeHTTPClient(connection: $0, session: session) })
+        let workers = DatabaseWorkers.shared(url: url)
+        let entered = AsyncStream<Void>.makeStream()
+        let release = DispatchSemaphore(value: 0)
+        defer { for _ in workers.readers { release.signal() } }
+        let blockers = workers.readers.map { worker in Task { try await worker.perform { _ in
+            entered.continuation.yield(())
+            #expect(release.wait(timeout: .now() + 60) == .success)
+        } } }
+        var iterator = entered.stream.makeAsyncIterator()
+        for _ in workers.readers { await iterator.next() }
+        let pending = Task { try await coordinator.connect(connection()) }
+        let deadline = ContinuousClock.now + .seconds(60)
+        while workers.readers.reduce(0, { $0 + $1.metrics.pending }) < workers.readers.count + 1 {
+            guard ContinuousClock.now < deadline else { throw DatabaseWorkerError.timedOut }
+            try await Task.sleep(for: .milliseconds(1))
+        }
+        await coordinator.shutdown()
+        for _ in workers.readers { release.signal() }
+        for blocker in blockers { try await blocker.value }
+        await #expect(throws: CancellationError.self) { try await pending.value }
+        await #expect(throws: OpenCodeError.self) { try await coordinator.call(connectionID: "fixture", path: "/api/session") }
+    }
+
     @Test func importPageExcludesKnownAndNativeSessionsAndStopsAtOnePage() async throws {
         let fixture = OpenCodeFixture(); FixtureProtocol.fixture = fixture
         fixture.sessions = (0..<60).map { ["id": .string("ses_\($0)"), "title": .string("Session \($0)")] }
@@ -14,8 +107,8 @@ struct OpenCodeIntegrationTests {
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
-        let db = try WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
-        _ = try db.createLocalACPSession(runtimeKind: .opencode, title: "Known", ownerDeviceID: UUID(), openCodeAssociation: ("fixture", "ses_0"))
+        let db = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
+        _ = try await db.createLocalACPSession(runtimeKind: .opencode, title: "Known", ownerDeviceID: UUID(), openCodeAssociation: ("fixture", "ses_0"))
         let session = fixtureSession()
         let coordinator = OpenCodeSessionCoordinator(database: db, clientFactory: { OpenCodeHTTPClient(connection: $0, session: session) })
         try await coordinator.connect(connection())
@@ -36,7 +129,7 @@ struct OpenCodeIntegrationTests {
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
-        let db = try WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
+        let db = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
         let session = fixtureSession()
         let coordinator = OpenCodeSessionCoordinator(database: db, clientFactory: { OpenCodeHTTPClient(connection: $0, session: session) })
         try await coordinator.connect(connection())
@@ -46,17 +139,17 @@ struct OpenCodeIntegrationTests {
         #expect(snapshot.olderCursor == nil)
         #expect(fixture.historyRequests == 4)
         #expect(fixture.createCount == 0)
-        let id = try db.createLocalACPSession(runtimeKind: .opencode, title: "Imported", ownerDeviceID: UUID(),
+        let id = try await db.createLocalACPSession(runtimeKind: .opencode, title: "Imported", ownerDeviceID: UUID(),
             openCodeAssociation: ("fixture", "ses_fixture"), importedOpenCodeSnapshot: snapshot)
-        let repeated = try db.createLocalACPSession(runtimeKind: .opencode, title: "Again", ownerDeviceID: UUID(),
+        let repeated = try await db.createLocalACPSession(runtimeKind: .opencode, title: "Again", ownerDeviceID: UUID(),
             openCodeAssociation: ("fixture", "ses_fixture"), importedOpenCodeSnapshot: snapshot)
         #expect(repeated == id)
-        #expect(try db.knownOpenCodeSessionIDs(connectionID: "fixture") == ["ses_fixture"])
-        try db.saveOpenCodeSnapshot(snapshot, conversationID: id)
-        let reopened = try WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
-        #expect(try reopened.openCodeSnapshot(conversationID: id)?.messages.count == 250)
-        #expect(try reopened.conversationContent(id: id).messages.count == 250)
-        let record = try #require(try reopened.workspaceOverview().conversations.first { $0.id == id })
+        #expect(try await db.knownOpenCodeSessionIDs(connectionID: "fixture") == ["ses_fixture"])
+        try await db.saveOpenCodeSnapshot(snapshot, conversationID: id)
+        let reopened = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
+        #expect(try await reopened.openCodeSnapshot(conversationID: id)?.messages.count == 250)
+        #expect(try await reopened.conversationContent(id: id).messages.count == 250)
+        let record = try #require(try await reopened.workspaceOverview().conversations.first { $0.id == id })
         #expect(record.importedAt != nil)
         #expect(record.lastMessageAt == record.importedAt)
         await coordinator.shutdown()
@@ -109,12 +202,12 @@ struct OpenCodeIntegrationTests {
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let database = try WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
-        let id = try database.createLocalACPSession(runtimeKind: .opencode, title: "Commands", ownerDeviceID: UUID(), openCodeAssociation: ("fixture", "ses_fixture"))
-        let source = try database.createLocalACPSession(runtimeKind: .codex, title: "Coordinator", ownerDeviceID: UUID())
+        let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+        let id = try await database.createLocalACPSession(runtimeKind: .opencode, title: "Commands", ownerDeviceID: UUID(), openCodeAssociation: ("fixture", "ses_fixture"))
+        let source = try await database.createLocalACPSession(runtimeKind: .codex, title: "Coordinator", ownerDeviceID: UUID())
         let deliveryID = UUID().uuidString.lowercased()
-        _ = try database.reserveToolDelivery(sourceID: source, targetID: id, text: "current changes", requestID: deliveryID)
-        _ = try database.claimToolDelivery(id: deliveryID)
+        _ = try await database.reserveToolDelivery(sourceID: source, targetID: id, text: "current changes", requestID: deliveryID)
+        _ = try await database.claimToolDelivery(id: deliveryID)
         let link = OpenCodeSessionLink(conversationID: id, connectionID: "fixture", sessionID: "ses_fixture")
         let session = fixtureSession()
         let coordinator = OpenCodeSessionCoordinator(database: database, clientFactory: { OpenCodeHTTPClient(connection: $0, session: session) })
@@ -125,23 +218,23 @@ struct OpenCodeIntegrationTests {
         #expect(fixture.lastCommand["text"].text == "current changes")
         #expect(fixture.lastCommand["id"].isNull)
         #expect(fixture.lastCommand["delivery"].text == "steer")
-        #expect(try database.toolDelivery(id: deliveryID)?.status == "accepted")
-        #expect(try database.toolDelivery(id: deliveryID)?.nativeCommand == "review")
-        #expect(try database.toolDelivery(id: deliveryID)?.messageID == nil)
-        #expect(try database.openCodeUncertainSubmissions(conversationID: id).isEmpty)
+        #expect(try await database.toolDelivery(id: deliveryID)?.status == "accepted")
+        #expect(try await database.toolDelivery(id: deliveryID)?.nativeCommand == "review")
+        #expect(try await database.toolDelivery(id: deliveryID)?.messageID == nil)
+        #expect(try await database.openCodeUncertainSubmissions(conversationID: id).isEmpty)
         fixture.loseCommandResponse = true
         let uncertainID = UUID().uuidString.lowercased()
-        _ = try database.reserveToolDelivery(sourceID: source, targetID: id, text: "again", requestID: uncertainID)
-        _ = try database.claimToolDelivery(id: uncertainID)
+        _ = try await database.reserveToolDelivery(sourceID: source, targetID: id, text: "again", requestID: uncertainID)
+        _ = try await database.claimToolDelivery(id: uncertainID)
         await #expect(throws: OpenCodeError.self) { try await coordinator.command(link, name: "review", input: .init(text: "again", historyDeliveryID: uncertainID)) }
-        try database.failToolDeliveryAttempt(id: uncertainID)
-        #expect(try database.toolDelivery(id: uncertainID)?.status == "uncertain")
-        #expect(try database.claimToolDelivery(id: uncertainID) == nil)
+        try await database.failToolDeliveryAttempt(id: uncertainID)
+        #expect(try await database.toolDelivery(id: uncertainID)?.status == "uncertain")
+        #expect(try await database.claimToolDelivery(id: uncertainID) == nil)
         #expect(fixture.commandCount == 2)
         #expect(fixture.promptCount == 0)
-        #expect(try database.openCodeUncertainSubmissions(conversationID: id).isEmpty)
-        let reopened = try WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
-        let incoming = try reopened.sessionDeliveries(sessionID: id, activityOnly: true)
+        #expect(try await database.openCodeUncertainSubmissions(conversationID: id).isEmpty)
+        let reopened = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+        let incoming = try await reopened.sessionDeliveries(sessionID: id, activityOnly: true)
         #expect(incoming.count == 2)
         let timeline = WorkspaceConversationTimelineItem.weave(messages: [], receipts: incoming, sessionID: id)
         #expect(timeline.count == 2)
@@ -289,8 +382,8 @@ struct OpenCodeIntegrationTests {
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let database = try WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
-        let id = try database.createLocalACPSession(runtimeKind: .opencode, title: "Events", ownerDeviceID: UUID(), openCodeAssociation: ("fixture", "ses_fixture"))
+        let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+        let id = try await database.createLocalACPSession(runtimeKind: .opencode, title: "Events", ownerDeviceID: UUID(), openCodeAssociation: ("fixture", "ses_fixture"))
         let link = OpenCodeSessionLink(conversationID: id, connectionID: "fixture", sessionID: "ses_fixture")
         let session = fixtureSession()
         let coordinator = OpenCodeSessionCoordinator(database: database, clientFactory: { OpenCodeHTTPClient(connection: $0, session: session) })
@@ -312,10 +405,10 @@ struct OpenCodeIntegrationTests {
         fixture.gate.release()
         try await fixture.waitForHistoryRequests(baseline + 3)
         for _ in 0..<400 {
-            if try database.openCodeSnapshot(conversationID: id)?.cursor == 7 { break }
+            if try await database.openCodeSnapshot(conversationID: id)?.cursor == 7 { break }
             try await Task.sleep(for: .milliseconds(5))
         }
-        let saved = try #require(try database.openCodeSnapshot(conversationID: id))
+        let saved = try #require(try await database.openCodeSnapshot(conversationID: id))
         #expect(saved.messages.last?["id"].text == "during-second")
         #expect(saved.cursor == 7)
         await coordinator.shutdown()
@@ -346,32 +439,32 @@ struct OpenCodeIntegrationTests {
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let database = try WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
-        let source = try database.createLocalACPSession(runtimeKind: .codex, title: "Coordinator", ownerDeviceID: UUID())
-        let target = try database.createLocalACPSession(runtimeKind: .opencode, title: "Work", ownerDeviceID: UUID())
+        let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+        let source = try await database.createLocalACPSession(runtimeKind: .codex, title: "Coordinator", ownerDeviceID: UUID())
+        let target = try await database.createLocalACPSession(runtimeKind: .opencode, title: "Work", ownerDeviceID: UUID())
         let link = OpenCodeSessionLink(conversationID: target, connectionID: "fixture", sessionID: "ses_fixture")
-        try database.attachOpenCodeSession(link)
+        try await database.attachOpenCodeSession(link)
         let deliveryID = UUID().uuidString.lowercased()
-        _ = try database.reserveToolDelivery(sourceID: source, targetID: target, text: "Build this", requestID: deliveryID)
-        _ = try database.claimToolDelivery(id: deliveryID)
+        _ = try await database.reserveToolDelivery(sourceID: source, targetID: target, text: "Build this", requestID: deliveryID)
+        _ = try await database.claimToolDelivery(id: deliveryID)
         let session = fixtureSession()
         let coordinator = OpenCodeSessionCoordinator(database: database, clientFactory: { OpenCodeHTTPClient(connection: $0, session: session) })
         try await coordinator.connect(connection())
         try await coordinator.prompt(link, input: .init(text: "Build this", historyDeliveryID: deliveryID), discovery: "<wovenmatter-tools>session discovery</wovenmatter-tools>")
-        let raw = try #require(try database.openCodeSnapshot(conversationID: target))
+        let raw = try #require(try await database.openCodeSnapshot(conversationID: target))
         #expect(fixture.lastPrompt["delivery"].text == "steer")
         #expect(raw.messages.last?["text"].text.contains("session discovery") == true)
-        let display = try database.openCodeDisplaySnapshot(raw, conversationID: target)
+        let display = try await database.openCodeDisplaySnapshot(raw, conversationID: target)
         #expect(display.messages.last?["text"].text == "Build this")
-        let content = try database.conversationContent(id: target)
+        let content = try await database.conversationContent(id: target)
         let input = try #require(content.messages.first(where: { $0.role == "user" }))
         #expect(input.content == "Build this")
         #expect(input.senderSessionID == source)
         #expect(input.senderKind == .message)
         #expect(input.senderSessionTitle == "Coordinator")
-        #expect(try database.toolDelivery(id: deliveryID)?.messageID == input.id)
-        let reopened = try WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
-        #expect(try reopened.openCodeDisplaySnapshot(raw, conversationID: target).messages.last?["text"].text == "Build this")
+        #expect(try await database.toolDelivery(id: deliveryID)?.messageID == input.id)
+        let reopened = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+        #expect(try await reopened.openCodeDisplaySnapshot(raw, conversationID: target).messages.last?["text"].text == "Build this")
         await coordinator.disconnect(connectionID: "fixture")
     }
 
@@ -380,10 +473,10 @@ struct OpenCodeIntegrationTests {
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let database = try WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
-        let id = try database.createLocalACPSession(runtimeKind: .opencode, title: "fixture", ownerDeviceID: UUID())
+        let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+        let id = try await database.createLocalACPSession(runtimeKind: .opencode, title: "fixture", ownerDeviceID: UUID())
         let link = OpenCodeSessionLink(conversationID: id, connectionID: "fixture", sessionID: "ses_fixture")
-        try database.attachOpenCodeSession(link)
+        try await database.attachOpenCodeSession(link)
         let session = fixtureSession()
         let coordinator = OpenCodeSessionCoordinator(database: database, clientFactory: { OpenCodeHTTPClient(connection: $0, session: session) })
         try await coordinator.connect(connection())
@@ -392,7 +485,7 @@ struct OpenCodeIntegrationTests {
         // A second UI wrote more than two pages while this client was offline.
         fixture.messages += (0..<250).map { message("msg_other_\($0)", time: Double(250 - $0)) }
         try await coordinator.refresh(link)
-        let recovered = try #require(try database.openCodeSnapshot(conversationID: id))
+        let recovered = try #require(try await database.openCodeSnapshot(conversationID: id))
         #expect(recovered.messages.count == 251)
         #expect(recovered.messages.last?["id"].text == "msg_other_249")
         #expect(recovered.forms.map { $0["id"].text } == ["form_pending"])
@@ -403,13 +496,13 @@ struct OpenCodeIntegrationTests {
         fixture.losePromptResponse = true
         try await coordinator.prompt(link, input: .init(text: "one input"))
         #expect(fixture.promptCount == 1)
-        #expect(try database.openCodeUncertainSubmissions(conversationID: id).isEmpty)
-        #expect(try database.openCodeSnapshot(conversationID: id)?.messages.last?["text"].text == "one input")
+        #expect(try await database.openCodeUncertainSubmissions(conversationID: id).isEmpty)
+        #expect(try await database.openCodeSnapshot(conversationID: id)?.messages.last?["text"].text == "one input")
         await coordinator.disconnect(connectionID: "fixture")
         #expect(fixture.interruptCount == 0)
-        let reopened = try WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
-        #expect(try reopened.openCodeLinks() == [link])
-        #expect(try reopened.openCodeSnapshot(conversationID: id)?.messages.count == 252)
+        let reopened = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+        #expect(try await reopened.openCodeLinks() == [link])
+        #expect(try await reopened.openCodeSnapshot(conversationID: id)?.messages.count == 252)
     }
 
     @Test func unknownAcceptanceBlocksNewInputWithoutTreating404AsRejection() async throws {
@@ -418,52 +511,52 @@ struct OpenCodeIntegrationTests {
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let database = try WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
-        let id = try database.createLocalACPSession(runtimeKind: .opencode, title: "fixture", ownerDeviceID: UUID())
+        let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+        let id = try await database.createLocalACPSession(runtimeKind: .opencode, title: "fixture", ownerDeviceID: UUID())
         let link = OpenCodeSessionLink(conversationID: id, connectionID: "fixture", sessionID: "ses_fixture")
-        try database.attachOpenCodeSession(link)
+        try await database.attachOpenCodeSession(link)
         let session = fixtureSession()
         let coordinator = OpenCodeSessionCoordinator(database: database, clientFactory: { OpenCodeHTTPClient(connection: $0, session: session) })
         let timer = WorkspaceSessionTimer(sessionID: id, instruction: "unknown", nextFireAt: .distantPast)
-        try database.saveSessionTimer(timer, callerID: id)
-        let pending = try #require(try database.dueSessionTimers().first?.pendingDeliveryID)
-        _ = try database.reserveToolDelivery(sourceID: id, targetID: id, text: timer.instruction, requestID: pending, kind: .timer)
-        _ = try database.claimToolDelivery(id: pending)
+        try await database.saveSessionTimer(timer, callerID: id)
+        let pending = try #require(try await database.dueSessionTimers().first?.pendingDeliveryID)
+        _ = try await database.reserveToolDelivery(sourceID: id, targetID: id, text: timer.instruction, requestID: pending, kind: .timer)
+        _ = try await database.claimToolDelivery(id: pending)
         let now = Date()
         // A disconnected native client fails before HTTP and keeps the one-shot.
         await #expect(throws: OpenCodeError.self) { try await coordinator.prompt(link, input: .init(text: timer.instruction, historyDeliveryID: pending)) }
-        try database.failToolDeliveryAttempt(id: pending, now: now)
-        try database.finishTimerOccurrence(id: timer.id, deliveryID: pending)
-        #expect(try database.toolDelivery(id: pending)?.status == "queued")
-        #expect(try database.sessionTimers().first?.pendingDeliveryID == pending)
+        try await database.failToolDeliveryAttempt(id: pending, now: now)
+        try await database.finishTimerOccurrence(id: timer.id, deliveryID: pending)
+        #expect(try await database.toolDelivery(id: pending)?.status == "queued")
+        #expect(try await database.sessionTimers().first?.pendingDeliveryID == pending)
         #expect(fixture.promptCount == 0)
         try await coordinator.connect(connection())
-        _ = try #require(try database.claimToolDelivery(id: pending, now: now.addingTimeInterval(30)))
+        _ = try #require(try await database.claimToolDelivery(id: pending, now: now.addingTimeInterval(30)))
         await #expect(throws: OpenCodeError.self) { try await coordinator.prompt(link, input: .init(text: timer.instruction, historyDeliveryID: pending)) }
-        try database.failToolDeliveryAttempt(id: pending)
-        try database.finishTimerOccurrence(id: timer.id, deliveryID: pending)
-        #expect(try database.toolDelivery(id: pending)?.status == "uncertain")
-        #expect(try database.sessionTimers().first?.pendingDeliveryID == pending)
-        #expect(try database.sessionTimers().first?.isPaused == false)
-        #expect(try database.claimToolDelivery(id: pending) == nil)
+        try await database.failToolDeliveryAttempt(id: pending)
+        try await database.finishTimerOccurrence(id: timer.id, deliveryID: pending)
+        #expect(try await database.toolDelivery(id: pending)?.status == "uncertain")
+        #expect(try await database.sessionTimers().first?.pendingDeliveryID == pending)
+        #expect(try await database.sessionTimers().first?.isPaused == false)
+        #expect(try await database.claimToolDelivery(id: pending) == nil)
         await #expect(throws: OpenCodeError.self) { try await coordinator.prompt(link, input: .init(text: "do not duplicate")) }
         #expect(fixture.promptCount == 1)
-        #expect(try database.openCodeUncertainSubmissions(conversationID: id).count == 1)
+        #expect(try await database.openCodeUncertainSubmissions(conversationID: id).count == 1)
         await coordinator.shutdown()
     }
 
-    @Test func legacyTranscriptsCannotEnterACPAndOtherHarnessesCan() throws {
+    @Test func legacyTranscriptsCannotEnterACPAndOtherHarnessesCan() async throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let database = try WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
-        let old = try database.createLocalACPSession(runtimeKind: .opencode, title: "Retained transcript", ownerDeviceID: UUID())
-        #expect(throws: OpenCodeError.self) { try database.beginLocalACPRun(conversationID: old, input: .init(text: "blocked")) }
-        #expect(try database.localACPSession(conversationID: old).title == "Retained transcript")
-        #expect(try database.conversationContent(id: old).messages.isEmpty)
-        let codex = try database.createLocalACPSession(runtimeKind: .codex, title: "Other harness", ownerDeviceID: UUID())
-        _ = try database.beginLocalACPRun(conversationID: codex, input: .init(text: "allowed"))
-        #expect(try database.conversationContent(id: codex).messages.count == 2)
+        let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+        let old = try await database.createLocalACPSession(runtimeKind: .opencode, title: "Retained transcript", ownerDeviceID: UUID())
+        await #expect(throws: OpenCodeError.self) { try await database.beginLocalACPRun(conversationID: old, input: .init(text: "blocked")) }
+        #expect(try await database.localACPSession(conversationID: old).title == "Retained transcript")
+        #expect(try await database.conversationContent(id: old).messages.isEmpty)
+        let codex = try await database.createLocalACPSession(runtimeKind: .codex, title: "Other harness", ownerDeviceID: UUID())
+        _ = try await database.beginLocalACPRun(conversationID: codex, input: .init(text: "allowed"))
+        #expect(try await database.conversationContent(id: codex).messages.count == 2)
     }
 
     @Test func disconnectDuringHealthCheckCannotReconnectAStaleClient() async throws {
@@ -471,7 +564,7 @@ struct OpenCodeIntegrationTests {
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let database = try WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+        let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
         let session = fixtureSession()
         let coordinator = OpenCodeSessionCoordinator(database: database, clientFactory: { OpenCodeHTTPClient(connection: $0, session: session) })
         let connection = try connection()
@@ -483,14 +576,14 @@ struct OpenCodeIntegrationTests {
         await #expect(throws: OpenCodeError.self) { try await coordinator.call(connectionID: "fixture", path: "/api/health") }
     }
 
-    @Test func richProjectionAndRecoveryCursorSurviveDatabaseReopen() throws {
+    @Test func richProjectionAndRecoveryCursorSurviveDatabaseReopen() async throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let url = directory.appending(path: "workspace.sqlite")
-        let database = try WorkspaceDatabase(url: url)
-        let id = try database.createLocalACPSession(runtimeKind: .opencode, title: "Rich fixture", ownerDeviceID: UUID())
-        try database.attachOpenCodeSession(.init(conversationID: id, connectionID: "fixture", sessionID: "ses_fixture"))
+        let database = try await WorkspaceDatabase(url: url)
+        let id = try await database.createLocalACPSession(runtimeKind: .opencode, title: "Rich fixture", ownerDeviceID: UUID())
+        try await database.attachOpenCodeSession(.init(conversationID: id, connectionID: "fixture", sessionID: "ses_fixture"))
         var snapshot = OpenCodeSessionSnapshot()
         snapshot.info = ["id": "ses_fixture", "title": "Rich fixture"]
         snapshot.cursor = 874
@@ -504,25 +597,25 @@ struct OpenCodeIntegrationTests {
                 ["type": "tool", "id": "tool_1", "name": "read", "state": ["status": "completed", "input": ["path": "fixture.txt"], "content": .array([["type": "text", "text": "fixture"]])]]
              ])]
         ]
-        try database.saveOpenCodeSnapshot(snapshot, conversationID: id)
-        try database.saveOpenCodeSnapshot(snapshot, conversationID: id)
-        let reopened = try WorkspaceDatabase(url: url)
-        #expect(try reopened.openCodeSnapshot(conversationID: id) == snapshot)
-        let content = try reopened.conversationContent(id: id)
+        try await database.saveOpenCodeSnapshot(snapshot, conversationID: id)
+        try await database.saveOpenCodeSnapshot(snapshot, conversationID: id)
+        let reopened = try await WorkspaceDatabase(url: url)
+        #expect(try await reopened.openCodeSnapshot(conversationID: id) == snapshot)
+        let content = try await reopened.conversationContent(id: id)
         #expect(content.messages.count == 2)
         #expect(content.runs.count == 1)
         #expect(content.runs.first?.completedAt?.hasPrefix("1970-01-01T00:00:00.003") == true)
-        #expect(try reopened.conversationHistoryPage(id: id, limit: 100).activities.count == 3)
+        #expect(try await reopened.conversationHistoryPage(id: id, limit: 100).activities.count == 3)
     }
 
-    @Test func existingV1MessageContentIsRetainedWhenContinuationIsRejected() throws {
+    @Test func existingV1MessageContentIsRetainedWhenContinuationIsRejected() async throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let url = directory.appending(path: "workspace.sqlite")
-        let database = try WorkspaceDatabase(url: url)
-        let id = try database.createLocalACPSession(runtimeKind: .codex, title: "Historical transcript", ownerDeviceID: UUID())
-        _ = try database.beginLocalACPRun(conversationID: id, input: .init(text: "Historical message, retained verbatim"))
+        let database = try await WorkspaceDatabase(url: url)
+        let id = try await database.createLocalACPSession(runtimeKind: .codex, title: "Historical transcript", ownerDeviceID: UUID())
+        _ = try await database.beginLocalACPRun(conversationID: id, input: .init(text: "Historical message, retained verbatim"))
         // Represent an existing pre-upgrade OpenCode ACP row without starting ACP.
         var handle: OpaquePointer?
         #expect(sqlite3_open(url.path, &handle) == SQLITE_OK)
@@ -532,24 +625,24 @@ struct OpenCodeIntegrationTests {
         defer { sqlite3_finalize(statement) }
         _ = id.withCString { sqlite3_bind_text(statement, 1, $0, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self)) }
         #expect(sqlite3_step(statement) == SQLITE_DONE)
-        let before = try database.conversationContent(id: id).messages
-        #expect(throws: OpenCodeError.self) { try database.beginLocalACPRun(conversationID: id, input: .init(text: "do not append")) }
-        #expect(try database.conversationContent(id: id).messages == before)
+        let before = try await database.conversationContent(id: id).messages
+        await #expect(throws: OpenCodeError.self) { try await database.beginLocalACPRun(conversationID: id, input: .init(text: "do not append")) }
+        #expect(try await database.conversationContent(id: id).messages == before)
         #expect(before.first?.content == "Historical message, retained verbatim")
     }
 
-    @Test func repeatedSessionOpenReusesOneAtomicConversationAssociation() throws {
+    @Test func repeatedSessionOpenReusesOneAtomicConversationAssociation() async throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let database = try WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+        let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
         let owner = UUID()
-        let first = try database.createLocalACPSession(runtimeKind: .opencode, title: "First", ownerDeviceID: owner, openCodeAssociation: ("server", "ses_same"))
-        let second = try database.createLocalACPSession(runtimeKind: .opencode, title: "Second", ownerDeviceID: owner, openCodeAssociation: ("server", "ses_same"))
+        let first = try await database.createLocalACPSession(runtimeKind: .opencode, title: "First", ownerDeviceID: owner, openCodeAssociation: ("server", "ses_same"))
+        let second = try await database.createLocalACPSession(runtimeKind: .opencode, title: "Second", ownerDeviceID: owner, openCodeAssociation: ("server", "ses_same"))
         #expect(first == second)
-        #expect(try database.openCodeLinks().count == 1)
-        #expect(try database.openCodeSnapshot(conversationID: first) == OpenCodeSessionSnapshot())
-        #expect(try database.localACPSession(conversationID: first).title == "First")
+        #expect(try await database.openCodeLinks().count == 1)
+        #expect(try await database.openCodeSnapshot(conversationID: first) == OpenCodeSessionSnapshot())
+        #expect(try await database.localACPSession(conversationID: first).title == "First")
     }
 
     @Test func largeCatchupPreservesOlderPageAnchorAndRefreshesLoadedHistory() async throws {
@@ -558,8 +651,8 @@ struct OpenCodeIntegrationTests {
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let database = try WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
-        let id = try database.createLocalACPSession(runtimeKind: .opencode, title: "Paging", ownerDeviceID: UUID(), openCodeAssociation: ("fixture", "ses_fixture"))
+        let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+        let id = try await database.createLocalACPSession(runtimeKind: .opencode, title: "Paging", ownerDeviceID: UUID(), openCodeAssociation: ("fixture", "ses_fixture"))
         let link = OpenCodeSessionLink(conversationID: id, connectionID: "fixture", sessionID: "ses_fixture")
         let session = fixtureSession()
         let coordinator = OpenCodeSessionCoordinator(database: database, clientFactory: { OpenCodeHTTPClient(connection: $0, session: session) })
@@ -567,23 +660,23 @@ struct OpenCodeIntegrationTests {
         try await coordinator.refresh(link)
         try await coordinator.loadOlder(link)
         try await coordinator.loadOlder(link)
-        let originalCursor = try database.openCodeSnapshot(conversationID: id)?.olderCursor
+        let originalCursor = try await database.openCodeSnapshot(conversationID: id)?.olderCursor
         fixture.messages += (350..<800).map { message("msg_history_\($0)") }
         try await coordinator.refresh(link)
-        #expect(try database.openCodeSnapshot(conversationID: id)?.olderCursor == originalCursor)
+        #expect(try await database.openCodeSnapshot(conversationID: id)?.olderCursor == originalCursor)
         try await coordinator.loadOlder(link)
-        #expect(try database.openCodeSnapshot(conversationID: id)?.messages.map { $0["id"].text } == fixture.messages.map { $0["id"].text })
+        #expect(try await database.openCodeSnapshot(conversationID: id)?.messages.map { $0["id"].text } == fixture.messages.map { $0["id"].text })
         // A reconnect must also refresh old loaded content, even when the new
         // messages alone exceed the previously loaded history length.
         fixture.messages[0]["text"] = "Updated by another client"
         fixture.messages += (800..<1700).map { message("msg_history_\($0)") }
         try await coordinator.refresh(link, recoverHistory: true)
-        let recovered = try #require(try database.openCodeSnapshot(conversationID: id))
+        let recovered = try #require(try await database.openCodeSnapshot(conversationID: id))
         #expect(recovered.messages.count == 1700)
         #expect(recovered.messages.first?["text"].text == "Updated by another client")
         #expect(recovered.olderCursor == nil)
         try await coordinator.refresh(link)
-        #expect(try database.openCodeSnapshot(conversationID: id)?.olderCursor == nil)
+        #expect(try await database.openCodeSnapshot(conversationID: id)?.olderCursor == nil)
         await coordinator.shutdown()
     }
 
@@ -592,8 +685,8 @@ struct OpenCodeIntegrationTests {
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let database = try WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
-        let id = try database.createLocalACPSession(runtimeKind: .opencode, title: "Original", ownerDeviceID: UUID(), openCodeAssociation: ("fixture", "ses_fixture"))
+        let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+        let id = try await database.createLocalACPSession(runtimeKind: .opencode, title: "Original", ownerDeviceID: UUID(), openCodeAssociation: ("fixture", "ses_fixture"))
         let link = OpenCodeSessionLink(conversationID: id, connectionID: "fixture", sessionID: "ses_fixture")
         let session = fixtureSession()
         let coordinator = OpenCodeSessionCoordinator(database: database, clientFactory: { OpenCodeHTTPClient(connection: $0, session: session) })
@@ -606,8 +699,8 @@ struct OpenCodeIntegrationTests {
         try await coordinator.connect(connection())
         fixture.gate.release()
         await #expect(throws: CancellationError.self) { try await refresh.value }
-        #expect(try database.openCodeSnapshot(conversationID: id) == OpenCodeSessionSnapshot())
-        #expect(try database.localACPSession(conversationID: id).title == "Original")
+        #expect(try await database.openCodeSnapshot(conversationID: id) == OpenCodeSessionSnapshot())
+        #expect(try await database.localACPSession(conversationID: id).title == "Original")
         await coordinator.shutdown()
     }
 
@@ -617,8 +710,8 @@ struct OpenCodeIntegrationTests {
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let database = try WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
-        let id = try database.createLocalACPSession(runtimeKind: .opencode, title: "Paging", ownerDeviceID: UUID(), openCodeAssociation: ("fixture", "ses_fixture"))
+        let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+        let id = try await database.createLocalACPSession(runtimeKind: .opencode, title: "Paging", ownerDeviceID: UUID(), openCodeAssociation: ("fixture", "ses_fixture"))
         let link = OpenCodeSessionLink(conversationID: id, connectionID: "fixture", sessionID: "ses_fixture")
         let session = fixtureSession()
         let coordinator = OpenCodeSessionCoordinator(database: database, clientFactory: { OpenCodeHTTPClient(connection: $0, session: session) })
@@ -634,7 +727,7 @@ struct OpenCodeIntegrationTests {
         fixture.gate.release()
         try await refresh.value
         try await older.value
-        #expect(try database.openCodeSnapshot(conversationID: id)?.messages.map { $0["id"].text } == Array(fixture.messages.suffix(200)).map { $0["id"].text })
+        #expect(try await database.openCodeSnapshot(conversationID: id)?.messages.map { $0["id"].text } == Array(fixture.messages.suffix(200)).map { $0["id"].text })
         await coordinator.shutdown()
     }
 
@@ -643,7 +736,7 @@ struct OpenCodeIntegrationTests {
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let database = try WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+        let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
         let session = fixtureSession()
         let coordinator = OpenCodeSessionCoordinator(database: database, clientFactory: { OpenCodeHTTPClient(connection: $0, session: session) })
         try await coordinator.connect(connection())
@@ -669,7 +762,7 @@ struct OpenCodeIntegrationTests {
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let database = try WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+        let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
         let session = fixtureSession()
         let coordinator = OpenCodeSessionCoordinator(database: database, clientFactory: { OpenCodeHTTPClient(connection: $0, session: session) })
         try await coordinator.connect(connection())
@@ -733,8 +826,8 @@ struct OpenCodeIntegrationTests {
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let database = try WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
-        let id = try database.createLocalACPSession(runtimeKind: .opencode, title: "History", ownerDeviceID: UUID(), openCodeAssociation: ("fixture", "ses_fixture"))
+        let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+        let id = try await database.createLocalACPSession(runtimeKind: .opencode, title: "History", ownerDeviceID: UUID(), openCodeAssociation: ("fixture", "ses_fixture"))
         let link = OpenCodeSessionLink(conversationID: id, connectionID: "fixture", sessionID: "ses_fixture")
         let session = fixtureSession()
         let coordinator = OpenCodeSessionCoordinator(database: database, clientFactory: { OpenCodeHTTPClient(connection: $0, session: session) })
@@ -742,12 +835,12 @@ struct OpenCodeIntegrationTests {
         try await coordinator.refresh(link)
         fixture.messages.removeFirst()
         try await coordinator.refresh(link, recoverHistory: true)
-        let recovered = try #require(try database.openCodeSnapshot(conversationID: id))
+        let recovered = try #require(try await database.openCodeSnapshot(conversationID: id))
         #expect(recovered.messages == fixture.messages)
         #expect(recovered.olderCursor == nil)
         // The saved transcript is retained, but the canonical visible projection
         // no longer includes content removed by another client.
-        #expect(try database.conversationContent(id: id).messages.count == 3)
+        #expect(try await database.conversationContent(id: id).messages.count == 3)
         await coordinator.shutdown()
     }
 
@@ -797,8 +890,8 @@ struct OpenCodeIntegrationTests {
         try Data("notes".utf8).write(to: directory.appending(path: "notes.txt"))
         let workspaceID = UUID()
         let identity = "remote-workspace:" + workspaceID.uuidString.lowercased()
-        let database = try WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
-        let id = try database.createRemoteACPSession(runtimeKind: .opencode, remoteWorkspaceID: workspaceID,
+        let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+        let id = try await database.createRemoteACPSession(runtimeKind: .opencode, remoteWorkspaceID: workspaceID,
             remoteWorkspaceName: "Remote", title: title, ownerDeviceID: UUID(),
             openCodeAssociation: (identity, "ses_fixture"))
         let session = fixtureSession()

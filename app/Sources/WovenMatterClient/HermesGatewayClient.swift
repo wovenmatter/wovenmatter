@@ -26,6 +26,7 @@ public actor HermesGatewayClient {
     private var completion: CheckedContinuation<LocalACPStopReason, any Error>?
     private var busy = false
     private var stopped = false
+    private var pendingDispatches: [ObjectIdentifier: AgentDispatchFence] = [:]
     private var imported = false
     private var closed = false
     private var recoveryInvalidated = false
@@ -41,6 +42,7 @@ public actor HermesGatewayClient {
     private var initialContext: String?
     private var replaying = false
     private var buffered: [HermesValue] = []
+    private var interactionFences: [String: AgentDispatchFence] = [:]
     private var interactionTasks: [String: Task<Void, Never>] = [:]
     private var heartbeat: Task<Void, Never>?
 
@@ -333,13 +335,19 @@ public actor HermesGatewayClient {
     }
 
     public func prompt(_ input: AgentMessageInput, onEvent: LocalACPClient.EventHandler?,
-                       onPermission: LocalACPClient.PermissionHandler?, onInteraction: LocalACPClient.InteractionHandler?) async throws -> LocalACPStopReason {
+                       onPermission: LocalACPClient.PermissionHandler?, onInteraction: LocalACPClient.InteractionHandler?,
+                       dispatchFence: AgentDispatchFence? = nil) async throws -> LocalACPStopReason {
+        let fence = dispatchFence ?? AgentDispatchFence()
+        try fence.check()
+        pendingDispatches[ObjectIdentifier(fence)] = fence
+        defer { pendingDispatches[ObjectIdentifier(fence)] = nil }
         guard !closed, !busy, !replaying, !sessionID.isEmpty else { throw HermesGatewayError.message("Hermes is busy or disconnected.") }
         let connected = await rpc?.isConnected == true
         if (recoveryInvalidated || !connected), let workingDirectory {
             _ = try await initializeSession(workingDirectory: workingDirectory,
                 existingSessionID: Self.identity(home: home, storedID: storedID, imported: imported), title: nil, systemPrompt: nil)
         }
+        try fence.check()
         guard let rpc else { throw HermesGatewayError.message("Hermes is disconnected.") }
         self.onEvent = onEvent; self.onPermission = onPermission; self.onInteraction = onInteraction
         busy = true; terminal = nil; text = ""; completedText = ""; stopped = false; activeReasoningID = nil
@@ -354,7 +362,7 @@ public actor HermesGatewayClient {
                 throw AgentMessageAttachmentError.unsupportedForAgent("Hermes slash commands accept text arguments. Remove attachments before running this command.")
             }
             let result = try await HermesSlashCommands.dispatch(input.text, sessionID: sessionID) { method, params in
-                try await rpc.call(method, params)
+                try await rpc.call(method, params, dispatchFence: fence)
             }
             if stopped { return .cancelled }
             switch result["type"].text {
@@ -385,6 +393,7 @@ public actor HermesGatewayClient {
         var stagedImages: [String] = []
         do {
             for file in input.files {
+                try fence.check()
                 // Hermes opens the path itself, so it must be where Hermes runs:
                 // the staged container path for a remote workspace.
                 if remoteConnection != nil, file.remotePath == nil {
@@ -409,8 +418,9 @@ public actor HermesGatewayClient {
         do {
             // Configuration and local slash commands can use an unpersisted native
             // draft. Pin its identity before submission, including an uncertain ack.
+            try fence.check()
             try await onEvent?(.sessionIdentity(Self.identity(home: home, storedID: storedID, imported: imported)))
-            _ = try await rpc.call("prompt.submit", ["session_id": .string(sessionID), "text": .string(content)])
+            _ = try await rpc.call("prompt.submit", ["session_id": .string(sessionID), "text": .string(content)], dispatchFence: fence)
             initialContext = nil
             if let terminal { return try terminal.get() }
             return try await withTaskCancellationHandler {
@@ -437,24 +447,32 @@ public actor HermesGatewayClient {
         ), appendsContent: false))
     }
 
-    public func steer(_ input: AgentMessageInput) async throws {
+    public func steer(_ input: AgentMessageInput, dispatchFence: AgentDispatchFence? = nil) async throws {
+        let fence = dispatchFence ?? AgentDispatchFence()
+        try fence.check()
+        guard !stopped else { throw CancellationError() }
+        pendingDispatches[ObjectIdentifier(fence)] = fence
+        defer { pendingDispatches[ObjectIdentifier(fence)] = nil }
         guard busy, let rpc else { throw HermesGatewayError.message("Hermes has no active turn to steer.") }
         guard input.files.isEmpty else { throw AgentMessageAttachmentError.unsupportedForAgent("Hermes steering accepts text and references. Send files with the next turn.") }
-        let receipt = try await rpc.call("session.steer", ["session_id": .string(sessionID), "text": .string(input.transportText())])
+        let receipt = try await rpc.call("session.steer", ["session_id": .string(sessionID), "text": .string(input.transportText())], dispatchFence: fence)
         guard receipt["status"].text == "queued" else { throw HermesGatewayError.message("Hermes did not accept this steering input.") }
     }
 
     public func cancel() async throws {
-        guard let rpc, busy else { return }
+        pendingDispatches.values.forEach { $0.cancel() }
         stopped = true
+        cancelInteractions()
+        guard let rpc, busy else { return }
         _ = try await rpc.call("session.interrupt", ["session_id": .string(sessionID)])
         // Completion comes from message.complete, never from terminating the service.
     }
 
     public func shutdown() async {
+        pendingDispatches.values.forEach { $0.cancel() }
         closed = true
         heartbeat?.cancel(); heartbeat = nil
-        for task in interactionTasks.values { task.cancel() }; interactionTasks.removeAll()
+        cancelInteractions()
         if busy { try? await cancel() }
         await rpc?.setHandlers(event: nil, disconnected: nil, request: nil)
         await rpc?.disconnect(); rpc = nil
@@ -582,9 +600,9 @@ public actor HermesGatewayClient {
             case "approval.request", "clarify.request", "sudo.request", "secret.request":
                 beginInteraction(event["type"].text, payload)
             case "request.cancel":
-                interactionTasks.removeValue(forKey: payload["id"].text)?.cancel()
+                cancelInteraction(payload["id"].text)
             case "clarify.expire", "sudo.expire", "secret.expire":
-                interactionTasks.removeValue(forKey: payload["request_id"].text)?.cancel()
+                cancelInteraction(payload["request_id"].text)
             default: break
             }
         } catch { finish(.failure(error)) }
@@ -603,7 +621,7 @@ public actor HermesGatewayClient {
     private func finish(_ result: Result<LocalACPStopReason, any Error>) {
         guard terminal == nil else { return }
         terminal = result
-        for task in interactionTasks.values { task.cancel() }; interactionTasks.removeAll()
+        cancelInteractions()
         let waiting = completion; completion = nil
         waiting?.resume(with: result)
     }
@@ -611,7 +629,7 @@ public actor HermesGatewayClient {
     private func receiveRequest(_ frame: HermesValue) async {
         guard let rpc, let id = frame["id"].string else { return }
         let payload = frame["params"]
-        guard !recoveryInvalidated, busy, payload["session_id"].text == sessionID,
+        guard !closed, !stopped, !recoveryInvalidated, busy, payload["session_id"].text == sessionID,
               ["approval", "clarify", "sudo", "secret"].contains(frame["method"].text) else {
             // Decline unsupported or unowned requests so the native worker never
             // waits indefinitely for a UI this client cannot present.
@@ -621,15 +639,31 @@ public actor HermesGatewayClient {
         beginInteraction(frame["method"].text + ".request", payload, responseID: id)
     }
 
-    private func beginInteraction(_ type: String, _ payload: HermesValue, responseID: String? = nil) {
-        let id = responseID ?? payload["request_id"].text
-        guard !id.isEmpty, interactionTasks[id] == nil else { return }
-        interactionTasks[id] = Task { [weak self] in await self?.respond(type, payload, responseID: responseID) }
+    private func cancelInteraction(_ id: String) {
+        interactionFences.removeValue(forKey: id)?.cancel()
+        interactionTasks.removeValue(forKey: id)?.cancel()
     }
 
-    private func respond(_ type: String, _ payload: HermesValue, responseID: String?) async {
+    private func cancelInteractions() {
+        interactionFences.values.forEach { $0.cancel() }
+        interactionFences.removeAll()
+        for task in interactionTasks.values { task.cancel() }
+        interactionTasks.removeAll()
+    }
+
+    private func beginInteraction(_ type: String, _ payload: HermesValue, responseID: String? = nil) {
         let id = responseID ?? payload["request_id"].text
-        defer { interactionTasks[id] = nil }
+        guard !closed, !stopped, busy, !id.isEmpty, interactionTasks[id] == nil else { return }
+        let fence = AgentDispatchFence()
+        interactionFences[id] = fence
+        interactionTasks[id] = Task { [weak self] in await self?.respond(type, payload, responseID: responseID, fence: fence) }
+    }
+
+    private func respond(_ type: String, _ payload: HermesValue, responseID: String?, fence: AgentDispatchFence) async {
+        let id = responseID ?? payload["request_id"].text
+        defer {
+            if interactionFences[id] === fence { interactionTasks[id] = nil; interactionFences[id] = nil }
+        }
         guard let rpc else { return }
         var params: HermesValue = ["session_id": .string(sessionID), "request_id": .string(id)]
         do {
@@ -638,12 +672,12 @@ public actor HermesGatewayClient {
                 let offered = choices.isEmpty ? ["once", "deny"] : choices
                 let selected = await onPermission?(LocalACPPermissionRequest(title: payload["description"].text + "\n" + payload["command"].text,
                     options: offered.map { LocalACPPermissionOption(id: $0, name: $0, kind: $0 == "deny" ? "reject_once" : $0 == "always" ? "allow_always" : "allow_once") }))
-                guard !Task.isCancelled else { return }
+                guard !stopped, !closed, !Task.isCancelled else { return }
                 let choice = HermesValue.string(selected.flatMap { offered.contains($0) ? $0 : nil } ?? "deny")
-                if let responseID { try await rpc.respond(id: responseID, result: ["choice": choice]) }
+                if let responseID { try await rpc.respond(id: responseID, result: ["choice": choice], dispatchFence: fence) }
                 else {
                     params["choice"] = choice
-                    _ = try await rpc.call("approval.respond", params)
+                    _ = try await rpc.call("approval.respond", params, dispatchFence: fence)
                 }
             } else if type == "clarify.request" {
                 let batch = payload["questions"].array
@@ -652,7 +686,7 @@ public actor HermesGatewayClient {
                         options: question["choices"].array.compactMap(\.string).map { LocalACPQuestionOption(id: $0, label: $0) }, allowsMultiple: question["multi_select"].bool)
                 }
                 let response = await onInteraction?(.questions(LocalACPQuestionRequest(questions: questions)))
-                guard !Task.isCancelled else { return }
+                guard !stopped, !closed, !Task.isCancelled else { return }
                 var answers: [String: HermesValue] = [:]
                 if case .answers(let values) = response {
                     for (key, value) in values {
@@ -665,25 +699,25 @@ public actor HermesGatewayClient {
                 if let responseID {
                     let result: HermesValue = answers.isEmpty ? [:] : batch.isEmpty
                         ? ["answer": answers[questions[0].id] ?? ""] : ["answers": .object(answers)]
-                    try await rpc.respond(id: responseID, result: result)
+                    try await rpc.respond(id: responseID, result: result, dispatchFence: fence)
                 } else {
                     for question in questions {
-                        guard !Task.isCancelled else { return }
+                        guard !stopped, !closed, !Task.isCancelled else { return }
                         if !batch.isEmpty { params["question_id"] = .string(question.id) }
                         params["answer"] = answers[question.id] ?? ""
-                        _ = try await rpc.call("clarify.respond", params)
+                        _ = try await rpc.call("clarify.respond", params, dispatchFence: fence)
                     }
                 }
             } else {
                 let prompt = type == "sudo.request" ? "Hermes requests your sudo password" : payload["prompt"].text
                 let answer = await onInteraction?(.secret(prompt: prompt))
-                guard !Task.isCancelled else { return }
+                guard !stopped, !closed, !Task.isCancelled else { return }
                 let value: HermesValue
                 if case .secret(let secret) = answer { value = .string(secret) } else { value = "" }
-                if let responseID { try await rpc.respond(id: responseID, result: ["value": value]) }
+                if let responseID { try await rpc.respond(id: responseID, result: ["value": value], dispatchFence: fence) }
                 else {
                     params[type == "sudo.request" ? "password" : "value"] = value
-                    _ = try await rpc.call(type == "sudo.request" ? "sudo.respond" : "secret.respond", params)
+                    _ = try await rpc.call(type == "sudo.request" ? "sudo.respond" : "secret.respond", params, dispatchFence: fence)
                 }
             }
         } catch { if !Task.isCancelled { finish(.failure(error)) } }

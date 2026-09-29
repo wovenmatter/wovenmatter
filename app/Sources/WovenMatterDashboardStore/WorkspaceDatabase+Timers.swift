@@ -176,3 +176,37 @@ extension WorkspaceDatabaseConnection {
     }
   }
 }
+
+// MARK: - Async worker boundary
+
+extension WorkspaceDatabase {
+  public func sessionTimers(sessionID: String? = nil) async throws -> [WorkspaceSessionTimer] {
+    try await read { try $0.sessionTimers(sessionID: sessionID) }
+  }
+
+  @discardableResult
+  public func saveSessionTimer(_ timer: WorkspaceSessionTimer, callerID: String,
+                               requestID: String? = nil, creating: Bool? = nil) async throws -> WorkspaceSessionTimer {
+    try await write { try $0.saveSessionTimer(timer, callerID: callerID, requestID: requestID, creating: creating) }
+  }
+
+  public func pauseSessionTimer(id: String, paused: Bool, callerID: String? = nil, requestID: String? = nil) async throws {
+    try await write { try $0.pauseSessionTimer(id: id, paused: paused, callerID: callerID, requestID: requestID) }
+  }
+
+  public func removeSessionTimer(id: String, callerID: String? = nil, requestID: String? = nil) async throws {
+    try await write { try $0.removeSessionTimer(id: id, callerID: callerID, requestID: requestID) }
+  }
+
+  public func dueSessionTimers(now: Date = Date()) async throws -> [WorkspaceSessionTimer] {
+    try await write { try $0.dueSessionTimers(now: now) }
+  }
+
+  public func isTimerOccurrenceActive(id: String, deliveryID: String) async throws -> Bool {
+    try await read { try $0.isTimerOccurrenceActive(id: id, deliveryID: deliveryID) }
+  }
+
+  public func finishTimerOccurrence(id: String, deliveryID: String, now: Date = Date()) async throws {
+    try await write { try $0.finishTimerOccurrence(id: id, deliveryID: deliveryID, now: now) }
+  }
+}

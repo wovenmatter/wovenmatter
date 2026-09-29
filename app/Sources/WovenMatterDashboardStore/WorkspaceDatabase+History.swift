@@ -277,37 +277,20 @@ extension WorkspaceDatabaseConnection {
     }
   }
 
-  public func historyWireRecorder(
-    conversationID: String? = nil, agentID: String? = nil,
-    harness: String
-  ) -> WorkspaceWireRecorder {
-    let correlation = GatewayHistoryRequestCorrelation()
-    return { [self] direction, data in
-      let key = harness == "openclaw" ? correlation.sessionKey(direction: direction, data: data) : nil
-      try recordHistory(
-        WorkspaceHistoryEvent(
-          conversationID: conversationID, agentID: agentID,
-          harness: harness, kind: "wire.\(direction)",
-          payload: String(decoding: data, as: UTF8.self), nativeSessionID: key))
+  func recordOpenCodeObservation(connectionID: String, direction: String, data: Data) throws {
+    let frame = try JSONDecoder().decode(WorkspaceHTTPObservation.self, from: data)
+    let parts = frame.path.split(separator: "/").map(String.init)
+    let nativeID = parts.firstIndex(of: "session").flatMap { index in
+      index + 1 < parts.count ? parts[index + 1].removingPercentEncoding : nil
     }
-  }
-
-  public func openCodeHistoryRecorder(connectionID: String) -> WorkspaceWireRecorder {
-    { [self] direction, data in
-      let frame = try JSONDecoder().decode(WorkspaceHTTPObservation.self, from: data)
-      let parts = frame.path.split(separator: "/").map(String.init)
-      let nativeID = parts.firstIndex(of: "session").flatMap { index in
-        index + 1 < parts.count ? parts[index + 1].removingPercentEncoding : nil
-      }
-      try transaction {
-        let conversationID: String?
-        if let nativeID {
-          conversationID = try historyRowsUnlocked("SELECT conversation_id FROM desktop_opencode_sessions WHERE connection_id=? AND session_id=?", values: [connectionID, nativeID]).first?.objectValue?["conversation_id"]?.stringValue
-        } else { conversationID = nil }
-        try recordHistoryUnlocked(.init(conversationID: conversationID, harness: "opencode",
-          kind: "wire.\(direction)", payload: String(decoding: data, as: UTF8.self),
-          nativeSessionID: nativeID, sourceConnectionID: connectionID))
-      }
+    try transaction {
+      let conversationID: String?
+      if let nativeID {
+        conversationID = try historyRowsUnlocked("SELECT conversation_id FROM desktop_opencode_sessions WHERE connection_id=? AND session_id=?", values: [connectionID, nativeID]).first?.objectValue?["conversation_id"]?.stringValue
+      } else { conversationID = nil }
+      try recordHistoryUnlocked(.init(conversationID: conversationID, harness: "opencode",
+        kind: "wire.\(direction)", payload: String(decoding: data, as: UTF8.self),
+        nativeSessionID: nativeID, sourceConnectionID: connectionID))
     }
   }
 
@@ -684,6 +667,47 @@ extension WorkspaceDatabaseConnection {
     try stepDone(statement)
     guard changedRowCountUnlocked == 1 else {
       throw WorkspaceDatabaseError.open("Unable to attach session attribution")
+    }
+  }
+}
+
+// MARK: - Async worker boundary
+
+extension WorkspaceDatabase {
+  public func recordHistory(_ event: WorkspaceHistoryEvent) async throws {
+    try await write { try $0.recordHistory(event) }
+  }
+
+  public func queryHistory(_ query: WorkspaceHistoryQuery) async throws -> GatewayJSONValue {
+    try await write { try $0.queryHistory(query) }
+  }
+
+  public func noteAssetVersions(id: String) async throws -> [NoteAssetVersion] {
+    try await read { try $0.noteAssetVersions(id: id) }
+  }
+
+  public func restoreNoteAssetVersion(noteID: String, versionID: String, expectedRevision: String, callerConversationID: String? = nil,
+                                      requestID: String? = nil) async throws -> NoteEditingResponse {
+    try await write { try $0.restoreNoteAssetVersion(noteID: noteID, versionID: versionID, expectedRevision: expectedRevision, callerConversationID: callerConversationID, requestID: requestID) }
+  }
+
+  public func checkpointNote(id: String) async throws {
+    try await write { try $0.checkpointNote(id: id) }
+  }
+
+  public func historyWireRecorder(conversationID: String? = nil, agentID: String? = nil,
+    harness: String) -> WorkspaceWireRecorder {
+    let correlation = GatewayHistoryRequestCorrelation()
+    return { [self] direction, data in
+      let key = harness == "openclaw" ? correlation.sessionKey(direction: direction, data: data) : nil
+      try await recordHistory(.init(conversationID: conversationID, agentID: agentID,
+        harness: harness, kind: "wire.\(direction)", payload: String(decoding: data, as: UTF8.self), nativeSessionID: key))
+    }
+  }
+
+  public func openCodeHistoryRecorder(connectionID: String) -> WorkspaceWireRecorder {
+    { [self] direction, data in
+      try await write { try $0.recordOpenCodeObservation(connectionID: connectionID, direction: direction, data: data) }
     }
   }
 }

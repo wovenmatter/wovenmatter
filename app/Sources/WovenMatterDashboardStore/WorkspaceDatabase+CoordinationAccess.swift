@@ -107,3 +107,24 @@ extension WorkspaceDatabaseConnection {
       coordinationEpoch: value["coordination_epoch"]?.stringValue)
   }
 }
+
+// MARK: - Async worker boundary
+
+extension WorkspaceDatabase {
+  public func requestCoordinationAccess(sourceID: String, targetID: String, purpose: String,
+                                       notifications: Bool = true, requestID: String) async throws -> WorkspaceCoordinationAccessRequest {
+    try await write { try $0.requestCoordinationAccess(sourceID: sourceID, targetID: targetID, purpose: purpose, notifications: notifications, requestID: requestID) }
+  }
+
+  public func pendingCoordinationAccessRequests() async throws -> [WorkspaceCoordinationAccessRequest] {
+    try await read { try $0.pendingCoordinationAccessRequests() }
+  }
+
+  public func resolveCoordinationAccess(requestID: String, allowed: Bool) async throws -> WorkspaceCoordinationAccessRequest {
+    try await write { try $0.resolveCoordinationAccess(requestID: requestID, allowed: allowed) }
+  }
+
+  public func cancelPendingCoordinationAccess() async throws {
+    try await write { try $0.cancelPendingCoordinationAccess() }
+  }
+}

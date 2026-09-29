@@ -33,7 +33,7 @@ public struct WorkspaceHistoryEvent: Sendable {
 }
 
 public typealias WorkspaceWireRecorder =
-  @Sendable (_ direction: String, _ data: Data) throws -> Void
+  @Sendable (_ direction: String, _ data: Data) async throws -> Void
 
 public struct WorkspaceHTTPObservation: Codable, Sendable {
   public let method: String

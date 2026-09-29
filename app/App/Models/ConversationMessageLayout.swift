@@ -91,3 +91,21 @@ struct ConversationMessageLayout {
             != failedRunError.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
+
+/// A run failure stays visible independently of its optional activity disclosure.
+struct ConversationWorkTranscriptPresentation {
+    let hasVisibleActivities: Bool
+    let failureMessage: String?
+
+    var isVisible: Bool { hasVisibleActivities || failureMessage != nil }
+
+    init(runStatus: String, runError: String?, hasVisibleActivities: Bool) {
+        self.hasVisibleActivities = hasVisibleActivities
+        if runStatus == "failed" {
+            let detail = runError?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            failureMessage = detail.isEmpty ? "No error details were provided." : detail
+        } else {
+            failureMessage = nil
+        }
+    }
+}

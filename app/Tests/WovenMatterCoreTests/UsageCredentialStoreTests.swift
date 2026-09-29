@@ -179,11 +179,13 @@ struct UsageCredentialStoreTests {
     defer { try? FileManager.default.removeItem(at: directory) }
     let credentials = SessionCredentialFixture()
     let collector = CredentialUseRecorder()
+    let revision = ConnectionRevisionFixture()
     let service = LocalUsageService(
       homeDirectory: directory,
       fileManager: .default,
       credentialStore: credentials,
       usageDatabaseURL: directory.appending(path: "usage.sqlite"),
+      sharedConnectionRevision: { revision.value },
       limitCollector: { request in
         collector.recordLimit(request.openRouterAPIKey)
         return []
@@ -203,6 +205,7 @@ struct UsageCredentialStoreTests {
     }
 
     try await service.authorizeOpenRouterCredentialAccess()
+    revision.advance() // An unrelated shared account change must not invalidate this isolated store.
     try await refresh()
     try await refresh()
     #expect(credentials.authorizationCount == 1)
@@ -220,6 +223,7 @@ struct UsageCredentialStoreTests {
     #expect(credentials.readCount == 0)
 
     try await service.saveOpenRouterAPIKey(" replacement ")
+    revision.advance()
     try await refresh()
     #expect(collector.limitKeys.last == "replacement")
     #expect(collector.activityKeys.last == "replacement")
@@ -230,6 +234,47 @@ struct UsageCredentialStoreTests {
     #expect(collector.limitKeys.last == "missing")
     #expect(collector.activityKeys.count == 4)
     #expect(credentials.readCount == 2)
+  }
+
+  @Test("a superseded limits save cannot replace the current session cache")
+  func supersededDatabaseSaveDoesNotPublishStaleLimits() async throws {
+    let directory = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let databaseURL = directory.appending(path: "usage.sqlite")
+    let service = LocalUsageService(homeDirectory: directory, fileManager: .default,
+      credentialStore: SessionCredentialFixture(), usageDatabaseURL: databaseURL,
+      limitCollector: { request in
+        [UsageLimitAccount(provider: .openRouter, accountLabel: "At \(request.now.timeIntervalSince1970)",
+          status: .available, source: "Fixture", detail: "Fixture", observedAt: request.now)]
+      })
+    let initial = try await service.limitsSnapshot(refresh: true,
+      enabledProviders: [.openRouter], allowCredentialAccess: false, now: Date(timeIntervalSince1970: 100))
+    let workers = DatabaseWorkers.shared(url: databaseURL)
+    let entered = AsyncStream<Void>.makeStream()
+    let release = DispatchSemaphore(value: 0)
+    defer { release.signal() }
+    let blocked = Task { try await workers.writer.perform { _ in
+      entered.continuation.yield(())
+      #expect(release.wait(timeout: .now() + 60) == .success)
+    } }
+    var iterator = entered.stream.makeAsyncIterator()
+    await iterator.next()
+    let outdated = Task { try await service.limitsSnapshot(refresh: true,
+      enabledProviders: [.openRouter], allowCredentialAccess: false, now: Date(timeIntervalSince1970: 200)) }
+    let deadline = ContinuousClock.now + .seconds(60)
+    while workers.writer.metrics.pending < 2 {
+      guard ContinuousClock.now < deadline else { throw DatabaseWorkerError.timedOut }
+      try await Task.sleep(for: .milliseconds(1))
+    }
+    let current = try await service.limitsSnapshot(refresh: false,
+      enabledProviders: [.openRouter], allowCredentialAccess: false)
+    #expect(current.accounts.first?.accountLabel == initial.accounts.first?.accountLabel)
+    release.signal()
+    try await blocked.value
+    await #expect(throws: CancellationError.self) { try await outdated.value }
+    let cached = try await service.limitsSnapshot(refresh: false,
+      enabledProviders: [.openRouter], allowCredentialAccess: false)
+    #expect(cached.accounts.first?.accountLabel == initial.accounts.first?.accountLabel)
   }
 
   private func temporaryDirectory() throws -> URL {
@@ -349,4 +394,11 @@ private final class CredentialUseRecorder: @unchecked Sendable {
   var activityKeys: [String] { lock.withLock { activity } }
   func recordLimit(_ value: String?) { lock.withLock { limits.append(value ?? "missing") } }
   func recordActivity(_ value: String) { lock.withLock { activity.append(value) } }
+}
+
+private final class ConnectionRevisionFixture: @unchecked Sendable {
+  private let lock = NSLock()
+  private var revision: UInt64 = 0
+  var value: UInt64 { lock.withLock { revision } }
+  func advance() { lock.withLock { revision += 1 } }
 }

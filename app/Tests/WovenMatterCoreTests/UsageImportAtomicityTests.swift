@@ -81,12 +81,17 @@ struct UsageImportAtomicityTests {
     #expect(initial.samples.count == 1)
     let store = try UsageStore(databaseURL: fixture.indexURL)
     let originalFingerprint = try store.source("opencode:database")?.fingerprint
+    let originalCoverage = try store.metadataDate("usage.local-indexed-after")
+    let originalImportDate = try store.metadataDate("usage.local-import-at")
     try fixture.execute(at: sourceURL, sql: "INSERT INTO raw_part VALUES('broken', 'session', 'message', '{}');")
     try FileManager.default.setAttributes([.modificationDate: now.addingTimeInterval(10)], ofItemAtPath: sourceURL.path)
-    let failed = try await service.analyticsSnapshot(range: .last24Hours, enabledProviders: [.openCodeGo], allowCredentialAccess: false, now: now.addingTimeInterval(1))
+    let failed = try await service.analyticsSnapshot(range: .last7Days, enabledProviders: [.openCodeGo], allowCredentialAccess: false, now: now.addingTimeInterval(1))
     #expect(failed.samples == initial.samples)
     #expect(failed.sources.first { $0.id == "opencode" }?.status == .partial)
     #expect(try store.source("opencode:database")?.fingerprint == originalFingerprint)
+    // A failed wider scan cannot claim coverage or defer its retry.
+    #expect(try store.metadataDate("usage.local-indexed-after") == originalCoverage)
+    #expect(try store.metadataDate("usage.local-import-at") == originalImportDate)
   }
 
   @Test("Metadata and cursor step failures throw instead of resembling missing rows")

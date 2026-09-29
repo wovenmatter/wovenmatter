@@ -2,7 +2,7 @@ import Foundation
 import SQLite3
 
 // Schema creation, compatibility columns and revision triggers.
-extension WorkspaceDatabase {
+extension WorkspaceDatabaseConnection {
   private func createWorkspaceCacheTablesUnlocked() throws {
     try executeUnlocked("""
       CREATE TABLE IF NOT EXISTS profiles (

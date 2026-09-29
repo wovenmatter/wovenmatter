@@ -137,6 +137,29 @@ struct HermesGatewayTests {
         await client.shutdown()
     }
 
+    @Test func stopCancelsDisplayedInteractionAndDeclinesSubsequentRequests() async throws {
+        let transport = HermesTransportFixture()
+        let client = makeClient(transport)
+        let gate = HermesAnswerGate()
+        _ = try await client.initializeSession(workingDirectory: URL(fileURLWithPath: "/tmp"), existingSessionID: nil, title: nil, systemPrompt: nil)
+        let turn = Task {
+            try await client.prompt(AgentMessageInput(text: "Hello"), onEvent: nil, onPermission: nil,
+                onInteraction: { _ in await gate.answer() })
+        }
+        try await transport.waitForSubmit()
+        await transport.request(id: "stopped-secret", method: "secret", params: ["prompt": "Fixture"])
+        try await gate.waitUntilAsked()
+        try await client.cancel()
+        await gate.resolve()
+        await transport.request(id: "after-stop", method: "approval", params: ["choices": .array(["once", "deny"])])
+        #expect(await transport.responses["after-stop"] == [:])
+        await transport.complete()
+        #expect(try await turn.value == .cancelled)
+        #expect(await transport.responses["stopped-secret"] == nil)
+        #expect(await transport.calls.contains { $0.0 == "session.interrupt" })
+        await client.shutdown()
+    }
+
     @Test func cancelledNativeRequestCannotSendALateAnswer() async throws {
         let transport = HermesTransportFixture()
         let client = makeClient(transport)
