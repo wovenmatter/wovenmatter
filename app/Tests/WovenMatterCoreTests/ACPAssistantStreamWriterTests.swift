@@ -4,6 +4,48 @@ import WovenMatterCore
 @testable import WovenMatterDashboardStore
 
 struct ACPAssistantStreamWriterTests {
+  @Test func decisionQueuedDuringBoundaryPersistenceDoesNotWaitForResume() async throws {
+    let fixture = try await WriterFixture()
+    defer { fixture.remove() }
+    let entered = AsyncStream<Void>.makeStream()
+    let release = DispatchSemaphore(value: 0)
+    defer { release.signal() }
+    let blocked = Task { try await fixture.database.write { _ in
+      entered.continuation.yield(())
+      #expect(release.wait(timeout: .now() + 60) == .success)
+    } }
+    var iterator = entered.stream.makeAsyncIterator()
+    await iterator.next()
+    let boundary = Task { try await fixture.writer.finishSegmentAndPause() }
+    for _ in 0..<500 {
+      if fixture.database.workerMetrics[0].pending == 2 { break }
+      try await Task.sleep(for: .milliseconds(1))
+    }
+    #expect(fixture.database.workerMetrics[0].pending == 2)
+    let state = DecisionCompletion()
+    let decision = Task {
+      await state.started()
+      try await fixture.writer.finishSegmentForDecision()
+      await state.finished()
+    }
+    while !(await state.hasStarted) { await Task.yield() }
+    // Keep the actual SQLite boundary suspended while the decision reaches the
+    // actor's persistence gate. The pause is published only after this write.
+    for _ in 0..<100 { await Task.yield() }
+    release.signal()
+    try await blocked.value
+    try await boundary.value
+    for _ in 0..<500 {
+      if await state.hasFinished { break }
+      try await Task.sleep(for: .milliseconds(1))
+    }
+    let finishedBeforeResume = await state.hasFinished
+    // Always release a regressed waiter, so a failure does not hang the suite.
+    await fixture.writer.resumeAfterSegmentBoundary()
+    try await decision.value
+    #expect(finishedBeforeResume)
+  }
+
   @Test func boundariesAndSnapshotPreserveCanonicalSteeringPrefix() async throws {
     let fixture = try await WriterFixture()
     defer { fixture.remove() }
@@ -54,6 +96,13 @@ struct ACPAssistantStreamWriterTests {
     try await fixture.writer.append("ignored")
     await #expect(try fixture.assistantText() == ["tail with space "])
   }
+}
+
+private actor DecisionCompletion {
+  private(set) var hasStarted = false
+  private(set) var hasFinished = false
+  func started() { hasStarted = true }
+  func finished() { hasFinished = true }
 }
 
 private struct WriterFixture {
