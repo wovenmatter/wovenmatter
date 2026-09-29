@@ -21,15 +21,29 @@ if [ ! -x "$cache/bin/node" ]; then
 fi
 export PATH="$cache/bin:$PATH"
 lock_hash="$(shasum -a 256 "$agent_root/package-lock.json" | cut -d ' ' -f1)-darwin-$node_arch"
-if [ ! -f "$agent_root/node_modules/.woven-lock" ] || [ "$(cat "$agent_root/node_modules/.woven-lock")" != "$lock_hash" ]; then
-  npm ci --prefix "$agent_root" --omit=dev --ignore-scripts --no-audit --no-fund --cpu="$node_arch" --os=darwin
-  printf '%s' "$lock_hash" > "$agent_root/node_modules/.woven-lock"
+# Keep reproducible dependencies outside a possibly cloud-synced checkout.
+# Copying node_modules from Desktop can block on File Provider hydration (and
+# include conflict copies) even when every package version is already locked.
+dependency_root="${TMPDIR:-/tmp}/wovenmatter-agent-dependencies-$lock_hash"
+if [ ! -f "$dependency_root/node_modules/.woven-lock" ] || [ "$(cat "$dependency_root/node_modules/.woven-lock")" != "$lock_hash" ]; then
+  mkdir -p "$dependency_root"
+  cp "$agent_root/package.json" "$agent_root/package-lock.json" "$dependency_root/"
+  (
+    # npm must see the physical working directory on macOS, where TMPDIR
+    # commonly begins with the /var symlink to /private/var.
+    cd -P "$dependency_root"
+    npm ci --omit=dev --ignore-scripts --no-audit --no-fund --cpu="$node_arch" --os=darwin
+  )
+  printf '%s' "$lock_hash" > "$dependency_root/node_modules/.woven-lock"
 fi
 output="${1:-$agent_root}"
 if [ "$output" != "$agent_root" ]; then
   mkdir -p "$output"
-  rsync -a --delete --exclude=/bin --exclude=/test --exclude=/.build --exclude=.DS_Store "$agent_root/" "$output/"
+  rsync -a --delete --exclude=/bin --exclude=/node_modules --exclude=/test --exclude=/.build --exclude=.DS_Store "$agent_root/" "$output/"
 fi
+mkdir -p "$output/node_modules"
+rsync -a --delete "$dependency_root/node_modules/" "$output/node_modules/"
+
 claude_binary="$output/node_modules/@anthropic-ai/claude-agent-sdk-darwin-$node_arch/claude"
 test -x "$claude_binary"
 # Preserve Anthropic's signed, unmodified runtime. Never re-sign or patch it.

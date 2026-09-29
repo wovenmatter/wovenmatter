@@ -43,6 +43,7 @@ final class WorkspaceAgentToolsModel {
     private var pendingBridges: [String: Task<WovenMatterRemoteToolBridge, any Error>] = [:]
     private let ownerID = UUID()
     private var stopped = false
+    private var receiptPageRequests: [String: UUID] = [:]
     private let endpointDirectory: URL
     private let sessionHandler: SessionHandler
     private let noteHandler: NoteHandler
@@ -102,7 +103,12 @@ final class WorkspaceAgentToolsModel {
         } else { try await setEnabled(group, enabled: enabled, sessionID: sessionID, confirmedPausingTimers: confirmedPausingTimers) }
     }
 
-    func reload() async throws {
+    func reloadInBackground(policyIDs: Set<String> = []) async throws {
+        try await reload(policyIDs: policyIDs)
+    }
+
+    func reload(policyIDs: Set<String> = []) async throws {
+        guard !stopped else { return }
         let generation = UUID()
         reloadGeneration = generation
         let mayPublishSettings = pendingSettingsWrites == 0
@@ -110,9 +116,9 @@ final class WorkspaceAgentToolsModel {
         let oldest = Dictionary(uniqueKeysWithValues: observed.compactMap { id in
             receipts[id]?.last.map { (id, $0.id) }
         })
-        let snapshot = try await database.toolStateSnapshot(sessionIDs: observed.union(sessionPolicies.keys),
+        let snapshot = try await database.toolStateSnapshot(sessionIDs: observed.union(sessionPolicies.keys).union(policyIDs),
             oldestReceipts: oldest, receiptSessionIDs: observed)
-        guard generation == reloadGeneration, !stopped else { return }
+        guard generation == reloadGeneration, !stopped, !Task.isCancelled else { return }
         if mayPublishSettings, pendingSettingsWrites == 0 {
             committedSettings = snapshot.settings
             if settings != snapshot.settings { settings = snapshot.settings }
@@ -148,6 +154,7 @@ final class WorkspaceAgentToolsModel {
         reloadGeneration = UUID()
         observedSessions[token] = id
         let active = Set(observedSessions.values)
+        receiptPageRequests = receiptPageRequests.filter { active.contains($0.key) }
         let retainedReceipts = receipts.filter { active.contains($0.key) }
         if receipts != retainedReceipts { receipts = retainedReceipts }
         let retainedOlderReceipts = hasOlderReceipts.intersection(active)
@@ -168,13 +175,25 @@ final class WorkspaceAgentToolsModel {
     }
 
     func loadOlderReceipts(sessionID: String) async {
-        guard let oldest = receipts[sessionID]?.last else { return }
+        reloadGeneration = UUID()
+        guard let oldestID = receipts[sessionID]?.last?.id, !stopped else { return }
+        let request = UUID()
+        receiptPageRequests[sessionID] = request
+        defer { if receiptPageRequests[sessionID] == request { receiptPageRequests[sessionID] = nil } }
         do {
-            let page = try await database.sessionDeliveries(sessionID: sessionID, limit: 201, beforeID: oldest.id, activityOnly: true)
-            guard receipts[sessionID]?.last?.id == oldest.id else { return }
-            publishReceipts((receipts[sessionID] ?? []) + page.prefix(200), for: sessionID)
+            let page = try await database.sessionDeliveries(sessionID: sessionID, limit: 201,
+                beforeID: oldestID, activityOnly: true)
+            guard !stopped, !Task.isCancelled, receiptPageRequests[sessionID] == request,
+                  observedSessions.values.contains(sessionID),
+                  receipts[sessionID]?.last?.id == oldestID else { return }
+            // Preserve new arrivals and fence snapshots captured before this window grew.
+            reloadGeneration = UUID()
+            let current = receipts[sessionID] ?? []
+            let known = Set(current.map(\.id))
+            publishReceipts(current + page.prefix(200).filter { !known.contains($0.id) }, for: sessionID)
             setHasOlderReceipts(page.count > 200, for: sessionID)
-        } catch { self.error = error.localizedDescription }
+        } catch is CancellationError { }
+        catch { if !stopped, receiptPageRequests[sessionID] == request { self.error = error.localizedDescription } }
     }
 
     func endCoordination(sessionID: String) async {
@@ -282,6 +301,8 @@ final class WorkspaceAgentToolsModel {
 
     func stop() {
         stopped = true
+        reloadGeneration = UUID()
+        receiptPageRequests.removeAll()
         for pending in pendingBridges.values { pending.cancel() }
         pendingBridges.removeAll()
         for bridge in remoteBridges.values { bridge.stop() }

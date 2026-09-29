@@ -1976,7 +1976,8 @@ public actor LocalACPClient {
         for option in options {
             if let id = option["value"]?.stringValue {
                 result[id] = SessionOptionMetadata(name: option["name"]?.stringValue,
-                    description: option["description"]?.stringValue)
+                    description: option["description"]?.stringValue,
+                    modelName: option["_meta"]?["modelName"]?.stringValue)
             } else {
                 result.merge(configurationOptionMetadata(option["options"]?.arrayValue ?? [])) { _, latest in latest }
             }

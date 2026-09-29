@@ -570,18 +570,6 @@ extension WorkspaceDatabase {
     try await write { try $0.setCoordinationNotifications(sourceID: sourceID, targetID: targetID, enabled: enabled) }
   }
 
-  public func setAgentCoordinationNotifications(sourceID: String, targetID: String, epoch: String,
-                                                 enabled: Bool, requestID: String) async throws -> WorkspaceCoordinationMutationReceipt {
-    try await write { try $0.setAgentCoordinationNotifications(sourceID: sourceID, targetID: targetID,
-      epoch: epoch, enabled: enabled, requestID: requestID) }
-  }
-
-  public func releaseAgentCoordination(sourceID: String, targetID: String, epoch: String,
-                                       requestID: String) async throws -> WorkspaceCoordinationMutationReceipt {
-    try await write { try $0.releaseAgentCoordination(sourceID: sourceID, targetID: targetID,
-      epoch: epoch, requestID: requestID) }
-  }
-
   public func endCoordination(targetID: String, sourceID: String? = nil) async throws {
     try await write { try $0.endCoordination(targetID: targetID, sourceID: sourceID) }
   }

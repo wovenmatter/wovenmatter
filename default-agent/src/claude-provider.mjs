@@ -8,6 +8,7 @@ import { getCurrentSystemPrompt, getCurrentTools } from '@earendil-works/pi-ai/u
 import { claudeExecutable, claudeProviders } from './claude-runtime.mjs';
 import { createClaudeAdmission } from './claude-admission.mjs';
 import { accessFailure, DefaultAgentError } from './config.mjs';
+import { claudeModelName } from './model-presentation.mjs';
 
 // Pi owns history, compaction, tools and approvals. The official SDK starts an
 // unmodified Claude runtime solely as a model client. Replay/admission follows
@@ -77,7 +78,7 @@ function safeFailure(error) {
 
 function modelDefinitions(claude, provider) {
   return claude.models.map(model => ({
-    id: model.value, name: model.displayName, provider, api, baseUrl: 'process://claude-native',
+    id: model.value, name: claudeModelName(model), provider, api, baseUrl: 'process://claude-native',
     reasoning: Boolean(model.supportedEffortLevels?.length), input: ['text', 'image'],
     thinkingLevelMap: { off: null, ...Object.fromEntries((model.supportedEffortLevels ?? []).map(level => [level, level])) },
     // Discovery does not currently report context length. Use a conservative

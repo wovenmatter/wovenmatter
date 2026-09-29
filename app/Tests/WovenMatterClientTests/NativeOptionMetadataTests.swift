@@ -2,6 +2,26 @@ import Testing
 @testable import WovenMatterClient
 
 struct NativeOptionMetadataTests {
+    @Test func modelButtonUsesExplicitNameWithoutChangingMenuAttribution() {
+        let metadata = SessionOptionMetadata(name: "GPT-6 Astra · ChatGPT subscription",
+            description: "OpenAI · ChatGPT subscription", modelName: "GPT-6 Astra")
+        #expect(SessionOptionMetadata.modelButtonLabel(id: "openai-codex/gpt-6-astra", metadata: metadata) == "GPT-6 Astra")
+        #expect(SessionOptionMetadata.modelLabel(id: "openai-codex/gpt-6-astra", metadata: metadata) == "GPT-6 Astra · ChatGPT subscription")
+        let custom = SessionOptionMetadata(name: "Model · Variant · Local server", modelName: "Model · Variant")
+        #expect(SessionOptionMetadata.modelButtonLabel(id: "custom/model", metadata: custom) == "Model · Variant")
+    }
+
+    @Test func oldBuiltInButtonNamesRecognizeOnlyTheirExactRouteSuffix() {
+        let legacy = SessionOptionMetadata(name: "GPT-6 Astra · OpenAI · ChatGPT subscription")
+        #expect(SessionOptionMetadata.modelButtonLabel(id: "openai-codex/gpt-6-astra", metadata: legacy) == "GPT-6 Astra")
+        #expect(SessionOptionMetadata.modelLabel(id: "openai-codex/gpt-6-astra", metadata: legacy) == legacy.name)
+        for id in ["gpt-6-astra", "external/model"] {
+            #expect(SessionOptionMetadata.modelButtonLabel(id: id, metadata: legacy) == legacy.name)
+        }
+        let otherName = SessionOptionMetadata(name: "Opus · Extended context")
+        #expect(SessionOptionMetadata.modelButtonLabel(id: "claude-subscription/opus", metadata: otherName) == otherName.name)
+    }
+
     @Test func gptPresentationRetainsFamilyWithoutChangingOtherNamesOrIDs() {
         for (id, name, expected) in [
             ("gpt-6-astra", "6 Astra", "GPT 6 Astra"),

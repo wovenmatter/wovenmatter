@@ -409,5 +409,5 @@ private struct SessionRoutingFixture {
 @MainActor private func fixtureAccounts() -> ProviderAccountCoordinator {
     ProviderAccountCoordinator(refresh: { scopes in
         Dictionary(uniqueKeysWithValues: scopes.map { ($0, DefaultAgentPayload(config: .init(), credentials: [:], workspace: $0)) })
-    }, version: { 0 })
+    }, version: { 0 }, configurationVersion: { 0 }, scopeVersion: { 0 }, reconfigure: { $0 })
 }

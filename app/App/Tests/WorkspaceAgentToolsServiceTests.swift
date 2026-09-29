@@ -61,6 +61,22 @@ struct WorkspaceAgentToolsServiceTests {
 }
 
 extension WorkspaceAgentToolsServiceTests {
+    @Test func policiesAreFailClosedUntilAsyncObservationAndRemovedPanelsStayRemoved() async throws {
+        let fixture = try await ToolSnapshotFixture()
+        defer { fixture.stop() }
+        let model = fixture.model
+        #expect(model.sessionPolicies[fixture.caller] == nil)
+        #expect(model.policy(for: fixture.caller).enabled.isEmpty)
+        let token = UUID()
+        await model.observeSession(fixture.caller, token: token)
+        #expect(model.policy(for: fixture.caller) == (try await fixture.database.sessionTools(fixture.caller)))
+        let refresh = Task { try? await model.reload() }
+        await model.observeSession(nil, token: token)
+        await refresh.value
+        #expect(model.receipts[fixture.caller] == nil)
+        #expect(!model.hasOlderReceipts.contains(fixture.caller))
+    }
+
     @Test(.timeLimit(.minutes(1)), arguments: [1, 65_536])
     func localSocketOverloadReturnsStructuredBusyResponse(payloadBytes: Int) async throws {
         let root = URL(fileURLWithPath: "/private/tmp/wm-overload-" + UUID().uuidString)

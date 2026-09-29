@@ -123,7 +123,7 @@ extension ApplicationModel {
                 try await database.finishTimerOccurrence(id: timer.id, deliveryID: id)
             }
             try await database.settleCalendarRuns()
-            try await agentTools?.reload()
+            try await agentTools?.reloadInBackground()
         } catch { agentTools?.error = error.localizedDescription }
     }
 

@@ -86,13 +86,15 @@ export class ClaudeRuntime {
     const saved = await readJSON(join(this.directory, 'claude-models.json'), []);
     if (Array.isArray(saved) && saved.length && saved.every(m => typeof m.value === 'string' && typeof m.displayName === 'string')) this.models = saved;
   }
-  async status(profile) {
+  async status(profile, { signal } = {}) {
+    signal?.throwIfAborted();
     let stdout;
     try {
       ({ stdout } = await this.executeCommand(claudeExecutable(), ['auth', 'status', '--json'], {
-        env: await this.environment(undefined, profile), timeout: 10000, maxBuffer: 65536, killSignal: 'SIGKILL',
+        env: await this.environment(undefined, profile), timeout: 10000, maxBuffer: 65536, killSignal: 'SIGKILL', signal,
       }));
     } catch (error) {
+      signal?.throwIfAborted();
       if (error.code !== 1 || !error.stdout) return { connected: false, state: 'check_failed', detail: 'Could not check the native Claude sign-in. Refresh connections to retry.' };
       stdout = error.stdout;
     }
@@ -108,8 +110,11 @@ export class ClaudeRuntime {
     const query = this.query ?? (await import('@anthropic-ai/claude-agent-sdk')).query;
     return query(options);
   }
-  async discover(key) {
+  async discover(key, { signal } = {}) {
+    signal?.throwIfAborted();
     const controller = new AbortController();
+    const abort = () => controller.abort(signal?.reason);
+    signal?.addEventListener('abort', abort, { once: true });
     const timer = setTimeout(() => controller.abort(), 15000);
     let session;
     try {
@@ -123,12 +128,17 @@ export class ClaudeRuntime {
         tools: [], skills: [], settingSources: [], strictMcpConfig: true, mcpServers: {},
         extraArgs: { 'disable-slash-commands': null },
         persistSession: false, abortController: controller } });
+      signal?.throwIfAborted();
       const models = await session.supportedModels();
+      signal?.throwIfAborted();
       if (models.length) {
         this.models = models;
         await writePrivateJSON(join(this.directory, 'claude-models.json'), models);
       }
-    } finally { clearTimeout(timer); controller.abort(); session?.close(); }
+    } finally {
+      signal?.removeEventListener('abort', abort);
+      clearTimeout(timer); controller.abort(); session?.close();
+    }
     return this.models;
   }
   async signOut(profile) {
