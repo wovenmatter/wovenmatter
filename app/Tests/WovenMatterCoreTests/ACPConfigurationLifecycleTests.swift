@@ -10,8 +10,8 @@ struct ACPConfigurationLifecycleTests {
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: directory) }
 
-    let database = try WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
-    let conversationID = try database.createLocalACPSession(
+    let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+    let conversationID = try await database.createLocalACPSession(
       runtimeKind: .codex, title: "Configuration fixture", ownerDeviceID: UUID()
     )
     let expected = LocalACPSessionConfiguration(
@@ -90,8 +90,8 @@ struct ACPConfigurationLifecycleTests {
     defer { try? FileManager.default.removeItem(at: directory) }
 
     let databaseURL = directory.appending(path: "workspace.sqlite")
-    let database = try WorkspaceDatabase(url: databaseURL)
-    let conversationID = try database.createLocalACPSession(
+    let database = try await WorkspaceDatabase(url: databaseURL)
+    let conversationID = try await database.createLocalACPSession(
       runtimeKind: .codex, title: "Selector persistence", ownerDeviceID: UUID()
     )
     let launch = LocalACPRuntimeLaunchConfiguration(
@@ -125,8 +125,8 @@ struct ACPConfigurationLifecycleTests {
     #expect(firstState.shutdowns == 1)
     await first.shutdown()
 
-    let reopenedDatabase = try WorkspaceDatabase(url: databaseURL)
-    let persisted = try reopenedDatabase.localACPSession(conversationID: conversationID)
+    let reopenedDatabase = try await WorkspaceDatabase(url: databaseURL)
+    let persisted = try await reopenedDatabase.localACPSession(conversationID: conversationID)
     #expect(persisted.model == "selected-model")
     #expect(persisted.thinking == "high")
 
@@ -161,8 +161,8 @@ struct ACPConfigurationLifecycleTests {
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: directory) }
 
-    let database = try WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
-    let conversationID = try database.createLocalACPSession(
+    let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+    let conversationID = try await database.createLocalACPSession(
       runtimeKind: .codex, title: "Native selector updates", ownerDeviceID: UUID()
     )
     let native = LocalACPSessionConfiguration(
@@ -187,10 +187,8 @@ struct ACPConfigurationLifecycleTests {
       processLease: ConfigurationTestProcessLease(),
       onChange: { change in
         changes.record(change)
-        guard case .configuration(let configuration) = change.phase else { return }
-        let descriptor = try? database.localACPSession(conversationID: conversationID)
-        #expect(descriptor?.model == configuration.model)
-        #expect(descriptor?.thinking == configuration.thinking)
+        // Persistence is awaited explicitly after each configuration operation
+        // below; notifications remain synchronous and carry immutable values.
       },
       clientFactory: { _, _ in drivers.next() }
     )
@@ -211,8 +209,8 @@ struct ACPConfigurationLifecycleTests {
     )
     #expect(observed.model == "native-model")
     #expect(observed.thinking == "high")
-    #expect(try database.localACPSession(conversationID: conversationID).model == "native-model")
-    #expect(try database.localACPSession(conversationID: conversationID).thinking == "high")
+    #expect(try await database.localACPSession(conversationID: conversationID).model == "native-model")
+    #expect(try await database.localACPSession(conversationID: conversationID).thinking == "high")
     #expect(firstState.shutdowns == 1)
 
     let selected = try await coordinator.updateConfiguration(
@@ -232,7 +230,7 @@ struct ACPConfigurationLifecycleTests {
     let changeCountBeforeStaleUpdate = changes.changes.count
     await firstState.emit(native.selecting(model: "default-model", thinking: "high"))
 
-    let persisted = try database.localACPSession(conversationID: conversationID)
+    let persisted = try await database.localACPSession(conversationID: conversationID)
     #expect(persisted.model == "selected-model")
     #expect(persisted.thinking == "low")
     #expect(changes.changes.count == changeCountBeforeStaleUpdate)

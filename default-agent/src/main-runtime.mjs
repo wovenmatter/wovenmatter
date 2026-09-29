@@ -7,7 +7,7 @@ import { DefaultAgentEngine } from './engine.mjs';
 import { CredentialVault, sharedCredentials } from './vault.mjs';
 import { signInStatuses } from './sign-in-status.mjs';
 import { probeServer } from './local-servers.mjs';
-import { preferredSignInAnswer } from './sign-in-interaction.mjs';
+import { createSignInPrompt } from './sign-in-interaction.mjs';
 import { grokAccountProfile } from './account-profile.mjs';
 import { inlineClaudeLogin } from './claude-runtime.mjs';
 import { PermissionRequests, RemotePermissionRequests } from './permissions.mjs';
@@ -15,6 +15,8 @@ import { PermissionRequests, RemotePermissionRequests } from './permissions.mjs'
 const send = (value, flushed) => process.stdout.write(JSON.stringify(value) + '\n', flushed);
 const remote = process.argv.includes('--remote');
 const control = process.argv.includes('--control');
+const controlController = control ? new AbortController() : undefined;
+
 const directory = process.env.WOVEN_DEFAULT_AGENT_DIRECTORY ?? join(homedir(), '.wovenmatter', 'default-agent');
 const permissions = new PermissionRequests();
 const requestPermission = (params, signal) => permissions.request(params, signal,
@@ -49,6 +51,14 @@ async function invoke(message) {
   if (message.method === 'session/cancel') permissions.cancelSession(message.params?.sessionId);
   const update = value => send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: message.params?.sessionId, update: value } });
   if (control) {
+    // Passive catalog loading and connection status own cancellable children.
+    // Other commands retain their existing shutdown behavior; installing a
+    // SIGTERM listener for an operation that ignores this signal would strand it.
+    if (!['probe-server', 'reset', 'logout', 'login', 'sign-in-status', 'refresh'].includes(message.action)) {
+      const abort = () => controlController.abort();
+      process.once('SIGTERM', abort);
+      // EOF is a valid one-shot request boundary for DefaultAgentControl.run.
+    }
     if (message.action === 'probe-server') {
       try { return await probeServer(message.url, message.key); }
       catch (error) { return { url: '', models: [], error: error.message }; }
@@ -60,7 +70,9 @@ async function invoke(message) {
       await vault.unlock(payload.workspace, payload.unlockKey);
     }
     const e = await engine();
-    if (message.action === 'claude-status') return e.claude.status(message.profile ?? (await e.credentials.read('claude-subscription'))?.accountId);
+    controlController.signal.throwIfAborted();
+    if (message.action === 'catalog') return { models: e.catalog() };
+    if (message.action === 'claude-status') return e.claude.status(message.profile ?? (await e.credentials.read('claude-subscription'))?.accountId, { signal: controlController.signal });
     if (message.action === 'reset') {
       await vault.modify(async stored => ({ ...stored, shared: sharedCredentials(payload.credentials) }));
       return { reset: true };
@@ -72,31 +84,29 @@ async function invoke(message) {
     }
     if (message.action === 'login') {
       const controller = new AbortController();
-      const abortLogin = () => controller.abort();
+      const abortLogin = () => { controller.abort(); controlController.abort(); };
       process.stdin.once('end', abortLogin);
       process.once('SIGTERM', abortLogin);
       const loginTimeout = setTimeout(abortLogin, 10 * 60 * 1000);
+      const prompt = createSignInPrompt({ provider: message.provider, signal: controller.signal, pending: pendingPrompts, send });
       try {
       if (message.provider === 'claude-subscription') {
-        const status = await inlineClaudeLogin(e.claude, message.profile, { signal: controller.signal, notify: notification => send({ notification }) });
+        const status = await inlineClaudeLogin(e.claude, message.profile, { signal: controller.signal, notify: notification => send({ notification }), prompt });
         return { ...status, provider: message.provider, nativeProfile: message.profile };
       }
       e.credentials.signingIn = true;
       let credential = await e.runtime.login(message.provider, 'oauth', { signal: controller.signal,
         notify: notification => send({ notification }),
-        prompt: prompt => {
-          const preferred = preferredSignInAnswer(message.provider, prompt);
-          if (preferred) return Promise.resolve(preferred);
-          return new Promise((resolve, reject) => { const id = crypto.randomUUID(); pendingPrompts.set(id, resolve); send({ prompt: { ...prompt, signal: undefined }, id }); controller.signal.addEventListener('abort', () => reject(new Error('Sign-in cancelled.')), { once: true }); }); } }).finally(() => { e.credentials.signingIn = false; });
+        prompt }).finally(() => { e.credentials.signingIn = false; });
       // SDK login persists through the app-owned credential store.
       if (message.provider === 'xai' && credential) {
         const profile = await grokAccountProfile(credential);
         if (profile.displayName) credential = await e.credentials.modify(message.provider, current => ({ ...current, ...profile }));
       }
-      return { ...(await e.status()), connected: Boolean(credential), ...(!vault ? { credential, provider: message.provider } : {}) };
+      return { ...(await e.status({ signal: controlController.signal })), connected: Boolean(credential), ...(!vault ? { credential, provider: message.provider } : {}) };
       } finally { clearTimeout(loginTimeout); process.stdin.removeListener('end', abortLogin); process.removeListener('SIGTERM', abortLogin); }
     }
-    if (message.action === 'sign-in-status') return { statuses: [...(await e.status()).providers.map(p => ({ ...p, name: 'Built-in · ' + p.name })), ...await signInStatuses(message.harnesses ?? [])] };
+    if (message.action === 'sign-in-status') return { statuses: [...(await e.status({ signal: controlController.signal })).providers.map(p => ({ ...p, name: 'Built-in · ' + p.name })), ...await signInStatuses(message.harnesses ?? [])] };
     if (message.action === 'refresh') {
       const errors = {};
       for (const provider of ['openai-codex', 'xai']) {
@@ -107,7 +117,7 @@ async function invoke(message) {
       }
       return { credentials: { ...e.credentials.supplied, ...e.credentials.owned }, errors };
     }
-    return e.status();
+    return e.status({ signal: controlController.signal });
   }
   if (!remote) {
     if (message.method === 'woven/configure') {

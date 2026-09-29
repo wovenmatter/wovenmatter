@@ -122,25 +122,25 @@ struct OpenClawGatewayStreamingTests {
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: directory) }
     let url = directory.appending(path: "streaming.sqlite")
-    let database = try WorkspaceDatabase(url: url)
-    _ = try database.createLocalACPSession(
+    let database = try await WorkspaceDatabase(url: url)
+    _ = try await database.createLocalACPSession(
       runtimeKind: .openclaw, title: "Fixture", ownerDeviceID: UUID()
     )
-    let agentID = try #require(database.dashboardAgents().first?.id)
+    let agentID = try await #require(database.dashboardAgents().first?.id)
     let endpoint = OpenClawGatewayEndpoint(
       url: URL(string: "ws://127.0.0.1:1")!, authorization: .localService
     )
-    try database.saveOpenClawGatewayLink(OpenClawGatewayLink(
+    try await database.saveOpenClawGatewayLink(OpenClawGatewayLink(
       agentID: agentID, location: .localAgentWorkspace, endpoint: endpoint
     ))
     let session = try #require(OpenClawGatewaySession(payload: .object([
       "key": .string("agent:fixture:durable"),
     ])))
-    let conversationID = try database.importOpenClawGatewaySession(
+    let conversationID = try await database.importOpenClawGatewaySession(
       agentID: agentID, session: session
     )
-    let run = try database.beginLocalACPRun(conversationID: conversationID, content: "Hello")
-    let steering = try database.beginLocalACPSteeringTurn(
+    let run = try await database.beginLocalACPRun(conversationID: conversationID, content: "Hello")
+    let steering = try await database.beginLocalACPSteeringTurn(
       runID: run.runID, input: AgentMessageInput(text: "Then"),
       completesPreviousAssistant: false
     )
@@ -163,16 +163,16 @@ struct OpenClawGatewayStreamingTests {
       assistantEvent(runID: steering.userMessageID, name: "agent", sequence: 1, delta: "steered"),
       agentID: agentID
     )
-    #expect(try database.conversationContent(id: conversationID).messages.first {
+    #expect(try await database.conversationContent(id: conversationID).messages.first {
       $0.id == run.assistantMessageID
     }?.content == "one")
-    #expect(try database.conversationContent(id: conversationID).messages.first {
+    #expect(try await database.conversationContent(id: conversationID).messages.first {
       $0.id == steering.assistantMessageID
     }?.content == "steered")
-    #expect(try database.deviceOwnedGatewayTraceEvents(runID: run.runID).count == 3)
+    #expect(try await database.deviceOwnedGatewayTraceEvents(runID: run.runID).count == 3)
     await first.shutdown()
 
-    let reopened = try WorkspaceDatabase(url: url)
+    let reopened = try await WorkspaceDatabase(url: url)
     let second = OpenClawGatewayCoordinator(database: reopened, runExecutor: { _, _, _, _ in })
     try await second.recoverSessionRuns(conversationID: conversationID, history: activeHistory)
     await second.receiveGatewayEventForTesting(
@@ -187,13 +187,71 @@ struct OpenClawGatewayStreamingTests {
       assistantEvent(runID: run.runID, name: "agent", sequence: 2, delta: " two"),
       agentID: agentID
     )
-    #expect(try reopened.conversationContent(id: conversationID).messages.first {
+    #expect(try await reopened.conversationContent(id: conversationID).messages.first {
       $0.id == run.assistantMessageID
     }?.content == "one two")
-    #expect(try reopened.conversationContent(id: conversationID).messages.first {
+    #expect(try await reopened.conversationContent(id: conversationID).messages.first {
       $0.id == steering.assistantMessageID
     }?.content == "steered")
     await second.shutdown()
+  }
+
+  @Test func overlappingUnsequencedEventsKeepEveryDeltaAcrossDatabaseWaits() async throws {
+    let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let url = directory.appending(path: "streaming.sqlite")
+    let database = try await WorkspaceDatabase(url: url)
+    _ = try await database.createLocalACPSession(runtimeKind: .openclaw, title: "Fixture", ownerDeviceID: UUID())
+    let agentID = try await #require(database.dashboardAgents().first?.id)
+    try await database.saveOpenClawGatewayLink(OpenClawGatewayLink(agentID: agentID,
+      location: .localAgentWorkspace, endpoint: .init(url: URL(string: "ws://127.0.0.1:1")!, authorization: .localService)))
+    let session = try #require(OpenClawGatewaySession(payload: .object(["key": .string("agent:fixture:overlap")])))
+    let conversationID = try await database.importOpenClawGatewaySession(agentID: agentID, session: session)
+    let started = AsyncStream<Void>.makeStream()
+    let finish = AsyncStream<Void>.makeStream()
+    defer { finish.continuation.finish() }
+    let coordinator = OpenClawGatewayCoordinator(database: database, runExecutor: { _, _, _, _ in
+      started.continuation.yield(())
+      var iterator = finish.stream.makeAsyncIterator()
+      await iterator.next()
+    })
+    let run = try await coordinator.accept(conversationID: conversationID, content: "Hello")
+    var runStarted = started.stream.makeAsyncIterator()
+    await runStarted.next()
+    let entered = AsyncStream<Void>.makeStream()
+    let release = DispatchSemaphore(value: 0)
+    defer { release.signal() }
+    let blocked = Task { try await database.write { _ in
+      entered.continuation.yield(())
+      #expect(release.wait(timeout: .now() + 60) == .success)
+    } }
+    var iterator = entered.stream.makeAsyncIterator()
+    await iterator.next()
+    func delta(_ text: String) -> OpenClawGatewayEvent {
+      .init(name: "agent", payload: .object(["runId": .string(run.runID), "stream": .string("assistant"),
+        "data": .object(["delta": .string(text)])]), sequence: nil)
+    }
+    let first = Task { await coordinator.receiveGatewayEventForTesting(delta("first"), agentID: agentID) }
+    let deadline = ContinuousClock.now + .seconds(60)
+    while database.workerMetrics[0].pending < 2 {
+      guard ContinuousClock.now < deadline else { throw DatabaseWorkerError.timedOut }
+      try await Task.sleep(for: .milliseconds(1))
+    }
+    let second = Task { await coordinator.receiveGatewayEventForTesting(delta(" second"), agentID: agentID) }
+    // Wait until the second event has reached the coordinator's gate.
+    while await coordinator.pendingGatewayEventCountForTesting == 0 {
+      guard ContinuousClock.now < deadline else { throw DatabaseWorkerError.timedOut }
+      try await Task.sleep(for: .milliseconds(1))
+    }
+    release.signal()
+    try await blocked.value
+    await first.value
+    await second.value
+    #expect(try await database.conversationContent(id: conversationID).messages.last?.content == "first second")
+    #expect(try await database.deviceOwnedGatewayTraceEvents(runID: run.runID).map(\.sequence) == [1, 2])
+    await coordinator.shutdown()
+    finish.continuation.finish()
   }
 
   private func project(

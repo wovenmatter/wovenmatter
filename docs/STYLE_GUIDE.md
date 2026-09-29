@@ -13,7 +13,12 @@ when an intentional design change is accepted.
   numeric displays.
 - **Composer selectors:** use title-case popout headings, such as `Thinking Level`,
   without all-caps styling or expanded letter spacing. Keep saved-default actions
-  out of the conversation selector popouts.
+  out of the conversation selector popouts. Composer model buttons show only the
+  model name and version; connection attribution belongs in the model popout.
+  Permission buttons use the fullest label that fits, then explicit shorter
+  labels, then an icon. Never ellipsize these labels or collapse distinct modes
+  such as Auto and Auto Accept into the same text. Popouts retain full labels
+  and descriptions.
 - **Components:** reuse the shared cards, selectors, search fields, and button
   styles in `DashboardDesign.swift`, and the page/row patterns in
   [SettingsComponents.swift](../app/App/Views/SettingsComponents.swift).

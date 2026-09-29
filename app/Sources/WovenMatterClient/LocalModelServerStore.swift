@@ -44,44 +44,50 @@ public enum LocalModelServerStore {
         let result = try JSONDecoder().decode(Result.self, from: data)
         if let error = result.error { throw DefaultAgentError.message(error) }
         guard !result.models.isEmpty else { throw DefaultAgentError.message("The server did not return any models.") }
-        return try await MainActor.run {
-            try Task.checkCancellation()
+        return try await saveConnection(url: result.url, models: result.models, key: key, replacing: existing)
+    }
+    private static func saveConnection(url: String, models: [String], key: String, replacing existing: LocalModelServer?) async throws -> LocalModelServer {
+        // The actor owns the complete commit, not only its Keychain write. If
+        // validation and preferences straddle an await, a concurrent reconnect
+        // can pair one probe's model metadata with another probe's key, or leave
+        // an unreferenced key when a new connection loses the capacity race.
+        try await ProviderConnectionStore.shared.perform {
             var values = servers
             if let existing {
                 guard values.contains(existing) else {
-                    throw DefaultAgentError.message(
-                        "This server connection changed or was removed. Open Connections and try again.")
+                    throw DefaultAgentError.message("This server connection changed or was removed. Open Connections and try again.")
                 }
             } else if values.count >= maximumServers {
                 throw DefaultAgentError.message("You can connect up to 12 local model servers.")
             }
-            var server = existing ?? LocalModelServer(url: result.url, models: result.models)
-            server.url = result.url
-            server.models = result.models
+            var server = existing ?? LocalModelServer(url: url, models: models)
+            server.url = url
+            server.models = models
             server.verifiedAt = .now
-            // Commit only after verification; a failed replacement keeps the saved connection.
             try DefaultAgentSupport.saveKey(key, provider: server.id, notify: false)
             values.removeAll { $0.id == server.id }
             values.append(server)
             servers = values
-            var settings = DefaultAgentSupport.settings
-            if !settings.global.providers.contains(server.id) { settings.global.providers.append(server.id) }
-            DefaultAgentSupport.settings = settings
+            DefaultAgentSupport.updateSettings { settings in
+                if !settings.global.providers.contains(server.id) { settings.global.providers.append(server.id) }
+            }
             return server
         }
     }
-    @MainActor public static func remove(_ server: LocalModelServer) throws {
-        try DefaultAgentSupport.saveKey("", provider: server.id)
-        servers.removeAll { $0.id == server.id }
-        var settings = DefaultAgentSupport.settings
-        func clean(_ value: inout DefaultAgentSettings) {
-            value.providers.removeAll { $0 == server.id }
-            value.models.removeAll { $0.hasPrefix(server.id + "/") }
-            value.fallbackModels.removeAll { $0.hasPrefix(server.id + "/") }
-            if value.defaultModel?.hasPrefix(server.id + "/") == true { value.defaultModel = nil }
+    @MainActor public static func remove(_ server: LocalModelServer) async throws {
+        try await ProviderConnectionStore.shared.perform {
+            try DefaultAgentSupport.saveKey("", provider: server.id, notify: false)
+            servers.removeAll { $0.id == server.id }
+            DefaultAgentSupport.updateSettings { settings in
+                func clean(_ value: inout DefaultAgentSettings) {
+                    value.providers.removeAll { $0 == server.id }
+                    value.models.removeAll { $0.hasPrefix(server.id + "/") }
+                    value.fallbackModels.removeAll { $0.hasPrefix(server.id + "/") }
+                    if value.defaultModel?.hasPrefix(server.id + "/") == true { value.defaultModel = nil }
+                }
+                clean(&settings.global)
+                for scope in settings.workspaces.keys { clean(&settings.workspaces[scope]!) }
+            }
         }
-        clean(&settings.global)
-        for scope in settings.workspaces.keys { clean(&settings.workspaces[scope]!) }
-        DefaultAgentSupport.settings = settings
     }
 }

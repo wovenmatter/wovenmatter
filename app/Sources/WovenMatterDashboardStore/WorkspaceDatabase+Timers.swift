@@ -2,10 +2,43 @@ import Foundation
 import WovenMatterCore
 import WovenMatterClient
 
-extension WorkspaceDatabase {
+extension WorkspaceDatabaseConnection {
   /// The app is the scheduler. No timer is installed with a provider or operating system.
   public func sessionTimers(sessionID: String? = nil) throws -> [WorkspaceSessionTimer] {
     try withLock { try timersUnlocked(sessionID: sessionID) }
+  }
+
+  public func querySessionTimers(callerID: String, sessionID: String, after: Int64 = 0,
+                                 limit: Int = 100) throws -> GatewayJSONValue {
+    try withLock {
+      try requireTimerAccessUnlocked(sourceID: callerID, targetID: sessionID)
+      guard after >= 0, (1...200).contains(limit) else {
+        throw WorkspaceToolError.invalid("Invalid pagination.")
+      }
+      var rows = try historyRowsUnlocked("""
+        SELECT t.rowid AS sequence,t.* FROM workspace_session_timers t
+        JOIN dashboard_conversations c ON c.id=t.session_id
+        WHERE c.deleted_at IS NULL AND t.session_id=? AND t.rowid>?
+        ORDER BY t.rowid LIMIT ?
+        """, values: [sessionID, String(after), String(limit + 1)])
+      let more = rows.count > limit
+      if more { rows.removeLast() }
+      rows = rows.map { value in
+        guard var row = value.objectValue else { return value }
+        if let seconds = row.removeValue(forKey: "next_fire_at")?.doubleValue {
+          row["nextFireAt"] = .string(Self.timestamp(Date(timeIntervalSince1970: seconds)))
+        }
+        row["id"] = row.removeValue(forKey: "id") ?? .null
+        row["sessionID"] = row.removeValue(forKey: "session_id") ?? .null
+        row["instruction"] = row.removeValue(forKey: "instruction") ?? .null
+        row["intervalSeconds"] = row.removeValue(forKey: "interval_seconds") ?? .null
+        row["isPaused"] = .bool(row.removeValue(forKey: "is_paused")?.intValue == 1)
+        row["pendingDeliveryID"] = row.removeValue(forKey: "pending_delivery_id") ?? .null
+        return .object(row)
+      }
+      return .object(["rows": .array(rows), "hasMore": .bool(more),
+        "nextCursor": rows.last?.objectValue?["sequence"] ?? .number(Double(after))])
+    }
   }
 
   private func timersUnlocked(sessionID: String? = nil) throws -> [WorkspaceSessionTimer] {
@@ -44,7 +77,7 @@ extension WorkspaceDatabase {
         let existing = try historyRowsUnlocked("SELECT session_id FROM workspace_session_timers WHERE id=?", values: [timer.id])
           .first?.objectValue?["session_id"]?.stringValue
         if creating == true, existing != nil { throw WorkspaceToolError.invalid("Timer already exists.") }
-        if creating == false, existing == nil { throw WorkspaceToolError.invalid("Timer not found.") }
+        if creating == false, existing == nil { throw WorkspaceToolError.notFound("Timer not found.") }
         var saved = timer
         if creating == false, let existing { saved.sessionID = existing }
         try requireTimerAccessUnlocked(sourceID: callerID, targetID: saved.sessionID)
@@ -71,7 +104,7 @@ extension WorkspaceDatabase {
       let outcome = try performToolMutationUnlocked(callerID: callerID, requestID: requestID,
         operation: paused ? "timers.pause" : "timers.resume", input: id) {
         guard let timer = try timersUnlocked().first(where: { $0.id == id }) else {
-          throw WorkspaceToolError.invalid("Timer not found.")
+          throw WorkspaceToolError.notFound("Timer not found.")
         }
         if let callerID { try requireTimerAccessUnlocked(sourceID: callerID, targetID: timer.sessionID) }
         if !paused { try requireToolUnlocked(.timers, sessionID: timer.sessionID) }
@@ -141,5 +174,39 @@ extension WorkspaceDatabase {
         try toolsExecuteUnlocked("UPDATE workspace_session_timers SET is_paused=1,pending_delivery_id=NULL WHERE id=?", [id])
       }
     }
+  }
+}
+
+// MARK: - Async worker boundary
+
+extension WorkspaceDatabase {
+  public func sessionTimers(sessionID: String? = nil) async throws -> [WorkspaceSessionTimer] {
+    try await read { try $0.sessionTimers(sessionID: sessionID) }
+  }
+
+  @discardableResult
+  public func saveSessionTimer(_ timer: WorkspaceSessionTimer, callerID: String,
+                               requestID: String? = nil, creating: Bool? = nil) async throws -> WorkspaceSessionTimer {
+    try await write { try $0.saveSessionTimer(timer, callerID: callerID, requestID: requestID, creating: creating) }
+  }
+
+  public func pauseSessionTimer(id: String, paused: Bool, callerID: String? = nil, requestID: String? = nil) async throws {
+    try await write { try $0.pauseSessionTimer(id: id, paused: paused, callerID: callerID, requestID: requestID) }
+  }
+
+  public func removeSessionTimer(id: String, callerID: String? = nil, requestID: String? = nil) async throws {
+    try await write { try $0.removeSessionTimer(id: id, callerID: callerID, requestID: requestID) }
+  }
+
+  public func dueSessionTimers(now: Date = Date()) async throws -> [WorkspaceSessionTimer] {
+    try await write { try $0.dueSessionTimers(now: now) }
+  }
+
+  public func isTimerOccurrenceActive(id: String, deliveryID: String) async throws -> Bool {
+    try await read { try $0.isTimerOccurrenceActive(id: id, deliveryID: deliveryID) }
+  }
+
+  public func finishTimerOccurrence(id: String, deliveryID: String, now: Date = Date()) async throws {
+    try await write { try $0.finishTimerOccurrence(id: id, deliveryID: deliveryID, now: now) }
   }
 }

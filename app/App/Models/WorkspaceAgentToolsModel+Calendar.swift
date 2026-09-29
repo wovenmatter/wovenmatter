@@ -5,45 +5,59 @@ import WovenMatterClient
 extension WorkspaceAgentToolsModel {
     func calendar(_ command: WovenMatterToolCommand, callerID: String, requestID: String) async throws -> WovenMatterToolResponse {
         if command.action == "list" {
-            return .init(result: try database.listAgentCalendar(callerID: callerID,
-                since: command.options["since"].map(Self.date), until: command.options["until"].map(Self.date),
+            let since = try command.options["since"].map(Self.date)
+            let until = try command.options["until"].map(Self.date)
+            if let since, let until, until < since {
+                throw WorkspaceToolError.invalid("--until must be at or after --since.")
+            }
+            return .init(result: try await database.listAgentCalendar(callerID: callerID,
+                since: since, until: until,
                 after: Int64(command.integer("after", default: 0, range: 0...Int.max)),
                 limit: command.integer("limit", default: 100, range: 1...200)))
         }
         if command.action == "read" || command.action == "occurrences" {
-            let event = try database.calendarEvent(id: command.required("id", allowPositional: true), callerID: callerID)
+            let event = try await database.calendarEvent(id: command.required("id", allowPositional: true), callerID: callerID)
             if command.action == "read" {
                 return .init(result: .object(["event": try WovenMatterToolResponse.value(event).result ?? .null,
-                    "runs": try WovenMatterToolResponse.value(database.calendarRuns().filter { $0.eventID == event.id }).result ?? .null]))
+                    "runs": try await database.queryCalendarRuns(eventID: event.id,
+                        after: command.integer("after", default: 0, range: 0...Int.max),
+                        limit: command.integer("limit", default: 100, range: 1...200))]))
             }
             let since = try Self.date(command.required("since")), until = try Self.date(command.required("until"))
             guard until > since, until.timeIntervalSince(since) <= 366 * 86_400 else {
                 throw WorkspaceToolError.invalid("Choose an occurrence window of at most one year.")
             }
             let values = WorkspaceCalendarSchedule.occurrences(event, in: .init(start: since, end: until))
-            return .init(result: .array(values.map {
+            let offset = try command.integer("after", default: 0, range: 0...Int.max)
+            let limit = try command.integer("limit", default: 100, range: 1...200)
+            let page = Array(values.dropFirst(offset).prefix(limit))
+            let next = offset + page.count
+            return .init(result: .object(["rows": .array(page.map {
                 .object(["eventID": .string(event.id), "occurrence": .number(Double($0.index)),
                     "startsAt": .string(WorkspaceCalendarSchedule.timestamp($0.startsAt)),
                     "endsAt": $0.endsAt.map { .string(WorkspaceCalendarSchedule.timestamp($0)) } ?? .null])
-            }))
+            }), "hasMore": .bool(next < values.count), "nextCursor": .number(Double(next))]))
         }
         let input = String(decoding: try JSONEncoder().encode(command.operationArguments), as: UTF8.self)
-        if let id = try database.replayCalendarRequest(callerID: callerID, requestID: requestID, input: input) {
+        if let id = try await database.replayCalendarRequest(callerID: callerID, requestID: requestID, input: input) {
             return .init(result: .object(["id": .string(id)]))
         }
         let creating = command.action == "create"
         let id = creating ? requestID : try command.required("id", allowPositional: true)
-        let existing = creating ? nil : try database.calendarEvent(id: id, callerID: callerID)
+        let existing = creating ? nil : try await database.calendarEvent(id: id, callerID: callerID)
         let revision = try command.options["revision"].map { _ in try command.integer("revision", default: 0, range: 0...Int.max) }
         let occurrence = try command.options["occurrence"].map { _ in try command.integer("occurrence", default: 0, range: 0...Int.max) }
+        if ["update", "remove", "detach"].contains(command.action), revision == nil {
+            throw WorkspaceToolError.revisionRequired("This calendar operation requires --revision. Read the event again and pass its current revision.")
+        }
         if command.action == "remove" {
-            try database.deleteCalendarEvent(id: id, occurrence: occurrence, expectedRevision: revision,
+            try await database.deleteCalendarEvent(id: id, occurrence: occurrence, expectedRevision: revision,
                 callerID: callerID, requestID: requestID, requestInput: input)
             return .init(result: .object(["id": .string(id)]))
         }
         var draft = try existing.map(WorkspaceCalendarDraft.init) ?? .init(startsAt: Self.date(command.required("starts-at")))
         if let occurrence, let existing {
-            guard let value = WorkspaceCalendarSchedule.occurrence(existing, index: occurrence) else { throw WorkspaceToolError.invalid("Occurrence not found.") }
+            guard let value = WorkspaceCalendarSchedule.occurrence(existing, index: occurrence) else { throw WorkspaceToolError.notFound("Occurrence not found.") }
             draft = value.draft
         }
         if let title = command.options["title"] { draft.title = title }
@@ -80,7 +94,7 @@ extension WorkspaceAgentToolsModel {
             _ = try command.required("starts-at")
             targetID = requestID; create = true; draft.recurrence = nil
         } else if occurrence != nil { throw WorkspaceToolError.invalid("Use detach to change a single recurring occurrence, or update without --occurrence to change the series.") }
-        let saved = try database.saveCalendarEvent(id: targetID, draft: draft, creating: create,
+        let saved = try await database.saveCalendarEvent(id: targetID, draft: draft, creating: create,
             expectedRevision: create ? nil : revision ?? existing?.calendar.revision, detaching: detach,
             callerID: callerID, requestID: requestID, requestInput: input)
         return .init(result: .object(["id": .string(saved)]))

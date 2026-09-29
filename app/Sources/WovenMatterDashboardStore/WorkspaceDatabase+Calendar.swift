@@ -3,11 +3,11 @@ import CryptoKit
 import WovenMatterCore
 import WovenMatterClient
 
-extension WorkspaceDatabase {
+extension WorkspaceDatabaseConnection {
   public func calendarEvent(id: String, callerID: String) throws -> WorkspaceCalendarItemRecord {
     try withLock {
       try requireToolUnlocked(.calendar, sessionID: callerID)
-      guard let event = try calendarItemsUnlocked().first(where: { $0.id == id }) else { throw WorkspaceToolError.invalid("Calendar event not found.") }
+      guard let event = try calendarItemsUnlocked().first(where: { $0.id == id }) else { throw WorkspaceToolError.notFound("Calendar event not found.") }
       return event
     }
   }
@@ -16,6 +16,7 @@ extension WorkspaceDatabase {
   public func replayCalendarRequest(callerID: String, requestID: String, input: String) throws -> String? {
     try withLock {
       try requireToolUnlocked(.calendar, sessionID: callerID, writesCalendar: true)
+      let requestID = try persistedToolRequestID(requestID, in: .mutations, sourceID: callerID)
       guard let row = try historyRowsUnlocked("SELECT operation,input_digest,result_json FROM workspace_tool_mutations WHERE source_id=? AND request_id=?",
         values: [callerID, requestID]).first?.objectValue else { return nil }
       let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
@@ -118,9 +119,10 @@ extension WorkspaceDatabase {
         operation: creating ? "calendar.create" : occurrence == nil ? "calendar.update" : "calendar.detach", input: input) {
         let existing = try calendarItemsUnlocked().first { $0.id == id }
         let idExists = try !historyRowsUnlocked("SELECT 1 FROM dashboard_calendar_items WHERE id=?", values: [id]).isEmpty
-        guard creating ? !idExists : existing != nil else { throw WorkspaceToolError.invalid("Calendar event not found or already exists.") }
+        if creating, idExists { throw WorkspaceToolError.invalid("Calendar event already exists.") }
+        if !creating, existing == nil { throw WorkspaceToolError.notFound("Calendar event not found.") }
         if let expectedRevision, existing?.calendar.revision != expectedRevision {
-          throw WorkspaceToolError.invalid("This event changed. Reopen it before saving your changes.")
+          throw WorkspaceToolError.revisionConflict("This event changed. Reopen it before saving your changes.")
         }
         if let previousWorkspace = existing?.calendar.task?.configuration.workspaceID,
            previousWorkspace != draft.task?.configuration.workspaceID,
@@ -228,11 +230,11 @@ extension WorkspaceDatabase {
       if let callerID { try requireToolUnlocked(.calendar, sessionID: callerID, writesCalendar: true) }
       _ = try performToolMutationUnlocked(callerID: callerID, requestID: requestID, operation: "calendar.remove",
         input: requestInput ?? [id, occurrence.map(String.init) ?? "", expectedRevision.map(String.init) ?? ""].joined(separator: ":")) {
-        guard let event = try calendarItemsUnlocked().first(where: { $0.id == id }) else { throw WorkspaceToolError.invalid("Calendar event not found.") }
-        if let expectedRevision, expectedRevision != event.calendar.revision { throw WorkspaceToolError.invalid("This event changed. Reopen it before deleting.") }
+        guard let event = try calendarItemsUnlocked().first(where: { $0.id == id }) else { throw WorkspaceToolError.notFound("Calendar event not found.") }
+        if let expectedRevision, expectedRevision != event.calendar.revision { throw WorkspaceToolError.revisionConflict("This event changed. Reopen it before deleting.") }
         if let occurrence {
           guard event.calendar.recurrence != nil else { throw WorkspaceToolError.invalid("This event is not recurring.") }
-          guard let value = WorkspaceCalendarSchedule.occurrence(event, index: occurrence) else { throw WorkspaceToolError.invalid("Occurrence not found.") }
+          guard let value = WorkspaceCalendarSchedule.occurrence(event, index: occurrence) else { throw WorkspaceToolError.notFound("Occurrence not found.") }
           var details = event.calendar
           details.excludedOccurrences.insert(occurrence); details.editedBy = try calendarAuthorUnlocked(callerID); details.revision += 1
           try cancelCalendarRunsUnlocked(eventID: id, scheduledAt: value.startsAt)
@@ -263,12 +265,34 @@ extension WorkspaceDatabase {
 
   public func calendarRuns() throws -> [WorkspaceCalendarRun] { try withLock { try calendarRunsUnlocked(visibleOnly: true) } }
 
-  func calendarRunsUnlocked(eventID: String? = nil, unfinishedOnly: Bool = false, visibleOnly: Bool = false) throws -> [WorkspaceCalendarRun] {
-    let rows = try historyRowsUnlocked("""
+  public func queryCalendarRuns(eventID: String, after: Int = 0, limit: Int = 100) throws -> GatewayJSONValue {
+    try withLock {
+      guard after >= 0, (1...200).contains(limit) else { throw WorkspaceToolError.invalid("Invalid pagination.") }
+      var runs = try calendarRunsUnlocked(eventID: eventID, visibleOnly: true,
+        limit: limit + 1, offset: after)
+      let more = runs.count > limit
+      if more { runs.removeLast() }
+      let values = try runs.map { try WovenMatterToolResponse.value($0).result ?? .null }
+      let (next, overflow) = after.addingReportingOverflow(runs.count)
+      return .object(["rows": .array(values), "hasMore": .bool(more),
+        "nextCursor": .number(Double(overflow ? Int.max : next))])
+    }
+  }
+
+  func calendarRunsUnlocked(eventID: String? = nil, unfinishedOnly: Bool = false,
+                            visibleOnly: Bool = false, limit: Int? = nil,
+                            offset: Int = 0) throws -> [WorkspaceCalendarRun] {
+    var sql = """
       SELECT r.*,coalesce(d.status,r.status) AS delivery_status FROM workspace_calendar_runs r
       LEFT JOIN workspace_session_deliveries d ON d.id=r.id
       WHERE \(visibleOnly ? "r.hidden_at IS NULL" : "1=1") \(eventID == nil ? "" : "AND r.event_id=?") \(unfinishedOnly ? "AND r.status='pending'" : "") ORDER BY r.scheduled_at,r.id
-      """, values: eventID.map { [$0] } ?? [])
+      """
+    var values: [String?] = eventID.map { [$0] } ?? []
+    if let limit {
+      sql += " LIMIT ? OFFSET ?"
+      values += [String(limit), String(offset)]
+    }
+    let rows = try historyRowsUnlocked(sql, values: values)
     return try rows.map { value in
       guard let r = value.objectValue, let id = r["id"]?.stringValue, let eventID = r["event_id"]?.stringValue,
             let scheduled = r["scheduled_at"]?.stringValue.flatMap(Self.date), let json = r["task_json"]?.stringValue,
@@ -366,20 +390,38 @@ extension WorkspaceDatabase {
     }
   }
 
+  /// Stop only the selected occurrence before native transport begins. The
+  /// outcome and checkpoint commit together so the next tick cannot retry it.
+  public func cancelCalendarRunBeforeDispatch(_ id: String) throws {
+    try transaction {
+      guard let run = try calendarRunsUnlocked(unfinishedOnly: true).first(where: { $0.id == id }),
+            run.isPending || run.status == "cancelled" else { return }
+      let started = try historyRowsUnlocked("SELECT transport_started FROM workspace_session_deliveries WHERE id=?", values: [id])
+        .first?.objectValue?["transport_started"]?.intValue == 1
+      guard !started else { return }
+      try toolsExecuteUnlocked("UPDATE workspace_session_deliveries SET status='cancelled' WHERE id=?", [id])
+      try settleCalendarRunUnlocked(run, status: "cancelled")
+    }
+  }
+
   public func settleCalendarRuns() throws {
     try transaction {
       for run in try calendarRunsUnlocked(unfinishedOnly: true) where ["accepted", "cancelled", "uncertain", "failed"].contains(run.status) {
-        try toolsExecuteUnlocked("UPDATE workspace_calendar_runs SET status=?,error=NULL WHERE id=?", [run.status, run.id])
-        let through = try historyRowsUnlocked("SELECT coalesced_through FROM workspace_calendar_runs WHERE id=?", values: [run.id])
-          .first?.objectValue?["coalesced_through"]?.doubleValue.map(Date.init(timeIntervalSince1970:)) ?? run.scheduledAt
-        let next = try historyRowsUnlocked("SELECT next_fire_at FROM dashboard_calendar_items WHERE id=?", values: [run.eventID])
-          .first?.objectValue?["next_fire_at"]?.doubleValue
-        // An edit may already have replaced this schedule while transport was in flight.
-        if let next, next <= run.scheduledAt.timeIntervalSince1970,
-           let event = try calendarItemsUnlocked().first(where: { $0.id == run.eventID }) {
-          try advanceCalendarUnlocked(event, after: through)
-        }
+        try settleCalendarRunUnlocked(run, status: run.status)
       }
+    }
+  }
+
+  private func settleCalendarRunUnlocked(_ run: WorkspaceCalendarRun, status: String) throws {
+    try toolsExecuteUnlocked("UPDATE workspace_calendar_runs SET status=?,error=NULL WHERE id=?", [status, run.id])
+    let through = try historyRowsUnlocked("SELECT coalesced_through FROM workspace_calendar_runs WHERE id=?", values: [run.id])
+      .first?.objectValue?["coalesced_through"]?.doubleValue.map(Date.init(timeIntervalSince1970:)) ?? run.scheduledAt
+    let next = try historyRowsUnlocked("SELECT next_fire_at FROM dashboard_calendar_items WHERE id=?", values: [run.eventID])
+      .first?.objectValue?["next_fire_at"]?.doubleValue
+    // An edit may already have replaced this schedule while transport was in flight.
+    if let next, next <= run.scheduledAt.timeIntervalSince1970,
+       let event = try calendarItemsUnlocked().first(where: { $0.id == run.eventID }) {
+      try advanceCalendarUnlocked(event, after: through)
     }
   }
 
@@ -416,7 +458,7 @@ public struct RemoteCalendarScheduleExport: Sendable {
   public let runs: [WorkspaceCalendarRun]
 }
 
-extension WorkspaceDatabase {
+extension WorkspaceDatabaseConnection {
   func remoteCalendarWorkspaceIDsUnlocked() throws -> Set<String> {
     Set(try historyRowsUnlocked("SELECT workspace_id FROM workspace_calendar_remote_ownership", values: [])
       .compactMap { $0.objectValue?["workspace_id"]?.stringValue })
@@ -501,7 +543,7 @@ extension WorkspaceDatabase {
   }
 }
 
-extension WorkspaceDatabase {
+extension WorkspaceDatabaseConnection {
   /// Atomic transcript projection and receipt: a crash/repeated fetch cannot
   /// duplicate a prompt or assistant reply. Native updates are retained verbatim.
   public func importRemoteCalendarTranscript(receiptID: String, run: WorkspaceCalendarRun,
@@ -607,7 +649,7 @@ extension WorkspaceDatabase {
   }
 }
 
-extension WorkspaceDatabase {
+extension WorkspaceDatabaseConnection {
   /// Call only after the remote gateway confirms it is disabled and its result
   /// journal is drained. Keep the durable fence until this checkpoint is saved.
   public func restoreRemoteCalendarExecutionCheckpoint(workspaceID: UUID, schedules: [RemoteTaskGatewaySchedule]) throws {
@@ -629,5 +671,86 @@ extension WorkspaceDatabase {
         }
       }
     }
+  }
+}
+
+// MARK: - Async worker boundary
+
+extension WorkspaceDatabase {
+  public func calendarEvent(id: String, callerID: String) async throws -> WorkspaceCalendarItemRecord {
+    try await read { try $0.calendarEvent(id: id, callerID: callerID) }
+  }
+
+  public func replayCalendarRequest(callerID: String, requestID: String, input: String) async throws -> String? {
+    try await read { try $0.replayCalendarRequest(callerID: callerID, requestID: requestID, input: input) }
+  }
+
+  @discardableResult
+  public func saveCalendarEvent(id: String = UUID().uuidString.lowercased(), draft: WorkspaceCalendarDraft,
+      creating: Bool, expectedRevision: Int? = nil, detaching occurrence: Int? = nil,
+      callerID: String? = nil, requestID: String? = nil, requestInput: String? = nil,
+      now: Date = Date()) async throws -> String {
+    try await write { try $0.saveCalendarEvent(id: id, draft: draft, creating: creating, expectedRevision: expectedRevision, detaching: occurrence, callerID: callerID, requestID: requestID, requestInput: requestInput, now: now) }
+  }
+
+  public func deleteCalendarEvent(id: String, occurrence: Int? = nil, expectedRevision: Int? = nil,
+      callerID: String? = nil, requestID: String? = nil, requestInput: String? = nil, now: Date = Date()) async throws {
+    try await write { try $0.deleteCalendarEvent(id: id, occurrence: occurrence, expectedRevision: expectedRevision, callerID: callerID, requestID: requestID, requestInput: requestInput, now: now) }
+  }
+
+  public func calendarRuns() async throws -> [WorkspaceCalendarRun] {
+    try await read { try $0.calendarRuns() }
+  }
+
+  public func dueCalendarRuns(now: Date = Date()) async throws -> [WorkspaceCalendarRun] {
+    try await write { try $0.dueCalendarRuns(now: now) }
+  }
+
+  public func isCalendarRunActive(_ id: String) async throws -> Bool {
+    try await read { try $0.isCalendarRunActive(id) }
+  }
+
+  public func prepareCalendarDelivery(runID: String, now: Date = Date()) async throws -> WorkspaceSessionDelivery {
+    try await write { try $0.prepareCalendarDelivery(runID: runID, now: now) }
+  }
+
+  public func deferCalendarRun(_ id: String, error: String, now: Date = Date()) async throws {
+    try await write { try $0.deferCalendarRun(id, error: error, now: now) }
+  }
+
+  public func cancelCalendarRunBeforeDispatch(_ id: String) async throws {
+    // Stop cleanup must survive cancellation of the scheduler task itself.
+    try await finishWrite { try $0.cancelCalendarRunBeforeDispatch(id) }
+  }
+
+  public func settleCalendarRuns() async throws {
+    try await write { try $0.settleCalendarRuns() }
+  }
+
+  public func remoteCalendarExecutionOwnership(workspaceID: UUID) async throws -> RemoteCalendarExecutionOwnership {
+    try await read { try $0.remoteCalendarExecutionOwnership(workspaceID: workspaceID) }
+  }
+
+  public func setRemoteCalendarExecutionOwnership(workspaceID: UUID, state: RemoteCalendarExecutionOwnership) async throws {
+    try await write { try $0.setRemoteCalendarExecutionOwnership(workspaceID: workspaceID, state: state) }
+  }
+
+  public func remoteCalendarExecutionSnapshot(workspaceID: UUID) async throws -> [RemoteCalendarScheduleExport] {
+    try await read { try $0.remoteCalendarExecutionSnapshot(workspaceID: workspaceID) }
+  }
+
+  public func importRemoteCalendarRun(_ run: WorkspaceCalendarRun, workspaceID: UUID,
+      coalescedThrough: Date? = nil, eventRevision: Int? = nil) async throws {
+    try await write { try $0.importRemoteCalendarRun(run, workspaceID: workspaceID, coalescedThrough: coalescedThrough, eventRevision: eventRevision) }
+  }
+
+  public func importRemoteCalendarTranscript(receiptID: String, run: WorkspaceCalendarRun,
+      workspaceID: UUID, workspaceName: String, ownerDeviceID: UUID,
+      nativeSessionID: String?, updates: [GatewayJSONValue], error: String?, completedAt: Date) async throws {
+    try await write { try $0.importRemoteCalendarTranscript(receiptID: receiptID, run: run, workspaceID: workspaceID, workspaceName: workspaceName, ownerDeviceID: ownerDeviceID, nativeSessionID: nativeSessionID, updates: updates, error: error, completedAt: completedAt) }
+  }
+
+  public func restoreRemoteCalendarExecutionCheckpoint(workspaceID: UUID, schedules: [RemoteTaskGatewaySchedule]) async throws {
+    try await write { try $0.restoreRemoteCalendarExecutionCheckpoint(workspaceID: workspaceID, schedules: schedules) }
   }
 }

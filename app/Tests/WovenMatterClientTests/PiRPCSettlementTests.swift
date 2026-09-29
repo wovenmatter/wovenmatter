@@ -5,6 +5,75 @@ import WovenMatterCore
 @testable import WovenMatterClient
 
 struct PiRPCSettlementTests {
+  @Test(.timeLimit(.minutes(1)))
+  func stopDuringApprovalHistoryNeverSendsTheSelectedApproval() async throws {
+    let history = PiPromptGate()
+    let fixture = PiPipeFixture(recorder: { direction, data in
+      if direction == "out",
+         let payload = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+         payload["type"] as? String == "extension_ui_response",
+         payload["confirmed"] as? Bool == true {
+        await history.pause()
+      }
+    })
+    let server = Task { try await fixture.serveApprovalStop() }
+    try await fixture.initialize()
+    let fence = AgentDispatchFence()
+    let prompt = Task {
+      try await fixture.client.prompt("fixture", onPermission: { _ in "allow" }, dispatchFence: fence)
+    }
+    await history.waitForPrompt()
+    let stop = Task { await fixture.client.cancel() }
+    while !fence.isCancelled { await Task.yield() }
+    await history.release()
+    await stop.value
+    #expect(try await prompt.value == .cancelled)
+    await fixture.client.shutdown()
+    try await server.value
+  }
+
+  @Test(.timeLimit(.minutes(1)))
+  @MainActor
+  func nativeAbortFailureKeepsStopBarrierClosedUntilExplicitRetry() async throws {
+    let history = PiPromptGate()
+    let fixture = PiPipeFixture(recorder: { direction, data in
+      if direction == "in",
+         let payload = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+         payload["type"] as? String == "agent_start" { await history.pause() }
+    })
+    let server = Task { try await fixture.serveApprovalStop(rejectFirstAbort: true) }
+    try await fixture.initialize()
+    let prompt = Task { try await fixture.client.prompt("fixture", onPermission: { _ in nil }) }
+    await history.waitForPrompt()
+    await history.release()
+    let barriers = AgentStopCoordinator()
+    let first = barriers.begin(conversationID: "fixture") { try await fixture.client.stop() }
+    do { try await first.value; Issue.record("Native abort rejection was ignored") }
+    catch PiRPCClientError.commandFailed { }
+    do { try await barriers.wait(conversationID: "fixture"); Issue.record("New input escaped a failed Stop") }
+    catch PiRPCClientError.commandFailed { }
+    let retry = barriers.begin(conversationID: "fixture") { try await fixture.client.stop() }
+    try await retry.value
+    try await barriers.wait(conversationID: "fixture")
+    #expect(try await prompt.value == .cancelled)
+    await fixture.client.shutdown()
+    try await server.value
+  }
+
+  @Test(arguments: [false, true])
+  func onlyDurableReconnectsRouteApprovalsBeforeTheNextPrompt(durable: Bool) async throws {
+    let fixture = PiPipeFixture(durable: durable)
+    await fixture.client.setResumePermissionHandler { request in
+      #expect(durable)
+      #expect(request.title == "Resume approval")
+      return "allow"
+    }
+    let server = Task { try await fixture.serve(settles: true, resumeApproval: durable) }
+    try await fixture.initialize()
+    await fixture.client.shutdown()
+    try await server.value
+  }
+
   @Test func durableRelayCarriesStableRunAndReturnsRecovery() async throws {
     let capture = PiWireCapture()
     let fixture = PiPipeFixture(recorder: { capture.append($0,$1) }, durable: true)
@@ -181,8 +250,47 @@ private struct PiPipeFixture: Sendable {
     _ = try await client.initializeSession(workingDirectory: URL(filePath: "/private/tmp"),
       existingSessionID: nil, title: nil, systemPrompt: nil)
   }
+  func serveApprovalStop(rejectFirstAbort: Bool = false) async throws {
+    defer { try? events.fileHandleForWriting.close() }
+    let cursor = FixtureCommandReader(handle: commands.fileHandleForReading)
+    func emit(_ object: [String: Any]) throws {
+      var data = try JSONSerialization.data(withJSONObject: object); data.append(10)
+      try events.fileHandleForWriting.write(contentsOf: data)
+    }
+    var started = false
+    var receivedCancellation = false
+    var rejectedAbort = false
+    while let line = try await cursor.next() {
+      let command = try #require(JSONSerialization.jsonObject(with: line) as? [String: Any])
+      let type = command["type"] as? String
+      if type == "extension_ui_response" {
+        #expect(command["confirmed"] as? Bool == false)
+        #expect(command["cancelled"] as? Bool == true)
+        receivedCancellation = true
+        continue
+      }
+      if type == "prompt" { started = true }
+      if type == "abort", rejectFirstAbort, !rejectedAbort {
+        rejectedAbort = true
+        try emit(["type": "response", "id": command["id"]!, "success": false, "error": "fixture abort rejection"])
+        continue
+      }
+      let data: [String: Any] = type == "get_state"
+        ? ["sessionId": "fixture-session", "isStreaming": started] : [:]
+      try emit(["type": "response", "id": command["id"]!, "success": true, "data": data])
+      if type == "get_state", started {
+        try emit(["type": "agent_start"])
+        try emit(["type": "extension_ui_request", "id": "approval", "method": "confirm", "title": "Allow tool?"])
+      }
+      if type == "abort" {
+        #expect(receivedCancellation)
+        try emit(["type": "agent_settled"])
+      }
+    }
+  }
+
   func serve(settles: Bool, accepts: Bool = true, hold: PiPromptGate? = nil,
-             streamLines: [String] = [], advertisesConfiguration: Bool = false, recovery: Bool = false) async throws {
+             streamLines: [String] = [], advertisesConfiguration: Bool = false, recovery: Bool = false, resumeApproval: Bool? = nil) async throws {
     defer { try? events.fileHandleForWriting.close() }
     let cursor = FixtureCommandReader(handle: commands.fileHandleForReading)
     while let line = try await cursor.next() {
@@ -191,6 +299,15 @@ private struct PiPipeFixture: Sendable {
       var data: [String: Any]
       switch type {
       case "get_state":
+        if let resumeApproval {
+          try events.fileHandleForWriting.write(contentsOf: Data(
+            #"{"type":"extension_ui_request","id":"pending-approval","method":"confirm","title":"Resume approval"}"#.utf8) + Data([10]))
+          let reply = try #require(try await cursor.next())
+          let value = try JSONSerialization.jsonObject(with: reply) as! [String: Any]
+          #expect(value["type"] as? String == "extension_ui_response")
+          #expect(value["id"] as? String == "pending-approval")
+          #expect(value["confirmed"] as? Bool == resumeApproval)
+        }
         data = advertisesConfiguration ? [
           "sessionId": "fixture-session",
           "model": ["provider": "anthropic", "id": "shared-model"],
