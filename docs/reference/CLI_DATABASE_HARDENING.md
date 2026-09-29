@@ -31,3 +31,12 @@ covers these cases. No test suites, CI, provider calls or live database mutation
 were executed for that audit; validation was limited to source review, Swift
 parse-only checks, Python AST parsing and diff checks. Combined native build and
 post-merge test execution remain separate validation gates.
+
+
+## Adversarial audit follow-up
+
+- Remote relay overload now returns `busy` before dispatch and drains the refused request within a shared 250 ms deadline. Remote replies use the same 1 MiB ceiling as local tool responses; synthesized failures retain stable codes and echo only validated UUID request IDs.
+- Linked SQLite text decoding preserves embedded NUL characters, including the suffix in encoded-response budgeting. The companion PR86 change makes workspace text binding and reads length-aware, preserving receipt identity/content and distinguishing empty TEXT from SQL NULL.
+- Legacy endpoint scrubbing pages only event identities, loading one body at a time instead of retaining 500 potentially large wire payloads. Existing content, the transaction, and the final FTS rebuild remain intact.
+- History character windows use PR86's NUL-safe UTF-8 scalar SQL functions. Offsets, lengths, and `has_more` include leading, middle, and trailing NULs without allocating the complete Swift string for a bounded substring.
+- Regression sources cover NUL/Unicode pagination, migration across its 500-row boundary, a saturated four-request relay, bounded overload cleanup, linked SQLite NUL/result-budget behavior, and durable delivery replay containing NUL text across connections. The provider-free Python remote relay suite passes all nine checks. The new SQLite binding/window and cancellation regressions are included in the shared PR86 Swift test batch; the PR85 history and migration regressions require combined PR85/PR86 validation.

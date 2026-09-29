@@ -366,7 +366,9 @@ public enum DatabaseLinkedData {
       guard sqlite3_column_bytes(statement, index) <= maximumSQLiteCellBytes else {
         throw DatabaseLinkedDataError.sqliteResultTooLarge
       }
-      return sqlite3_column_text(statement, index).map(String.init(cString:)) ?? ""
+      guard let bytes = sqlite3_column_text(statement, index) else { return "" }
+      return String(decoding: UnsafeBufferPointer(start: bytes,
+        count: Int(sqlite3_column_bytes(statement, index))), as: UTF8.self)
     case SQLITE_BLOB:
       let count = Int(sqlite3_column_bytes(statement, index))
       guard count <= maximumSQLiteCellBytes * 3 / 4 else {

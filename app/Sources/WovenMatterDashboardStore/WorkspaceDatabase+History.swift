@@ -160,17 +160,20 @@ extension WorkspaceDatabaseConnection {
           """)
         var redactionCursor = 0
         while true {
-          let payloads = try historyRowsUnlocked("""
-            SELECT sequence,payload FROM workspace_history_events
+          // Keep only page identities alive: legacy wire payloads can each be
+          // large, so retaining 500 full bodies here creates a startup memory spike.
+          let identities = try historyRowsUnlocked("""
+            SELECT sequence FROM workspace_history_events
             WHERE sequence>? AND (instr(lower(payload),'wmtools-')>0 OR instr(lower(payload),'.wmt')>0)
             ORDER BY sequence LIMIT 500
             """, values: [String(redactionCursor)])
-          guard !payloads.isEmpty else { break }
-          for row in payloads {
-            guard let object = row.objectValue,
-                  let sequence = object["sequence"]?.intValue,
-                  let payload = object["payload"]?.stringValue else { continue }
+          guard !identities.isEmpty else { break }
+          for row in identities {
+            guard let sequence = row.objectValue?["sequence"]?.intValue else { continue }
             redactionCursor = max(redactionCursor, sequence)
+            guard let payload = try historyRowsUnlocked(
+              "SELECT payload FROM workspace_history_events WHERE sequence=?", values: [String(sequence)])
+                .first?.objectValue?["payload"]?.stringValue else { continue }
             let redacted = WorkspaceHistoryPrivacy.redactingToolEndpoints(payload)
             if redacted != payload {
               try toolsExecuteUnlocked("UPDATE workspace_history_events SET payload=? WHERE sequence=?",
@@ -418,16 +421,16 @@ extension WorkspaceDatabaseConnection {
       }
       sql = """
         SELECT e.sequence,e.id,e.conversation_id,e.run_id,e.agent_id,e.harness,e.kind,
-          e.completeness,e.recorded_at,length(e.payload) AS payload_characters,
-          CASE WHEN length(e.payload)<=8192 THEN e.payload ELSE NULL END AS payload
+          e.completeness,e.recorded_at,woven_text_length(e.payload) AS payload_characters,
+          CASE WHEN woven_text_length(e.payload)<=8192 THEN e.payload ELSE NULL END AS payload
         FROM workspace_history_events e WHERE
         """ + " " + filters.joined(separator: " AND ") + " ORDER BY e.sequence"
     case "event":
       guard let id = query.id else { throw WorkspaceDatabaseError.open("event requires an ID") }
       sql = """
-        SELECT sequence,id,length(payload) AS payload_characters,? AS payload_offset,
-          CASE WHEN length(payload)>?+? THEN 1 ELSE 0 END AS payload_has_more,
-          substr(payload,?,?) AS payload FROM workspace_history_events WHERE id=? ORDER BY sequence
+        SELECT sequence,id,woven_text_length(payload) AS payload_characters,? AS payload_offset,
+          CASE WHEN woven_text_length(payload)>?+? THEN 1 ELSE 0 END AS payload_has_more,
+          woven_text_substr(payload,?,?) AS payload FROM workspace_history_events WHERE id=? ORDER BY sequence
         """
       values = [String(query.offset), String(query.offset), String(query.characters),
         String(query.offset + 1), String(query.characters), id]
@@ -454,12 +457,12 @@ extension WorkspaceDatabaseConnection {
         throw WorkspaceDatabaseError.open("conversation requires an ID")
       }
       sql =
-        "SELECT m.rowid AS sequence,m.id,m.conversation_id,m.run_id,m.role,substr(m.content,?,?) AS content,length(m.content) AS content_characters,? AS content_offset,CASE WHEN length(m.content)>?+? THEN 1 ELSE 0 END AS content_has_more,m.status,m.created_at, d.source_id AS sender_session_id,d.source_agent AS sender_agent,d.source_title AS sender_session_title FROM dashboard_messages m LEFT JOIN workspace_session_deliveries d ON d.message_id=m.id WHERE m.conversation_id=? AND m.rowid>? ORDER BY m.rowid"
+        "SELECT m.rowid AS sequence,m.id,m.conversation_id,m.run_id,m.role,woven_text_substr(m.content,?,?) AS content,woven_text_length(m.content) AS content_characters,? AS content_offset,CASE WHEN woven_text_length(m.content)>?+? THEN 1 ELSE 0 END AS content_has_more,m.status,m.created_at, d.source_id AS sender_session_id,d.source_agent AS sender_agent,d.source_title AS sender_session_title FROM dashboard_messages m LEFT JOIN workspace_session_deliveries d ON d.message_id=m.id WHERE m.conversation_id=? AND m.rowid>? ORDER BY m.rowid"
       values = [String(query.offset + 1), String(query.characters), String(query.offset),
         String(query.offset), String(query.characters), id, String(query.after)]
     case "message":
       guard let id = query.id else { throw WorkspaceDatabaseError.open("message requires an ID") }
-      sql = "SELECT rowid AS sequence,id,conversation_id,length(content) AS content_characters,? AS content_offset,CASE WHEN length(content)>?+? THEN 1 ELSE 0 END AS content_has_more,substr(content,?,?) AS content FROM dashboard_messages WHERE id=? ORDER BY rowid"
+      sql = "SELECT rowid AS sequence,id,conversation_id,woven_text_length(content) AS content_characters,? AS content_offset,CASE WHEN woven_text_length(content)>?+? THEN 1 ELSE 0 END AS content_has_more,woven_text_substr(content,?,?) AS content FROM dashboard_messages WHERE id=? ORDER BY rowid"
       values = [String(query.offset), String(query.offset), String(query.characters),
         String(query.offset + 1), String(query.characters), id]
     case "runs":
@@ -482,7 +485,7 @@ extension WorkspaceDatabaseConnection {
       guard let id = query.id else {
         throw WorkspaceDatabaseError.open("version requires a version ID")
       }
-      sql = "SELECT sequence,id,note_id,title,revision,source,bytes,created_at,length(content) AS content_characters,? AS content_offset,CASE WHEN length(content)>?+? THEN 1 ELSE 0 END AS content_has_more,substr(content,?,?) AS content FROM note_asset_versions WHERE id=? ORDER BY sequence"
+      sql = "SELECT sequence,id,note_id,title,revision,source,bytes,created_at,woven_text_length(content) AS content_characters,? AS content_offset,CASE WHEN woven_text_length(content)>?+? THEN 1 ELSE 0 END AS content_has_more,woven_text_substr(content,?,?) AS content FROM note_asset_versions WHERE id=? ORDER BY sequence"
       values = [String(query.offset), String(query.offset), String(query.characters),
         String(query.offset + 1), String(query.characters), id]
     default: throw WorkspaceDatabaseError.open("Unknown read-only history command")

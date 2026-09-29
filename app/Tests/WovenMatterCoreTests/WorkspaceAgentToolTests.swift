@@ -132,6 +132,22 @@ struct WorkspaceAgentToolTests {
     }
   }
 
+  @Test func linkedSQLitePreservesEmbeddedNULTextAndBudgetsItsSuffix() async throws {
+    let (db, dir, _, _) = try await fixture()
+    _ = db
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let url = dir.appending(path: "workspace.sqlite")
+    let table = try DatabaseLinkedData.load(from: url, preference: .sqlite,
+      sqliteQuery: "SELECT 'before'||char(0)||'after 🪡' AS value")
+    #expect(table.rows == [["before\0after 🪡"]])
+    let object = try JSONSerialization.jsonObject(with: Data(table.json.utf8)) as? [[String: String]]
+    #expect(object?.first?["value"] == "before\0after 🪡")
+    #expect(throws: DatabaseLinkedDataError.sqliteResultTooLarge) {
+      try DatabaseLinkedData.load(from: url, preference: .sqlite,
+        sqliteQuery: "WITH n(x) AS (VALUES(1),(2),(3)) SELECT char(0)||replace(hex(zeroblob(100000)),'0',char(1)) AS value FROM n")
+    }
+  }
+
   @Test func sqliteResultBudgetsIncludeJSONEscaping() async throws {
     let control = String(repeating: "\u{0001}", count: 200_000)
     #expect(throws: DatabaseLinkedDataError.sqliteResultTooLarge) {

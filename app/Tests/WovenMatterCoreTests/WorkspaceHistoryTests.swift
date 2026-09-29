@@ -32,6 +32,34 @@ struct WorkspaceHistoryTests {
       .allSatisfy { $0.objectValue?["payload"]?.stringValue?.contains("streaming") == false })
   }
 
+  @Test func legacyEndpointScrubbingCrossesIdentityPageBoundary() async throws {
+    let url = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: url) }
+    let endpoint = "/private/tmp/wmtools-" + String(repeating: "a", count: 32)
+      + "/" + String(repeating: "b", count: 32) + ".sock"
+    do {
+      let database = try await WorkspaceDatabase(url: url.appending(path: "workspace.sqlite"))
+      try await database.write { connection in
+        try connection.transaction {
+          try connection.executeUnlocked("DELETE FROM workspace_history_schema WHERE version=2")
+          for index in 0..<501 {
+            try connection.toolsExecuteUnlocked("INSERT INTO workspace_history_events(id,harness,kind,payload) VALUES(?,?,?,?)",
+              ["legacy-page-\(index)", "pi", "wire.in", "retained-marker-\(index) " + endpoint])
+          }
+        }
+      }
+    }
+    let reopened = try await WorkspaceDatabase(url: url.appending(path: "workspace.sqlite"))
+    let counts = try await reopened.read { connection in
+      try connection.historyRowsUnlocked("SELECT count(*) AS total,sum(instr(payload,?)>0) AS leaked,sum(instr(payload,'[Woven Matter session tool endpoint]')>0) AS scrubbed FROM workspace_history_events WHERE id LIKE 'legacy-page-%'", values: [endpoint])
+    }
+    #expect(counts.first?.objectValue?["total"]?.intValue == 501)
+    #expect(counts.first?.objectValue?["leaked"]?.intValue == 0)
+    #expect(counts.first?.objectValue?["scrubbed"]?.intValue == 501)
+    #expect(!rows(try await reopened.queryHistory(.init(command: "search", search: "retained-marker-500"))).isEmpty)
+  }
+
   @Test func uppercaseSessionEndpointsAreRedacted() {
     let owner = String(repeating: "A", count: 32)
     let endpoint = String(repeating: "B", count: 32)

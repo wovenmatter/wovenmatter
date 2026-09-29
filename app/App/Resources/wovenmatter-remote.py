@@ -13,7 +13,7 @@ import time
 import uuid
 
 REQUEST_LIMIT = 4 * 1024 * 1024
-RESPONSE_LIMIT = 32 * 1024 * 1024
+RESPONSE_LIMIT = 1024 * 1024
 # The Swift forwarder has a 55s total deadline; leave time for SSH replies.
 RELAY_TIMEOUT = 75
 CLI_TIMEOUT = 90
@@ -104,11 +104,28 @@ def run_cli(arguments):
         if not result.get("silent", False):
             sys.stdout.buffer.write(response + b"\n")
         return 0 if result.get("success", False) else 1
-    except (OSError, ValueError) as error:
+    except (OSError, ValueError, RecursionError) as error:
         # A lost reply is not permission to create a new mutation identity.
         print(json.dumps({"success": False, "error": str(error), "silent": False,
-                          "requestID": json.loads(request)["requestID"]}))
+                          "code": "transport_error", "requestID": json.loads(request)["requestID"]}))
         return 1
+
+
+def reject_busy(connection):
+    # Match the local endpoint: refuse before dispatch, then drain the caller's
+    # request so closing unread input does not turn the busy reply into EPIPE.
+    deadline = time.monotonic() + 0.25
+    try:
+        connection.settimeout(0.25)
+        connection.sendall(json.dumps({"success": False, "silent": False,
+                                      "error": "The tool service is busy. Retry later.",
+                                      "code": "busy"}).encode())
+        connection.shutdown(socket.SHUT_WR)
+        receive_all(connection, REQUEST_LIMIT, timeout=deadline - time.monotonic())
+    except (OSError, ValueError):
+        pass
+    finally:
+        connection.close()
 
 
 def run_relay(directory):
@@ -161,22 +178,30 @@ def run_relay(directory):
     def forward(connection):
         identity = str(uuid.uuid4())
         request_id = None
+        error_code = "invalid_request"
         try:
             connection.settimeout(RELAY_TIMEOUT)
             data = receive_all(connection, REQUEST_LIMIT)
             request = json.loads(data)
             if not isinstance(request, dict):
                 raise ValueError("A tool request must be a JSON object.")
-            request_id = request.get("requestID")
+            raw_request_id = request.get("requestID")
+            if not isinstance(raw_request_id, str):
+                raise ValueError("A tool request requires a UUID requestID.")
+            try:
+                request_id = str(uuid.UUID(raw_request_id))
+            except ValueError:
+                raise ValueError("A tool request requires a UUID requestID.") from None
+            error_code = "transport_error"
             waiter = queue.Queue(maxsize=1)
             with lock:
                 pending[identity] = waiter
             write_packet({"id": identity, "payload": base64.b64encode(data).decode("ascii")})
             response = waiter.get(timeout=RELAY_TIMEOUT)
             connection.sendall(response)
-        except (OSError, ValueError, queue.Empty) as error:
+        except (OSError, ValueError, RecursionError, queue.Empty) as error:
             try:
-                connection.sendall(json.dumps({"success": False, "error": str(error) or "The tool relay timed out.", "silent": False, "requestID": request_id}).encode())
+                connection.sendall(json.dumps({"success": False, "error": str(error) or "The tool relay timed out.", "silent": False, "code": error_code, "requestID": request_id}).encode())
             except OSError:
                 pass
         finally:
@@ -199,7 +224,7 @@ def run_relay(directory):
                 except socket.timeout:
                     continue
                 if not capacity.acquire(blocking=False):
-                    connection.close()
+                    reject_busy(connection)
                     continue
                 with lock:
                     connections.add(connection)
