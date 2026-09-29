@@ -15,6 +15,26 @@ and runtime binaries are build products, not checked into Git. Remote deployment
 archives include only the helper's source and package manifests; local binaries,
 dependencies, tests, and build caches are not uploaded.
 
+SDK management is scoped to the executing location. Installed-version reads use
+package metadata only; registry checks and updates are explicit user actions.
+The macOS bundle includes npm alongside its pinned Node distribution so updates
+do not depend on a user-installed package manager. Installation occurs under
+`<agent-directory>/sdk-runtime/generations`, outside the signed app bundle.
+Updates stage a complete locked dependency graph, keep the two Pi packages
+aligned, disable npm lifecycle scripts, and verify required SDK exports before
+atomically activating an immutable generation. Existing generations remain
+available to running helpers. A helper-source fingerprint prevents an app
+update from selecting an older copied helper implementation.
+
+Local ACP starts through `main.mjs`, which selects a generation before importing
+SDK code. The remote HTTP service delegates Built-in execution to a managed child
+process, retaining credentials only in the existing private process boundary.
+It waits for active work and admission leases before switching generations;
+scheduled runs hold a lease through setup and completion. SDK commands use the
+same authenticated workspace connection as other maintenance operations. The
+native background service owns update jobs across settings navigation; status,
+progress, and errors are scoped to their workspace.
+
 `DefaultAgentSettingsScope` stores non-secret preferences and per-workspace
 replacements. API keys and owned OAuth credentials use macOS Keychain.
 Connections is the central account management surface for Built-in, Usage,
