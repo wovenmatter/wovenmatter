@@ -889,9 +889,11 @@ public actor LocalACPSessionCoordinator {
         dispatchFence: AgentDispatchFence? = nil
     ) async throws -> LocalACPSteeringIdentifiers {
         try dispatchFence?.check()
+        let requestedRunID = runIDsByConversation[conversationID]
         await acquireSteeringLock(conversationID: conversationID)
         defer { releaseSteeringLock(conversationID: conversationID) }
         guard let runID = runIDsByConversation[conversationID],
+              runID == requestedRunID,
               acceptingActiveInputRunIDs.contains(runID),
               !cancellationRequestedRunIDs.contains(runID),
               let streamWriter = await streamWriter(runID: runID),
