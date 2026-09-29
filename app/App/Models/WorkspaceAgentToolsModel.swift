@@ -253,6 +253,7 @@ final class WorkspaceAgentToolsModel {
     }
 
     func saveSettings(_ value: WorkspaceToolSettings) {
+        reloadGeneration &+= 1
         if passiveProjection { settings = value; enqueue(.saveSettings(value)); return }
         do { try database.saveToolSettings(value); settings = value; error = nil }
         catch { self.error = error.localizedDescription }

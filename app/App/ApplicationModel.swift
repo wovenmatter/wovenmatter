@@ -1082,7 +1082,7 @@ final class ApplicationModel {
                 apply(snapshot)
             }
             guard self.dashboardStore === dashboardStore, generation == workspaceRefreshGeneration, !Task.isCancelled else { return }
-            let nativeDirectories = await dashboardStore.sessionNativeWorkingDirectories(
+            let nativeDirectories = try await dashboardStore.sessionNativeWorkingDirectories(
                 ids: (workspaceOverview?.conversations ?? []).map(\.id))
             guard self.dashboardStore === dashboardStore, generation == workspaceRefreshGeneration, !Task.isCancelled else { return }
             let libraryLocations = (workspaceOverview?.conversations ?? []).map { conversation in
@@ -2076,7 +2076,7 @@ final class ApplicationModel {
             try dashboardStore.database.attachConversationReference(sourceID: conversation.id, targetID: reference.resourceID)
         }
         var context: AgentNoteContext?
-        if let note, try await dashboardStore.database.readForPresentation({ try $0.sessionTools(conversation.id) }).enabled.contains(.notes) {
+        if let note, try await dashboardStore.database.sessionTools(conversation.id).enabled.contains(.notes) {
             guard self.dashboardStore === dashboardStore, self.agentTools === agentTools, !backendStopping else { throw CancellationError() }
             guard flushNoteDrafts() else { throw ApplicationModelError.noteDraftSaveFailed }
             let response = try dashboardStore.database.readNoteForEditing(id: note.id, callerConversationID: conversation.id)

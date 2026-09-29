@@ -10,10 +10,10 @@ struct OpenClawScheduledResultTests {
     let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: root) }
-    let store = try DashboardStore(supportDirectory: root)
+    let store = try await DashboardStore(supportDirectory: root)
     let db = store.database
-    _ = try db.createLocalACPSession(runtimeKind: .openclaw, title: "Seed", ownerDeviceID: UUID())
-    let agentID = try #require(db.dashboardAgents().first).id
+    _ = try await db.createLocalACPSession(runtimeKind: .openclaw, title: "Seed", ownerDeviceID: UUID())
+    let agentID = try #require(await db.dashboardAgents().first).id
     let jobs = ["frequent", "quiet"].map {
       OpenClawCronJob(id: $0, agentID: agentID, name: $0, schedule: "daily", enabled: true, remotePayload: Data())
     }
@@ -23,7 +23,7 @@ struct OpenClawScheduledResultTests {
     }
     runs.append(OpenClawCronRun(id: "quiet-run", jobID: "quiet", agentID: agentID, status: "ok",
       completedAt: Date(timeIntervalSince1970: 1), remotePayload: Data()))
-    try db.replaceOpenClawCronSnapshot(agentID: agentID, jobs: jobs, runs: runs)
+    try await db.replaceOpenClawCronSnapshot(agentID: agentID, jobs: jobs, runs: runs)
     let initial = try await store.openClawCronPresentation(limits: [:])
     let key = DashboardStore.openClawCronHistoryKey(agentID: agentID, jobID: "frequent")
     #expect(initial.runs.filter { $0.jobID == "frequent" }.count == 50)
@@ -32,8 +32,8 @@ struct OpenClawScheduledResultTests {
     let expanded = try await store.openClawCronPresentation(limits: [key: 100])
     #expect(expanded.runs.count == 56)
     #expect(expanded.hasOlder.isEmpty)
-    #expect(try db.openClawCronRuns(agentID: agentID).count == 56)
-    #expect(try db.openClawCronRuns(agentID: agentID, jobID: "frequent", limit: 1).first?.id == "run-54")
+    #expect(try await db.openClawCronRuns(agentID: agentID).count == 56)
+    #expect(try await db.openClawCronRuns(agentID: agentID, jobID: "frequent", limit: 1).first?.id == "run-54")
   }
 
   @Test func retainedResultsSurviveSummaryRefreshAndDeliverOnceAcrossRestartAndDeletion() throws {

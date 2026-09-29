@@ -528,38 +528,24 @@ public actor DashboardStore {
     agentID.uuidString.lowercased() + "/" + jobID
   }
 
-  public func openClawCronPresentation(limits: [String: Int]) throws -> (
+  public func openClawCronPresentation(limits: [String: Int]) async throws -> (
     jobs: [OpenClawCronJob], runs: [OpenClawCronRun], hasOlder: Set<String>, routes: [UUID: [String: String]]
   ) {
-    let jobs = try database.openClawCronJobs()
-    var runs: [OpenClawCronRun] = []
-    var hasOlder: Set<String> = []
-    var routes: [UUID: [String: String]] = [:]
-    for job in jobs {
-      let key = Self.openClawCronHistoryKey(agentID: job.agentID, jobID: job.id)
-      let limit = max(1, min(limits[key] ?? 50, Int.max - 1))
-      let page = try database.openClawCronRuns(agentID: job.agentID, jobID: job.id, limit: limit + 1)
-      runs.append(contentsOf: page.prefix(limit))
-      if page.count > limit { hasOlder.insert(key) }
-      if routes[job.agentID] == nil { routes[job.agentID] = try database.openClawResultRoutes(agentID: job.agentID) }
-    }
-    return (jobs, runs, hasOlder, routes)
+    try await database.openClawCronPresentation(limits: limits)
   }
 
-  public func hermesResultRoutes(agentID: UUID) throws -> [String: String] {
-    try database.hermesResultRoutes(agentID: agentID)
+  public func hermesResultRoutes(agentID: UUID) async throws -> [String: String] {
+    try await database.hermesResultRoutes(agentID: agentID)
   }
 
   public func collectHermesResult(agentID: UUID, jobID: String, runID: String, title: String, output: String,
-                                 ownerDeviceID: UUID, remoteWorkspaceID: UUID?, remoteWorkspaceName: String) throws {
-    _ = try database.collectHermesResult(agentID: agentID, jobID: jobID, runID: runID, title: title, output: output,
+                                 ownerDeviceID: UUID, remoteWorkspaceID: UUID?, remoteWorkspaceName: String) async throws {
+    _ = try await database.collectHermesResult(agentID: agentID, jobID: jobID, runID: runID, title: title, output: output,
       ownerDeviceID: ownerDeviceID, remoteWorkspaceID: remoteWorkspaceID, remoteWorkspaceName: remoteWorkspaceName)
   }
 
-  public func sessionNativeWorkingDirectories(ids: [String]) -> [String: String] {
-    var result: [String: String] = [:]
-    for id in ids { result[id] = (try? database.toolSessionCreationConfiguration(targetID: id))?.nativeWorkingDirectory }
-    return result
+  public func sessionNativeWorkingDirectories(ids: [String]) async throws -> [String: String] {
+    try await database.sessionNativeWorkingDirectories(ids: ids)
   }
 
   public func emptyOpenClawCronTrash(agentID: UUID? = nil) throws {
