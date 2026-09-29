@@ -32,6 +32,9 @@ final class OpenCodeModel {
     var applyInitialSessionTools: ((String, [String]) async throws -> Void)?
     var backendSessionRevisions: [String: UInt64] = [:]
     private var hydratedBackendRevisions: [String: UInt64] = [:]
+    private var backendSnapshotToken = UUID()
+    private var backendCommandGeneration = UUID()
+    var backendSnapshotGeneration: UUID { backendSnapshotToken }
     var links: [String: OpenCodeSessionLink] = [:]
     var snapshots: [String: OpenCodeSessionSnapshot] = [:]
     var uncertainSubmissions: [String: [OpenCodeValue]] = [:]
@@ -134,8 +137,16 @@ final class OpenCodeModel {
             for await update in coordinator.updates {
                 guard let self, !Task.isCancelled else { return }
                 guard update.status == "Disconnected" || (self.isEnabled && !self.serverStopped && !self.quitting) else { continue }
-                if let snapshot = update.snapshot { self.snapshots[update.conversationID] = try? await store.database.openCodeDisplaySnapshot(snapshot, conversationID: update.conversationID) }
-                self.uncertainSubmissions[update.conversationID] = try? await store.database.openCodeUncertainSubmissions(conversationID: update.conversationID)
+                let generation = self.connectionGeneration
+                let display: OpenCodeSessionSnapshot?
+                if let snapshot = update.snapshot {
+                    display = try? await store.database.openCodeDisplaySnapshot(snapshot, conversationID: update.conversationID)
+                } else { display = nil }
+                let uncertain = try? await store.database.openCodeUncertainSubmissions(conversationID: update.conversationID)
+                guard !Task.isCancelled, generation == self.connectionGeneration,
+                      update.status == "Disconnected" || (self.isEnabled && !self.serverStopped && !self.quitting) else { continue }
+                if let display { self.snapshots[update.conversationID] = display }
+                self.uncertainSubmissions[update.conversationID] = uncertain
                 self.statuses[update.conversationID] = update.status
                 self.errors[update.conversationID] = update.error
                 self.backendSessionRevisions[update.conversationID, default: 0] &+= 1
@@ -703,8 +714,10 @@ extension OpenCodeModel {
             defaultModels: defaultModels.filter { $0.key == catalogSessionID },
             models: models.filter { $0.key == catalogSessionID }, commands: commands.filter { $0.key == catalogSessionID })
     }
-    func applyBackendSnapshot(_ value: BackendSnapshot) {
+    func applyBackendSnapshot(_ value: BackendSnapshot, expectedGeneration: UUID? = nil) {
         guard isBackendProjection else { return }
+        if let expectedGeneration, expectedGeneration != backendSnapshotToken { return }
+        backendSnapshotToken = UUID()
         applyingBackendSnapshot = true
         defer { applyingBackendSnapshot = false }
         if links != value.links { links = value.links }; backendSessionRevisions = value.sessionRevisions; if statuses != value.statuses { statuses = value.statuses }; if errors != value.errors { errors = value.errors }
@@ -723,13 +736,15 @@ extension OpenCodeModel {
     }
     func hydrateBackendSessions(_ ids: Set<String>) async {
         guard isBackendProjection else { return }
-        for id in ids where links[id] != nil {
+        for id in ids {
+            guard let link = links[id], !Task.isCancelled else { continue }
             let revision = backendSessionRevisions[id] ?? 0
             guard hydratedBackendRevisions[id] != revision else { continue }
             if let snapshot = try? await store.database.openCodeSnapshot(conversationID: id),
                let display = try? await store.database.openCodeDisplaySnapshot(snapshot, conversationID: id) {
                 let uncertain = try? await store.database.openCodeUncertainSubmissions(conversationID: id)
-                guard backendSessionRevisions[id] == revision else { continue }
+                guard !Task.isCancelled, links[id] == link,
+                      (backendSessionRevisions[id] ?? 0) == revision else { continue }
                 if snapshots[id] != display { snapshots[id] = display }
                 uncertainSubmissions[id] = uncertain
                 hydratedBackendRevisions[id] = revision
@@ -739,9 +754,16 @@ extension OpenCodeModel {
     func backendCommand(_ command: BackendOpenCodeCommand) async throws -> BackendOpenCodeResponse {
         guard let backendRequest else { throw OpenCodeError.message("The execution backend is unavailable.") }
         let request = BackendOpenCodeRequest(workspaceID: remoteConfiguration?.id, command: command)
+        let generation = UUID()
+        backendSnapshotToken = generation
+        backendCommandGeneration = generation
         let data = try await backendRequest("opencode.command", JSONEncoder().encode(request))
         let response = try JSONDecoder().decode(BackendOpenCodeResponse.self, from: data)
-        applyBackendSnapshot(response.snapshot)
+        if backendCommandGeneration == generation {
+            // A passive snapshot arriving during this command must not hide
+            // its eventual result. A newer command still supersedes it.
+            applyBackendSnapshot(response.snapshot)
+        }
         return response
     }
     func watch(_ link: OpenCodeSessionLink) async {

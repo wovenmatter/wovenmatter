@@ -26,6 +26,9 @@ public actor OpenClawGatewayCoordinator {
     var eventFence = GatewayStreamEventFence()
     var assistantSource = GatewayAssistantStreamSource()
     var cancelRequested = false
+    // Recovered runs have already reached the Gateway. New admissions opt out
+    // until their driver is ready to make the first native request.
+    var dispatchStarted = true
     var fallbackSequence = 0
     var liveToolCallIDs: Set<String> = []
     var remoteRunIDs: Set<String>
@@ -65,6 +68,9 @@ public actor OpenClawGatewayCoordinator {
     UUID: Task<OpenClawGatewayClient, any Error>
   ] = [:]
   private var activeRuns: [String: ActiveRun] = [:]
+  private var admittingConversations: Set<String> = []
+  private var cancelledAdmissions: Set<String> = []
+  private var recoveringConversations: Set<String> = []
   private var runTasks: [String: Task<Void, any Error>] = [:]
   private var activeInputTasksByRunID: [
     String: [ActiveInputTask]
@@ -266,7 +272,19 @@ public actor OpenClawGatewayCoordinator {
     onPermission: PermissionHandler? = nil,
     onUpdate: UpdateHandler? = nil
   ) async throws -> LocalACPRunIdentifiers {
+    guard !isShuttingDown else { throw CancellationError() }
+    guard !activeRuns.values.contains(where: { $0.conversationID == conversationID }),
+          !recoveringConversations.contains(conversationID),
+          admittingConversations.insert(conversationID).inserted else {
+      throw LocalACPSessionDatabaseError.runAlreadyActive
+    }
+    defer {
+      admittingConversations.remove(conversationID)
+      cancelledAdmissions.remove(conversationID)
+    }
     let descriptor = try await database.openClawGatewaySession(conversationID: conversationID)
+    try Task.checkCancellation()
+    guard !isShuttingDown, !cancelledAdmissions.contains(conversationID) else { throw CancellationError() }
     let capabilities: OpenClawGatewayCapabilities?
     if runExecutor == nil {
       capabilities = try await client(agentID: descriptor.agentID).connect()
@@ -308,13 +326,15 @@ public actor OpenClawGatewayCoordinator {
     guard !isShuttingDown else { throw CancellationError() }
     let descriptor = try await database.openClawGatewaySession(conversationID: conversationID)
     try Task.checkCancellation()
-    guard !isShuttingDown else { throw CancellationError() }
+    guard !isShuttingDown, !cancelledAdmissions.contains(conversationID) else { throw CancellationError() }
     let run = try await database.beginLocalACPRun(
       conversationID: conversationID,
       input: input,
       noteContext: noteContext
     )
-    guard !isShuttingDown, !Task.isCancelled else {
+    guard !isShuttingDown, !Task.isCancelled, !cancelledAdmissions.contains(conversationID) else {
+      // The write may have committed while Stop was waiting on this actor.
+      // Its terminal write survives caller cancellation and precedes rejection.
       try await database.cancelLocalACPRun(runID: run.runID)
       throw CancellationError()
     }
@@ -325,6 +345,7 @@ public actor OpenClawGatewayCoordinator {
       sessionKey: descriptor.sessionKey,
       onUpdate: onUpdate,
       onPermission: onPermission,
+      dispatchStarted: false,
       remoteRunIDs: [run.runID],
       lastRemoteRunID: run.runID,
       assistantMessageIDsByRemoteRunID: [run.runID: run.assistantMessageID]
@@ -352,13 +373,21 @@ public actor OpenClawGatewayCoordinator {
   ) async throws {
     defer { finishTracking(runID: run.runID) }
     do {
+      let client = runExecutor == nil ? try await self.client(agentID: agentID) : nil
+      guard !isShuttingDown, !Task.isCancelled,
+            activeRuns[run.runID]?.cancelRequested == false else {
+        try await database.cancelLocalACPRun(runID: run.runID)
+        await publishUpdate(runID: run.runID, phase: .terminal)
+        return
+      }
+      activeRuns[run.runID]?.dispatchStarted = true
       if let runExecutor {
         try await runExecutor(run.runID, agentID, sessionKey, content)
         try await database.completeLocalACPRun(runID: run.runID)
         await publishUpdate(runID: run.runID, phase: .terminal)
         return
       }
-      let client = try await client(agentID: agentID)
+      guard let client else { throw OpenClawGatewayClientError.connectionClosed }
       let receipt = try await client.request("chat.send", params: .object(
         Self.chatSendParameters(
           sessionKey: sessionKey,
@@ -432,6 +461,17 @@ public actor OpenClawGatewayCoordinator {
       }
       await publishUpdate(runID: run.runID, phase: .terminal)
     } catch {
+      if let active = activeRuns[run.runID], !active.dispatchStarted {
+        // Nothing reached the Gateway, so there is no remote work to recover.
+        if Task.isCancelled || isShuttingDown || active.cancelRequested {
+          try await database.cancelLocalACPRun(runID: run.runID)
+          await publishUpdate(runID: run.runID, phase: .terminal)
+          return
+        }
+        try await database.completeLocalACPRun(runID: run.runID, error: error.localizedDescription)
+        await publishUpdate(runID: run.runID, phase: .terminal)
+        throw error
+      }
       if Task.isCancelled { return } // App shutdown does not cancel Gateway-owned execution.
       if Self.isRecoverableDeliveryError(error), let conversationID = activeRuns[run.runID]?.conversationID {
         await observeRecoveredRun(run: run, conversationID: conversationID)
@@ -534,7 +574,11 @@ public actor OpenClawGatewayCoordinator {
   }
 
   public func cancel(conversationID: String) async throws {
-    guard let active = activeRuns.values.first(where: {
+    if admittingConversations.contains(conversationID) {
+      cancelledAdmissions.insert(conversationID)
+      return
+    }
+    guard var active = activeRuns.values.first(where: {
       $0.conversationID == conversationID
     }) else {
       let descriptor = try await database.openClawGatewaySession(conversationID: conversationID)
@@ -542,6 +586,11 @@ public actor OpenClawGatewayCoordinator {
         "key": .string(descriptor.sessionKey), "clearQueued": .bool(true)
       ]))
       _ = try await synchronizeSession(conversationID: conversationID)
+      return
+    }
+    if !active.dispatchStarted {
+      active.cancelRequested = true
+      activeRuns[active.runID] = active
       return
     }
     let client = try await client(agentID: active.agentID)
@@ -2278,9 +2327,16 @@ public actor OpenClawGatewayCoordinator {
   }
 
   func recoverSessionRuns(conversationID: String, history: OpenClawGatewayHistory) async throws {
+    // Recovery and admission must retain exclusive ownership while SQL yields.
+    // Otherwise an older idle history can close a newly admitted or recovered run.
+    guard !isShuttingDown, !admittingConversations.contains(conversationID),
+          recoveringConversations.insert(conversationID).inserted else { return }
+    defer { recoveringConversations.remove(conversationID) }
     for run in try await database.interruptedOpenClawRuns(conversationID: conversationID)
     where activeRuns[run.runID] == nil {
       var inputs = try await database.openClawRunAssistantIDs(runID: run.runID)
+      try Task.checkCancellation()
+      guard !isShuttingDown, activeRuns[run.runID] == nil else { continue }
       if inputs.isEmpty { inputs[run.runID] = run.assistantMessageID }
       let latestRemoteID = inputs.first { $0.value == run.assistantMessageID }?.key ?? run.runID
       // Observe recovery by session. Never resend an input on ambiguous acceptance.
