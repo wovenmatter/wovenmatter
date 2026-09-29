@@ -1,4 +1,5 @@
 import Foundation
+import WovenMatterCore
 
 /// Provider-supplied presentation kept separate from the exact selection ID.
 public struct SessionOptionMetadata: Codable, Equatable, Sendable {
@@ -144,6 +145,26 @@ public struct LocalACPSessionMetadata: Codable, Equatable, Sendable {
             let value = $0.trimmingCharacters(in: .whitespacesAndNewlines)
             return !value.isEmpty && seen.insert(value).inserted ? value : nil
         }
+    }
+}
+
+/// Restored native chats may appear before their local or remote launch context.
+/// Include readiness in the SwiftUI task key so discovery completion retries a
+/// skipped refresh, without polling or restarting on unchanged runtime snapshots.
+public struct LocalACPSessionMetadataTaskIdentity: Hashable, Sendable {
+    private let conversationID: String
+    private let runtimeKind: AgentRuntimeKind
+    private let launchAvailable: Bool?
+
+    public init?(conversationID: String, runtimeKind: AgentRuntimeKind?,
+                 usesOpenClawGateway: Bool, launchAvailable: @autoclosure () -> Bool) {
+        guard let runtimeKind else { return nil }
+        self.conversationID = conversationID
+        self.runtimeKind = runtimeKind
+        // These paths watch an existing native session or gateway connection.
+        // Do not observe unrelated CLI launch state for either one.
+        self.launchAvailable = runtimeKind == .opencode || usesOpenClawGateway
+            ? nil : launchAvailable()
     }
 }
 
