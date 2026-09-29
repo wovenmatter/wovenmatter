@@ -1126,13 +1126,15 @@ public actor LocalACPClient {
         _ text: String,
         onEvent: EventHandler? = nil,
         onPermission: PermissionHandler? = nil,
-        onInteraction: InteractionHandler? = nil
+        onInteraction: InteractionHandler? = nil,
+        dispatchFence: AgentDispatchFence? = nil
     ) async throws -> LocalACPStopReason {
         try await prompt(
             AgentMessageInput(text: text),
             onEvent: onEvent,
             onPermission: onPermission,
-            onInteraction: onInteraction
+            onInteraction: onInteraction,
+            dispatchFence: dispatchFence
         )
     }
 
@@ -1140,14 +1142,17 @@ public actor LocalACPClient {
         _ input: AgentMessageInput,
         onEvent: EventHandler? = nil,
         onPermission: PermissionHandler? = nil,
-        onInteraction: InteractionHandler? = nil
+        onInteraction: InteractionHandler? = nil,
+        dispatchFence: AgentDispatchFence? = nil
     ) async throws -> LocalACPStopReason {
+        try dispatchFence?.check()
         sessionCancellationRequested = false
         return try await beginPrompt(
             input,
             onEvent: onEvent,
             onPermission: onPermission,
-            onInteraction: onInteraction
+            onInteraction: onInteraction,
+            dispatchFence: dispatchFence
         ).value
     }
 
@@ -1155,18 +1160,21 @@ public actor LocalACPClient {
     /// Returns on admission; the receipt retains any continuation's completion.
     /// Never cancel the current prompt to simulate steering.
     public func beginActiveInput(
-        _ text: String
+        _ text: String,
+        dispatchFence: AgentDispatchFence? = nil
     ) async throws -> LocalACPActiveInputReceipt {
-        try await beginActiveInput(AgentMessageInput(text: text))
+        try await beginActiveInput(AgentMessageInput(text: text), dispatchFence: dispatchFence)
     }
 
     public func beginActiveInput(
-        _ input: AgentMessageInput
+        _ input: AgentMessageInput,
+        dispatchFence: AgentDispatchFence? = nil
     ) async throws -> LocalACPActiveInputReceipt {
+        try dispatchFence?.check()
         guard let sessionID else {
             throw LocalACPClientError.sessionNotInitialized
         }
-        guard !sessionCancellationRequested else { throw CancellationError() }
+        guard !sessionCancellationRequested else { throw LocalACPClientError.activeInputUnsupported }
         switch Self.activeInputRoute(
             runtimeKind: runtimeKind,
             steeringSupported: steeringSupported
@@ -1206,7 +1214,8 @@ public actor LocalACPClient {
                     "prompt": promptBlocks,
                     "_meta": .object(steeringMetadata),
                 ]),
-                waitsForNotifications: false
+                waitsForNotifications: false,
+                dispatchFence: dispatchFence
             )
             switch response?["outcome"]?.stringValue {
             case "injected":
@@ -1252,7 +1261,7 @@ public actor LocalACPClient {
                 })
             case "promptRequired":
                 return LocalACPActiveInputReceipt(
-                    completion: try beginActivePrompt(input)
+                    completion: try beginActivePrompt(input, dispatchFence: dispatchFence)
                 )
             default:
                 throw LocalACPClientError.invalidActiveInputResponse
@@ -1260,7 +1269,7 @@ public actor LocalACPClient {
         case .grokInterjection:
             if !input.files.isEmpty {
                 return LocalACPActiveInputReceipt(
-                    completion: try beginActivePrompt(input)
+                    completion: try beginActivePrompt(input, dispatchFence: dispatchFence)
                 )
             }
             do {
@@ -1270,17 +1279,18 @@ public actor LocalACPClient {
                         "sessionId": .string(sessionID),
                         "text": .string(input.transportText()),
                     ]),
-                    waitsForNotifications: false
+                    waitsForNotifications: false,
+                    dispatchFence: dispatchFence
                 )
                 return LocalACPActiveInputReceipt(completion: Task { nil })
             } catch LocalACPClientError.agent(let code, _) where code == -32_601 {
                 return LocalACPActiveInputReceipt(
-                    completion: try beginActivePrompt(input)
+                    completion: try beginActivePrompt(input, dispatchFence: dispatchFence)
                 )
             }
         case .concurrentPrompt:
             return LocalACPActiveInputReceipt(
-                completion: try beginActivePrompt(input)
+                completion: try beginActivePrompt(input, dispatchFence: dispatchFence)
             )
         case .piRPC, .unsupported:
             throw LocalACPClientError.activeInputUnsupported
@@ -1304,16 +1314,18 @@ public actor LocalACPClient {
     }
 
     private func beginActivePrompt(
-        _ input: AgentMessageInput
+        _ input: AgentMessageInput,
+        dispatchFence: AgentDispatchFence? = nil
     ) throws -> Task<LocalACPStopReason?, any Error> {
         // A promptRequired receipt may arrive after Stop. Never start its
         // fallback prompt after the native cancellation has already been sent.
-        guard !sessionCancellationRequested else { throw CancellationError() }
+        guard !sessionCancellationRequested else { throw LocalACPClientError.activeInputUnsupported }
         let prompt = try beginPrompt(
             input,
             onEvent: activeEventHandler,
             onPermission: activePermissionHandler,
-            onInteraction: activeInteractionHandler
+            onInteraction: activeInteractionHandler,
+            dispatchFence: dispatchFence
         )
         return Task { try await prompt.value }
     }
@@ -1340,7 +1352,8 @@ public actor LocalACPClient {
         _ input: AgentMessageInput,
         onEvent: EventHandler?,
         onPermission: PermissionHandler?,
-        onInteraction: InteractionHandler?
+        onInteraction: InteractionHandler?,
+        dispatchFence: AgentDispatchFence? = nil
     ) throws -> Task<LocalACPStopReason, any Error> {
         guard let sessionID else {
             throw LocalACPClientError.sessionNotInitialized
@@ -1363,7 +1376,8 @@ public actor LocalACPClient {
                     "wovenRunID": .string(defaultAgentRunID ?? UUID().uuidString.lowercased()),
                     "wovenInputID": .string(UUID().uuidString.lowercased()),
                 ]) : .object([:]),
-            ])
+            ]),
+            dispatchFence: dispatchFence
         )
         if initialSystemPrompt != nil {
             // A second accepted message must not duplicate the definition,
@@ -1575,11 +1589,13 @@ public actor LocalACPClient {
     private func request(
         method: String,
         params: ACPJSONValue,
-        waitsForNotifications: Bool = true
+        waitsForNotifications: Bool = true,
+        dispatchFence: AgentDispatchFence? = nil
     ) async throws -> ACPJSONValue? {
         let response = try await beginRequest(
             method: method,
-            params: params
+            params: params,
+            dispatchFence: dispatchFence
         ).value
         if waitsForNotifications {
             try await response.notificationBarrier?.value
@@ -1589,7 +1605,8 @@ public actor LocalACPClient {
 
     private func beginRequest(
         method: String,
-        params: ACPJSONValue
+        params: ACPJSONValue,
+        dispatchFence: AgentDispatchFence? = nil
     ) throws -> Task<ACPRequestResponse, any Error> {
         startReaderIfNeeded()
         let id = nextID
@@ -1604,7 +1621,7 @@ public actor LocalACPClient {
                 id: .integer(id),
                 method: method,
                 params: params
-            ))
+            ), dispatchFence: dispatchFence)
         } catch {
             pendingRequests.removeValue(forKey: id)
             pair.continuation.finish(throwing: error)
@@ -2307,10 +2324,24 @@ public actor LocalACPClient {
         ))
     }
 
-    private func write(_ envelope: ACPEnvelope) throws {
+    private func write(_ envelope: ACPEnvelope, dispatchFence: AgentDispatchFence? = nil) throws {
         guard !closed else { throw LocalACPClientError.processExited }
         var data = try JSONEncoder().encode(envelope)
         if runtimeKind != .defaultAgent { try historyRecorder?("out", data) }
+        // History persistence becomes asynchronous with the database worker.
+        // A queued prompt/steer must not reach the transport after Stop wins.
+        if ["session/prompt", "_session/steering", "_x.ai/interject"].contains(envelope.method ?? "") {
+            guard !Task.isCancelled, !sessionCancellationRequested else {
+                throw LocalACPClientError.activeInputUnsupported
+            }
+        }
+        do { try dispatchFence?.claimDispatch() }
+        catch {
+            if ["session/prompt", "_session/steering", "_x.ai/interject"].contains(envelope.method ?? "") {
+                throw LocalACPClientError.activeInputUnsupported
+            }
+            throw error
+        }
         data.append(0x0A)
         try input.write(contentsOf: data)
     }

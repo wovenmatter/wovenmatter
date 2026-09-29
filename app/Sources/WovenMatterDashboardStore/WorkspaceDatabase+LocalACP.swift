@@ -884,17 +884,10 @@ extension WorkspaceDatabase {
     }
   }
 
-  struct SteeringReservation: Sendable {
-    let identifiers: LocalACPSteeringIdentifiers
-    let previous: [String: String?]
-    let deliveryID: String?
-    let newAttachmentGrants: Set<String>
-  }
-
   /// Commit the input before native dispatch. A definitive rejection may undo
   /// this reservation; an uncertain receipt must retain the original identity.
   func reserveLocalACPSteeringTurn(runID: String, input: AgentMessageInput,
-                                   completesPreviousAssistant: Bool = true) throws -> SteeringReservation {
+                                   completesPreviousAssistant: Bool = true) throws -> LocalACPSteeringReservation {
     try transaction {
       guard let previous = try historyRowsUnlocked("""
         SELECT r.assistant_message_id, r.updated_at AS run_updated_at,
@@ -919,7 +912,7 @@ extension WorkspaceDatabase {
       let newGrants = Set(input.references.filter { $0.kind == .conversation }.map(\.resourceID)).subtracting(existingGrants)
       let identifiers = try beginLocalACPSteeringTurnUnlocked(runID: runID, input: input,
         completesPreviousAssistant: completesPreviousAssistant, createdAt: Date())
-      return SteeringReservation(identifiers: identifiers,
+      return LocalACPSteeringReservation(identifiers: identifiers,
         previous: previous.mapValues { $0.stringValue }, deliveryID: input.historyDeliveryID, newAttachmentGrants: newGrants)
     }
   }
@@ -927,7 +920,7 @@ extension WorkspaceDatabase {
   /// Only remove an untouched, latest segment after a definitive native refusal.
   /// If output or another owner advanced it, preserve the durable receipt instead.
   @discardableResult
-  func rejectLocalACPSteeringTurn(_ reservation: SteeringReservation) throws -> Bool {
+  func rejectLocalACPSteeringTurn(_ reservation: LocalACPSteeringReservation) throws -> Bool {
     try transaction {
       let ids = reservation.identifiers
       guard !(try historyRowsUnlocked("""

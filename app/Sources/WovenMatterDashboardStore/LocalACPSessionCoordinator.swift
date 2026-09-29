@@ -30,6 +30,8 @@ struct LocalACPSessionDriver: Sendable {
     let setResumePermissionHandler: (@Sendable (@escaping LocalACPClient.PermissionHandler) async -> Void)?
     let finishRun: (@Sendable () async -> Void)?
     let shutdown: @Sendable () async -> Void
+    let fencedPrompt: (@Sendable (AgentMessageInput, LocalACPClient.EventHandler?, LocalACPClient.PermissionHandler?, LocalACPClient.InteractionHandler?, AgentDispatchFence) async throws -> LocalACPStopReason)?
+    let fencedActiveInput: (@Sendable (AgentMessageInput, AgentDispatchFence) async throws -> LocalACPActiveInputReceipt)?
 
     init(
         initializeSession: @escaping @Sendable (
@@ -58,7 +60,9 @@ struct LocalACPSessionDriver: Sendable {
         shutdown: @escaping @Sendable () async -> Void,
         finishRun: (@Sendable () async -> Void)? = nil,
         setRunID: (@Sendable (String) async throws -> Void)? = nil,
-        setResumePermissionHandler: (@Sendable (@escaping LocalACPClient.PermissionHandler) async -> Void)? = nil
+        setResumePermissionHandler: (@Sendable (@escaping LocalACPClient.PermissionHandler) async -> Void)? = nil,
+        fencedPrompt: (@Sendable (AgentMessageInput, LocalACPClient.EventHandler?, LocalACPClient.PermissionHandler?, LocalACPClient.InteractionHandler?, AgentDispatchFence) async throws -> LocalACPStopReason)? = nil,
+        fencedActiveInput: (@Sendable (AgentMessageInput, AgentDispatchFence) async throws -> LocalACPActiveInputReceipt)? = nil
     ) {
         self.initializeSession = initializeSession
         self.prompt = prompt
@@ -72,6 +76,8 @@ struct LocalACPSessionDriver: Sendable {
         self.setResumePermissionHandler = setResumePermissionHandler
         self.shutdown = shutdown
         self.finishRun = finishRun
+        self.fencedPrompt = fencedPrompt
+        self.fencedActiveInput = fencedActiveInput
     }
 
     static func start(
@@ -192,6 +198,13 @@ struct LocalACPSessionDriver: Sendable {
             setRunID: { value in try await client.setDefaultAgentRunID(value) },
             setResumePermissionHandler: { handler in
                 await client.setResumePermissionHandler(handler)
+            },
+            fencedPrompt: { input, event, permission, interaction, fence in
+                try await client.prompt(input, onEvent: event, onPermission: permission,
+                    onInteraction: interaction, dispatchFence: fence)
+            },
+            fencedActiveInput: { input, fence in
+                try await client.beginActiveInput(input, dispatchFence: fence)
             }
         )
     }
@@ -345,7 +358,8 @@ public actor LocalACPSessionCoordinator {
         workspace: LocalACPWorkspaceLaunchConfiguration,
         systemPrompt: String? = nil,
         onPermission: PermissionHandler? = nil,
-        onInteraction: InteractionHandler? = nil
+        onInteraction: InteractionHandler? = nil,
+        dispatchFence: AgentDispatchFence? = nil
     ) async throws -> LocalACPRunIdentifiers {
         try await accept(
             conversationID: conversationID,
@@ -356,7 +370,8 @@ public actor LocalACPSessionCoordinator {
             workspace: workspace,
             systemPrompt: systemPrompt,
             onPermission: onPermission,
-            onInteraction: onInteraction
+            onInteraction: onInteraction,
+            dispatchFence: dispatchFence
         )
     }
 
@@ -370,7 +385,8 @@ public actor LocalACPSessionCoordinator {
         workspace: LocalACPWorkspaceLaunchConfiguration,
         systemPrompt: String? = nil,
         onPermission: PermissionHandler? = nil,
-        onInteraction: InteractionHandler? = nil
+        onInteraction: InteractionHandler? = nil,
+        dispatchFence: AgentDispatchFence? = nil
     ) async throws -> LocalACPRunIdentifiers {
         let (run, _) = try beginAcceptedRun(
             conversationID: conversationID,
@@ -381,7 +397,8 @@ public actor LocalACPSessionCoordinator {
             workspace: workspace,
             systemPrompt: systemPrompt,
             onPermission: onPermission,
-            onInteraction: onInteraction
+            onInteraction: onInteraction,
+            dispatchFence: dispatchFence
         )
         return run
     }
@@ -395,8 +412,10 @@ public actor LocalACPSessionCoordinator {
         workspace: LocalACPWorkspaceLaunchConfiguration,
         systemPrompt: String?,
         onPermission: PermissionHandler?,
-        onInteraction: InteractionHandler?
+        onInteraction: InteractionHandler?,
+        dispatchFence: AgentDispatchFence? = nil
     ) throws -> (LocalACPRunIdentifiers, Task<Void, any Error>) {
+        try dispatchFence?.check()
         try ensureNoPermissionMutation(conversationID: conversationID)
         let leaseAcquisition = try acquireOperationLease(
             recoveringInterruptedRuns: true
@@ -408,6 +427,7 @@ public actor LocalACPSessionCoordinator {
             guard descriptor.runtimeKind == launch.runtimeKind else {
                 throw LocalACPSessionDatabaseError.runtimeUnavailable
             }
+            try dispatchFence?.check()
             let run = try database.beginLocalACPRun(
                 conversationID: conversationID,
                 input: input,
@@ -433,7 +453,8 @@ public actor LocalACPSessionCoordinator {
                     systemPrompt: systemPrompt,
                     onPermission: onPermission,
                     onInteraction: onInteraction,
-                    leaseAcquisition: leaseAcquisition
+                    leaseAcquisition: leaseAcquisition,
+                    dispatchFence: dispatchFence
                 )
             }
             runTasks[run.runID] = task
@@ -454,7 +475,8 @@ public actor LocalACPSessionCoordinator {
         systemPrompt: String?,
         onPermission: PermissionHandler?,
         onInteraction: InteractionHandler?,
-        leaseAcquisition: LocalACPProcessLeaseAcquisition?
+        leaseAcquisition: LocalACPProcessLeaseAcquisition?,
+        dispatchFence: AgentDispatchFence? = nil
     ) async throws {
         defer {
             releaseOperationLease(leaseAcquisition)
@@ -569,12 +591,17 @@ public actor LocalACPSessionCoordinator {
             resumeStreamWriterWaiters(runID: run.runID, writer: streamWriter)
             let initialResult: Result<LocalACPStopReason, any Error>
             do {
-                let reason = try await client.prompt(
-                    input,
-                    { try await eventBuffer.receive($0) },
-                    permissionHandler,
-                    interactionHandler
-                )
+                try dispatchFence?.check()
+                guard !cancellationRequestedRunIDs.contains(run.runID), !isShutDown else { throw CancellationError() }
+                let reason: LocalACPStopReason
+                if let dispatchFence, let fencedPrompt = client.fencedPrompt {
+                    reason = try await fencedPrompt(input, { try await eventBuffer.receive($0) },
+                        permissionHandler, interactionHandler, dispatchFence)
+                } else {
+                    try dispatchFence?.claimDispatch()
+                    reason = try await client.prompt(input, { try await eventBuffer.receive($0) },
+                        permissionHandler, interactionHandler)
+                }
                 initialResult = .success(reason)
             } catch { initialResult = .failure(error) }
             let stopReason = try await drainActiveInputs(
@@ -843,12 +870,14 @@ public actor LocalACPSessionCoordinator {
     public func sendActiveInput(
         conversationID: String,
         content: String,
-        deliveryContent: String? = nil
+        deliveryContent: String? = nil,
+        dispatchFence: AgentDispatchFence? = nil
     ) async throws -> LocalACPSteeringIdentifiers {
         try await sendActiveInput(
             conversationID: conversationID,
             input: AgentMessageInput(text: content),
-            deliveryContent: deliveryContent
+            deliveryContent: deliveryContent,
+            dispatchFence: dispatchFence
         )
     }
 
@@ -856,8 +885,10 @@ public actor LocalACPSessionCoordinator {
     public func sendActiveInput(
         conversationID: String,
         input: AgentMessageInput,
-        deliveryContent: String? = nil
+        deliveryContent: String? = nil,
+        dispatchFence: AgentDispatchFence? = nil
     ) async throws -> LocalACPSteeringIdentifiers {
+        try dispatchFence?.check()
         await acquireSteeringLock(conversationID: conversationID)
         defer { releaseSteeringLock(conversationID: conversationID) }
         guard let runID = runIDsByConversation[conversationID],
@@ -881,7 +912,7 @@ public actor LocalACPSessionCoordinator {
         }
         let reservation: WorkspaceDatabase.SteeringReservation
         do {
-            reservation = try database.reserveLocalACPSteeringTurn(runID: runID, input: input)
+            reservation = try await database.reserveLocalACPSteeringTurn(runID: runID, input: input)
         } catch {
             await streamWriter.resumeAfterSegmentBoundary()
             try await eventBuffer.resume()
@@ -889,15 +920,31 @@ public actor LocalACPSessionCoordinator {
         }
         let identifiers = reservation.identifiers
         let completion: Task<LocalACPStopReason?, any Error>
+        var dispatchStarted = false
         do {
-            let receipt = try await activeInput(AgentMessageInput(
-                text: deliveryContent ?? input.text,
-                attachments: input.attachments
-            ))
+            // Reservation waits on the writer. Stop or session replacement may
+            // win while it is queued, before any native request has been sent.
+            try Task.checkCancellation()
+            try dispatchFence?.check()
+            guard runIDsByConversation[conversationID] == runID,
+                  acceptingActiveInputRunIDs.contains(runID),
+                  !cancellationRequestedRunIDs.contains(runID),
+                  activeSessions[conversationID]?.configurationObservationID == active.configurationObservationID else {
+                throw LocalACPSessionDatabaseError.steeringUnsupported
+            }
+            dispatchStarted = true
+            let deliveryInput = AgentMessageInput(text: deliveryContent ?? input.text, attachments: input.attachments)
+            let receipt: LocalACPActiveInputReceipt
+            if let dispatchFence, let fencedInput = active.client.fencedActiveInput {
+                receipt = try await fencedInput(deliveryInput, dispatchFence)
+            } else {
+                try dispatchFence?.claimDispatch()
+                receipt = try await activeInput(deliveryInput)
+            }
             completion = receipt.completion
         } catch {
-            if Self.isDefinitiveSteeringRejection(error),
-               (try? database.rejectLocalACPSteeringTurn(reservation)) == true {
+            if !dispatchStarted || dispatchFence?.hasDispatched == false || Self.isDefinitiveSteeringRejection(error),
+               (try? await database.rejectLocalACPSteeringTurn(reservation)) == true {
                 await streamWriter.resumeAfterSegmentBoundary()
                 try await eventBuffer.resume()
                 throw error

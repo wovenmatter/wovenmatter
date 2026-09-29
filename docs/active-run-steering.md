@@ -42,3 +42,14 @@ Inspected the installed Codex desktop bundle and the public sources below on Sep
 Provider-free regressions exercise repeated corrections, rejected/unsupported input, stop, transcript boundaries, detached Codex completion before/after acknowledgement, Claude idle fallback, Cursor/Grok dispatch, Pi preflight/settlement races, ordinary OpenCode delivery, Gateway admission/rejection, storage failures before dispatch, uncertain receipts, permission revocation at admission, remote concurrent-input isolation, out-of-order completion, idempotency and recovery. Built-in tests run the actual pinned Pi loop with synthetic model streams, including immediate input during startup and a preflight that overlaps the original loop ending.
 
 Run `scripts/test-changes.sh --all` for the complete automated suite and unsigned native build. These checks do not establish live-provider acceptance. Live review should send several corrections during a tool-using run in each installed harness, confirm acknowledgement and continued work in the same conversation, repeat near completion, and verify Stop and reconnect. No provider calls, app installation, live account authentication or production deployment are part of the automated checks.
+
+## Async database compatibility
+
+The steering compatibility update depends on the async workspace database facade
+and `AgentDispatchFence` from PR #86. Steering reservations cross the writer lane
+as value-only receipts; definite local/native refusal settles rollback through
+the cancellation-independent terminal writer. After an async reservation, the
+coordinator checks run ownership and Stop intent again before dispatch. The same
+dispatch fence reaches the native transport after outbound history persistence,
+so an input revoked before send remains a definite rejection while uncertain
+receipts retain their original continuation identity.
