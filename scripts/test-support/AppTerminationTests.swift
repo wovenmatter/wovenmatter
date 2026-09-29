@@ -5,6 +5,9 @@ import Foundation
 @MainActor
 final class ApplicationModel {
     var isPreparedForExecutionRestart = false
+    var noteEditingSuspended = false
+    func suspendNoteEditing() { noteEditingSuspended = true }
+    func resumeNoteEditing() { noteEditingSuspended = false }
     var flushCount = 0
     var cleanupCount = 0
     var cleanupFinished = false
@@ -15,7 +18,7 @@ final class ApplicationModel {
     func flushNoteDrafts() async -> Bool { flushCount += 1; return true }
     func restoreOpenCodeInstances() async {}
     func shutdownLocalACPSessions() {}
-    func flushNotesBeforeBackendClientQuit() async -> Bool { true }
+    func flushNotesBeforeBackendClientQuit() async -> Bool { flushCount += 1; return true }
     func prepareOpenCodeInstancesToQuit() async throws {
         cleanupCount += 1
         try await Task.sleep(for: .milliseconds(20))
@@ -58,7 +61,7 @@ private final class TerminationProbe: NSObject, NSApplicationDelegate {
     }
 
     @objc private func finished(_ notification: Notification) {
-        let passed = deferredTermination && model.flushCount == 1 && model.cleanupCount == 1 && model.cleanupFinished
+        let passed = deferredTermination && model.noteEditingSuspended && model.flushCount == 1 && model.cleanupCount == 1 && model.cleanupFinished
         try! (passed ? "PASS\n" : "FAIL: termination cancelled, cleanup unfinished, or duplicate cleanup\n")
             .write(to: resultURL, atomically: true, encoding: .utf8)
     }

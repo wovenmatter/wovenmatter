@@ -146,7 +146,9 @@ extension ApplicationModel {
 
     func handleAgentNote(callerID: String, request: NoteEditingRequest, requestID: String) async throws -> NoteEditingResponse {
         guard let database = dashboardStore?.database else { throw CancellationError() }
-        guard await flushNoteDrafts() else { throw ApplicationModelError.noteDraftSaveFailed }
+        guard await flushNoteDrafts(), !noteEditingSuspended, !backendStopping else {
+            throw ApplicationModelError.noteDraftSaveFailed
+        }
         let response: NoteEditingResponse = switch request.command {
         case .read: try await database.readNoteForEditing(id: request.noteID, callerConversationID: callerID)
         case .apply: try await database.applyNoteEdits(request, callerConversationID: callerID, requestID: requestID)

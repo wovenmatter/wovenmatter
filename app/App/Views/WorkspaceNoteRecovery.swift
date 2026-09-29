@@ -11,6 +11,10 @@ struct WorkspaceNoteRecovery: View {
     @State private var error: String?
     @State private var restores = false
     @State private var confirmsRestore = false
+    @State private var loading = false
+    @State private var loadGeneration = UUID()
+    @State private var refreshTask: Task<Void, Never>?
+    @State private var restoreTask: Task<Void, Never>?
 
     private var selected: NoteAssetVersion? { versions.first { $0.id == selection } }
 
@@ -36,7 +40,7 @@ struct WorkspaceNoteRecovery: View {
                                 }.padding(9).frame(maxWidth: .infinity, alignment: .leading)
                                     .background(selection == version.id ? DashboardPalette.foreground.opacity(0.07) : .clear,
                                         in: RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius))
-                            }.buttonStyle(.plain).accessibilityAddTraits(selection == version.id ? .isSelected : [])
+                            }.buttonStyle(.plain).disabled(restores).accessibilityAddTraits(selection == version.id ? .isSelected : [])
                         }
                         if versions.isEmpty { Text("No retained versions.").font(.system(size: 12)) }
                     }
@@ -60,15 +64,35 @@ struct WorkspaceNoteRecovery: View {
             }.frame(height: 330)
             if let error { Text(error).font(.system(size: 12)).foregroundStyle(DashboardPalette.danger) }
             HStack {
-                Button("Refresh") { Task { await load() } }.buttonStyle(SettingsQuietButtonStyle())
+                Button("Refresh") {
+                    refreshTask?.cancel()
+                    refreshTask = Task { await load() }
+                }.buttonStyle(SettingsQuietButtonStyle()).disabled(loading || restores)
                 Spacer()
                 Button("Restore version") { confirmsRestore = true }
                     .buttonStyle(DashboardPrimaryButtonStyle())
-                    .disabled(selected == nil || expectedRevision == nil || restores)
+                    .disabled(selected == nil || expectedRevision == nil || loading || restores)
             }
         }.padding(24).frame(width: 710)
         .foregroundStyle(DashboardPalette.foreground)
-        .task(id: noteID) { await load() }
+        .task(id: noteID) {
+            refreshTask?.cancel()
+            restoreTask?.cancel()
+            restores = false
+            confirmsRestore = false
+            versions = []
+            selection = nil
+            error = nil
+            await load()
+        }
+        .onDisappear {
+            loadGeneration = UUID()
+            refreshTask?.cancel()
+            restoreTask?.cancel()
+            loading = false
+            restores = false
+            confirmsRestore = false
+        }
         .alert("Restore this version?", isPresented: $confirmsRestore) {
             Button("Cancel", role: .cancel) { }
             Button("Restore") { restore() }
@@ -76,29 +100,57 @@ struct WorkspaceNoteRecovery: View {
     }
 
     private func load() async {
+        let requestID = UUID()
+        loadGeneration = requestID
+        loading = true
+        expectedRevision = nil
+        defer { if loadGeneration == requestID { loading = false } }
         do {
             guard await model.flushNoteDrafts(), let database = model.dashboardStore?.database else {
                 throw ApplicationModelError.noteDraftSaveFailed
             }
+            try Task.checkCancellation()
+            guard loadGeneration == requestID else { return }
             try await model.checkpointNoteForHistory(id: noteID)
-            expectedRevision = try await database.readNoteForEditing(id: noteID).revision
-            versions = try await database.noteAssetVersions(id: noteID)
+            try Task.checkCancellation()
+            let revision = try await database.readNoteForEditing(id: noteID).revision
+            let fetched = try await database.noteAssetVersions(id: noteID)
+            try Task.checkCancellation()
+            guard loadGeneration == requestID else { return }
+            // Publish the revision and matching list together; a partial or old
+            // request must not re-enable restoration with stale evidence.
+            expectedRevision = revision
+            versions = fetched
             if !versions.contains(where: { $0.id == selection }) { selection = versions.first?.id }
             error = nil
-        } catch { self.error = error.localizedDescription }
+        } catch is CancellationError { }
+        catch { if loadGeneration == requestID { self.error = error.localizedDescription } }
     }
 
     private func restore() {
-        guard let selected, let expectedRevision else { return }
+        guard !loading, !restores, let selected, let expectedRevision else { return }
+        let requestID = UUID()
+        loadGeneration = requestID
+        refreshTask?.cancel()
         restores = true
-        Task { @MainActor in
-            defer { restores = false }
+        restoreTask = Task { @MainActor in
+            defer { if loadGeneration == requestID { restores = false } }
             do {
                 guard await model.flushNoteDrafts() else { throw ApplicationModelError.noteDraftSaveFailed }
+                try Task.checkCancellation()
+                guard loadGeneration == requestID else { return }
                 let result = try await model.restoreRetainedNote(id: noteID, versionID: selected.id, expectedRevision: expectedRevision)
-                await model.adoptNoteEditingResponse(result)
+                // A started write returns its definitive result even when the
+                // sheet disappears. Refresh app state, then fence sheet state.
+                await Task { @MainActor in await model.adoptNoteEditingResponse(result) }.value
+                guard !Task.isCancelled, loadGeneration == requestID else { return }
+                restores = false
                 await load()
-            } catch { self.error = error.localizedDescription + " Refresh to review the current document before trying again." }
+            } catch is CancellationError { }
+            catch {
+                guard loadGeneration == requestID else { return }
+                self.error = error.localizedDescription + " Refresh to review the current document before trying again."
+            }
         }
     }
 

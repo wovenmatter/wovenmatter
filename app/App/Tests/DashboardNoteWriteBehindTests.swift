@@ -126,4 +126,46 @@ struct DashboardNoteWriteBehindTests {
         #expect(await writes.values == ["retry"])
         #expect(try journal.entries().isEmpty)
     }
+
+    @Test func emptyFlushBarrierReportsEarlierAsynchronousFailure() async throws {
+        let root = try directory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let gate = AsyncStream<Void>.makeStream()
+        defer { gate.continuation.finish() }
+        let started = AsyncStream<Void>.makeStream()
+        let writes = Writes(gate: gate.stream, started: started.continuation)
+        await writes.setFailure(true)
+        let journal = DashboardNoteDraftJournal(fileURL: root.appending(path: "drafts.ndjson"))
+        let writer = DashboardNoteWriteBehind(journal: journal, coalescingDelay: .seconds(60),
+            update: { try await writes.append($0) }, completion: { _, _ in })
+        writer.submit(entry("not committed", revision: 1))
+        let first = Task { try await writer.flush() }
+        var iterator = started.stream.makeAsyncIterator()
+        await iterator.next()
+        let barrier = Task { try await writer.flush() }
+        gate.continuation.yield(())
+        await #expect(throws: Failure.expected) { try await first.value }
+        await #expect(throws: Failure.expected) { try await barrier.value }
+        #expect(try journal.entries().map(\.content) == ["not committed"])
+        await #expect(throws: Failure.expected) { try await writer.flush() }
+    }
+
+    @Test func newerCommittedDraftClearsFailureForSupersededJournalEntry() async throws {
+        let root = try directory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let writes = Writes()
+        await writes.setFailure(true)
+        let journal = DashboardNoteDraftJournal(fileURL: root.appending(path: "drafts.ndjson"))
+        let writer = DashboardNoteWriteBehind(journal: journal, coalescingDelay: .seconds(60),
+            update: { try await writes.append($0) }, completion: { _, _ in })
+        writer.submit(entry("failed old edit", revision: 1))
+        await #expect(throws: Failure.expected) { try await writer.flush() }
+        await writes.setFailure(false)
+        writer.submit(entry("new edit", revision: 2))
+        try await writer.flush()
+        try await writer.flush()
+        #expect(try journal.entries().isEmpty)
+        #expect(await writes.values == ["failed old edit", "new edit"])
+    }
+
 }

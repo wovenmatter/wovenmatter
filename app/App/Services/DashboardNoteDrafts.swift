@@ -282,8 +282,16 @@ final class DashboardNoteDraftJournal: @unchecked Sendable {
 
 }
 
-enum DashboardNoteJournalError: Error {
+enum DashboardNoteJournalError: Error, LocalizedError {
     case createFailed
+    case unpersistedDrafts
+
+    var errorDescription: String? {
+        switch self {
+        case .createFailed: "The note recovery journal could not be created."
+        case .unpersistedDrafts: "Some note changes have not been saved. Retry saving before continuing."
+        }
+    }
 }
 
 final class DashboardNoteWriteBehind: @unchecked Sendable {
@@ -305,6 +313,7 @@ final class DashboardNoteWriteBehind: @unchecked Sendable {
     private var order: [String] = []
     private var scheduledGeneration: UInt64 = 0
     private var stickyAppendError: (any Error)?
+    private var retainedUpdateError: (any Error)?
     private var batches: [Batch] = []
     private var processing = false
 
@@ -393,7 +402,16 @@ final class DashboardNoteWriteBehind: @unchecked Sendable {
         dispatchPrecondition(condition: .onQueue(queue))
         guard index < batch.entries.count else {
             if !batch.entries.isEmpty, !batch.journaled { stickyAppendError = appendFailure }
-            let failure = firstFailure ?? stickyAppendError
+            var failure = firstFailure ?? stickyAppendError
+            if batch.continuation != nil {
+                // An empty FIFO barrier still owns failures from earlier async
+                // batches. A successful newer edit may have acknowledged their
+                // records; otherwise no caller may assume SQLite is current.
+                do {
+                    if try journal.entries().isEmpty { retainedUpdateError = nil }
+                    else { failure = failure ?? retainedUpdateError ?? DashboardNoteJournalError.unpersistedDrafts }
+                } catch { failure = failure ?? error }
+            }
             if let failure { batch.continuation?.resume(throwing: failure) }
             else { batch.continuation?.resume() }
             processing = false
@@ -432,7 +450,10 @@ final class DashboardNoteWriteBehind: @unchecked Sendable {
                 }
                 completion(entry, acknowledged)
                 let failure: (any Error)?
-                if case .failure(let error) = acknowledged { failure = error } else { failure = nil }
+                if case .failure(let error) = acknowledged {
+                    retainedUpdateError = error
+                    failure = error
+                } else { failure = nil }
                 persist(batch, index: index + 1, firstFailure: firstFailure ?? failure, appendFailure: appendFailure)
             }
         }

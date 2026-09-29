@@ -202,6 +202,7 @@ final class ApplicationModel {
     private(set) var calendarRuns: [WorkspaceCalendarRun] = []
     private(set) var workspaceRevision: Int64 = 0
     private var workspaceRefreshGeneration: UInt64 = 0
+    private var backendOpenCodeRefreshGeneration: UInt64 = 0
     private(set) var workspaceListRevision: Int64 = 0
     private(set) var macSurfaceProfile: SurfaceProfile?
     private(set) var workspaceError: String?
@@ -314,6 +315,7 @@ final class ApplicationModel {
 
     private(set) var dashboardStore: DashboardStore?
     private var noteWriteBehind: DashboardNoteWriteBehind?
+    private(set) var noteEditingSuspended = false
     private var dashboardStoreStarted = false
     private var dashboardStoreStartDeferredForNoteRecovery = false
     @ObservationIgnored var backendRPCClient: BackendRPCClient?
@@ -528,7 +530,9 @@ final class ApplicationModel {
                     return try await self.handleAgentNote(callerID: caller, request: request, requestID: requestID)
                 }, noteRestoreHandler: { [weak self] caller, noteID, versionID, revision, requestID in
                     guard let self else { throw CancellationError() }
-                    guard await self.flushNoteDrafts() else { throw ApplicationModelError.noteDraftSaveFailed }
+                    guard await self.flushNoteDrafts(), !self.noteEditingSuspended, !self.backendStopping else {
+                        throw ApplicationModelError.noteDraftSaveFailed
+                    }
                     let response = try await dashboardStore.database.restoreNoteAssetVersion(noteID: noteID, versionID: versionID,
                         expectedRevision: revision, callerConversationID: caller, requestID: requestID)
                     await self.adoptNoteEditingResponse(response)
@@ -1613,11 +1617,24 @@ final class ApplicationModel {
         noteDrafts[note.id] = draft
     }
 
+    func suspendNoteEditing() {
+        // Commit an active field editor before closing admission. Already
+        // submitted edits remain owned by the write-behind flush barrier.
+        if !noteEditingSuspended { NSApp.keyWindow?.makeFirstResponder(nil) }
+        noteEditingSuspended = true
+    }
+
+    func resumeNoteEditing() { noteEditingSuspended = false }
+
     func updateNoteDraft(
         note: WorkspaceNoteRecord,
         title: String? = nil,
         content: String? = nil
     ) {
+        guard !noteEditingSuspended else {
+            noteMutationError = "Note editing is paused while Woven Matter closes or restarts."
+            return
+        }
         prepareNoteDraft(note)
         guard var draft = noteDrafts[note.id] else { return }
         draft.edit(title: title, content: content)
@@ -1625,6 +1642,7 @@ final class ApplicationModel {
     }
 
     func retryNoteDraft(note: WorkspaceNoteRecord) {
+        guard !noteEditingSuspended else { return }
         prepareNoteDraft(note)
         guard var draft = noteDrafts[note.id] else { return }
         draft.editRevision &+= 1
@@ -1676,6 +1694,7 @@ final class ApplicationModel {
     }
 
     func restoreRetainedNote(id: String, versionID: String, expectedRevision: String) async throws -> NoteEditingResponse {
+        guard !noteEditingSuspended, !backendStopping else { throw ApplicationModelError.noteDraftSaveFailed }
         if isBackendFrontend {
             let result = try await sendBackendCommand(.workspaceMutation(.restoreNote(id: id, versionID: versionID, expectedRevision: expectedRevision)))
             guard let response = result.noteResponse else { throw ApplicationModelError.noteDraftSaveFailed }
@@ -1721,6 +1740,11 @@ final class ApplicationModel {
         guard var draft = noteDrafts[entry.noteID] else { return }
         switch result {
         case .success:
+            // Readers admitted before this commit may still hold its prior
+            // snapshot. Fence them before the acknowledgement allows draft
+            // reconciliation to adopt database state, and before the next await.
+            workspaceRefreshGeneration &+= 1
+            noteRefreshTask?.cancel()
             draft.persistedRevision = max(draft.persistedRevision, entry.revision)
             if draft.editRevision == entry.revision {
                 draft.saveState = .saved
@@ -5256,6 +5280,9 @@ extension ApplicationModel {
               pendingLocalACPInteractions.isEmpty, pendingSessionAccess.isEmpty else {
             throw BackendRPCError.remote("Wait for running sessions and pending approvals before switching execution modes.")
         }
+        let wasSuspended = noteEditingSuspended
+        suspendNoteEditing()
+        defer { if !isPreparedForExecutionRestart && !wasSuspended { resumeNoteEditing() } }
         guard await flushNotesBeforeBackendClientQuit() else { throw ApplicationModelError.noteDraftSaveFailed }
         let previous = LocalBackgroundExecution.shared.isEnabled
         try await LocalExecutionTransition.perform(prepare: {
@@ -5277,6 +5304,9 @@ extension ApplicationModel {
 
     func prepareBackendForUpdate() async throws {
         guard isBackendFrontend else { return }
+        let wasSuspended = noteEditingSuspended
+        suspendNoteEditing()
+        defer { if !isPreparedForExecutionRestart && !wasSuspended { resumeNoteEditing() } }
         guard await flushNotesBeforeBackendClientQuit() else { throw ApplicationModelError.noteDraftSaveFailed }
         _ = try await callBackend(method: "application.stop")
         backendStopRequestedForLifecycle = true
@@ -5288,6 +5318,7 @@ extension ApplicationModel {
 
     func recoverBackendAfterFailedUpdate() async throws {
         isPreparedForExecutionRestart = false
+        defer { resumeNoteEditing() }
         guard isBackendFrontend else { return }
         // A refused stop leaves the original backend in place. A successful stop
         // releases its lease before a replacement process may take ownership.
@@ -5535,8 +5566,22 @@ extension ApplicationModel {
 
     private func refreshBackendOpenCodeState() async throws {
         guard isBackendFrontend, let dashboardStore else { return }
+        backendOpenCodeRefreshGeneration &+= 1
+        let generation = backendOpenCodeRefreshGeneration
+        var expectedSnapshots = Dictionary(uniqueKeysWithValues: openCodeInstances.map {
+            ($0.remoteConfiguration?.id.uuidString ?? "local", ($0, $0.backendSnapshotGeneration))
+        })
+        func currentSnapshotsMatch() -> Bool {
+            let instances = openCodeInstances
+            return instances.count == expectedSnapshots.count && instances.allSatisfy { instance in
+                guard let expected = expectedSnapshots[instance.remoteConfiguration?.id.uuidString ?? "local"] else { return false }
+                return expected.0 === instance && expected.1 == instance.backendSnapshotGeneration
+            }
+        }
         let states = try JSONDecoder().decode([BackendOpenCodeWorkspaceSnapshot].self,
             from: await callBackend(method: "opencode.snapshot"))
+        guard generation == backendOpenCodeRefreshGeneration,
+              self.dashboardStore === dashboardStore, currentSnapshotsMatch(), !Task.isCancelled else { return }
         var retainedRemoteIDs = Set<UUID>()
         var hasLocal = false
         for item in states {
@@ -5552,8 +5597,16 @@ extension ApplicationModel {
                         return try await self.callBackend(method: method, payload: payload)
                     })
             }
-            instance.applyBackendSnapshot(item.state)
+            guard generation == backendOpenCodeRefreshGeneration,
+                  self.dashboardStore === dashboardStore, currentSnapshotsMatch(), !Task.isCancelled else { return }
+            let key = item.configuration?.id.uuidString ?? "local"
+            instance.applyBackendSnapshot(item.state, expectedGeneration: expectedSnapshots[key]?.1)
+            if existing === instance {
+                expectedSnapshots[key] = (instance, instance.backendSnapshotGeneration)
+            }
             await instance.hydrateBackendSessions(Set(conversationStatesByID.keys))
+            guard generation == backendOpenCodeRefreshGeneration,
+                  self.dashboardStore === dashboardStore, currentSnapshotsMatch(), !Task.isCancelled else { return }
             if let configuration = item.configuration {
                 retainedRemoteIDs.insert(configuration.id)
                 if remoteOpenCodes[configuration.id] !== instance { remoteOpenCodes[configuration.id] = instance }
@@ -5561,6 +5614,7 @@ extension ApplicationModel {
                 hasLocal = true
                 if openCode !== instance { openCode = instance }
             }
+            expectedSnapshots[key] = (instance, instance.backendSnapshotGeneration)
         }
         if !hasLocal { openCode = nil }
         for id in Array(remoteOpenCodes.keys) where !retainedRemoteIDs.contains(id) { remoteOpenCodes.removeValue(forKey: id) }

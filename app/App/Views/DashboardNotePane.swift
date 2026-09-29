@@ -45,6 +45,7 @@ struct DashboardNotePane: View {
         Binding(
             get: { documentCache.value(noteID: note.id, source: model.noteDraft(for: note).content) },
             set: { updated in
+                guard !model.noteEditingSuspended else { return }
                 guard let content = try? documentCache.encode(updated, noteID: note.id) else { return }
                 model.updateNoteDraft(note: note, content: content)
             }
@@ -232,6 +233,7 @@ struct DashboardNotePane: View {
             .padding(.bottom, 24)
         }
         .background(theme.palette.workspace)
+        .disabled(model.noteEditingSuspended)
         .sheet(isPresented: $showsVersionHistory) { WorkspaceNoteRecovery(model: model, noteID: note.id) }
         .onAppear {
             model.prepareNoteDraft(note)
