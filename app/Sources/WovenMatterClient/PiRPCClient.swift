@@ -101,6 +101,7 @@ public actor PiRPCClient {
     private var transportError: (any Error)?
     private var settledWaiters: [CheckedContinuation<Void, any Error>] = []
     private var cancelled = false
+    private var pendingDispatches: [ObjectIdentifier: AgentDispatchFence] = [:]
     private var abortTask: Task<Void, Never>?
     private var readerTask: Task<Void, Never>?
     private var eventTask: Task<Void, Never>?
@@ -241,14 +242,18 @@ public actor PiRPCClient {
     }
 
     public func prompt(_ input: AgentMessageInput, onEvent: LocalACPClient.EventHandler? = nil,
-                       onPermission: LocalACPClient.PermissionHandler? = nil) async throws -> LocalACPStopReason {
+                       onPermission: LocalACPClient.PermissionHandler? = nil,
+                       dispatchFence: AgentDispatchFence? = nil) async throws -> LocalACPStopReason {
+        try dispatchFence?.check()
         let payload = try Self.attachmentPayload(input)
-        return try await prompt(payload.text, images: payload.images, onEvent: onEvent, onPermission: onPermission)
+        return try await prompt(payload.text, images: payload.images, onEvent: onEvent,
+            onPermission: onPermission, dispatchFence: dispatchFence)
     }
 
-    public func steer(_ input: AgentMessageInput) async throws {
+    public func steer(_ input: AgentMessageInput, dispatchFence: AgentDispatchFence? = nil) async throws {
+        try dispatchFence?.check()
         let payload = try Self.attachmentPayload(input)
-        try await steer(payload.text, images: payload.images)
+        try await steer(payload.text, images: payload.images, dispatchFence: dispatchFence)
     }
 
     static func attachmentPayload(_ input: AgentMessageInput) throws -> (text: String, images: [[String: String]]) {
@@ -271,9 +276,13 @@ public actor PiRPCClient {
         _ text: String,
         images: [[String: String]] = [],
         onEvent: LocalACPClient.EventHandler? = nil,
-        onPermission: LocalACPClient.PermissionHandler? = nil
+        onPermission: LocalACPClient.PermissionHandler? = nil,
+        dispatchFence: AgentDispatchFence? = nil
     ) async throws -> LocalACPStopReason {
-        try Task.checkCancellation()
+        let fence = dispatchFence ?? AgentDispatchFence()
+        try fence.check()
+        pendingDispatches[ObjectIdentifier(fence)] = fence
+        defer { pendingDispatches[ObjectIdentifier(fence)] = nil }
         let generation = UUID()
         promptGeneration = generation
         hasQueuedSettlement = false
@@ -304,7 +313,7 @@ public actor PiRPCClient {
                 if launch.environment["WOVEN_DURABLE_REMOTE_ACP"] == "1" {
                     command["_meta"] = ["wovenRunID": runID ?? UUID().uuidString.lowercased()]
                 }
-                let response = try await sendCommand(command)
+                let response = try await sendCommand(command, dispatchFence: fence)
                 if response["success"] as? Bool != true {
                     throw PiRPCClientError.commandFailed(
                         string(response["error"]) ?? "Pi rejected the prompt."
@@ -328,12 +337,18 @@ public actor PiRPCClient {
         }
     }
 
-    public func steer(_ text: String, images: [[String: String]] = []) async throws {
+    public func steer(_ text: String, images: [[String: String]] = [],
+                      dispatchFence: AgentDispatchFence? = nil) async throws {
+        let fence = dispatchFence ?? AgentDispatchFence()
+        try fence.check()
+        guard !cancelled else { throw CancellationError() }
+        pendingDispatches[ObjectIdentifier(fence)] = fence
+        defer { pendingDispatches[ObjectIdentifier(fence)] = nil }
         let response = try await sendCommand([
             "type": "steer",
             "message": text,
             "images": images,
-        ])
+        ], dispatchFence: fence)
         guard response["success"] as? Bool == true else {
             throw PiRPCClientError.commandFailed(
                 string(response["error"])
@@ -343,6 +358,7 @@ public actor PiRPCClient {
     }
 
     public func cancel() async {
+        pendingDispatches.values.forEach { $0.cancel() }
         cancelled = true
         guard promptAcknowledged else {
             // Abort only stops native agent work, not an extension command that
@@ -373,11 +389,13 @@ public actor PiRPCClient {
 
     private func cancelPromptTask(generation: UUID) async {
         guard promptGeneration == generation else { return }
+        pendingDispatches.values.forEach { $0.cancel() }
         failPending(CancellationError())
         await shutdown()
     }
 
     public func shutdown() async {
+        pendingDispatches.values.forEach { $0.cancel() }
         if let shutdownTask {
             await shutdownTask.value
             return
@@ -649,8 +667,9 @@ public actor PiRPCClient {
         else { outgoingWaiters.removeFirst().resume() }
     }
 
-    private func sendCommand(_ payload: [String: Any]) async throws -> [String: Any] {
+    private func sendCommand(_ payload: [String: Any], dispatchFence: AgentDispatchFence? = nil) async throws -> [String: Any] {
         try Task.checkCancellation()
+        try dispatchFence?.check()
         if let transportError { throw transportError }
         guard !closed, let input else {
             throw PiRPCClientError.sessionNotInitialized
@@ -673,6 +692,8 @@ public actor PiRPCClient {
             defer { releaseOutgoing() }
             pendingResponses[id] = continuation
             do {
+                // Stop can run while outbound history is being persisted.
+                try dispatchFence?.claimDispatch()
                 try input.write(contentsOf: line)
             } catch {
                 pendingResponses.removeValue(forKey: id)

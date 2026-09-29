@@ -8,7 +8,17 @@ protocol HermesGatewayTransport: Sendable {
     func connect() async throws
     func disconnect() async
     func call(_ method: String, _ params: HermesValue) async throws -> HermesValue
+    func call(_ method: String, _ params: HermesValue, dispatchFence: AgentDispatchFence?) async throws -> HermesValue
     func respond(id: String, result: HermesValue) async throws
+}
+
+extension HermesGatewayTransport {
+    // Fixtures and non-journaling transports keep their existing call contract.
+    // The native RPC implementation claims only at its final socket write.
+    func call(_ method: String, _ params: HermesValue, dispatchFence: AgentDispatchFence?) async throws -> HermesValue {
+        try dispatchFence?.claimDispatch()
+        return try await call(method, params)
+    }
 }
 
 /// Native Hermes JSON-RPC 2.0, including newline-batched WebSocket frames.
@@ -106,6 +116,11 @@ public actor HermesGatewayRPC: HermesGatewayTransport {
     }
 
     public func call(_ method: String, _ params: HermesValue = [:]) async throws -> HermesValue {
+        try await call(method, params, dispatchFence: nil)
+    }
+
+    public func call(_ method: String, _ params: HermesValue, dispatchFence: AgentDispatchFence?) async throws -> HermesValue {
+        try dispatchFence?.check()
         guard let socket else { throw HermesGatewayError.message("Hermes Gateway is disconnected.") }
         let id = UUID().uuidString
         let frame: HermesValue = ["jsonrpc": "2.0", "id": .string(id), "method": .string(method), "params": params]
@@ -116,6 +131,7 @@ public actor HermesGatewayRPC: HermesGatewayTransport {
             try await record("out", data: Data(text.utf8))
             try Task.checkCancellation()
             guard current == generation else { throw HermesGatewayError.message("Hermes Gateway disconnected before sending the request.") }
+            try dispatchFence?.check()
         } catch { releaseOutgoing(); throw error }
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
@@ -127,11 +143,21 @@ public actor HermesGatewayRPC: HermesGatewayTransport {
                 Task {
                     defer { self.releaseOutgoing() }
                     guard self.generation == current, self.pending[id] != nil else { return }
-                    do { try await socket.send(.string(text)) }
-                    catch { self.expire(id) }
+                    do {
+                        try dispatchFence?.claimDispatch()
+                        try await socket.send(.string(text))
+                    } catch {
+                        if let dispatchFence, !dispatchFence.hasDispatched {
+                            self.timeouts.removeValue(forKey: id)?.cancel()
+                            self.pending.removeValue(forKey: id)?.resume(throwing: error)
+                        } else { self.expire(id) }
+                    }
                 }
             }
-        } onCancel: { Task { await self.expire(id) } }
+        } onCancel: {
+            let unsent = dispatchFence?.cancel() == true
+            Task { await self.cancelRequest(id, unsent: unsent) }
+        }
     }
 
     public func respond(id: String, result: HermesValue) async throws {
@@ -176,6 +202,12 @@ public actor HermesGatewayRPC: HermesGatewayTransport {
             // The reader must keep draining while a UI approval or replay RPC is pending.
             await eventHandler?(event)
         }
+    }
+
+    private func cancelRequest(_ id: String, unsent: Bool) {
+        guard unsent else { expire(id); return }
+        timeouts.removeValue(forKey: id)?.cancel()
+        pending.removeValue(forKey: id)?.resume(throwing: CancellationError())
     }
 
     private func expire(_ id: String) {
