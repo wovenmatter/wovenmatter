@@ -41,27 +41,41 @@ public enum DefaultAgentSDKControl {
     // Injectable only for local process-lifecycle fixtures. This starts no account/runtime session.
     static func run(_ request: DefaultAgentSDKRequest, executable: URL,
                     arguments: [String], timeout: TimeInterval) async throws -> DefaultAgentSDKStatus {
-        let task = Task.detached(priority: .utility) {
-            let response = try execute(request, executable: executable, arguments: arguments, timeout: timeout)
-            struct Envelope: Decodable { let result: DefaultAgentSDKStatus?; let error: String? }
-            guard let line = response.split(separator: 10).last,
-                  let envelope = try? JSONDecoder().decode(Envelope.self, from: Data(line)) else {
-                throw DefaultAgentError.message("SDK maintenance did not complete. Reload installed versions before trying again.")
-            }
-            // A completed activation remains installed even if cancellation arrived
-            // while the helper was flushing its final response or exiting.
-            if let result = envelope.result { return result }
-            if let error = envelope.error { throw DefaultAgentError.message(error) }
-            throw DefaultAgentError.message("SDK maintenance did not complete. Reload installed versions before trying again.")
-        }
+        let cancellation = CancellationState()
         return try await withTaskCancellationHandler {
-            try await task.value
-        } onCancel: { task.cancel() }
+            try await withCheckedThrowingContinuation { continuation in
+                // poll/read/waitpid are blocking. A maintenance request must not
+                // occupy a cooperative Swift executor while the installer runs.
+                DispatchQueue.global(qos: .utility).async {
+                    continuation.resume(with: Result {
+                        let response = try execute(request, executable: executable,
+                            arguments: arguments, timeout: timeout, cancellation: cancellation)
+                        struct Envelope: Decodable { let result: DefaultAgentSDKStatus?; let error: String? }
+                        guard let line = response.split(separator: 10).last,
+                              let envelope = try? JSONDecoder().decode(Envelope.self, from: Data(line)) else {
+                            throw DefaultAgentError.message("SDK maintenance did not complete. Reload installed versions before trying again.")
+                        }
+                        // A completed activation remains installed even if cancellation
+                        // arrives while its response is flushing or the helper exits.
+                        if let result = envelope.result { return result }
+                        if let error = envelope.error { throw DefaultAgentError.message(error) }
+                        throw DefaultAgentError.message("SDK maintenance did not complete. Reload installed versions before trying again.")
+                    })
+                }
+            }
+        } onCancel: { cancellation.cancel() }
+    }
+
+    private final class CancellationState: @unchecked Sendable {
+        private let lock = NSLock()
+        private var cancelled = false
+        var isCancelled: Bool { lock.withLock { cancelled } }
+        func cancel() { lock.withLock { cancelled = true } }
     }
 
     private static func execute(_ request: DefaultAgentSDKRequest, executable: URL,
-                                arguments: [String], timeout: TimeInterval) throws -> Data {
-        try Task.checkCancellation()
+                                arguments: [String], timeout: TimeInterval, cancellation: CancellationState) throws -> Data {
+        guard !cancellation.isCancelled else { throw CancellationError() }
         let input = Pipe(), output = Pipe()
         let inputRead = input.fileHandleForReading, inputWrite = input.fileHandleForWriting
         let outputRead = output.fileHandleForReading, outputWrite = output.fileHandleForWriting
@@ -138,7 +152,7 @@ public enum DefaultAgentSDKControl {
             // descriptor must not keep this maintenance request alive forever.
             if let childExitedAt, now - childExitedAt >= 0.5 { return response }
             if let stopDeadline, now >= stopDeadline + 0.5 { return response }
-            if stopDeadline == nil && (Task.isCancelled || now >= deadline) {
+            if stopDeadline == nil && (cancellation.isCancelled || now >= deadline) {
                 kill(-pid, SIGTERM)
                 stopDeadline = now + 2
             }

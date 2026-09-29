@@ -30,6 +30,20 @@ struct DefaultAgentSDKControlTests {
     while :; do wait; done
     """#
 
+    @Test func cancellationBeforeExecutionStartsDoesNotSpawnAHelper() async throws {
+        let root = try directory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let operation = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try await DefaultAgentSDKControl.run(.init(action: .status),
+                executable: URL(filePath: "/bin/sh"),
+                arguments: ["-c", "printf started > \"$1/parent\"", "fixture", root.path], timeout: 1)
+        }
+        do { _ = try await operation.value; Issue.record("Cancelled maintenance unexpectedly ran") }
+        catch is CancellationError { }
+        #expect(!FileManager.default.fileExists(atPath: root.appending(path: "parent").path))
+    }
+
     @Test func timeoutReapsOnlyItsOwnedProcessGroup() async throws {
         let root = try directory()
         defer { try? FileManager.default.removeItem(at: root) }
