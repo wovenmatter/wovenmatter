@@ -38,7 +38,8 @@ final class DefaultAgentSDKSettingsModel {
                     var data = try await backendRequest("connections.sdks.command", JSONEncoder().encode(command))
                     while let self {
                         let state = try JSONDecoder().decode(DefaultAgentSDKWorkspaceState.self, from: data)
-                        self.workspaces[command.key] = state
+                        // Dictionary subscript mutation notifies observers even for an identical poll result.
+                        if self.workspaces[command.key] != state { self.workspaces[command.key] = state }
                         if !state.busy {
                             if command.request.action == .update && state.error == nil {
                                 self.refreshModels(after: command, connections: connections, remoteWorkspaces: remoteWorkspaces)
