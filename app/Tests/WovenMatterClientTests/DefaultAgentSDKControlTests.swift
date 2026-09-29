@@ -30,6 +30,21 @@ struct DefaultAgentSDKControlTests {
     while :; do wait; done
     """#
 
+    @Test @MainActor
+    func maintenanceStartsWhenGlobalUtilityPoolIsSaturated() async throws {
+        let pressure = UtilityPoolPressure()
+        defer { pressure.release() }
+        #expect(pressure.probeRemainsQueued())
+        let result = try await DefaultAgentSDKControl.run(.init(action: .status),
+            executable: URL(filePath: "/bin/sh"),
+            arguments: ["-c", #"printf '%s\n' '{"result":{"sdks":[],"generation":"owned-thread"}}'"#],
+            timeout: 1)
+        #expect(result.generation == "owned-thread")
+        // A watchdog eventually releases pressure to keep a broken implementation
+        // from hanging this suite. It must not be needed for maintenance to run.
+        #expect(pressure.probeRemainsQueued())
+    }
+
     @Test func cancellationBeforeExecutionStartsDoesNotSpawnAHelper() async throws {
         let root = try directory()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -48,10 +63,16 @@ struct DefaultAgentSDKControlTests {
         let root = try directory()
         defer { try? FileManager.default.removeItem(at: root) }
         let unrelated = Process()
-        unrelated.executableURL = URL(filePath: "/bin/sleep")
-        unrelated.arguments = ["30"]
+        let unrelatedInput = Pipe()
+        unrelated.executableURL = URL(filePath: "/bin/cat")
+        unrelated.standardInput = unrelatedInput
+        unrelated.standardOutput = FileHandle.nullDevice
+        unrelated.standardError = FileHandle.nullDevice
         try unrelated.run()
-        defer { if unrelated.isRunning { unrelated.terminate() }; unrelated.waitUntilExit() }
+        defer {
+            try? unrelatedInput.fileHandleForWriting.close()
+            unrelated.waitUntilExit()
+        }
         do {
             _ = try await DefaultAgentSDKControl.run(.init(action: .status), executable: URL(filePath: "/bin/sh"),
                 arguments: ["-c", hangingScript, "fixture", root.path], timeout: 0.5)
@@ -73,6 +94,7 @@ struct DefaultAgentSDKControlTests {
             try await DefaultAgentSDKControl.run(.init(action: .check, id: "pi"), executable: URL(filePath: "/bin/sh"),
                 arguments: ["-c", hangingScript, "fixture", root.path], timeout: 30)
         }
+        defer { operation.cancel() }
         try await awaitFile(root.appending(path: "child"))
         operation.cancel()
         do { _ = try await operation.value; Issue.record("A canceled fixture must not return an SDK status") }
@@ -136,5 +158,47 @@ extension DefaultAgentSDKControlTests {
         // It deliberately remains alive until fixture cleanup removes its directory.
         let child = try #require(Int32(String(contentsOf: root.appending(path: "child"), encoding: .utf8)))
         #expect(kill(child, 0) == 0)
+    }
+}
+
+private final class UtilityPoolPressure: @unchecked Sendable {
+    private let gate = DispatchSemaphore(value: 0)
+    private let jobs = DispatchGroup()
+    private let watchdog = DispatchSemaphore(value: 0)
+    private let released = NSLock()
+    private var isReleased = false
+    let probe = DispatchSemaphore(value: 0)
+    private let count = 256
+
+    init() {
+        for _ in 0..<count {
+            jobs.enter()
+            DispatchQueue.global(qos: .utility).async { [gate, jobs] in
+                gate.wait()
+                jobs.leave()
+            }
+        }
+        DispatchQueue.global(qos: .utility).async { [probe] in probe.signal() }
+        let recovery = Thread { [weak self, watchdog] in
+            if watchdog.wait(timeout: .now() + .seconds(5)) == .timedOut {
+                self?.release()
+            }
+        }
+        recovery.start()
+    }
+
+    func probeRemainsQueued() -> Bool {
+        probe.wait(timeout: .now()) == .timedOut
+    }
+
+    func release() {
+        guard released.withLock({
+            if isReleased { return false }
+            isReleased = true
+            return true
+        }) else { return }
+        watchdog.signal()
+        for _ in 0..<count { gate.signal() }
+        jobs.wait()
     }
 }
