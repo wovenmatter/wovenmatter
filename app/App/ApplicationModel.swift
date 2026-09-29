@@ -5179,10 +5179,12 @@ extension ApplicationModel {
     }
     private func refreshBackendConnectionsState() async throws {
         let revision = connections.backendSnapshotGeneration
+        let catalogGeneration = connections.catalogSnapshotGeneration
         let snapshot = try JSONDecoder().decode(BackendConnectionsSnapshot.self,
             from: await callBackend(method: "connections.snapshot"))
         if snapshot != BackendConnectionsSnapshot(connections) {
-            connections.applyBackendSnapshot(snapshot, expectedGeneration: revision)
+            connections.applyBackendSnapshot(snapshot, expectedGeneration: revision,
+                expectedCatalogGeneration: catalogGeneration)
         }
     }
     private func refreshBackendRemoteState() async throws {

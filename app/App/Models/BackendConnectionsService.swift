@@ -16,6 +16,7 @@ struct BackendConnectionsCommand: Codable {
     var removingAccount: String? = nil
     var reconnectingAccount: String? = nil
     var configuration: DefaultAgentSettings? = nil
+    var configurationBase: DefaultAgentSettings? = nil
     var server: LocalModelServer? = nil
 }
 
@@ -72,7 +73,7 @@ struct BackendConnectionsSnapshot: Codable, Equatable {
                 _ = try await LocalModelServerStore.connect(url: c.label ?? "", key: savedKey, replacing: c.server)
             case "removeServer":
                 if let server = c.server { try await LocalModelServerStore.remove(server) }
-            case "configuration": if let value = c.configuration { model.configuration = value }
+            case "configuration": if let value = c.configuration { model.applyConfiguration(value, base: c.configurationBase) }
             case "inherits": model.setInherits(c.flag ?? false)
             case "saveKey": _ = await model.saveKey(c.value ?? "", provider: c.provider ?? "", label: c.label)
             case "accounts": await model.loadAccountsAndWait()

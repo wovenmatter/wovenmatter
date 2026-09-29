@@ -33,6 +33,7 @@ final class DefaultAgentSettingsModel {
         let catalogOnly: Bool
         let catalogConfiguration: DefaultAgentSettings?
         let catalogKey: String?
+        let sdkRevision: UInt64
     }
     private var connectionChangesTask: Task<Void, Never>?
     private var configurationChangesTask: Task<Void, Never>?
@@ -47,6 +48,9 @@ final class DefaultAgentSettingsModel {
     private var catalogOnly = false
     private var catalogRequestConfiguration: DefaultAgentSettings?
     private var catalogRequestKey: String?
+    private var catalogRequestSDKRevision: UInt64 = 0
+    private var sdkCatalogRevisions: [String: UInt64] = [:]
+    private var metadataInvalidationTask: Task<Void, Never>?
     private var catalogCache: [String: (configuration: DefaultAgentSettings, models: [Model])] = [:]
     private struct EnabledMetadata: Codable, Equatable, Sendable {
         var configuration: DefaultAgentSettings
@@ -63,6 +67,17 @@ final class DefaultAgentSettingsModel {
         func read(_ key: String) -> EnabledMetadata? {
             guard let data = UserDefaults.standard.data(forKey: prefix + key), data.count <= 131_072 else { return nil }
             return try? JSONDecoder().decode(EnabledMetadata.self, from: data)
+        }
+        func invalidate(runtime: String, keys knownKeys: Set<String>, revision: UInt64) {
+            let persisted = UserDefaults.standard.stringArray(forKey: prefix + "index") ?? []
+            let affected = Set(persisted).union(knownKeys).filter {
+                DefaultAgentSettingsModel.catalogRuntime(for: $0) == runtime
+            }
+            for key in affected {
+                revisions[key] = max(revisions[key] ?? 0, revision)
+                UserDefaults.standard.removeObject(forKey: prefix + key)
+            }
+            UserDefaults.standard.set(persisted.filter { !affected.contains($0) }, forKey: prefix + "index")
         }
         func write(_ value: EnabledMetadata, key: String, revision: UInt64) {
             guard revision >= (revisions[key] ?? 0) else { return }
@@ -120,6 +135,8 @@ final class DefaultAgentSettingsModel {
     private var backendCommandTask: Task<Void, Never>?
     private var backendPollTask: Task<Void, Never>?
     private var backendGeneration = UUID()
+    private(set) var catalogSnapshotGeneration = UUID()
+    private var backendCatalogRefreshTask: Task<Void, Never>?
     private var backendCommandError: String?
 
     private func forward(_ command: BackendConnectionsCommand) -> Bool {
@@ -140,9 +157,11 @@ final class DefaultAgentSettingsModel {
             await previous?.value
             guard let self else { return }
             do {
+                let catalogGeneration = self.catalogSnapshotGeneration
                 let result = try await request("connections.command", JSONEncoder().encode(command))
                 guard self.backendGeneration == requestID, !Task.isCancelled else { return }
-                self.applyBackendSnapshot(try JSONDecoder().decode(BackendConnectionsSnapshot.self, from: result))
+                self.applyBackendSnapshot(try JSONDecoder().decode(BackendConnectionsSnapshot.self, from: result),
+                    expectedCatalogGeneration: catalogGeneration)
                 self.pollBackendIfNeeded()
             } catch {
                 guard self.backendGeneration == requestID else { return }
@@ -160,10 +179,13 @@ final class DefaultAgentSettingsModel {
             while !Task.isCancelled {
                 do {
                     try await Task.sleep(for: .milliseconds(250))
+                    guard let self else { return }
+                    let catalogGeneration = self.catalogSnapshotGeneration
                     let data = try await request("connections.snapshot", Data())
                     try Task.checkCancellation()
-                    guard let self, self.backendGeneration == requestID else { return }
-                    self.applyBackendSnapshot(try JSONDecoder().decode(BackendConnectionsSnapshot.self, from: data))
+                    guard self.backendGeneration == requestID else { return }
+                    self.applyBackendSnapshot(try JSONDecoder().decode(BackendConnectionsSnapshot.self, from: data),
+                        expectedCatalogGeneration: catalogGeneration)
                     if !self.busy { return }
                 } catch is CancellationError { return }
                 catch {
@@ -174,12 +196,18 @@ final class DefaultAgentSettingsModel {
         }
     }
     var backendSnapshotGeneration: UUID { backendGeneration }
-    func applyBackendSnapshot(_ value: BackendConnectionsSnapshot, expectedGeneration: UUID? = nil) {
+    func applyBackendSnapshot(_ value: BackendConnectionsSnapshot, expectedGeneration: UUID? = nil,
+                              expectedCatalogGeneration: UUID? = nil) {
         if let expectedGeneration, expectedGeneration != backendGeneration { return }
         localServers = value.localServers
-        scope = value.scope; settings = value.settings; catalog = value.catalog; providers = value.providers
-        catalogIncludesAllModels = value.catalogIncludesAllModels ?? false
-        resolvedDefaultModelID = value.resolvedDefaultModelID
+        scope = value.scope; settings = value.settings; providers = value.providers
+        // SDK replacement may finish while an earlier snapshot is in transit.
+        // Preserve account/operation updates, but never restore its old inventory.
+        if expectedCatalogGeneration == nil || expectedCatalogGeneration == catalogSnapshotGeneration {
+            catalog = value.catalog
+            catalogIncludesAllModels = value.catalogIncludesAllModels ?? false
+            resolvedDefaultModelID = value.resolvedDefaultModelID
+        }
         searchConfigured = value.searchConfigured; accounts = value.accounts
         cursorAccountStatus = value.cursorAccountStatus; signInProvider = value.signInProvider
         busy = value.busy; error = value.error; notice = value.notice
@@ -206,10 +234,11 @@ final class DefaultAgentSettingsModel {
             return
         }
         guard LocalExecutionRole.current != .frontend else { throw BackendRPCError.remote("The background service is not connected.") }
-        let runID = generation
+        let runID = generation, catalogGeneration = catalogSnapshotGeneration
         let data = try await BackendConnectionsService.handle(method: "connections.command", payload: JSONEncoder().encode(command), model: self)
         guard generation == runID, !Task.isCancelled else { throw CancellationError() }
-        applyBackendSnapshot(try JSONDecoder().decode(BackendConnectionsSnapshot.self, from: data))
+        applyBackendSnapshot(try JSONDecoder().decode(BackendConnectionsSnapshot.self, from: data),
+            expectedCatalogGeneration: catalogGeneration)
     }
 
     var scope = "global"
@@ -242,6 +271,7 @@ final class DefaultAgentSettingsModel {
     var promptOptions: [(id: String, label: String)] = []
     private var process: Process?
     private var input: FileHandle?
+    private let inputQueue = DispatchQueue(label: "wovenmatter.built-in.settings-input", qos: .userInitiated)
     private var outputBuffer = Data()
     private var generation = UUID()
     private var operationTask: Task<Void, Never>?
@@ -254,18 +284,26 @@ final class DefaultAgentSettingsModel {
     var configuration: DefaultAgentSettings {
         get { scope == "global" ? settings.global : settings.resolved(scope) }
         set {
-            if configuration.defaultModel != newValue.defaultModel { resolvedDefaultModelID = nil }
+            let base = configuration
+            if base.defaultModel != newValue.defaultModel { resolvedDefaultModelID = nil }
             if backendRequest != nil || LocalExecutionRole.current == .frontend {
                 if scope == "global" { settings.global = newValue } else { settings.workspaces[scope] = newValue }
                 publishCatalog()
-                _ = forward(.init(action: "configuration", configuration: newValue))
+                _ = forward(.init(action: "configuration", configuration: newValue, configurationBase: base))
                 return
             }
-            settings = DefaultAgentSupport.updateSettings { value in
-                if scope == "global" { value.global = newValue } else { value.workspaces[scope] = newValue }
-            }
-            publishCatalog()
+            applyConfiguration(newValue, base: base)
         }
+    }
+    func applyConfiguration(_ edited: DefaultAgentSettings, base: DefaultAgentSettings?) {
+        let original = base ?? configuration
+        if original.defaultModel != edited.defaultModel { resolvedDefaultModelID = nil }
+        settings = DefaultAgentSupport.updateSettings { value in
+            let current = scope == "global" ? value.global : value.resolved(scope)
+            let merged = current.applyingChanges(from: original, to: edited)
+            if scope == "global" { value.global = merged } else { value.workspaces[scope] = merged }
+        }
+        publishCatalog()
     }
     var inherits: Bool { scope != "global" && settings.workspaces[scope] == nil }
     var keyScope: String { inherits ? "global" : scope }
@@ -614,13 +652,16 @@ final class DefaultAgentSettingsModel {
         processingResult = false
         outputTask?.cancel()
         outputTask = nil
-        try? output?.close()
-        output = nil
-        finishSignIn()
-        input?.closeFile()
-        input = nil
+        // Terminate before closing a pipe that a reader/writer may be using.
+        // FileHandle close/write can wait for that operation; neither belongs on
+        // MainActor. The serial queue also preserves request/answer ordering.
         if let process, process.isRunning { process.terminate() }
         process = nil
+        if let output { DispatchQueue.global(qos: .utility).async { try? output.close() } }
+        output = nil
+        finishSignIn()
+        if let input { inputQueue.async { try? input.close() } }
+        input = nil
         busy = false
         signInProvider = nil
         signInURL = nil
@@ -693,6 +734,64 @@ final class DefaultAgentSettingsModel {
     func waitForEnabledMetadata() async {
         await metadataTask?.value
         await accountsTask?.value
+    }
+    /// Successful SDK replacement invalidates every scope using that runtime.
+    /// Do not launch discovery or cancel unrelated account operations here.
+    func invalidateSDKCatalog(scopeKey: String) {
+        let runtime = scopeKey.lowercased()
+        catalogSnapshotGeneration = UUID()
+        sdkCatalogRevisions[runtime, default: 0] &+= 1
+        let currentKey = catalogKey(remote: catalogRemote)
+        let keys = Set(catalogCache.keys).union(enabledMetadata.keys).union(loadedMetadataKeys).union([currentKey])
+        for key in keys where Self.catalogRuntime(for: key) == runtime {
+            catalogCache.removeValue(forKey: key)
+            enabledMetadata.removeValue(forKey: key)
+            loadedMetadataKeys.remove(key)
+        }
+        if backendRequest == nil && LocalExecutionRole.current != .frontend {
+            metadataWriteRevision &+= 1
+            let revision = metadataWriteRevision
+            let previous = metadataInvalidationTask
+            metadataInvalidationTask = Task {
+                await previous?.value
+                await EnabledMetadataStore.shared.invalidate(runtime: runtime, keys: keys, revision: revision)
+            }
+        }
+        // Re-read the backend projection after invalidation without issuing a
+        // catalog command. This also covers a successful update in another scope.
+        if let request = backendRequest {
+            backendCatalogRefreshTask?.cancel()
+            let requestID = backendGeneration, catalogGeneration = catalogSnapshotGeneration
+            backendCatalogRefreshTask = Task { [weak self] in
+                do {
+                    let data = try await request("connections.snapshot", Data())
+                    guard let self, !Task.isCancelled, self.backendGeneration == requestID,
+                          self.catalogSnapshotGeneration == catalogGeneration else { return }
+                    self.applyBackendSnapshot(try JSONDecoder().decode(BackendConnectionsSnapshot.self, from: data),
+                        expectedGeneration: requestID, expectedCatalogGeneration: catalogGeneration)
+                    self.pollBackendIfNeeded()
+                } catch { /* Cached labels remain optional; normal refresh can retry. */ }
+            }
+        }
+        guard Self.catalogRuntime(for: currentKey) == runtime else { return }
+        metadataTask?.cancel()
+        metadataGeneration = UUID()
+        resolvedDefaultModelID = nil
+        catalogIncludesAllModels = false
+        catalog = enabledModelIDs.map(fallbackModel)
+        publishCatalog()
+        if backendRequest == nil && LocalExecutionRole.current != .frontend,
+           !busy && !requestedAllModels && runtime == "local" {
+            hydrateEnabledMetadata(remote: nil)
+        }
+    }
+    nonisolated private static func catalogRuntime(for key: String) -> String? {
+        guard let data = Data(base64Encoded: key),
+              let parts = try? JSONDecoder().decode([String].self, from: data), parts.count > 1 else { return nil }
+        return parts[1].lowercased()
+    }
+    private func sdkRevision(for key: String?) -> UInt64 {
+        key.flatMap { Self.catalogRuntime(for: $0) }.flatMap { sdkCatalogRevisions[$0] } ?? 0
     }
     private func catalogKey(remote: RemoteWorkspaceConfiguration?) -> String {
         let endpoint = remote.map { [$0.id.uuidString, $0.hostName, $0.userName ?? "", String($0.remotePort), $0.workspaceID] } ?? ["local"]
@@ -775,6 +874,8 @@ final class DefaultAgentSettingsModel {
         let key = catalogKey(remote: remote)
         metadataTask = Task { [weak self] in
             guard let self else { return }
+            await self.metadataInvalidationTask?.value
+            guard !Task.isCancelled, self.metadataGeneration == requestID else { return }
             if !self.loadedMetadataKeys.contains(key) {
                 let stored = await EnabledMetadataStore.shared.read(key)
                 guard !Task.isCancelled, self.metadataGeneration == requestID,
@@ -830,6 +931,7 @@ final class DefaultAgentSettingsModel {
         catalogOnly = action == "catalog"
         catalogRequestConfiguration = catalogConfiguration
         catalogRequestKey = catalogKey(remote: remote)
+        catalogRequestSDKRevision = sdkRevision(for: catalogRequestKey)
         if !catalogOnly {
             if login == nil { ProviderAccountCoordinator.shared.invalidate() }
             loadAccounts(force: login == nil)
@@ -950,7 +1052,18 @@ final class DefaultAgentSettingsModel {
         do {
             var data = try JSONSerialization.data(withJSONObject: value)
             data.append(0x0a)
-            try input?.write(contentsOf: data)
+            guard let input else { throw DefaultAgentError.message("Built-in helper disconnected.") }
+            let runID = generation
+            let body = data
+            inputQueue.async { [weak self] in
+                do { try input.write(contentsOf: body) }
+                catch {
+                    Task { @MainActor [weak self] in
+                        guard let self, self.generation == runID else { return }
+                        self.error = "Built-in helper disconnected."
+                    }
+                }
+            }
         } catch { self.error = "Built-in helper disconnected." }
     }
     private func receive(_ data: Data) {
@@ -966,7 +1079,8 @@ final class DefaultAgentSettingsModel {
                 let runID = generation
                 let context = ResultContext(keyScope: activeKeyScope, removingAccount: removingAccount,
                     reconnectingAccount: reconnectingAccount, provider: signInProvider, catalogOnly: catalogOnly,
-                    catalogConfiguration: catalogRequestConfiguration, catalogKey: catalogRequestKey)
+                    catalogConfiguration: catalogRequestConfiguration, catalogKey: catalogRequestKey,
+                    sdkRevision: catalogRequestSDKRevision)
                 resultTask = Task { [self] in await receiveResult(result, runID: runID, context: context) }
                 continue
             }
@@ -1007,6 +1121,11 @@ final class DefaultAgentSettingsModel {
         let data = try? JSONSerialization.data(withJSONObject: result)
         if context.catalogOnly {
             guard generation == runID else { return }
+            guard context.sdkRevision == sdkRevision(for: context.catalogKey) else {
+                busy = false
+                publishCatalog()
+                return
+            }
             struct Catalog: Decodable { let models: [Model] }
             if let data, let response = try? JSONDecoder().decode(Catalog.self, from: data) {
                 if let requested = context.catalogConfiguration, let cacheKey = context.catalogKey {
@@ -1075,7 +1194,8 @@ final class DefaultAgentSettingsModel {
         removingAccount = nil
         finishSignIn()
         if let status {
-            if let key = context.catalogKey, let requested = context.catalogConfiguration {
+            if let key = context.catalogKey, let requested = context.catalogConfiguration,
+               context.sdkRevision == sdkRevision(for: key) {
                 catalogCache[key] = (requested, status.models)
             }
             providers = status.providers
