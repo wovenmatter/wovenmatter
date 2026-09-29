@@ -36,7 +36,8 @@ struct WorkspaceHistoryTextWindowTests {
           let expected = String(String.UnicodeScalarView(scalars.dropFirst(offset).prefix(2)))
           #expect(row[field]?.stringValue == expected)
           #expect(row[field + "_characters"]?.intValue == scalars.count)
-          #expect(row[field + "_offset"]?.intValue == offset)
+          // Query offsets retain the existing TEXT-bound JSON representation.
+          #expect(row[field + "_offset"]?.stringValue == String(offset))
           #expect(row[field + "_has_more"]?.intValue == (offset + 2 < scalars.count ? 1 : 0))
         }
       }
