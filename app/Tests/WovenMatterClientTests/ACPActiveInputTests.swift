@@ -55,7 +55,12 @@ struct ACPActiveInputTests {
             try await Task.sleep(for: .milliseconds(5))
         }
         try await client.cancel()
-        await #expect(throws: CancellationError.self) { try await steering.value }
+        // The native receipt explicitly requested a fallback, so rejecting it
+        // after Stop is definite non-admission, not uncertain delivery.
+        await #expect(performing: { try await steering.value }, throws: { error in
+            guard case LocalACPClientError.activeInputUnsupported = error else { return false }
+            return true
+        })
         #expect(try await prompt.value == .cancelled)
         #expect(try f.requests().filter { $0["method"] as? String == "session/prompt" }.count == 1)
         await client.shutdown()

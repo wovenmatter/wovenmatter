@@ -1910,6 +1910,7 @@ private actor LocalACPRunEventBuffer {
 }
 
 actor LocalACPAssistantStreamWriter {
+    enum PersistenceEvent: Sendable { case acquired, queued }
     private static let immediateFlushCharacters = 4_096
     private static let coalescingDelay = Duration.milliseconds(75)
 
@@ -1918,6 +1919,8 @@ actor LocalACPAssistantStreamWriter {
     private var assistantMessageID: String
     private let conversationID: String
     private let onChange: LocalACPSessionCoordinator.ChangeHandler?
+    // Internal observation seam for deterministic persistence-gate fixtures.
+    private let onPersistenceEvent: (@Sendable (PersistenceEvent) -> Void)?
     // Actor isolation does not cover suspension points. Keep each stream's
     // buffer changes and persistence ordered while SQLite runs on its worker.
     private var persistenceBusy = false
@@ -1937,13 +1940,15 @@ actor LocalACPAssistantStreamWriter {
         runID: String,
         assistantMessageID: String,
         conversationID: String,
-        onChange: LocalACPSessionCoordinator.ChangeHandler?
+        onChange: LocalACPSessionCoordinator.ChangeHandler?,
+        onPersistenceEvent: (@Sendable (PersistenceEvent) -> Void)? = nil
     ) {
         self.database = database
         self.runID = runID
         self.assistantMessageID = assistantMessageID
         self.conversationID = conversationID
         self.onChange = onChange
+        self.onPersistenceEvent = onPersistenceEvent
     }
 
     func append(_ chunk: String) async throws {
@@ -2063,8 +2068,15 @@ actor LocalACPAssistantStreamWriter {
     }
 
     private func acquirePersistence() async {
-        if !persistenceBusy { persistenceBusy = true; return }
-        await withCheckedContinuation { persistenceWaiters.append($0) }
+        if !persistenceBusy {
+            persistenceBusy = true
+            onPersistenceEvent?(.acquired)
+            return
+        }
+        await withCheckedContinuation {
+            persistenceWaiters.append($0)
+            onPersistenceEvent?(.queued)
+        }
     }
 
     private func releasePersistence() {

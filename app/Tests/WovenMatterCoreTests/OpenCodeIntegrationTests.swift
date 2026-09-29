@@ -439,8 +439,8 @@ struct OpenCodeIntegrationTests {
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let database = try WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
-        let id = try database.createLocalACPSession(runtimeKind: .opencode, title: "Work", ownerDeviceID: UUID(), openCodeAssociation: ("fixture", "ses_fixture"))
+        let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+        let id = try await database.createLocalACPSession(runtimeKind: .opencode, title: "Work", ownerDeviceID: UUID(), openCodeAssociation: ("fixture", "ses_fixture"))
         let link = OpenCodeSessionLink(conversationID: id, connectionID: "fixture", sessionID: "ses_fixture")
         let session = fixtureSession()
         let coordinator = OpenCodeSessionCoordinator(database: database, clientFactory: { OpenCodeHTTPClient(connection: $0, session: session) })

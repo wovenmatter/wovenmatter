@@ -1245,7 +1245,7 @@ public actor LocalACPClient {
                         return self.sessionCancellationRequested ? .cancelled : .endTurn
                     })
                 }
-                if sessionCancellationRequested { try cancel() }
+                if sessionCancellationRequested { try await cancel() }
                 followsDetachedTurn = true
                 lifecycle.continuation.yield(ACPRequestResponse(value: .object(["type": .string("steeringAccepted")]), notificationBarrier: nil))
                 return LocalACPActiveInputReceipt(completion: Task {
