@@ -27,8 +27,18 @@ history queries, remain writer jobs. Dashboard and tool-state refreshes read the
 related records and revision together. UI views consume published model state;
 they do not query SQLite while rendering.
 
-Usage transcript scanning and its import transaction run on the writer worker.
-Provider network collection remains asynchronous and outside that transaction.
+Usage transcript enumeration, parsing, and external history queries run on a
+separate preparation worker with at most four admitted jobs. It prepares one
+source at a time; only normalized values enter the shared writer. Each source's
+samples and fingerprint/range checkpoint commit atomically after revalidating the
+previous source state. Partial or conflicted imports preserve the aggregate
+coverage checkpoint for retry. Successful completion updates that checkpoint and
+prunes retention in one writer transaction. Queued usage writes validate refresh
+and account ownership when they start, and live observations allocate their
+sequence from the durable cursor on that same lane. Provider network collection
+remains asynchronous and outside database transactions. A single large source
+replacement or retention prune can still occupy the writer until its SQL commits;
+this change removes external I/O from that interval, not SQLite serialization.
 Transport history recorders are async and awaited before a frame is consumed or
 sent. Note write-behind retains its coalescing and recovery journal, while its
 ordered batches await SQLite or backend RPC; lifecycle flushes are async barriers.

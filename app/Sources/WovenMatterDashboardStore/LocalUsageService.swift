@@ -162,10 +162,14 @@ public actor LocalUsageService {
   private let sharedConnectionRevision: @Sendable () -> UInt64
   private let limitCollector: @Sendable (UsageLimitsRequest) async -> [UsageLimitAccount]
   private let openRouterActivityFetcher: @Sendable (String) async throws -> OpenRouterActivityResult
-  private var limitsGeneration = UUID()
-  private var analyticsGeneration = UUID()
+  private var limitsGeneration = UsageRefreshOwnership() { didSet { oldValue.invalidate() } }
+  private var analyticsGeneration = UsageRefreshOwnership() { didSet { oldValue.invalidate() } }
   private var usageStore: AsyncUsageStore?
-  private var usageStoreOpening: Task<AsyncUsageStore, any Error>?
+  private struct StoreOpening {
+    let id = UUID()
+    let task: Task<AsyncUsageStore, any Error>
+  }
+  private var usageStoreOpening: StoreOpening?
   private var usageStoreFailure: String?
   private var cachedLimits: (
     date: Date,
@@ -321,7 +325,7 @@ public actor LocalUsageService {
     }
     let selectionIDs = Dictionary(uniqueKeysWithValues: resolvedConnections.map { ($0.key.rawValue, $0.value.id) })
     let connectionRevision = sharedConnectionRevision()
-    let generation = UUID()
+    let generation = makeRefreshOwnership()
     limitsGeneration = generation
     let codexSources = !usesSharedConnections && enabledProviders.contains(.codex)
       ? ProviderLimitCollector.codexWorkspaceSources(homeDirectory: homeDirectory)
@@ -399,7 +403,7 @@ public actor LocalUsageService {
           else { return account }
           return prior.retainingLastGood(after: account)
         }
-        try? await store?.saveUsageLimitAccounts(accounts, storedAt: now)
+        try? await store?.saveUsageLimitAccounts(accounts, storedAt: now, validating: { try generation.check() })
         try checkCurrentLimits(generation, connectionRevision: connectionRevision)
         cachedLimits = (now, enabledProviders, resolvedCodexWorkspaceID, connectionRevision, selectionIDs, accounts)
       } else {
@@ -426,8 +430,9 @@ public actor LocalUsageService {
     )
   }
 
-  private func checkCurrentLimits(_ generation: UUID, connectionRevision: UInt64) throws {
-    guard limitsGeneration == generation, !Task.isCancelled,
+  private func checkCurrentLimits(_ generation: UsageRefreshOwnership, connectionRevision: UInt64) throws {
+    try generation.check()
+    guard limitsGeneration === generation, !Task.isCancelled,
           !usesSharedConnections || connectionRevision == sharedConnectionRevision() else {
       throw CancellationError()
     }
@@ -441,7 +446,7 @@ public actor LocalUsageService {
     now: Date = Date()
   ) async throws -> UsageAnalyticsSnapshot {
     try Task.checkCancellation()
-    let generation = UUID()
+    let generation = makeRefreshOwnership()
     analyticsGeneration = generation
     let interval = range.interval(relativeTo: now)
     guard let store = await openUsageStore() else {
@@ -483,13 +488,15 @@ public actor LocalUsageService {
         now: now
       ) {
         guard isCurrentAnalytics(generation) else { throw CancellationError() }
-        try? await store.setMetadataDate(now, for: "usage.local-import-at")
-        let previousCutoff = try? await store.metadataDate("usage.local-indexed-after")
-        try? await store.setMetadataDate(
-          min(previousCutoff ?? requestedImportCutoff, requestedImportCutoff),
-          for: "usage.local-indexed-after"
-        )
-        try? await store.prune(before: now.addingTimeInterval(-Self.retention))
+        try? await store.write(validating: { try generation.check() }) { connection in
+          try connection.performTransaction {
+            let previousCutoff = try connection.metadataDate("usage.local-indexed-after")
+            try connection.setMetadataDate(now, for: "usage.local-import-at")
+            try connection.setMetadataDate(min(previousCutoff ?? requestedImportCutoff, requestedImportCutoff),
+              for: "usage.local-indexed-after")
+            try connection.prune(before: now.addingTimeInterval(-Self.retention))
+          }
+        }
       }
     }
     guard isCurrentAnalytics(generation) else { throw CancellationError() }
@@ -499,7 +506,9 @@ public actor LocalUsageService {
       guard isCurrentAnalytics(generation) else { throw CancellationError() }
       await importOpenRouterActivity(store: store, generation: generation, now: now)
       guard isCurrentAnalytics(generation) else { throw CancellationError() }
-      try? await store.setMetadataDate(now, for: "usage.openrouter-attempt-at")
+      try? await store.write(validating: { try generation.check() }) {
+        try $0.setMetadataDate(now, for: "usage.openrouter-attempt-at")
+      }
     }
     if enabledProviders.contains(.cursor),
        await shouldImportCursorAccount(store: store, reason: refreshReason, now: now) {
@@ -511,7 +520,9 @@ public actor LocalUsageService {
         now: now
       )
       guard isCurrentAnalytics(generation) else { throw CancellationError() }
-      try? await store.setMetadataDate(now, for: "usage.cursor-attempt-at")
+      try? await store.write(validating: { try generation.check() }) {
+        try $0.setMetadataDate(now, for: "usage.cursor-attempt-at")
+      }
     }
     guard isCurrentAnalytics(generation) else { throw CancellationError() }
     let storedSamples = ((try? await store.samples(in: interval)) ?? []).filter {
@@ -539,8 +550,8 @@ public actor LocalUsageService {
     try credentialStore.saveOpenRouterAPIKey(key)
     openRouterAPIKey = key
     openRouterCredentialRevision = sharedConnectionRevision()
-    limitsGeneration = UUID()
-    analyticsGeneration = UUID()
+    limitsGeneration = UsageRefreshOwnership()
+    analyticsGeneration = UsageRefreshOwnership()
     cachedLimits = nil
     openRouterStatus = .unavailable
     openRouterDetail = "The new credential has not been checked yet."
@@ -560,8 +571,8 @@ public actor LocalUsageService {
   public func deleteOpenRouterAPIKey() throws {
     try credentialStore.deleteOpenRouterAPIKey()
     openRouterAPIKey = nil
-    limitsGeneration = UUID()
-    analyticsGeneration = UUID()
+    limitsGeneration = UsageRefreshOwnership()
+    analyticsGeneration = UsageRefreshOwnership()
     cachedLimits = nil
     openRouterStatus = .unavailable
     openRouterDetail = "Add an OpenRouter management key to import official account activity."
@@ -578,15 +589,15 @@ public actor LocalUsageService {
   public func authorizeOpenRouterCredentialAccess() throws {
     guard let key = try credentialStore.authorizeOpenRouterAPIKey() else {
       openRouterAPIKey = nil
-      limitsGeneration = UUID()
-      analyticsGeneration = UUID()
+      limitsGeneration = UsageRefreshOwnership()
+      analyticsGeneration = UsageRefreshOwnership()
       cachedLimits = nil
       throw LocalUsageServiceError.missingCredential
     }
     openRouterAPIKey = key
     openRouterCredentialRevision = sharedConnectionRevision()
-    limitsGeneration = UUID()
-    analyticsGeneration = UUID()
+    limitsGeneration = UsageRefreshOwnership()
+    analyticsGeneration = UsageRefreshOwnership()
     cachedLimits = nil
   }
 
@@ -604,19 +615,21 @@ public actor LocalUsageService {
   private func openUsageStore() async -> AsyncUsageStore? {
     if let usageStore { return usageStore }
     if usageStoreFailure != nil { return nil }
-    let opening: Task<AsyncUsageStore, any Error>
+    let opening: StoreOpening
     if let pending = usageStoreOpening { opening = pending }
     else {
       let url = databaseURL
-      opening = Task { try await AsyncUsageStore(databaseURL: url) }
+      opening = StoreOpening(task: Task { try await AsyncUsageStore(databaseURL: url) })
       usageStoreOpening = opening
     }
     do {
-      let store = try await opening.value
+      let store = try await opening.task.value
       usageStore = store
-      usageStoreOpening = nil
+      if usageStoreOpening?.id == opening.id { usageStoreOpening = nil }
       return store
     } catch {
+      // Multiple waiters can resume after another caller already started a retry.
+      guard usageStoreOpening?.id == opening.id else { return usageStore }
       usageStoreOpening = nil
       // Queue pressure and cancellation are retryable, not a corrupt index.
       if !(error is CancellationError), !(error is DatabaseWorkerError) {
@@ -684,7 +697,7 @@ public actor LocalUsageService {
   private func importCursorAccountActivity(
     store: AsyncUsageStore,
     cutoff: Date,
-    generation: UUID,
+    generation: UsageRefreshOwnership,
     now: Date
   ) async {
     do {
@@ -711,7 +724,8 @@ public actor LocalUsageService {
         harness: "Cursor",
         fingerprint: "cursor-account:\(now.timeIntervalSince1970)",
         samples: Array(samplesByEvent.values),
-        importedAt: now
+        importedAt: now,
+        validating: { try generation.check() }
       )
       guard isCurrentAnalytics(generation) else { return }
       cursorAccountStatus = .available
@@ -728,18 +742,16 @@ public actor LocalUsageService {
   }
 
   private func importLocalSources(store: AsyncUsageStore, cutoff: Date,
-    enabledProviders: Set<ProviderKind>, generation: UUID, now: Date) async -> Bool {
+    enabledProviders: Set<ProviderKind>, generation: UsageRefreshOwnership, now: Date) async -> Bool {
     let home = homeDirectory
     let outcomes = importOutcomes
     do {
-      let result = try await store.write { connection in
-        let importer = UsageTranscriptImporter(homeDirectory: home, fileManager: FileManager(), outcomes: outcomes)
-        let succeeded = importer.run(store: connection, cutoff: cutoff, enabledProviders: enabledProviders, now: now)
-        return (succeeded, importer.importOutcomes)
-      }
+      let importer = UsageTranscriptImporter(homeDirectory: home, outcomes: outcomes, ownership: generation)
+      let complete = try await importer.run(store: store, cutoff: cutoff, enabledProviders: enabledProviders, now: now)
+      let updatedOutcomes = await importer.importOutcomes
       guard isCurrentAnalytics(generation) else { return false }
-      importOutcomes = result.1
-      return result.0
+      importOutcomes = updatedOutcomes
+      return complete
     } catch {
       guard isCurrentAnalytics(generation) else { return false }
       importOutcomes["wovenmatter:index"] = .init(failures: 1)
@@ -747,11 +759,17 @@ public actor LocalUsageService {
     }
   }
 
-  private func isCurrentAnalytics(_ generation: UUID) -> Bool {
-    analyticsGeneration == generation && !Task.isCancelled
+  private func makeRefreshOwnership() -> UsageRefreshOwnership {
+    UsageRefreshOwnership(connectionRevision: usesSharedConnections ? sharedConnectionRevision() : nil,
+      currentRevision: sharedConnectionRevision)
   }
 
-  private func importOpenRouterActivity(store: AsyncUsageStore, generation: UUID, now: Date) async {
+  private func isCurrentAnalytics(_ generation: UsageRefreshOwnership) -> Bool {
+    guard analyticsGeneration === generation, !Task.isCancelled else { return false }
+    do { try generation.check(); return true } catch { return false }
+  }
+
+  private func importOpenRouterActivity(store: AsyncUsageStore, generation: UsageRefreshOwnership, now: Date) async {
     do {
       guard let key = try loadOpenRouterAPIKey() else {
         openRouterStatus = .unavailable
@@ -770,7 +788,8 @@ public actor LocalUsageService {
           harness: nil,
           fingerprint: "\(Self.parserVersion):\(now.timeIntervalSince1970)",
           samples: uniqueSourceEvents(samples),
-          importedAt: now
+          importedAt: now,
+          validating: { try generation.check() }
         )
       }
       guard isCurrentAnalytics(generation) else { return }
@@ -1222,7 +1241,9 @@ public enum LocalUsageServiceError: LocalizedError {
 struct OpenCodeUsageDatabase {
   let databaseURL: URL
 
-  func samples(cutoff: Date, now: Date) throws -> [UsageSample] {
+  func samples(cutoff: Date, now: Date,
+    check: @escaping @Sendable () throws -> Void = {}) throws -> [UsageSample] {
+    try check()
     var database: OpaquePointer?
     let status = sqlite3_open_v2(databaseURL.path, &database, SQLITE_OPEN_READONLY, nil)
     guard status == SQLITE_OK, let database else {
@@ -1231,6 +1252,9 @@ struct OpenCodeUsageDatabase {
     }
     defer { sqlite3_close(database) }
     sqlite3_busy_timeout(database, 500)
+    let cancellation = UsageSourceQueryCancellation(check)
+    cancellation.install(on: database)
+    defer { cancellation.remove(from: database) }
 
     let sql = """
       SELECT p.id, p.session_id, m.data, p.data, s.directory
@@ -1256,6 +1280,7 @@ struct OpenCodeUsageDatabase {
     var samples: [UsageSample] = []
     while true {
       let status = sqlite3_step(statement)
+      try check()
       if status == SQLITE_DONE { return samples }
       guard status == SQLITE_ROW else { throw OpenCodeUsageDatabaseError.queryFailed }
       guard let partID = text(statement, column: 0),
