@@ -1096,9 +1096,9 @@ struct DashboardMessageRow: View {
             HStack {
                 ConversationChangedFilesCard(records: activities, topSpacing: {
                     if showsAssistantBody { return 18 }
-                    guard run != nil else { return 0 }
-                    return ConversationWorkTranscript.hasVisibleActivities(
-                        in: activities, commentaryIDs: Set(transcript.commentary.map(\.id))
+                    guard let run else { return 0 }
+                    return ConversationWorkTranscript.hasVisibleContent(
+                        run: run, in: activities, commentaryIDs: Set(transcript.commentary.map(\.id))
                     ) ? 18 : 0
                 })
                 .frame(maxWidth: .infinity, alignment: .leading)

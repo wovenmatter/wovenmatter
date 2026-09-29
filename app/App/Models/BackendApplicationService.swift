@@ -11,6 +11,8 @@ struct BackendAttachmentSource: Codable, Sendable {
 }
 
 enum BackendApplicationCommand: Codable, Sendable {
+    case setIdleSleepPolicy(WorkPowerPolicy)
+    case setClosedLidPolicy(WorkPowerPolicy)
     case stageAttachments(files: [BackendAttachmentSource])
     case toolsMutation(BackendToolsMutation)
     case prepareSelections(conversationID: String, defaults: SessionSelections?)
@@ -55,15 +57,12 @@ struct BackendApplicationReadiness: Codable, Sendable {
     let capabilities: [String]
 }
 
-/// A separate backend owns this dispatcher and the full ApplicationModel. Installing
-/// this service alone does not authorize the UI to skip its execution startup: the
-/// lifecycle handshake must also verify completeClientRouting.
+/// Dispatches frontend commands to the backend-owned application model.
 @MainActor
 final class BackendApplicationService {
     let instanceID = UUID()
     let invalidations: BackendInvalidationJournal
     let model: ApplicationModel
-    private let completeClientRouting: Bool
     private struct PendingCommand {
         let identity: BackendRPCCommandIdentity
         let task: Task<BackendRPCResponse, Never>
@@ -74,11 +73,10 @@ final class BackendApplicationService {
     private var dispatchAdmissions: AgentDispatchAdmissionLedger
     var dispatchStopRevisions: [String: UInt64] { dispatchAdmissions.stopRevisions }
 
-    init(model: ApplicationModel, completeClientRouting: Bool = false) {
+    init(model: ApplicationModel) {
         self.invalidations = BackendInvalidationJournal(instanceID: instanceID)
         self.dispatchAdmissions = AgentDispatchAdmissionLedger(instanceID: instanceID)
         self.model = model
-        self.completeClientRouting = completeClientRouting
     }
 
     func handle(_ request: BackendRPCRequest) async -> BackendRPCResponse {
@@ -109,7 +107,7 @@ final class BackendApplicationService {
             case "application.readiness":
                 return try response(request, BackendApplicationReadiness(protocolVersion: 1,
                     instanceID: instanceID, ready: model.state == .ready,
-                    completeClientRouting: completeClientRouting,
+                    completeClientRouting: true,
                     capabilities: ["session.create", "session.send", "session.configure", "session.tools",
                                    "session.cancel", "session.permission", "session.interaction", "calendar.write",
                                    "calendar.metadata", "session.dispatch-epochs"]))
@@ -157,6 +155,12 @@ final class BackendApplicationService {
 
     private func execute(_ command: BackendApplicationCommand) async throws -> BackendApplicationResult {
         switch command {
+        case .setIdleSleepPolicy(let policy):
+            model.activeWorkSleepPrevention.setPolicy(policy)
+            return .init()
+        case .setClosedLidPolicy(let policy):
+            model.applyClosedLidPolicy(policy)
+            return .init()
         case let .stageAttachments(files):
             return try await .init(attachments: model.stageMessageAttachments(files.map { (url: $0.url, mimeType: $0.mimeType) }))
         case let .toolsMutation(mutation):

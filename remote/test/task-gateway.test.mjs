@@ -260,3 +260,23 @@ test('Built-in tasks forward their saved working directory for both new and recu
     { cwd: '/workspace/project' }, { cwd: '/workspace/project', sessionId: 'native' }, { cwd: '/workspace' },
   ])
 })
+
+
+test('restart retains complete output before a torn final append without replaying the task', async t => {
+  const { directory, gateway } = await fixture(t, {
+    now: () => Date.parse('2026-01-02T15:00:00Z'), execute: () => new Promise(() => {}),
+  })
+  gateway.publish({ publicationID: 'torn-output', schedules: [task()], knownRuns: [] })
+  gateway.tick()
+  const state = JSON.parse(await readFile(resolve(directory, 'state.json'), 'utf8'))
+  const claim = Object.values(state.claims)[0]
+  const complete = { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'retained' } }
+  await writeFile(resolve(directory, `run-${claim.id}.jsonl`), JSON.stringify(complete) + '\n{"sessionUpdate":')
+  const restarted = createTaskGateway({ directory, now: () => Date.parse('2026-01-02T16:00:00Z'),
+    execute: async () => assert.fail('an uncertain prompt must not be replayed'),
+  })
+  restarted.tick()
+  assert.equal(restarted.status().activeRuns, 0)
+  assert.equal(restarted.results().entries[0].run.status, 'uncertain')
+  assert.deepEqual(restarted.results().entries[0].updates, [complete])
+})

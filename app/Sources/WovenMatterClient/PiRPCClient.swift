@@ -86,6 +86,11 @@ public actor PiRPCClient {
     private var pendingResponses: [String: CheckedContinuation<[String: Any], any Error>] = [:]
     private var promptEvents: LocalACPClient.EventHandler?
     private var promptPermission: LocalACPClient.PermissionHandler?
+    private var resumePermissionHandler: LocalACPClient.PermissionHandler?
+
+    public func setResumePermissionHandler(_ handler: @escaping LocalACPClient.PermissionHandler) {
+        resumePermissionHandler = handler
+    }
     private var promptGeneration: UUID?
     private var reasoningPhaseSequence = 0
     private var activeReasoningPhaseID: String?
@@ -828,7 +833,8 @@ public actor PiRPCClient {
         if cancelled || Task.isCancelled {
             selected = nil
         } else {
-            selected = await promptPermission?(
+            let handler = promptPermission ?? (launch.environment["WOVEN_DURABLE_REMOTE_ACP"] == "1" ? resumePermissionHandler : nil)
+            selected = await handler?(
                 LocalACPPermissionRequest(
                     title: request.title,
                     options: request.options

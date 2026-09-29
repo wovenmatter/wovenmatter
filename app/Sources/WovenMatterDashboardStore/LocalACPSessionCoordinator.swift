@@ -174,6 +174,7 @@ struct LocalACPSessionDriver: Sendable {
                     await client.shutdown()
                 },
                 setRunID: { await client.setRunID($0) },
+                setResumePermissionHandler: { await client.setResumePermissionHandler($0) },
                 fencedPrompt: { input, event, permission, _, fence in
                     try await client.prompt(input, onEvent: event, onPermission: permission,
                         dispatchFence: fence)
@@ -1710,9 +1711,9 @@ public actor LocalACPSessionCoordinator {
             ? descriptor.acpSessionID
             : nil
         return try await withTaskCancellationHandler {
-            // Loading a Built-in session can resume a remote run that is
+            // Loading a durable session can resume a remote run that is
             // waiting for approval, before any new prompt handler exists.
-            if descriptor.runtimeKind == .defaultAgent,
+            if descriptor.runtimeKind == .defaultAgent || descriptor.remoteWorkspaceID != nil,
                let handler = resumePermissionHandler {
                 await client.setResumePermissionHandler? { request in
                     await handler(descriptor.conversationID, request)

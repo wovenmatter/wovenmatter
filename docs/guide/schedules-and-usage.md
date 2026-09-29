@@ -55,13 +55,19 @@ choices: change the **Entire series**, or **Detach this occurrence** into an
 independent one-time event. Detaching retains its settings and removes that
 occurrence from the series.
 
-Calendar tasks run while Woven Matter is open. When the app returns, every
-overdue independent task runs, while each recurring task catches up once.
+Local tasks run while Woven Matter is open, or in its background service when
+**Background execution** is enabled in **Settings → Local agent workspace**.
+Remote workspaces run their own tasks with background execution enabled by
+default; the remote host and workspace service must remain running. Built-in may
+wait for the Mac to reconnect and unlock credentials after a remote restart.
+When execution resumes, every overdue independent task runs, while each recurring
+task catches up once.
 Tasks wait when their session is busy or the running-session limit is reached;
 an unavailable connection is retried. A send whose acceptance cannot be
 confirmed is marked for inspection rather than automatically sent again.
-Future recurring occurrences continue on their schedule. These app-owned
-tasks are separate from the **Hermes** and **OpenClaw** agent-service schedules.
+Future recurring occurrences continue on their schedule. Unattended remote tasks
+that need approval stop for inspection; open their session before continuing.
+These tasks are separate from the **Hermes** and **OpenClaw** agent-service schedules.
 
 After a task sends, click its event and choose **Open session**. If a later edit
 moves the schedule, the original **Past run** keeps its saved prompt and session

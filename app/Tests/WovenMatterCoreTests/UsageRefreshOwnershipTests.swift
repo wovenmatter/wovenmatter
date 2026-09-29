@@ -234,7 +234,10 @@ struct UsageRefreshOwnershipTests {
     } }
     var iterator = entered.stream.makeAsyncIterator()
     await iterator.next()
-    let now = Date()
+    // Metadata stores Unix seconds; converting an arbitrary Date from its
+    // reference epoch can round a sub-microsecond bit. Keep this ownership
+    // assertion exact with a whole-second timestamp representable in both epochs.
+    let now = Date(timeIntervalSince1970: 1_780_000_000)
     let importing = Task { try await importer.run(store: store,
       cutoff: now.addingTimeInterval(-86_400), enabledProviders: [.codex], now: now) }
     try await waitForUsageJob { preparation.metrics.pending == 2 }

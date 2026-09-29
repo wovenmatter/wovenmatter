@@ -70,7 +70,7 @@ public struct WorkspaceCalendarDetails: Codable, Equatable, Sendable {
   private enum CodingKeys: String, CodingKey {
     case timeZoneID, recurrence, task, showsOnCalendar, excludedOccurrences, createdBy, editedBy, revision
   }
-  public init(from decoder: Decoder) throws {
+  public init(from decoder: any Decoder) throws {
     let values = try decoder.container(keyedBy: CodingKeys.self)
     self.init(timeZoneID: try values.decode(String.self, forKey: .timeZoneID),
       recurrence: try values.decodeIfPresent(WorkspaceCalendarRecurrence.self, forKey: .recurrence),
@@ -113,7 +113,7 @@ public struct WorkspaceCalendarDraft: Codable, Equatable, Sendable {
   private enum CodingKeys: String, CodingKey {
     case title, details, startsAt, endsAt, allDay, timeZoneID, recurrence, task, showsOnCalendar
   }
-  public init(from decoder: Decoder) throws {
+  public init(from decoder: any Decoder) throws {
     let values = try decoder.container(keyedBy: CodingKeys.self)
     self.init(title: try values.decode(String.self, forKey: .title),
       details: try values.decode(String.self, forKey: .details),

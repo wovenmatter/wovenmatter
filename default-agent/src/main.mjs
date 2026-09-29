@@ -7,7 +7,7 @@ import { DefaultAgentEngine } from './engine.mjs';
 import { CredentialVault, sharedCredentials } from './vault.mjs';
 import { signInStatuses } from './sign-in-status.mjs';
 import { probeServer } from './local-servers.mjs';
-import { preferredSignInAnswer } from './sign-in-interaction.mjs';
+import { createSignInPrompt } from './sign-in-interaction.mjs';
 import { grokAccountProfile } from './account-profile.mjs';
 import { inlineClaudeLogin } from './claude-runtime.mjs';
 import { PermissionRequests, RemotePermissionRequests } from './permissions.mjs';
@@ -76,18 +76,16 @@ async function invoke(message) {
       process.stdin.once('end', abortLogin);
       process.once('SIGTERM', abortLogin);
       const loginTimeout = setTimeout(abortLogin, 10 * 60 * 1000);
+      const prompt = createSignInPrompt({ provider: message.provider, signal: controller.signal, pending: pendingPrompts, send });
       try {
       if (message.provider === 'claude-subscription') {
-        const status = await inlineClaudeLogin(e.claude, message.profile, { signal: controller.signal, notify: notification => send({ notification }) });
+        const status = await inlineClaudeLogin(e.claude, message.profile, { signal: controller.signal, notify: notification => send({ notification }), prompt });
         return { ...status, provider: message.provider, nativeProfile: message.profile };
       }
       e.credentials.signingIn = true;
       let credential = await e.runtime.login(message.provider, 'oauth', { signal: controller.signal,
         notify: notification => send({ notification }),
-        prompt: prompt => {
-          const preferred = preferredSignInAnswer(message.provider, prompt);
-          if (preferred) return Promise.resolve(preferred);
-          return new Promise((resolve, reject) => { const id = crypto.randomUUID(); pendingPrompts.set(id, resolve); send({ prompt: { ...prompt, signal: undefined }, id }); controller.signal.addEventListener('abort', () => reject(new Error('Sign-in cancelled.')), { once: true }); }); } }).finally(() => { e.credentials.signingIn = false; });
+        prompt }).finally(() => { e.credentials.signingIn = false; });
       // SDK login persists through the app-owned credential store.
       if (message.provider === 'xai' && credential) {
         const profile = await grokAccountProfile(credential);

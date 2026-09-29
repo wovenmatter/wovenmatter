@@ -5,23 +5,27 @@ import WovenMatterCore
 @testable import WovenMatterDashboardStore
 
 struct ACPResumePermissionTests {
-  @Test(arguments: [AgentRuntimeKind.defaultAgent, .codex])
-  func configurationLoadsRoutePendingBuiltInApprovalsToTheirConversation(runtime: AgentRuntimeKind) async throws {
+  @Test(arguments: [AgentRuntimeKind.defaultAgent, .codex, .pi], [false, true])
+  func configurationLoadsRouteDurableApprovalsToTheirConversation(runtime: AgentRuntimeKind, remote: Bool) async throws {
     let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: directory) }
     let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
     var conversations: [String] = []
     for index in 0..<2 {
-      let id = try await database.createLocalACPSession(
-        runtimeKind: runtime, title: "Resume \(index)", ownerDeviceID: UUID()
-      )
+      let id: String
+      if remote {
+        id = try await database.createRemoteACPSession(runtimeKind: runtime, remoteWorkspaceID: UUID(),
+            remoteWorkspaceName: "Fixture", title: "Resume \(index)", ownerDeviceID: UUID())
+      } else {
+        id = try await database.createLocalACPSession(runtimeKind: runtime, title: "Resume \(index)", ownerDeviceID: UUID())
+      }
       try await database.updateLocalACPSessionID(conversationID: id, sessionID: "remote-\(index)")
       conversations.append(id)
     }
     let requests = ResumePermissionRecorder()
     let coordinator = LocalACPSessionCoordinator(database: database, clientFactory: { _, _ in
-      ResumePermissionDriver(expectsHandler: runtime == .defaultAgent).driver()
+      ResumePermissionDriver(expectsHandler: runtime == .defaultAgent || remote).driver()
     })
     await coordinator.setResumePermissionHandler { conversationID, request in
       await requests.record(conversationID: conversationID, title: request.title)
@@ -44,7 +48,7 @@ struct ACPResumePermissionTests {
     }
 
     let observed = await requests.values
-    if runtime == .defaultAgent {
+    if runtime == .defaultAgent || remote {
       #expect(observed == [conversations[0]: "remote-0", conversations[1]: "remote-1"])
     } else {
       #expect(observed.isEmpty)
