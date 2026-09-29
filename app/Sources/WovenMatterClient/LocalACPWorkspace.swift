@@ -244,8 +244,9 @@ public enum LocalACPWorkspaceProvisioner {
         } else {
             try fileManager.createSymbolicLink(at: link, withDestinationURL: target)
         }
-        // Never recursively delete a folder that an agent could still be writing into.
-        if let saved = backup, saved.path.withCString({ rmdir($0) }) == 0 { backup = nil }
+        // Keep even an empty backup: an agent may already hold it as its cwd
+        // or through a directory descriptor. rmdir would strand its next write
+        // and can invalidate another reader resolving the exchanged directory.
         return LocalACPWorkspaceFolderChangeResult(backupURL: backup, skippedItemNames: skippedItems)
     }
 
