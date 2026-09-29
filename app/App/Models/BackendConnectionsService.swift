@@ -34,6 +34,7 @@ struct BackendConnectionsSnapshot: Codable, Equatable {
     var accounts: [String: [ProviderConnectionAccounts.Account]]
     var cursorAccountStatus: String
     var signInProvider: String?
+    var signInOutcome: DefaultAgentSettingsModel.SignInOutcome?
     var busy: Bool
     var error: String?
     var notice: String?
@@ -50,6 +51,7 @@ struct BackendConnectionsSnapshot: Codable, Equatable {
         resolvedDefaultModelID = model.resolvedDefaultModelID
         searchConfigured = model.searchConfigured; accounts = model.accounts
         cursorAccountStatus = model.cursorAccountStatus; signInProvider = model.signInProvider
+        signInOutcome = model.signInOutcome
         busy = model.busy; error = model.error; notice = model.notice
         signInURL = model.signInURL; signInCode = model.signInCode
         prompt = model.prompt; promptID = model.promptID

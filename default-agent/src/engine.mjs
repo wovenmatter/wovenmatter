@@ -21,7 +21,7 @@ export class DefaultAgentEngine {
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
     await this.claude.loadModels();
     this.credentials = await new Credentials(this.supplied, this.vault, this.credentialAccounts).initialize();
-    this.runtime = await ModelRuntime.create({ credentials: this.credentials, modelsPath: null, modelsStorePath: join(this.directory, 'models.json'), refreshOnCreate: false });
+    this.runtime = await ModelRuntime.create({ credentials: this.credentials.forModelRuntime(), modelsPath: null, modelsStorePath: join(this.directory, 'models.json'), refreshOnCreate: false });
     registerLocalServers(this.runtime, this.config.customServers);
     const xaiModels = this.runtime.getModels().filter(model => model.provider === 'xai');
     if (xaiModels.length) this.runtime.registerProvider('xai-api', {

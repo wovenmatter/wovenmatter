@@ -109,6 +109,14 @@ private func closedPromptly(_ descriptor: Int32) throws {
     try require(count == 0 || (count < 0 && errno == ECONNRESET), "expected closed peer")
 }
 
+private func busyPromptly(_ descriptor: Int32) throws {
+    var state = pollfd(fd: descriptor, events: Int16(POLLIN), revents: 0)
+    try require(poll(&state, 1, 1_000) > 0, "busy response was not returned promptly")
+    let response = try JSONDecoder().decode(NoteEditingResponse.self, from: receiveRaw(descriptor))
+    try require(!response.success && response.error?.contains("busy") == true,
+        "overloaded peer did not return a structured busy response")
+}
+
 private func socketURL() -> URL {
     URL(fileURLWithPath: "/private/tmp/wmn-\(UUID().uuidString).sock")
 }
@@ -203,7 +211,7 @@ struct WovenNoteSocketTests {
         try await entered.waitForOpen()
         let excess = try connectRaw(url)
         defer { close(excess) }
-        try closedPromptly(excess)
+        try busyPromptly(excess)
         close(client)
         release.open() // The server writes to a peer that disconnected after submitting its request.
         try await requireRecovery(url)

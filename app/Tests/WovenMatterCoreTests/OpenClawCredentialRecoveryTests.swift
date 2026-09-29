@@ -11,11 +11,11 @@ struct OpenClawCredentialRecoveryTests {
     let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: directory) }
-    let database = try WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
-    _ = try database.createLocalACPSession(runtimeKind: .openclaw, title: "Fixture", ownerDeviceID: UUID())
-    let agentID = try #require(database.dashboardAgents().first).id
+    let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+    _ = try await database.createLocalACPSession(runtimeKind: .openclaw, title: "Fixture", ownerDeviceID: UUID())
+    let agentID = try await #require(database.dashboardAgents().first).id
     let endpoint = OpenClawGatewayEndpoint(url: URL(string: "ws://127.0.0.1:1")!, authorization: .localService)
-    try database.saveOpenClawGatewayLink(OpenClawGatewayLink(
+    try await database.saveOpenClawGatewayLink(OpenClawGatewayLink(
       agentID: agentID, location: .localAgentWorkspace, endpoint: endpoint
     ))
     let attempts = CredentialConnectionAttempts()
@@ -31,7 +31,7 @@ struct OpenClawCredentialRecoveryTests {
       #expect((error as NSError).code == Int(status))
     }
     #expect(await attempts.count == 1)
-    let link = try #require(database.openClawGatewayLinks().first)
+    let link = try await #require(database.openClawGatewayLinks().first)
     #expect(link.connectionStatus == .unavailable)
     await coordinator.shutdown()
   }

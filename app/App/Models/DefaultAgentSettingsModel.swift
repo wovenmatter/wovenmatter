@@ -20,6 +20,11 @@ final class DefaultAgentSettingsModel {
         let detail: String?
         let account: String?
     }
+    struct SignInOutcome: Codable, Equatable {
+        let provider: String
+        let notice: String?
+        let error: String?
+    }
     struct Status: Decodable {
         let providers: [Provider]
         let models: [Model]
@@ -210,6 +215,7 @@ final class DefaultAgentSettingsModel {
         }
         searchConfigured = value.searchConfigured; accounts = value.accounts
         cursorAccountStatus = value.cursorAccountStatus; signInProvider = value.signInProvider
+        signInOutcome = value.signInOutcome
         busy = value.busy; error = value.error; notice = value.notice
         signInURL = value.signInURL; signInCode = value.signInCode; prompt = value.prompt; promptID = value.promptID
         promptOptions = value.promptOptions.map { ($0.id, $0.label) }
@@ -260,6 +266,7 @@ final class DefaultAgentSettingsModel {
     }
     var cursorAccountStatus = "Refresh to check Cursor sign-in"
     var signInProvider: String?
+    var signInOutcome: SignInOutcome?
     var accounts: [String: [ProviderConnectionAccounts.Account]] = [:]
     var busy = false
     var error: String?
@@ -523,11 +530,13 @@ final class DefaultAgentSettingsModel {
         if forward(.init(action: "cursorSignIn")) { return }
         cancel()
         signInProvider = "cursor"
+        signInOutcome = nil
         error = nil
         notice = "Preparing Cursor sign-in…"
         guard let executable = LocalACPRuntimeResolver.resolveExecutable(named: "cursor-agent")
             ?? LocalACPRuntimeResolver.resolveExecutable(named: "agent") else {
             error = "Install Cursor’s agent CLI to connect this account."
+            completeSignInPresentation()
             return
         }
         busy = true
@@ -563,14 +572,17 @@ final class DefaultAgentSettingsModel {
         child.terminationHandler = { [weak self] child in
             Task { @MainActor in
                 guard let self, self.generation == runID else { return }
-                self.busy = false
-                self.signInURL = nil
-                if child.terminationStatus == 0 { await self.refreshCursorStatus(); self.notice = self.cursorAccountStatus }
-                else { self.error = "Cursor sign-in did not complete. Try again." }
+                self.notice = nil
+                if child.terminationStatus == 0 {
+                    await self.refreshCursorStatus()
+                    guard self.generation == runID else { return }
+                    self.notice = self.cursorAccountStatus
+                } else { self.error = "Cursor sign-in did not complete. Try again." }
+                self.completeSignInPresentation()
             }
         }
         do { try child.run(); process = child }
-        catch { busy = false; self.error = "Could not start Cursor sign-in." }
+        catch { self.error = "Could not start Cursor sign-in."; completeSignInPresentation() }
     }
     func move(_ id: String, by offset: Int) {
         var value = configuration
@@ -627,6 +639,7 @@ final class DefaultAgentSettingsModel {
         localServers = LocalModelServerStore.servers
         self.scope = scope
         if changedScope { catalog = []; providers = []; accounts = [:] }
+        signInOutcome = nil
         notice = nil
         error = nil
     }
@@ -669,6 +682,21 @@ final class DefaultAgentSettingsModel {
         prompt = nil
         promptID = nil
         promptOptions = []
+    }
+    private func completeSignInPresentation() {
+        if let provider = signInProvider {
+            signInOutcome = .init(provider: provider, notice: error == nil ? notice : nil, error: error)
+            notice = nil
+            error = nil
+        }
+        busy = false
+        signInProvider = nil
+        signInURL = nil
+        signInCode = nil
+        prompt = nil
+        promptID = nil
+        promptOptions = []
+        finishSignIn()
     }
     private func finishSignIn() {
         if let signInLease { ProviderAccountCoordinator.shared.endSignIn(signInLease) }
@@ -925,6 +953,7 @@ final class DefaultAgentSettingsModel {
         self.reconnectingAccount = reconnectingAccount
         busy = true
         signInProvider = login
+        if login != nil { signInOutcome = nil }
         receivedResult = false
         outputEnded = false
         terminationStatus = nil
@@ -1037,7 +1066,7 @@ final class DefaultAgentSettingsModel {
                 clearCatalogRequest()
                 busy = false
                 self.error = error.localizedDescription
-                finishSignIn()
+                completeSignInPresentation()
             }
         }
     }
@@ -1045,8 +1074,7 @@ final class DefaultAgentSettingsModel {
         guard outputEnded, terminationStatus != nil, !processingResult, !receivedResult else { return }
         if error == nil { error = "Built-in setup did not complete. Try again." }
         clearCatalogRequest()
-        busy = false
-        finishSignIn()
+        completeSignInPresentation()
     }
     private func write(_ value: [String: Any]) {
         do {
@@ -1088,8 +1116,7 @@ final class DefaultAgentSettingsModel {
                 receivedResult = true
                 clearCatalogRequest()
                 self.error = error
-                busy = false
-                finishSignIn()
+                completeSignInPresentation()
             }
             if let event = object["notification"] as? [String: Any] {
                 if let url = (event["url"] ?? event["verificationUri"]) as? String, let value = URL(string: url),
@@ -1192,7 +1219,6 @@ final class DefaultAgentSettingsModel {
         }
         guard generation == runID, !Task.isCancelled else { return }
         removingAccount = nil
-        finishSignIn()
         if let status {
             if let key = context.catalogKey, let requested = context.catalogConfiguration,
                context.sdkRevision == sdkRevision(for: key) {
@@ -1215,11 +1241,7 @@ final class DefaultAgentSettingsModel {
         }
         let shouldRefresh = error == nil && (result["connected"] as? Bool == true || result["disconnected"] as? Bool == true)
         if shouldRefresh, let provider = signInProvider { invalidateConnection(provider) }
-        busy = false
-        signInProvider = nil
-        signInURL = nil
-        signInCode = nil
-        prompt = nil
+        completeSignInPresentation()
         if shouldRefresh {
             let remote = activeRemote
             Task { @MainActor [weak self] in

@@ -8,18 +8,20 @@ extension BackendApplicationService {
         }
         do {
             switch mutation {
-            case let .saveSettings(value): try database.saveToolSettings(value)
+            case let .saveTimer(timer):
+                _ = try await database.saveSessionTimer(timer, callerID: timer.sessionID)
+            case let .saveSettings(value): try await database.saveToolSettings(value)
             case let .setEnabled(group, enabled, id, confirmed):
-                try tools.setEnabled(group, enabled: enabled, sessionID: id, confirmedPausingTimers: confirmed)
-            case let .endCoordination(id): try database.endCoordination(targetID: id)
+                try await tools.setEnabled(group, enabled: enabled, sessionID: id, confirmedPausingTimers: confirmed)
+            case let .endCoordination(id): try await database.endCoordination(targetID: id)
             case let .notifications(id, enabled):
-                if let source = try database.sessionRelationship(id).coordinatorID {
-                    try database.setCoordinationNotifications(sourceID: source, targetID: id, enabled: enabled)
+                if let source = try await database.sessionRelationship(id).coordinatorID {
+                    try await database.setCoordinationNotifications(sourceID: source, targetID: id, enabled: enabled)
                 }
-            case let .pauseTimer(id, paused): try database.pauseSessionTimer(id: id, paused: paused)
-            case let .removeTimer(id): try database.removeSessionTimer(id: id)
+            case let .pauseTimer(id, paused): try await database.pauseSessionTimer(id: id, paused: paused)
+            case let .removeTimer(id): try await database.removeSessionTimer(id: id)
             }
-            try tools.reload()
+            try await tools.reload()
             await invalidations.publish(scopes: [.settings])
             return .init()
         } catch WorkspaceToolError.timerPauseConfirmation {

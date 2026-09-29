@@ -3,7 +3,7 @@ import SQLite3
 import WovenMatterCore
 import WovenMatterClient
 
-extension WorkspaceDatabase {
+extension WorkspaceDatabaseConnection {
   /// Only the app scheduler uses timer/notification kinds. Agent commands always
   /// use message/created with a caller bound to their endpoint.
   public func reserveToolDelivery(sourceID: String, targetID: String, text: String, requestID: String,
@@ -16,8 +16,13 @@ extension WorkspaceDatabase {
   func reserveToolDeliveryUnlocked(sourceID: String, targetID: String, text: String, requestID: String,
                                    kind: WorkspaceSessionDeliveryKind, purpose: String? = nil,
                                    eventKey: String? = nil) throws -> WorkspaceSessionDelivery {
-      guard UUID(uuidString: requestID) != nil, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-            text.utf8.count <= 65_536 else { throw WorkspaceToolError.invalid("A delivery needs a UUID and a message of at most 64 KiB.") }
+      let requestID = try persistedToolRequestID(requestID, in: .deliveries)
+      guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+            text.utf8.count <= 65_536,
+            purpose.map({ $0.utf8.count <= 65_536 }) ?? true,
+            eventKey.map({ !$0.isEmpty && $0.utf8.count <= 4_096 }) ?? true else {
+        throw WorkspaceToolError.invalid("A delivery has invalid or oversized content.")
+      }
       if kind == .message || kind == .created {
         try requireToolUnlocked(.sessions, sessionID: sourceID)
         guard sourceID != targetID else { throw WorkspaceToolError.invalid("Use a timer for follow-ups to this session.") }
@@ -25,7 +30,12 @@ extension WorkspaceDatabase {
       try requireToolSessionUnlocked(sourceID)
       try requireToolSessionUnlocked(targetID)
       if let existing = try deliveryUnlocked(requestID) {
-        guard existing.sourceID == sourceID, existing.targetID == targetID, existing.text == text, existing.kind == kind else {
+        let storedEventKey = try historyRowsUnlocked(
+          "SELECT event_key FROM workspace_session_deliveries WHERE id=?", values: [requestID])
+          .first?.objectValue?["event_key"]?.stringValue
+        guard existing.sourceID == sourceID, existing.targetID == targetID,
+              existing.text == text, existing.kind == kind,
+              existing.purpose == purpose, storedEventKey == eventKey else {
           throw WorkspaceToolError.invalid("Delivery request ID collision.")
         }
         return existing
@@ -49,6 +59,7 @@ extension WorkspaceDatabase {
   /// Preparation is safe to recover; an unconfirmed native submission is not.
   public func claimToolDelivery(id: String, now: Date = Date()) throws -> WorkspaceSessionDelivery? {
     try transaction {
+      let id = try canonicalDeliveryID(id)
       guard let delivery = try deliveryUnlocked(id), delivery.status == "queued" else { return nil }
       let retryAfter = try historyRowsUnlocked("SELECT retry_after FROM workspace_session_deliveries WHERE id=?", values: [id])
         .first?.objectValue?["retry_after"]?.doubleValue
@@ -70,6 +81,7 @@ extension WorkspaceDatabase {
   /// boundary before issuing a request so a lost response can never be retried.
   public func markToolDeliveryTransportStarted(id: String, targetID: String? = nil, nativeCommand: String? = nil) throws {
     try transaction {
+      let id = try canonicalDeliveryID(id)
       if let targetID, try deliveryUnlocked(id)?.targetID != targetID {
         throw WorkspaceToolError.invalid("This delivery is not reserved for this session.")
       }
@@ -82,6 +94,7 @@ extension WorkspaceDatabase {
   }
 
   func markToolDeliveryTransportStartedUnlocked(id: String) throws {
+    let id = try canonicalDeliveryID(id)
     try validateClaimedToolDeliveryUnlocked(id: id)
     try toolsExecuteUnlocked("UPDATE workspace_session_deliveries SET transport_started=1 WHERE id=?", [id])
   }
@@ -90,6 +103,7 @@ extension WorkspaceDatabase {
   /// input could have reached the backend, only reconciliation can settle it.
   public func failToolDeliveryAttempt(id: String, now: Date = Date()) throws {
     try transaction {
+      let id = try canonicalDeliveryID(id)
       guard let delivery = try deliveryUnlocked(id), delivery.status == "sending" else { return }
       let submitted = try historyRowsUnlocked("SELECT transport_started FROM workspace_session_deliveries WHERE id=?", values: [id])
         .first?.objectValue?["transport_started"]?.intValue != 0
@@ -107,6 +121,7 @@ extension WorkspaceDatabase {
   /// Call inside the final acceptance transaction, after asynchronous connection
   /// and attachment preparation. A prior app-level check is only a preflight.
   func validateClaimedToolDeliveryUnlocked(id: String) throws {
+    let id = try canonicalDeliveryID(id)
     guard let delivery = try deliveryUnlocked(id), delivery.status == "sending",
           try toolDeliveryAuthorizedUnlocked(delivery) else {
       throw WorkspaceToolError.invalid("This delivery was cancelled or its access was revoked.")
@@ -138,13 +153,20 @@ extension WorkspaceDatabase {
     }
   }
 
-  public func setToolDeliveryStatus(id: String, status: String, messageID: String? = nil) throws {
+  public func setToolDeliveryStatus(id: String, status: String, messageID: String? = nil,
+                                    failureCode: String? = nil, failureReason: String? = nil) throws {
     guard ["queued", "accepted", "failed", "uncertain", "cancelled"].contains(status) else {
       throw WorkspaceToolError.invalid("Invalid delivery status.")
     }
+    guard failureCode.map({ !$0.isEmpty && $0.utf8.count <= 64 }) ?? true,
+          failureReason.map({ $0.utf8.count <= 1_024 }) ?? true else {
+      throw WorkspaceToolError.invalid("Invalid delivery failure details.")
+    }
     try transaction {
+      let id = try canonicalDeliveryID(id)
       guard let current = try deliveryUnlocked(id), current.status != "accepted" else { return }
-      try toolsExecuteUnlocked("UPDATE workspace_session_deliveries SET status=?,message_id=coalesce(?,message_id) WHERE id=?", [status, messageID, id])
+      try toolsExecuteUnlocked("UPDATE workspace_session_deliveries SET status=?,message_id=coalesce(?,message_id),failure_code=?,failure_reason=? WHERE id=?",
+        [status, messageID, failureCode, failureReason, id])
     }
   }
 
@@ -212,7 +234,13 @@ extension WorkspaceDatabase {
   }
 
   private func deliveryUnlocked(_ id: String) throws -> WorkspaceSessionDelivery? {
-    try historyRowsUnlocked("SELECT rowid AS sequence,* FROM workspace_session_deliveries WHERE id=?", values: [id]).first.map(deliveryFromRow)
+    let id = try canonicalDeliveryID(id)
+    return try historyRowsUnlocked("SELECT rowid AS sequence,* FROM workspace_session_deliveries WHERE id=?", values: [id]).first.map(deliveryFromRow)
+  }
+
+  func canonicalDeliveryID(_ id: String) throws -> String {
+    guard UUID(uuidString: id) != nil else { return id }
+    return try persistedToolRequestID(id, in: .deliveries)
   }
 
   private func deliveryFromRow(_ value: GatewayJSONValue) -> WorkspaceSessionDelivery {
@@ -222,6 +250,104 @@ extension WorkspaceDatabase {
       kind: WorkspaceSessionDeliveryKind(rawValue: string("kind")) ?? .message, status: string("status"), messageID: r["message_id"]?.stringValue,
       sourceTitle: string("source_title"), sourceHarness: string("source_agent"), targetTitle: string("target_title"), targetHarness: string("target_harness"),
       targetModel: r["target_model"]?.stringValue, purpose: r["purpose"]?.stringValue, createdAt: string("created_at"),
-      sequence: r["sequence"]?.intValue.map(Int64.init), nativeCommand: r["native_command"]?.stringValue)
+      sequence: r["sequence"]?.intValue.map(Int64.init), nativeCommand: r["native_command"]?.stringValue,
+      failureCode: r["failure_code"]?.stringValue, failureReason: r["failure_reason"]?.stringValue)
+  }
+}
+
+// MARK: - Async worker boundary
+
+extension WorkspaceDatabase {
+  public func reserveToolDelivery(sourceID: String, targetID: String, text: String, requestID: String,
+                                  kind: WorkspaceSessionDeliveryKind = .message, purpose: String? = nil,
+                                  eventKey: String? = nil) async throws -> WorkspaceSessionDelivery {
+    try await write { try $0.reserveToolDelivery(sourceID: sourceID, targetID: targetID, text: text, requestID: requestID, kind: kind, purpose: purpose, eventKey: eventKey) }
+  }
+
+  public func claimToolDelivery(id: String, now: Date = Date()) async throws -> WorkspaceSessionDelivery? {
+    try await write { try $0.claimToolDelivery(id: id, now: now) }
+  }
+
+  public func validateClaimedToolDelivery(id: String) async throws {
+    try await read { try $0.validateClaimedToolDelivery(id: id) }
+  }
+
+  public func markToolDeliveryTransportStarted(id: String, targetID: String? = nil, nativeCommand: String? = nil) async throws {
+    try await write { try $0.markToolDeliveryTransportStarted(id: id, targetID: targetID, nativeCommand: nativeCommand) }
+  }
+
+  public func failToolDeliveryAttempt(id: String, now: Date = Date()) async throws {
+    try await finishWrite { try $0.failToolDeliveryAttempt(id: id, now: now) }
+  }
+
+  public func setToolDeliveryStatus(id: String, status: String, messageID: String? = nil,
+                                    failureCode: String? = nil, failureReason: String? = nil) async throws {
+    // Resolving an already claimed delivery is cleanup, including returning a
+    // known-unsent attempt to the queue. Preserve its outcome on cancellation.
+    try await finishWrite { try $0.setToolDeliveryStatus(id: id, status: status, messageID: messageID, failureCode: failureCode, failureReason: failureReason) }
+  }
+
+  public func recoverToolDeliveries() async throws {
+    try await write { try $0.recoverToolDeliveries() }
+  }
+
+  public func toolDelivery(id: String) async throws -> WorkspaceSessionDelivery? {
+    try await read { try $0.toolDelivery(id: id) }
+  }
+
+  public func sessionDeliveries(sessionID: String? = nil, queuedOnly: Bool = false, limit: Int = 200, beforeID: String? = nil, outgoingOnly: Bool = false, activityOnly: Bool = false, includeCalendar: Bool = true) async throws -> [WorkspaceSessionDelivery] {
+    try await read { try $0.sessionDeliveries(sessionID: sessionID, queuedOnly: queuedOnly, limit: limit, beforeID: beforeID, outgoingOnly: outgoingOnly, activityOnly: activityOnly, includeCalendar: includeCalendar) }
+  }
+
+  public func sessionActivityWindow(sessionID: String, throughID: String) async throws -> [WorkspaceSessionDelivery] {
+    try await read { try $0.sessionActivityWindow(sessionID: sessionID, throughID: throughID) }
+  }
+}
+
+// MARK: - Async worker boundary
+
+extension WorkspaceDatabase {
+  public func reserveToolDelivery(sourceID: String, targetID: String, text: String, requestID: String,
+                                  kind: WorkspaceSessionDeliveryKind = .message, purpose: String? = nil,
+                                  eventKey: String? = nil) async throws -> WorkspaceSessionDelivery {
+    try await write { try $0.reserveToolDelivery(sourceID: sourceID, targetID: targetID, text: text, requestID: requestID, kind: kind, purpose: purpose, eventKey: eventKey) }
+  }
+
+  public func claimToolDelivery(id: String, now: Date = Date()) async throws -> WorkspaceSessionDelivery? {
+    try await write { try $0.claimToolDelivery(id: id, now: now) }
+  }
+
+  public func validateClaimedToolDelivery(id: String) async throws {
+    try await read { try $0.validateClaimedToolDelivery(id: id) }
+  }
+
+  public func markToolDeliveryTransportStarted(id: String, targetID: String? = nil, nativeCommand: String? = nil) async throws {
+    try await write { try $0.markToolDeliveryTransportStarted(id: id, targetID: targetID, nativeCommand: nativeCommand) }
+  }
+
+  public func failToolDeliveryAttempt(id: String, now: Date = Date()) async throws {
+    try await finishWrite { try $0.failToolDeliveryAttempt(id: id, now: now) }
+  }
+
+  public func setToolDeliveryStatus(id: String, status: String, messageID: String? = nil) async throws {
+    // Resolving an already claimed delivery is cleanup, including returning a
+    // known-unsent attempt to the queue. Preserve its outcome on cancellation.
+    try await finishWrite { try $0.setToolDeliveryStatus(id: id, status: status, messageID: messageID) }
+  }
+
+  public func recoverToolDeliveries() async throws {
+    try await write { try $0.recoverToolDeliveries() }
+  }
+
+  public func toolDelivery(id: String) async throws -> WorkspaceSessionDelivery? {
+    try await read { try $0.toolDelivery(id: id) }
+  }
+
+  public func sessionDeliveries(sessionID: String? = nil, queuedOnly: Bool = false, limit: Int = 200, beforeID: String? = nil, outgoingOnly: Bool = false, activityOnly: Bool = false, includeCalendar: Bool = true) async throws -> [WorkspaceSessionDelivery] {
+    try await read { try $0.sessionDeliveries(sessionID: sessionID, queuedOnly: queuedOnly, limit: limit, beforeID: beforeID, outgoingOnly: outgoingOnly, activityOnly: activityOnly, includeCalendar: includeCalendar) }
+  }
+
+  public func sessionActivityWindow(sessionID: String, throughID: String) async throws -> [WorkspaceSessionDelivery] {
+    try await read { try $0.sessionActivityWindow(sessionID: sessionID, throughID: throughID) }
   }
 }

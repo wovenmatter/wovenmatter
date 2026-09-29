@@ -33,6 +33,91 @@ struct OpenClawGatewayUpgradeTests {
     await reopened.disconnect()
   }
 
+  @Test func timedOutRequestIsNotSentAfterAsyncHistoryRecordingCompletes() async throws {
+    let entered = AsyncStream<Void>.makeStream()
+    let release = AsyncStream<Void>.makeStream()
+    let returned = AsyncStream<Void>.makeStream()
+    let socket = GatewayFixtureSocket()
+    let client = OpenClawGatewayClient(endpoint: endpoint, credentialStore: GatewayMemoryCredentials(),
+      historyRecorder: { direction, _ in
+        guard direction == "out" else { return }
+        entered.continuation.yield(())
+        var iterator = release.stream.makeAsyncIterator()
+        await iterator.next()
+        returned.continuation.yield(())
+      }, socketFactory: { _ in socket })
+    _ = try await client.connect()
+    let request = Task { try await client.request("delayed", timeout: .milliseconds(30)) }
+    var started = entered.stream.makeAsyncIterator()
+    await started.next()
+    await #expect(throws: (any Error).self) { try await request.value }
+    release.continuation.yield(())
+    var ended = returned.stream.makeAsyncIterator()
+    await ended.next()
+    // The next request shares the outgoing FIFO, so its response is a barrier
+    // proving the timed-out send has retired, without relying on a sleep.
+    release.continuation.yield(())
+    _ = try await client.request("after")
+    #expect(await socket.methods == ["connect", "after"])
+    await client.disconnect()
+  }
+
+  @Test func disconnectDuringAsyncHistoryNeverSendsOnTheRetiredSocket() async throws {
+    let entered = AsyncStream<Void>.makeStream()
+    let release = AsyncStream<Void>.makeStream()
+    let returned = AsyncStream<Void>.makeStream()
+    let socket = GatewayFixtureSocket()
+    let client = OpenClawGatewayClient(endpoint: endpoint, credentialStore: GatewayMemoryCredentials(),
+      historyRecorder: { direction, _ in
+        guard direction == "out" else { return }
+        entered.continuation.yield(())
+        var iterator = release.stream.makeAsyncIterator()
+        await iterator.next()
+        returned.continuation.yield(())
+      }, socketFactory: { _ in socket })
+    _ = try await client.connect()
+    let request = Task { try await client.request("delayed") }
+    var started = entered.stream.makeAsyncIterator()
+    await started.next()
+    await client.disconnect()
+    release.continuation.yield(())
+    var ended = returned.stream.makeAsyncIterator()
+    await ended.next()
+    await #expect(throws: (any Error).self) { try await request.value }
+    #expect(await socket.methods == ["connect"])
+  }
+
+  @Test func stoppedInputNeverSendsAfterHistoryAndNextInputStillWorks() async throws {
+    let entered = AsyncStream<Void>.makeStream()
+    let release = AsyncStream<Void>.makeStream()
+    defer { release.continuation.finish() }
+    let socket = GatewayFixtureSocket()
+    let client = OpenClawGatewayClient(endpoint: endpoint, credentialStore: GatewayMemoryCredentials(),
+      historyRecorder: { direction, _ in
+        guard direction == "out" else { return }
+        entered.continuation.yield(())
+        var iterator = release.stream.makeAsyncIterator()
+        await iterator.next()
+      }, socketFactory: { _ in socket })
+    _ = try await client.connect()
+    let fence = AgentDispatchFence()
+    let request = Task { try await client.request("stopped", dispatchFence: fence) }
+    var started = entered.stream.makeAsyncIterator()
+    await started.next()
+    #expect(fence.cancel())
+    release.continuation.yield(())
+    await #expect(throws: (any Error).self) { try await request.value }
+    #expect(!fence.hasDispatched)
+    #expect(await socket.methods == ["connect"])
+    let fresh = AgentDispatchFence()
+    release.continuation.yield(())
+    _ = try await client.request("after-stop", dispatchFence: fresh)
+    #expect(fresh.hasDispatched)
+    #expect(await socket.methods == ["connect", "after-stop"])
+    #expect(!fresh.cancel())
+    await client.disconnect()
+  }
+
   @Test func explicitSharedAuthenticationRemainsDistinctFromDeviceAuthentication() {
     let params = OpenClawGatewayClient.connectParameters(deviceID: "device", publicKey: "key",
       signature: "signature", signedAt: 1, nonce: "nonce", scopes: ["operator.read"],

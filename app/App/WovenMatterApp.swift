@@ -368,10 +368,6 @@ struct WovenMatterApp: App {
             ? nil
             : WorkspaceProcessLease.acquireOrExit()
         if !isRunningUnitTests && LocalExecutionRole.current == .backend {
-            guard ApplicationModel.backendClientCapabilitiesComplete else {
-                NSLog("Woven Matter backend client routing is not available in this build.")
-                Darwin.exit(EXIT_FAILURE)
-            }
             do {
                 try WovenMatterBackendProcess.removeStaleSocketAfterAcquiringLease(
                     LocalExecutionRole.backendSocketURL(workspaceDirectory:
@@ -424,10 +420,8 @@ struct WovenMatterApp: App {
             RootView(model: applicationModel)
                 .onAppear {
                     lifecycleDelegate.model = applicationModel
-                    if ApplicationModel.backendClientCapabilitiesComplete {
-                        LocalBackgroundExecution.shared.transitionHandler = { enabled in
-                            try await applicationModel.changeLocalBackgroundExecution(enabled: enabled)
-                        }
+                    LocalBackgroundExecution.shared.transitionHandler = { enabled in
+                        try await applicationModel.changeLocalBackgroundExecution(enabled: enabled)
                     }
                 }
                 .frame(minWidth: 760, minHeight: 640)
@@ -437,7 +431,7 @@ struct WovenMatterApp: App {
                         for: NSApplication.didResignActiveNotification
                     )
                 ) { _ in
-                    applicationModel.flushNoteDrafts()
+                    Task { await applicationModel.flushNoteDrafts() }
                 }
                 .onReceive(
                     NotificationCenter.default.publisher(
@@ -445,7 +439,7 @@ struct WovenMatterApp: App {
                     )
                 ) { _ in
                     if LocalExecutionRole.current.ownsExecution {
-                        applicationModel.flushNoteDrafts()
+                        // Notes were flushed by the asynchronous termination barrier.
                         applicationModel.shutdownLocalACPSessions()
                     }
                 }

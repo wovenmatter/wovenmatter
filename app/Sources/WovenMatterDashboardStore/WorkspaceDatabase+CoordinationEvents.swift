@@ -2,7 +2,7 @@ import Foundation
 import WovenMatterCore
 import WovenMatterClient
 
-extension WorkspaceDatabase {
+extension WorkspaceDatabaseConnection {
   /// Bounded durable observations let all native transports share completion
   /// semantics. Only turns completed during the current assignment are eligible.
   public func collectCoordinationTurnNotifications(limit: Int = 100) throws -> [WorkspaceSessionDelivery] {
@@ -93,5 +93,17 @@ extension WorkspaceDatabase {
       """
     try toolsExecuteUnlocked("DELETE FROM workspace_session_grants WHERE kind='approved' AND target_id IN (SELECT session_id FROM workspace_session_relationships WHERE " + predicate + ")", [sessionID, sessionID])
     try toolsExecuteUnlocked("UPDATE workspace_session_relationships SET coordinator_id=NULL,coordination_epoch=NULL,coordination_since=NULL WHERE " + predicate, [sessionID, sessionID])
+  }
+}
+
+// MARK: - Async worker boundary
+
+extension WorkspaceDatabase {
+  public func collectCoordinationTurnNotifications(limit: Int = 100) async throws -> [WorkspaceSessionDelivery] {
+    try await write { try $0.collectCoordinationTurnNotifications(limit: limit) }
+  }
+
+  public func recordCoordinationNeedsInput(sessionID: String, requestID: String, requiresUserApproval: Bool) async throws -> WorkspaceSessionDelivery? {
+    try await write { try $0.recordCoordinationNeedsInput(sessionID: sessionID, requestID: requestID, requiresUserApproval: requiresUserApproval) }
   }
 }

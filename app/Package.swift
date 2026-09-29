@@ -72,7 +72,7 @@ let package = Package(
       path: "App",
       exclude: [
         "ApplicationModel.swift", "WovenMatterApp.swift", "WovenMatterLifecycleDelegate.swift",
-        "Info.plist", "Assets.xcassets", "Resources", "Views", "Services/DashboardNoteDrafts.swift",
+        "Info.plist", "Assets.xcassets", "Resources", "Views",
         "Models/ApplicationModel+AgentTools.swift", "Models/ApplicationModel+Calendar.swift", "Models/AgentDatabases.swift",
         "Models/ConversationMarkdownDocument.swift", "Models/DashboardConversationReferencePreview.swift",
         "Models/DashboardConversationState.swift", "Models/OpenCodeModel.swift", "Models/RemoteWorkspacesModel.swift"
@@ -81,6 +81,7 @@ let package = Package(
         "Models/WorkspaceAgentToolsModel.swift", "Models/WorkspaceAgentToolsModel+Calendar.swift", "Services/WovenMatterToolService.swift",
         "Services/WovenNoteService.swift", "Services/WovenMatterRemoteToolBridge.swift",
         "Tests/WorkspaceAgentToolsServiceTests.swift",
+        "Services/DashboardNoteDrafts.swift", "Tests/DashboardNoteWriteBehindTests.swift",
         "Models/LibraryModel.swift", "Models/BackendLibraryService.swift", "Tests/LibraryModelTests.swift"
       ]
     )
