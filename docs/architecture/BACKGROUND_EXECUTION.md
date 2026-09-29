@@ -92,22 +92,30 @@ no sudoers change, shell execution, or general-purpose privileged command API.
 
 The helper serializes all power changes. Each XPC connection has a 15-second
 lease, renewed every three seconds while work is active. A two-second independent
-watchdog expires stale leases and reads the actual power source. Unknown power
-sources release protection. Disconnecting the client releases its lease; stopping
-work closes the connection. Concurrent owners share the helper and cannot release
-one another's protection. `pmset` calls have bounded timeouts and verify their
-result before reporting protection as active.
+watchdog expires stale leases and reads the actual power source. Lease deadlines
+start when the request arrives, so a queued request cannot acquire a fresh lifetime.
+Each connection admits at most one queued renewal. Intake only records leases;
+the watchdog performs power-service I/O, preventing heartbeat traffic from delaying
+restoration. Changes apply on the next watchdog pass, and renewal replies report
+its last verified state. Unknown power sources release protection. Disconnecting
+the client removes its lease; stopping work closes the connection. Concurrent
+owners share the helper and cannot release one another's protection. `pmset` calls
+have bounded timeouts and verify their result before reporting protection as active.
 
 Before a false-to-true change, a root-owned, exclusive recovery journal is synced
 to disk under `/private/var/db/wovenmatter-power-helper`. The helper restores false
 before clearing that journal. A restarted daemon restores an unfinished transaction
 before accepting new work; failed restoration retains the journal and is retried.
-The launch daemon stays available while idle so recovery does not depend on the
-UI. A pre-existing `SleepDisabled=1` is never claimed or reset. Other utilities
+New leases cannot bypass failed restoration or an uncertain enable operation.
+Normal termination signals stop admission and restore the journal before the helper
+exits. Failed termination cleanup keeps retrying until launchd ends the process;
+the journal remains available for the next start. The launch daemon stays available
+while idle so recovery does not depend on the UI. A pre-existing `SleepDisabled=1` is never claimed or reset. Other utilities
 changing the same global flag concurrently cannot be fully coordinated.
 
-If the helper is manually removed, denied execution, or its bundle deleted while
-an override is active, automatic restoration may be unavailable. Recovery is to
+If the helper is forcibly killed without a restart, denied execution, or its bundle
+deleted while an override is active, automatic restoration may be unavailable.
+Normal termination cleanup is best effort and cannot override launchd's kill deadline. Recovery is to
 restore the approved helper or have an administrator run
 `sudo /usr/bin/pmset -a disablesleep 0`. That command affects the system-wide sleep
 setting, including settings from other utilities; inspect `pmset -g` first.
@@ -172,8 +180,10 @@ remains a separate manual acceptance check.
 Closed-lid tests use fake power settings and a temporary user-owned journal. They
 cover both levels and their independent source policies, persisted off choices,
 live policy and AC/battery changes, multiple clients, lease expiry,
-helper restart, mutation/journal failures, pre-existing overrides, peer identity
-validation, frontend ownership, approval waiting, and late callbacks. Native
+helper restart, queued lease expiry, failed restoration followed by renewed work,
+uncertain enable operations, terminal cleanup, mutation/journal failures,
+pre-existing overrides, peer identity validation, frontend ownership, approval
+waiting, and late callbacks. Native
 build validation checks the bundled executable and launchd configuration without
 registering or running the daemon.
 

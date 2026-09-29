@@ -13,7 +13,8 @@ final class ClosedLidLeaseController {
     private let writeDisabled: (Bool) throws -> Void
     private let readJournal: () throws -> Bool
     private let writeJournal: (Bool) throws -> Void
-    private var recovered = false
+    private var recoveryPending = true
+    private var stopped = false
     private(set) var isProtecting = false
     private(set) var errorMessage: String?
 
@@ -25,46 +26,68 @@ final class ClosedLidLeaseController {
         self.writeJournal = writeJournal
     }
 
-    func renew(_ id: UUID, policy: WorkPowerPolicy, now: TimeInterval, source: WorkPowerSource) {
+    /// Receipt time belongs to XPC intake, not the moment a queued request is
+    /// processed. A delayed request must never acquire a fresh lease.
+    func recordRenewal(_ id: UUID, policy: WorkPowerPolicy, receivedAt: TimeInterval) {
+        guard !stopped else { return }
         if policy.isEnabled {
-            leases[id] = Lease(policy: policy, expires: now + Self.leaseLifetime)
+            leases[id] = Lease(policy: policy, expires: receivedAt + Self.leaseLifetime)
         } else {
             leases[id] = nil
         }
+    }
+
+    func recordDisconnect(_ id: UUID) { leases[id] = nil }
+
+    func renew(_ id: UUID, policy: WorkPowerPolicy, now: TimeInterval, source: WorkPowerSource) {
+        recordRenewal(id, policy: policy, receivedAt: now)
         tick(now: now, source: source)
     }
 
     func remove(_ id: UUID, now: TimeInterval, source: WorkPowerSource) {
-        leases[id] = nil
+        recordDisconnect(id)
         tick(now: now, source: source)
+    }
+
+    /// Termination is irreversible. New or already queued requests cannot
+    /// reacquire the override while launchd is stopping this helper.
+    func stop(now: TimeInterval) {
+        stopped = true
+        leases.removeAll()
+        recoveryPending = true
+        tick(now: now, source: .unknown)
+    }
+
+    private func restore() throws {
+        // Keep this set through both the system write and durable journal clear.
+        // A new lease must not bypass a previously failed restoration.
+        recoveryPending = true
+        if try readJournal() {
+            try writeDisabled(false)
+            try writeJournal(false)
+        }
+        recoveryPending = false
     }
 
     func tick(now: TimeInterval, source: WorkPowerSource) {
         leases = leases.filter { $0.value.expires > now }
         do {
-            // A restarted daemon must restore its previous transaction first.
-            // The journal remains until restoration succeeds, including retries.
-            if !recovered {
-                if try readJournal() {
-                    try writeDisabled(false)
-                    try writeJournal(false)
-                }
-                recovered = true
-            }
-            let requested = leases.values.contains { $0.policy.permits(source) }
+            // Restart, failed restoration, and uncertain enable operations all
+            // restore the journal before considering any newly requested work.
+            if recoveryPending { try restore() }
+            let requested = !stopped && leases.values.contains { $0.policy.permits(source) }
             if requested {
                 if try !readDisabled() {
                     // Claim only a false -> true transition. Never undo another
                     // utility's pre-existing SleepDisabled setting.
+                    recoveryPending = true
                     try writeJournal(true)
                     try writeDisabled(true)
+                    recoveryPending = false
                 }
                 isProtecting = true
             } else {
-                if try readJournal() {
-                    try writeDisabled(false)
-                    try writeJournal(false)
-                }
+                try restore()
                 isProtecting = false
             }
             errorMessage = nil

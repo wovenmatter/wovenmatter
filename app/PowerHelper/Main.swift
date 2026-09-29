@@ -10,6 +10,8 @@ final class PowerHelper: NSObject, NSXPCListenerDelegate, @unchecked Sendable {
     private let requirement: String
     private var sessions: Set<UUID> = []
     private var watchdog: (any DispatchSourceTimer)?
+    private var terminationSources: [any DispatchSourceSignal] = []
+    private var stopping = false
     private let logger = Logger(subsystem: ClosedLidHelperIdentity.service, category: "recovery")
     private var lastError: String?
 
@@ -21,6 +23,15 @@ final class PowerHelper: NSObject, NSXPCListenerDelegate, @unchecked Sendable {
     }
 
     func start() {
+        // launchd normally stops a disabled/replaced helper with SIGTERM. Restore
+        // before exiting; if macOS refuses, keep retrying until launchd ends us.
+        for number in [SIGTERM, SIGINT] {
+            signal(number, SIG_IGN)
+            let source = DispatchSource.makeSignalSource(signal: number, queue: queue)
+            source.setEventHandler { [weak self] in self?.stop() }
+            terminationSources.append(source)
+            source.resume()
+        }
         queue.sync { tick() }
         let timer = DispatchSource.makeTimerSource(queue: queue)
         timer.schedule(deadline: .now(), repeating: 2)
@@ -29,12 +40,23 @@ final class PowerHelper: NSObject, NSXPCListenerDelegate, @unchecked Sendable {
         timer.resume()
     }
 
+    private func stop() {
+        stopping = true
+        controller.stop(now: Self.now)
+        reportRecovery()
+    }
+
     private func tick() {
-        controller.tick(now: Self.now, source: ClosedLidSystemPower.source())
+        controller.tick(now: Self.now, source: stopping ? .unknown : ClosedLidSystemPower.source())
+        reportRecovery()
+    }
+
+    private func reportRecovery() {
         if controller.errorMessage != lastError {
             lastError = controller.errorMessage
             if let lastError { logger.error("\(lastError, privacy: .public)") }
         }
+        if stopping && controller.errorMessage == nil { exit(0) }
     }
 
     static var now: TimeInterval {
@@ -46,7 +68,7 @@ final class PowerHelper: NSObject, NSXPCListenerDelegate, @unchecked Sendable {
     func listener(_ listener: NSXPCListener, shouldAcceptNewConnection connection: NSXPCConnection) -> Bool {
         let id = UUID()
         let admitted = queue.sync {
-            guard sessions.count < 32 else { return false }
+            guard !stopping, sessions.count < 32 else { return false }
             sessions.insert(id)
             return true
         }
@@ -58,7 +80,7 @@ final class PowerHelper: NSObject, NSXPCListenerDelegate, @unchecked Sendable {
             guard let self else { return }
             self.queue.async {
                 self.sessions.remove(id)
-                self.controller.remove(id, now: Self.now, source: ClosedLidSystemPower.source())
+                self.controller.recordDisconnect(id)
             }
         }
         connection.interruptionHandler = { [weak connection] in connection?.invalidate() }
@@ -66,10 +88,16 @@ final class PowerHelper: NSObject, NSXPCListenerDelegate, @unchecked Sendable {
         return true
     }
 
-    func renew(id: UUID, policy: WorkPowerPolicy, reply: @escaping @Sendable (Bool, String?) -> Void) {
+    func renew(id: UUID, policy: WorkPowerPolicy, receivedAt: TimeInterval,
+               reply: @escaping @Sendable (Bool, String?) -> Void) {
         queue.async {
-            guard self.sessions.contains(id) else { reply(false, "The power helper connection closed."); return }
-            self.controller.renew(id, policy: policy, now: Self.now, source: ClosedLidSystemPower.source())
+            guard !self.stopping, self.sessions.contains(id) else {
+                reply(false, "The power helper connection closed.")
+                return
+            }
+            self.controller.recordRenewal(id, policy: policy, receivedAt: receivedAt)
+            // Only the watchdog performs potentially slow power-service I/O.
+            // Renewal replies report its most recent verified protection state.
             reply(self.controller.isProtecting, self.controller.errorMessage)
         }
     }
@@ -78,9 +106,22 @@ final class PowerHelper: NSObject, NSXPCListenerDelegate, @unchecked Sendable {
 final class PowerHelperSession: NSObject, ClosedLidPowerProtocol, @unchecked Sendable {
     private let id: UUID
     private let helper: PowerHelper
+    private let lock = NSLock()
+    private var pending = false
     init(id: UUID, helper: PowerHelper) { self.id = id; self.helper = helper }
     func renew(externalPower: Bool, batteryPower: Bool, reply: @escaping @Sendable (Bool, String?) -> Void) {
-        helper.renew(id: id, policy: .init(externalPower: externalPower, batteryPower: batteryPower), reply: reply)
+        let receivedAt = PowerHelper.now
+        let admitted = lock.withLock {
+            guard !pending else { return false }
+            pending = true
+            return true
+        }
+        guard admitted else { reply(false, "A power helper request is already pending."); return }
+        helper.renew(id: id, policy: .init(externalPower: externalPower, batteryPower: batteryPower),
+                     receivedAt: receivedAt) { [self] active, error in
+            lock.withLock { pending = false }
+            reply(active, error)
+        }
     }
 }
 

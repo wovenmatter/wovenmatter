@@ -111,6 +111,79 @@ struct ClosedLidProtectionTests {
         #expect(!power.journal && !power.disabled)
     }
 
+    @Test func queuedRenewalUsesReceiptDeadlineAndIntakeNeverWritesPower() {
+        let power = FakePower(), controller = power.controller(), id = UUID()
+        controller.recordRenewal(id, policy: .init(externalPower: true), receivedAt: 0)
+        #expect(power.operations.isEmpty)
+        controller.tick(now: 16, source: .external)
+        #expect(power.operations.isEmpty && !controller.isProtecting)
+        controller.recordRenewal(id, policy: .init(externalPower: true), receivedAt: 17)
+        controller.tick(now: 18, source: .external)
+        #expect(power.disabled)
+        controller.recordDisconnect(id)
+        controller.tick(now: 20, source: .external)
+        #expect(!power.disabled && !power.journal)
+    }
+
+    @Test func renewedWorkCannotBypassFailedRestoration() {
+        let power = FakePower(), controller = power.controller(), id = UUID()
+        controller.renew(id, policy: .init(externalPower: true), now: 0, source: .external)
+        power.failWrite = true
+        controller.remove(id, now: 1, source: .external)
+        controller.renew(id, policy: .init(externalPower: true), now: 2, source: .external)
+        #expect(!controller.isProtecting && controller.errorMessage != nil)
+        #expect(power.operations.suffix(2) == ["sleep:false", "sleep:false"])
+        power.failWrite = false
+        controller.tick(now: 3, source: .external)
+        #expect(controller.isProtecting)
+        #expect(power.operations.suffix(4) == ["sleep:false", "journal:false", "journal:true", "sleep:true"])
+    }
+
+    @Test func failedJournalClearMustCompleteBeforeWorkCanReacquire() {
+        let power = FakePower(), controller = power.controller(), id = UUID()
+        controller.renew(id, policy: .init(externalPower: true), now: 0, source: .external)
+        power.failJournal = true
+        controller.remove(id, now: 1, source: .external)
+        #expect(!power.disabled && power.journal)
+        controller.renew(id, policy: .init(externalPower: true), now: 2, source: .external)
+        #expect(!power.disabled && !controller.isProtecting)
+        #expect(power.operations.suffix(2) == ["sleep:false", "journal:false"])
+        power.failJournal = false
+        controller.tick(now: 3, source: .external)
+        #expect(power.operations.suffix(4) == ["sleep:false", "journal:false", "journal:true", "sleep:true"])
+    }
+
+    @Test func uncertainEnableRestoresBeforeASecondAttempt() {
+        var disabled = false, journal = false, failVerification = true
+        var writes: [Bool] = []
+        let controller = ClosedLidLeaseController(readDisabled: { disabled }, writeDisabled: {
+            disabled = $0
+            writes.append($0)
+            if $0 && failVerification { throw CocoaError(.fileReadUnknown) }
+        }, readJournal: { journal }, writeJournal: { journal = $0 })
+        let id = UUID()
+        controller.renew(id, policy: .init(externalPower: true), now: 0, source: .external)
+        #expect(disabled && journal && !controller.isProtecting)
+        failVerification = false
+        controller.renew(id, policy: .init(externalPower: true), now: 1, source: .external)
+        #expect(writes == [true, false, true])
+        #expect(controller.isProtecting && journal)
+    }
+
+    @Test func terminalStopRetriesRecoveryAndRejectsQueuedWork() {
+        let power = FakePower(), controller = power.controller(), id = UUID()
+        controller.renew(id, policy: .init(externalPower: true), now: 0, source: .external)
+        power.failWrite = true
+        controller.stop(now: 1)
+        #expect(power.journal && controller.errorMessage != nil)
+        controller.recordRenewal(id, policy: .init(externalPower: true), receivedAt: 2)
+        power.failWrite = false
+        controller.tick(now: 3, source: .external)
+        #expect(!power.disabled && !power.journal && controller.errorMessage == nil)
+        controller.renew(id, policy: .init(externalPower: true), now: 4, source: .external)
+        #expect(!power.disabled && !controller.isProtecting)
+    }
+
     @Test func pmsetReadFailsClosedForPartialOrUnknownOutput() throws {
         #expect(throws: (any Error).self) { try ClosedLidSystemPower.parseDisabled("System-wide power settings:\n") }
         let prefix = "System-wide power settings:\n"
