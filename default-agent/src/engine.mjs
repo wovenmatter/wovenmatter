@@ -8,6 +8,7 @@ import { providerFetch } from './transport.mjs';
 import { registerLocalServers } from './local-servers.mjs';
 import { ClaudeRuntime, isClaude } from './claude-runtime.mjs';
 import { registerClaudeProviders } from './claude-provider.mjs';
+import { modelOption } from './model-presentation.mjs';
 
 const builtInInstructions = 'You are Built-in in Woven Matter. Work in the supplied agent workspace. Use the wovenmatter CLI and workspace instructions for notes and databases. Use web_search and web_read for current information and cite source URLs. If search is not configured, direct the user to Settings → Connections. Never claim a tool succeeded when it failed.';
 
@@ -118,7 +119,7 @@ export class DefaultAgentEngine {
     const levels = this.thinkingLevels(record);
     const thinking = record.session.thinkingLevel;
     return { configOptions: [{ id: 'model', name: 'Model', category: 'model', type: 'select', currentValue: record.selected,
-      options: this.modelOptions().map(m => ({ value: m.id, name: `${m.name} · ${m.providerName}` })) },
+      options: this.modelOptions().map(modelOption) },
       ...(levels.length > 1 ? [{ id: 'thinking', name: 'Thinking Level', category: 'thought_level', type: 'select', currentValue: thinking,
         options: levels.map(value => ({ value, name: value[0].toUpperCase() + value.slice(1) })) }] : []),
       { id: 'permission_mode', name: 'Permissions', type: 'select', currentValue: record.permission ?? 'normal', options: [
