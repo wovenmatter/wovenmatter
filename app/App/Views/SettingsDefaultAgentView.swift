@@ -140,8 +140,8 @@ private struct SettingsAgentModelsView: View {
     @State private var page = 0
     @State private var choosingDefault = false
     @State private var fallbackPage = 0
-    // Native controls in a SettingsPage's eager stack must be bounded even if the
-    // catalog grows. Paging applies after filtering, so every choice stays available.
+    // Pagination bounds the browser's data. The lazy section and row stacks below
+    // defer offscreen native controls within SettingsPage's existing scroll viewport.
     private let pageSize = 40
 
     private struct Inputs: Equatable {
@@ -178,7 +178,7 @@ private struct SettingsAgentModelsView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        LazyVStack(alignment: .leading, spacing: 12) {
             Text("Models").font(.headline)
             HStack {
                 Text("Default model")
@@ -224,7 +224,7 @@ private struct SettingsAgentModelsView: View {
                 Text("No models match these filters.").font(.callout).foregroundStyle(.secondary)
             } else {
                 SettingsAgentCatalogPageControls(count: matches.count, pageSize: pageSize, page: $page)
-                VStack(spacing: 8) {
+                LazyVStack(spacing: 8) {
                     ForEach(pageRows) { row in modelRow(row) }
                 }
                 if matches.count > pageSize {

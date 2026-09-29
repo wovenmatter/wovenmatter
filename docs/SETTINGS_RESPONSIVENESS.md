@@ -16,6 +16,20 @@ head `0dec43a`. The evidence identified several independent sources of work:
   derived row state from a catalog containing hundreds of models. Its automatic
   status request also performed native Claude status and model discovery.
 
+Later September 28 samples of the updated Dev app captured 726 samples on initial
+Built-in Settings entry and 1,900 on a repeated entry under synchronous main-thread
+SwiftUI rendering. Those stacks included model-row construction, layout, and focus
+work. The captured Keychain reads were on the background account actor, with none
+on the main thread. These are sample counts, not precise elapsed milliseconds.
+
+The first model-browser correction bounded a page to 40 rows but still placed
+those rows inside eager section and row stacks. Each model row has two toggles
+and two ordering buttons, so entering the page could construct 160 model controls
+before the user scrolled to them. The follow-up changes those two stacks to lazy
+stacks within the existing page scroll viewport. Pagination and catalog behavior
+remain unchanged; a new Dev build and matching profile are needed to measure the
+improvement.
+
 These observations do not establish the duration of every reported stall, or
 that the separate long-conversation slowdown has the same cause.
 
@@ -35,9 +49,10 @@ model discovery. Explicit connection refresh and completed sign-in still verify
 connections. Cancelling passive status/discovery terminates its native work;
 normal EOF remains a valid one-shot helper request boundary.
 
-The model browser and default chooser display at most 40 controls per page.
-Search covers the complete catalog, and every model remains reachable. Catalog
-classification and row preference state are indexed outside row rendering.
+The model browser and default chooser expose at most 40 model rows per page.
+The browser's section and row stacks defer native controls outside the scroll
+viewport. Search covers the complete catalog, and every model remains reachable.
+Catalog classification and row preference state are indexed outside row rendering.
 
 Composer measurement uses separate, reusable TextKit objects and finite viewport
 widths. Sizing probes do not alter the mounted editor, selection, or native text
