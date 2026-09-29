@@ -282,7 +282,15 @@ final class ApplicationModel {
         PreparedLocalACPRuntimeInstall?
     private(set) var pendingLocalACPPermissions: [PendingLocalACPPermission] = []
     private(set) var pendingLocalACPInteractions: [PendingLocalACPInteraction] = []
-    private(set) var localRunningConversationIDs: Set<String> = []
+    let closedLidProtection: ClosedLidWorkProtection
+    private(set) var isChangingClosedLidPolicy = false
+    private(set) var closedLidSettingsError: String?
+    private(set) var isChangingIdleSleepPolicy = false
+    private(set) var idleSleepSettingsError: String?
+    let activeWorkSleepPrevention: ActiveWorkSleepPrevention
+    private(set) var localRunningConversationIDs: Set<String> = [] {
+        didSet { activeWorkSleepPrevention.setRunningConversationIDs(runningToolSessionIDs) }
+    }
     private(set) var conversationStatesByID: [String: DashboardConversationState] = [:]
     // Usage owns its observable state; these projections preserve the application API.
     private let usage: ApplicationUsageModel
@@ -390,6 +398,13 @@ final class ApplicationModel {
         startsAutomatically: Bool? = nil
     ) {
         self.applicationDefaults = applicationDefaults
+        let closedLidProtection = ClosedLidWorkProtection(
+            ownsExecution: LocalExecutionRole.current.ownsExecution, defaults: applicationDefaults)
+        self.closedLidProtection = closedLidProtection
+        self.activeWorkSleepPrevention = ActiveWorkSleepPrevention(
+            ownsExecution: LocalExecutionRole.current.ownsExecution, defaults: applicationDefaults,
+            closedLidPolicy: closedLidProtection.snapshot.policy,
+            onWorkChanged: { [weak closedLidProtection] in closedLidProtection?.setWorking($0) })
         self.usage = ApplicationUsageModel(applicationDefaults: applicationDefaults)
         self.sessionSelectionPreferences = SessionSelectionPreferences(defaults: applicationDefaults)
         self.localACPRuntimePreferences = LocalACPRuntimePreferences(
@@ -2025,6 +2040,8 @@ final class ApplicationModel {
             return try await sendBackendCommand(.sendMessage(conversationID: conversation.id, input: input, noteID: note?.id)).accepted
         }
 
+        let activityID = activeWorkSleepPrevention.beginDispatch()
+        defer { activeWorkSleepPrevention.endDispatch(activityID) }
         guard let dashboardStore, let agentTools else { throw ApplicationModelError.dashboardStoreUnavailable }
         try await applyPendingSessionSelections(conversationID: conversation.id)
         guard !loadingLocalACPSessionIDs.contains(conversation.id),
@@ -2091,6 +2108,16 @@ final class ApplicationModel {
         } catch {
             if !steering { localRunningConversationIDs.remove(conversation.id) }
             throw error
+        }
+        // A workspace refresh may have cleared the provisional running ID while
+        // session setup awaited. Reconcile accepted work before its dispatch
+        // lease ends, including runs that already completed during submission.
+        if let running = try? await dashboardStore.activeAgentConversationIDs() {
+            localRunningConversationIDs = running
+        } else {
+            // Acceptance already succeeded. Keep protection until the next
+            // successful refresh without reporting a retryable send failure.
+            localRunningConversationIDs.insert(conversation.id)
         }
         scheduleConversationTitleGeneration(conversation: conversation, firstPrompt: normalized.previewText)
         return true
@@ -3372,6 +3399,8 @@ final class ApplicationModel {
     }
 
     func shutdownLocalACPSessions() {
+        activeWorkSleepPrevention.stop()
+        closedLidProtection.stop()
         library.stop()
         toolRuntimeTask?.cancel()
         agentTools?.stop()
@@ -4927,6 +4956,8 @@ struct BackendApplicationState: Codable, Sendable {
     let sessionAccess: [WorkspaceCoordinationAccessRequest]
     let sessionAccessError: String?
     let executionErrors: [String: String]
+    let closedLidProtection: ClosedLidProtectionSnapshot?
+    let idleSleepProtection: IdleSleepProtectionSnapshot?
 }
 
 extension ApplicationModel {
@@ -5062,7 +5093,9 @@ extension ApplicationModel {
               permissions: pendingLocalACPPermissions, interactions: pendingLocalACPInteractions,
               composerPrefills: pendingComposerPrefills, calendarErrors: remoteCalendarGatewayErrors,
               sessionAccess: pendingSessionAccess, sessionAccessError: sessionAccessError,
-              executionErrors: conversationStatesByID.compactMapValues { $0.error })
+              executionErrors: conversationStatesByID.compactMapValues { $0.error },
+              closedLidProtection: closedLidProtection.snapshot,
+              idleSleepProtection: activeWorkSleepPrevention.snapshot)
     }
 
     private func observeBackendApplicationState() {
@@ -5219,6 +5252,8 @@ extension ApplicationModel {
 
     private func refreshBackendApplicationState() async throws {
         let snapshot = try JSONDecoder().decode(BackendApplicationState.self, from: await callBackend(method: "application.state"))
+        activeWorkSleepPrevention.applyBackendSnapshot(snapshot.idleSleepProtection ?? .init())
+        closedLidProtection.applyBackendSnapshot(snapshot.closedLidProtection ?? .init())
         localRunningConversationIDs = snapshot.runningConversationIDs
         localACPSessionMetadata = snapshot.metadata
         pendingLocalACPPermissions = snapshot.permissions
@@ -5235,6 +5270,49 @@ extension ApplicationModel {
         backendExecutionErrorIDs = Set(snapshot.executionErrors.keys)
         applyBackendRuntimeSnapshot(try JSONDecoder().decode(BackendRuntimeSnapshot.self,
             from: await callBackend(method: "runtime.snapshot")))
+    }
+
+    func setIdleSleepPolicyFromSettings(_ policy: WorkPowerPolicy) async {
+        guard !isChangingIdleSleepPolicy else { return }
+        isChangingIdleSleepPolicy = true
+        idleSleepSettingsError = nil
+        defer { isChangingIdleSleepPolicy = false }
+        do {
+            if isBackendFrontend {
+                _ = try await sendBackendCommand(.setIdleSleepPolicy(policy))
+                try await refreshBackendApplicationState()
+            } else {
+                activeWorkSleepPrevention.setPolicy(policy)
+            }
+        } catch { idleSleepSettingsError = error.localizedDescription }
+    }
+
+    func applyClosedLidPolicy(_ policy: WorkPowerPolicy) {
+        activeWorkSleepPrevention.setClosedLidPolicy(policy)
+        closedLidProtection.setPolicy(policy)
+    }
+
+    func setClosedLidPolicyFromSettings(_ policy: WorkPowerPolicy) async {
+        guard !isChangingClosedLidPolicy else { return }
+        isChangingClosedLidPolicy = true
+        closedLidSettingsError = nil
+        defer { isChangingClosedLidPolicy = false }
+        do {
+            let previous = closedLidProtection.snapshot.policy
+            let enablesSource = (policy.externalPower && !previous.externalPower)
+                || (policy.batteryPower && !previous.batteryPower)
+            // Turning a switch off must work even if the helper was removed or
+            // approval revoked. An unchanged enabled policy is the setup retry.
+            if enablesSource || (policy.isEnabled && policy == previous) {
+                try ClosedLidHelperRegistration.prepareFromUserAction()
+            }
+            if isBackendFrontend {
+                _ = try await sendBackendCommand(.setClosedLidPolicy(policy))
+                try await refreshBackendApplicationState()
+            } else {
+                applyClosedLidPolicy(policy)
+            }
+        } catch { closedLidSettingsError = error.localizedDescription }
     }
 
     func changeLocalBackgroundExecution(enabled: Bool) async throws {
