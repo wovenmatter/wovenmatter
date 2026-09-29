@@ -629,17 +629,14 @@ struct DashboardCloudConversation: View {
         }
     }
 
-    private var sessionIdentity: String? {
+    private var sessionIdentity: LocalACPSessionMetadataTaskIdentity? {
         guard let conversation else { return nil }
-        if let runtimeKind = conversation.localRuntimeKind {
-            // A restored chat can appear before CLI discovery finishes. Retry
-            // its metadata task when the launch context becomes available.
-            if [.codex, .claudeCode, .grokBuild, .cursor].contains(runtimeKind) {
-                return "local:\(conversation.id):\(model.isLocalACPSessionLaunchAvailable(conversation))"
-            }
-            return "local:\(conversation.id)"
-        }
-        return nil
+        return LocalACPSessionMetadataTaskIdentity(
+            conversationID: conversation.id,
+            runtimeKind: conversation.localRuntimeKind,
+            usesOpenClawGateway: model.isOpenClawGatewayConversation(conversation.id),
+            launchAvailable: model.isLocalACPSessionLaunchAvailable(conversation)
+        )
     }
 
     private var conversationState: DashboardConversationState? {
