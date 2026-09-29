@@ -52,13 +52,16 @@ struct WorkspaceAgentToolTests {
     let requestID = UUID().uuidString.lowercased()
     let legacyRequest = NoteEditingRequest(command: .apply, noteID: note,
       operations: [.setTitle("Legacy edit")])
-    // Model the durable pre-upgrade receipt, whose input had no revision.
-    let applied = try await db.write { connection in
+    let applied = try await db.applyNoteEdits(.init(command: .apply, noteID: note,
+      expectedRevision: initial.revision, operations: legacyRequest.operations))
+    // Model the durable pre-upgrade receipt, whose input had no revision. The
+    // edit above already committed; seed its acknowledgement without nesting
+    // applyNoteEdits' transaction inside the receipt fixture transaction.
+    _ = try await db.write { connection in
       try connection.transaction {
         try connection.performToolMutationUnlocked(callerID: caller, requestID: requestID,
           operation: "notes.apply", input: legacyRequest, receipt: connection.noteMutationReceipt) {
-            try connection.applyNoteEdits(.init(command: .apply, noteID: note,
-              expectedRevision: initial.revision, operations: legacyRequest.operations))
+            applied
           }.result
       }
     }
