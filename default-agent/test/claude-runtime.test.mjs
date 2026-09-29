@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, chmod, stat, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, chmod, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ClaudeRuntime, claudeDirectories, claudeEnvironment } from '../src/claude-runtime.mjs';
@@ -30,10 +30,34 @@ test('Mac native credential directory blocks disk fallback without making sessio
   const paths = await claudeDirectories(root, { platform: 'darwin' });
   assert.equal((await stat(paths.storage)).mode & 0o777, 0o700);
   assert.equal((await stat(paths.config)).mode & 0o777, 0o700);
-  if (process.getuid() !== 0) await assert.rejects(writeFile(join(paths.storage, '.credentials.json'), 'fixture'), /EACCES|EPERM/);
+  // Native Keychain mutation acquires this directory lock before touching
+  // secure storage; a read-only directory would silently break sign-in again.
+  const lock = join(paths.storage, '.storage-write.lock');
+  await mkdir(lock);
+  await claudeDirectories(root, { platform: 'darwin' });
+  await rm(lock, { recursive: true });
+  if (process.getuid() !== 0) {
+    await assert.rejects(writeFile(join(paths.storage, '.credentials.json'), 'fixture'), /EACCES|EPERM/);
+    await assert.rejects(writeFile(join(paths.storage, '.credentials.json.fixture.tmp'), 'fixture'), /EACCES|EPERM/);
+    const fallback = join(root, 'fallback-fixture');
+    await writeFile(fallback, 'fixture');
+    await assert.rejects(rename(fallback, join(paths.storage, '.credentials.json')), /EACCES|EPERM/);
+    assert.equal(await readFile(fallback, 'utf8'), 'fixture');
+  }
   await writeFile(join(paths.config, 'fixture-session'), 'nonsecret');
   await claudeDirectories(root, { platform: 'darwin' });
   assert.equal((await stat(paths.storage)).mode & 0o777, 0o700);
+});
+
+test('Mac native storage rejects preexisting plaintext without reading or removing it', { skip: process.platform !== 'darwin' }, async t => {
+  const root = await mkdtemp(join(tmpdir(), 'woven-claude-existing-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const storage = join(root, 'claude-keychain');
+  await mkdir(storage, { mode: 0o700 });
+  const file = join(storage, '.credentials.json');
+  await writeFile(file, 'nonsecret fixture', { mode: 0o600 });
+  await assert.rejects(claudeDirectories(root, { platform: 'darwin' }), /unexpected file/);
+  assert.equal(await readFile(file, 'utf8'), 'nonsecret fixture');
 });
 
 test('remote native storage rejects disk-backed directories', async () => {
