@@ -434,6 +434,29 @@ struct OpenCodeIntegrationTests {
         await #expect(throws: OpenCodeError.incompatible("2.99.0")) { try await client.health() }
     }
 
+    @Test func ordinaryMessagesAndCommandsSteerEvenBeforeBusyStateRefreshes() async throws {
+        let fixture = OpenCodeFixture(); FixtureProtocol.fixture = fixture
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+        let id = try await database.createLocalACPSession(runtimeKind: .opencode, title: "Work", ownerDeviceID: UUID(), openCodeAssociation: ("fixture", "ses_fixture"))
+        let link = OpenCodeSessionLink(conversationID: id, connectionID: "fixture", sessionID: "ses_fixture")
+        let session = fixtureSession()
+        let coordinator = OpenCodeSessionCoordinator(database: database, clientFactory: { OpenCodeHTTPClient(connection: $0, session: session) })
+        try await coordinator.connect(connection())
+        for text in ["start", "first correction", "second correction"] {
+            try await coordinator.prompt(link, input: .init(text: text))
+            #expect(fixture.lastPrompt["delivery"].text == "steer")
+            #expect(fixture.lastPrompt["text"].text == text)
+        }
+        try await coordinator.command(link, name: "review", input: .init(text: "focus on races"))
+        #expect(fixture.lastCommand["delivery"].text == "steer")
+        #expect(fixture.promptCount == 3)
+        #expect(fixture.interruptCount == 0)
+        await coordinator.shutdown()
+    }
+
     @Test func unifiedDiscoveryPreservesVisibleInputAndDurableAgentAttribution() async throws {
         let fixture = OpenCodeFixture(); FixtureProtocol.fixture = fixture
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)

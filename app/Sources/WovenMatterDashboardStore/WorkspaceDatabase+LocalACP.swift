@@ -608,7 +608,7 @@ extension WorkspaceDatabaseConnection {
     return try transaction {
       let active = try prepareUnlocked("""
         SELECT 1 FROM dashboard_runs
-        WHERE conversation_id = ? AND desktop_owned = 1 AND status = 'running'
+        WHERE conversation_id = ? AND desktop_owned = 1 AND status IN ('running', 'uncertain')
         LIMIT 1
         """)
       defer { sqlite3_finalize(active) }
@@ -847,7 +847,7 @@ extension WorkspaceDatabaseConnection {
         SELECT DISTINCT conversation_id
         FROM dashboard_runs
         WHERE desktop_owned = 1 AND authority_kind = 'device_owned'
-          AND status = 'running'
+          AND status IN ('running', 'uncertain')
         """)
       defer { sqlite3_finalize(statement) }
       var conversationIDs: Set<String> = []
@@ -879,6 +879,85 @@ extension WorkspaceDatabaseConnection {
     createdAt: Date = Date()
   ) throws -> LocalACPSteeringIdentifiers {
     try transaction {
+      try beginLocalACPSteeringTurnUnlocked(runID: runID, input: input,
+        completesPreviousAssistant: completesPreviousAssistant, createdAt: createdAt)
+    }
+  }
+
+  /// Commit the input before native dispatch. A definitive rejection may undo
+  /// this reservation; an uncertain receipt must retain the original identity.
+  func reserveLocalACPSteeringTurn(runID: String, input: AgentMessageInput,
+                                   completesPreviousAssistant: Bool = true) throws -> LocalACPSteeringReservation {
+    try transaction {
+      guard let previous = try historyRowsUnlocked("""
+        SELECT r.assistant_message_id, r.updated_at AS run_updated_at,
+          m.status AS assistant_status, m.updated_at AS assistant_updated_at,
+          c.id AS conversation_id, c.last_message_preview, c.last_message_at,
+          c.updated_at AS conversation_updated_at
+        FROM dashboard_runs r JOIN dashboard_messages m ON m.id=r.assistant_message_id
+        JOIN dashboard_conversations c ON c.id=r.conversation_id
+        WHERE r.id=? AND r.desktop_owned=1 AND r.status='running'
+        """, values: [runID]).first?.objectValue else { throw LocalACPSessionDatabaseError.runNotFound }
+      if let deliveryID = input.historyDeliveryID {
+        let target = try historyRowsUnlocked("SELECT target_id FROM workspace_session_deliveries WHERE id=?", values: [deliveryID])
+          .first?.objectValue?["target_id"]?.stringValue
+        guard target == previous["conversation_id"]?.stringValue else {
+          throw WorkspaceToolError.invalid("This delivery is not reserved for this session.")
+        }
+        try markToolDeliveryTransportStartedUnlocked(id: deliveryID)
+      }
+      let existingGrants = Set(try historyRowsUnlocked(
+        "SELECT target_id FROM workspace_session_grants WHERE source_id=? AND kind='attachment'",
+        values: [previous["conversation_id"]?.stringValue]).compactMap { $0.objectValue?["target_id"]?.stringValue })
+      let newGrants = Set(input.references.filter { $0.kind == .conversation }.map(\.resourceID)).subtracting(existingGrants)
+      let identifiers = try beginLocalACPSteeringTurnUnlocked(runID: runID, input: input,
+        completesPreviousAssistant: completesPreviousAssistant, createdAt: Date())
+      return LocalACPSteeringReservation(identifiers: identifiers,
+        previous: previous.mapValues { $0.stringValue }, deliveryID: input.historyDeliveryID, newAttachmentGrants: newGrants)
+    }
+  }
+
+  /// Only remove an untouched, latest segment after a definitive native refusal.
+  /// If output or another owner advanced it, preserve the durable receipt instead.
+  @discardableResult
+  func rejectLocalACPSteeringTurn(_ reservation: LocalACPSteeringReservation) throws -> Bool {
+    try transaction {
+      let ids = reservation.identifiers
+      guard !(try historyRowsUnlocked("""
+        SELECT 1 FROM dashboard_runs r JOIN dashboard_messages m ON m.id=r.assistant_message_id
+        WHERE r.id=? AND r.status='running' AND r.assistant_message_id=? AND m.content=''
+        """, values: [ids.runID, ids.assistantMessageID])).isEmpty else { return false }
+      func value(_ key: String) -> String? { reservation.previous[key] ?? nil }
+      try toolsExecuteUnlocked("UPDATE dashboard_runs SET assistant_message_id=?,updated_at=? WHERE id=?",
+        [value("assistant_message_id"), value("run_updated_at"), ids.runID])
+      try toolsExecuteUnlocked("UPDATE dashboard_messages SET status=?,updated_at=? WHERE id=?",
+        [value("assistant_status"), value("assistant_updated_at"), value("assistant_message_id")])
+      if let deliveryID = reservation.deliveryID {
+        try toolsExecuteUnlocked("UPDATE workspace_session_deliveries SET message_id=NULL,status='sending',transport_started=0 WHERE id=? AND message_id=?",
+          [deliveryID, ids.userMessageID])
+      }
+      try toolsExecuteUnlocked("DELETE FROM desktop_openclaw_run_inputs WHERE local_run_id=? AND user_message_id=?",
+        [ids.runID, ids.userMessageID])
+      for table in ["dashboard_message_attachments", "dashboard_message_references"] {
+        try toolsExecuteUnlocked("DELETE FROM \(table) WHERE message_id IN (?,?)", [ids.userMessageID, ids.assistantMessageID])
+      }
+      try toolsExecuteUnlocked("DELETE FROM dashboard_messages WHERE id IN (?,?)", [ids.userMessageID, ids.assistantMessageID])
+      for target in reservation.newAttachmentGrants {
+        try toolsExecuteUnlocked("""
+          DELETE FROM workspace_session_grants WHERE source_id=? AND target_id=? AND kind='attachment'
+            AND NOT EXISTS (SELECT 1 FROM dashboard_message_references WHERE conversation_id=? AND resource_type='conversation' AND resource_id=?)
+          """, [value("conversation_id"), target, value("conversation_id"), target])
+      }
+      try toolsExecuteUnlocked("""
+        UPDATE dashboard_conversations SET last_message_preview=?,last_message_at=?,updated_at=? WHERE id=?
+        """, [value("last_message_preview"), value("last_message_at"), value("conversation_updated_at"), value("conversation_id")])
+      return true
+    }
+  }
+
+  private func beginLocalACPSteeringTurnUnlocked(
+    runID: String, input: AgentMessageInput, completesPreviousAssistant: Bool, createdAt: Date
+  ) throws -> LocalACPSteeringIdentifiers {
       let authority = try localRunAuthorityUnlocked(runID: runID)
       let active = try prepareUnlocked("""
         SELECT 1 FROM dashboard_runs
@@ -1008,7 +1087,6 @@ extension WorkspaceDatabaseConnection {
       try recordOpenClawInputUnlocked(conversationID: authority.conversationID, localRunID: runID,
         remoteRunID: identifiers.userMessageID, userMessageID: identifiers.userMessageID, assistantMessageID: identifiers.assistantMessageID)
       return identifiers
-    }
   }
 
   typealias DeviceOwnedAssistantMutation = WorkspaceDatabase.DeviceOwnedAssistantMutation
@@ -1531,14 +1609,55 @@ extension WorkspaceDatabaseConnection {
   /// A disconnected transport may have marked them failed while the workspace kept running.
   public func recoverRemoteAgentRuns(conversationID: String, snapshots: [DefaultAgentRunSnapshot]) throws {
     try transaction {
+      try recoverRemoteAgentRunsUnlocked(conversationID: conversationID, snapshots: snapshots)
+    }
+  }
+
+  /// A fenced service attachment proved this exact native session idle after
+  /// retiring every older admission. A plain load or a timeout is not proof.
+  func reconcileUncertainRemoteRuns(conversationID: String, remoteWorkspaceID: UUID,
+    sessionID: String, snapshots: [DefaultAgentRunSnapshot]) throws {
+    try transaction {
+      let route = try historyRowsUnlocked("""
+        SELECT 1 FROM desktop_local_acp_sessions WHERE conversation_id=?
+          AND remote_workspace_id=?
+        """, values: [conversationID, remoteWorkspaceID.uuidString.lowercased()])
+      guard !route.isEmpty else { throw LocalACPSessionDatabaseError.sessionNotFound }
+      try recoverRemoteAgentRunsUnlocked(conversationID: conversationID, snapshots: snapshots,
+        confirmedSessionID: sessionID, confirmedWorkspaceID: remoteWorkspaceID.uuidString.lowercased())
+      let now = Self.timestamp(Date())
+      let detail = "The remote session is idle, but no completed result was retained for this input."
+      try toolsExecuteUnlocked("""
+        UPDATE dashboard_messages SET status='failed',updated_at=?
+        WHERE id IN (SELECT assistant_message_id FROM dashboard_runs WHERE conversation_id=?
+          AND desktop_owned=1 AND status='uncertain' AND id IN
+            (SELECT run_id FROM desktop_local_acp_durable_runs WHERE native_session_id=? AND remote_workspace_id=?))
+        """, [now, conversationID, sessionID, remoteWorkspaceID.uuidString.lowercased()])
+      try toolsExecuteUnlocked("""
+        UPDATE dashboard_runs SET status='failed',error=?,completed_at=?,updated_at=?
+        WHERE conversation_id=? AND desktop_owned=1 AND status='uncertain' AND id IN
+          (SELECT run_id FROM desktop_local_acp_durable_runs WHERE native_session_id=? AND remote_workspace_id=?)
+        """, [detail, now, now, conversationID, sessionID, remoteWorkspaceID.uuidString.lowercased()])
+    }
+  }
+
+  private func recoverRemoteAgentRunsUnlocked(conversationID: String,
+    snapshots: [DefaultAgentRunSnapshot], confirmedSessionID: String? = nil, confirmedWorkspaceID: String? = nil) throws {
       let route = try prepareUnlocked("SELECT 1 FROM desktop_local_acp_sessions WHERE conversation_id=? AND (runtime_kind='default_agent' OR remote_workspace_id IS NOT NULL)")
       defer { sqlite3_finalize(route) }
       try bind(conversationID, at: 1, to: route)
       guard sqlite3_step(route) == SQLITE_ROW else { throw LocalACPSessionDatabaseError.runtimeUnavailable }
       for snapshot in snapshots {
-        let query = try prepareUnlocked("SELECT assistant_message_id FROM dashboard_runs WHERE id=? AND conversation_id=? AND desktop_owned=1 AND status!='completed'")
+        let query = try prepareUnlocked("""
+          SELECT assistant_message_id FROM dashboard_runs WHERE id=? AND conversation_id=?
+            AND desktop_owned=1 AND status!='completed'
+            AND (status!='uncertain' OR id IN (SELECT run_id FROM desktop_local_acp_durable_runs
+              WHERE native_session_id=? AND remote_workspace_id=?))
+          """)
         defer { sqlite3_finalize(query) }
         try bind(snapshot.runID, at: 1, to: query); try bind(conversationID, at: 2, to: query)
+        try bindNullable(confirmedSessionID, at: 3, to: query)
+        try bindNullable(confirmedWorkspaceID, at: 4, to: query)
         guard sqlite3_step(query) == SQLITE_ROW else { continue }
         let messageID = try text(query, column: 0)
         let status = snapshot.error == nil ? "completed" : "failed"
@@ -1553,7 +1672,6 @@ extension WorkspaceDatabaseConnection {
         for (index, value) in [now, now, snapshot.runID, conversationID].enumerated() { try bind(value, at: Int32(index + 3), to: run) }
         try stepDone(run)
       }
-    }
   }
 
   public func completeLocalACPRun(
@@ -1603,6 +1721,45 @@ extension WorkspaceDatabaseConnection {
     }
   }
 
+  /// The attachment ended without proving that the durable native run ended.
+  /// Keep its identity and a nonterminal status until authoritative recovery.
+  func markLocalACPRunUncertain(runID: String, detail: String) throws {
+    try transaction { try markLocalACPRunUncertainUnlocked(runID: runID, detail: detail) }
+  }
+
+  func registerDurableLocalACPRun(runID: String, remoteWorkspaceID: UUID, sessionID: String) throws {
+    try transaction {
+      try toolsExecuteUnlocked("""
+        INSERT INTO desktop_local_acp_durable_runs(run_id,remote_workspace_id,native_session_id)
+        SELECT r.id,?,? FROM dashboard_runs r JOIN desktop_local_acp_sessions s ON s.conversation_id=r.conversation_id
+        WHERE r.id=? AND r.status='running' AND s.remote_workspace_id=?
+        ON CONFLICT(run_id) DO UPDATE SET remote_workspace_id=excluded.remote_workspace_id,native_session_id=excluded.native_session_id
+        """, [remoteWorkspaceID.uuidString.lowercased(), sessionID, runID, remoteWorkspaceID.uuidString.lowercased()])
+      guard changedRowCountUnlocked == 1 else { throw LocalACPSessionDatabaseError.runNotFound }
+      // A service-owned session is already recoverable before its first prompt;
+      // keep this identity even for harnesses whose local CLI defers persistence.
+      try toolsExecuteUnlocked("""
+        UPDATE desktop_local_acp_sessions SET acp_session_id=?,revision=revision+1,updated_at=?
+        WHERE conversation_id=(SELECT conversation_id FROM dashboard_runs WHERE id=?) AND remote_workspace_id=?
+        """, [sessionID, Self.timestamp(Date()), runID, remoteWorkspaceID.uuidString.lowercased()])
+      try toolsExecuteUnlocked("UPDATE dashboard_runs SET openclaw_session_key=? WHERE id=?", [sessionID, runID])
+    }
+  }
+
+  private func markLocalACPRunUncertainUnlocked(runID: String, detail: String) throws {
+      let now = Self.timestamp(Date())
+      try toolsExecuteUnlocked("""
+        UPDATE dashboard_runs SET status='uncertain',error=?,completed_at=NULL,updated_at=?
+        WHERE id=? AND desktop_owned=1 AND status='running'
+          AND id IN (SELECT run_id FROM desktop_local_acp_durable_runs)
+        """, [detail, now, runID])
+      guard changedRowCountUnlocked == 1 else { throw LocalACPSessionDatabaseError.runNotFound }
+      try toolsExecuteUnlocked("""
+        UPDATE dashboard_messages SET status='uncertain',updated_at=?
+        WHERE id=(SELECT assistant_message_id FROM dashboard_runs WHERE id=?) AND desktop_owned=1
+        """, [now, runID])
+  }
+
   public func cancelLocalACPRun(
     runID: String,
     completedAt: Date = Date()
@@ -1644,6 +1801,29 @@ extension WorkspaceDatabaseConnection {
   ) throws {
     try transaction {
       let timestamp = Self.timestamp(recoveredAt)
+      // Older remote Built-in sessions always used the service. Other legacy
+      // remote harnesses could be foreground SSH; their route is not inferable.
+      try toolsExecuteUnlocked("""
+        INSERT OR IGNORE INTO desktop_local_acp_durable_runs(run_id,remote_workspace_id,native_session_id)
+        SELECT r.id,s.remote_workspace_id,s.acp_session_id FROM dashboard_runs r
+        JOIN desktop_local_acp_sessions s ON s.conversation_id=r.conversation_id
+        WHERE r.desktop_owned=1 AND r.status='running' AND s.runtime_kind='default_agent'
+          AND s.remote_workspace_id IS NOT NULL AND s.acp_session_id IS NOT NULL
+          AND s.acp_session_id!='' AND r.openclaw_session_key=s.acp_session_id
+        """)
+      // Losing this process ends a local CLI, but only detaches a service-owned
+      // native run. Do not manufacture terminal truth for the latter.
+      let durable = try historyRowsUnlocked("""
+        SELECT r.id FROM dashboard_runs r JOIN desktop_local_acp_durable_runs d ON d.run_id=r.id
+        WHERE r.desktop_owned=1 AND r.status='running'
+          AND r.conversation_id NOT IN (SELECT conversation_id FROM desktop_openclaw_gateway_sessions)
+          AND r.conversation_id NOT IN (SELECT conversation_id FROM desktop_opencode_sessions)
+        """, values: [])
+      for row in durable {
+        guard let id = row.objectValue?["id"]?.stringValue else { continue }
+        try markLocalACPRunUncertainUnlocked(runID: id,
+          detail: "The connection ended before the remote outcome was confirmed. Reconnect this conversation to recover its result.")
+      }
       let message = try prepareUnlocked("""
         UPDATE dashboard_messages
         SET content = CASE

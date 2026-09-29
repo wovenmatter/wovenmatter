@@ -21,6 +21,43 @@ async function fixture(t) {
   return { call, relay, child, options, launches: () => launches, received: () => received, disable: () => { enabled = false } }
 }
 
+test('replacement attachment fences delayed old input, cancel and approval without blocking read-only polling', async t => {
+  const f = await fixture(t)
+  const old = await f.call('attach', { attachmentProtocol: 1 })
+  const current = await f.call('attach', { attachmentProtocol: 1 })
+  assert.notEqual(current.attachmentToken, old.attachmentToken)
+  for (const message of [
+    { jsonrpc: '2.0', id: 1, method: 'session/prompt', params: { sessionId: 'native' } },
+    { jsonrpc: '2.0', method: 'session/cancel', params: { sessionId: 'native' } },
+    { jsonrpc: '2.0', id: 'permission', result: { outcome: 'selected' } },
+  ]) {
+    await assert.rejects(f.call('message', { attachmentToken: old.attachmentToken, deliveryID: 'late', message }), /attachment was replaced/)
+    await assert.rejects(f.call('message', { deliveryID: 'legacy', message }), /attachment was replaced/)
+  }
+  assert.equal(f.received(), '')
+  assert.equal((await f.call('poll')).snapshot.recoveryComplete, false)
+  assert.equal((await f.call('poll', { attachmentToken: old.attachmentToken })).snapshot.recoveryComplete, false)
+  assert.equal((await f.call('poll', { attachmentToken: current.attachmentToken })).snapshot.recoveryComplete, true)
+})
+
+test('fenced recovery remains busy through every already admitted continuation', async t => {
+  const f = await fixture(t)
+  const old = await f.call('attach', { attachmentProtocol: 1 })
+  for (const id of [1, 2]) await f.call('message', { attachmentToken: old.attachmentToken, deliveryID: 'input-' + id,
+    message: { jsonrpc: '2.0', id, method: 'session/prompt', params: { sessionId: 'native', _meta: { wovenRunID: 'logical-run' } } } })
+  const current = await f.call('attach', { attachmentProtocol: 1 })
+  const snapshot = async () => (await f.call('poll', { attachmentToken: current.attachmentToken, includeRecovery: true })).snapshot
+  assert.equal((await snapshot()).recoveryComplete, false)
+  f.child.stdout.write('{"jsonrpc":"2.0","id":1,"result":{"stopReason":"end_turn"}}\n')
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal((await snapshot()).recoveryComplete, false)
+  f.child.stdout.write('{"jsonrpc":"2.0","id":2,"result":{"stopReason":"end_turn"}}\n')
+  await new Promise(resolve => setImmediate(resolve))
+  const terminal = await snapshot()
+  assert.equal(terminal.recoveryComplete, true)
+  assert.equal(terminal.recoveredRuns[0].runID, 'logical-run')
+})
+
 test('reattaching preserves process and journaled output without resubmitting accepted prompts', async t => {
   const f = await fixture(t)
   assert.equal((await f.call('attach')).state, 'running')
@@ -253,6 +290,247 @@ test('stdio relay makes one idle wait and aborts it immediately when detached',a
   assert.equal(polls,1)
 })
 
+test('same-run steering is forwarded once and all prompt responses own completion', async t => {
+  const f = await fixture(t)
+  await f.call('attach')
+  const prompt = id => ({ deliveryID: 'input-' + id, message: { jsonrpc: '2.0', id, method: 'session/prompt', params: { sessionId: 'native', _meta: { wovenRunID: 'run' } } } })
+  await f.call('message', prompt(1))
+  const update = text => f.child.stdout.write(JSON.stringify({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: 'native', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } } } }) + '\n')
+  update('before ')
+  await new Promise(resolve => setImmediate(resolve))
+  await f.call('message', prompt(2))
+  await f.call('message', prompt(3))
+  assert.equal((await f.call('message', prompt(2))).duplicate, true)
+  f.child.stdout.write('{"jsonrpc":"2.0","id":1,"result":{"stopReason":"cancelled"}}\n')
+  update('after ')
+  f.child.stdout.write('{"jsonrpc":"2.0","id":2,"result":{"stopReason":"end_turn"}}\n')
+  await new Promise(resolve => setImmediate(resolve))
+  const active = await f.call('attach')
+  assert.equal(active.snapshot.busy, true)
+  assert.deepEqual(active.snapshot.recoveredRuns, [])
+  await assert.rejects(f.call('message', { deliveryID: 'foreign', message: { ...prompt(4).message, params: { sessionId: 'other', _meta: { wovenRunID: 'run' } } } }), /still running/)
+  for (const params of [{ sessionId: 'other' }, { sessionId: 'native', _meta: { wovenRunID: 'other-run' } }]) {
+    await assert.rejects(f.call('message', { deliveryID: 'foreign-steer', message: {
+      jsonrpc: '2.0', id: 4, method: '_session/steering', params,
+    } }), /another remote task/)
+  }
+  f.child.stdout.write('{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}\n')
+  await new Promise(resolve => setImmediate(resolve))
+  const done = await f.call('attach')
+  assert.equal(done.snapshot.busy, false)
+  assert.deepEqual(done.snapshot.recoveredRuns, [{ runID: 'run', content: 'before after ' }])
+  assert.equal(f.received().trim().split('\n').length, 3)
+})
+
+for (const mode of ['ordinary', 'fast', 'late-active', 'old-idle', 'command-only']) test(`Codex detached steering retains recovery through native idle (${mode})`, async t => {
+  const fast = mode === 'fast'
+  const f = await fixture(t)
+  await f.call('attach')
+  const send = message => f.child.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...message }) + '\n')
+  const status = type => send({ method: 'session/update', params: { sessionId: 'native', update: { sessionUpdate: 'session_info_update', _meta: { codex: { threadStatus: { type } } } } } })
+  await f.call('message', { deliveryID: 'initial', message: { jsonrpc: '2.0', id: 1, method: 'session/prompt', params: { sessionId: 'native', _meta: { wovenRunID: 'run' } } } })
+  if (mode === 'old-idle') { status('active'); status('idle'); await new Promise(resolve => setImmediate(resolve)) }
+  await f.call('message', { deliveryID: 'steer', message: { jsonrpc: '2.0', id: 2, method: '_session/steering', params: { sessionId: 'native', prompt: [{ type: 'text', text: 'continue' }], _meta: { wovenCommandOnly: mode === 'command-only' } } } })
+  if (mode !== 'old-idle') status('active')
+  send({ id: 1, result: { stopReason: 'end_turn' } }); status('idle')
+  if (!['late-active', 'command-only'].includes(mode)) status('active')
+  const finish = () => {
+    send({ method: 'session/update', params: { sessionId: 'native', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'continuation' } } } })
+    status('idle')
+  }
+  if (fast || mode === 'command-only') finish()
+  send({ id: 2, result: { outcome: 'startedNewTurn' } })
+  await new Promise(resolve => setImmediate(resolve))
+  if (!fast && mode !== 'command-only') {
+    assert.equal((await f.call('attach')).snapshot.busy, true)
+    assert.deepEqual((await f.call('attach')).snapshot.recoveredRuns, [])
+    if (mode === 'late-active') status('active')
+    finish()
+    await new Promise(resolve => setImmediate(resolve))
+  }
+  const done = await f.call('attach')
+  assert.equal(done.snapshot.busy, false)
+  assert.deepEqual(done.snapshot.recoveredRuns, [{ runID: 'run', content: 'continuation' }])
+})
+
+for (const latestFailed of [false, true]) test(`concurrent ACP recovery follows input order, not response order (failed=${latestFailed})`, async t => {
+  const f = await fixture(t)
+  await f.call('attach')
+  for (const id of [1, 2]) await f.call('message', { deliveryID: `input-${id}`, message: {
+    jsonrpc: '2.0', id, method: 'session/prompt', params: { sessionId: 'native', _meta: { wovenRunID: 'run' } },
+  } })
+  for (const id of [2, 1]) {
+    const failed = (id === 2) === latestFailed
+    f.child.stdout.write(JSON.stringify({ jsonrpc: '2.0', id, ...(failed ? { error: { code: -1, message: 'turn failed' } } : { result: { stopReason: 'end_turn' } }) }) + '\n')
+  }
+  await new Promise(resolve => setImmediate(resolve))
+  const done = await f.call('attach')
+  assert.equal(done.snapshot.busy, false)
+  assert.deepEqual(done.snapshot.recoveredRuns, [{ runID: 'run', content: '', ...(latestFailed ? { error: 'turn failed' } : {}) }])
+})
+
+for (const rejected of [false, true]) test(`Pi steering preflight retains one recovery through an old settlement (rejected=${rejected})`, async t => {
+  const f = await fixture(t)
+  f.options.catalog.set('pi', { transport: 'rpc', command: 'pi' })
+  const call = (op, body = {}) => f.call(op, { harnessID: 'pi', ...body })
+  const emit = message => f.child.stdout.write(JSON.stringify(message) + '\n')
+  const tick = () => new Promise(resolve => setImmediate(resolve))
+  await call('attach')
+  const prompt = id => ({ deliveryID: id, message: { type: 'prompt', id, message: id, _meta: { wovenRunID: 'run' }, ...(id === 'first' ? {} : { streamingBehavior: 'steer' }) } })
+  await call('message', prompt('first'))
+  emit({ type: 'response', id: 'first', success: true })
+  emit({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: 'before ' } })
+  await tick()
+  await call('message', prompt('second'))
+  assert.equal((await call('message', prompt('second'))).duplicate, true)
+  emit({ type: 'agent_settled' })
+  await tick()
+  assert.equal((await call('attach')).snapshot.busy, true)
+  emit({ type: 'response', id: 'second', success: !rejected, ...(rejected ? { error: 'rejected' } : {}) })
+  if (!rejected) emit({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: 'after' } })
+  await tick()
+  if (rejected) {
+    await call('message', { deliveryID: 'state', message: { type: 'get_state', id: 'state' } })
+    emit({ type: 'response', id: 'state', success: true, data: { isStreaming: false, isCompacting: false, pendingMessageCount: 0 } })
+  } else emit({ type: 'agent_settled' })
+  await tick()
+  const done = (await call('attach')).snapshot
+  assert.equal(done.busy, false)
+  assert.deepEqual(done.recoveredRuns, [{ runID: 'run', content: rejected ? 'before ' : 'before after' }])
+  assert.equal(f.received().includes('_meta'), false)
+})
+
+test('late same-run ACP continuation extends recovery instead of duplicating or losing its prefix', async t => {
+  const f = await fixture(t)
+  await f.call('attach')
+  for (const id of [1, 2]) {
+    await f.call('message', { deliveryID: `input-${id}`, message: { jsonrpc: '2.0', id, method: 'session/prompt', params: { sessionId: 'native', _meta: { wovenRunID: 'run' } } } })
+    f.child.stdout.write(JSON.stringify({ method: 'session/update', params: { sessionId: 'native', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: `${id} ` } } } }) + '\n')
+    f.child.stdout.write(JSON.stringify({ id, result: { stopReason: 'end_turn' } }) + '\n')
+    await new Promise(resolve => setImmediate(resolve))
+  }
+  assert.deepEqual((await f.call('attach')).snapshot.recoveredRuns, [{ runID: 'run', content: '1 2 ' }])
+})
+
+test('late Codex steering reclaims completed recovery before starting its detached turn', async t => {
+  const f = await fixture(t)
+  await f.call('attach')
+  const send = message => f.child.stdout.write(JSON.stringify(message) + '\n')
+  const status = type => send({ method: 'session/update', params: { sessionId: 'native', update: { _meta: { codex: { threadStatus: { type } } } } } })
+  const chunk = text => send({ method: 'session/update', params: { sessionId: 'native', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } } } })
+  await f.call('message', { deliveryID: 'original', message: { jsonrpc: '2.0', id: 1, method: 'session/prompt', params: { sessionId: 'native', _meta: { wovenRunID: 'run' } } } })
+  status('active'); chunk('before '); status('idle'); send({ id: 1, result: { stopReason: 'end_turn' } })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal((await f.call('attach')).snapshot.busy, false)
+  await f.call('message', { deliveryID: 'late', message: { jsonrpc: '2.0', id: 2, method: '_session/steering', params: { sessionId: 'native', _meta: { wovenRunID: 'run' } } } })
+  send({ id: 2, result: { outcome: 'startedNewTurn' } })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal((await f.call('attach')).snapshot.busy, true)
+  status('active'); chunk('after'); status('idle')
+  await new Promise(resolve => setImmediate(resolve))
+  assert.deepEqual((await f.call('attach')).snapshot.recoveredRuns, [{ runID: 'run', content: 'before after' }])
+})
+
+for (const mode of ['codex', 'codex-paged', 'pi']) test(`stdio relay forwards continuation output after its last request receipt (${mode})`, { timeout: 5000 }, async t => {
+  const { runStdioRelay } = await import('../src/durable-acp-stdio.mjs')
+  const f = await fixture(t)
+  const pi = mode === 'pi', count = mode === 'codex-paged' ? 260 : 1
+  if (pi) f.options.catalog.set('pi', { transport: 'rpc', command: 'pi' })
+  const input = new PassThrough(), output = new PassThrough(), observed = []
+  let buffer = ''
+  output.on('data', bytes => {
+    buffer += bytes
+    while (buffer.includes('\n')) {
+      const end = buffer.indexOf('\n'); observed.push(JSON.parse(buffer.slice(0, end))); buffer = buffer.slice(end + 1)
+    }
+  })
+  const until = async predicate => {
+    for (let i = 0; i < 500; i++) {
+      if (predicate()) return
+      await new Promise(resolve => setTimeout(resolve, 5))
+    }
+    assert.fail('Timed out waiting for forwarded continuation output')
+  }
+  const request = async (url, options) => {
+    const work = f.relay.handle('POST', new URL(url).pathname, JSON.parse(options.body))
+    const result = await Promise.race([work, new Promise((_, reject) => {
+      if (options.signal.aborted) reject(options.signal.reason)
+      else options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true })
+    })])
+    return { ok: true, json: async () => result }
+  }
+  const running = runStdioRelay({ channelID: 'session', harnessID: pi ? 'pi' : 'test', token: 'fixture', input, output, request })
+  t.after(async () => { input.end(); await running })
+  const writeInput = message => input.write(JSON.stringify(message) + '\n')
+  const native = () => f.received().trim().split('\n').filter(Boolean).map(JSON.parse)
+  const emit = message => f.child.stdout.write(JSON.stringify(pi ? message : { jsonrpc: '2.0', ...message }) + '\n')
+  const status = type => emit({ method: 'session/update', params: { sessionId: 'native', update: { _meta: { codex: { threadStatus: { type } } } } } })
+  const text = value => emit(pi ? { type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: value } }
+    : { method: 'session/update', params: { sessionId: 'native', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: value } } } })
+  writeInput(pi ? { type: 'prompt', id: 1, message: 'start', _meta: { wovenRunID: 'run' } }
+    : { jsonrpc: '2.0', id: 1, method: 'session/prompt', params: { sessionId: 'native', _meta: { wovenRunID: 'run' } } })
+  await until(() => native().length === 1)
+  const original = native()[0].id
+  if (pi) { emit({ type: 'response', id: original, success: true }); emit({ type: 'agent_start' }) }
+  else status('active')
+  text('before')
+  await until(() => observed.some(message => JSON.stringify(message).includes('before')))
+  writeInput(pi ? { type: 'prompt', id: 2, streamingBehavior: 'steer', message: 'continue', _meta: { wovenRunID: 'run' } }
+    : { jsonrpc: '2.0', id: 2, method: '_session/steering', params: { sessionId: 'native', prompt: [{ type: 'text', text: 'continue' }], _meta: { wovenRunID: 'run' } } })
+  await until(() => native().length === 2)
+  const steering = native()[1].id
+  if (pi) {
+    emit({ type: 'agent_settled' }); emit({ type: 'response', id: steering, success: true })
+  } else {
+    emit({ id: original, result: { stopReason: 'end_turn' } }); status('idle'); status('active')
+    emit({ id: steering, result: { outcome: 'startedNewTurn' } })
+  }
+  await until(() => observed.some(message => message.id === 2))
+  await new Promise(resolve => setImmediate(resolve))
+  if (pi) emit({ type: 'agent_start' })
+  for (let i = 0; i < count; i++) text('continued')
+  if (pi) emit({ type: 'agent_settled' }); else status('idle')
+  await until(() => observed.filter(message => JSON.stringify(message).includes('continued')).length === count)
+  input.end()
+  await running
+  assert.equal(native().length, 2)
+  await f.relay.stopAll()
+  // Drain the natural-close journal entry queued by the fake child as well.
+  await f.call('poll', { harnessID: pi ? 'pi' : 'test' })
+})
+
+for (const pi of [false, true]) test(`stdio relay distinguishes a lost dispatch receipt from native rejection (pi=${pi})`, { timeout: 5000 }, async () => {
+  const { runStdioRelay } = await import('../src/durable-acp-stdio.mjs')
+  const input = new PassThrough(), output = new PassThrough()
+  let result
+  output.on('data', bytes => { result = JSON.parse(bytes); input.end() })
+  const request = async (url, options) => {
+    if (url.endsWith('/attach')) return { ok: true, json: async () => ({ state: 'running', attachmentToken: 'fixture-attachment', snapshot: { busy: false }, events: [] }) }
+    if (url.endsWith('/message')) throw new Error('connection lost after dispatch')
+    return new Promise((_, reject) => options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true }))
+  }
+  input.write(JSON.stringify(pi ? { type: 'prompt', id: 1, streamingBehavior: 'steer', message: 'continue' }
+    : { jsonrpc: '2.0', id: 1, method: '_session/steering', params: { sessionId: 'native' } }) + '\n')
+  await runStdioRelay({ channelID: 'session', harnessID: pi ? 'pi' : 'test', token: 'fixture', input, output, request })
+  assert.equal(result.id, 1)
+  assert.equal(pi ? result._meta.deliveryUncertain : result.error.data.deliveryUncertain, true)
+})
+
+test('explicit Stop during Pi preflight retires the workspace-owned process before reattachment', async t => {
+  const f = await fixture(t)
+  f.options.catalog.set('pi', { transport: 'rpc', command: 'pi' })
+  const call = (operation, body = {}) => f.call(operation, { harnessID: 'pi', ...body })
+  await call('attach')
+  await call('message', { deliveryID: 'prompt', message: { type: 'prompt', id: 'p1', message: 'start', _meta: { wovenRunID: 'run' } } })
+  await call('message', { deliveryID: 'steer', message: { type: 'prompt', id: 'p2', streamingBehavior: 'steer', message: 'continue', _meta: { wovenRunID: 'run' } } })
+  const stopped = await call('message', { deliveryID: 'stop', message: { type: 'abort', id: 'stop', _meta: { wovenStopPreflight: true } } })
+  assert.equal(stopped.stoppedPreflight, true)
+  assert.equal(f.relay.hasActiveRuntime('pi'), false)
+  const attached = await call('attach')
+  assert.equal(attached.state, 'stopped')
+  assert.equal(attached.snapshot.busy, false)
+  assert.match(attached.snapshot.recoveredRuns[0].error, /stopped before completion/)
+})
 for (const harnessID of ['test', 'pi']) {
   test(`${harnessID} reconnect waits for restored approval beyond the load deadline`, { timeout: 2000 }, async () => {
     const { runStdioRelay } = await import('../src/durable-acp-stdio.mjs')
@@ -292,7 +570,7 @@ for (const harnessID of ['test', 'pi']) {
           else options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true })
         })])
       }
-      return { ok: true, json: async () => ({ state: 'running', snapshot: structuredClone(state), events: [] }) }
+      return { ok: true, json: async () => ({ state: 'running', attachmentToken: 'fixture-attachment', snapshot: structuredClone(state), events: [] }) }
     }
     input.write(JSON.stringify(pi ? { type: 'get_state', id: 1 }
       : { jsonrpc: '2.0', id: 1, method: 'session/load', params: { sessionId: 'native' } }) + '\n')
@@ -317,7 +595,7 @@ for (const notifyOnly of [false, true]) {
       }
     })
     const request = async (url, options) => {
-      if (url.endsWith('/attach')) return { ok: true, json: async () => ({ state: 'running', events: [],
+      if (url.endsWith('/attach')) return { ok: true, json: async () => ({ state: 'running', attachmentToken: 'fixture-attachment', events: [],
         snapshot: { session: { sessionId: 'native' }, piState: { sessionId: 'native' }, busy: true,
           pendingRequests: notifyOnly ? [{ type: 'extension_ui_request', id: 'notice', method: 'notify', message: 'Working' }] : [] } }) }
       assert.ok(url.endsWith('/poll'), 'timed-out recovery must not send a prompt')

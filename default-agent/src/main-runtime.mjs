@@ -47,6 +47,23 @@ async function remoteRequest(path, body, canUnlock = true) {
   if (!response.ok) throw new Error(`Built-in workspace service failed (HTTP ${response.status}).`);
   return response.json();
 }
+const remoteAttachmentTokens = new Map();
+async function attachedRemoteRPC(message) {
+  const sessionID = message.params?.sessionId;
+  const attachmentToken = remoteAttachmentTokens.get(sessionID);
+  if (['session/prompt', '_session/steering'].includes(message.method) && !attachmentToken) {
+    throw new DefaultAgentError('Update the workspace service and reconnect before sending messages; this service cannot fence replaced attachments.');
+  }
+  const response = await remoteRequest('rpc', { ...message, attachmentToken,
+    ...(['session/new', 'session/load'].includes(message.method) ? { attachmentProtocol: 1 } : {}),
+    operationID: message.method === 'session/prompt' ? (message.params?._meta?.wovenInputID ?? message.params?._meta?.wovenRunID ?? crypto.randomUUID()) : undefined }).catch(error => {
+      if (['session/prompt', '_session/steering'].includes(message.method)) error.deliveryUncertain = true;
+      throw error;
+    });
+  const token = response.attachmentToken ?? response.result?._meta?.attachmentToken;
+  if (token) remoteAttachmentTokens.set(response.result?.sessionId ?? sessionID, token);
+  return response;
+}
 async function invoke(message) {
   if (message.method === 'session/cancel') permissions.cancelSession(message.params?.sessionId);
   const update = value => send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: message.params?.sessionId, update: value } });
@@ -129,26 +146,36 @@ async function invoke(message) {
     }
     return (await engine()).handle(message.method, message.params, update, requestPermission);
   }
-  const response = await remoteRequest('rpc', { ...message, operationID: message.method === 'session/prompt' ? (message.params?._meta?.wovenRunID ?? crypto.randomUUID()) : undefined });
+  const response = await attachedRemoteRPC(message);
   if (!response.operationID) return response.result;
   let cursor = 0;
+  const permissionAttachmentToken = remoteAttachmentTokens.get(message.params?.sessionId);
   const remotePermissions = new RemotePermissionRequests(requestPermission, (id, allowed) =>
-    remoteRequest('rpc', { method: 'woven/permission', params: { id, result: { outcome: { outcome: 'selected', optionId: allowed ? 'allow' : 'deny' } } } }));
+    remoteRequest('rpc', { method: 'woven/permission', attachmentToken: permissionAttachmentToken,
+      params: { sessionId: message.params?.sessionId, id, result: { outcome: { outcome: 'selected', optionId: allowed ? 'allow' : 'deny' } } } }));
+  let terminalOutcomeConfirmed = false;
   try {
     while (true) {
-      const page = await remoteRequest(`runs/${response.operationID}?after=${cursor}`);
+      const page = await remoteRequest(`runs/${response.operationID}?after=${cursor}`).catch(error => {
+        if (message.method === 'session/prompt') error.deliveryUncertain = true;
+        throw error;
+      });
+      terminalOutcomeConfirmed = page.done === true;
       remotePermissions.update(page);
       for (const event of page.updates) {
         if (event.sessionUpdate !== 'woven_permission') update(event);
       }
       cursor = page.cursor;
       if (page.done) {
-        if (response.loadingSessionID) return (await remoteRequest('rpc', { method: 'session/load', params: { sessionId: response.loadingSessionID } })).result;
+        if (response.loadingSessionID) return (await attachedRemoteRPC({ method: 'session/load', params: { sessionId: response.loadingSessionID } })).result;
         if (page.error) throw new DefaultAgentError(page.error);
         return page.result;
       }
       await new Promise(resolve => setTimeout(resolve, 150));
     }
+  } catch (error) {
+    if (message.method === 'session/prompt' && !terminalOutcomeConfirmed) error.deliveryUncertain = true;
+    throw error;
   } finally { remotePermissions.close(); }
 }
 const pendingPrompts = new Map();
@@ -170,7 +197,8 @@ lines.on('line', line => {
   }, error => {
     const messageText = operationErrorMessage(error);
     if (control) send({ error: messageText }, () => process.exit(1));
-    else if (message.id !== undefined) send({ jsonrpc: '2.0', id: message.id, error: { code: -32000, message: messageText } });
+    else if (message.id !== undefined) send({ jsonrpc: '2.0', id: message.id, error: { code: -32000, message: messageText,
+      ...(error.deliveryUncertain ? { data: { deliveryUncertain: true } } : {}) } });
   });
 });
 lines.on('close', () => { if (!control) process.exit(0); });

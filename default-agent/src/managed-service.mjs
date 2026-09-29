@@ -5,7 +5,7 @@ import { sdkStatus, checkSDKUpdates, updateSDK, resolveSDKRuntime, SDKMaintenanc
 // Only this proxy is loaded by the long-lived workspace HTTP service. SDKs and
 // session state live in a replaceable process with one immutable generation.
 export function createManagedDefaultAgentService({ cwd, directory }) {
-  let worker, selection = Promise.resolve(), sequence = 0, leases = 0, closed = false, lastConfiguration;
+  let worker, selection = Promise.resolve(), sequence = 0, leases = 0, closed = false, lastConfiguration, attachmentState;
   const installController = new AbortController();
   const updates = new Set();
   async function bounded(operation, milliseconds) {
@@ -18,6 +18,10 @@ export function createManagedDefaultAgentService({ cwd, directory }) {
     } finally { clearTimeout(timer); }
   }
   function launch(runtime) {
+    // A transfer belongs to this replacement only. Never replay an older
+    // attachment snapshot after the new worker has crashed or replaced it.
+    const inheritedAttachmentState = attachmentState;
+    attachmentState = undefined;
     const child = fork(fileURLToPath(new URL('./sdk-worker.mjs', import.meta.url)), [], { cwd, execPath: process.execPath,
       stdio: ['ignore', 'ignore', 'ignore', 'ipc'], serialization: 'advanced' });
     const pending = new Map();
@@ -46,7 +50,7 @@ export function createManagedDefaultAgentService({ cwd, directory }) {
     };
     child.once('error', lost); child.once('exit', lost);
     const id = ++sequence;
-    value.ready = new Promise((resolve, reject) => { pending.set(id, { resolve, reject }); child.send({ id, method: 'initialize', root: runtime.root, cwd, directory }, error => { if (error) { pending.delete(id); reject(error); } }); });
+    value.ready = new Promise((resolve, reject) => { pending.set(id, { resolve, reject }); child.send({ id, method: 'initialize', root: runtime.root, cwd, directory, attachmentState: inheritedAttachmentState }, error => { if (error) { pending.delete(id); reject(error); } }); });
     return value;
   }
   async function stop(value) {
@@ -65,7 +69,9 @@ export function createManagedDefaultAgentService({ cwd, directory }) {
       // All dispatches pass through this queue. An idle acknowledgement fences
       // the old process before another request can enter it.
       const previous = worker;
-      if (await bounded(previous.call('prepareRetirement'), 10000)) {
+      const retirement = await bounded(previous.call('prepareRetirement'), 10000);
+      if (retirement) {
+        attachmentState = retirement.attachmentState;
         if (worker === previous) worker = undefined;
         await stop(previous);
       }
@@ -112,6 +118,7 @@ export function createManagedDefaultAgentService({ cwd, directory }) {
     poll: (id, after) => dispatch('poll', id, after),
     status: () => dispatch('status'),
     cancelActive: () => dispatch('cancelActive'),
+    cancelSession: sessionID => dispatch('cancelSession', sessionID),
     sdkStatus: inventory,
     checkSDKUpdates: async ({ id, signal } = {}) => { await checkSDKUpdates({ directory, id, signal }); return inventory(); },
     async updateSDK({ id, version, signal } = {}) {
@@ -150,6 +157,7 @@ export function createManagedDefaultAgentService({ cwd, directory }) {
       await Promise.allSettled([...updates]);
       await selection;
       lastConfiguration = undefined;
+      attachmentState = undefined;
     },
   };
 }

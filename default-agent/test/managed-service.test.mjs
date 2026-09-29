@@ -74,3 +74,45 @@ test('shutdown stops a worker while its initialization import is pending', async
   await f.service.close();
   await rejected;
 });
+
+
+test('SDK retirement transfers only the current attachment authority and trusted cancellation', async t => {
+  const source = `
+    import { createDefaultAgentService as createService } from ${JSON.stringify(new URL('../src/service.mjs', import.meta.url).href)};
+    export function createDefaultAgentService(options) {
+      const engine = {
+        sessions: new Map(), create: async () => ({}), configuration: () => ({}),
+        handle: async (method, params) => {
+          if (method === 'fixture/crash') process.exit(19);
+          return { sessionId: params?.sessionId ?? 'native', worker: process.pid };
+        },
+      };
+      return createService({ ...options, engineFactory: async () => engine });
+    }
+  `;
+  const f = await fixture(t, source);
+  const load = sessionId => f.service.invoke({ method: 'session/load', attachmentProtocol: 1, params: { sessionId } });
+  const old = (await load('native')).result._meta.attachmentToken;
+  const attached = await load('native');
+  const current = attached.result._meta.attachmentToken;
+  const other = (await load('other')).result._meta.attachmentToken;
+  const selection = (sessionId, attachmentToken) => f.service.invoke({
+    method: 'session/set_config_option', attachmentToken, params: { sessionId },
+  });
+  await f.activate();
+  await assert.rejects(selection('native', old), /attachment was replaced/);
+  await assert.rejects(selection('native', undefined), /attachment was replaced/);
+  await assert.rejects(selection('native', other), /attachment was replaced/);
+  const selected = await selection('native', current);
+  assert.notEqual(selected.result.worker, attached.result.worker, 'the SDK generation must actually rotate');
+  assert.equal((await selection('other', other)).result.sessionId, 'other');
+  assert.equal((await f.service.cancelSession('native')).sessionId, 'native');
+
+  // A later replacement followed by a crash must not replay the retired
+  // generation's authority into another worker.
+  const replacement = (await load('native')).result._meta.attachmentToken;
+  await assert.rejects(f.service.invoke({ method: 'fixture/crash' }), /stopped/);
+  for (const token of [old, current, replacement]) await assert.rejects(selection('native', token), /attachment was replaced/);
+  const reattached = (await load('native')).result._meta.attachmentToken;
+  assert.equal((await selection('native', reattached)).result.sessionId, 'native');
+});

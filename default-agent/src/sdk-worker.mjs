@@ -3,12 +3,12 @@ import { pathToFileURL } from 'node:url';
 let service;
 const send = message => { if (process.connected) process.send?.(message, () => {}); };
 process.on('error', () => {});
-const allowed = new Set(['configure', 'invoke', 'poll', 'status', 'cancelActive', 'prepareRetirement']);
+const allowed = new Set(['configure', 'invoke', 'poll', 'status', 'cancelActive', 'cancelSession', 'prepareRetirement']);
 process.on('message', async message => {
   try {
     if (message.method === 'initialize') {
       const { createDefaultAgentService } = await import(pathToFileURL(join(message.root, 'src/service.mjs')).href);
-      service = createDefaultAgentService({ cwd: message.cwd, directory: message.directory });
+      service = createDefaultAgentService({ cwd: message.cwd, directory: message.directory, attachmentState: message.attachmentState });
       send({ id: message.id, result: true }); return;
     }
     if (!service || !allowed.has(message.method)) throw new Error('Unknown runtime operation.');

@@ -9,19 +9,21 @@ export async function runStdioRelay({ channelID, harnessID, cwd, permission, nat
   if (!/^\d+$/.test(String(port))) throw new Error('Invalid service port')
   const lifecycle = new AbortController()
   const pi = harnessID === 'pi'
-  let stopped = false, cursor = 0, state, activePiPrompt = false, piReconnecting = false, idleBackoff = 100
+  let stopped = false, cursor = 0, state, observingRun = false, piReconnecting = false, idleBackoff = 100
+  let attachmentToken
   const attachment = randomUUID(), requestIDs = new Map(), requestMethods = new Map(), incomingRequests = new Set()
   const write = message => new Promise((resolve, reject) => output.write(JSON.stringify(message) + '\n', error => error ? reject(error) : resolve()))
   async function call(operation, values = {}) {
     const response = await request(`http://127.0.0.1:${port}/v1/durable-acp/${operation}`, {
       method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ channelID, harnessID, cwd, permission, nativeSessionID, ...values }), signal: AbortSignal.any([lifecycle.signal, AbortSignal.timeout(15000)]),
+      body: JSON.stringify({ channelID, harnessID, cwd, permission, nativeSessionID, attachmentToken, ...values }), signal: AbortSignal.any([lifecycle.signal, AbortSignal.timeout(15000)]),
     })
     if (!response.ok) throw new Error(`Remote session relay failed (${response.status})`)
     return response.json()
   }
-  let attached = await call('attach')
-  if (attached.state === 'stopped') attached = await call('recover')
+  let attached = await call('attach', { attachmentProtocol: 1 })
+  if (attached.state === 'stopped') attached = await call('recover', { attachmentProtocol: 1 })
+  attachmentToken = attached.attachmentToken
   state = attached.snapshot
   piReconnecting = pi && !!state.piState
   // Historical notifications are reconciled through recoveredRuns, never blindly
@@ -36,7 +38,11 @@ export async function runStdioRelay({ channelID, harnessID, cwd, permission, nat
   const reader = createInterface({ input })
   const operations = new Set()
   async function handleMessage(message) {
+      let dispatched = false
       try {
+        if (!attachmentToken && !['initialize', 'session/load', 'get_state', 'get_available_models', 'get_available_thinking_levels', 'get_commands'].includes(message.method ?? message.type)) {
+          throw new Error('Update the workspace service and reconnect before sending messages; this service cannot fence replaced attachments.')
+        }
         if (message.method === 'initialize' && state.initialized) {
           await write({ jsonrpc: '2.0', id: message.id, result: state.initialized }); return
         }
@@ -64,12 +70,12 @@ export async function runStdioRelay({ channelID, harnessID, cwd, permission, nat
           if (pi) {
             piReconnecting = false
             await write({ type: 'response', id: message.id, command: 'get_state', success: true, data: {
-              ...state.piState, _meta: { recoveredRuns: state.recoveredRuns },
+              ...state.piState, _meta: { recoveredRuns: state.recoveredRuns, recoveryComplete: state.recoveryComplete === true, recoverySessionID: state.piState?.sessionId ?? state.piState?.session_id },
             } }); return
           }
           const { sessionId, ...result } = state.session
           await write({ jsonrpc: '2.0', id: message.id, result: {
-            ...result, _meta: { ...result._meta, recoveredRuns: state.recoveredRuns },
+            ...result, _meta: { ...result._meta, recoveredRuns: state.recoveredRuns, recoveryComplete: state.recoveryComplete === true, recoverySessionID: sessionId },
           } }); return
         }
         if (attached.state !== 'running') throw new Error('Remote process stopped; start a new session to continue')
@@ -81,19 +87,25 @@ export async function runStdioRelay({ channelID, harnessID, cwd, permission, nat
         } else if (!message.method && message.id !== undefined) {
           if (!incomingRequests.delete(message.id)) return
         }
-        if (pi && message.type === 'prompt') activePiPrompt = true
-        await call('message', { deliveryID: randomUUID(), message })
+        if (message.method === 'session/prompt' || message.method === '_session/steering' || (pi && message.type === 'prompt')) observingRun = true
+        dispatched = true
+        const receipt = await call('message', { deliveryID: randomUUID(), message })
+        if (pi && receipt.stoppedPreflight) {
+          const id = requestIDs.get(message.id) ?? message.id
+          requestIDs.delete(message.id); requestMethods.delete(message.id)
+          await write({ type: 'response', id, command: 'abort', success: true })
+        }
       } catch (error) {
         const originalID = requestIDs.get(message.id) ?? message.id
         requestIDs.delete(message.id)
         requestMethods.delete(message.id)
         if (pi) {
-          if (message.type === 'prompt') activePiPrompt = false
-          if (message.id !== undefined) await write({ type: 'response', id: originalID, command: message.type, success: false, error: error.message })
+          if (message.id !== undefined) await write({ type: 'response', id: originalID, command: message.type, success: false,
+            error: error.message, _meta: { deliveryUncertain: dispatched } })
           return
         }
         if (message.id !== undefined) await write({ jsonrpc: '2.0', id: originalID,
-          error: { code: -32000, message: error.message } })
+          error: { code: -32000, message: error.message, data: { deliveryUncertain: dispatched } } })
       }
   }
   const sending = (async () => {
@@ -119,10 +131,10 @@ export async function runStdioRelay({ channelID, harnessID, cwd, permission, nat
           if (requestIDs.has(message.id)) {
             let delivered = { ...message, id: requestIDs.get(message.id) }
             if (requestMethods.get(message.id) === 'session/load' && message.result) delivered.result = {
-              ...message.result, _meta: { ...message.result._meta, recoveredRuns: state.recoveredRuns ?? [] },
+              ...message.result, _meta: { ...message.result._meta, recoveredRuns: state.recoveredRuns ?? [], recoveryComplete: state.recoveryComplete === true, recoverySessionID: state.session?.sessionId },
             }
             if (pi && requestMethods.get(message.id) === 'get_state' && message.success) delivered.data = {
-              ...message.data, _meta: { ...message.data?._meta, recoveredRuns: state.recoveredRuns ?? [] },
+              ...message.data, _meta: { ...message.data?._meta, recoveredRuns: state.recoveredRuns ?? [], recoveryComplete: state.recoveryComplete === true, recoverySessionID: state.piState?.sessionId ?? state.piState?.session_id },
             }
             await write(delivered)
             requestIDs.delete(message.id)
@@ -133,10 +145,14 @@ export async function runStdioRelay({ channelID, harnessID, cwd, permission, nat
             incomingRequests.add(message.id)
             await write(message)
           }
-        } else if (requestIDs.size || activePiPrompt) await write(message)
-        if (pi && message.type === 'agent_settled') activePiPrompt = false
+        } else if (requestIDs.size || observingRun) await write(message)
         cursor = event.sequence
       }
+      // Admission can remove the last request ID while a detached Codex turn
+      // or Pi continuation is still streaming. Keep forwarding through the
+      // complete terminal batch, including paginated output already journaled.
+      if (state.busy === false && batch.events.length < 256
+        && ![...requestMethods.values()].some(method => ['session/prompt', '_session/steering', 'prompt'].includes(method))) observingRun = false
       if (batch.state !== 'running') throw new Error('Remote process stopped; reconnect to recover its saved results')
       // An older service may ignore waitMs. Avoid spinning its idle endpoint.
       if (!batch.events.length && performance.now() - pollStarted < 25) {

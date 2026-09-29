@@ -309,7 +309,7 @@ if (runningAsService) {
       if (taskGateway.enabled()) { foregroundDefaultRuns.delete(id); continue }
       if (Date.now() - lease.lastSeen > 30000) {
         foregroundDefaultRuns.delete(id)
-        void defaultAgent.invoke({method:'session/cancel',params:{sessionId:lease.sessionID}}).catch(() => {})
+        void defaultAgent.cancelSession(lease.sessionID).catch(() => {})
       }
     }
   }, 5000).unref()

@@ -363,3 +363,111 @@ test('removed models normalize idle and restored selections to the visible defau
   engine.config.defaultModel = 'disabled/model';
   assert.equal(engine.modelOptions()[0].id, expected);
 });
+
+test('Built-in steering reaches the next model call inside the same native run', async t => {
+  const { engine } = await fixture(t);
+  const record = await engine.create();
+  let started, release;
+  const ready = new Promise(resolve => { started = resolve; });
+  const gate = new Promise(resolve => { release = resolve; });
+  const contexts = [];
+  record.session.agent.streamFunction = (model, context) => {
+    contexts.push(structuredClone(context.messages));
+    const stream = createAssistantMessageEventStream();
+    const result = { role: 'assistant', api: model.api, provider: model.provider, model: model.id,
+      content: [{ type: 'text', text: 'reply' }], timestamp: Date.now(), stopReason: 'stop',
+      usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
+    (async () => {
+      if (contexts.length === 1) { started(); await gate; }
+      stream.push({ type: 'start', partial: result });
+      stream.push({ type: 'done', reason: 'stop', message: result }); stream.end(result);
+    })();
+    return stream;
+  };
+  const init = await engine.handle('initialize');
+  assert.equal(init._meta.steering.supported, true);
+  const turn = engine.prompt(record, 'start', () => {});
+  await ready;
+  for (const text of ['first correction', 'second correction']) {
+    assert.deepEqual(await engine.handle('_session/steering', { sessionId: record.session.sessionId, prompt: [{ type: 'text', text }] }), { outcome: 'injected' });
+  }
+  assert.equal(record.busy, true);
+  release();
+  assert.equal((await turn).stopReason, 'end_turn');
+  assert.ok(contexts.length >= 2);
+  const users = record.session.messages.filter(message => message.role === 'user').map(message => message.content.filter(block => block.type === 'text').map(block => block.text).join(''));
+  assert.deepEqual(users, ['start', 'first correction', 'second correction']);
+  assert.deepEqual(await engine.steer(record, 'idle'), { outcome: 'promptRequired' });
+});
+
+for (const stopped of [false, true]) test(`Built-in owns late steering preflight through completion or Stop (stopped=${stopped})`, { timeout: 5000 }, async t => {
+  const { engine } = await fixture(t);
+  const record = await engine.create();
+  let finishFirst, preflightStarted, releasePreflight, originalSettled;
+  const firstGate = new Promise(resolve => { finishFirst = resolve; });
+  const preflightReady = new Promise(resolve => { preflightStarted = resolve; });
+  const preflightGate = new Promise(resolve => { releasePreflight = resolve; });
+  const originalDone = new Promise(resolve => { originalSettled = resolve; });
+  let calls = 0;
+  record.session.agent.streamFunction = model => {
+    const stream = createAssistantMessageEventStream();
+    const result = { role: 'assistant', api: model.api, provider: model.provider, model: model.id,
+      content: [{ type: 'text', text: 'reply' }], timestamp: Date.now(), stopReason: 'stop',
+      usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
+    const first = ++calls === 1;
+    (async () => {
+      if (first) await firstGate;
+      stream.push({ type: 'start', partial: result });
+      stream.push({ type: 'done', reason: 'stop', message: result }); stream.end(result);
+    })();
+    return stream;
+  };
+  const nativePrompt = record.session.prompt.bind(record.session);
+  record.session.prompt = async (text, options) => {
+    if (options?.streamingBehavior === 'steer') { preflightStarted(); await preflightGate; }
+    const result = await nativePrompt(text, options);
+    if (text === 'start') originalSettled();
+    return result;
+  };
+  const turn = engine.prompt(record, 'start', () => {});
+  // Submit immediately, while the engine is still preparing its first prompt.
+  const correction = engine.steer(record, 'late correction');
+  await preflightReady;
+  finishFirst();
+  await originalDone;
+  assert.equal(record.busy, true);
+  if (stopped) await engine.handle('session/cancel', { sessionId: record.session.sessionId });
+  const rejected = stopped ? assert.rejects(correction, /abort/i) : null;
+  releasePreflight();
+  if (stopped) await rejected;
+  else assert.deepEqual(await correction, { outcome: 'injected' });
+  assert.equal((await turn).stopReason, stopped ? 'cancelled' : 'end_turn');
+  assert.equal(calls, stopped ? 1 : 2);
+  assert.equal(record.session.messages.filter(message => message.role === 'user').length, stopped ? 1 : 2);
+  assert.equal(record.session.pendingMessageCount, 0);
+});
+
+test('an accepted continuation failure drains newer inputs before retiring the run', { timeout: 5000 }, async t => {
+  const { engine } = await fixture(t);
+  const record = await engine.create();
+  const gate = () => Promise.withResolvers();
+  const initial = gate(), first = gate(), second = gate(), ready = gate();
+  record.session.prompt = async (text, options) => {
+    options.preflightResult(true);
+    if (text === 'start') { ready.resolve(); await initial.promise; }
+    else await (text === 'first' ? first : second).promise;
+  };
+  const turn = engine.prompt(record, 'start', () => {});
+  const failed = assert.rejects(turn, /model request failed/i);
+  await ready.promise;
+  await engine.steer(record, 'first');
+  initial.resolve();
+  await new Promise(resolve => setImmediate(resolve));
+  await engine.steer(record, 'second');
+  first.reject(new Error('late failure'));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(record.busy, true);
+  second.resolve();
+  await failed;
+  assert.equal(record.busy, false);
+});
