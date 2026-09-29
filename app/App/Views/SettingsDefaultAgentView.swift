@@ -101,6 +101,11 @@ struct SettingsDefaultAgentView: View {
 /// Catalog metadata is indexed only when the source catalog changes. Preferences and
 /// filters project that index; rendering a row never scans or classifies the catalog.
 private struct SettingsAgentCatalogIndex {
+    // Re-entering Settings recreates its view state. Retain one immutable value
+    // snapshot of catalog metadata so an unchanged catalog is not classified again.
+    // No scope, account, preference, filter, or selection state is shared here.
+    @MainActor private static var latest: SettingsAgentCatalogIndex?
+
     struct Entry: Identifiable {
         let model: DefaultAgentSettingsModel.Model
         let lab: String
@@ -117,8 +122,12 @@ private struct SettingsAgentCatalogIndex {
     private(set) var providers: [String] = []
     private(set) var labs: [String] = []
 
-    mutating func update(_ models: [DefaultAgentSettingsModel.Model]) {
+    @MainActor mutating func update(_ models: [DefaultAgentSettingsModel.Model]) {
         guard source != models else { return }
+        if let cached = Self.latest, cached.source == models {
+            self = cached
+            return
+        }
         source = models
         var seen = Set<String>()
         entries = models.filter { seen.insert($0.id).inserted }.map {
@@ -127,6 +136,7 @@ private struct SettingsAgentCatalogIndex {
         byID = Dictionary(uniqueKeysWithValues: entries.map { ($0.id, $0) })
         providers = Array(Set(entries.map { $0.model.provider })).sorted()
         labs = Array(Set(entries.map(\.lab))).sorted()
+        Self.latest = self
     }
 }
 
