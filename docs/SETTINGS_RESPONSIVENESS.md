@@ -56,15 +56,24 @@ separate notifications and revisions from credential changes, so they do not
 trigger Keychain reloads and Usage refreshes. Credential renewal and explicit
 connection verification retain their existing ownership.
 
-Opening Built-in Settings requests cached/bundled catalog metadata using a
-configuration-only helper request. It does not perform native sign-in status or
-model discovery. Explicit connection refresh and completed sign-in still verify
+Opening Built-in Settings shows enabled models and the configured or previously
+resolved default. Entry does not start a catalog helper or initialize either SDK.
+A compact metadata cache supplies names; missing names can be read from the
+needed provider metadata files in the background. Local Claude alias versions
+are accepted only from compatible local runtime metadata. Unknown implicit
+defaults remain “First available model” until discovery resolves them.
+
+“Browse all models” explicitly loads the full catalog. Opening the default-model
+chooser does not load it; the chooser has its own explicit browse action. Page
+entry and workspace changes return to enabled models even if a full catalog was
+previously cached. Explicit connection refresh and completed sign-in still verify
 connections. Cancelling passive status/discovery terminates its native work;
 normal EOF remains a valid one-shot helper request boundary.
 
 The model browser and default chooser expose at most 40 model rows per page.
 The browser's section and row stacks defer native controls outside the scroll
-viewport. Search covers the complete catalog, and every model remains reachable.
+viewport. After explicit browsing, search covers the complete catalog and every
+model remains reachable.
 Catalog classification and row preference state are indexed outside row rendering.
 
 Composer measurement uses separate, reusable TextKit objects and finite viewport

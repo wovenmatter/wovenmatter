@@ -9,6 +9,7 @@ struct SettingsDefaultAgentView: View {
     let onBack: () -> Void
     private var agent: DefaultAgentSettingsModel { model.connections }
     @State private var syncError: String?
+    @State private var browsingAllModels = false
 
     private var remote: RemoteWorkspaceConfiguration? {
         model.remoteWorkspaces.workspaces.first { $0.id.uuidString.lowercased() == agent.scope }
@@ -31,14 +32,16 @@ struct SettingsDefaultAgentView: View {
                     ConnectionsLink(title: "Manage workspace connections", scope: agent.scope)
                 }
             }.buttonStyle(SettingsQuietButtonStyle())
-            SettingsAgentModelsView(agent: agent, editable: editable)
+            SettingsAgentModelsView(agent: agent, editable: editable,
+                                    browsingAllModels: browsingAllModels, setBrowsingAllModels: showCatalog)
         }
-        .task { agent.changeScope(initialScope); agent.loadCatalog(remote: remote) }
+        .task { selectScope(initialScope) }
+        .onChange(of: agent.scope) { _, _ in browsingAllModels = false }
         .onDisappear { agent.cancel() }
     }
     private var scopeSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Picker("Settings for", selection: Binding(get: { agent.scope }, set: { agent.changeScope($0); agent.loadCatalog(remote: remote) })) {
+            Picker("Settings for", selection: Binding(get: { agent.scope }, set: { selectScope($0) })) {
                 Text("All workspaces").tag("global")
                 Text("Local agent workspace").tag("local")
                 ForEach(model.remoteWorkspaces.workspaces) { workspace in Text(workspace.name).tag(workspace.id.uuidString.lowercased()) }
@@ -46,7 +49,7 @@ struct SettingsDefaultAgentView: View {
             if agent.scope != "global" {
                 Toggle("Use settings from All workspaces", isOn: Binding(get: { agent.inherits }, set: {
                     agent.setInherits($0)
-                    agent.loadCatalog(remote: remote)
+                    agent.loadCatalog(remote: remote, includeAllModels: browsingAllModels)
                 }))
                 Text(agent.inherits ? "Providers, keys, search, and model preferences follow your global settings. Subscription sign-ins can also be connected in this workspace." : "This workspace has its own preferences. Saved API keys are reused unless replaced here.").font(.callout).foregroundStyle(.secondary)
             }
@@ -61,7 +64,7 @@ struct SettingsDefaultAgentView: View {
                         config.providers.removeAll { $0 == provider.id }
                         if enabled { config.providers.append(provider.id) }
                         agent.configuration = config
-                        agent.loadCatalog(remote: remote)
+                        agent.loadCatalog(remote: remote, includeAllModels: browsingAllModels)
                     })).disabled(!editable)
                     Spacer()
                     ConnectionsLink(title: agent.connectionLabel(provider.id), scope: agent.scope)
@@ -72,7 +75,7 @@ struct SettingsDefaultAgentView: View {
                     Toggle(server.name, isOn: Binding(get: { agent.configuration.providers.contains(server.id) }, set: { enabled in
                         var config = agent.configuration; config.providers.removeAll { $0 == server.id }
                         if enabled { config.providers.append(server.id) }; agent.configuration = config
-                        agent.loadCatalog(remote: remote)
+                        agent.loadCatalog(remote: remote, includeAllModels: browsingAllModels)
                     })).disabled(!editable)
                     Spacer()
                     ConnectionsLink(title: "Manage server")
@@ -84,6 +87,15 @@ struct SettingsDefaultAgentView: View {
         SettingsCard(title: "Web search") {
             HStack { Text("Exa"); Spacer(); ConnectionsLink(title: agent.searchConfigured ? "Key configured" : "Connect Exa", scope: agent.scope) }
         }
+    }
+    private func selectScope(_ scope: String) {
+        browsingAllModels = false
+        agent.changeScope(scope)
+        agent.loadCatalog(remote: remote, includeAllModels: false)
+    }
+    private func showCatalog(_ includeAllModels: Bool) {
+        browsingAllModels = includeAllModels
+        agent.loadCatalog(remote: remote, includeAllModels: includeAllModels)
     }
     private func synchronize() {
         syncError = nil
@@ -143,6 +155,8 @@ private struct SettingsAgentCatalogIndex {
 private struct SettingsAgentModelsView: View {
     let agent: DefaultAgentSettingsModel
     let editable: Bool
+    let browsingAllModels: Bool
+    let setBrowsingAllModels: (Bool) -> Void
     @State private var index = SettingsAgentCatalogIndex()
     @State private var filter = Filter()
     @State private var rows: [Row] = []
@@ -158,7 +172,7 @@ private struct SettingsAgentModelsView: View {
         let scope: String
         let catalog: [DefaultAgentSettingsModel.Model]
         let configuration: DefaultAgentSettings
-        let connectedProviders: Set<String>
+        let effectiveDefaultModel: String?
     }
     private struct Filter: Equatable {
         var query = ""
@@ -175,9 +189,16 @@ private struct SettingsAgentModelsView: View {
         let canMoveLater: Bool
         var id: String { entry.id }
     }
+    private var showingAllModels: Bool { browsingAllModels && agent.catalogIncludesAllModels }
     private var inputs: Inputs {
-        Inputs(scope: agent.scope, catalog: agent.catalog, configuration: agent.configuration,
-               connectedProviders: agent.availableModelProviderIDs)
+        let configuration = agent.configuration
+        let defaultID = agent.effectiveDefaultModel
+        let enabledIDs = Set(configuration.models + [defaultID].compactMap { $0 })
+        // Keep cached full catalogs out of the initial view/index, including the
+        // first render before the page's enabled-only load has been applied.
+        let displayedCatalog = showingAllModels ? agent.catalog : agent.catalog.filter { enabledIDs.contains($0.id) }
+        return Inputs(scope: agent.scope, catalog: displayedCatalog, configuration: configuration,
+                      effectiveDefaultModel: defaultID)
     }
     private var pageRows: ArraySlice<Row> {
         matches.dropFirst(page * pageSize).prefix(pageSize)
@@ -189,7 +210,7 @@ private struct SettingsAgentModelsView: View {
 
     var body: some View {
         LazyVStack(alignment: .leading, spacing: 12) {
-            Text("Models").font(.headline)
+            Text(showingAllModels ? "Models" : "Enabled models").font(.headline)
             HStack {
                 Text("Default model")
                 Button { choosingDefault = true } label: {
@@ -203,7 +224,11 @@ private struct SettingsAgentModelsView: View {
                 .accessibilityLabel("Choose default model")
                 .accessibilityValue(defaultLabel)
                 .popover(isPresented: $choosingDefault, arrowEdge: .bottom) {
-                    SettingsAgentDefaultModelChooser(index: index, selection: agent.configuration.defaultModel) { id in
+                    SettingsAgentDefaultModelChooser(
+                        index: index, selection: agent.configuration.defaultModel,
+                        browsingAllModels: browsingAllModels, includesAllModels: agent.catalogIncludesAllModels,
+                        loading: agent.busy, error: agent.error, setBrowsingAllModels: setBrowsingAllModels
+                    ) { id in
                         var config = agent.configuration
                         config.defaultModel = id
                         agent.configuration = config
@@ -223,15 +248,23 @@ private struct SettingsAgentModelsView: View {
                     Button("Later") { agent.moveFallback(id, by: 1) }
                 }.buttonStyle(SettingsQuietButtonStyle()).disabled(!editable)
             }
-            Text("Your default model is always available in the composer. Turn on any other models you want to include.")
+            Text(showingAllModels
+                 ? "Your default model is always available in the composer. Turn on any other models you want to include."
+                 : "Your default model is always available in the composer. Browse all models to add more.")
                 .font(.callout).foregroundStyle(.secondary)
-            TextField("Find a model or provider", text: $filter.query).textFieldStyle(.roundedBorder)
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 12) { modelFilters }
-                VStack(alignment: .leading, spacing: 8) { modelFilters }
+            SettingsAgentCatalogBrowseControls(
+                requested: browsingAllModels, includesAllModels: agent.catalogIncludesAllModels,
+                loading: agent.busy, error: agent.error, setBrowsingAllModels: setBrowsingAllModels)
+            if showingAllModels {
+                TextField("Find a model or provider", text: $filter.query).textFieldStyle(.roundedBorder)
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 12) { modelFilters }
+                    VStack(alignment: .leading, spacing: 8) { modelFilters }
+                }
             }
             if matches.isEmpty {
-                Text("No models match these filters.").font(.callout).foregroundStyle(.secondary)
+                Text(showingAllModels ? "No models match these filters." : "No enabled models to display.")
+                    .font(.callout).foregroundStyle(.secondary)
             } else {
                 SettingsAgentCatalogPageControls(count: matches.count, pageSize: pageSize, page: $page)
                 LazyVStack(spacing: 8) {
@@ -244,6 +277,7 @@ private struct SettingsAgentModelsView: View {
         }
         .onChange(of: inputs, initial: true) { old, value in updatePresentation(from: old, to: value) }
         .onChange(of: filter) { _, _ in page = 0; filterRows() }
+        .onChange(of: browsingAllModels) { _, _ in filter = Filter(); page = 0; filterRows() }
     }
 
     private func updatePresentation(from old: Inputs, to value: Inputs) {
@@ -258,9 +292,9 @@ private struct SettingsAgentModelsView: View {
             filter.lab = ""
             page = 0
         }
-        let defaultID = value.configuration.defaultModel.flatMap { index.byID[$0] == nil ? nil : $0 }
-            ?? index.entries.first { value.connectedProviders.contains($0.model.provider) }?.id
-            ?? index.entries.first?.id
+        // A configured subset cannot establish the runtime's implicit default.
+        // The model resolves it from an explicit selection or known full metadata.
+        let defaultID = value.effectiveDefaultModel
         var seen = Set<String>()
         var visibleIDs = value.configuration.models.filter { index.byID[$0] != nil && seen.insert($0).inserted }
         if let defaultID, seen.insert(defaultID).inserted { visibleIDs.insert(defaultID, at: 0) }
@@ -291,7 +325,8 @@ private struct SettingsAgentModelsView: View {
     }
     private func filterRows() {
         matches = rows.filter { row in
-            row.entry.matches(filter.query)
+            guard showingAllModels else { return row.visible }
+            return row.entry.matches(filter.query)
                 && (filter.connection.isEmpty || row.entry.model.provider == filter.connection)
                 && (filter.lab.isEmpty || row.entry.lab == filter.lab)
                 && (!filter.subscriptionsOnly || ["openai-codex", "claude-subscription", "xai"].contains(row.entry.model.provider))
@@ -330,6 +365,39 @@ private struct SettingsAgentModelsView: View {
     }
 }
 
+/// Loading the full inventory is always an explicit user action, including when
+/// the default chooser is open. Existing enabled model controls remain usable.
+private struct SettingsAgentCatalogBrowseControls: View {
+    let requested: Bool
+    let includesAllModels: Bool
+    let loading: Bool
+    let error: String?
+    let setBrowsingAllModels: (Bool) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                if requested {
+                    Button("Show enabled models") { setBrowsingAllModels(false) }
+                    if !includesAllModels {
+                        if loading {
+                            ProgressView().controlSize(.small)
+                            Text("Loading models…").font(.callout).foregroundStyle(.secondary)
+                        } else {
+                            Button("Retry") { setBrowsingAllModels(true) }
+                        }
+                    }
+                } else {
+                    Button("Browse all models") { setBrowsingAllModels(true) }.disabled(loading)
+                }
+            }.buttonStyle(SettingsQuietButtonStyle())
+            if requested && !includesAllModels && !loading, let error {
+                Text(error).font(.callout).foregroundStyle(.red).textSelection(.enabled)
+            }
+        }
+    }
+}
+
 private struct SettingsAgentCatalogPageControls: View {
     let count: Int
     let pageSize: Int
@@ -353,6 +421,11 @@ private struct SettingsAgentDefaultModelChooser: View {
     @Environment(\.dismiss) private var dismiss
     let index: SettingsAgentCatalogIndex
     let selection: String?
+    let browsingAllModels: Bool
+    let includesAllModels: Bool
+    let loading: Bool
+    let error: String?
+    let setBrowsingAllModels: (Bool) -> Void
     let select: (String?) -> Void
     @State private var query = ""
     @State private var matches: [SettingsAgentCatalogIndex.Entry] = []
@@ -365,9 +438,15 @@ private struct SettingsAgentDefaultModelChooser: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Default model").font(.headline)
             Button("Use first available model") { select(nil) }.buttonStyle(SettingsQuietButtonStyle())
-            TextField("Find a model or provider", text: $query).textFieldStyle(.roundedBorder)
+            SettingsAgentCatalogBrowseControls(
+                requested: browsingAllModels, includesAllModels: includesAllModels,
+                loading: loading, error: error, setBrowsingAllModels: setBrowsingAllModels)
+            if browsingAllModels && includesAllModels {
+                TextField("Find a model or provider", text: $query).textFieldStyle(.roundedBorder)
+            }
             if matches.isEmpty {
-                Text("No models match this search.").font(.callout).foregroundStyle(.secondary)
+                Text(browsingAllModels && includesAllModels ? "No models match this search." : "No enabled models to display.")
+                    .font(.callout).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, minHeight: 260)
             } else {
                 List(selection: $selectedID) {
@@ -400,6 +479,7 @@ private struct SettingsAgentDefaultModelChooser: View {
             locateInitialSelection()
         }
         .onChange(of: query) { _, _ in page = 0; filterModels() }
+        .onChange(of: browsingAllModels) { _, _ in query = ""; page = 0; filterModels() }
         .onChange(of: index.source) { _, _ in filterModels(); locateInitialSelection() }
         .onExitCommand { dismiss() }
     }

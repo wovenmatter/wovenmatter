@@ -26,6 +26,8 @@ struct BackendConnectionsSnapshot: Codable, Equatable {
     var scope: String
     var settings: DefaultAgentSettingsScope
     var catalog: [DefaultAgentSettingsModel.Model]
+    var catalogIncludesAllModels: Bool?
+    var resolvedDefaultModelID: String?
     var providers: [DefaultAgentSettingsModel.Provider]
     var searchConfigured: Bool
     var accounts: [String: [ProviderConnectionAccounts.Account]]
@@ -43,6 +45,8 @@ struct BackendConnectionsSnapshot: Codable, Equatable {
     @MainActor init(_ model: DefaultAgentSettingsModel) {
         localServers = model.localServers
         scope = model.scope; settings = model.settings; catalog = model.catalog; providers = model.providers
+        catalogIncludesAllModels = model.catalogIncludesAllModels
+        resolvedDefaultModelID = model.resolvedDefaultModelID
         searchConfigured = model.searchConfigured; accounts = model.accounts
         cursorAccountStatus = model.cursorAccountStatus; signInProvider = model.signInProvider
         busy = model.busy; error = model.error; notice = model.notice
@@ -83,7 +87,9 @@ struct BackendConnectionsSnapshot: Codable, Equatable {
             case "scope": model.changeScope(c.value ?? "global")
             case "cancel": model.cancel()
             case "respond": model.respond(c.value ?? "")
-            case "catalog": model.loadCatalog(remote: c.remote)
+            case "catalog":
+                model.loadCatalog(remote: c.remote, includeAllModels: c.flag ?? false)
+                if c.flag != true { await model.waitForEnabledMetadata() }
             case "refresh": model.refresh(remote: c.remote, login: c.provider, action: c.value, profile: c.profile,
                 removingAccount: c.removingAccount, reconnectingAccount: c.reconnectingAccount)
             default: throw CocoaError(.featureUnsupported)

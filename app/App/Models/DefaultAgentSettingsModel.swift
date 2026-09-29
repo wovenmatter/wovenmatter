@@ -6,7 +6,7 @@ import WovenMatterCore
 
 @MainActor @Observable
 final class DefaultAgentSettingsModel {
-    struct Model: Codable, Equatable, Identifiable {
+    struct Model: Codable, Equatable, Identifiable, Sendable {
         let id: String
         let name: String
         let provider: String
@@ -48,6 +48,46 @@ final class DefaultAgentSettingsModel {
     private var catalogRequestConfiguration: DefaultAgentSettings?
     private var catalogRequestKey: String?
     private var catalogCache: [String: (configuration: DefaultAgentSettings, models: [Model])] = [:]
+    private struct EnabledMetadata: Codable, Equatable, Sendable {
+        var configuration: DefaultAgentSettings
+        var models: [Model]
+        var defaultModel: String?
+        var selectedDefault: String?
+        var connectedProviders: Set<String>
+    }
+    /// Only compact per-scope display metadata is persisted, off the main actor.
+    private actor EnabledMetadataStore {
+        static let shared = EnabledMetadataStore()
+        private let prefix = "wovenmatter.built-in.enabled-metadata.v2."
+        private var revisions: [String: UInt64] = [:]
+        func read(_ key: String) -> EnabledMetadata? {
+            guard let data = UserDefaults.standard.data(forKey: prefix + key), data.count <= 131_072 else { return nil }
+            return try? JSONDecoder().decode(EnabledMetadata.self, from: data)
+        }
+        func write(_ value: EnabledMetadata, key: String, revision: UInt64) {
+            guard revision >= (revisions[key] ?? 0) else { return }
+            revisions[key] = revision
+            guard let data = try? JSONEncoder().encode(value), data.count <= 131_072 else { return }
+            UserDefaults.standard.set(data, forKey: prefix + key)
+            var keys = UserDefaults.standard.stringArray(forKey: prefix + "index") ?? []
+            keys.removeAll { $0 == key }
+            keys.append(key)
+            while keys.count > 32 {
+                let stale = keys.removeFirst()
+                UserDefaults.standard.removeObject(forKey: prefix + stale)
+                revisions.removeValue(forKey: stale)
+            }
+            UserDefaults.standard.set(keys, forKey: prefix + "index")
+        }
+    }
+    private var enabledMetadata: [String: EnabledMetadata] = [:]
+    private var loadedMetadataKeys = Set<String>()
+    private var metadataWriteRevision: UInt64 = 0
+    private var metadataTask: Task<Void, Never>?
+    private var metadataGeneration = UUID()
+    private var catalogRemote: RemoteWorkspaceConfiguration?
+    private var requestedAllModels = false
+    private var publishedCatalogKey: String?
     init() {
         guard LocalExecutionRole.current != .frontend else { return }
         connectionChangesTask = Task { [weak self] in
@@ -63,6 +103,7 @@ final class DefaultAgentSettingsModel {
                 self.settings = DefaultAgentSupport.settings
                 self.localServers = LocalModelServerStore.servers
                 if self.keyScope != previousKeyScope { self.loadAccounts() }
+                self.publishCatalog()
             }
         }
     }
@@ -71,6 +112,7 @@ final class DefaultAgentSettingsModel {
         settings = DefaultAgentSupport.settings
         localServers = LocalModelServerStore.servers
         providers = []
+        publishCatalog()
         loadAccounts()
     }
     var localServers: [LocalModelServer] = []
@@ -84,6 +126,7 @@ final class DefaultAgentSettingsModel {
         guard let request = backendRequest else {
             if LocalExecutionRole.current == .frontend {
                 error = "The background service is not connected."
+                busy = false
                 return true
             }
             return false
@@ -135,6 +178,8 @@ final class DefaultAgentSettingsModel {
         if let expectedGeneration, expectedGeneration != backendGeneration { return }
         localServers = value.localServers
         scope = value.scope; settings = value.settings; catalog = value.catalog; providers = value.providers
+        catalogIncludesAllModels = value.catalogIncludesAllModels ?? false
+        resolvedDefaultModelID = value.resolvedDefaultModelID
         searchConfigured = value.searchConfigured; accounts = value.accounts
         cursorAccountStatus = value.cursorAccountStatus; signInProvider = value.signInProvider
         busy = value.busy; error = value.error; notice = value.notice
@@ -170,6 +215,8 @@ final class DefaultAgentSettingsModel {
     var scope = "global"
     var settings = DefaultAgentSupport.settings
     var catalog: [Model] = []
+    var catalogIncludesAllModels = false
+    var resolvedDefaultModelID: String?
     var providers: [Provider] = []
     var searchConfigured = false
     func connectionLabel(_ id: String) -> String {
@@ -207,14 +254,17 @@ final class DefaultAgentSettingsModel {
     var configuration: DefaultAgentSettings {
         get { scope == "global" ? settings.global : settings.resolved(scope) }
         set {
+            if configuration.defaultModel != newValue.defaultModel { resolvedDefaultModelID = nil }
             if backendRequest != nil || LocalExecutionRole.current == .frontend {
                 if scope == "global" { settings.global = newValue } else { settings.workspaces[scope] = newValue }
+                publishCatalog()
                 _ = forward(.init(action: "configuration", configuration: newValue))
                 return
             }
             settings = DefaultAgentSupport.updateSettings { value in
                 if scope == "global" { value.global = newValue } else { value.workspaces[scope] = newValue }
             }
+            publishCatalog()
         }
     }
     var inherits: Bool { scope != "global" && settings.workspaces[scope] == nil }
@@ -228,12 +278,23 @@ final class DefaultAgentSettingsModel {
         return result
     }
     var effectiveDefaultModel: String? {
-        let available = availableModelProviderIDs
-        return configuration.defaultModel.flatMap { id in catalog.contains { $0.id == id } ? id : nil }
-            ?? catalog.first { available.contains($0.provider) }?.id ?? catalog.first?.id
+        // A subset's first row is not the runtime's implicit default. Keep an
+        // explicit saved choice, or the default resolved from a full result.
+        if let resolvedDefaultModelID, isProviderEnabled(for: resolvedDefaultModelID) { return resolvedDefaultModelID }
+        return configuration.defaultModel.flatMap { isProviderEnabled(for: $0) ? $0 : nil }
     }
     var orderedModels: [Model] {
-        DefaultAgentModelCatalog.visibleIDs(explicit: configuration.models, defaultModel: effectiveDefaultModel, catalog: catalog.map(\.id)).compactMap { id in catalog.first { $0.id == id } }
+        enabledModelIDs.compactMap { id in catalog.first { $0.id == id } }
+    }
+    private var enabledModelIDs: [String] {
+        var seen = Set<String>()
+        var ids = configuration.models.filter { isProviderEnabled(for: $0) && seen.insert($0).inserted }
+        if let model = effectiveDefaultModel, seen.insert(model).inserted { ids.insert(model, at: 0) }
+        return ids
+    }
+    private func isProviderEnabled(for model: String) -> Bool {
+        let provider = String(model.split(separator: "/", maxSplits: 1).first ?? "")
+        return configuration.providers.contains(provider)
     }
     func setInherits(_ value: Bool) {
         if forward(.init(action: "inherits", flag: value)) { return }
@@ -243,6 +304,7 @@ final class DefaultAgentSettingsModel {
         }
         providers = []
         accounts = [:]
+        publishCatalog()
         loadAccounts()
     }
     func saveKeyConfirmed(_ key: String, provider: String, label: String? = nil) async -> Bool {
@@ -296,6 +358,7 @@ final class DefaultAgentSettingsModel {
             guard !Task.isCancelled, generation == runID, keyScope == accountScope,
                 value.revision == DefaultAgentSupport.revision else { return }
             if accounts != value.accounts { accounts = value.accounts }
+            publishCatalog()
             if !providers.contains(where: { $0.id == "exa" }) { searchConfigured = !(accounts["exa"] ?? []).isEmpty }
         } catch is CancellationError { }
         catch { if generation == runID, keyScope == accountScope { self.error = error.localizedDescription } }
@@ -504,6 +567,13 @@ final class DefaultAgentSettingsModel {
         configuration = value
     }
     func changeScope(_ scope: String) {
+        metadataTask?.cancel()
+        metadataGeneration = UUID()
+        requestedAllModels = false
+        catalogIncludesAllModels = false
+        resolvedDefaultModelID = nil
+        publishedCatalogKey = nil
+        catalogRemote = nil
         if backendRequest != nil {
             if self.scope != scope { catalog = []; providers = []; accounts = [:] }
             self.scope = scope
@@ -527,6 +597,9 @@ final class DefaultAgentSettingsModel {
     func cancel() {
         if forward(.init(action: "cancel")) { return }
         generation = UUID()
+        metadataTask?.cancel()
+        metadataTask = nil
+        metadataGeneration = UUID()
         clearCatalogRequest()
         operationTask?.cancel()
         operationTask = nil
@@ -571,28 +644,179 @@ final class DefaultAgentSettingsModel {
         value.customServers = LocalModelServerStore.servers
         return value
     }
-    func loadCatalog(remote: RemoteWorkspaceConfiguration? = nil) {
-        if forward(.init(action: "catalog", remote: remote)) { return }
+    /// Entry and ordinary preference changes use metadata only. Starting the
+    /// helper is reserved for an explicit request to browse every model.
+    func loadCatalog(remote: RemoteWorkspaceConfiguration? = nil, includeAllModels: Bool = false) {
+        let hasOtherOperation = busy && !catalogOnly
+        let cacheKey = catalogKey(remote: remote)
+        if publishedCatalogKey != cacheKey {
+            catalog = []
+            resolvedDefaultModelID = nil
+            catalogIncludesAllModels = false
+        }
+        catalogRemote = remote
+        requestedAllModels = includeAllModels
+        if !includeAllModels {
+            if catalogOnly { cancel() }
+            catalogIncludesAllModels = false
+            publishCatalog()
+        } else {
+            busy = true
+            error = nil
+        }
+        if forward(.init(action: "catalog", flag: includeAllModels, remote: remote)) { return }
         let config = catalogConfiguration
-        let cacheKey = scope + ":" + (remote?.id.uuidString ?? "local")
-        // Repeated page/configuration requests can arrive before the helper
-        // returns. Keep the matching request instead of cancelling and spawning
-        // another helper. Explicit connection refreshes still bypass this path.
-        if busy, catalogOnly, error == nil, catalogRequestKey == cacheKey,
-           catalogRequestConfiguration == config, activeRemote == remote { return }
-        if let value = catalogCache[cacheKey], value.configuration == config {
-            if catalog != value.models { catalog = value.models }
+        if !includeAllModels {
+            hydrateEnabledMetadata(remote: remote)
             loadAccounts()
             return
         }
+        // Coalesce only a real, matching in-flight discovery request.
+        if catalogOnly, error == nil, catalogRequestKey == cacheKey,
+           catalogRequestConfiguration == config, activeRemote == remote { return }
+        if let value = catalogCache[cacheKey], value.configuration == config {
+            publishCatalog()
+            if !hasOtherOperation { busy = false }
+            loadAccounts()
+            return
+        }
+        // Browsing must not replace an in-progress connection/sign-in operation.
+        // Its status result can supply the full catalog; otherwise Browse retries
+        // once that operation has finished.
+        if hasOtherOperation { return }
         refresh(remote: remote, action: "catalog")
         loadAccounts()
+    }
+    func waitForEnabledMetadata() async {
+        await metadataTask?.value
+        await accountsTask?.value
+    }
+    private func catalogKey(remote: RemoteWorkspaceConfiguration?) -> String {
+        let endpoint = remote.map { [$0.id.uuidString, $0.hostName, $0.userName ?? "", String($0.remotePort), $0.workspaceID] } ?? ["local"]
+        return ((try? JSONEncoder().encode([scope] + endpoint)) ?? Data()).base64EncodedString()
+    }
+    private func fallbackModel(_ id: String) -> Model {
+        let parts = id.split(separator: "/", maxSplits: 1).map(String.init)
+        let provider = parts.first ?? id
+        let name = parts.count > 1 ? parts[1] : id
+        let providerName = ProviderConnectionID(rawValue: provider)?.name
+            ?? localServers.first { $0.id == provider }?.name ?? provider
+        return Model(id: id, name: name, provider: provider, providerName: providerName)
+    }
+    private func publishCatalog() {
+        let key = catalogKey(remote: catalogRemote)
+        let stored = enabledMetadata[key]
+        let isFrontend = backendRequest != nil || LocalExecutionRole.current == .frontend
+        let cachedFull = catalogCache[key].flatMap { $0.configuration == catalogConfiguration ? $0.models : nil }
+        // Frontend snapshots already hold the exact projection. Preference edits
+        // must not collapse an open full browser while waiting for the backend.
+        let full = cachedFull ?? (isFrontend && catalogIncludesAllModels && publishedCatalogKey == key ? catalog : nil)
+        if let full {
+            let available = availableModelProviderIDs
+            resolvedDefaultModelID = configuration.defaultModel.flatMap { id in
+                full.contains { $0.id == id && isProviderEnabled(for: id) } ? id : nil
+            } ?? full.first { isProviderEnabled(for: $0.id) && available.contains($0.provider) }?.id
+                ?? full.first { isProviderEnabled(for: $0.id) }?.id
+        } else if stored?.configuration == catalogConfiguration,
+                  stored?.selectedDefault == configuration.defaultModel,
+                  stored?.connectedProviders == availableModelProviderIDs {
+            resolvedDefaultModelID = stored?.defaultModel
+        } else if !isFrontend || publishedCatalogKey != key { resolvedDefaultModelID = nil }
+        var known = Dictionary((stored?.models ?? []).map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
+        if publishedCatalogKey == key {
+            for model in catalog { known[model.id] = model }
+        }
+        for model in full ?? [] { known[model.id] = model }
+        let enabled = enabledModelIDs.map { known[$0] ?? fallbackModel($0) }
+        if requestedAllModels, let full {
+            let fullIDs = Set(full.map(\.id))
+            // A removed/renamed catalog entry must not erase a saved selection.
+            catalog = full + enabled.filter { !fullIDs.contains($0.id) }
+            catalogIncludesAllModels = true
+        } else {
+            catalog = enabled
+            catalogIncludesAllModels = false
+        }
+        publishedCatalogKey = key
+        guard !isFrontend else { return }
+        // Do not replace observed default evidence with the temporary empty
+        // account set seen before asynchronous account metadata has arrived.
+        let sameEvidence = stored?.configuration == catalogConfiguration && stored?.selectedDefault == configuration.defaultModel
+        var remembered = enabled
+        if sameEvidence, resolvedDefaultModelID == nil, let defaultID = stored?.defaultModel,
+           !remembered.contains(where: { $0.id == defaultID }), let model = stored?.models.first(where: { $0.id == defaultID }) {
+            remembered.append(model)
+        }
+        let snapshot = EnabledMetadata(configuration: catalogConfiguration, models: Array(remembered.prefix(256)),
+            defaultModel: resolvedDefaultModelID ?? (sameEvidence ? stored?.defaultModel : nil),
+            selectedDefault: configuration.defaultModel,
+            connectedProviders: resolvedDefaultModelID != nil || !sameEvidence ? availableModelProviderIDs : stored?.connectedProviders ?? [])
+        guard full != nil || loadedMetadataKeys.contains(key) else { return }
+        guard snapshot != stored else { return }
+        enabledMetadata[key] = snapshot
+        if enabledMetadata.count > 32 {
+            for stale in enabledMetadata.keys.sorted() where stale != key {
+                if enabledMetadata.count <= 32 { break }
+                enabledMetadata.removeValue(forKey: stale)
+                loadedMetadataKeys.remove(stale)
+            }
+        }
+        metadataWriteRevision &+= 1
+        let revision = metadataWriteRevision
+        Task { await EnabledMetadataStore.shared.write(snapshot, key: key, revision: revision) }
+    }
+    private func hydrateEnabledMetadata(remote: RemoteWorkspaceConfiguration?) {
+        metadataTask?.cancel()
+        metadataGeneration = UUID()
+        let requestID = metadataGeneration
+        let key = catalogKey(remote: remote)
+        metadataTask = Task { [weak self] in
+            guard let self else { return }
+            if !self.loadedMetadataKeys.contains(key) {
+                let stored = await EnabledMetadataStore.shared.read(key)
+                guard !Task.isCancelled, self.metadataGeneration == requestID,
+                      self.catalogKey(remote: self.catalogRemote) == key, !self.requestedAllModels else { return }
+                if self.enabledMetadata[key] == nil, let stored {
+                    self.enabledMetadata[key] = stored
+                    let names = Dictionary(stored.models.map { ($0.id, $0.name) }, uniquingKeysWith: { _, last in last })
+                    self.applyEnabledNames(names)
+                }
+                self.loadedMetadataKeys.insert(key)
+                self.publishCatalog()
+            }
+            // Resolve preserved default evidence before selecting IDs to hydrate.
+            await self.accountsTask?.value
+            guard !Task.isCancelled, self.metadataGeneration == requestID,
+                  self.catalogKey(remote: self.catalogRemote) == key, !self.requestedAllModels else { return }
+            // Never use local SDK metadata to claim a remote runtime's version.
+            guard remote == nil, !self.enabledModelIDs.isEmpty else { return }
+            let ids = self.enabledModelIDs
+            let names = await DefaultAgentEnabledModelMetadata.names(for: ids, resources: nil, local: true)
+            guard !Task.isCancelled, self.metadataGeneration == requestID,
+                  self.catalogKey(remote: self.catalogRemote) == key, !self.requestedAllModels else { return }
+            self.applyEnabledNames(names)
+            self.publishCatalog()
+        }
+    }
+    private func applyEnabledNames(_ names: [String: String]) {
+        func replacing(_ models: [Model]) -> [Model] {
+            models.map { model in
+                guard let name = names[model.id] else { return model }
+                return Model(id: model.id, name: name, provider: model.provider, providerName: model.providerName)
+            }
+        }
+        catalog = replacing(catalog)
+        let key = catalogKey(remote: catalogRemote)
+        if let cached = catalogCache[key] {
+            catalogCache[key] = (cached.configuration, replacing(cached.models))
+        }
     }
     func refresh(remote: RemoteWorkspaceConfiguration? = nil, login: String? = nil, action: String? = nil, profile: String? = nil, removingAccount: String? = nil, reconnectingAccount: String? = nil) {
         if forward(.init(action: "refresh", provider: login, value: action, remote: remote, profile: profile, removingAccount: removingAccount, reconnectingAccount: reconnectingAccount)) { return }
         guard login == nil || !inherits else { return }
         cancel()
         self.activeRemote = remote
+        self.catalogRemote = remote
         self.removingAccount = removingAccount
         self.reconnectingAccount = reconnectingAccount
         busy = true
@@ -601,10 +825,9 @@ final class DefaultAgentSettingsModel {
         outputEnded = false
         terminationStatus = nil
         catalogOnly = action == "catalog"
-        if catalogOnly {
-            catalogRequestConfiguration = catalogConfiguration
-            catalogRequestKey = scope + ":" + (remote?.id.uuidString ?? "local")
-        } else {
+        catalogRequestConfiguration = catalogConfiguration
+        catalogRequestKey = catalogKey(remote: remote)
+        if !catalogOnly {
             if login == nil { ProviderAccountCoordinator.shared.invalidate() }
             loadAccounts(force: login == nil)
         }
@@ -631,6 +854,14 @@ final class DefaultAgentSettingsModel {
                 }
                 try Task.checkCancellation()
                 guard generation == runID else { return }
+                if !catalogOnly {
+                    // Preparing credentials may suspend while preferences change;
+                    // cache results against the payload actually sent to the helper.
+                    var launched = DefaultAgentSettings()
+                    launched.providers = prepared.config.providers
+                    launched.customServers = prepared.config.customServers
+                    catalogRequestConfiguration = launched
+                }
                 var body = try JSONSerialization.jsonObject(with: prepared.data()) as! [String: Any]
                 body["action"] = action ?? (login == nil ? "status" : "login")
                 if let login {
@@ -782,11 +1013,11 @@ final class DefaultAgentSettingsModel {
                         // request before asking for the current configuration.
                         clearCatalogRequest()
                         busy = false
-                        loadCatalog(remote: activeRemote)
+                        loadCatalog(remote: activeRemote, includeAllModels: requestedAllModels)
                         return
                     }
                 }
-                catalog = response.models
+                publishCatalog()
             } else { error = "The model catalog could not be loaded. Try again." }
             busy = false
             return
@@ -841,9 +1072,11 @@ final class DefaultAgentSettingsModel {
         removingAccount = nil
         finishSignIn()
         if let status {
-            catalogCache.removeValue(forKey: scope + ":" + (activeRemote?.id.uuidString ?? "local"))
+            if let key = context.catalogKey, let requested = context.catalogConfiguration {
+                catalogCache[key] = (requested, status.models)
+            }
             providers = status.providers
-            catalog = status.models
+            publishCatalog()
             searchConfigured = status.searchConfigured
         }
         if result["connected"] as? Bool == false {
