@@ -53,7 +53,16 @@ struct BackendConnectionsSnapshot: Codable, Equatable {
 }
 
 @MainActor enum BackendConnectionsService {
-    static func handle(method: String, payload: Data, model: DefaultAgentSettingsModel) async throws -> Data {
+    static func handle(method: String, payload: Data, model: DefaultAgentSettingsModel,
+                       remoteWorkspaces: RemoteWorkspacesModel? = nil) async throws -> Data {
+        if method == "connections.sdks.command" || method == "connections.sdks.snapshot" {
+            let command = try JSONDecoder().decode(DefaultAgentSDKCommand.self, from: payload)
+            if method == "connections.sdks.command" {
+                guard let remoteWorkspaces else { throw BackendRPCError.remote("The workspace service is unavailable.") }
+                model.sdks.start(command, remoteWorkspaces: remoteWorkspaces)
+            }
+            return try JSONEncoder().encode(model.sdks.state(for: command.key))
+        }
         if method == "connections.command" {
             let c = try JSONDecoder().decode(BackendConnectionsCommand.self, from: payload)
             switch c.action {

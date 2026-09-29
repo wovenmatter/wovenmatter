@@ -41,6 +41,7 @@ final class DefaultAgentSettingsModel {
         localServers = LocalModelServerStore.servers
         loadAccounts()
     }
+    let sdks = DefaultAgentSDKSettingsModel()
     var localServers: [LocalModelServer] = []
     var backendRequest: ((String, Data) async throws -> Data)?
     private var backendCommandTask: Task<Void, Never>?
