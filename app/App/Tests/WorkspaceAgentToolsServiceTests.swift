@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import Observation
 import Testing
@@ -91,17 +92,18 @@ extension WorkspaceAgentToolsServiceTests {
         try service.start(); defer { try? service.stop() }
         let slow = try JSONEncoder().encode(WovenMatterToolRequest(arguments: ["slow"]))
         let fast = try JSONEncoder().encode(WovenMatterToolRequest(arguments: [String(repeating: "f", count: payloadBytes)]))
-        let first = Task {
-            try await runBlockingToolFixture {
-                try WovenMatterCommandLine.forward(slow, to: endpoint.path, timeout: 5)
-            }
+        // This connection only occupies the server slot. It has no reply deadline:
+        // parallel MainActor tests may delay this test after the handler is parked.
+        // Only the second request's bounded overload reply is under test.
+        let occupiedSocket = try await runBlockingToolFixture {
+            try openParkedToolRequest(slow, to: endpoint.path)
         }
+        defer { Darwin.close(occupiedSocket) }
         await gate.waitUntilPaused()
         let overloaded = try await runBlockingToolFixture {
             Result { try WovenMatterCommandLine.forward(fast, to: endpoint.path, timeout: 2) }
         }
         await gate.release()
-        _ = try await first.value
         let response = try JSONDecoder().decode(WovenMatterToolResponse.self, from: overloaded.get())
         #expect(!response.success && response.code == "busy")
     }
@@ -291,7 +293,6 @@ extension WorkspaceAgentToolsServiceTests {
         defer { fixture.stop() }
         let holder = RelayForwarderReference()
         let output = RelayOutputCapture()
-        let notified = DispatchSemaphore(value: 0)
         let replacement = try fixture.request(slow: false)
         let forwarder = WovenMatterRelayForwarder(localSocket: fixture.endpoint.path,
             write: { _ in throw CancellationError() }, onFailure: { error in
@@ -303,17 +304,12 @@ extension WorkspaceAgentToolsServiceTests {
                         try holder.value?.submit(id: UUID().uuidString, request: replacement)
                     }
                 }
-                notified.signal()
             })
         holder.value = forwarder
         defer { forwarder.stop() }
         try forwarder.submit(id: UUID().uuidString, request: replacement)
-        let notificationFinished = await withCheckedContinuation { continuation in
-            DispatchQueue(label: "relay-failure-notification").async {
-                continuation.resume(returning: notified.wait(timeout: .now() + 30) == .success)
-            }
-        }
-        #expect(notificationFinished)
+        // Idle ownership is released only after the failure observer returns.
+        // Await that lifecycle boundary, not an unrelated wall-clock deadline.
         await forwarder.waitUntilIdle()
         #expect(output.errors.count == 1)
     }
@@ -340,6 +336,38 @@ extension WorkspaceAgentToolsServiceTests {
         await broken.waitUntilIdle()
         #expect(output.errors.count == 1)
         #expect(throws: (any Error).self) { try broken.submit(id: UUID().uuidString, request: fixture.request(slow: false)) }
+    }
+}
+
+// Send a complete request and retain its socket without starting a response
+// timeout. The caller closes it after the deliberately paused handler is released.
+private func openParkedToolRequest(_ request: Data, to path: String) throws -> Int32 {
+    let descriptor = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
+    guard descriptor >= 0 else { throw WovenNoteSocketError.system(errno) }
+    do {
+        try configureSocket(descriptor)
+        var address = try unixAddress(path: path)
+        let result = withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                Darwin.connect(descriptor, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+            }
+        }
+        if result != 0 {
+            guard errno == EINPROGRESS else { throw WovenNoteSocketError.system(errno) }
+            try waitForSocket(descriptor, events: POLLOUT, deadline: ProcessInfo.processInfo.systemUptime + 2)
+            var error: Int32 = 0
+            var length = socklen_t(MemoryLayout<Int32>.size)
+            guard getsockopt(descriptor, SOL_SOCKET, SO_ERROR, &error, &length) == 0 else {
+                throw WovenNoteSocketError.system(errno)
+            }
+            guard error == 0 else { throw WovenNoteSocketError.system(error) }
+        }
+        try writeMessage(request, to: descriptor, timeout: 2)
+        guard Darwin.shutdown(descriptor, SHUT_WR) == 0 else { throw WovenNoteSocketError.system(errno) }
+        return descriptor
+    } catch {
+        Darwin.close(descriptor)
+        throw error
     }
 }
 
