@@ -44,9 +44,10 @@ public enum DefaultAgentSDKControl {
         let cancellation = CancellationState()
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
-                // poll/read/waitpid are blocking. A maintenance request must not
-                // occupy a cooperative Swift executor while the installer runs.
-                DispatchQueue.global(qos: .utility).async {
+                // poll/read/waitpid can block for an entire installation. Own
+                // an OS thread: neither Swift's cooperative executor nor GCD's
+                // shared utility pool may gate maintenance or cancellation.
+                let worker = Thread {
                     continuation.resume(with: Result {
                         let response = try execute(request, executable: executable,
                             arguments: arguments, timeout: timeout, cancellation: cancellation)
@@ -62,6 +63,9 @@ public enum DefaultAgentSDKControl {
                         throw DefaultAgentError.message("SDK maintenance did not complete. Reload installed versions before trying again.")
                     })
                 }
+                worker.name = "Woven Matter SDK maintenance"
+                worker.qualityOfService = .utility
+                worker.start()
             }
         } onCancel: { cancellation.cancel() }
     }
