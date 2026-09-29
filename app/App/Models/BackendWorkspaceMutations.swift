@@ -12,6 +12,7 @@ enum BackendWorkspaceMutation: Codable, Sendable {
     case moveFolder(id: String, up: Bool)
     case deleteFolder(id: String)
     case conversation(id: String, mutation: WorkspaceConversationMutation)
+    case note(id: String, mutation: WorkspaceNoteMutation, expectedRevision: String)
     case moveConversation(id: String, folderID: String?)
     case createNote(folderID: String?, kind: NoteArtifactKind)
     case persistNoteDraft(DashboardNoteJournalEntry)
@@ -40,6 +41,8 @@ extension BackendApplicationService {
             try await store.deleteFolder(id: id)
         case let .conversation(id, mutation):
             try await model.mutateConversation(id: id, mutation: mutation)
+        case let .note(id, mutation, revision):
+            try await store.mutateNote(id: id, mutation: mutation, expectedRevision: revision)
         case let .moveConversation(id, folder):
             result.accepted = try await store.moveConversation(id: id, toFolderID: folder)
         case let .createNote(folder, kind):

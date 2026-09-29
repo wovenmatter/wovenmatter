@@ -1,6 +1,6 @@
-# Chat menu actions
+# Chat and note menu actions
 
-Right-click a chat in either sidebar layout:
+Right-click a chat in either sidebar layout or in navigation Recents:
 
 - **Pin / Unpin** moves it into or out of the pinned section in the current folder.
 - **Rename** opens an editor with the current name. Save persists the trimmed,
@@ -16,7 +16,7 @@ Right-click a chat in either sidebar layout:
   first. Trash checks active runs again when committing and shares the message
   preparation reservation, so a new dispatch cannot race that operation.
 
-The **Trash** sidebar entry lists trashed chats and offers **Restore**. Restoring
+The **Trash** sidebar entry lists trashed chats and notes and offers **Restore**. Restoring
 preserves the chat's name, pin, messages, and retained Library files, and returns
 it to its previous folder if that folder still exists. Otherwise it returns to Workspace. Trashing pauses
 session timers and cancels queued or claimed-but-unsent deliveries; restoration
@@ -66,3 +66,24 @@ including cancel and a destination write failure, in embedded and separate-backe
 modes. Interrupted delivery of an export response can leave a staged temporary
 export; normal Save,
 Cancel, and error paths remove it.
+
+## Note menus
+
+Notes expose Pin/Unpin, Rename, Move to Folder, Export note, Export document, and
+Move to Trash from the sidebar. Trash includes notes and chats, each with Restore.
+Pinning and moving a note retain its document and history. Restore keeps its pin
+and returns it to the original folder when that folder remains available.
+
+Menu identity includes the fields that affect its labels and actions. This forces
+macOS to discard a cached Pin/Unpin menu after the state changes without rebuilding
+rows for every streaming message update.
+
+Before changing or exporting a note, the app commits the active field editor and
+flushes its queued draft writes. The selected note stays read-only for that action.
+The database checks the expected saved revision within the mutation transaction;
+a competing edit produces a conflict instead of silently replacing newer content.
+
+Export note produces Markdown for ordinary notes, CSV for spreadsheets, and HTML
+for HTML artifacts. Export document preserves the complete structured document as
+JSON. Native Save dialogs support cancellation; export encoding and file writes
+stay off the UI thread. Exports use the saved snapshot after the draft barrier.

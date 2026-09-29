@@ -227,6 +227,7 @@ struct DashboardNotePane: View {
             .padding(.horizontal, 32)
             .padding(.bottom, 24)
         }
+        .disabled(model.noteActionIDs.contains(note.id))
         .background(theme.palette.workspace)
         .sheet(isPresented: $showsVersionHistory) { WorkspaceNoteRecovery(model: model, noteID: note.id) }
         .onAppear {

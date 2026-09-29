@@ -221,6 +221,7 @@ final class ApplicationModel {
     var remoteCalendarResultCursors: [UUID: String] = [:]
     var isCreatingCalendarItem = false
     private(set) var noteDrafts: [String: DashboardNoteDraft] = [:]
+    var noteActionIDs: Set<String> = []
     private var consumedBackendPrefills: [String: String] = [:]
     var pendingComposerPrefills: [String: String] = [:]
     private(set) var localACPSessionMetadata: [
@@ -1623,6 +1624,7 @@ final class ApplicationModel {
         title: String? = nil,
         content: String? = nil
     ) {
+        guard !noteActionIDs.contains(note.id) else { return }
         prepareNoteDraft(note)
         guard var draft = noteDrafts[note.id] else { return }
         draft.edit(title: title, content: content)
@@ -1630,6 +1632,7 @@ final class ApplicationModel {
     }
 
     func retryNoteDraft(note: WorkspaceNoteRecord) {
+        guard !noteActionIDs.contains(note.id) else { return }
         prepareNoteDraft(note)
         guard var draft = noteDrafts[note.id] else { return }
         draft.editRevision &+= 1

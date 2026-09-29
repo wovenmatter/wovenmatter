@@ -100,7 +100,9 @@
 		CBCBD600AB92468988000001 /* BackendSpeechService.swift in Sources */ = {isa = PBXBuildFile; fileRef = CBCBD600AB92468988000002 /* BackendSpeechService.swift */; };
 		281F6DF22C3AE19CCE3FC99D /* BackendLibraryService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 753DF034EE6D727B6091929D /* BackendLibraryService.swift */; };
 		C131C0A00000000000000002 /* ApplicationModel+ConversationActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = C131C0A00000000000000001 /* ApplicationModel+ConversationActions.swift */; };
+		C131C0B00000000000000002 /* ApplicationModel+NoteActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = C131C0B00000000000000001 /* ApplicationModel+NoteActions.swift */; };
 		C131C0A00000000000000004 /* DashboardConversationActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = C131C0A00000000000000003 /* DashboardConversationActions.swift */; };
+		C131C0B00000000000000004 /* DashboardNoteActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = C131C0B00000000000000003 /* DashboardNoteActions.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -198,7 +200,9 @@
 		CBCBD600AB92468988000002 /* BackendSpeechService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BackendSpeechService.swift"; sourceTree = "<group>"; };
 		753DF034EE6D727B6091929D /* BackendLibraryService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BackendLibraryService.swift"; sourceTree = "<group>"; };
 		C131C0A00000000000000001 /* ApplicationModel+ConversationActions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ApplicationModel+ConversationActions.swift"; sourceTree = "<group>"; };
+		C131C0B00000000000000001 /* ApplicationModel+NoteActions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ApplicationModel+NoteActions.swift"; sourceTree = "<group>"; };
 		C131C0A00000000000000003 /* DashboardConversationActions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DashboardConversationActions.swift"; sourceTree = "<group>"; };
+		C131C0B00000000000000003 /* DashboardNoteActions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DashboardNoteActions.swift"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -275,6 +279,7 @@
 				CBCBD600AB92468988000002 /* BackendSpeechService.swift */,
 				753DF034EE6D727B6091929D /* BackendLibraryService.swift */,
 				C131C0A00000000000000001 /* ApplicationModel+ConversationActions.swift */,
+				C131C0B00000000000000001 /* ApplicationModel+NoteActions.swift */,
 				B88F25850147F01B163EDF7E /* ApplicationModel+Calendar.swift */,
 				20E807F893654CD4A1F24D40 /* WorkspaceAgentToolsModel.swift */,
 				7C678F616FB535F772A00598 /* WorkspaceAgentToolsModel+Calendar.swift */,
@@ -304,6 +309,7 @@
 				E45100000000000000000002 /* DashboardHermesCron.swift */,
 				502EF864DA314DFBB322C973 /* DashboardLocalSecretCard.swift */,
 				C131C0A00000000000000003 /* DashboardConversationActions.swift */,
+				C131C0B00000000000000003 /* DashboardNoteActions.swift */,
 				40D1B5DEF1B0023CB8C52B6D /* DashboardSharedViews.swift */,
 				C04200000000000000000002 /* DashboardConversationPopover.swift */,
 				3AB89D5EB3D93F04C3A5CB5E /* DashboardOpenClawCron.swift */,
@@ -495,6 +501,7 @@
 				A14000000000000000000001 /* ApplicationModel+SessionSelections.swift in Sources */,
 				4C606D43824083BD3A612FF1 /* OpenCodeModel.swift in Sources */,
 				C131C0A00000000000000004 /* DashboardConversationActions.swift in Sources */,
+				C131C0B00000000000000004 /* DashboardNoteActions.swift in Sources */,
 				923D138C1F54FC887AA90493 /* DashboardSharedViews.swift in Sources */,
 				C04200000000000000000001 /* DashboardConversationPopover.swift in Sources */,
 				BAAE9A1BC06C8AC78E67AA1B /* DashboardOpenClawCron.swift in Sources */,
@@ -526,6 +533,7 @@
 				CBCBD600AB92468988000001 /* BackendSpeechService.swift in Sources */,
 				281F6DF22C3AE19CCE3FC99D /* BackendLibraryService.swift in Sources */,
 				C131C0A00000000000000002 /* ApplicationModel+ConversationActions.swift in Sources */,
+				C131C0B00000000000000002 /* ApplicationModel+NoteActions.swift in Sources */,
 				A13EC094A3DEA4F302868640 /* ApplicationModel+Calendar.swift in Sources */,
 				5C84BF439B9047118002DD70 /* WorkspaceAgentToolsModel.swift in Sources */,
 				E9A58E7B05C5C2726FA4EE82 /* WorkspaceAgentToolsModel+Calendar.swift in Sources */,

@@ -20,6 +20,8 @@ enum BackendApplicationCommand: Codable, Sendable {
     case workspaceMutation(BackendWorkspaceMutation)
     case exportConversation(id: String, format: WorkspaceConversationExportFormat)
     case trashedConversations
+    case trashedNotes
+    case exportNote(id: String, format: WorkspaceNoteExportFormat, expectedRevision: String)
     case sessionMetadata(conversationID: String)
     case createSession(runtime: AgentRuntimeKind, workspaceID: UUID?, conversationID: UUID,
                        workingDirectory: URL?, title: String?, nativeWorkspaceID: String?)
@@ -38,6 +40,8 @@ enum BackendApplicationCommand: Codable, Sendable {
 struct BackendApplicationResult: Codable, Sendable {
     var exportURL: URL?
     var trashedConversations: [WorkspaceTrashedConversation]?
+    var trashedNotes: [WorkspaceTrashedNote]?
+    var noteExport: WorkspaceNoteExport?
     var surfaceProfile: SurfaceProfile?
     var accepted: Bool = true
     var entityID: String?
@@ -171,6 +175,12 @@ final class BackendApplicationService {
             return try await .init(exportURL: model.exportConversation(id: id, format: format))
         case .trashedConversations:
             return try await .init(trashedConversations: model.trashedConversations())
+        case .trashedNotes:
+            guard let store = model.dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
+            return try await .init(trashedNotes: store.trashedNotes())
+        case let .exportNote(id, format, revision):
+            guard let store = model.dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
+            return try await .init(noteExport: store.exportNote(id: id, format: format, expectedRevision: revision))
         case let .sessionMetadata(id):
             await model.refreshLocalACPSession(conversation: try conversation(id))
             return .init(metadata: model.localACPSessionMetadata[id] ?? model.openClawGatewaySessionMetadata[id])
