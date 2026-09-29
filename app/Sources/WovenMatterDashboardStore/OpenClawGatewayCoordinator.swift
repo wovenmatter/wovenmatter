@@ -29,6 +29,7 @@ public actor OpenClawGatewayCoordinator {
     // Recovered runs have already reached the Gateway. New admissions opt out
     // until their driver is ready to make the first native request.
     var dispatchStarted = true
+    var initialDispatchFence: AgentDispatchFence? = nil
     var fallbackSequence = 0
     var liveToolCallIDs: Set<String> = []
     var remoteRunIDs: Set<String>
@@ -70,6 +71,7 @@ public actor OpenClawGatewayCoordinator {
   private var activeRuns: [String: ActiveRun] = [:]
   private var admittingConversations: Set<String> = []
   private var cancelledAdmissions: Set<String> = []
+  private var steeringDispatchFences: [String: [ObjectIdentifier: AgentDispatchFence]] = [:]
   private var recoveringConversations: Set<String> = []
   private var runTasks: [String: Task<Void, any Error>] = [:]
   private var activeInputTasksByRunID: [
@@ -222,6 +224,8 @@ public actor OpenClawGatewayCoordinator {
 
   public func shutdown() async {
     isShuttingDown = true
+    for run in activeRuns.values { run.initialDispatchFence?.cancel() }
+    for fences in steeringDispatchFences.values { for fence in fences.values { fence.cancel() } }
     for task in runTasks.values { task.cancel() }
     for refresh in historyTasks.values { refresh.task.cancel() }
     for task in monitorTasks.values { task.cancel() }
@@ -251,7 +255,8 @@ public actor OpenClawGatewayCoordinator {
     deliveryContent: String? = nil,
     noteContext: AgentNoteContext? = nil,
     onPermission: PermissionHandler? = nil,
-    onUpdate: UpdateHandler? = nil
+    onUpdate: UpdateHandler? = nil,
+    dispatchFence: AgentDispatchFence? = nil
   ) async throws -> LocalACPRunIdentifiers {
     try await accept(
       conversationID: conversationID,
@@ -259,7 +264,8 @@ public actor OpenClawGatewayCoordinator {
       deliveryContent: deliveryContent,
       noteContext: noteContext,
       onPermission: onPermission,
-      onUpdate: onUpdate
+      onUpdate: onUpdate,
+      dispatchFence: dispatchFence
     )
   }
 
@@ -270,8 +276,10 @@ public actor OpenClawGatewayCoordinator {
     deliveryContent: String? = nil,
     noteContext: AgentNoteContext? = nil,
     onPermission: PermissionHandler? = nil,
-    onUpdate: UpdateHandler? = nil
+    onUpdate: UpdateHandler? = nil,
+    dispatchFence: AgentDispatchFence? = nil
   ) async throws -> LocalACPRunIdentifiers {
+    try dispatchFence?.check()
     guard !isShuttingDown else { throw CancellationError() }
     guard !activeRuns.values.contains(where: { $0.conversationID == conversationID }),
           !recoveringConversations.contains(conversationID),
@@ -309,7 +317,8 @@ public actor OpenClawGatewayCoordinator {
       noteContext: noteContext,
       attachments: attachments,
       onPermission: onPermission,
-      onUpdate: onUpdate
+      onUpdate: onUpdate,
+      dispatchFence: dispatchFence
     )
     return run
   }
@@ -321,17 +330,26 @@ public actor OpenClawGatewayCoordinator {
     noteContext: AgentNoteContext? = nil,
     attachments: [GatewayJSONValue],
     onPermission: PermissionHandler?,
-    onUpdate: UpdateHandler?
+    onUpdate: UpdateHandler?,
+    dispatchFence suppliedFence: AgentDispatchFence? = nil
   ) async throws -> (LocalACPRunIdentifiers, Task<Void, any Error>) {
+    let dispatchFence = suppliedFence ?? AgentDispatchFence()
+    try dispatchFence.check()
     guard !isShuttingDown else { throw CancellationError() }
     let descriptor = try await database.openClawGatewaySession(conversationID: conversationID)
     try Task.checkCancellation()
+    try dispatchFence.check()
     guard !isShuttingDown, !cancelledAdmissions.contains(conversationID) else { throw CancellationError() }
     let run = try await database.beginLocalACPRun(
       conversationID: conversationID,
       input: input,
       noteContext: noteContext
     )
+    do { try dispatchFence.check() }
+    catch {
+      try await database.cancelLocalACPRun(runID: run.runID)
+      throw error
+    }
     guard !isShuttingDown, !Task.isCancelled, !cancelledAdmissions.contains(conversationID) else {
       // The write may have committed while Stop was waiting on this actor.
       // Its terminal write survives caller cancellation and precedes rejection.
@@ -346,6 +364,7 @@ public actor OpenClawGatewayCoordinator {
       onUpdate: onUpdate,
       onPermission: onPermission,
       dispatchStarted: false,
+      initialDispatchFence: dispatchFence,
       remoteRunIDs: [run.runID],
       lastRemoteRunID: run.runID,
       assistantMessageIDsByRemoteRunID: [run.runID: run.assistantMessageID]
@@ -382,6 +401,7 @@ public actor OpenClawGatewayCoordinator {
       }
       activeRuns[run.runID]?.dispatchStarted = true
       if let runExecutor {
+        try activeRuns[run.runID]?.initialDispatchFence?.claimDispatch()
         try await runExecutor(run.runID, agentID, sessionKey, content)
         try await database.completeLocalACPRun(runID: run.runID)
         await publishUpdate(runID: run.runID, phase: .terminal)
@@ -395,7 +415,7 @@ public actor OpenClawGatewayCoordinator {
           runID: run.runID,
           attachments: attachments
         )
-      ))
+      ), dispatchFence: activeRuns[run.runID]?.initialDispatchFence)
       guard let remoteRunID = receipt.objectValue?["runId"]?.stringValue,
             remoteRunID == run.runID else {
         throw OpenClawGatewayClientError.malformedFrame
@@ -461,9 +481,9 @@ public actor OpenClawGatewayCoordinator {
       }
       await publishUpdate(runID: run.runID, phase: .terminal)
     } catch {
-      if let active = activeRuns[run.runID], !active.dispatchStarted {
+      if let active = activeRuns[run.runID], !active.dispatchStarted || active.initialDispatchFence?.hasDispatched == false {
         // Nothing reached the Gateway, so there is no remote work to recover.
-        if Task.isCancelled || isShuttingDown || active.cancelRequested {
+        if Task.isCancelled || isShuttingDown || active.cancelRequested || active.initialDispatchFence?.isCancelled == true {
           try await database.cancelLocalACPRun(runID: run.runID)
           await publishUpdate(runID: run.runID, phase: .terminal)
           return
@@ -574,6 +594,7 @@ public actor OpenClawGatewayCoordinator {
   }
 
   public func cancel(conversationID: String) async throws {
+    if let fences = steeringDispatchFences[conversationID] { for fence in fences.values { fence.cancel() } }
     if admittingConversations.contains(conversationID) {
       cancelledAdmissions.insert(conversationID)
       return
@@ -588,7 +609,7 @@ public actor OpenClawGatewayCoordinator {
       _ = try await synchronizeSession(conversationID: conversationID)
       return
     }
-    if !active.dispatchStarted {
+    if active.initialDispatchFence?.cancel() == true || !active.dispatchStarted {
       active.cancelRequested = true
       activeRuns[active.runID] = active
       return
@@ -620,12 +641,14 @@ public actor OpenClawGatewayCoordinator {
   public func sendActiveInput(
     conversationID: String,
     content: String,
-    deliveryContent: String? = nil
+    deliveryContent: String? = nil,
+    dispatchFence: AgentDispatchFence? = nil
   ) async throws -> LocalACPSteeringIdentifiers {
     try await sendActiveInput(
       conversationID: conversationID,
       input: AgentMessageInput(text: content),
-      deliveryContent: deliveryContent
+      deliveryContent: deliveryContent,
+      dispatchFence: dispatchFence
     )
   }
 
@@ -633,10 +656,17 @@ public actor OpenClawGatewayCoordinator {
   public func sendActiveInput(
     conversationID: String,
     input: AgentMessageInput,
-    deliveryContent: String? = nil
+    deliveryContent: String? = nil,
+    dispatchFence suppliedFence: AgentDispatchFence? = nil
   ) async throws -> LocalACPSteeringIdentifiers {
+    let dispatchFence = suppliedFence ?? AgentDispatchFence()
+    try dispatchFence.check()
+    steeringDispatchFences[conversationID, default: [:]][ObjectIdentifier(dispatchFence)] = dispatchFence
+    var handedToDriver = false
+    defer { if !handedToDriver { forgetSteeringFence(dispatchFence, conversationID: conversationID) } }
     await acquireSteeringLock(conversationID: conversationID)
     defer { releaseSteeringLock(conversationID: conversationID) }
+    try dispatchFence.check()
     guard runExecutor == nil else {
       throw LocalACPSessionDatabaseError.steeringUnsupported
     }
@@ -658,6 +688,7 @@ public actor OpenClawGatewayCoordinator {
       content: transportContent,
       attachments: attachments
     )
+    try dispatchFence.check()
     pausedGatewayEventRunIDs.insert(active.runID)
     let identifiers: LocalACPSteeringIdentifiers
     do {
@@ -681,15 +712,18 @@ public actor OpenClawGatewayCoordinator {
       identifiers.assistantMessageID
     activeRuns[active.runID] = current
     let task = Task { [self] in
-      try await dispatchActiveInput(
+      defer { forgetSteeringFence(dispatchFence, conversationID: conversationID) }
+      return try await dispatchActiveInput(
         localRunID: active.runID,
         provisionalRemoteRunID: provisionalRemoteRunID,
         agentID: active.agentID,
         sessionKey: active.sessionKey,
         content: transportContent,
-        attachments: attachments
+        attachments: attachments,
+        dispatchFence: dispatchFence
       )
     }
+    handedToDriver = true
     activeInputTasksByRunID[active.runID, default: []].append(ActiveInputTask(
       remoteRunID: provisionalRemoteRunID,
       assistantMessageID: identifiers.assistantMessageID,
@@ -741,7 +775,8 @@ public actor OpenClawGatewayCoordinator {
     agentID: UUID,
     sessionKey: String,
     content: String,
-    attachments: [GatewayJSONValue]
+    attachments: [GatewayJSONValue],
+    dispatchFence: AgentDispatchFence
   ) async throws -> OpenClawGatewayEventProjection.TerminalState {
     let receipt = try await client(agentID: agentID).request(
       "chat.send",
@@ -750,7 +785,8 @@ public actor OpenClawGatewayCoordinator {
         content: content,
         runID: provisionalRemoteRunID,
         attachments: attachments
-      ))
+      )),
+      dispatchFence: dispatchFence
     )
     // Gateway v4 acknowledges the supplied idempotency key, just as it does
     // for the first input. Never attach a different run's output to this row.
@@ -763,6 +799,11 @@ public actor OpenClawGatewayCoordinator {
       remoteRunID: remoteRunID,
       agentID: agentID
     )
+  }
+
+  private func forgetSteeringFence(_ fence: AgentDispatchFence, conversationID: String) {
+    steeringDispatchFences[conversationID]?[ObjectIdentifier(fence)] = nil
+    if steeringDispatchFences[conversationID]?.isEmpty == true { steeringDispatchFences[conversationID] = nil }
   }
 
   private func acquireSteeringLock(conversationID: String) async {

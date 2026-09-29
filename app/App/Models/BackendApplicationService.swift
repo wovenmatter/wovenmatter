@@ -186,10 +186,13 @@ final class BackendApplicationService {
             guard let id else { throw BackendRPCError.remote(model.localRunError ?? "The session could not be created.") }
             return .init(conversationID: id)
         case let .sendMessage(id, input, noteID):
+            let dispatchFence = model.beginAgentDispatch(conversationID: id)
+            defer { model.finishAgentDispatch(conversationID: id, fence: dispatchFence) }
             let record = try await conversation(id)
+            try dispatchFence.check()
             let note = noteID.flatMap { id in model.workspaceOverview?.notes.first { $0.id == id } }
             guard noteID == nil || note != nil else { throw BackendRPCError.remote("The attached note is unavailable.") }
-            return try await .init(accepted: model.dispatchAgentMessage(conversation: record, input: input, note: note))
+            return try await .init(accepted: model.dispatchAgentMessage(conversation: record, input: input, note: note, dispatchFence: dispatchFence))
         case let .configureSession(id, selectedModel, thinking, permission):
             await model.updateLocalACPSession(conversation: try conversation(id), model: selectedModel,
                 thinking: thinking, permission: permission)
@@ -199,7 +202,7 @@ final class BackendApplicationService {
             try await database.setSessionTools(tools, sessionID: id, confirmedPausingTimers: confirmed)
             try await model.agentTools?.reload()
         case let .cancelSession(id):
-            _ = try await conversation(id)
+            model.cancelPendingAgentDispatch(conversationID: id)
             if model.isOpenClawGatewayConversation(id) { model.cancelOpenClawGatewayPrompt(conversationID: id) }
             else { model.cancelLocalACPPrompt(conversationID: id) }
         case let .resolveSessionAccess(id, allowed):

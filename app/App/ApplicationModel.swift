@@ -215,6 +215,7 @@ final class ApplicationModel {
     @ObservationIgnored var toolRuntimeTask: Task<Void, Never>?
     @ObservationIgnored var toolCreationTasks: [String: Task<WovenMatterToolResponse, any Error>] = [:]
     @ObservationIgnored private var toolSessionAdmission = WorkspaceSessionAdmission()
+    @ObservationIgnored private var pendingAgentDispatches: [String: [ObjectIdentifier: AgentDispatchFence]] = [:]
     var calendarMutationError: String?
     var remoteCalendarGatewayErrors: [UUID: String] = [:]
     var remoteCalendarSyncInProgress: Set<UUID> = []
@@ -2047,20 +2048,44 @@ final class ApplicationModel {
         return false
     }
 
+    func beginAgentDispatch(conversationID: String) -> AgentDispatchFence {
+        let fence = AgentDispatchFence()
+        pendingAgentDispatches[conversationID, default: [:]][ObjectIdentifier(fence)] = fence
+        return fence
+    }
+
+    func finishAgentDispatch(conversationID: String, fence: AgentDispatchFence) {
+        pendingAgentDispatches[conversationID]?[ObjectIdentifier(fence)] = nil
+        if pendingAgentDispatches[conversationID]?.isEmpty == true { pendingAgentDispatches[conversationID] = nil }
+    }
+
+    func cancelPendingAgentDispatch(conversationID: String) {
+        guard let pending = pendingAgentDispatches[conversationID] else { return }
+        for fence in pending.values { fence.cancel() }
+    }
+
     /// Both user and CLI delivery use this admission point. A false result means
     /// no dispatch occurred; callers decide whether to show the user limit alert.
     func dispatchAgentMessage(
         conversation: WorkspaceConversationRecord,
         input: AgentMessageInput,
         note: WorkspaceNoteRecord? = nil,
-        allowSteering: Bool = true
+        allowSteering: Bool = true,
+        dispatchFence suppliedFence: AgentDispatchFence? = nil
     ) async throws -> Bool {
+        let dispatchFence = suppliedFence ?? beginAgentDispatch(conversationID: conversation.id)
+        defer { if suppliedFence == nil { finishAgentDispatch(conversationID: conversation.id, fence: dispatchFence) } }
+        try dispatchFence.check()
         if isBackendFrontend {
+            // IPC handoff can have an uncertain outcome. Its execution owner
+            // creates a separate native fence; do not classify it as unsent.
+            try dispatchFence.claimDispatch()
             return try await sendBackendCommand(.sendMessage(conversationID: conversation.id, input: input, noteID: note?.id)).accepted
         }
 
         guard let dashboardStore, let agentTools else { throw ApplicationModelError.dashboardStoreUnavailable }
         try await applyPendingSessionSelections(conversationID: conversation.id)
+        try dispatchFence.check()
         guard !loadingLocalACPSessionIDs.contains(conversation.id),
               !updatingLocalACPSessionIDs.contains(conversation.id) else {
             throw ApplicationModelError.localSessionConfigurationInProgress
@@ -2099,28 +2124,30 @@ final class ApplicationModel {
         if conversation.remoteWorkspaceID != nil, remote == nil { throw ApplicationModelError.remoteHarnessUnavailable }
         let discovery = try await agentTools.discovery(sessionID: conversation.id, remote: remote, noteID: context?.noteID)
         let deliveryContent = discovery + "\n\n" + normalized.text
-        try Task.checkCancellation()
+        try dispatchFence.check()
         if let deliveryID = normalized.historyDeliveryID {
             try await dashboardStore.database.validateClaimedToolDelivery(id: deliveryID)
         }
+        try dispatchFence.check()
         if !steering { localRunningConversationIDs.insert(conversation.id) }
         do {
             if conversation.localRuntimeKind == .opencode {
                 guard let openCode = openCodeModel(for: conversation.id) else { throw OpenCodeError.message("This workspace's OpenCode connection is unavailable.") }
-                try await openCode.send(conversation.id, input: normalized, discovery: discovery)
+                try await openCode.send(conversation.id, input: normalized, discovery: discovery, dispatchFence: dispatchFence)
             } else if steering {
                 if isOpenClawGatewayConversation(conversation.id) {
-                    _ = try await dashboardStore.sendActiveOpenClawGatewayPrompt(conversationID: conversation.id, input: normalized, deliveryContent: deliveryContent)
+                    _ = try await dashboardStore.sendActiveOpenClawGatewayPrompt(conversationID: conversation.id, input: normalized, deliveryContent: deliveryContent, dispatchFence: dispatchFence)
                 } else {
                     let staged = try await remoteWorkspaces.stagingFiles(of: normalized, in: conversation.remoteWorkspaceID)
-                    _ = try await dashboardStore.sendActiveLocalACPPrompt(conversationID: conversation.id, input: staged, deliveryContent: deliveryContent)
+                    try dispatchFence.check()
+                    _ = try await dashboardStore.sendActiveLocalACPPrompt(conversationID: conversation.id, input: staged, deliveryContent: deliveryContent, dispatchFence: dispatchFence)
                 }
             } else if isOpenClawGatewayConversation(conversation.id) {
                 _ = try await acceptOpenClawGatewayMessage(conversation: conversation, input: normalized,
-                    deliveryContent: deliveryContent, noteContext: context, store: dashboardStore)
+                    deliveryContent: deliveryContent, noteContext: context, store: dashboardStore, dispatchFence: dispatchFence)
             } else {
                 _ = try await acceptLocalAgentMessage(conversation: conversation, input: normalized,
-                    deliveryContent: deliveryContent, noteContext: context, store: dashboardStore)
+                    deliveryContent: deliveryContent, noteContext: context, store: dashboardStore, dispatchFence: dispatchFence)
             }
         } catch {
             if !steering { localRunningConversationIDs.remove(conversation.id) }
@@ -2189,7 +2216,8 @@ final class ApplicationModel {
         input: AgentMessageInput,
         deliveryContent: String,
         noteContext: AgentNoteContext?,
-        store: DashboardStore
+        store: DashboardStore,
+        dispatchFence: AgentDispatchFence
     ) async throws -> LocalACPRunIdentifiers {
         guard openClawGatewayConversationIDs.contains(conversation.id) else {
             throw OpenClawGatewayClientError.invalidEndpoint
@@ -2204,7 +2232,8 @@ final class ApplicationModel {
                     conversationID: conversation.id,
                     request: request
                 )
-            }
+            },
+            dispatchFence: dispatchFence
         )
     }
 
@@ -2213,7 +2242,8 @@ final class ApplicationModel {
         input: AgentMessageInput,
         deliveryContent: String,
         noteContext: AgentNoteContext?,
-        store: DashboardStore
+        store: DashboardStore,
+        dispatchFence: AgentDispatchFence
     ) async throws -> LocalACPRunIdentifiers {
         guard let runtimeKind = conversation.localRuntimeKind else {
             throw ApplicationModelError.localACPRuntimeUnavailable
@@ -2236,6 +2266,7 @@ final class ApplicationModel {
             throw ApplicationModelError.localACPRuntimeUnavailable
         }
         let input = try await remoteWorkspaces.stagingFiles(of: input, in: conversation.remoteWorkspaceID)
+        try dispatchFence.check()
         return try await store.acceptLocalACPPrompt(
             conversationID: conversation.id,
             input: input,
@@ -2254,7 +2285,8 @@ final class ApplicationModel {
                     conversationID: conversation.id,
                     request: request
                 )
-            }
+            },
+            dispatchFence: dispatchFence
         )
     }
 
@@ -3379,6 +3411,7 @@ final class ApplicationModel {
     }
 
     func cancelLocalACPPrompt(conversationID: String) {
+        cancelPendingAgentDispatch(conversationID: conversationID)
         if isBackendFrontend {
             Task {
                 do { _ = try await sendBackendCommand(.cancelSession(conversationID: conversationID)) }
@@ -3388,6 +3421,7 @@ final class ApplicationModel {
         }
 
         if let openCode = openCodeModel(for: conversationID), openCode.links[conversationID] != nil {
+            openCode.cancelPendingInput(conversationID)
             openCode.perform { _ = try await openCode.sessionCall(conversationID, "/interrupt", method: "POST") }
             return
         }
@@ -4526,6 +4560,7 @@ final class ApplicationModel {
     }
 
     func cancelOpenClawGatewayPrompt(conversationID: String) {
+        cancelPendingAgentDispatch(conversationID: conversationID)
         if isBackendFrontend {
             Task {
                 do { _ = try await sendBackendCommand(.cancelSession(conversationID: conversationID)) }

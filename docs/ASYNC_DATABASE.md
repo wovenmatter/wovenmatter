@@ -41,7 +41,11 @@ replacement or retention prune can still occupy the writer until its SQL commits
 this change removes external I/O from that interval, not SQLite serialization.
 Transport history recorders are async and awaited before a frame is consumed or
 sent. Note write-behind retains its coalescing and recovery journal, while its
-ordered batches await SQLite or backend RPC; lifecycle flushes are async barriers.
+ordered batches await SQLite or backend RPC. An empty flush barrier still reports
+unacknowledged failures from earlier batches. Quit and execution handoff commit
+the active field editor, close note-edit admission, and await that barrier;
+failure keeps the app open and restores editing. History loads publish their
+revision and version list together and discard superseded requests.
 
 ## Admission, cancellation, and deadlines
 
@@ -63,13 +67,26 @@ part of their work has committed.
 
 Stream writers serialize their buffer transitions across awaits. Accepted chunks
 and terminal run cleanup finish even when the driving task is cancelled. Tool toggles
-perform their read/modify/write sequence in one writer job. Refresh generations
+perform their read/modify/write sequence in one writer transaction. Refresh generations
 and pagination identity checks prevent older async results replacing newer UI
 state. ACP prompt handlers and initial instructions are reserved before outbound
 history waits. Gateway events serialize per run and merge stream updates without
 overwriting concurrent steering or cancellation. Connection lifecycle checks run
 after database waits as well as network waits. Note-edit replies trigger a fresh
 workspace snapshot, so delayed replies cannot replace newer saved drafts.
+
+Within the execution process, each input carries one `AgentDispatchFence` from app preparation through database
+admission to the final transport write. Stop cancels pending fences synchronously,
+including backend requests still loading their conversation. Transport senders
+claim dispatch after history persistence; a cancelled input that has not reached
+that point can be rejected durably. Once dispatch has started, a missing native
+receipt retains the existing uncertain outcome rather than rolling back an input
+that may have reached the agent. New sends use a new fence.
+
+The frontend/backend RPC protocol still uses independent request connections. A
+frontend send delayed before backend admission can arrive after a separate Stop
+request; in-process fences do not establish ordering across those connections.
+That existing protocol limitation requires a separate admission-identity change.
 
 `workerMetrics` reports pending/high-water counts, finished and failed jobs,
 cancellation, timeout and rejection counts, and maximum queue/execution time. It
@@ -86,8 +103,15 @@ flush ordering, journal failure and replay; transport tests cover delayed histor
 recording across timeout and disconnect, overlapping ACP prompts, failed history
 writes, and shutdown during a pending connection read. Usage tests suspend a save
 and supersede its refresh to check that stale results cannot replace the current
-cache. Gateway tests overlap unsequenced events behind a blocked writer and verify
+cache. Additional regression sources cover WAL snapshot coherence across a
+concurrent commit, observed-only receipt loading, failed flush barriers, queued
+usage ownership changes, and Stop during pending Gateway admission. Gateway tests overlap unsequenced events behind a blocked writer and verify
 that both deltas and their ordered trace records survive.
+
+The current review used source inspection, Swift syntax parsing, and diff checks.
+New and changed regressions have not been executed; suites and CI are deferred
+until the main-branch merge in this workflow. Historical passing results for
+`06291cd` do not validate these follow-up changes or the combined Dev build.
 
 ```sh
 swift test --package-path app --filter AsyncDatabaseWorkerTests

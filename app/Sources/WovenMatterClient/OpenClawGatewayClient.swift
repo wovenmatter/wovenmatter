@@ -420,7 +420,8 @@ public actor OpenClawGatewayClient {
     _ method: String,
     params: GatewayJSONValue = .object([:]),
     timeout: Duration = .seconds(30),
-    expectedConnectionGeneration: UUID? = nil
+    expectedConnectionGeneration: UUID? = nil,
+    dispatchFence: AgentDispatchFence? = nil
   ) async throws -> GatewayJSONValue {
     if let expectedConnectionGeneration {
       guard connectedGeneration == expectedConnectionGeneration, !retired else {
@@ -443,7 +444,7 @@ public actor OpenClawGatewayClient {
       Task {
         do {
           guard self.generation == requestGeneration, self.pending[id] != nil else { return }
-          try await self.send(Frame(type: "req", id: id, method: method, params: params))
+          try await self.send(Frame(type: "req", id: id, method: method, params: params), dispatchFence: dispatchFence)
         }
         catch { self.resumePending(id: id, with: .failure(error)) }
       }
@@ -530,7 +531,7 @@ public actor OpenClawGatewayClient {
       else { outgoingWaiters.removeFirst().resume() }
   }
 
-  private func send(_ frame: Frame) async throws {
+  private func send(_ frame: Frame, dispatchFence: AgentDispatchFence? = nil) async throws {
     let attempt = generation
     await acquireOutgoing()
     defer { releaseOutgoing() }
@@ -547,6 +548,8 @@ public actor OpenClawGatewayClient {
     if frame.method != "connect", let id = frame.id, pending[id] == nil {
       throw OpenClawGatewayClientError.requestTimedOut(frame.method ?? "request")
     }
+    do { try dispatchFence?.claimDispatch() }
+    catch { throw OpenClawGatewayClientError.rejected("The input was stopped before dispatch.") }
     try await socket.send(data)
   }
 

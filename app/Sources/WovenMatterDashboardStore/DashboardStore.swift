@@ -397,7 +397,8 @@ public actor DashboardStore {
     deliveryContent: String? = nil,
     noteContext: AgentNoteContext? = nil,
     onPermission: OpenClawGatewayCoordinator.PermissionHandler? = nil,
-    onUpdate: OpenClawGatewayCoordinator.UpdateHandler? = nil
+    onUpdate: OpenClawGatewayCoordinator.UpdateHandler? = nil,
+    dispatchFence: AgentDispatchFence? = nil
   ) async throws -> LocalACPRunIdentifiers {
     try await openClawGateway.accept(
       conversationID: conversationID,
@@ -405,7 +406,8 @@ public actor DashboardStore {
       deliveryContent: deliveryContent,
       noteContext: noteContext,
       onPermission: onPermission,
-      onUpdate: onUpdate
+      onUpdate: onUpdate,
+      dispatchFence: dispatchFence
     )
   }
 
@@ -416,7 +418,8 @@ public actor DashboardStore {
     deliveryContent: String? = nil,
     noteContext: AgentNoteContext? = nil,
     onPermission: OpenClawGatewayCoordinator.PermissionHandler? = nil,
-    onUpdate: OpenClawGatewayCoordinator.UpdateHandler? = nil
+    onUpdate: OpenClawGatewayCoordinator.UpdateHandler? = nil,
+    dispatchFence: AgentDispatchFence? = nil
   ) async throws -> LocalACPRunIdentifiers {
     try await openClawGateway.accept(
       conversationID: conversationID,
@@ -424,7 +427,8 @@ public actor DashboardStore {
       deliveryContent: deliveryContent,
       noteContext: noteContext,
       onPermission: onPermission,
-      onUpdate: onUpdate
+      onUpdate: onUpdate,
+      dispatchFence: dispatchFence
     )
   }
 
@@ -878,7 +882,8 @@ public actor DashboardStore {
     launch: LocalACPRuntimeLaunchConfiguration?,
     workspace: LocalACPWorkspaceLaunchConfiguration?,
     onPermission: LocalACPSessionCoordinator.PermissionHandler? = nil,
-    onInteraction: LocalACPSessionCoordinator.InteractionHandler? = nil
+    onInteraction: LocalACPSessionCoordinator.InteractionHandler? = nil,
+    dispatchFence: AgentDispatchFence? = nil
   ) async throws -> LocalACPRunIdentifiers {
     try await acceptLocalACPPrompt(
       conversationID: conversationID,
@@ -888,7 +893,8 @@ public actor DashboardStore {
       launch: launch,
       workspace: workspace,
       onPermission: onPermission,
-      onInteraction: onInteraction
+      onInteraction: onInteraction,
+      dispatchFence: dispatchFence
     )
   }
 
@@ -901,13 +907,16 @@ public actor DashboardStore {
     launch: LocalACPRuntimeLaunchConfiguration?,
     workspace: LocalACPWorkspaceLaunchConfiguration?,
     onPermission: LocalACPSessionCoordinator.PermissionHandler? = nil,
-    onInteraction: LocalACPSessionCoordinator.InteractionHandler? = nil
+    onInteraction: LocalACPSessionCoordinator.InteractionHandler? = nil,
+    dispatchFence: AgentDispatchFence? = nil
   ) async throws -> LocalACPRunIdentifiers {
+    try dispatchFence?.check()
     let context = try await localACPLaunchContext(
       conversationID: conversationID,
       directLaunch: launch,
       directWorkspace: workspace
     )
+    try dispatchFence?.check()
     return try await localSessions.accept(
       conversationID: conversationID,
       input: input,
@@ -917,7 +926,8 @@ public actor DashboardStore {
       workspace: context.workspace,
       systemPrompt: context.systemPrompt,
       onPermission: onPermission,
-      onInteraction: onInteraction
+      onInteraction: onInteraction,
+      dispatchFence: dispatchFence
     )
   }
 
@@ -925,12 +935,14 @@ public actor DashboardStore {
   public func sendActiveLocalACPPrompt(
     conversationID: String,
     content: String,
-    deliveryContent: String? = nil
+    deliveryContent: String? = nil,
+    dispatchFence: AgentDispatchFence? = nil
   ) async throws -> LocalACPSteeringIdentifiers {
     try await sendActiveLocalACPPrompt(
       conversationID: conversationID,
       input: AgentMessageInput(text: content),
-      deliveryContent: deliveryContent
+      deliveryContent: deliveryContent,
+      dispatchFence: dispatchFence
     )
   }
 
@@ -938,12 +950,14 @@ public actor DashboardStore {
   public func sendActiveLocalACPPrompt(
     conversationID: String,
     input: AgentMessageInput,
-    deliveryContent: String? = nil
+    deliveryContent: String? = nil,
+    dispatchFence: AgentDispatchFence? = nil
   ) async throws -> LocalACPSteeringIdentifiers {
     return try await localSessions.sendActiveInput(
       conversationID: conversationID,
       input: input,
-      deliveryContent: deliveryContent
+      deliveryContent: deliveryContent,
+      dispatchFence: dispatchFence
     )
   }
 
@@ -951,12 +965,14 @@ public actor DashboardStore {
   public func sendActiveOpenClawGatewayPrompt(
     conversationID: String,
     content: String,
-    deliveryContent: String? = nil
+    deliveryContent: String? = nil,
+    dispatchFence: AgentDispatchFence? = nil
   ) async throws -> LocalACPSteeringIdentifiers {
     try await sendActiveOpenClawGatewayPrompt(
       conversationID: conversationID,
       input: AgentMessageInput(text: content),
-      deliveryContent: deliveryContent
+      deliveryContent: deliveryContent,
+      dispatchFence: dispatchFence
     )
   }
 
@@ -964,12 +980,14 @@ public actor DashboardStore {
   public func sendActiveOpenClawGatewayPrompt(
     conversationID: String,
     input: AgentMessageInput,
-    deliveryContent: String? = nil
+    deliveryContent: String? = nil,
+    dispatchFence: AgentDispatchFence? = nil
   ) async throws -> LocalACPSteeringIdentifiers {
     try await openClawGateway.sendActiveInput(
       conversationID: conversationID,
       input: input,
-      deliveryContent: deliveryContent
+      deliveryContent: deliveryContent,
+      dispatchFence: dispatchFence
     )
   }
 

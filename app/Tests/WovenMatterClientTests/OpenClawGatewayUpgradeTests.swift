@@ -87,6 +87,37 @@ struct OpenClawGatewayUpgradeTests {
     #expect(await socket.methods == ["connect"])
   }
 
+  @Test func stoppedInputNeverSendsAfterHistoryAndNextInputStillWorks() async throws {
+    let entered = AsyncStream<Void>.makeStream()
+    let release = AsyncStream<Void>.makeStream()
+    defer { release.continuation.finish() }
+    let socket = GatewayFixtureSocket()
+    let client = OpenClawGatewayClient(endpoint: endpoint, credentialStore: GatewayMemoryCredentials(),
+      historyRecorder: { direction, _ in
+        guard direction == "out" else { return }
+        entered.continuation.yield(())
+        var iterator = release.stream.makeAsyncIterator()
+        await iterator.next()
+      }, socketFactory: { _ in socket })
+    _ = try await client.connect()
+    let fence = AgentDispatchFence()
+    let request = Task { try await client.request("stopped", dispatchFence: fence) }
+    var started = entered.stream.makeAsyncIterator()
+    await started.next()
+    #expect(fence.cancel())
+    release.continuation.yield(())
+    await #expect(throws: (any Error).self) { try await request.value }
+    #expect(!fence.hasDispatched)
+    #expect(await socket.methods == ["connect"])
+    let fresh = AgentDispatchFence()
+    release.continuation.yield(())
+    _ = try await client.request("after-stop", dispatchFence: fresh)
+    #expect(fresh.hasDispatched)
+    #expect(await socket.methods == ["connect", "after-stop"])
+    #expect(!fresh.cancel())
+    await client.disconnect()
+  }
+
   @Test func explicitSharedAuthenticationRemainsDistinctFromDeviceAuthentication() {
     let params = OpenClawGatewayClient.connectParameters(deviceID: "device", publicKey: "key",
       signature: "signature", signedAt: 1, nonce: "nonce", scopes: ["operator.read"],
