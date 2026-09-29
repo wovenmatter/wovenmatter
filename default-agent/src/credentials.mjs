@@ -7,6 +7,22 @@ import { providers } from './config.mjs';
 export class Credentials extends InMemoryCredentialStore {
   constructor(supplied = {}, vault, accounts = {}) { super(); this.supplied = supplied; this.vault = vault; this.owned = {}; this.accounts = accounts; this.context = new AsyncLocalStorage(); }
   async initialize() { return this; }
+  // Pi accepts API-key/OAuth credentials, while Woven's native marker only
+  // selects a Claude-owned profile. Keep it in this store for account routing,
+  // but let Pi resolve that provider through its existing ambient-auth handler.
+  // Unknown types on every other provider still fail closed in Pi's resolver.
+  forModelRuntime() {
+    const nativeProfile = (provider, value) => provider === 'claude-subscription' && value?.type === 'native';
+    return {
+      read: async (provider, options) => {
+        const value = await this.read(provider, options);
+        return nativeProfile(provider, value) ? undefined : value;
+      },
+      list: async options => (await this.list(options)).filter(value => !nativeProfile(value.providerId, value)),
+      modify: (provider, update, options) => this.modify(provider, update, options),
+      delete: (provider, options) => this.delete(provider, options),
+    };
+  }
   async replace(supplied, accounts) { this.supplied = supplied; if (accounts) this.accounts = accounts; }
   async candidates(provider) {
     const vault = this.vault ? await this.vault.read() : undefined;

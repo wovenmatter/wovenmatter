@@ -38,6 +38,7 @@ struct DashboardComposer: View {
     let sessionControlsDisabled: Bool
     let sendDisabled: Bool
     let startsCollapsed: Bool
+    @Binding var collapseOverride: Bool?
     let focusRequestGeneration: Int?
     let onActivate: () -> Void
     let onSelectModel: ((String) -> Void)?
@@ -50,6 +51,7 @@ struct DashboardComposer: View {
     let onCommandNavigation: (DashboardComposerNavigationDirection) -> Bool
     let onSend: () -> Void
     @Environment(\.dashboardTheme) private var theme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var selectedSlashCommandID: String?
     @State private var slashCommandsDismissed = false
     @State private var slashNavigationRequest = 0
@@ -60,7 +62,6 @@ struct DashboardComposer: View {
     @State private var dictationDraftID = UUID().uuidString
     @State private var openMenu: DashboardComposerMenuKind?
     @State private var isDropTarget = false
-    @State private var collapseOverride: Bool?
     @State private var permitsNarrowExpandedControls = false
 
     private var isCollapsed: Bool {
@@ -117,10 +118,15 @@ struct DashboardComposer: View {
 
             if !isCollapsed {
                 ViewThatFits(in: .horizontal) {
-                    regularControls
-                        .onAppear {
-                            permitsNarrowExpandedControls = false
+                    // Compare whole rows so a label's intrinsic width cannot
+                    // skip straight from truncation to the compact fallback.
+                    regularControls(permissionLabel: .full)
+                    if showsSessionControls && showsPermissionControl {
+                        if permissionLabels.short != nil {
+                            regularControls(permissionLabel: .short)
                         }
+                        regularControls(permissionLabel: .icon)
+                    }
                     compactControls
                         .onAppear {
                             if permitsNarrowExpandedControls {
@@ -132,6 +138,7 @@ struct DashboardComposer: View {
                 }
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
         .glassEffect(
@@ -203,8 +210,7 @@ struct DashboardComposer: View {
                 focused = true
             }
         }
-        .animation(.easeOut(duration: 0.15), value: openMenu)
-        .animation(.easeOut(duration: 0.15), value: isCollapsed)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: openMenu)
     }
 
     private func composerTextEditor(maximumVisibleLines: Int) -> some View {
@@ -228,6 +234,8 @@ struct DashboardComposer: View {
             dictationIdentity: sessionID ?? dictationDraftID
         )
         .frame(
+            minWidth: 0,
+            maxWidth: .infinity,
             minHeight: isCollapsed ? 36 : 32,
             alignment: .topLeading
         )
@@ -396,7 +404,7 @@ struct DashboardComposer: View {
         }
     }
 
-    private var regularControls: some View {
+    private func regularControls(permissionLabel: DashboardComposerPermissionLabel) -> some View {
         HStack(spacing: 4) {
             attachmentControl
 
@@ -404,7 +412,7 @@ struct DashboardComposer: View {
                 sessionMenu(
                     kind: .model,
                     icon: .cpu,
-                    title: sessionMetadata?.model.map { SessionOptionMetadata.modelLabel(id: $0, metadata: sessionMetadata?.modelOptionMetadata?[$0]) } ?? "Model",
+                    title: sessionMetadata?.model.map { SessionOptionMetadata.modelButtonLabel(id: $0, metadata: sessionMetadata?.modelOptionMetadata?[$0]) } ?? "Model",
                     menuTitle: "Model",
                     accessibilityLabel: "Choose session model",
                     options: sessionMetadata?.selectableModels ?? [],
@@ -425,7 +433,7 @@ struct DashboardComposer: View {
                     action: onSelectThinking
                 )
                 if showsPermissionControl {
-                    permissionMenu(compact: false)
+                    permissionMenu(label: permissionLabel)
                 }
             }
             toolsControl
@@ -434,6 +442,11 @@ struct DashboardComposer: View {
             collapseControl
             voiceControl
             sendControl
+        }
+        .onAppear {
+            if permitsNarrowExpandedControls {
+                permitsNarrowExpandedControls = false
+            }
         }
     }
 
@@ -445,7 +458,7 @@ struct DashboardComposer: View {
                     compactSessionMenu(
                         kind: .model,
                         icon: .cpu,
-                        title: sessionMetadata?.model.map { SessionOptionMetadata.modelLabel(id: $0, metadata: sessionMetadata?.modelOptionMetadata?[$0]) } ?? "Model",
+                        title: sessionMetadata?.model.map { SessionOptionMetadata.modelButtonLabel(id: $0, metadata: sessionMetadata?.modelOptionMetadata?[$0]) } ?? "Model",
                         menuTitle: "Model",
                         accessibilityLabel: "Choose session model",
                         options: sessionMetadata?.selectableModels ?? [],
@@ -466,7 +479,7 @@ struct DashboardComposer: View {
                         action: onSelectThinking
                     )
                     if showsPermissionControl {
-                        permissionMenu(compact: true)
+                        permissionMenu(label: .icon)
                     }
                 }
                 toolsControl
@@ -482,7 +495,6 @@ struct DashboardComposer: View {
 
     private var collapsedControls: some View {
         HStack(spacing: 4) {
-            toolsControl
             collapseControl
             voiceControl
             sendControl
@@ -553,14 +565,23 @@ struct DashboardComposer: View {
         .accessibilityLabel("Send")
     }
 
+    private var permissionTitle: String {
+        if sessionMetadataLoading { return "Loading permissions…" }
+        return sessionMetadata?.permission.map {
+            sessionMetadata?.permissionOptionMetadata?[$0]?.name ?? $0
+        } ?? "Permissions"
+    }
+
+    private var permissionLabels: DashboardComposerPermissionTitles {
+        DashboardComposerPermissionTitles(title: permissionTitle)
+    }
+
     @ViewBuilder
-    private func permissionMenu(compact: Bool) -> some View {
+    private func permissionMenu(label: DashboardComposerPermissionLabel) -> some View {
         let selection = sessionMetadata?.permission
         let metadata = sessionMetadata?.permissionOptionMetadata ?? [:]
-        let title = sessionMetadataLoading
-            ? "Loading permissions…"
-            : selection.map { metadata[$0]?.name ?? $0 } ?? "Permissions"
-        if compact {
+        let title = permissionTitle
+        if label == .icon {
             compactSessionMenu(
                 kind: .permission,
                 icon: .keyRound,
@@ -578,6 +599,7 @@ struct DashboardComposer: View {
                 kind: .permission,
                 icon: .keyRound,
                 title: title,
+                inlineTitle: label == .short ? permissionLabels.short : permissionLabels.full,
                 menuTitle: "Permissions",
                 accessibilityLabel: "Choose session permissions",
                 options: sessionMetadata?.permissionOptions ?? [],
@@ -632,7 +654,7 @@ struct DashboardComposer: View {
         .opacity(unavailable ? 0.4 : 1)
         .accessibilityLabel(accessibilityLabel)
         .accessibilityValue("\(title), \(openMenu == kind ? "Expanded" : "Collapsed")")
-        .help([title, selection, selection.flatMap { optionMetadata[$0]?.description }]
+        .help(kind == .model ? title : [title, selection, selection.flatMap { optionMetadata[$0]?.description }]
             .compactMap { $0 }.joined(separator: "\n"))
         .popover(isPresented: Binding(
             get: { openMenu == kind },
@@ -660,6 +682,7 @@ struct DashboardComposer: View {
         kind: DashboardComposerMenuKind,
         icon: DashboardLucideGlyph,
         title: String,
+        inlineTitle: String? = nil,
         menuTitle: String,
         accessibilityLabel: String,
         options: [String],
@@ -677,7 +700,11 @@ struct DashboardComposer: View {
             focused = false
             openMenu = openMenu == kind ? nil : kind
         } label: {
-            DashboardComposerSessionLabel(icon: icon, title: title, maximumTitleWidth: kind == .model ? 90 : (kind == .thinking ? 40 : 80))
+            DashboardComposerSessionLabel(
+                icon: icon,
+                title: inlineTitle ?? title,
+                maximumTitleWidth: kind == .thinking ? 40 : nil
+            )
         }
         .buttonStyle(DashboardComposerControlButtonStyle())
         .disabled(unavailable)
@@ -685,7 +712,7 @@ struct DashboardComposer: View {
         .fixedSize(horizontal: true, vertical: false)
         .accessibilityLabel(accessibilityLabel)
         .accessibilityValue("\(title), \(openMenu == kind ? "Expanded" : "Collapsed")")
-        .help([title, selection, selection.flatMap { optionMetadata[$0]?.description }]
+        .help(kind == .model ? title : [title, selection, selection.flatMap { optionMetadata[$0]?.description }]
             .compactMap { $0 }.joined(separator: "\n"))
         .popover(isPresented: Binding(
             get: { openMenu == kind },
@@ -841,10 +868,39 @@ struct DashboardDraftAttachmentChip: View {
     }
 }
 
+private enum DashboardComposerPermissionLabel {
+    case full, short, icon
+}
+
+private struct DashboardComposerPermissionTitles {
+    let full: String
+    let short: String?
+
+    init(title: String) {
+        let normalized = title.lowercased()
+            .replacingOccurrences(of: "-", with: " ")
+            .split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        let labels: (String, String?)
+        switch normalized {
+        case "ask before it changes", "ask before changes": labels = ("Ask Before It Changes", "Ask")
+        case "ask approval": labels = ("Ask Approval", "Ask")
+        case "ask for approval": labels = ("Ask for Approval", "Ask")
+        case "full access": labels = ("Full Access", "Full")
+        case "auto accept edits": labels = ("Auto Accept Edits", "Auto Accept")
+        case "auto": labels = ("Auto", nil)
+        case "don't ask", "don’t ask": labels = ("Don't Ask", nil)
+        case "loading permissions…": labels = ("Loading Permissions", "Loading")
+        default: labels = (title, nil)
+        }
+        full = labels.0
+        short = labels.1
+    }
+}
+
 struct DashboardComposerSessionLabel: View {
     let icon: DashboardLucideGlyph
     let title: String
-    var maximumTitleWidth: CGFloat = 120
+    var maximumTitleWidth: CGFloat? = nil
 
     var body: some View {
         HStack(spacing: 8) {
@@ -852,6 +908,7 @@ struct DashboardComposerSessionLabel: View {
             Text(title)
                 .lineLimit(1)
                 .truncationMode(.middle)
+                .fixedSize(horizontal: maximumTitleWidth == nil, vertical: false)
                 .frame(maxWidth: maximumTitleWidth)
             DashboardLucideIcon(glyph: .chevronDown, size: 14)
         }
@@ -1031,12 +1088,15 @@ struct DashboardComposerOptionMenu: View {
                             DashboardComposerPopoverRow(action: { onSelect(option) }) {
                                 HStack(spacing: 12) {
                                     VStack(alignment: .leading, spacing: 3) {
-                                        Text(optionLabel(option)).lineLimit(1)
+                                        Text(optionLabel(option))
+                                            .lineLimit(isModelMenu ? nil : 1)
+                                            .fixedSize(horizontal: false, vertical: true)
                                         if needsDisambiguation(option) {
-                                            Text(option)
-                                                .font(.system(size: 10, design: .monospaced))
+                                            Text(disambiguationLabel(option))
+                                                .font(.system(size: 10))
                                                 .foregroundStyle(DashboardPalette.mutedForeground)
-                                                .lineLimit(1)
+                                                .lineLimit(isModelMenu ? nil : 1)
+                                                .fixedSize(horizontal: false, vertical: true)
                                         }
                                         if showsDescriptions, let description = optionDescription(option) {
                                             Text(description)
@@ -1055,7 +1115,7 @@ struct DashboardComposerOptionMenu: View {
                                 .font(.system(size: 13))
                                 .foregroundStyle(DashboardPalette.foreground)
                                 .padding(.horizontal, 10)
-                                .frame(height: rowHeight(option))
+                                .frame(minHeight: rowHeight(option))
                                 .help(optionHelp(option))
                                 .accessibilityLabel(optionHelp(option))
                                 .accessibilityValue(option == selection ? "Selected" : "")
@@ -1072,9 +1132,11 @@ struct DashboardComposerOptionMenu: View {
             }
         }
         .padding(6)
-        .frame(width: showsDescriptions ? 320 : 288)
+        .frame(width: showsDescriptions ? 320 : (isModelMenu ? 360 : 288))
         .dashboardComposerPopover()
     }
+
+    private var isModelMenu: Bool { !showsDescriptions && !capitalizeOptions }
 
     private func optionLabel(_ option: String) -> String {
         if showsDescriptions {
@@ -1088,6 +1150,17 @@ struct DashboardComposerOptionMenu: View {
 
     private func needsDisambiguation(_ option: String) -> Bool {
         options.contains { $0 != option && optionLabel($0) == optionLabel(option) }
+    }
+
+    private func disambiguationLabel(_ option: String) -> String {
+        if isModelMenu, let description = optionDescription(option),
+           !options.contains(where: {
+               $0 != option && optionLabel($0) == optionLabel(option)
+                   && optionDescription($0) == description
+           }) {
+            return description
+        }
+        return option
     }
 
     private func optionDescription(_ option: String) -> String? {

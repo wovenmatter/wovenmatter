@@ -8,6 +8,7 @@ import { providerFetch } from './transport.mjs';
 import { registerLocalServers } from './local-servers.mjs';
 import { ClaudeRuntime, isClaude } from './claude-runtime.mjs';
 import { registerClaudeProviders } from './claude-provider.mjs';
+import { modelOption } from './model-presentation.mjs';
 
 const builtInInstructions = 'You are Built-in in Woven Matter. Work in the supplied agent workspace. Use the wovenmatter CLI and workspace instructions for notes and databases. Use web_search and web_read for current information and cite source URLs. If search is not configured, direct the user to Settings → Connections. Never claim a tool succeeded when it failed.';
 
@@ -20,7 +21,7 @@ export class DefaultAgentEngine {
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
     await this.claude.loadModels();
     this.credentials = await new Credentials(this.supplied, this.vault, this.credentialAccounts).initialize();
-    this.runtime = await ModelRuntime.create({ credentials: this.credentials, modelsPath: null, modelsStorePath: join(this.directory, 'models.json'), refreshOnCreate: false });
+    this.runtime = await ModelRuntime.create({ credentials: this.credentials.forModelRuntime(), modelsPath: null, modelsStorePath: join(this.directory, 'models.json'), refreshOnCreate: false });
     registerLocalServers(this.runtime, this.config.customServers);
     const xaiModels = this.runtime.getModels().filter(model => model.provider === 'xai');
     if (xaiModels.length) this.runtime.registerProvider('xai-api', {
@@ -78,13 +79,25 @@ export class DefaultAgentEngine {
     return this.runtime.getModels().filter(m => this.config.providers.includes(m.provider)).map(m => ({ id: modelRef(m), name: m.name, provider: m.provider, providerName: this.providerName(m.provider) }));
   }
   providerName(id) { return providerNames[id] ?? this.config.customServers.find(s => s.id === id)?.url ?? id; }
-  async status() {
-    const subscription = await this.claude.status((await this.credentials.read('claude-subscription'))?.accountId);
+  async status({ signal } = {}) {
+    signal?.throwIfAborted();
+    const subscription = await this.claude.status((await this.credentials.read('claude-subscription'))?.accountId, { signal });
+    signal?.throwIfAborted();
     if (subscription.connected || await this.credentials.read('anthropic')) {
-      try { const discover = async () => this.claude.discover(subscription.connected ? undefined : (await this.credentials.read('anthropic'))?.key); if (this.claude.withProfile) await this.claude.withProfile((await this.credentials.read('claude-subscription'))?.accountId, discover); else await discover(); registerClaudeProviders(this.runtime, this.claude, this.credentials); } catch { /* Keep the bundled aliases available when discovery is offline. */ }
+      try {
+        const discover = async () => this.claude.discover(subscription.connected ? undefined : (await this.credentials.read('anthropic'))?.key, { signal });
+        if (this.claude.withProfile) await this.claude.withProfile((await this.credentials.read('claude-subscription'))?.accountId, discover);
+        else await discover();
+        registerClaudeProviders(this.runtime, this.claude, this.credentials);
+      } catch {
+        signal?.throwIfAborted(); // Cancellation is not an offline inventory fallback.
+        // Keep the bundled aliases available when discovery is offline.
+      }
     }
+    signal?.throwIfAborted();
     return { providers: await Promise.all([...providers, ...this.config.customServers.map(s => s.id)].map(async id => { if (id === 'claude-subscription') return { id, name: this.providerName(id), ...subscription }; const c = await this.credentials.read(id); const expired = c?.type === 'oauth' && c.expires <= Date.now(); return { id, name: this.providerName(id), connected: Boolean(c) && !expired, state: !c || expired ? 'sign_in_required' : 'credentials_present', detail: expired ? 'Access expired. Reconnect Woven Matter or sign in.' : c ? 'Credentials stored; provider access has not been verified.' : 'No credentials stored.' }; })), models: this.catalog(), searchConfigured: Boolean((await this.credentials.read('exa'))?.key) };
   }
+
   modelOptions() {
     const all = this.catalog();
     const ids = [...this.config.models];
@@ -106,7 +119,7 @@ export class DefaultAgentEngine {
     const levels = this.thinkingLevels(record);
     const thinking = record.session.thinkingLevel;
     return { configOptions: [{ id: 'model', name: 'Model', category: 'model', type: 'select', currentValue: record.selected,
-      options: this.modelOptions().map(m => ({ value: m.id, name: `${m.name} · ${m.providerName}` })) },
+      options: this.modelOptions().map(modelOption) },
       ...(levels.length > 1 ? [{ id: 'thinking', name: 'Thinking Level', category: 'thought_level', type: 'select', currentValue: thinking,
         options: levels.map(value => ({ value, name: value[0].toUpperCase() + value.slice(1) })) }] : []),
       { id: 'permission_mode', name: 'Permissions', type: 'select', currentValue: record.permission ?? 'normal', options: [

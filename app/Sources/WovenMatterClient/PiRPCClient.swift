@@ -89,6 +89,11 @@ public actor PiRPCClient {
     private var pendingResponses: [String: CheckedContinuation<[String: Any], any Error>] = [:]
     private var promptEvents: LocalACPClient.EventHandler?
     private var promptPermission: LocalACPClient.PermissionHandler?
+    private var resumePermissionHandler: LocalACPClient.PermissionHandler?
+
+    public func setResumePermissionHandler(_ handler: @escaping LocalACPClient.PermissionHandler) {
+        resumePermissionHandler = handler
+    }
     private var promptGeneration: UUID?
     private var reasoningPhaseSequence = 0
     private var activeReasoningPhaseID: String?
@@ -106,7 +111,8 @@ public actor PiRPCClient {
     private var transportError: (any Error)?
     private var settledWaiters: [CheckedContinuation<Void, any Error>] = []
     private var cancelled = false
-    private var abortTask: Task<Void, Never>?
+    private var pendingDispatches: [ObjectIdentifier: AgentDispatchFence] = [:]
+    private var abortTask: Task<Void, any Error>?
     private var readerTask: Task<Void, Never>?
     private var eventTask: Task<Void, Never>?
     private struct ExtensionUIRequest: Sendable {
@@ -247,9 +253,12 @@ public actor PiRPCClient {
     }
 
     public func prompt(_ input: AgentMessageInput, onEvent: LocalACPClient.EventHandler? = nil,
-                       onPermission: LocalACPClient.PermissionHandler? = nil) async throws -> LocalACPStopReason {
+                       onPermission: LocalACPClient.PermissionHandler? = nil,
+                       dispatchFence: AgentDispatchFence? = nil) async throws -> LocalACPStopReason {
+        try dispatchFence?.check()
         let payload = try Self.attachmentPayload(input)
-        return try await prompt(payload.text, images: payload.images, onEvent: onEvent, onPermission: onPermission)
+        return try await prompt(payload.text, images: payload.images, onEvent: onEvent,
+            onPermission: onPermission, dispatchFence: dispatchFence)
     }
 
     public func steer(_ input: AgentMessageInput, dispatchFence: AgentDispatchFence? = nil) async throws {
@@ -257,6 +266,7 @@ public actor PiRPCClient {
     }
 
     public func beginActiveInput(_ input: AgentMessageInput, dispatchFence: AgentDispatchFence? = nil) async throws -> LocalACPActiveInputReceipt {
+        try dispatchFence?.check()
         let payload = try Self.attachmentPayload(input)
         return try await beginActiveInput(payload.text, images: payload.images, dispatchFence: dispatchFence)
     }
@@ -281,9 +291,13 @@ public actor PiRPCClient {
         _ text: String,
         images: [[String: String]] = [],
         onEvent: LocalACPClient.EventHandler? = nil,
-        onPermission: LocalACPClient.PermissionHandler? = nil
+        onPermission: LocalACPClient.PermissionHandler? = nil,
+        dispatchFence: AgentDispatchFence? = nil
     ) async throws -> LocalACPStopReason {
-        try Task.checkCancellation()
+        let fence = dispatchFence ?? AgentDispatchFence()
+        try fence.check()
+        pendingDispatches[ObjectIdentifier(fence)] = fence
+        defer { pendingDispatches[ObjectIdentifier(fence)] = nil }
         let generation = UUID()
         promptGeneration = generation
         hasQueuedSettlement = false
@@ -312,7 +326,7 @@ public actor PiRPCClient {
                 if launch.environment["WOVEN_DURABLE_REMOTE_ACP"] == "1" {
                     command["_meta"] = ["wovenRunID": runID ?? UUID().uuidString.lowercased()]
                 }
-                let response = try await sendCommand(command)
+                let response = try await sendCommand(command, dispatchFence: fence)
                 if response["success"] as? Bool != true {
                     if dictionary(response["_meta"])?["deliveryUncertain"] as? Bool == true {
                         throw PiRPCClientError.deliveryUncertain(string(response["error"]) ?? "The remote prompt receipt was lost.")
@@ -325,7 +339,7 @@ public actor PiRPCClient {
                 try Task.checkCancellation()
                 try await settleHandledInputIfIdle()
                 try await waitUntilSettled()
-                await abortTask?.value
+                try await abortTask?.value
                 if let latestTerminalError {
                     throw PiRPCClientError.commandFailed(latestTerminalError)
                 }
@@ -347,6 +361,8 @@ public actor PiRPCClient {
         let fence = dispatchFence ?? AgentDispatchFence()
         try fence.check()
         guard !cancelled else { throw CancellationError() }
+        pendingDispatches[ObjectIdentifier(fence)] = fence
+        defer { pendingDispatches[ObjectIdentifier(fence)] = nil }
         settlementGeneration += 1
         settlement = nil
         sawAgentStart = false
@@ -373,6 +389,7 @@ public actor PiRPCClient {
         return LocalACPActiveInputReceipt(completion: Task {
             try await self.settleHandledInputIfIdle(forceStateCheck: true)
             try await self.waitUntilSettled()
+            try await self.abortTask?.value
             if let error = self.latestTerminalError { throw PiRPCClientError.commandFailed(error) }
             return self.cancelled ? .cancelled : (self.latestStopReason ?? .endTurn)
         })
@@ -384,6 +401,13 @@ public actor PiRPCClient {
     }
 
     public func cancel() async {
+        try? await stop()
+    }
+
+    /// Return native abort failure to admission owners. They must not release
+    /// newer input merely because the best-effort cancellation task finished.
+    public func stop() async throws {
+        pendingDispatches.values.forEach { $0.cancel() }
         cancelled = true
         guard promptAcknowledged, steeringRequestID == nil else {
             // Abort only stops native agent work, not an extension command that
@@ -401,30 +425,39 @@ public actor PiRPCClient {
             return
         }
         if let abortTask {
-            await abortTask.value
+            try await abortTask.value
             return
         }
+        let generation = promptGeneration
         let task = Task {
             do {
-                _ = try await self.sendCommand(["type": "abort"])
+                let response = try await self.sendCommand(["type": "abort"])
+                guard response["success"] as? Bool == true else {
+                    throw PiRPCClientError.commandFailed(string(response["error"]) ?? "Pi could not stop the active turn.")
+                }
                 // Drain prior output before the session can accept another run.
                 await self.eventTask?.value
                 if !self.sawAgentStart { self.finishSettledWaiters() }
             } catch {
-                self.failPending(error)
+                // A rejected abort does not prove the active turn ended or the
+                // pipe failed. Keep its ownership so an explicit Stop can retry.
+                throw error
             }
         }
         abortTask = task
-        await task.value
+        defer { if promptGeneration == generation { abortTask = nil } }
+        try await task.value
     }
 
     private func cancelPromptTask(generation: UUID) async {
         guard promptGeneration == generation else { return }
+        pendingDispatches.values.forEach { $0.cancel() }
         failPending(CancellationError())
         await shutdown()
     }
 
     public func shutdown() async {
+        pendingDispatches.values.forEach { $0.cancel() }
         if let shutdownTask {
             await shutdownTask.value
             return
@@ -560,7 +593,7 @@ public actor PiRPCClient {
     }
 
     private func handleLine(_ line: Data) async throws {
-        try launch.historyRecorder?("in", line)
+        try await launch.historyRecorder?("in", line)
         guard let object = try JSONSerialization.jsonObject(with: line) as? [String: Any] else {
             throw PiRPCClientError.invalidResponse("expected JSON object")
         }
@@ -692,10 +725,24 @@ public actor PiRPCClient {
         }
     }
 
+    private var outgoingBusy = false
+    private var outgoingWaiters: [CheckedContinuation<Void, Never>] = []
+
+    private func acquireOutgoing() async {
+        if outgoingBusy {
+            await withCheckedContinuation { outgoingWaiters.append($0) }
+        } else { outgoingBusy = true }
+    }
+
+    private func releaseOutgoing() {
+        if outgoingWaiters.isEmpty { outgoingBusy = false }
+        else { outgoingWaiters.removeFirst().resume() }
+    }
+
     private func sendCommand(_ payload: [String: Any], dispatchFence: AgentDispatchFence? = nil) async throws -> [String: Any] {
         try Task.checkCancellation()
-        if let transportError { throw transportError }
         try dispatchFence?.check()
+        if let transportError { throw transportError }
         guard !closed, let input else {
             throw PiRPCClientError.sessionNotInitialized
         }
@@ -705,12 +752,20 @@ public actor PiRPCClient {
         var body = payload
         body["id"] = id
         let data = try JSONSerialization.data(withJSONObject: body)
-        try launch.historyRecorder?("out", data)
+        await acquireOutgoing()
+        do {
+            try await launch.historyRecorder?("out", data)
+            try Task.checkCancellation()
+            if let transportError { throw transportError }
+            guard !closed else { throw PiRPCClientError.sessionNotInitialized }
+        } catch { releaseOutgoing(); throw error }
         var line = data
         line.append(0x0A)
         return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<[String: Any], any Error>) in
+            defer { releaseOutgoing() }
             pendingResponses[id] = continuation
             do {
+                // Stop can run while outbound history is being persisted.
                 try dispatchFence?.claimDispatch()
                 try input.write(contentsOf: line)
             } catch {
@@ -831,29 +886,49 @@ public actor PiRPCClient {
     private func handleExtensionUI(
         _ request: ExtensionUIRequest
     ) async throws {
-        let selected = await promptPermission?(
-            LocalACPPermissionRequest(
-                title: request.title,
-                options: request.options
-            )
-        )
-        var payload: [String: Any] = [
-            "type": "extension_ui_response",
-            "id": request.id,
-        ]
-        if selected == nil || selected == "reject" {
-            payload["cancelled"] = true
-            if request.method == "confirm" {
-                payload["confirmed"] = false
-            }
-        } else if request.method == "confirm" {
-            payload["confirmed"] = true
+        let generation = promptGeneration
+        let selected: String?
+        if cancelled || Task.isCancelled {
+            selected = nil
         } else {
-            payload["value"] = selected
+            let handler = promptPermission ?? (launch.environment["WOVEN_DURABLE_REMOTE_ACP"] == "1" ? resumePermissionHandler : nil)
+            selected = await handler?(
+                LocalACPPermissionRequest(
+                    title: request.title,
+                    options: request.options
+                )
+            )
         }
-        guard let input else { return }
-        var data = try JSONSerialization.data(withJSONObject: payload)
-        try launch.historyRecorder?("out", data)
+        func response(cancelled: Bool) throws -> Data {
+            var payload: [String: Any] = [
+                "type": "extension_ui_response",
+                "id": request.id,
+            ]
+            if cancelled {
+                payload["cancelled"] = true
+                if request.method == "confirm" { payload["confirmed"] = false }
+            } else if request.method == "confirm" {
+                payload["confirmed"] = true
+            } else {
+                payload["value"] = selected
+            }
+            return try JSONSerialization.data(withJSONObject: payload)
+        }
+        await acquireOutgoing()
+        defer { releaseOutgoing() }
+        guard !closed, let input else { return }
+        let rejected = selected == nil || selected == "reject" || cancelled
+            || Task.isCancelled || promptGeneration != generation
+        var data = try response(cancelled: rejected)
+        try await launch.historyRecorder?("out", data)
+        guard !closed else { return }
+        // Stop can arrive while the chosen response waits for its journal write.
+        // Release the native UI request with a cancellation, never a late approval.
+        if !rejected && (cancelled || Task.isCancelled || promptGeneration != generation) {
+            data = try response(cancelled: true)
+            try await launch.historyRecorder?("out", data)
+            guard !closed else { return }
+        }
         data.append(0x0A)
         try input.write(contentsOf: data)
     }

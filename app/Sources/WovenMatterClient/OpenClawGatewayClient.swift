@@ -517,14 +517,37 @@ public actor OpenClawGatewayClient {
     }
   }
 
+  private var outgoingBusy = false
+  private var outgoingWaiters: [CheckedContinuation<Void, Never>] = []
+
+  private func acquireOutgoing() async {
+      if outgoingBusy {
+          await withCheckedContinuation { outgoingWaiters.append($0) }
+      } else { outgoingBusy = true }
+  }
+
+  private func releaseOutgoing() {
+      if outgoingWaiters.isEmpty { outgoingBusy = false }
+      else { outgoingWaiters.removeFirst().resume() }
+  }
+
   private func send(_ frame: Frame, dispatchFence: AgentDispatchFence? = nil) async throws {
+    let attempt = generation
+    await acquireOutgoing()
+    defer { releaseOutgoing() }
+    guard attempt == generation else { throw OpenClawGatewayClientError.connectionClosed }
     guard let socket else { throw OpenClawGatewayClientError.connectionClosed }
     let data = try JSONEncoder().encode(frame)
     if let limit = capabilities?.maximumPayloadBytes, data.count > limit {
       throw OpenClawGatewayClientError.rejected("Request exceeds the Gateway payload limit.")
     }
     // Never retain the authentication handshake in the history journal.
-    if frame.method != "connect" { try historyRecorder?("out", data) }
+    if frame.method != "connect" { try await historyRecorder?("out", data) }
+    try Task.checkCancellation()
+    guard attempt == generation else { throw OpenClawGatewayClientError.connectionClosed }
+    if frame.method != "connect", let id = frame.id, pending[id] == nil {
+      throw OpenClawGatewayClientError.requestTimedOut(frame.method ?? "request")
+    }
     do { try dispatchFence?.claimDispatch() }
     catch { throw OpenClawGatewayClientError.rejected("The input was stopped before dispatch.") }
     try await socket.send(data)
@@ -532,7 +555,7 @@ public actor OpenClawGatewayClient {
 
   private func receiveFrame(from socket: any OpenClawGatewaySocket) async throws -> Frame {
     let data = try await socket.receive()
-    if capabilities != nil { try historyRecorder?("in", data) }
+    if capabilities != nil { try await historyRecorder?("in", data) }
     return try JSONDecoder().decode(Frame.self, from: data)
   }
 

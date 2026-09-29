@@ -31,6 +31,17 @@ are reused. Changes synchronize to connected workspaces automatically. **Apply t
 New workspaces inherit these settings automatically. An offline workspace gets
 the current settings when it reconnects.
 
+SDK versions appear below **Settings for**. Expand a workspace to see its
+**Pi SDK** and **Claude SDK** versions. Use **Check for updates**, then **Update**
+for the SDK you want to update. **All workspaces** lists each location; choosing
+one workspace limits the list to that location. Collapsing a workspace hides its
+SDK details without discarding update progress.
+
+SDK installations belong to each location, independently of inherited provider
+preferences. Updating the local SDK does not update remote workspaces or the
+separately installed Pi and Claude Code CLIs. Older remote workspace services
+need a workspace software update before they can expose SDK management.
+
 Fallback applies when a connection loses authentication or exhausts its available
 usage. Woven Matter tries the preferred account and its ordered backups first,
 then your enabled fallback models in order, updates the
@@ -94,15 +105,18 @@ credentials, a harness reporting sign-in, missing sign-in, unsupported checks,
 and failures. These checks do not verify remaining usage. Local harnesses whose
 credential access is disabled stay unchecked.
 
-These disconnect guarantees apply to Built-in. The other harnesses retain
-their existing runtime-specific connection behavior.
+With remote background execution enabled, the workspace also retains supported
+ACP and Pi sessions across Mac disconnections. Service or container restarts are
+a separate boundary: interrupted sends are not automatically repeated. See
+[Background execution](../architecture/BACKGROUND_EXECUTION.md).
 
 ## Claude models
 
 In **Settings → Connections → Anthropic**, expand **Claude subscriptions** and click
-**Sign in with Claude**. Complete Anthropic’s own flow using the inline link, then click
-**Refresh connections**. Woven Matter bundles the unmodified official runtime;
-this sign-in is separate from an independently installed Claude Code harness.
+**Sign in with Claude**. Open the inline link and complete Anthropic’s sign-in flow.
+Paste the full code returned by Claude into Connections and click **Continue**.
+Connections refreshes when sign-in completes. Woven Matter bundles the unmodified
+official runtime; this sign-in is separate from an independently installed Claude Code harness.
 An API key uses the separate **Claude API key** option and is billed separately.
 
 Claude provides model responses while Built-in retains its tools, approvals,

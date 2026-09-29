@@ -72,9 +72,9 @@ struct OpenClawGatewayReviewTests {
 
   @Test(.timeLimit(.minutes(1)), arguments: [false, true])
   func composerSteeringWaitsForNativeAdmissionWithoutInterrupting(rejected: Bool) async throws {
-    let fixture = try ReviewGatewayFixture()
+    let fixture = try await ReviewGatewayFixture()
     defer { fixture.remove() }
-    let id = try fixture.database.importOpenClawGatewaySession(agentID: fixture.agentID, session: fixture.session)
+    let id = try await fixture.database.importOpenClawGatewaySession(agentID: fixture.agentID, session: fixture.session)
     let run = try await fixture.coordinator.accept(conversationID: id, content: "start")
     let completed = ReviewSteeringCompletion()
     let input = Task {
@@ -95,8 +95,8 @@ struct OpenClawGatewayReviewTests {
     try await fixture.socket.acknowledgeSteering(rejected: rejected)
     if rejected {
       await #expect(throws: OpenClawGatewayClientError.self) { try await input.value }
-      #expect(try fixture.database.conversationContent(id: id).messages.filter { $0.role == "user" }.map(\.content) == ["start"])
-      #expect(try fixture.database.openClawRunAssistantIDs(runID: run.runID).count == 1)
+      #expect(try await fixture.database.conversationContent(id: id).messages.filter { $0.role == "user" }.map(\.content) == ["start"])
+      #expect(try await fixture.database.openClawRunAssistantIDs(runID: run.runID).count == 1)
     } else {
       #expect(try await input.value.runID == run.runID)
     }
@@ -106,7 +106,7 @@ struct OpenClawGatewayReviewTests {
   }
 
   @Test func keylessGatewayResponsesRemainScopedThroughImportAndDatabaseReopen() async throws {
-    let fixture = try ReviewGatewayFixture()
+    let fixture = try await ReviewGatewayFixture()
     defer { fixture.remove() }
     let database = fixture.database
     let recorder = database.historyWireRecorder(agentID: fixture.agentID.uuidString.lowercased(), harness: "openclaw")
@@ -117,32 +117,32 @@ struct OpenClawGatewayReviewTests {
     }
     let firstResponse = #"{"type":"res","id":"first","ok":true,"payload":{"messages":["first-only"],"future_field":17}}"#
     let otherResponse = #"{"type":"res","id":"other","ok":true,"payload":{"messages":["other-only"]}}"#
-    try recorder("out", request("first", key: firstKey))
-    try recorder("out", request("other", key: otherKey))
-    try recorder("in", Data(otherResponse.utf8))
-    try recorder("in", Data(firstResponse.utf8))
+    try await recorder("out", request("first", key: firstKey))
+    try await recorder("out", request("other", key: otherKey))
+    try await recorder("in", Data(otherResponse.utf8))
+    try await recorder("in", Data(firstResponse.utf8))
     // Import comes after its history RPC, so native identity must survive even
     // before a local conversation exists. Associations adopt only their scope.
-    let first = try database.importOpenClawGatewaySession(agentID: fixture.agentID, session: fixture.session)
-    let other = try database.importOpenClawGatewaySession(agentID: fixture.agentID,
+    let first = try await database.importOpenClawGatewaySession(agentID: fixture.agentID, session: fixture.session)
+    let other = try await database.importOpenClawGatewaySession(agentID: fixture.agentID,
       session: #require(OpenClawGatewaySession(payload: .object(["key": .string(otherKey)]))))
-    let caller = try database.createLocalACPSession(runtimeKind: .codex, title: "Scoped reader", ownerDeviceID: UUID())
-    try database.setSessionTools(.init(enabled: [.sessions]), sessionID: caller)
-    try database.attachConversationReference(sourceID: caller, targetID: first)
-    let reopened = try WorkspaceDatabase(url: fixture.directory.appending(path: "review.sqlite"))
-    let rows = try reopened.queryAgentHistory(.init(command: "events", conversationID: first, kind: "wire.in"), callerID: caller)
+    let caller = try await database.createLocalACPSession(runtimeKind: .codex, title: "Scoped reader", ownerDeviceID: UUID())
+    try await database.setSessionTools(.init(enabled: [.sessions]), sessionID: caller)
+    try await database.attachConversationReference(sourceID: caller, targetID: first)
+    let reopened = try await WorkspaceDatabase(url: fixture.directory.appending(path: "review.sqlite"))
+    let rows = try await reopened.queryAgentHistory(.init(command: "events", conversationID: first, kind: "wire.in"), callerID: caller)
       .objectValue?["rows"]?.arrayValue ?? []
     #expect(rows.count == 1)
     #expect(rows.first?.objectValue?["payload"]?.stringValue == firstResponse)
-    #expect(throws: WorkspaceToolError.accessRequired(other)) {
-      try reopened.queryAgentHistory(.init(command: "events", conversationID: other, kind: "wire.in"), callerID: caller)
+    await #expect(throws: WorkspaceToolError.accessRequired(other)) {
+      try await reopened.queryAgentHistory(.init(command: "events", conversationID: other, kind: "wire.in"), callerID: caller)
     }
     // Request IDs are local to a connection. Neither another recorder nor a
     // duplicate keyless response may inherit a completed request's scope.
     let fresh = reopened.historyWireRecorder(agentID: fixture.agentID.uuidString.lowercased(), harness: "openclaw")
-    try fresh("in", Data(firstResponse.utf8))
-    try recorder("in", Data(firstResponse.utf8))
-    let after = try reopened.queryAgentHistory(.init(command: "events", conversationID: first, kind: "wire.in"), callerID: caller)
+    try await fresh("in", Data(firstResponse.utf8))
+    try await recorder("in", Data(firstResponse.utf8))
+    let after = try await reopened.queryAgentHistory(.init(command: "events", conversationID: first, kind: "wire.in"), callerID: caller)
       .objectValue?["rows"]?.arrayValue ?? []
     #expect(after.count == 1)
     await fixture.coordinator.shutdown()
@@ -189,19 +189,19 @@ struct OpenClawGatewayReviewTests {
   }
 
   @Test func steeringHistoryReconcilesExactMessagesAfterReopen() async throws {
-    let fixture = try ReviewGatewayFixture()
+    let fixture = try await ReviewGatewayFixture()
     defer { fixture.remove() }
-    let id = try fixture.database.importOpenClawGatewaySession(agentID: fixture.agentID, session: fixture.session)
-    let initial = try fixture.database.beginLocalACPRun(conversationID: id, content: "First")
-    let steering = try fixture.database.beginLocalACPSteeringTurn(runID: initial.runID, input: AgentMessageInput(text: "Second"), completesPreviousAssistant: false)
+    let id = try await fixture.database.importOpenClawGatewaySession(agentID: fixture.agentID, session: fixture.session)
+    let initial = try await fixture.database.beginLocalACPRun(conversationID: id, content: "First")
+    let steering = try await fixture.database.beginLocalACPSteeringTurn(runID: initial.runID, input: AgentMessageInput(text: "Second"), completesPreviousAssistant: false)
     let history = try OpenClawGatewayHistory(payload: .object(["messages": .array([
       historyMessage("u1", "user", initial.runID, "First"), historyMessage("a1", "assistant", initial.runID, "First reply"),
       historyMessage("u2", "user", steering.userMessageID, "Second"), historyMessage("a2", "assistant", steering.userMessageID, "Second reply")
     ])]))
-    let reopened = try WorkspaceDatabase(url: fixture.directory.appending(path: "review.sqlite"))
-    try reopened.synchronizeOpenClawHistory(conversationID: id, history: history)
-    try reopened.synchronizeOpenClawHistory(conversationID: id, history: history)
-    let messages = try reopened.conversationContent(id: id).messages
+    let reopened = try await WorkspaceDatabase(url: fixture.directory.appending(path: "review.sqlite"))
+    try await reopened.synchronizeOpenClawHistory(conversationID: id, history: history)
+    try await reopened.synchronizeOpenClawHistory(conversationID: id, history: history)
+    let messages = try await reopened.conversationContent(id: id).messages
     #expect(messages.count == 4)
     #expect(messages.first { $0.id == initial.assistantMessageID }?.content == "First reply")
     #expect(messages.first { $0.id == steering.assistantMessageID }?.content == "Second reply")
@@ -209,20 +209,20 @@ struct OpenClawGatewayReviewTests {
   }
 
   @Test func nativeRunIdentityReconcilesAfterDatabaseReopen() async throws {
-    let fixture = try ReviewGatewayFixture()
+    let fixture = try await ReviewGatewayFixture()
     defer { fixture.remove() }
-    let id = try fixture.database.importOpenClawGatewaySession(agentID: fixture.agentID, session: fixture.session)
-    let run = try fixture.database.beginLocalACPRun(conversationID: id, content: "Hello")
+    let id = try await fixture.database.importOpenClawGatewaySession(agentID: fixture.agentID, session: fixture.session)
+    let run = try await fixture.database.beginLocalACPRun(conversationID: id, content: "Hello")
     let history = try OpenClawGatewayHistory(payload: .object([
       "sessionInfo": .object(["hasActiveRun": .bool(false)]),
       "messages": .array([.object(["role": .string("assistant"), "content": .string("Native reply"),
         "__openclaw": .object(["id": .string("native-answer"), "runId": .string(run.runID)])])])]))
-    let reopened = try WorkspaceDatabase(url: fixture.directory.appending(path: "review.sqlite"))
-    try reopened.recoverInterruptedLocalACPRuns()
-    #expect(try reopened.interruptedOpenClawRuns(conversationID: id).count == 1)
-    try reopened.synchronizeOpenClawHistory(conversationID: id, history: history)
+    let reopened = try await WorkspaceDatabase(url: fixture.directory.appending(path: "review.sqlite"))
+    try await reopened.recoverInterruptedLocalACPRuns()
+    #expect(try await reopened.interruptedOpenClawRuns(conversationID: id).count == 1)
+    try await reopened.synchronizeOpenClawHistory(conversationID: id, history: history)
     try await fixture.coordinator.recoverSessionRuns(conversationID: id, history: history)
-    let messages = try reopened.conversationContent(id: id).messages
+    let messages = try await reopened.conversationContent(id: id).messages
     #expect(messages.count == 2)
     #expect(messages.first { $0.id == run.assistantMessageID }?.content == "Native reply")
     #expect(messages.first { $0.id == run.assistantMessageID }?.status == "completed")
@@ -230,7 +230,7 @@ struct OpenClawGatewayReviewTests {
   }
 
   @Test func newWorkspaceSessionSetsOnlyItsOwnDirectory() async throws {
-    let fixture = try ReviewGatewayFixture()
+    let fixture = try await ReviewGatewayFixture()
     defer { fixture.remove() }
     let key = "agent:eddie:wovenmatter:new"
     try await fixture.coordinator.createWorkspaceSession(agentID: fixture.agentID, sessionKey: key,
@@ -238,14 +238,14 @@ struct OpenClawGatewayReviewTests {
     #expect(await fixture.socket.creationParameters == .object([
       "key": .string(key), "cwd": .string("/shared/wovenmatter")
     ]))
-    let id = try fixture.database.importOpenClawGatewaySession(agentID: fixture.agentID, session: fixture.session)
-    #expect(try fixture.database.knownOpenClawSessionKeys(agentID: fixture.agentID).contains(fixture.session.key))
-    #expect(try fixture.database.openClawGatewaySession(conversationID: id).sessionKey == fixture.session.key)
+    let id = try await fixture.database.importOpenClawGatewaySession(agentID: fixture.agentID, session: fixture.session)
+    #expect(try await fixture.database.knownOpenClawSessionKeys(agentID: fixture.agentID).contains(fixture.session.key))
+    #expect(try await fixture.database.openClawGatewaySession(conversationID: id).sessionKey == fixture.session.key)
     await fixture.coordinator.shutdown()
   }
 
   @Test func interruptedWorkspaceCreationAdoptsTheExistingSessionWithoutResettingItsDirectory() async throws {
-    let fixture = try ReviewGatewayFixture()
+    let fixture = try await ReviewGatewayFixture()
     defer { fixture.remove() }
     let key = "agent:main:wovenmatter:recovered"
     await fixture.socket.setWorkspaceSession(key, row: .object([
@@ -259,7 +259,7 @@ struct OpenClawGatewayReviewTests {
   }
 
   @Test func workspaceCreationRecoveryCreatesOnlyWhenTheSessionIsMissing() async throws {
-    let fixture = try ReviewGatewayFixture()
+    let fixture = try await ReviewGatewayFixture()
     defer { fixture.remove() }
     let key = "agent:main:wovenmatter:new-retry"
     for _ in 0..<2 {
@@ -277,9 +277,9 @@ struct OpenClawGatewayReviewTests {
   }
 
   @Test func creationSelectionRequiresGatewayConfirmation() async throws {
-    let fixture = try ReviewGatewayFixture()
+    let fixture = try await ReviewGatewayFixture()
     defer { fixture.remove() }
-    let id = try fixture.database.importOpenClawGatewaySession(agentID: fixture.agentID, session: fixture.session)
+    let id = try await fixture.database.importOpenClawGatewaySession(agentID: fixture.agentID, session: fixture.session)
     try await fixture.coordinator.confirmCreationSelection(conversationID: id, model: "xai/grok-4.6", thinking: "high")
     // This gateway fixture acknowledges writes without changing its selection.
     await #expect(throws: (any Error).self) {
@@ -295,53 +295,53 @@ struct OpenClawGatewayReviewTests {
   @Test(.timeLimit(.minutes(1)), arguments: ["policy", "timer-pause", "timer-remove", "timer-disable", "assignment", "cancel"])
   func revokedDeliveryCannotCrossAnAsynchronousGatewayConnection(revocation: String) async throws {
     let gate = ReviewConnectionGate()
-    let fixture = try ReviewGatewayFixture(beforeConnect: { await gate.pause() })
+    let fixture = try await ReviewGatewayFixture(beforeConnect: { await gate.pause() })
     defer { fixture.remove() }
     let database = fixture.database
-    let target = try database.importOpenClawGatewaySession(agentID: fixture.agentID, session: fixture.session)
-    let caller = try database.createLocalACPSession(runtimeKind: .codex, title: "Source", ownerDeviceID: UUID())
+    let target = try await database.importOpenClawGatewaySession(agentID: fixture.agentID, session: fixture.session)
+    let caller = try await database.createLocalACPSession(runtimeKind: .codex, title: "Source", ownerDeviceID: UUID())
     var source = caller, requestID = UUID().uuidString
     var kind = WorkspaceSessionDeliveryKind.message
     var timerID: String?
     if revocation.hasPrefix("timer-") {
       let timer = WorkspaceSessionTimer(sessionID: target, instruction: "Follow up", nextFireAt: .distantPast)
-      try database.saveSessionTimer(timer, callerID: target)
+      try await database.saveSessionTimer(timer, callerID: target)
       timerID = timer.id
-      requestID = try #require(database.dueSessionTimers().first?.pendingDeliveryID)
+      requestID = try await #require(database.dueSessionTimers().first?.pendingDeliveryID)
       source = target; kind = .timer
     } else if revocation == "assignment" {
-      try database.beginCoordination(sourceID: target, targetID: caller, purpose: "Observe")
+      try await database.beginCoordination(sourceID: target, targetID: caller, purpose: "Observe")
       kind = .notification
     }
-    _ = try database.reserveToolDelivery(sourceID: source, targetID: target, text: "Follow up", requestID: requestID, kind: kind)
-    _ = try #require(try database.claimToolDelivery(id: requestID))
-    try database.validateClaimedToolDelivery(id: requestID)
+    _ = try await database.reserveToolDelivery(sourceID: source, targetID: target, text: "Follow up", requestID: requestID, kind: kind)
+    _ = try #require(try await database.claimToolDelivery(id: requestID))
+    try await database.validateClaimedToolDelivery(id: requestID)
     let coordinator = fixture.coordinator
     let input = AgentMessageInput(text: "Follow up", historyDeliveryID: requestID)
     let acceptance = Task { try await coordinator.accept(conversationID: target, input: input) }
     await gate.waitUntilPaused()
     switch revocation {
-    case "policy": try database.setSessionTools(.init(enabled: []), sessionID: caller)
-    case "timer-pause": try database.pauseSessionTimer(id: try #require(timerID), paused: true)
-    case "timer-remove": try database.removeSessionTimer(id: try #require(timerID))
-    case "timer-disable": try database.setSessionTools(.init(enabled: [.sessions]), sessionID: target, confirmedPausingTimers: true)
-    case "assignment": try database.endCoordination(targetID: caller, sourceID: target)
-    default: try database.setToolDeliveryStatus(id: requestID, status: "cancelled")
+    case "policy": try await database.setSessionTools(.init(enabled: []), sessionID: caller)
+    case "timer-pause": try await database.pauseSessionTimer(id: try #require(timerID), paused: true)
+    case "timer-remove": try await database.removeSessionTimer(id: try #require(timerID))
+    case "timer-disable": try await database.setSessionTools(.init(enabled: [.sessions]), sessionID: target, confirmedPausingTimers: true)
+    case "assignment": try await database.endCoordination(targetID: caller, sourceID: target)
+    default: try await database.setToolDeliveryStatus(id: requestID, status: "cancelled")
     }
     await gate.release()
     await #expect(throws: (any Error).self) { try await acceptance.value }
-    #expect(try database.conversationContent(id: target).messages.isEmpty)
-    #expect(try database.toolDelivery(id: requestID)?.messageID == nil)
+    #expect(try await database.conversationContent(id: target).messages.isEmpty)
+    #expect(try await database.toolDelivery(id: requestID)?.messageID == nil)
     #expect(!(await fixture.socket.requestMethods).contains("chat.send"))
     await coordinator.shutdown()
   }
 
   @Test func providerIdentityRepairsHistoryDuplicateAndContentRevisions() async throws {
-    let fixture = try ReviewGatewayFixture()
+    let fixture = try await ReviewGatewayFixture()
     defer { fixture.remove() }
-    let id = try fixture.database.importOpenClawGatewaySession(agentID: fixture.agentID, session: fixture.session)
-    let run = try fixture.database.beginLocalACPRun(conversationID: id, content: "Hello")
-    try fixture.database.replaceLocalACPAssistantMessage(runID: run.runID, assistantMessageID: run.assistantMessageID, content: "Reply")
+    let id = try await fixture.database.importOpenClawGatewaySession(agentID: fixture.agentID, session: fixture.session)
+    let run = try await fixture.database.beginLocalACPRun(conversationID: id, content: "Hello")
+    try await fixture.database.replaceLocalACPAssistantMessage(runID: run.runID, assistantMessageID: run.assistantMessageID, content: "Reply")
     func history(_ text: String, gatewayID: String?) throws -> OpenClawGatewayHistory {
       var metadata: [String: GatewayJSONValue] = ["id": .string("answer"), "idempotencyKey": .string("codex-app-server:thread:turn:assistant")]
       if let gatewayID { metadata["runId"] = .string(gatewayID) }
@@ -349,34 +349,34 @@ struct OpenClawGatewayReviewTests {
         .object(["role": .string("assistant"), "content": .string(text), "__openclaw": .object(metadata)])])]))
     }
     // Seed the same orphan history row the old parser created, without editing a live DB.
-    try fixture.database.synchronizeOpenClawHistory(conversationID: id, history: history("Reply", gatewayID: nil))
-    #expect(try fixture.database.conversationContent(id: id).messages.count == 3)
-    let reopened = try WorkspaceDatabase(url: fixture.directory.appending(path: "review.sqlite"))
-    try reopened.synchronizeOpenClawHistory(conversationID: id, history: history("Reply", gatewayID: run.runID))
-    try reopened.synchronizeOpenClawHistory(conversationID: id, history: history("Revised reply", gatewayID: run.runID))
-    try reopened.synchronizeOpenClawHistory(conversationID: id, history: history("Revised reply", gatewayID: run.runID))
+    try await fixture.database.synchronizeOpenClawHistory(conversationID: id, history: history("Reply", gatewayID: nil))
+    #expect(try await fixture.database.conversationContent(id: id).messages.count == 3)
+    let reopened = try await WorkspaceDatabase(url: fixture.directory.appending(path: "review.sqlite"))
+    try await reopened.synchronizeOpenClawHistory(conversationID: id, history: history("Reply", gatewayID: run.runID))
+    try await reopened.synchronizeOpenClawHistory(conversationID: id, history: history("Revised reply", gatewayID: run.runID))
+    try await reopened.synchronizeOpenClawHistory(conversationID: id, history: history("Revised reply", gatewayID: run.runID))
     #expect(try history("Reply", gatewayID: run.runID).messages.first?.correlatedRunID(knownInputIDs: [run.runID]) == run.runID)
-    let messages = try reopened.conversationContent(id: id).messages
+    let messages = try await reopened.conversationContent(id: id).messages
     #expect(messages.count == 2)
     #expect(messages.first { $0.id == run.assistantMessageID }?.content == "Revised reply")
-    #expect(try reopened.interruptedOpenClawRuns(conversationID: id).first?.runID == run.runID)
+    #expect(try await reopened.interruptedOpenClawRuns(conversationID: id).first?.runID == run.runID)
     await fixture.coordinator.shutdown()
   }
 
   @Test func exactSteeringKeyWinsOverExecutionIDAndDistinctRepliesRemain() async throws {
-    let fixture = try ReviewGatewayFixture()
+    let fixture = try await ReviewGatewayFixture()
     defer { fixture.remove() }
-    let id = try fixture.database.importOpenClawGatewaySession(agentID: fixture.agentID, session: fixture.session)
-    let run = try fixture.database.beginLocalACPRun(conversationID: id, content: "First")
-    let steering = try fixture.database.beginLocalACPSteeringTurn(runID: run.runID, input: AgentMessageInput(text: "Second"), completesPreviousAssistant: false)
+    let id = try await fixture.database.importOpenClawGatewaySession(agentID: fixture.agentID, session: fixture.session)
+    let run = try await fixture.database.beginLocalACPRun(conversationID: id, content: "First")
+    let steering = try await fixture.database.beginLocalACPSteeringTurn(runID: run.runID, input: AgentMessageInput(text: "Second"), completesPreviousAssistant: false)
     let rows: [GatewayJSONValue] = ["one", "two"].map { key in
       .object(["role": .string("assistant"), "content": .string("Same text"),
         "__openclaw": .object(["id": .string(key), "idempotencyKey": .string(steering.userMessageID + ":assistant"), "runId": .string(run.runID)])])
     }
     let history = try OpenClawGatewayHistory(payload: .object(["messages": .array(rows)]))
-    try fixture.database.synchronizeOpenClawHistory(conversationID: id, history: history)
-    try fixture.database.synchronizeOpenClawHistory(conversationID: id, history: history)
-    let messages = try fixture.database.conversationContent(id: id).messages
+    try await fixture.database.synchronizeOpenClawHistory(conversationID: id, history: history)
+    try await fixture.database.synchronizeOpenClawHistory(conversationID: id, history: history)
+    let messages = try await fixture.database.conversationContent(id: id).messages
     #expect(messages.count == 5)
     #expect(messages.first { $0.id == steering.assistantMessageID }?.content == "Same text")
     #expect(messages.first { $0.id == run.assistantMessageID }?.content != "Same text")
@@ -384,32 +384,32 @@ struct OpenClawGatewayReviewTests {
   }
 
   @Test func partialHistoryRetainsProjectedSiblings() async throws {
-    let fixture = try ReviewGatewayFixture()
+    let fixture = try await ReviewGatewayFixture()
     defer { fixture.remove() }
-    let id = try fixture.database.importOpenClawGatewaySession(agentID: fixture.agentID, session: fixture.session)
+    let id = try await fixture.database.importOpenClawGatewaySession(agentID: fixture.agentID, session: fixture.session)
     let rows: [GatewayJSONValue] = ["First", "Second"].map { text in
       .object(["role": .string("assistant"), "content": .string(text),
         "__openclaw": .object(["id": .string("shared-record"), "runId": .string("external-run")])])
     }
-    try fixture.database.synchronizeOpenClawHistory(conversationID: id,
+    try await fixture.database.synchronizeOpenClawHistory(conversationID: id,
       history: OpenClawGatewayHistory(payload: .object(["messages": .array(rows)])))
-    try fixture.database.synchronizeOpenClawHistory(conversationID: id,
+    try await fixture.database.synchronizeOpenClawHistory(conversationID: id,
       history: OpenClawGatewayHistory(payload: .object(["messages": .array([rows[1]])])))
-    #expect(try fixture.database.conversationContent(id: id).messages.count == 2)
+    #expect(try await fixture.database.conversationContent(id: id).messages.count == 2)
     await fixture.coordinator.shutdown()
   }
 
   @Test func initialReplyDoesNotProveLatestSteeringWasDelivered() async throws {
-    let fixture = try ReviewGatewayFixture()
+    let fixture = try await ReviewGatewayFixture()
     defer { fixture.remove() }
-    let id = try fixture.database.importOpenClawGatewaySession(agentID: fixture.agentID, session: fixture.session)
-    let initial = try fixture.database.beginLocalACPRun(conversationID: id, content: "First")
-    let steering = try fixture.database.beginLocalACPSteeringTurn(runID: initial.runID, input: AgentMessageInput(text: "Second"), completesPreviousAssistant: false)
+    let id = try await fixture.database.importOpenClawGatewaySession(agentID: fixture.agentID, session: fixture.session)
+    let initial = try await fixture.database.beginLocalACPRun(conversationID: id, content: "First")
+    let steering = try await fixture.database.beginLocalACPSteeringTurn(runID: initial.runID, input: AgentMessageInput(text: "Second"), completesPreviousAssistant: false)
     let history = try OpenClawGatewayHistory(payload: .object([
       "messages": .array([historyMessage("a1", "assistant", initial.runID, "First reply")]),
       "sessionInfo": .object(["hasActiveRun": .bool(false)])]))
     try await fixture.coordinator.recoverSessionRuns(conversationID: id, history: history)
-    let message = try #require(fixture.database.conversationContent(id: id).messages.first { $0.id == steering.assistantMessageID })
+    let message = try await #require(fixture.database.conversationContent(id: id).messages.first { $0.id == steering.assistantMessageID })
     #expect(message.status == "failed")
     await fixture.coordinator.shutdown()
   }
@@ -420,18 +420,18 @@ struct OpenClawGatewayReviewTests {
   }
 
   @Test func failedImportLeavesNoPhantomConversation() async throws {
-    let fixture = try ReviewGatewayFixture(denyHistory: true)
+    let fixture = try await ReviewGatewayFixture(denyHistory: true)
     defer { fixture.remove() }
     do {
       _ = try await fixture.coordinator.importSession(agentID: fixture.agentID, session: fixture.session)
       Issue.record("Denied history was imported")
     } catch OpenClawGatewayClientError.rejected { }
-    #expect(try fixture.database.openClawGatewaySessions(agentID: fixture.agentID).isEmpty)
+    #expect(try await fixture.database.openClawGatewaySessions(agentID: fixture.agentID).isEmpty)
     await fixture.coordinator.shutdown()
   }
 
   @Test func historyDoesNotRequireApprovalScopes() async throws {
-    let fixture = try ReviewGatewayFixture()
+    let fixture = try await ReviewGatewayFixture()
     defer { fixture.remove() }
     let id = try await fixture.coordinator.importSession(agentID: fixture.agentID, session: fixture.session)
     _ = try await fixture.coordinator.synchronizeSession(conversationID: id)
@@ -440,19 +440,19 @@ struct OpenClawGatewayReviewTests {
   }
 
   @Test func toolOutputCannotReplaceAssistantOrProveSuccessfulRecovery() async throws {
-    let fixture = try ReviewGatewayFixture()
+    let fixture = try await ReviewGatewayFixture()
     defer { fixture.remove() }
-    let id = try fixture.database.importOpenClawGatewaySession(agentID: fixture.agentID, session: fixture.session)
-    let run = try fixture.database.beginLocalACPRun(conversationID: id, content: "Hello")
+    let id = try await fixture.database.importOpenClawGatewaySession(agentID: fixture.agentID, session: fixture.session)
+    let run = try await fixture.database.beginLocalACPRun(conversationID: id, content: "Hello")
     let history = try OpenClawGatewayHistory(payload: .object([
       "sessionInfo": .object(["hasActiveRun": .bool(false)]),
       "messages": .array([.object(["role": .string("toolResult"), "content": .string("Tool succeeded"),
         "__openclaw": .object(["id": .string("tool"), "idempotencyKey": .string(run.runID)])])])]))
-    try fixture.database.synchronizeOpenClawHistory(conversationID: id, history: history)
-    let before = try #require(fixture.database.conversationContent(id: id).messages.first { $0.id == run.assistantMessageID })
+    try await fixture.database.synchronizeOpenClawHistory(conversationID: id, history: history)
+    let before = try await #require(fixture.database.conversationContent(id: id).messages.first { $0.id == run.assistantMessageID })
     #expect(before.content.isEmpty)
     try await fixture.coordinator.recoverSessionRuns(conversationID: id, history: history)
-    let after = try #require(fixture.database.conversationContent(id: id).messages.first { $0.id == run.assistantMessageID })
+    let after = try await #require(fixture.database.conversationContent(id: id).messages.first { $0.id == run.assistantMessageID })
     #expect(after.status == "failed")
     #expect(after.content.contains("not resent"))
     await fixture.coordinator.shutdown()
@@ -460,15 +460,15 @@ struct OpenClawGatewayReviewTests {
 
   @Test(arguments: [false, true])
   func idleHistoryPreservesCommentaryThroughCoordinatorRecovery(tracked: Bool) async throws {
-    let fixture = try ReviewGatewayFixture()
+    let fixture = try await ReviewGatewayFixture()
     defer { fixture.remove() }
-    let id = try fixture.database.importOpenClawGatewaySession(agentID: fixture.agentID, session: fixture.session)
-    let run = try fixture.database.beginLocalACPRun(conversationID: id, content: "Start")
-    try fixture.database.appendLocalACPAssistantChunk(runID: run.runID, chunk: "Commentary\n\n")
-    try fixture.database.recordAssistantStreamBoundary(runID: run.runID)
-    try fixture.database.appendLocalACPAssistantChunk(runID: run.runID, chunk: "Draft final")
-    try fixture.database.recordAssistantStreamBoundary(runID: run.runID, finalSegment: true)
-    try fixture.database.upsertDeviceOwnedRunActivity(runID: run.runID,
+    let id = try await fixture.database.importOpenClawGatewaySession(agentID: fixture.agentID, session: fixture.session)
+    let run = try await fixture.database.beginLocalACPRun(conversationID: id, content: "Start")
+    try await fixture.database.appendLocalACPAssistantChunk(runID: run.runID, chunk: "Commentary\n\n")
+    try await fixture.database.recordAssistantStreamBoundary(runID: run.runID)
+    try await fixture.database.appendLocalACPAssistantChunk(runID: run.runID, chunk: "Draft final")
+    try await fixture.database.recordAssistantStreamBoundary(runID: run.runID, finalSegment: true)
+    try await fixture.database.upsertDeviceOwnedRunActivity(runID: run.runID,
       activity: AgentRunActivity(id: "late", kind: .thought, content: "Late reasoning"))
     let payload: GatewayJSONValue = .object([
       "sessionInfo": .object(["hasActiveRun": .bool(false)]),
@@ -484,13 +484,13 @@ struct OpenClawGatewayReviewTests {
       // The recovered observer must perform the actual idle synchronization
       // before it terminalizes the locally tracked run.
       for _ in 0..<400 {
-        if try fixture.database.conversationContent(id: id).runs.first?.status == "completed" { break }
+        if try await fixture.database.conversationContent(id: id).runs.first?.status == "completed" { break }
         try await Task.sleep(for: .milliseconds(5))
       }
     } else {
       _ = try await fixture.coordinator.synchronizeSession(conversationID: id)
     }
-    let page = try fixture.database.conversationHistoryPage(id: id, limit: 20)
+    let page = try await fixture.database.conversationHistoryPage(id: id, limit: 20)
     let reply = try #require(page.messages.first { $0.id == run.assistantMessageID })
     #expect(reply.content == "Commentary\n\nFinal answer")
     #expect(page.runs.first?.status == "completed")
@@ -501,16 +501,16 @@ struct OpenClawGatewayReviewTests {
     // Ordinary refresh after completion and database reopen must not erase
     // the preserved prefix, even when this page contains only the final row.
     _ = try await fixture.coordinator.synchronizeSession(conversationID: id)
-    #expect(try fixture.database.conversationContent(id: id).messages.first { $0.id == run.assistantMessageID }?.content == reply.content)
-    let reopened = try WorkspaceDatabase(url: fixture.directory.appending(path: "review.sqlite"))
-    try reopened.synchronizeOpenClawHistory(conversationID: id, history: OpenClawGatewayHistory(payload: payload))
-    #expect(try reopened.conversationContent(id: id).messages.first { $0.id == run.assistantMessageID }?.content == reply.content)
+    #expect(try await fixture.database.conversationContent(id: id).messages.first { $0.id == run.assistantMessageID }?.content == reply.content)
+    let reopened = try await WorkspaceDatabase(url: fixture.directory.appending(path: "review.sqlite"))
+    try await reopened.synchronizeOpenClawHistory(conversationID: id, history: OpenClawGatewayHistory(payload: payload))
+    #expect(try await reopened.conversationContent(id: id).messages.first { $0.id == run.assistantMessageID }?.content == reply.content)
     let replacement = try OpenClawGatewayHistory(payload: .object([
       "messages": .array([.object(["role": .string("assistant"), "text": .string("Authoritative replacement"),
         "__openclaw": .object(["id": .string("final"), "runId": .string(run.runID)])])]),
     ]))
-    try reopened.synchronizeOpenClawHistory(conversationID: id, history: replacement)
-    let replaced = try reopened.conversationHistoryPage(id: id, limit: 20)
+    try await reopened.synchronizeOpenClawHistory(conversationID: id, history: replacement)
+    let replaced = try await reopened.conversationHistoryPage(id: id, limit: 20)
     let replacedReply = try #require(replaced.messages.first { $0.id == run.assistantMessageID })
     #expect(replacedReply.content == "Authoritative replacement")
     #expect(AssistantTranscriptProjection(messageID: replacedReply.id, content: replacedReply.content,
@@ -519,9 +519,9 @@ struct OpenClawGatewayReviewTests {
   }
 
   @Test func modelDiscoveryUsesTheImportedSessionAndPreparedDetails() async throws {
-    let fixture = try ReviewGatewayFixture()
+    let fixture = try await ReviewGatewayFixture()
     defer { fixture.remove() }
-    let id = try fixture.database.importOpenClawGatewaySession(agentID: fixture.agentID, session: fixture.session)
+    let id = try await fixture.database.importOpenClawGatewaySession(agentID: fixture.agentID, session: fixture.session)
     let metadata = try await fixture.coordinator.sessionMetadata(conversationID: id)
     let params = try #require(await fixture.socket.modelParameters?.objectValue)
     #expect(params["sessionKey"] == .string("agent:eddie:shared"))
@@ -545,9 +545,9 @@ struct OpenClawGatewayReviewTests {
   }
 
   @Test func modelDiscoveryFallsBackToSessionLevelsOnlyWhenCatalogFieldIsAbsent() async throws {
-    let absent = try ReviewGatewayFixture(modelThinkingLevels: nil)
+    let absent = try await ReviewGatewayFixture(modelThinkingLevels: nil)
     defer { absent.remove() }
-    let absentID = try absent.database.importOpenClawGatewaySession(
+    let absentID = try await absent.database.importOpenClawGatewaySession(
       agentID: absent.agentID, session: absent.session
     )
     let fallback = try await absent.coordinator.sessionMetadata(conversationID: absentID)
@@ -555,9 +555,9 @@ struct OpenClawGatewayReviewTests {
     #expect(fallback.thinkingOptionMetadata?["medium"]?.name == "Session medium")
     await absent.coordinator.shutdown()
 
-    let empty = try ReviewGatewayFixture(modelThinkingLevels: .array([]))
+    let empty = try await ReviewGatewayFixture(modelThinkingLevels: .array([]))
     defer { empty.remove() }
-    let emptyID = try empty.database.importOpenClawGatewaySession(
+    let emptyID = try await empty.database.importOpenClawGatewaySession(
       agentID: empty.agentID, session: empty.session
     )
     let authoritativeEmpty = try await empty.coordinator.sessionMetadata(conversationID: emptyID)
@@ -567,17 +567,17 @@ struct OpenClawGatewayReviewTests {
   }
 
   @Test func concurrentImportsKeepOneNativeSession() async throws {
-    let fixture = try ReviewGatewayFixture()
+    let fixture = try await ReviewGatewayFixture()
     defer { fixture.remove() }
     let database = fixture.database, agentID = fixture.agentID, session = fixture.session
     let ids = try await withThrowingTaskGroup(of: String.self) { group in
-      for _ in 0..<12 { group.addTask { try database.importOpenClawGatewaySession(agentID: agentID, session: session) } }
+      for _ in 0..<12 { group.addTask { try await database.importOpenClawGatewaySession(agentID: agentID, session: session) } }
       var ids: [String] = []
       for try await id in group { ids.append(id) }
       return ids
     }
     #expect(Set(ids).count == 1)
-    #expect(try database.openClawGatewaySessions(agentID: agentID).count == 1)
+    #expect(try await database.openClawGatewaySessions(agentID: agentID).count == 1)
     await fixture.coordinator.shutdown()
   }
 }
@@ -595,14 +595,14 @@ private struct ReviewGatewayFixture {
       "description": .string("Thorough reasoning")]),
     .object(["id": .string("low"), "label": .string("Low effort")]),
   ]), beforeConnect: (@Sendable () async -> Void)? = nil,
-    failSteeringTransport: Bool = false, historyRecorder: WorkspaceWireRecorder? = nil) throws {
+    failSteeringTransport: Bool = false, historyRecorder: WorkspaceWireRecorder? = nil) async throws {
     directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    database = try WorkspaceDatabase(url: directory.appending(path: "review.sqlite"))
-    _ = try database.createLocalACPSession(runtimeKind: .openclaw, title: "Seed", ownerDeviceID: UUID())
-    agentID = try #require(database.dashboardAgents().first).id
+    database = try await WorkspaceDatabase(url: directory.appending(path: "review.sqlite"))
+    _ = try await database.createLocalACPSession(runtimeKind: .openclaw, title: "Seed", ownerDeviceID: UUID())
+    agentID = try await #require(database.dashboardAgents().first).id
     let endpoint = OpenClawGatewayEndpoint(url: URL(string: "ws://127.0.0.1:1")!, authorization: .localService)
-    try database.saveOpenClawGatewayLink(OpenClawGatewayLink(agentID: agentID, location: .localAgentWorkspace, endpoint: endpoint))
+    try await database.saveOpenClawGatewayLink(OpenClawGatewayLink(agentID: agentID, location: .localAgentWorkspace, endpoint: endpoint))
     session = try #require(OpenClawGatewaySession(payload: .object(["key": .string("agent:eddie:shared") ])))
     socket = ReviewGatewaySocket(
       denyHistory: denyHistory, modelThinkingLevels: modelThinkingLevels,

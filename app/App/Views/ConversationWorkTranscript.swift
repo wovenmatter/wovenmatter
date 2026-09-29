@@ -67,6 +67,12 @@ struct ConversationWorkTranscript: View {
     }
 
     var body: some View {
+        let activities = self.activities
+        let content = ConversationWorkTranscriptPresentation(
+            runStatus: run.status,
+            runError: run.error,
+            hasVisibleActivities: activities.contains { $0.kind != .fileChange }
+        )
         // Lost receipts can have no assistant output or tool activity at all.
         // Keep the recovery state visible independently of the work disclosure.
         if run.status == "uncertain" {
@@ -81,57 +87,77 @@ struct ConversationWorkTranscript: View {
             .foregroundStyle(DashboardPalette.mutedForeground)
             .fixedSize(horizontal: false, vertical: true)
         }
-        if activities.contains(where: { $0.kind != .fileChange }) {
+        if content.isVisible {
             VStack(alignment: .leading, spacing: 0) {
-                Button {
-                    transcriptInteraction()
-                    expanded.toggle()
-                } label: {
-                    HStack(spacing: 7) {
-                        elapsedLabel
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 11, weight: .semibold))
-                            .rotationEffect(.degrees(expanded ? 90 : 0))
-                        Spacer(minLength: 0)
+                if content.hasVisibleActivities {
+                    Button {
+                        transcriptInteraction()
+                        expanded.toggle()
+                    } label: {
+                        HStack(spacing: 7) {
+                            elapsedLabel
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 11, weight: .semibold))
+                                .rotationEffect(.degrees(expanded ? 90 : 0))
+                            Spacer(minLength: 0)
+                        }
+                        .contentShape(Rectangle())
                     }
-                    .contentShape(Rectangle())
+                    .buttonStyle(ConversationElapsedButtonStyle())
+                    .foregroundStyle(DashboardPalette.mutedForeground)
+                    .accessibilityValue(expanded ? "Expanded" : "Collapsed")
+                } else {
+                    HStack(spacing: 7) {
+                        DashboardLucideIcon(glyph: .alertCircle, size: 13)
+                        elapsedLabel
+                    }
+                    .foregroundStyle(DashboardPalette.danger)
                 }
-                .buttonStyle(ConversationElapsedButtonStyle())
-                .foregroundStyle(DashboardPalette.mutedForeground)
-                .accessibilityValue(expanded ? "Expanded" : "Collapsed")
 
-                Divider()
-                    .overlay(DashboardPalette.foreground.opacity(0.10))
-                    .padding(.top, 12)
+                // Failure belongs to the run, not to its optional work history.
+                // Keep it visible even when that history is empty or collapsed.
+                if let failureMessage = content.failureMessage {
+                    Text(RemoteNoteEditEnvelope.redactingEnvelopes(in: failureMessage))
+                        .font(.system(size: 13))
+                        .foregroundStyle(DashboardPalette.danger)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, 8)
+                }
 
-                if expanded {
-                    let activities = self.activities
-                    let timelineItems = timelineItems(for: activities)
-                    ConversationBoundedTranscript {
-                        VStack(alignment: .leading, spacing: 10) {
-                            ForEach(timelineItems) { item in
-                                if item.activities.first?.kind == .tool {
-                                    ConversationToolGroup(
-                                        activities: item.activities,
-                                        runStatus: run.status
-                                    )
-                                } else if let activity = item.activities.first {
-                                    if activity.kind == .assistant {
-                                        ConversationMarkdown(
-                                            document: ConversationMarkdownDocument(RemoteNoteEditEnvelope.redactingEnvelopes(in: activity.content ?? "")),
-                                            isStreaming: false
+                if content.hasVisibleActivities {
+                    Divider()
+                        .overlay(DashboardPalette.foreground.opacity(0.10))
+                        .padding(.top, 12)
+
+                    if expanded {
+                        let timelineItems = timelineItems(for: activities)
+                        ConversationBoundedTranscript {
+                            VStack(alignment: .leading, spacing: 10) {
+                                ForEach(timelineItems) { item in
+                                    if item.activities.first?.kind == .tool {
+                                        ConversationToolGroup(
+                                            activities: item.activities,
+                                            runStatus: run.status
                                         )
-                                        .textSelection(.enabled)
-                                    } else {
-                                        ConversationActivityRow(activity: activity, runStatus: run.status)
+                                    } else if let activity = item.activities.first {
+                                        if activity.kind == .assistant {
+                                            ConversationMarkdown(
+                                                document: ConversationMarkdownDocument(RemoteNoteEditEnvelope.redactingEnvelopes(in: activity.content ?? "")),
+                                                isStreaming: false
+                                            )
+                                            .textSelection(.enabled)
+                                        } else {
+                                            ConversationActivityRow(activity: activity, runStatus: run.status)
+                                        }
                                     }
                                 }
                             }
                         }
+                        .padding(.top, 14)
+                        .padding(.leading, 18)
+                        .transition(reduceMotion ? .identity : .opacity)
                     }
-                    .padding(.top, 14)
-                    .padding(.leading, 18)
-                    .transition(reduceMotion ? .identity : .opacity)
                 }
             }
         }
@@ -160,8 +186,12 @@ struct ConversationWorkTranscript: View {
         Self.visibleActivities(in: records, commentaryIDs: commentaryIDs)
     }
 
-    static func hasVisibleActivities(in records: [WorkspaceRunActivityRecord], commentaryIDs: Set<String>) -> Bool {
-        visibleActivities(in: records, commentaryIDs: commentaryIDs).contains { $0.kind != .fileChange }
+    static func hasVisibleContent(run: WorkspaceRunRecord, in records: [WorkspaceRunActivityRecord], commentaryIDs: Set<String>) -> Bool {
+        ConversationWorkTranscriptPresentation(
+            runStatus: run.status,
+            runError: run.error,
+            hasVisibleActivities: visibleActivities(in: records, commentaryIDs: commentaryIDs).contains { $0.kind != .fileChange }
+        ).isVisible
     }
 
     private static func visibleActivities(in records: [WorkspaceRunActivityRecord], commentaryIDs: Set<String>) -> [AgentRunActivity] {

@@ -37,15 +37,15 @@ enum UsageStoreError: LocalizedError {
 
 /// Woven Matter's durable, normalized usage index. Provider and harness stores
 /// remain provenance; this database is the query surface and local history.
-final class UsageStore: @unchecked Sendable {
+final class UsageStore {
   private static let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
   private var connection: OpaquePointer?
   private var transactionInvalidated = false
 
-  init(databaseURL: URL) throws {
+  init(databaseURL: URL, readOnly: Bool = false) throws {
     var database: OpaquePointer?
-    let flags = SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX
+    let flags = (readOnly ? SQLITE_OPEN_READONLY : SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE) | SQLITE_OPEN_FULLMUTEX
     guard sqlite3_open_v2(databaseURL.path, &database, flags, nil) == SQLITE_OK,
           let database else {
       let message = database.map { String(cString: sqlite3_errmsg($0)) }
@@ -55,9 +55,14 @@ final class UsageStore: @unchecked Sendable {
     }
     connection = database
     do {
+      if readOnly {
+        try execute("PRAGMA query_only = ON")
+        try execute("PRAGMA busy_timeout = 5000")
+        return
+      }
+      try execute("PRAGMA busy_timeout = 5000")
       try execute("PRAGMA journal_mode = WAL")
       try execute("PRAGMA foreign_keys = ON")
-      try execute("PRAGMA busy_timeout = 5000")
       try migrate()
     } catch {
       sqlite3_close(database)
@@ -840,5 +845,43 @@ final class UsageStore: @unchecked Sendable {
   private func optionalDouble(_ statement: OpaquePointer, _ index: Int32) -> Double? {
     guard sqlite3_column_type(statement, index) != SQLITE_NULL else { return nil }
     return sqlite3_column_double(statement, index)
+  }
+}
+
+extension UsageStore {
+
+  /// A coherent snapshot for multi-query reads, with cooperative SQLite query
+  /// interruption. query_only additionally rejects accidental writes on readers.
+  func readSnapshot<T>(context: DatabaseJobContext, _ operation: () throws -> T) throws -> T {
+    guard let connection else { throw UsageStoreError.step("Database is closed") }
+    let pointer = Unmanaged.passUnretained(context).toOpaque()
+    sqlite3_progress_handler(connection, 1_000, { pointer in
+      guard let pointer else { return 0 }
+      do { try Unmanaged<DatabaseJobContext>.fromOpaque(pointer).takeUnretainedValue().check(); return 0 }
+      catch { return 1 }
+    }, pointer)
+    sqlite3_busy_handler(connection, { pointer, attempt in
+      guard let pointer, attempt < 500 else { return 0 }
+      do { try Unmanaged<DatabaseJobContext>.fromOpaque(pointer).takeUnretainedValue().check() }
+      catch { return 0 }
+      sqlite3_sleep(10)
+      return 1
+    }, pointer)
+    defer {
+      sqlite3_progress_handler(connection, 0, nil, nil)
+      sqlite3_busy_timeout(connection, 5000)
+    }
+    try execute("BEGIN DEFERRED")
+    do {
+      let value = try operation()
+      try context.check()
+      try execute("COMMIT")
+      return value
+    } catch {
+      sqlite3_progress_handler(connection, 0, nil, nil)
+      try? execute("ROLLBACK")
+      try context.check()
+      throw error
+    }
   }
 }

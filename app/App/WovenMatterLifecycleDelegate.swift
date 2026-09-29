@@ -32,16 +32,22 @@ final class WovenMatterLifecycleDelegate: NSObject, NSApplicationDelegate {
         if model.isPreparedForExecutionRestart { return .terminateNow }
         guard !terminating else { return .terminateLater }
         terminating = true
+        model.suspendNoteEditing()
         if LocalExecutionRole.current == .frontend {
             Task {
                 let flushed = await model.flushNotesBeforeBackendClientQuit()
-                if !flushed { terminating = false }
+                if !flushed { terminating = false; model.resumeNoteEditing() }
                 sender.reply(toApplicationShouldTerminate: flushed)
             }
             return .terminateLater
         }
-        model.flushNoteDrafts()
         Task {
+            guard await model.flushNotesBeforeBackendClientQuit() else {
+                terminating = false
+                model.resumeNoteEditing()
+                sender.reply(toApplicationShouldTerminate: false)
+                return
+            }
             do {
                 try await model.prepareOpenCodeInstancesToQuit()
                 sender.reply(toApplicationShouldTerminate: true)
@@ -58,6 +64,7 @@ final class WovenMatterLifecycleDelegate: NSObject, NSApplicationDelegate {
                 alert.addButton(withTitle: "Quit anyway")
                 let quit = alert.runModal() == .alertSecondButtonReturn
                 terminating = false
+                if !quit { model.resumeNoteEditing() }
                 sender.reply(toApplicationShouldTerminate: quit)
                 if !quit { await model.restoreOpenCodeInstances() }
             }
@@ -66,7 +73,7 @@ final class WovenMatterLifecycleDelegate: NSObject, NSApplicationDelegate {
     }
     func applicationWillTerminate(_ notification: Notification) {
         if LocalExecutionRole.current == .backend {
-            model?.flushNoteDrafts()
+            // The asynchronous termination barrier already flushed note drafts.
             model?.shutdownLocalACPSessions()
         }
     }

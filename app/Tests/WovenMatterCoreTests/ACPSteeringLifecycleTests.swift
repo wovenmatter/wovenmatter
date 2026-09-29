@@ -8,7 +8,7 @@ import WovenMatterCore
 @Suite(.timeLimit(.minutes(1)))
 struct ACPSteeringLifecycleTests {
     @Test func persistenceFailurePreventsNativeDispatch() async throws {
-        let f = try SteeringFixture()
+        let f = try await SteeringFixture()
         defer { f.remove() }
         _ = try await f.start()
         await f.driver.waitForPrompt()
@@ -21,7 +21,7 @@ struct ACPSteeringLifecycleTests {
             try await f.coordinator.sendActiveInput(conversationID: f.id, content: "correction")
         }
         #expect(await f.driver.received.isEmpty)
-        #expect(try f.messages().filter { $0.role == "user" }.map(\.content) == ["start"])
+        #expect(try await f.messages().filter { $0.role == "user" }.map(\.content) == ["start"])
         await f.driver.finishInitial()
         try await f.waitForTerminal()
         await f.coordinator.shutdown()
@@ -29,55 +29,55 @@ struct ACPSteeringLifecycleTests {
 
     @Test(arguments: ["uncertain", "uncertain-acp-relay", "uncertain-pi-relay"])
     func uncertainNativeReceiptKeepsTheDurableInput(text: String) async throws {
-        let f = try SteeringFixture()
+        let f = try await SteeringFixture()
         defer { f.remove() }
         _ = try await f.start()
         await f.driver.waitForPrompt()
         await f.driver.setBeforeAdmission {
-            let messages = try f.messages()
+            let messages = try await f.messages()
             #expect(messages.last(where: { $0.role == "user" })?.content == text)
         }
         let input = try await f.coordinator.sendActiveInput(conversationID: f.id, content: text)
-        #expect(try f.messages().contains { $0.id == input.userMessageID })
+        #expect(try await f.messages().contains { $0.id == input.userMessageID })
         await f.driver.finishInitial()
         try await f.waitForTerminal()
-        #expect(try f.messages().last?.status == "failed")
+        #expect(try await f.messages().last?.status == "failed")
         await f.coordinator.shutdown()
     }
 
     @Test func revokingToolAccessAfterDispatchDoesNotDiscardAnAcceptedInput() async throws {
-        let f = try SteeringFixture()
+        let f = try await SteeringFixture()
         defer { f.remove() }
         _ = try await f.start()
         await f.driver.waitForPrompt()
-        let source = try f.database.createLocalACPSession(runtimeKind: .codex, title: "Source", ownerDeviceID: UUID())
-        try f.database.setSessionTools(.init(enabled: [.sessions]), sessionID: source)
+        let source = try await f.database.createLocalACPSession(runtimeKind: .codex, title: "Source", ownerDeviceID: UUID())
+        try await f.database.setSessionTools(.init(enabled: [.sessions]), sessionID: source)
         let deliveryID = UUID().uuidString.lowercased()
-        _ = try f.database.reserveToolDelivery(sourceID: source, targetID: f.id, text: "correction", requestID: deliveryID)
-        _ = try f.database.claimToolDelivery(id: deliveryID)
+        _ = try await f.database.reserveToolDelivery(sourceID: source, targetID: f.id, text: "correction", requestID: deliveryID)
+        _ = try await f.database.claimToolDelivery(id: deliveryID)
         await f.driver.setBeforeAdmission {
-            #expect(try f.database.toolDelivery(id: deliveryID)?.status == "accepted")
-            try f.database.setSessionTools(.init(enabled: []), sessionID: source)
+            #expect(try await f.database.toolDelivery(id: deliveryID)?.status == "accepted")
+            try await f.database.setSessionTools(.init(enabled: []), sessionID: source)
         }
         _ = try await f.coordinator.sendActiveInput(conversationID: f.id,
             input: .init(text: "correction", historyDeliveryID: deliveryID))
-        #expect(try f.messages().filter { $0.role == "user" }.map(\.content) == ["start", "correction"])
+        #expect(try await f.messages().filter { $0.role == "user" }.map(\.content) == ["start", "correction"])
         await f.driver.finishInitial()
         try await f.waitForTerminal()
         await f.coordinator.shutdown()
     }
     @Test(arguments: [false, true])
     func toolDeliveryAuthorityIsCheckedBeforeNativeSteering(revoked: Bool) async throws {
-        let f = try SteeringFixture()
+        let f = try await SteeringFixture()
         defer { f.remove() }
         _ = try await f.start()
         await f.driver.waitForPrompt()
-        let source = try f.database.createLocalACPSession(runtimeKind: .codex, title: "Source", ownerDeviceID: UUID())
-        try f.database.setSessionTools(.init(enabled: [.sessions]), sessionID: source)
+        let source = try await f.database.createLocalACPSession(runtimeKind: .codex, title: "Source", ownerDeviceID: UUID())
+        try await f.database.setSessionTools(.init(enabled: [.sessions]), sessionID: source)
         let deliveryID = UUID().uuidString.lowercased()
-        _ = try f.database.reserveToolDelivery(sourceID: source, targetID: f.id, text: "correction", requestID: deliveryID)
-        _ = try f.database.claimToolDelivery(id: deliveryID)
-        if revoked { try f.database.setSessionTools(.init(enabled: []), sessionID: source) }
+        _ = try await f.database.reserveToolDelivery(sourceID: source, targetID: f.id, text: "correction", requestID: deliveryID)
+        _ = try await f.database.claimToolDelivery(id: deliveryID)
+        if revoked { try await f.database.setSessionTools(.init(enabled: []), sessionID: source) }
         let input = AgentMessageInput(text: "correction", historyDeliveryID: deliveryID)
         if revoked {
             await #expect(throws: WorkspaceToolError.self) {
@@ -87,14 +87,14 @@ struct ACPSteeringLifecycleTests {
         } else {
             _ = try await f.coordinator.sendActiveInput(conversationID: f.id, input: input)
             #expect(await f.driver.received == ["correction"])
-            #expect(try f.database.toolDelivery(id: deliveryID)?.status == "accepted")
+            #expect(try await f.database.toolDelivery(id: deliveryID)?.status == "accepted")
         }
         await f.driver.finishInitial()
         try await f.waitForTerminal()
         await f.coordinator.shutdown()
     }
     @Test func outputAndDecisionBeforeAdmissionDoNotDeadlockOrLeakAcrossSegments() async throws {
-        let f = try SteeringFixture()
+        let f = try await SteeringFixture()
         defer { f.remove() }
         _ = try await f.start()
         await f.driver.waitForPrompt()
@@ -104,19 +104,19 @@ struct ACPSteeringLifecycleTests {
         }
         await f.driver.finishInitial()
         try await f.waitForTerminal()
-        #expect(try f.messages().filter { $0.role == "user" }.map(\.content) == ["start", "preflight"])
-        #expect(try f.messages().filter { $0.role == "assistant" }.map(\.content) == ["before", "accepted outputrejected output"])
+        #expect(try await f.messages().filter { $0.role == "user" }.map(\.content) == ["start", "preflight"])
+        #expect(try await f.messages().filter { $0.role == "assistant" }.map(\.content) == ["before", "accepted outputrejected output"])
         await f.coordinator.shutdown()
     }
     @Test func repeatedSteersKeepOneRunAndRejectedInputDoesNotEnterHistory() async throws {
-        let f = try SteeringFixture()
+        let f = try await SteeringFixture()
         defer { f.remove() }
         let run = try await f.start()
         await f.driver.waitForPrompt()
         await #expect(throws: LocalACPSessionDatabaseError.steeringUnsupported) {
             try await f.coordinator.sendActiveInput(conversationID: f.id, content: "reject")
         }
-        #expect(try f.messages().filter { $0.role == "user" }.map(\.content) == ["start"])
+        #expect(try await f.messages().filter { $0.role == "user" }.map(\.content) == ["start"])
         // A rejected boundary must leave cumulative snapshot replacement intact.
         try await f.driver.emit(.assistantSnapshot("before continued"))
         for text in ["first", "second", "third"] {
@@ -126,29 +126,29 @@ struct ACPSteeringLifecycleTests {
         }
         await f.driver.finishInitial()
         try await f.waitForTerminal()
-        #expect(try f.messages().filter { $0.role == "user" }.map(\.content) == ["start", "first", "second", "third"])
-        #expect(try f.messages().filter { $0.role == "assistant" }.map(\.content) == ["before continued", "reply to first", "reply to second", "reply to third"])
-        #expect(Set(try f.messages().compactMap(\.runID)) == [run.runID])
+        #expect(try await f.messages().filter { $0.role == "user" }.map(\.content) == ["start", "first", "second", "third"])
+        #expect(try await f.messages().filter { $0.role == "assistant" }.map(\.content) == ["before continued", "reply to first", "reply to second", "reply to third"])
+        #expect(Set(try await f.messages().compactMap(\.runID)) == [run.runID])
         await f.coordinator.shutdown()
     }
 
     @Test func originalCompletionDoesNotCloseAnAcceptedContinuation() async throws {
-        let f = try SteeringFixture()
+        let f = try await SteeringFixture()
         defer { f.remove() }
         _ = try await f.start()
         await f.driver.waitForPrompt()
         _ = try await f.coordinator.sendActiveInput(conversationID: f.id, content: "continuation")
         await f.driver.finishInitial()
         try await f.driver.emit(.assistantChunk("continued work"))
-        #expect(try f.database.activeDeviceOwnedConversationIDs().contains(f.id))
+        #expect(try await f.database.activeDeviceOwnedConversationIDs().contains(f.id))
         await f.driver.finishContinuation()
         try await f.waitForTerminal()
-        #expect(try f.messages().last?.content == "continued work")
+        #expect(try await f.messages().last?.content == "continued work")
         await f.coordinator.shutdown()
     }
 
     @Test func stopRejectsFurtherSteeringWithoutPersistingIt() async throws {
-        let f = try SteeringFixture()
+        let f = try await SteeringFixture()
         defer { f.remove() }
         _ = try await f.start()
         await f.driver.waitForPrompt()
@@ -156,7 +156,7 @@ struct ACPSteeringLifecycleTests {
         await #expect(throws: LocalACPSessionDatabaseError.steeringUnsupported) {
             try await f.coordinator.sendActiveInput(conversationID: f.id, content: "after stop")
         }
-        #expect(try f.messages().filter { $0.role == "user" }.map(\.content) == ["start"])
+        #expect(try await f.messages().filter { $0.role == "user" }.map(\.content) == ["start"])
         await f.driver.finishInitial()
         try await f.waitForTerminal()
         await f.coordinator.shutdown()
@@ -169,11 +169,11 @@ private struct SteeringFixture {
     let id: String
     let driver = SteeringDriver()
     let coordinator: LocalACPSessionCoordinator
-    init() throws {
+    init() async throws {
         root = FileManager.default.temporaryDirectory.appending(path: "steering-\(UUID())")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        database = try WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
-        id = try database.createLocalACPSession(runtimeKind: .codex, title: "Steering", ownerDeviceID: UUID())
+        database = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
+        id = try await database.createLocalACPSession(runtimeKind: .codex, title: "Steering", ownerDeviceID: UUID())
         let driver = driver
         coordinator = LocalACPSessionCoordinator(database: database, clientFactory: { _, _ in driver.makeDriver() })
     }
@@ -182,7 +182,7 @@ private struct SteeringFixture {
             launch: .init(runtimeKind: .codex, executableURL: URL(filePath: "/fixture"), arguments: []),
             workspace: .init(rootURL: root, repositoriesURL: root), onPermission: { _ in "allow" })
     }
-    func messages() throws -> [WorkspaceMessageRecord] { try database.conversationContent(id: id).messages }
+    func messages() async throws -> [WorkspaceMessageRecord] { try await database.conversationContent(id: id).messages }
     func execute(_ sql: String) throws {
         var connection: OpaquePointer?
         #expect(sqlite3_open(root.appending(path: "workspace.sqlite").path, &connection) == SQLITE_OK)
@@ -193,7 +193,7 @@ private struct SteeringFixture {
     }
     func waitForTerminal() async throws {
         for _ in 0..<500 {
-            if try !database.activeDeviceOwnedConversationIDs().contains(id) { return }
+            if try await !database.activeDeviceOwnedConversationIDs().contains(id) { return }
             try await Task.sleep(for: .milliseconds(10))
         }
         Issue.record("The steered run did not settle")
@@ -208,8 +208,8 @@ private actor SteeringDriver {
     var event: LocalACPClient.EventHandler?
     var permission: LocalACPClient.PermissionHandler?
     var received: [String] = []
-    var beforeAdmission: (@Sendable () throws -> Void)?
-    func setBeforeAdmission(_ action: @escaping @Sendable () throws -> Void) { beforeAdmission = action }
+    var beforeAdmission: (@Sendable () async throws -> Void)?
+    func setBeforeAdmission(_ action: @escaping @Sendable () async throws -> Void) { beforeAdmission = action }
     nonisolated func makeDriver() -> LocalACPSessionDriver {
         LocalACPSessionDriver(
             initializeSession: { _, _, _, _ in .init(sessionID: "native", loadedExistingSession: false, configuration: .init()) },
@@ -227,7 +227,7 @@ private actor SteeringDriver {
         return .endTurn
     }
     func steer(_ text: String) async throws -> LocalACPActiveInputReceipt {
-        try beforeAdmission?()
+        try await beforeAdmission?()
         received.append(text)
         if text == "uncertain-acp-relay" { throw LocalACPClientError.deliveryUncertain("Lost receipt") }
         if text == "uncertain-pi-relay" { throw PiRPCClientError.deliveryUncertain("Lost receipt") }

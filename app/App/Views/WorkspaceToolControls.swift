@@ -8,7 +8,7 @@ struct WorkspaceToolDefaultsCard: View {
         Binding(get: { tools.settings[keyPath: key] }, set: { value in
             var settings = tools.settings
             settings[keyPath: key] = value
-            tools.saveSettings(settings)
+            tools.saveSettingsFromUI(settings)
         })
     }
 
@@ -20,7 +20,7 @@ struct WorkspaceToolDefaultsCard: View {
                         Toggle(group.title, isOn: Binding(get: { tools.settings.enabledByDefault.contains(group) }, set: { enabled in
                             var settings = tools.settings
                             if enabled { settings.enabledByDefault.insert(group) } else { settings.enabledByDefault.remove(group) }
-                            tools.saveSettings(settings)
+                            tools.saveSettingsFromUI(settings)
                         }))
                         Spacer(minLength: 8)
                         if group == .calendar {

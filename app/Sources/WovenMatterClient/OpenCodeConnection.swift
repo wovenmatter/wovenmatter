@@ -105,13 +105,13 @@ public struct OpenCodeHTTPClient: Sendable {
         return copy
     }
     private func record(_ direction: String, method: String, path: String,
-                        query: [String: String], data: Data, status: Int? = nil) throws {
+                        query: [String: String], data: Data, status: Int? = nil) async throws {
         guard let historyRecorder else { return }
         // Headers and endpoint credentials are deliberately absent. The original
         // body and SSE framing are retained verbatim, including unknown fields.
         let frame = WorkspaceHTTPObservation(method: method, path: path, query: query,
             status: status, body: String(decoding: data, as: UTF8.self))
-        try historyRecorder(direction, JSONEncoder().encode(frame))
+        try await historyRecorder(direction, JSONEncoder().encode(frame))
     }
     public func request(_ method: String = "GET", _ path: String,
                         query: [String: String] = [:], body: OpenCodeValue? = nil) throws -> URLRequest {
@@ -133,9 +133,13 @@ public struct OpenCodeHTTPClient: Sendable {
         return request
     }
     public func call(_ method: String = "GET", _ path: String,
-                     query: [String: String] = [:], body: OpenCodeValue? = nil) async throws -> OpenCodeValue {
+                     query: [String: String] = [:], body: OpenCodeValue? = nil,
+                     dispatchFence: AgentDispatchFence? = nil) async throws -> OpenCodeValue {
+        try dispatchFence?.check()
         let request = try request(method, path, query: query, body: body)
-        try record("out", method: method, path: path, query: query, data: request.httpBody ?? Data())
+        try await record("out", method: method, path: path, query: query, data: request.httpBody ?? Data())
+        try Task.checkCancellation()
+        try dispatchFence?.claimDispatch()
         let (bytes, response) = try await session.bytes(for: request)
         defer { bytes.task.cancel() }
         var data = Data()
@@ -145,7 +149,7 @@ public struct OpenCodeHTTPClient: Sendable {
             data.append(byte)
         }
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-        try record("in", method: method, path: path, query: query, data: data, status: status)
+        try await record("in", method: method, path: path, query: query, data: data, status: status)
         guard (200...299).contains(status) else { throw OpenCodeError.http(status) }
         return data.isEmpty ? .null : try OpenCodeValue.decode(data)
     }
@@ -182,7 +186,7 @@ public struct OpenCodeHTTPClient: Sendable {
         // HTTP snapshots retain their short timeout; stream silence is not a
         // connection failure. A closed socket still triggers normal recovery.
         request.timeoutInterval = 86_400
-        try record("out", method: "GET", path: path, query: query, data: Data())
+        try await record("out", method: "GET", path: path, query: query, data: Data())
         let (bytes, response) = try await session.bytes(for: request)
         defer { bytes.task.cancel() }
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
@@ -198,16 +202,16 @@ public struct OpenCodeHTTPClient: Sendable {
                 try Task.checkCancellation()
                 raw.append(byte)
                 if byte == 10 || raw.count >= 16_384 {
-                    try record("in", method: "GET", path: path, query: query, data: raw, status: http.statusCode)
+                    try await record("in", method: "GET", path: path, query: query, data: raw, status: http.statusCode)
                     raw.removeAll(keepingCapacity: true)
                 }
                 for value in try parser.append(byte) { try await receive(value) }
             }
         } catch {
-            if !raw.isEmpty { try record("in", method: "GET", path: path, query: query, data: raw, status: http.statusCode) }
+            if !raw.isEmpty { try await record("in", method: "GET", path: path, query: query, data: raw, status: http.statusCode) }
             throw error
         }
-        if !raw.isEmpty { try record("in", method: "GET", path: path, query: query, data: raw, status: http.statusCode) }
+        if !raw.isEmpty { try await record("in", method: "GET", path: path, query: query, data: raw, status: http.statusCode) }
         // A partial frame is never accepted or acknowledged at EOF.
         if parser.hasPartialFrame { throw OpenCodeError.malformedStream }
     }

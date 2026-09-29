@@ -4,6 +4,39 @@ import WovenMatterCore
 @testable import WovenMatterClient
 
 struct OpenCodeWireCaptureTests {
+  @Test func stoppedApprovalCannotCrossAnAwaitingHistoryWrite() async throws {
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.protocolClasses = [CaptureFixtureProtocol.self]
+    let session = URLSession(configuration: configuration)
+    defer { session.invalidateAndCancel() }
+    let gate = ApprovalWriteGate()
+    let fence = AgentDispatchFence()
+    let connection = try OpenCodeConnection(identity: "approval-wire", url: URL(string: "http://fixture.invalid")!, password: "fixture")
+    let client = OpenCodeHTTPClient(connection: connection, session: session).recording { direction, _ in
+      if direction == "out" { await gate.pause() }
+    }
+    let reply = Task { try await client.call("POST", "/api/session/s/permission/p/reply",
+      body: ["reply": "once"], dispatchFence: fence) }
+    await gate.entered()
+    fence.cancel()
+    await gate.release()
+    await #expect(throws: CancellationError.self) { try await reply.value }
+    #expect(!fence.hasDispatched)
+    // Native denial remains a usable mutation even after affirmative work stops.
+    let denied = try await OpenCodeHTTPClient(connection: connection, session: session)
+      .call("POST", "/api/session/s/permission/p/reply", body: ["reply": "reject"])
+    #expect(denied["future_response"].bool)
+  }
+
+  @Test func onlyAffirmativePermissionAndFormRepliesNeedAnActiveTurn() {
+    for answer in ["once", "always", "unknown"] {
+      #expect(OpenCodePermissionHandling.requiresActiveTurn(method: "POST", suffix: "/permission/p/reply", body: ["reply": .string(answer)]))
+    }
+    #expect(!OpenCodePermissionHandling.requiresActiveTurn(method: "POST", suffix: "/permission/p/reply", body: ["reply": "reject"]))
+    #expect(OpenCodePermissionHandling.requiresActiveTurn(method: "POST", suffix: "/form/f/reply", body: ["answer": "yes"]))
+    #expect(!OpenCodePermissionHandling.requiresActiveTurn(method: "POST", suffix: "/form/f/cancel", body: nil))
+  }
+
   @Test func preservesUnknownHTTPAndSSEFieldsWithoutCredentials() async throws {
     let configuration = URLSessionConfiguration.ephemeral
     configuration.protocolClasses = [CaptureFixtureProtocol.self]
@@ -49,4 +82,17 @@ private final class CaptureFixtureProtocol: URLProtocol, @unchecked Sendable {
     client?.urlProtocol(self, didLoad: Data((stream ? Self.stream : failure ? "{\"error\":\"fixture rejection\"}" : "{\"future_response\":true}").utf8))
     client?.urlProtocolDidFinishLoading(self)
   }
+}
+
+private actor ApprovalWriteGate {
+  private var waiting: CheckedContinuation<Void, Never>?
+  private var observers: [CheckedContinuation<Void, Never>] = []
+  func pause() async {
+    await withCheckedContinuation { waiting = $0; observers.forEach { $0.resume() }; observers.removeAll() }
+  }
+  func entered() async {
+    if waiting != nil { return }
+    await withCheckedContinuation { observers.append($0) }
+  }
+  func release() { waiting?.resume(); waiting = nil }
 }

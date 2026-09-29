@@ -41,7 +41,12 @@ export function createTaskExecutor({ catalog,workspaceRoot,environment,defaultAg
   return async ({run,nativeSessionID,signal,publish,bindSession}) => {
     const config = run.task.configuration
     if (signal.aborted) throw before('Background execution was turned off.')
-    if (config.runtimeKind === 'default_agent') return runBuiltIn({run,nativeSessionID,signal,publish,bindSession,defaultAgent,workspaceRoot})
+    if (config.runtimeKind === 'default_agent') {
+      // Hold admission through session setup and the completed run. An SDK update
+      // must not rotate the worker between load/configuration/prompt requests.
+      const execute = () => runBuiltIn({run,nativeSessionID,signal,publish,bindSession,defaultAgent,workspaceRoot})
+      return defaultAgent.withRuntimeLease ? defaultAgent.withRuntimeLease(execute) : execute()
+    }
     if (['pi','hermes','opencode'].includes(config.runtimeKind)) {
       if (!await isEnabled(config.runtimeKind)) throw before('This agent is disabled in the workspace.')
       return native({run,nativeSessionID,signal,publish,bindSession})

@@ -6,14 +6,14 @@ import WovenMatterDashboardStore
 extension ApplicationModel {
     /// Workspace identity includes its host. Local folders and remote paths must
     /// never accidentally share a permissions or model default.
-    func sessionSelectionContext(conversationID: String) throws -> (harness: String, workspace: String) {
+    func sessionSelectionContext(conversationID: String) async throws -> (harness: String, workspace: String) {
         if let captured = sessionSelectionPreferences.conversation(id: conversationID) {
-            return (captured.harness, try sessionSelectionWorkspaceID?(conversationID) ?? captured.workspace)
+            return await (captured.harness, try sessionSelectionWorkspaceID?(conversationID) ?? captured.workspace)
         }
         guard let dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
-        let session = try dashboardStore.database.localACPSession(conversationID: conversationID)
+        let session = try await dashboardStore.database.localACPSession(conversationID: conversationID)
         let workspace: String
-        if let resolved = try sessionSelectionWorkspaceID?(conversationID) {
+        if let resolved = try await sessionSelectionWorkspaceID?(conversationID) {
             workspace = resolved
         } else if let remote = session.remoteWorkspaceID {
             workspace = "remote:" + remote.uuidString.lowercased()
@@ -37,9 +37,9 @@ extension ApplicationModel {
         }
 
         guard let dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
-        let context = try sessionSelectionContext(conversationID: conversationID)
-        let native = try dashboardStore.database.localACPSession(conversationID: conversationID)
-        _ = sessionSelectionPreferences.captureConversation(
+        let context = try await sessionSelectionContext(conversationID: conversationID)
+        let native = try await dashboardStore.database.localACPSession(conversationID: conversationID)
+        _ = await sessionSelectionPreferences.captureConversation(
             id: conversationID, harness: context.harness, workspace: context.workspace,
             selections: SessionSelections(),
             nativeFallback: SessionSelections(model: native.model, thinking: native.thinking,
@@ -93,17 +93,17 @@ extension ApplicationModel {
                 confirmedMetadata = metadata
             }
         } else {
-            let native = try dashboardStore.database.localACPSession(conversationID: conversationID)
+            let native = try await dashboardStore.database.localACPSession(conversationID: conversationID)
             // An unlinked OpenClaw chat will apply its captured native settings
             // after the gateway is linked, rather than treating a DB write as a patch.
             if native.runtimeKind == .openclaw { return }
             let permission = native.runtimeKind == .pi ? nil : desired.permission
             if desired.model != nil || desired.thinking != nil || permission != nil {
-                guard let conversation = try dashboardStore.database.workspaceOverview().conversations
+                guard let conversation = try await dashboardStore.database.workspaceOverview().conversations
                     .first(where: { $0.id == conversationID }) else {
                     throw LocalACPSessionDatabaseError.sessionNotFound
                 }
-                let context = try directACPLaunchContext(conversation: conversation,
+                let context = try await directACPLaunchContext(conversation: conversation,
                     runtimeKind: native.runtimeKind, isBuzzWorkspaceSession: native.buzzWorkspaceLinkID != nil)
                 // Configure the actual session, including a retained native client.
                 // A DB seed alone cannot prove that its next prompt uses these values.
@@ -128,10 +128,10 @@ extension ApplicationModel {
             guard let applyInitialSessionToolIDs else {
                 throw ApplicationModelError.unavailableSessionTools
             }
-            try applyInitialSessionToolIDs(conversationID, tools)
+            try await applyInitialSessionToolIDs(conversationID, tools)
         }
         if let metadata = confirmedMetadata {
-            sessionSelectionPreferences.replaceConfirmedSelections(id: conversationID,
+            await sessionSelectionPreferences.replaceConfirmedSelections(id: conversationID,
                 selections: SessionSelections(model: metadata.model, thinking: metadata.thinking,
                     permission: metadata.permission, tools: currentSessionToolIDs?(conversationID) ?? saved.selections.tools))
         }
@@ -172,15 +172,15 @@ extension ApplicationModel {
         return true
     }
 
-    func recordConfirmedSessionSelections(conversationID: String, metadata: LocalACPSessionMetadata) {
+    func recordConfirmedSessionSelections(conversationID: String, metadata: LocalACPSessionMetadata) async {
         if isBackendFrontend {
             // Confirmation belongs to the execution owner; a stale UI snapshot must
             // never overwrite newer backend model/permission preferences.
             return
         }
 
-        guard let context = try? sessionSelectionContext(conversationID: conversationID) else { return }
-        let selections = SessionSelections(model: metadata.model, thinking: metadata.thinking,
+        guard let context = try? await sessionSelectionContext(conversationID: conversationID) else { return }
+        let selections = await SessionSelections(model: metadata.model, thinking: metadata.thinking,
             permission: context.harness == AgentRuntimeKind.pi.rawValue ? nil : metadata.permission,
             tools: currentSessionToolIDs?(conversationID)
                 ?? sessionSelectionPreferences.conversation(id: conversationID)?.selections.tools)

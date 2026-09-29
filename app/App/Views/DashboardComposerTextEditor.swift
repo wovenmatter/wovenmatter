@@ -81,12 +81,7 @@ struct DashboardComposerTextEditor: NSViewRepresentable {
         nsView: DashboardComposerScrollView,
         context: Context
     ) -> CGSize? {
-        let width = proposal.width ?? nsView.frame.width
-        guard width > 0 else { return nil }
-        nsView.frame.size.width = width
-        nsView.layoutSubtreeIfNeeded()
-        nsView.updateDocumentLayout()
-        return CGSize(width: width, height: nsView.preferredHeight)
+        nsView.fittingSize(for: proposal)
     }
 
     @MainActor
@@ -216,6 +211,17 @@ final class DashboardComposerScrollView: NSScrollView {
 
     let composerTextView = DashboardComposerNativeTextView()
 
+    // SwiftUI also probes with infinity and huge finite sentinels. Such values
+    // cannot describe a real text viewport and must never reach NSView geometry.
+    private static let maximumMeasurementWidth: CGFloat = 1_000_000
+    private static let initialMeasurementWidth: CGFloat = 320
+    private let measurementStorage = NSTextStorage()
+    private let measurementLayoutManager = NSLayoutManager()
+    private let measurementContainer = NSTextContainer(
+        containerSize: NSSize(width: 1, height: CGFloat.greatestFiniteMagnitude)
+    )
+    private var isUpdatingDocumentLayout = false
+
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         configure()
@@ -228,6 +234,39 @@ final class DashboardComposerScrollView: NSScrollView {
 
     var preferredHeight: CGFloat {
         min(max(naturalDocumentHeight, Self.minimumHeight), maximumHeight)
+    }
+
+    func fittingSize(for proposal: ProposedViewSize) -> CGSize {
+        let width = Self.measurementWidth(proposal.width)
+            ?? Self.measurementWidth(bounds.width)
+            ?? Self.initialMeasurementWidth
+        guard let storage = composerTextView.textStorage else {
+            return CGSize(width: width, height: Self.minimumHeight)
+        }
+        // Measurement has its own reusable TextKit objects. Probing a different
+        // width must not resize the mounted editor, move its selection, or force
+        // another native layout pass while SwiftUI is choosing a size.
+        if !measurementStorage.isEqual(to: storage) {
+            measurementStorage.setAttributedString(storage)
+        }
+        let padding = composerTextView.textContainer?.lineFragmentPadding ?? 0
+        if measurementContainer.lineFragmentPadding != padding {
+            measurementContainer.lineFragmentPadding = padding
+        }
+        let size = NSSize(
+            width: max(1, width - composerTextView.textContainerInset.width * 2),
+            height: CGFloat.greatestFiniteMagnitude
+        )
+        if measurementContainer.containerSize != size {
+            measurementContainer.containerSize = size
+        }
+        let naturalHeight = documentHeight(using: measurementLayoutManager, in: measurementContainer)
+        return CGSize(width: width, height: min(max(naturalHeight, Self.minimumHeight), maximumHeight))
+    }
+
+    private static func measurementWidth(_ width: CGFloat?) -> CGFloat? {
+        guard let width, width.isFinite, width > 0, width <= maximumMeasurementWidth else { return nil }
+        return width
     }
 
     var hasVerticalOverflow: Bool {
@@ -254,25 +293,36 @@ final class DashboardComposerScrollView: NSScrollView {
     }
 
     func updateDocumentLayout() {
+        guard !isUpdatingDocumentLayout else { return }
         let viewport = contentSize
+        guard viewport.width.isFinite, viewport.width >= 0,
+              viewport.width <= Self.maximumMeasurementWidth,
+              viewport.height.isFinite, viewport.height >= 0 else { return }
+        isUpdatingDocumentLayout = true
+        defer { isUpdatingDocumentLayout = false }
         let width = max(viewport.width, 1)
+        var geometryChanged = false
         if composerTextView.frame.width != width {
             composerTextView.frame.size.width = width
+            geometryChanged = true
         }
-        composerTextView.textContainer?.containerSize = NSSize(
-            width: width,
-            height: CGFloat.greatestFiniteMagnitude
-        )
-        if let textContainer = composerTextView.textContainer {
-            composerTextView.layoutManager?.ensureLayout(for: textContainer)
+        let containerSize = NSSize(width: width, height: CGFloat.greatestFiniteMagnitude)
+        if let textContainer = composerTextView.textContainer,
+           textContainer.containerSize != containerSize {
+            textContainer.containerSize = containerSize
+            geometryChanged = true
         }
-        composerTextView.frame = NSRect(
+        let frame = NSRect(
             x: 0,
             y: 0,
             width: width,
             height: max(viewport.height, naturalDocumentHeight)
         )
-        reflectScrolledClipView(contentView)
+        if composerTextView.frame != frame {
+            composerTextView.frame = frame
+            geometryChanged = true
+        }
+        if geometryChanged { reflectScrolledClipView(contentView) }
     }
 
     private var naturalDocumentHeight: CGFloat {
@@ -280,11 +330,18 @@ final class DashboardComposerScrollView: NSScrollView {
               let textContainer = composerTextView.textContainer else {
             return Self.minimumHeight
         }
+        return documentHeight(using: layoutManager, in: textContainer)
+    }
+
+    private func documentHeight(using layoutManager: NSLayoutManager, in textContainer: NSTextContainer) -> CGFloat {
         layoutManager.ensureLayout(for: textContainer)
-        return ceil(
-            layoutManager.usedRect(for: textContainer).height
-                + composerTextView.textContainerInset.height * 2
-        )
+        var height = layoutManager.usedRect(for: textContainer).maxY
+        // A trailing newline has an empty caret line with no glyphs of its own.
+        // Include it identically in speculative measurement and native layout.
+        if layoutManager.extraLineFragmentTextContainer === textContainer {
+            height = max(height, layoutManager.extraLineFragmentRect.maxY)
+        }
+        return ceil(height + composerTextView.textContainerInset.height * 2)
     }
 
     private var maximumHeight: CGFloat {
@@ -300,6 +357,8 @@ final class DashboardComposerScrollView: NSScrollView {
     }
 
     private func configure() {
+        measurementStorage.addLayoutManager(measurementLayoutManager)
+        measurementLayoutManager.addTextContainer(measurementContainer)
         drawsBackground = false
         borderType = .noBorder
         hasVerticalScroller = false

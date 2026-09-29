@@ -124,6 +124,8 @@ test('replaced approval authority cannot be reused or redirected through another
 });
 
 for (const failure of ['receipt', 'poll', 'terminal']) test(`Built-in adapter distinguishes remote ${failure} outcome`, { timeout: 10000 }, async t => {
+  const directory = await mkdtemp('/tmp/woven-adapter-test-');
+  t.after(() => rm(directory, { recursive: true, force: true }));
   const mock = `globalThis.fetch = async (url, options) => {
     const body = options.body && JSON.parse(options.body);
     let result;
@@ -138,7 +140,9 @@ for (const failure of ['receipt', 'poll', 'terminal']) test(`Built-in adapter di
     return { ok: true, status: 200, json: async () => result };
   };`;
   const child = spawn(process.execPath, ['--import', 'data:text/javascript,' + encodeURIComponent(mock),
-    fileURLToPath(new URL('../src/main.mjs', import.meta.url)), '--remote'], { stdio: ['pipe', 'pipe', 'pipe'] });
+    fileURLToPath(new URL('../src/main.mjs', import.meta.url)), '--remote'], {
+      env: { ...process.env, WOVEN_DEFAULT_AGENT_DIRECTORY: directory }, stdio: ['pipe', 'pipe', 'pipe'],
+    });
   t.after(() => child.kill('SIGTERM'));
   const pending = new Map();
   const lines = createInterface({ input: child.stdout });

@@ -10,6 +10,27 @@ public struct DefaultAgentSettings: Codable, Equatable, Sendable {
     public var searchProvider = "exa"
     public var customServers: [LocalModelServer]?
     public init() {}
+
+    /// Apply a UI edit to the latest saved value without undoing a connection
+    /// added or removed while the edit was in flight to the background service.
+    public func applyingChanges(from base: Self, to edited: Self) -> Self {
+        var result = self
+        func merge(_ current: [String], _ original: [String], _ requested: [String]) -> [String] {
+            guard original != requested else { return current }
+            let oldIDs = Set(original), currentIDs = Set(current), requestedIDs = Set(requested)
+            var seen = Set<String>()
+            return (requested.filter { currentIDs.contains($0) || !oldIDs.contains($0) }
+                + current.filter { !oldIDs.contains($0) && !requestedIDs.contains($0) })
+                .filter { seen.insert($0).inserted }
+        }
+        result.providers = merge(providers, base.providers, edited.providers)
+        result.models = merge(models, base.models, edited.models)
+        result.fallbackModels = merge(fallbackModels, base.fallbackModels, edited.fallbackModels)
+        if base.defaultModel != edited.defaultModel { result.defaultModel = edited.defaultModel }
+        if base.searchProvider != edited.searchProvider { result.searchProvider = edited.searchProvider }
+        if base.customServers != edited.customServers { result.customServers = edited.customServers }
+        return result
+    }
 }
 
 public struct DefaultAgentSettingsScope: Codable, Equatable, Sendable {

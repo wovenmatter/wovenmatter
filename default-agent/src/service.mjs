@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { CredentialVault, sharedCredentials, sharedAccounts } from './vault.mjs';
 import { join } from 'node:path';
-import { appendFile, readFile, readdir } from 'node:fs/promises';
+import { appendFile, open, readFile, readdir } from 'node:fs/promises';
 import { DefaultAgentError, operationErrorMessage, readJSON, validateConfig, writePrivateJSON } from './config.mjs';
 import { PermissionRequests } from './permissions.mjs';
 
@@ -19,7 +19,7 @@ function verifyRetry(stored, fingerprint) {
 
 // Owned by the workspace service. Requests only attach to runs; disconnecting a
 // reader never cancels the SDK session. Journals support replay after reconnect.
-export function createDefaultAgentService({ cwd, directory, engineFactory, writeState = writePrivateJSON }) {
+export function createDefaultAgentService({ cwd, directory, engineFactory, writeState = writePrivateJSON, attachmentState }) {
   let enginePromise;
   const vault = new CredentialVault(directory);
   const epoch = crypto.randomUUID();
@@ -28,9 +28,9 @@ export function createDefaultAgentService({ cwd, directory, engineFactory, write
   let lastPromptStartedAt = 0;
   const operations = new Map();
   const admissions = new Map();
-  const attachmentTokens = new Map();
+  const attachmentTokens = new Map(attachmentState?.tokens);
   const admissionQueues = new Map();
-  const cancellationRevisions = new Map();
+  const cancellationRevisions = new Map(attachmentState?.cancellations);
   function admit(message, fingerprint) {
     if (!['session/load', 'session/prompt', '_session/steering', 'session/set_config_option'].includes(message.method)) return invokeOperation(message, fingerprint);
     const sessionID = message.params?.sessionId;
@@ -167,9 +167,13 @@ export function createDefaultAgentService({ cwd, directory, engineFactory, write
       try {
         await journal;
         if (journalError) throw journalError;
+        // Persist streamed output before publishing its completion receipt.
+        const file = await open(path, 'a', 0o600);
+        try { await file.sync(); } finally { await file.close(); }
         const record = e.sessions.get(operation.sessionID);
         const snapshot = { runID: message.params?._meta?.wovenRunID ?? id, content: operation.updates.filter(u => u.sessionUpdate === 'agent_message_chunk').map(u => u.content.text).join(''), error: operation.error, model: record?.selected };
         await writePrivateJSON(join(directory, `run-${id}.json`), { sessionID: operation.sessionID, startedAt: operation.startedAt, fingerprint, snapshot, result: operation.result, error: operation.error });
+        operations.delete(id);
       }
       catch { operation.error = 'The workspace could not save the completed run.'; }
       operation.done = true;
@@ -183,7 +187,7 @@ export function createDefaultAgentService({ cwd, directory, engineFactory, write
     const completion = await readJSON(join(directory, `run-${id}.json`), null);
     if (!completion) throw new Error('This run was interrupted when the workspace service stopped.');
     let updates = []; try { updates = (await readFile(join(directory, `run-${id}.jsonl`), 'utf8')).trim().split('\n').filter(Boolean).map(JSON.parse); } catch (error) { if (error.code !== 'ENOENT') throw error; }
-    return { updates: updates.slice(after, after + 200), cursor: Math.min(updates.length, after + 200), done: after + 200 >= updates.length, ...completion };
+    return { updates: updates.slice(after, after + 200), pendingPermissions: [], cursor: Math.min(updates.length, after + 200), done: after + 200 >= updates.length, ...completion };
   }
   async function cancelActive() {
     const running = [...operations.values()].filter(operation => !operation.done);
@@ -196,5 +200,23 @@ export function createDefaultAgentService({ cwd, directory, engineFactory, write
     cancellationRevisions.set(sessionID, (cancellationRevisions.get(sessionID) ?? 0) + 1);
     return (await engine()).handle('session/cancel', { sessionId: sessionID });
   }
-  return { engine, configure, invoke, poll, status, cancelActive, cancelSession };
+  let inFlight = 0, retiring = false;
+  const tracked = fn => async (...args) => {
+    if (retiring) throw new DefaultAgentError('The Built-in runtime is updating. Retry after it finishes.');
+    inFlight++;
+    try { return await fn(...args); } finally { inFlight--; }
+  };
+  // The proxy serializes admission while asking this question. Once retired,
+  // this generation cannot admit another prompt while the replacement starts.
+  function prepareRetirement() {
+    if (inFlight || admissions.size || admissionQueues.size || permissions.pending.size || [...operations.values()].some(operation => !operation.done)) return false;
+    retiring = true;
+    // Transfer ownership only after all calls and admissions have settled. The
+    // private worker channel preserves replaced-attachment fences across an SDK
+    // switch without writing bearer tokens into workspace files.
+    return { attachmentState: { tokens: [...attachmentTokens], cancellations: [...cancellationRevisions] } };
+  }
+  return { engine, configure: tracked(configure), invoke: tracked(invoke), poll: tracked(poll), status: tracked(status), cancelActive: tracked(cancelActive), cancelSession: tracked(cancelSession), prepareRetirement };
+
+
 }
