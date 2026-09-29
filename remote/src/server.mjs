@@ -1135,7 +1135,7 @@ export async function defaultAgentSDKRequest(request, response, service) {
   const controller = new AbortController()
   const abort = () => controller.abort()
   const disconnected = () => { if (!response.writableEnded) abort() }
-  const timeout = setTimeout(abort, body.action === 'update' ? 360_000 : 30_000)
+  const timeout = setTimeout(abort, body.action === 'update' ? 900_000 : 90_000)
   timeout.unref?.()
   request.once('aborted', abort)
   response.once('close', disconnected)
