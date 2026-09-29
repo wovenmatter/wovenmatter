@@ -462,8 +462,7 @@ final class OpenCodeModel {
         }
         if isBackendProjection { return try await backendCommand(.sessionCall(id, suffix, method, body)).value ?? .null }
         guard let link = links[id], isLocalSession(id) else { throw OpenCodeError.message("This is a saved transcript. Start a new OpenCode chat to continue.") }
-        let result = try await coordinator.call(connectionID: connectionID, method: method,
-            path: "/api/session/" + OpenCodeHTTPClient.segment(link.sessionID) + suffix, body: body)
+        let result = try await coordinator.sessionCall(link, suffix: suffix, method: method, body: body)
         if method != "GET" { try? await coordinator.refresh(link) }
         return result
     }

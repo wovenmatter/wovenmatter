@@ -83,10 +83,36 @@ that point can be rejected durably. Once dispatch has started, a missing native
 receipt retains the existing uncertain outcome rather than rolling back an input
 that may have reached the agent. New sends use a new fence.
 
-The frontend/backend RPC protocol still uses independent request connections. A
-frontend send delayed before backend admission can arrive after a separate Stop
-request; in-process fences do not establish ordering across those connections.
-That existing protocol limitation requires a separate admission-identity change.
+Independent frontend/backend request connections carry a backend-lifetime ID,
+frontend ID, per-conversation Stop sequence, and observed shared Stop revision.
+The execution owner rejects stale sends, including a delayed send from another
+frontend that has not observed a newer Stop. A newer send may carry its own Stop
+before the separate Stop request arrives; that late equal-sequence Stop becomes
+a no-op. Native Stop completion is a shared barrier for frontend, local UI, tool,
+and scheduled dispatch. Preparation revalidates its fence after waiting. Failed
+native cancellation blocks later sends until an explicit Stop retry succeeds.
+A failed local harness Stop retains its native session identity: a missing or
+replacement client cannot clear the failure. Pi abort rejection preserves the
+active turn for retry rather than pretending that native work ended. Exact-session
+recovery can clear this state only with authoritative fenced idle evidence.
+
+Calendar occurrences reserve their target and register the same input fence before
+scheduled preparation begins. Stop during that preparation cancels the occurrence
+and advances its existing checkpoint without dispatching it; concurrent user sends
+cannot take over the reserved session while its settings are being prepared.
+OpenCode affirmative permission/form replies and automatic approvals claim the
+conversation's Stop fence after outbound history persistence. Denials remain
+available. Pi and Hermes likewise revalidate permission responses after journal
+waits, so an approval chosen before Stop cannot be sent afterward.
+
+The ledger retains at most 4,096 conversations and client/conversation pairs and
+never evicts Stop history; overflow fails closed. Conversation IDs use the same
+exact string identity as backend lookup. Backend restart invalidates old frames;
+frontends discard their old Stop sequences and ignore superseded state replies.
+Reconnect within one backend lifetime preserves sequences. Updated frontends
+require the `session.dispatch-epochs` readiness capability. Legacy sends are
+rejected with reconnect guidance; legacy Stop still cancels current work and
+invalidates older versioned sends. No uncertain send is automatically replayed.
 
 `workerMetrics` reports pending/high-water counts, finished and failed jobs,
 cancellation, timeout and rejection counts, and maximum queue/execution time. It
@@ -105,13 +131,15 @@ writes, and shutdown during a pending connection read. Usage tests suspend a sav
 and supersede its refresh to check that stale results cannot replace the current
 cache. Additional regression sources cover WAL snapshot coherence across a
 concurrent commit, observed-only receipt loading, failed flush barriers, queued
-usage ownership changes, and Stop during pending Gateway admission. Gateway tests overlap unsequenced events behind a blocked writer and verify
+usage ownership changes, and Stop during pending Gateway admission. Admission regression sources cover delayed sends, cross-client Stops, backend restart, non-evicting capacity, native Stop wait/retry, and superseded barriers. Gateway tests overlap unsequenced events behind a blocked writer and verify
 that both deltas and their ordered trace records survive.
 
-The current review used source inspection, Swift syntax parsing, and diff checks.
-New and changed regressions have not been executed; suites and CI are deferred
-until the main-branch merge in this workflow. Historical passing results for
-`06291cd` do not validate these follow-up changes or the combined Dev build.
+The production audit includes source inspection, Swift syntax parsing, and diff
+checks. Its provider-free focused runs passed 75 database, ownership, admission,
+Stop, Pi, and settings tests, plus 31 Calendar and 31 OpenCode/Hermes tests. The
+final focused log is `/private/tmp/wm-pr86-adversarial-final-tests.log`. Full
+repository validation and hosted CI must still run on the integrated dependency
+head; these focused results do not validate the combined Dev app or live providers.
 
 ```sh
 swift test --package-path app --filter AsyncDatabaseWorkerTests

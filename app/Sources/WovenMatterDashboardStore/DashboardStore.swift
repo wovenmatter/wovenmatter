@@ -1091,6 +1091,10 @@ public actor DashboardStore {
     await ownedLocalSessions?.cancel(conversationID: conversationID)
   }
 
+  public func stopLocalACPPrompt(conversationID: String) async throws {
+    try await ownedLocalSessions?.stop(conversationID: conversationID)
+  }
+
   public func shutdownLocalACPSessions() async {
     await ownedOpenClawGateway?.shutdown()
     await ownedLocalSessions?.shutdown()

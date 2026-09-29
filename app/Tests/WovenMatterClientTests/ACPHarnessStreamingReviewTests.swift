@@ -108,9 +108,10 @@ struct ACPHarnessStreamingReviewTests {
       fence.cancel()
     }
     _ = try await client.initializeSession(workingDirectory: fixture.root, existingSessionID: nil, title: nil)
-    await #expect(throws: LocalACPClientError.activeInputUnsupported) {
-      try await client.prompt("Never send", dispatchFence: fence)
-    }
+    do {
+      _ = try await client.prompt("Never send", dispatchFence: fence)
+      Issue.record("A stopped dispatch fence must reject the prompt before transport")
+    } catch LocalACPClientError.activeInputUnsupported { }
     #expect(!fence.hasDispatched)
     #expect(await client.activePromptRequestCount == 0)
     await client.shutdown()

@@ -168,7 +168,7 @@ struct LocalACPSessionDriver: Sendable {
                     )
                 },
                 cancel: {
-                    await client.cancel()
+                    try await client.stop()
                 },
                 shutdown: {
                     await client.shutdown()
@@ -270,6 +270,8 @@ public actor LocalACPSessionCoordinator {
         let client: LocalACPSessionDriver
         let configurationObservationID: UUID
         let runtimeKind: AgentRuntimeKind
+        let nativeSessionID: String
+        let remoteWorkspaceID: UUID?
         // Cursor returns a session ID before it has created the durable
         // store.db needed by session/load. Keep a newly created Cursor ID
         // attached to this live process until its first prompt succeeds.
@@ -295,12 +297,14 @@ public actor LocalACPSessionCoordinator {
         case shutDown
         case sessionBusy
         case sessionIdentityChanged
+        case failedStopNeedsReconnection
 
         var errorDescription: String? {
             switch self {
             case .shutDown: "The local ACP session coordinator has shut down."
             case .sessionBusy: "Wait for the current session operation to finish before changing permissions."
             case .sessionIdentityChanged: "The harness could not reconnect the existing session to change permissions."
+            case .failedStopNeedsReconnection: "The previous Stop was not confirmed. Reconnect the original agent session and confirm it has stopped before sending again."
             }
         }
     }
@@ -320,6 +324,14 @@ public actor LocalACPSessionCoordinator {
     private let onUsage: (@Sendable (UsageRunRecorder.Observation) async -> Void)?
     private var resumePermissionHandler: ResumePermissionHandler?
     private var activeSessions: [String: ActiveSession] = [:]
+    // Losing a client after an unsuccessful Stop is not evidence that native
+    // work ended. Only that client's successful cancellation can clear this.
+    private struct FailedStopIdentity {
+        let observationID: UUID
+        let nativeSessionID: String
+        let remoteWorkspaceID: UUID?
+    }
+    private var failedStopSessionIDs: [String: FailedStopIdentity] = [:]
     private var runTasks: [String: Task<Void, any Error>] = [:]
     private var runIDsByConversation: [String: String] = [:]
     private var admissionDispatchFences: [String: AgentDispatchFence] = [:]
@@ -922,6 +934,12 @@ public actor LocalACPSessionCoordinator {
     }
 
     public func cancel(conversationID: String) async {
+        try? await stop(conversationID: conversationID)
+    }
+
+    /// Admission barriers need the native result; best-effort lifecycle callers
+    /// can continue using cancel without falsely acknowledging a successful Stop.
+    public func stop(conversationID: String) async throws {
         admissionDispatchFences[conversationID]?.cancel()
         if admittingConversations.contains(conversationID) { cancelledAdmissions.insert(conversationID) }
         if let runID = runIDsByConversation[conversationID] {
@@ -932,9 +950,39 @@ public actor LocalACPSessionCoordinator {
             if let pending = pendingSessionStarts[conversationID], pending.waiters.count == 1 {
                 pending.task.cancel()
             }
+            guard failedStopSessionIDs[conversationID] == nil else {
+                throw LifecycleError.failedStopNeedsReconnection
+            }
             return
         }
-        try? await active.client.cancel()
+        if let failedSession = failedStopSessionIDs[conversationID],
+           failedSession.observationID != active.configurationObservationID {
+            throw LifecycleError.failedStopNeedsReconnection
+        }
+        do {
+            try await active.client.cancel()
+            if failedStopSessionIDs[conversationID]?.observationID == active.configurationObservationID {
+                failedStopSessionIDs.removeValue(forKey: conversationID)
+            }
+        } catch {
+            failedStopSessionIDs[conversationID] = FailedStopIdentity(
+                observationID: active.configurationObservationID,
+                nativeSessionID: active.nativeSessionID,
+                remoteWorkspaceID: active.remoteWorkspaceID
+            )
+            throw error
+        }
+    }
+
+    // Called only after typed, fenced recovery confirms this exact native
+    // session is idle and its durable runs have been reconciled.
+    private func confirmRecoveredStop(
+        conversationID: String, nativeSessionID: String, remoteWorkspaceID: UUID
+    ) {
+        guard let failed = failedStopSessionIDs[conversationID],
+              failed.nativeSessionID == nativeSessionID,
+              failed.remoteWorkspaceID == remoteWorkspaceID else { return }
+        failedStopSessionIDs.removeValue(forKey: conversationID)
     }
 
     @discardableResult
@@ -1552,6 +1600,8 @@ public actor LocalACPSessionCoordinator {
                 client: started,
                 configurationObservationID: observationID,
                 runtimeKind: descriptor.runtimeKind,
+                nativeSessionID: initialized.sessionID,
+                remoteWorkspaceID: descriptor.remoteWorkspaceID,
                 pendingDurableSessionID:
                     Self.defersNewSessionPersistence(descriptor.runtimeKind)
                         && !initialized.loadedExistingSession

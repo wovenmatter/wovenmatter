@@ -102,7 +102,7 @@ public actor PiRPCClient {
     private var settledWaiters: [CheckedContinuation<Void, any Error>] = []
     private var cancelled = false
     private var pendingDispatches: [ObjectIdentifier: AgentDispatchFence] = [:]
-    private var abortTask: Task<Void, Never>?
+    private var abortTask: Task<Void, any Error>?
     private var readerTask: Task<Void, Never>?
     private var eventTask: Task<Void, Never>?
     private struct ExtensionUIRequest: Sendable {
@@ -323,7 +323,7 @@ public actor PiRPCClient {
                 try Task.checkCancellation()
                 try await settleHandledInputIfIdle()
                 try await waitUntilSettled()
-                await abortTask?.value
+                try await abortTask?.value
                 if let latestTerminalError {
                     throw PiRPCClientError.commandFailed(latestTerminalError)
                 }
@@ -358,6 +358,12 @@ public actor PiRPCClient {
     }
 
     public func cancel() async {
+        try? await stop()
+    }
+
+    /// Return native abort failure to admission owners. They must not release
+    /// newer input merely because the best-effort cancellation task finished.
+    public func stop() async throws {
         pendingDispatches.values.forEach { $0.cancel() }
         cancelled = true
         guard promptAcknowledged else {
@@ -370,21 +376,28 @@ public actor PiRPCClient {
             return
         }
         if let abortTask {
-            await abortTask.value
+            try await abortTask.value
             return
         }
+        let generation = promptGeneration
         let task = Task {
             do {
-                _ = try await self.sendCommand(["type": "abort"])
+                let response = try await self.sendCommand(["type": "abort"])
+                guard response["success"] as? Bool == true else {
+                    throw PiRPCClientError.commandFailed(string(response["error"]) ?? "Pi could not stop the active turn.")
+                }
                 // Drain prior output before the session can accept another run.
                 await self.eventTask?.value
                 if !self.sawAgentStart { self.finishSettledWaiters() }
             } catch {
-                self.failPending(error)
+                // A rejected abort does not prove the active turn ended or the
+                // pipe failed. Keep its ownership so an explicit Stop can retry.
+                throw error
             }
         }
         abortTask = task
-        await task.value
+        defer { if promptGeneration == generation { abortTask = nil } }
+        try await task.value
     }
 
     private func cancelPromptTask(generation: UUID) async {
@@ -810,32 +823,48 @@ public actor PiRPCClient {
     private func handleExtensionUI(
         _ request: ExtensionUIRequest
     ) async throws {
-        let selected = await promptPermission?(
-            LocalACPPermissionRequest(
-                title: request.title,
-                options: request.options
-            )
-        )
-        var payload: [String: Any] = [
-            "type": "extension_ui_response",
-            "id": request.id,
-        ]
-        if selected == nil || selected == "reject" {
-            payload["cancelled"] = true
-            if request.method == "confirm" {
-                payload["confirmed"] = false
-            }
-        } else if request.method == "confirm" {
-            payload["confirmed"] = true
+        let generation = promptGeneration
+        let selected: String?
+        if cancelled || Task.isCancelled {
+            selected = nil
         } else {
-            payload["value"] = selected
+            selected = await promptPermission?(
+                LocalACPPermissionRequest(
+                    title: request.title,
+                    options: request.options
+                )
+            )
+        }
+        func response(cancelled: Bool) throws -> Data {
+            var payload: [String: Any] = [
+                "type": "extension_ui_response",
+                "id": request.id,
+            ]
+            if cancelled {
+                payload["cancelled"] = true
+                if request.method == "confirm" { payload["confirmed"] = false }
+            } else if request.method == "confirm" {
+                payload["confirmed"] = true
+            } else {
+                payload["value"] = selected
+            }
+            return try JSONSerialization.data(withJSONObject: payload)
         }
         await acquireOutgoing()
         defer { releaseOutgoing() }
         guard !closed, let input else { return }
-        var data = try JSONSerialization.data(withJSONObject: payload)
+        let rejected = selected == nil || selected == "reject" || cancelled
+            || Task.isCancelled || promptGeneration != generation
+        var data = try response(cancelled: rejected)
         try await launch.historyRecorder?("out", data)
-        guard !closed else { throw PiRPCClientError.sessionNotInitialized }
+        guard !closed else { return }
+        // Stop can arrive while the chosen response waits for its journal write.
+        // Release the native UI request with a cancellation, never a late approval.
+        if !rejected && (cancelled || Task.isCancelled || promptGeneration != generation) {
+            data = try response(cancelled: true)
+            try await launch.historyRecorder?("out", data)
+            guard !closed else { return }
+        }
         data.append(0x0A)
         try input.write(contentsOf: data)
     }

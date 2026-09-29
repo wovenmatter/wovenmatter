@@ -26,6 +26,7 @@ public actor OpenCodeSessionCoordinator {
     private var refreshing: Set<String> = []
     private var sending: Set<String> = []
     private var pendingDispatches: [String: (link: OpenCodeSessionLink, fence: AgentDispatchFence)] = [:]
+    private var interactionFences: [String: AgentDispatchFence] = [:]
     private var automaticApprovalTasks: [String: Task<Void, Never>] = [:]
     private var automaticApprovalEpochs: [String: UUID] = [:]
     private var automaticallyReplied: [String: Set<String>] = [:]
@@ -83,15 +84,34 @@ public actor OpenCodeSessionCoordinator {
             emit(link.conversationID, status: "Disconnected")
         }
     }
-    public func shutdown() { pendingDispatches.values.forEach { $0.fence.cancel() }; automaticApprovalTasks.values.forEach { $0.cancel() }; automaticApprovalTasks.removeAll(); automaticApprovalEpochs.removeAll(); automaticallyReplied.removeAll(); automaticApprovalFailures.removeAll(); workers.values.forEach { $0.cancel() }; eventRefreshes.values.forEach { $0.cancel() }; workers.removeAll(); eventRefreshes.removeAll(); eventRefreshTokens.removeAll(); eventRefreshDirty.removeAll(); generations.removeAll(); clients.removeAll(); connectionTokens.removeAll(); pendingCursors.removeAll() }
+    public func shutdown() { interactionFences.values.forEach { $0.cancel() }; pendingDispatches.values.forEach { $0.fence.cancel() }; automaticApprovalTasks.values.forEach { $0.cancel() }; automaticApprovalTasks.removeAll(); automaticApprovalEpochs.removeAll(); automaticallyReplied.removeAll(); automaticApprovalFailures.removeAll(); workers.values.forEach { $0.cancel() }; eventRefreshes.values.forEach { $0.cancel() }; workers.removeAll(); eventRefreshes.removeAll(); eventRefreshTokens.removeAll(); eventRefreshDirty.removeAll(); generations.removeAll(); clients.removeAll(); connectionTokens.removeAll(); pendingCursors.removeAll() }
     public func call(connectionID: String, method: String = "GET", path: String,
-                     query: [String: String] = [:], body: OpenCodeValue? = nil) async throws -> OpenCodeValue {
+                     query: [String: String] = [:], body: OpenCodeValue? = nil,
+                     dispatchFence: AgentDispatchFence? = nil) async throws -> OpenCodeValue {
         guard let client = clients[connectionID] else { throw OpenCodeError.message("Connect to the OpenCode service first.") }
         let token = connectionTokens[connectionID]
-        let result = try await client.call(method, path, query: query, body: body)
+        let result = try await client.call(method, path, query: query, body: body, dispatchFence: dispatchFence)
         guard token == connectionTokens[connectionID] else { throw CancellationError() }
         return result
     }
+    private func interactionFence(_ conversationID: String) -> AgentDispatchFence {
+        if let fence = interactionFences[conversationID] { return fence }
+        let fence = AgentDispatchFence()
+        interactionFences[conversationID] = fence
+        return fence
+    }
+
+    public func sessionCall(_ link: OpenCodeSessionLink, suffix: String, method: String,
+                            body: OpenCodeValue?) async throws -> OpenCodeValue {
+        if method == "POST", suffix == "/interrupt" { cancelPendingInput(conversationID: link.conversationID) }
+        let fence = OpenCodePermissionHandling.requiresActiveTurn(method: method, suffix: suffix, body: body)
+            ? interactionFence(link.conversationID) : nil
+        try fence?.check()
+        return try await call(connectionID: link.connectionID, method: method,
+            path: "/api/session/" + OpenCodeHTTPClient.segment(link.sessionID) + suffix,
+            body: body, dispatchFence: fence)
+    }
+
     /// Persist only this conversation's approval handling. The native service
     /// still decides allow/ask/deny; automatic replies never create saved grants.
     @discardableResult
@@ -150,6 +170,7 @@ public actor OpenCodeSessionCoordinator {
         guard (try? await database.openCodeLinks())?.contains(link) == true,
               OpenCodePermissionHandling.normalized(snapshots[link.conversationID]?.approvalMode) != "normal",
               !changingPermissionHandling.contains(link.conversationID),
+              interactionFences[link.conversationID]?.isCancelled != true,
               automaticApprovalTasks[link.conversationID] == nil,
               let token = connectionTokens[link.connectionID], clients[link.connectionID] != nil else { return }
         let epoch = automaticApprovalEpochs[link.conversationID] ?? UUID()
@@ -173,7 +194,8 @@ public actor OpenCodeSessionCoordinator {
                 // Native TUI uses this same reply: once, never always. The
                 // permission endpoint binds the request to the supplied session.
                 _ = try await client.call("POST", "/api/session/" + OpenCodeHTTPClient.segment(link.sessionID)
-                    + "/permission/" + OpenCodeHTTPClient.segment(requestID) + "/reply", body: ["reply": "once"])
+                    + "/permission/" + OpenCodeHTTPClient.segment(requestID) + "/reply", body: ["reply": "once"],
+                    dispatchFence: interactionFence(link.conversationID))
             } catch OpenCodeError.http(404) {
                 // Another native client may already have answered this request.
             } catch {
@@ -499,6 +521,7 @@ public actor OpenCodeSessionCoordinator {
         snapshots[link.conversationID] = snapshot; emit(link.conversationID, status: "Connected")
     }
     public func cancelPendingInput(conversationID: String) {
+        interactionFence(conversationID).cancel()
         pendingDispatches[conversationID]?.fence.cancel()
         stopAutomaticApprovals(conversationID)
     }
@@ -522,6 +545,9 @@ public actor OpenCodeSessionCoordinator {
             throw OpenCodeError.message("Resolve the uncertain input in session controls before sending another message.")
         }
         try fence.check()
+        if interactionFences[link.conversationID]?.isCancelled == true {
+            interactionFences[link.conversationID] = AgentDispatchFence()
+        }
         let deliveryText = (discovery.map { $0 + "\n\n" } ?? "") + input.textWithReferenceContext
         let id = "msg_" + UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
         var files: [OpenCodeValue] = []

@@ -10,6 +10,7 @@ protocol HermesGatewayTransport: Sendable {
     func call(_ method: String, _ params: HermesValue) async throws -> HermesValue
     func call(_ method: String, _ params: HermesValue, dispatchFence: AgentDispatchFence?) async throws -> HermesValue
     func respond(id: String, result: HermesValue) async throws
+    func respond(id: String, result: HermesValue, dispatchFence: AgentDispatchFence?) async throws
 }
 
 extension HermesGatewayTransport {
@@ -19,6 +20,11 @@ extension HermesGatewayTransport {
         try dispatchFence?.claimDispatch()
         return try await call(method, params)
     }
+    func respond(id: String, result: HermesValue, dispatchFence: AgentDispatchFence?) async throws {
+        try dispatchFence?.claimDispatch()
+        try await respond(id: id, result: result)
+    }
+
 }
 
 /// Native Hermes JSON-RPC 2.0, including newline-batched WebSocket frames.
@@ -164,7 +170,12 @@ public actor HermesGatewayRPC: HermesGatewayTransport {
         try await send(["jsonrpc": "2.0", "id": .string(id), "result": result])
     }
 
-    private func send(_ frame: HermesValue) async throws {
+    public func respond(id: String, result: HermesValue, dispatchFence: AgentDispatchFence?) async throws {
+        try await send(["jsonrpc": "2.0", "id": .string(id), "result": result], dispatchFence: dispatchFence)
+    }
+
+    private func send(_ frame: HermesValue, dispatchFence: AgentDispatchFence? = nil) async throws {
+        try dispatchFence?.check()
         let current = generation
         await acquireOutgoing()
         defer { releaseOutgoing() }
@@ -174,6 +185,7 @@ public actor HermesGatewayRPC: HermesGatewayTransport {
         try await record("out", data: data)
         try Task.checkCancellation()
         guard current == generation else { throw HermesGatewayError.message("Hermes Gateway disconnected before sending the response.") }
+        try dispatchFence?.claimDispatch()
         try await socket.send(.string(String(decoding: data, as: UTF8.self)))
     }
 

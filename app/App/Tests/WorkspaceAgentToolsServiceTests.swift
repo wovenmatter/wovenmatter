@@ -612,3 +612,99 @@ extension WorkspaceAgentToolsServiceTests {
         #expect(!response.success)
     }
 }
+
+extension WorkspaceAgentToolsServiceTests {
+    @Test(arguments: [false, true])
+    func failedSettingsSaveRestoresTheCommittedProjection(replyLostAfterCommit: Bool) async throws {
+        let fixture = try await ToolSnapshotFixture()
+        defer { fixture.stop() }
+        let original = try await fixture.database.toolSettings()
+        let projection = try await WorkspaceAgentToolsModel(projection: fixture.database) { mutation in
+            if replyLostAfterCommit, case let .saveSettings(value) = mutation {
+                try await fixture.database.saveToolSettings(value)
+            }
+            throw ToolSettingsSaveFailure()
+        }
+        defer { projection.stop() }
+        var edited = original
+        edited.maximumManagedSessions = original.maximumManagedSessions == 16 ? 15 : original.maximumManagedSessions + 1
+        await projection.saveSettings(edited)
+        #expect(projection.settings == (replyLostAfterCommit ? edited : original))
+        #expect(try await fixture.database.toolSettings() == projection.settings)
+        #expect(projection.error == ToolSettingsSaveFailure().localizedDescription)
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func failedQueuedSettingsSavePreservesNewerEditAndLastSuccessfulValue() async throws {
+        let fixture = try await ToolSnapshotFixture()
+        defer { fixture.stop() }
+        let gate = ToolSettingsSaveGate()
+        let projection = try await WorkspaceAgentToolsModel(projection: fixture.database) { mutation in
+            try await gate.pause()
+            if case let .saveSettings(value) = mutation { try await fixture.database.saveToolSettings(value) }
+        }
+        defer { projection.stop(); gate.finishAll() }
+        var first = projection.settings
+        first.maximumManagedSessions = 7
+        var latest = first
+        latest.maximumManagedSessions = 9
+        let oldSave = Task { await projection.saveSettings(first) }
+        await gate.waitForStarts(1)
+        let newestSave = Task { await projection.saveSettings(latest) }
+        let deadline = ContinuousClock.now + .seconds(5)
+        while projection.settings != latest, ContinuousClock.now < deadline { await Task.yield() }
+        #expect(projection.settings == latest)
+        gate.finish(1, failure: true)
+        await gate.waitForStarts(2)
+        #expect(projection.settings == latest)
+        gate.finish(2, failure: false)
+        await oldSave.value
+        await newestSave.value
+        #expect(projection.settings == latest)
+        #expect(try await fixture.database.toolSettings() == latest)
+        #expect(projection.error == nil)
+
+        var rejected = latest
+        rejected.maximumManagedSessions = 11
+        let failedSave = Task { await projection.saveSettings(rejected) }
+        await gate.waitForStarts(3)
+        gate.finish(3, failure: true)
+        await failedSave.value
+        #expect(projection.settings == latest)
+        #expect(projection.error == ToolSettingsSaveFailure().localizedDescription)
+    }
+}
+
+private struct ToolSettingsSaveFailure: LocalizedError {
+    var errorDescription: String? { "The fixture save failed." }
+}
+
+@MainActor
+private final class ToolSettingsSaveGate {
+    private var starts = 0
+    private var pending: [Int: CheckedContinuation<Void, any Error>] = [:]
+    private var observers: [(Int, CheckedContinuation<Void, Never>)] = []
+    func pause() async throws {
+        starts += 1
+        let id = starts
+        try await withCheckedThrowingContinuation { continuation in
+            pending[id] = continuation
+            let ready = observers.filter { $0.0 <= starts }
+            observers.removeAll { $0.0 <= starts }
+            ready.forEach { $0.1.resume() }
+        }
+    }
+    func waitForStarts(_ count: Int) async {
+        if starts >= count { return }
+        await withCheckedContinuation { observers.append((count, $0)) }
+    }
+    func finish(_ id: Int, failure: Bool) {
+        if failure { pending.removeValue(forKey: id)?.resume(throwing: ToolSettingsSaveFailure()) }
+        else { pending.removeValue(forKey: id)?.resume() }
+    }
+    func finishAll() {
+        let remaining = pending.values
+        pending.removeAll()
+        remaining.forEach { $0.resume(throwing: CancellationError()) }
+    }
+}

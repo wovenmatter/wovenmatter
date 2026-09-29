@@ -366,20 +366,38 @@ extension WorkspaceDatabaseConnection {
     }
   }
 
+  /// Stop only the selected occurrence before native transport begins. The
+  /// outcome and checkpoint commit together so the next tick cannot retry it.
+  public func cancelCalendarRunBeforeDispatch(_ id: String) throws {
+    try transaction {
+      guard let run = try calendarRunsUnlocked(unfinishedOnly: true).first(where: { $0.id == id }),
+            run.isPending || run.status == "cancelled" else { return }
+      let started = try historyRowsUnlocked("SELECT transport_started FROM workspace_session_deliveries WHERE id=?", values: [id])
+        .first?.objectValue?["transport_started"]?.intValue == 1
+      guard !started else { return }
+      try toolsExecuteUnlocked("UPDATE workspace_session_deliveries SET status='cancelled' WHERE id=?", [id])
+      try settleCalendarRunUnlocked(run, status: "cancelled")
+    }
+  }
+
   public func settleCalendarRuns() throws {
     try transaction {
       for run in try calendarRunsUnlocked(unfinishedOnly: true) where ["accepted", "cancelled", "uncertain", "failed"].contains(run.status) {
-        try toolsExecuteUnlocked("UPDATE workspace_calendar_runs SET status=?,error=NULL WHERE id=?", [run.status, run.id])
-        let through = try historyRowsUnlocked("SELECT coalesced_through FROM workspace_calendar_runs WHERE id=?", values: [run.id])
-          .first?.objectValue?["coalesced_through"]?.doubleValue.map(Date.init(timeIntervalSince1970:)) ?? run.scheduledAt
-        let next = try historyRowsUnlocked("SELECT next_fire_at FROM dashboard_calendar_items WHERE id=?", values: [run.eventID])
-          .first?.objectValue?["next_fire_at"]?.doubleValue
-        // An edit may already have replaced this schedule while transport was in flight.
-        if let next, next <= run.scheduledAt.timeIntervalSince1970,
-           let event = try calendarItemsUnlocked().first(where: { $0.id == run.eventID }) {
-          try advanceCalendarUnlocked(event, after: through)
-        }
+        try settleCalendarRunUnlocked(run, status: run.status)
       }
+    }
+  }
+
+  private func settleCalendarRunUnlocked(_ run: WorkspaceCalendarRun, status: String) throws {
+    try toolsExecuteUnlocked("UPDATE workspace_calendar_runs SET status=?,error=NULL WHERE id=?", [status, run.id])
+    let through = try historyRowsUnlocked("SELECT coalesced_through FROM workspace_calendar_runs WHERE id=?", values: [run.id])
+      .first?.objectValue?["coalesced_through"]?.doubleValue.map(Date.init(timeIntervalSince1970:)) ?? run.scheduledAt
+    let next = try historyRowsUnlocked("SELECT next_fire_at FROM dashboard_calendar_items WHERE id=?", values: [run.eventID])
+      .first?.objectValue?["next_fire_at"]?.doubleValue
+    // An edit may already have replaced this schedule while transport was in flight.
+    if let next, next <= run.scheduledAt.timeIntervalSince1970,
+       let event = try calendarItemsUnlocked().first(where: { $0.id == run.eventID }) {
+      try advanceCalendarUnlocked(event, after: through)
     }
   }
 
@@ -674,6 +692,11 @@ extension WorkspaceDatabase {
 
   public func deferCalendarRun(_ id: String, error: String, now: Date = Date()) async throws {
     try await write { try $0.deferCalendarRun(id, error: error, now: now) }
+  }
+
+  public func cancelCalendarRunBeforeDispatch(_ id: String) async throws {
+    // Stop cleanup must survive cancellation of the scheduler task itself.
+    try await finishWrite { try $0.cancelCalendarRunBeforeDispatch(id) }
   }
 
   public func settleCalendarRuns() async throws {

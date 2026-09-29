@@ -34,6 +34,7 @@ final class WorkspaceDatabaseConnection {
     connection = database
 
     do {
+      try WorkspaceSQLiteTextFunctions.register(on: database)
       if readOnlyProjection {
         try execute("PRAGMA query_only = ON")
         try execute("PRAGMA busy_timeout = 5000")
@@ -98,9 +99,15 @@ final class WorkspaceDatabaseConnection {
   }
 
   func bind(_ value: String, at index: Int32, to statement: OpaquePointer) throws {
-    guard sqlite3_bind_text(statement, index, value, -1, SQLITE_TRANSIENT) == SQLITE_OK else {
-      throw bindError()
+    guard let byteCount = Int32(exactly: value.utf8.count) else {
+      throw WorkspaceDatabaseError.bind("Text exceeds SQLite's byte-length limit")
     }
+    // withCString supplies a nonnil terminator even for empty TEXT. The explicit
+    // byte count preserves embedded NULs; TRANSIENT copies before this scope ends.
+    let status = value.withCString { bytes in
+      sqlite3_bind_text(statement, index, bytes, byteCount, SQLITE_TRANSIENT)
+    }
+    guard status == SQLITE_OK else { throw bindError() }
   }
 
   func bind(_ value: Data, at index: Int32, to statement: OpaquePointer) throws {
@@ -136,11 +143,14 @@ final class WorkspaceDatabaseConnection {
 
   func text(_ statement: OpaquePointer, column: Int32) throws -> String {
     guard let value = sqlite3_column_text(statement, column) else { throw WorkspaceDatabaseError.corruptRow }
-    return String(cString: value)
+    return String(decoding: UnsafeBufferPointer(start: value,
+      count: Int(sqlite3_column_bytes(statement, column))), as: UTF8.self)
   }
 
   func optionalText(_ statement: OpaquePointer, column: Int32) -> String? {
-    sqlite3_column_text(statement, column).map { String(cString: $0) }
+    guard let value = sqlite3_column_text(statement, column) else { return nil }
+    return String(decoding: UnsafeBufferPointer(start: value,
+      count: Int(sqlite3_column_bytes(statement, column))), as: UTF8.self)
   }
 
   func blob(_ statement: OpaquePointer, column: Int32) throws -> Data {
@@ -211,6 +221,83 @@ private final class WorkspaceTimestampCodec: @unchecked Sendable {
 }
 
 private let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+
+
+/// SQLite's built-in TEXT length/substr stop at embedded NUL. History windows
+/// count UTF-8 scalar boundaries instead, without constructing the entire Swift
+/// String or allocating its UTF-16 representation just to return a small slice.
+private enum WorkspaceSQLiteTextFunctions {
+  static func register(on database: OpaquePointer) throws {
+    let flags = SQLITE_UTF8 | SQLITE_DETERMINISTIC
+    let lengthStatus = sqlite3_create_function_v2(database, "woven_text_length", 1, flags, nil,
+      { context, _, arguments in
+        guard let context, let value = arguments?[0] else { return }
+        guard sqlite3_value_type(value) != SQLITE_NULL else { sqlite3_result_null(context); return }
+        guard let bytes = sqlite3_value_text(value) else { sqlite3_result_error_nomem(context); return }
+        let count = Int(sqlite3_value_bytes(value))
+        sqlite3_result_int64(context, WorkspaceSQLiteTextFunctions.scalarCount(bytes, count: count))
+      }, nil, nil, nil)
+    guard lengthStatus == SQLITE_OK else { throw WorkspaceDatabaseError.open("Unable to register history text length") }
+    for arity: Int32 in [2, 3] {
+      let status = sqlite3_create_function_v2(database, "woven_text_substr", arity, flags, nil,
+        { context, count, arguments in
+          guard let context, let arguments, let value = arguments[0], let position = arguments[1] else { return }
+          guard sqlite3_value_type(value) != SQLITE_NULL, sqlite3_value_type(position) != SQLITE_NULL,
+                count != 3 || sqlite3_value_type(arguments[2]) != SQLITE_NULL else {
+            sqlite3_result_null(context); return
+          }
+          guard let bytes = sqlite3_value_text(value) else { sqlite3_result_error_nomem(context); return }
+          let byteCount = Int(sqlite3_value_bytes(value))
+          var start = sqlite3_value_int64(position)
+          let requested = count == 3 ? sqlite3_value_int64(arguments[2]) : Int64.max
+          let backwards = requested < 0
+          var width = requested == Int64.min ? Int64.max : backwards ? -requested : requested
+          // Match SQLite's one-based/negative index and negative length rules.
+          if start < 0 {
+            start += WorkspaceSQLiteTextFunctions.scalarCount(bytes, count: byteCount)
+            if start < 0 { width += start; start = 0 }
+          } else if start > 0 { start -= 1 }
+          else if width > 0 { width -= 1 }
+          width = max(0, width)
+          if backwards {
+            start -= width
+            if start < 0 { width += start; start = 0 }
+          }
+          var begin = 0
+          while start > 0, begin < byteCount {
+            begin = WorkspaceSQLiteTextFunctions.nextScalar(bytes, count: byteCount, from: begin)
+            start -= 1
+          }
+          var end = begin
+          while width > 0, end < byteCount {
+            end = WorkspaceSQLiteTextFunctions.nextScalar(bytes, count: byteCount, from: end)
+            width -= 1
+          }
+          let result = UnsafeRawPointer(bytes.advanced(by: begin)).assumingMemoryBound(to: CChar.self)
+          sqlite3_result_text(context, result, Int32(end - begin), SQLITE_TRANSIENT)
+        }, nil, nil, nil)
+      guard status == SQLITE_OK else { throw WorkspaceDatabaseError.open("Unable to register history text window") }
+    }
+  }
+
+  private static func scalarCount(_ bytes: UnsafePointer<UInt8>, count: Int) -> Int64 {
+    var offset = 0
+    var scalars: Int64 = 0
+    while offset < count {
+      offset = nextScalar(bytes, count: count, from: offset)
+      scalars += 1
+    }
+    return scalars
+  }
+
+  private static func nextScalar(_ bytes: UnsafePointer<UInt8>, count: Int, from offset: Int) -> Int {
+    var next = offset + 1
+    if bytes[offset] >= 0xc0 {
+      while next < count, bytes[next] & 0xc0 == 0x80 { next += 1 }
+    }
+    return next
+  }
+}
 
 
 extension WorkspaceDatabaseConnection {

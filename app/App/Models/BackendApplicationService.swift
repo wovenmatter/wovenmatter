@@ -22,6 +22,8 @@ enum BackendApplicationCommand: Codable, Sendable {
     case createSession(runtime: AgentRuntimeKind, workspaceID: UUID?, conversationID: UUID,
                        workingDirectory: URL?, title: String?, nativeWorkspaceID: String?)
     case sendMessage(conversationID: String, input: AgentMessageInput, noteID: String?)
+    case sendMessageFenced(conversationID: String, input: AgentMessageInput, noteID: String?, admission: AgentDispatchAdmission)
+    case cancelSessionFenced(conversationID: String, admission: AgentDispatchAdmission)
     case configureSession(conversationID: String, model: String?, thinking: String?, permission: String?)
     case setSessionTools(conversationID: String, tools: WorkspaceSessionTools, confirmedPausingTimers: Bool)
     case cancelSession(conversationID: String)
@@ -69,9 +71,12 @@ final class BackendApplicationService {
     private var pending: [String: PendingCommand] = [:]
     private var completed: [String: (BackendRPCCommandIdentity, BackendRPCResponse)] = [:]
     private var completionOrder: [String] = []
+    private var dispatchAdmissions: AgentDispatchAdmissionLedger
+    var dispatchStopRevisions: [String: UInt64] { dispatchAdmissions.stopRevisions }
 
     init(model: ApplicationModel, completeClientRouting: Bool = false) {
         self.invalidations = BackendInvalidationJournal(instanceID: instanceID)
+        self.dispatchAdmissions = AgentDispatchAdmissionLedger(instanceID: instanceID)
         self.model = model
         self.completeClientRouting = completeClientRouting
     }
@@ -107,7 +112,7 @@ final class BackendApplicationService {
                     completeClientRouting: completeClientRouting,
                     capabilities: ["session.create", "session.send", "session.configure", "session.tools",
                                    "session.cancel", "session.permission", "session.interaction", "calendar.write",
-                                   "calendar.metadata"]))
+                                   "calendar.metadata", "session.dispatch-epochs"]))
             case "application.changes":
                 let cursor = try JSONDecoder().decode(BackendInvalidationCursor?.self, from: request.payload)
                 return try await response(request, invalidations.waitForChanges(after: cursor))
@@ -185,11 +190,21 @@ final class BackendApplicationService {
             }
             guard let id else { throw BackendRPCError.remote(model.localRunError ?? "The session could not be created.") }
             return .init(conversationID: id)
-        case let .sendMessage(id, input, noteID):
+        case .sendMessage:
+            // An unversioned request cannot prove that it predates or follows Stop.
+            throw AgentDispatchAdmissionError.invalid
+        case let .sendMessageFenced(id, input, noteID, admission):
+            if try dispatchAdmissions.prepareSend(admission, conversationID: id) {
+                model.beginAgentStop(conversationID: id)
+                await invalidations.publish(scopes: [.runtime])
+            }
+            try await model.waitForAgentStop(conversationID: id)
+            try dispatchAdmissions.validateSend(admission, conversationID: id)
             let dispatchFence = model.beginAgentDispatch(conversationID: id)
             defer { model.finishAgentDispatch(conversationID: id, fence: dispatchFence) }
             let record = try await conversation(id)
             try dispatchFence.check()
+            try dispatchAdmissions.validateSend(admission, conversationID: id)
             let note = noteID.flatMap { id in model.workspaceOverview?.notes.first { $0.id == id } }
             guard noteID == nil || note != nil else { throw BackendRPCError.remote("The attached note is unavailable.") }
             return try await .init(accepted: model.dispatchAgentMessage(conversation: record, input: input, note: note, dispatchFence: dispatchFence))
@@ -202,9 +217,32 @@ final class BackendApplicationService {
             try await database.setSessionTools(tools, sessionID: id, confirmedPausingTimers: confirmed)
             try await model.agentTools?.reload()
         case let .cancelSession(id):
-            model.cancelPendingAgentDispatch(conversationID: id)
-            if model.isOpenClawGatewayConversation(id) { model.cancelOpenClawGatewayPrompt(conversationID: id) }
-            else { model.cancelLocalACPPrompt(conversationID: id) }
+            // Keep legacy Stop useful for an older client and scheduled work.
+            // At capacity Stop still reaches native work; future unknown sends fail closed.
+            do { try dispatchAdmissions.prepareLegacyStop(conversationID: id) }
+            catch {
+                dispatchAdmissions.refuseFurtherSends(conversationID: id)
+                let barrier = model.beginAgentStop(conversationID: id)
+                try await barrier.value
+                throw error
+            }
+            let barrier = model.beginAgentStop(conversationID: id)
+            await invalidations.publish(scopes: [.runtime])
+            try await barrier.value
+        case let .cancelSessionFenced(id, admission):
+            let advances: Bool
+            do { advances = try dispatchAdmissions.prepareStop(admission, conversationID: id) }
+            catch AgentDispatchAdmissionError.capacity {
+                dispatchAdmissions.refuseFurtherSends(conversationID: id)
+                let barrier = model.beginAgentStop(conversationID: id)
+                try await barrier.value
+                throw AgentDispatchAdmissionError.capacity
+            }
+            if advances {
+                let barrier = model.beginAgentStop(conversationID: id)
+                await invalidations.publish(scopes: [.runtime])
+                try await barrier.value
+            }
         case let .resolveSessionAccess(id, allowed):
             await model.resolveSessionToolAccess(id: id, allowed: allowed)
             await invalidations.publish(scopes: [.permissions, .settings])

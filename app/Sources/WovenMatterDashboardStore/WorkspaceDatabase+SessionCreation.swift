@@ -157,7 +157,8 @@ extension WorkspaceDatabase {
   }
 
   public func failToolSessionCreation(requestID: String) async throws {
-    try await write { try $0.failToolSessionCreation(requestID: requestID) }
+    // Release the durable fanout reservation even when setup's owner is cancelled.
+    try await finishWrite { try $0.failToolSessionCreation(requestID: requestID) }
   }
 
   public func recoverToolSessionCreations() async throws {

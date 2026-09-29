@@ -262,6 +262,121 @@ extension WorkspaceCalendarTests {
     #expect(delivered.count == 2 && delivered.contains(busySession))
   }
 
+  @Test(arguments: [WorkspaceCalendarTask.SessionMode.same, .new])
+  @MainActor func stopDuringPreparationCancelsOnlySelectedOccurrence(mode: WorkspaceCalendarTask.SessionMode) async throws {
+    let (db, directory) = try await fixture(); defer { try? FileManager.default.removeItem(at: directory) }
+    let start = date("2026-09-01T13:00:00Z")
+    let selectedID = try await insert(db, start: start, repeatRule: .init(unit: .day), mode: mode)
+    let otherID = try await insert(db, start: start.addingTimeInterval(1))
+    let now = start.addingTimeInterval(2)
+    let runs = try await db.dueCalendarRuns(now: now)
+    let selected = try #require(runs.first { $0.eventID == selectedID })
+    let other = try #require(runs.first { $0.eventID == otherID })
+    _ = try await db.createLocalACPSession(runtimeKind: .codex, title: "Selected", ownerDeviceID: UUID(),
+      requestedConversationID: UUID(uuidString: selected.sessionID))
+    let (entered, enteredSignal) = AsyncStream<Void>.makeStream()
+    let (resume, resumeSignal) = AsyncStream<Void>.makeStream()
+    defer { resumeSignal.finish() }
+    var admission = WorkspaceSessionAdmission()
+    var registered: [String: AgentDispatchFence] = [:]
+    var released: [String] = []
+    var delivered: [String] = []
+    let pass = Task { @MainActor in
+      defer { enteredSignal.finish() }
+      try await CalendarTaskRunner.tick(database: db, now: now,
+        isRunning: { _ in false }, hasCapacity: { true },
+        beginPreparation: { run in
+          #expect(admission.begin(run.sessionID, running: [], limit: 16) == .start)
+          let fence = AgentDispatchFence()
+          registered[run.sessionID] = fence
+          return fence
+        }, finishPreparation: { run in
+          admission.finish(run.sessionID)
+          released.append(run.id)
+        }, finishAttempt: { run, fence in
+          #expect(registered[run.sessionID] === fence)
+          registered[run.sessionID] = nil
+        }, prepare: { run, fence in
+          if run.id == selected.id {
+            enteredSignal.yield(())
+            var iterator = resume.makeAsyncIterator()
+            _ = await iterator.next()
+            // Real native preparation can resume without checking Stop itself;
+            // the runner must still fence the following database/dispatch work.
+          } else {
+            _ = try await db.createLocalACPSession(runtimeKind: .codex, title: "Other", ownerDeviceID: UUID(),
+              requestedConversationID: UUID(uuidString: run.sessionID))
+          }
+        }, dispatch: { delivery, fence in
+          #expect(registered[delivery.targetID] === fence)
+          // Preparation releases the shared reservation before normal dispatch.
+          #expect(admission.begin(delivery.targetID, running: [], limit: 16) == .start)
+          defer { admission.finish(delivery.targetID) }
+          try fence.claimDispatch()
+          delivered.append(delivery.id)
+          _ = try await db.claimToolDelivery(id: delivery.id, now: now)
+          try await db.setToolDeliveryStatus(id: delivery.id, status: "accepted")
+        })
+    }
+    var enteredIterator = entered.makeAsyncIterator()
+    _ = await enteredIterator.next()
+    let stopped = try #require(registered[selected.sessionID])
+    #expect(admission.begin(selected.sessionID, running: [], limit: 16) == .preparing)
+    #expect(stopped.cancel())
+    resumeSignal.yield(())
+    try await pass.value
+    #expect(delivered == [other.id])
+    #expect(Set(released) == Set(runs.map(\.id)) && released.count == runs.count)
+    #expect(registered.isEmpty)
+    #expect(admission.begin(selected.sessionID, running: [], limit: 16) == .start)
+    admission.finish(selected.sessionID)
+    #expect(try await db.calendarRuns().first { $0.id == selected.id }?.status == "cancelled")
+    #expect(try await db.toolDelivery(id: selected.id) == nil)
+    // Stop consumes this occurrence, not the recurring schedule or a new session.
+    let reopened = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+    #expect(try await reopened.dueCalendarRuns(now: now).isEmpty)
+    let next = try await #require(reopened.dueCalendarRuns(now: start.addingTimeInterval(86_400)).first)
+    #expect(next.eventID == selectedID && next.id != selected.id)
+    #expect((next.sessionID == selected.sessionID) == (mode == .same))
+    var nextDelivered = false
+    try await CalendarTaskRunner.tick(database: reopened, now: start.addingTimeInterval(86_400),
+      isRunning: { _ in false }, hasCapacity: { true }, prepare: { run in
+        if mode == .new {
+          _ = try await reopened.createLocalACPSession(runtimeKind: .codex, title: "Next", ownerDeviceID: UUID(),
+            requestedConversationID: UUID(uuidString: run.sessionID))
+        }
+      }, dispatch: { delivery in
+        nextDelivered = true
+        _ = try await reopened.claimToolDelivery(id: delivery.id, now: start.addingTimeInterval(86_400))
+        try await reopened.setToolDeliveryStatus(id: delivery.id, status: "accepted")
+      })
+    #expect(nextDelivered)
+  }
+
+  @Test func cancellationBeforeDispatchSettlesPreparedOccurrenceButPreservesStartedTransport() async throws {
+    let (db, directory) = try await fixture(); defer { try? FileManager.default.removeItem(at: directory) }
+    let start = date("2026-09-01T13:00:00Z")
+    _ = try await insert(db, start: start)
+    _ = try await insert(db, start: start.addingTimeInterval(1))
+    let now = start.addingTimeInterval(2)
+    let runs = try await db.dueCalendarRuns(now: now)
+    #expect(runs.count == 2)
+    for (index, run) in runs.enumerated() {
+      _ = try await db.createLocalACPSession(runtimeKind: .codex, title: "Task", ownerDeviceID: UUID(),
+        requestedConversationID: UUID(uuidString: run.sessionID))
+      _ = try await db.prepareCalendarDelivery(runID: run.id, now: now)
+      _ = try await db.claimToolDelivery(id: run.id, now: now)
+      if index == 1 { try await db.markToolDeliveryTransportStarted(id: run.id) }
+      try await db.cancelCalendarRunBeforeDispatch(run.id)
+    }
+    #expect(try await db.calendarRuns().first { $0.id == runs[0].id }?.status == "cancelled")
+    #expect(try await db.toolDelivery(id: runs[0].id)?.status == "cancelled")
+    #expect(try await db.toolDelivery(id: runs[1].id)?.status == "sending")
+    let remaining = try await db.dueCalendarRuns(now: now)
+    #expect(!remaining.contains { $0.id == runs[0].id })
+    #expect(remaining.allSatisfy { $0.id == runs[1].id })
+  }
+
   @Test @MainActor func runtimePreparationFailureDoesNotBlockOtherEventsAndRetriesWithStableIdentity() async throws {
     let (db, directory) = try await fixture(); defer { try? FileManager.default.removeItem(at: directory) }
     let start = date("2026-09-01T13:00:00Z")

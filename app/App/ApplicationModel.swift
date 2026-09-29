@@ -216,6 +216,12 @@ final class ApplicationModel {
     @ObservationIgnored var toolCreationTasks: [String: Task<WovenMatterToolResponse, any Error>] = [:]
     @ObservationIgnored private var toolSessionAdmission = WorkspaceSessionAdmission()
     @ObservationIgnored private var pendingAgentDispatches: [String: [ObjectIdentifier: AgentDispatchFence]] = [:]
+    @ObservationIgnored private let backendDispatchClientID = UUID()
+    @ObservationIgnored private var backendDispatchInstanceID: UUID?
+    @ObservationIgnored private var backendDispatchStopSequences: [String: UInt64] = [:]
+    @ObservationIgnored private var backendDispatchStopRevisions: [String: UInt64] = [:]
+    @ObservationIgnored private var backendApplicationStateGeneration: UInt64 = 0
+    @ObservationIgnored private let agentStops = AgentStopCoordinator()
     var calendarMutationError: String?
     var remoteCalendarGatewayErrors: [UUID: String] = [:]
     var remoteCalendarSyncInProgress: Set<UUID> = []
@@ -2048,6 +2054,19 @@ final class ApplicationModel {
         return false
     }
 
+    func beginCalendarPreparation(conversationID: String) throws {
+        guard !backendStopping, !runningToolSessionIDs.contains(conversationID) else {
+            throw CancellationError()
+        }
+        let decision = toolSessionAdmission.begin(conversationID, running: runningToolSessionIDs,
+            limit: agentTools?.settings.maximumRunningSessions ?? 16)
+        guard decision == .start else { throw ApplicationModelError.localSessionConfigurationInProgress }
+    }
+
+    func finishCalendarPreparation(conversationID: String) {
+        toolSessionAdmission.finish(conversationID)
+    }
+
     func beginAgentDispatch(conversationID: String) -> AgentDispatchFence {
         let fence = AgentDispatchFence()
         pendingAgentDispatches[conversationID, default: [:]][ObjectIdentifier(fence)] = fence
@@ -2062,6 +2081,76 @@ final class ApplicationModel {
     func cancelPendingAgentDispatch(conversationID: String) {
         guard let pending = pendingAgentDispatches[conversationID] else { return }
         for fence in pending.values { fence.cancel() }
+    }
+
+    private func backendDispatchAdmission(conversationID: String, stopping: Bool = false) throws -> AgentDispatchAdmission {
+        guard let instanceID = backendDispatchInstanceID else { throw AgentDispatchAdmissionError.invalid }
+        if stopping {
+            let previous = backendDispatchStopSequences[conversationID] ?? 0
+            guard previous < UInt64.max else { throw AgentDispatchAdmissionError.capacity }
+            backendDispatchStopSequences[conversationID] = previous + 1
+        }
+        return AgentDispatchAdmission(instanceID: instanceID, clientID: backendDispatchClientID,
+            stopSequence: backendDispatchStopSequences[conversationID] ?? 0,
+            observedStopRevision: backendDispatchStopRevisions[conversationID] ?? 0)
+    }
+
+    private func stopBackendFromFrontend(conversationID: String) {
+        // Capture and advance synchronously with the click, before the RPC Task.
+        let admission = try? backendDispatchAdmission(conversationID: conversationID, stopping: true)
+        Task {
+            do {
+                let command: BackendApplicationCommand = if let admission {
+                    .cancelSessionFenced(conversationID: conversationID, admission: admission)
+                } else { .cancelSession(conversationID: conversationID) }
+                _ = try await sendBackendCommand(command)
+                try await refreshBackendApplicationState()
+            } catch { ensureConversationState(id: conversationID).setError(error.localizedDescription) }
+        }
+    }
+
+    /// Invalidate old preparation synchronously, then order native cancellation
+    /// before every new user, tool, and scheduled input for this conversation.
+    @discardableResult
+    func beginAgentStop(conversationID: String, retainFailure: Bool = true) -> Task<Void, any Error> {
+        cancelPendingAgentDispatch(conversationID: conversationID)
+        for permissionID in pendingLocalACPPermissions.filter({ $0.conversationID == conversationID }).map(\.id) {
+            resolveLocalACPPermission(id: permissionID, optionID: nil)
+        }
+        cancelLocalACPInteractions(conversationID: conversationID)
+        return agentStops.begin(conversationID: conversationID, retainFailure: retainFailure) { [self] in
+            try await stopBackendAgentDispatch(conversationID: conversationID)
+        }
+    }
+
+    func waitForAgentStop(conversationID: String) async throws {
+        try await agentStops.wait(conversationID: conversationID)
+    }
+
+    private func stopBackendAgentDispatch(conversationID: String) async throws {
+        guard !isBackendFrontend else { throw ApplicationModelError.dashboardStoreUnavailable }
+        // Do not sweep app fences here: a new input may already be waiting for
+        // this Stop. Its fence must survive unless another Stop supersedes it.
+        if let openCode = openCodeModel(for: conversationID), openCode.links[conversationID] != nil {
+            openCode.cancelPendingInput(conversationID)
+            _ = try await openCode.sessionCall(conversationID, "/interrupt", method: "POST")
+        } else if isOpenClawGatewayConversation(conversationID) {
+            try await dashboardStore?.cancelOpenClawGatewayPrompt(conversationID: conversationID)
+        } else {
+            try await dashboardStore?.stopLocalACPPrompt(conversationID: conversationID)
+        }
+    }
+
+    private func stopAgentLocally(conversationID: String) {
+        let barrier = beginAgentStop(conversationID: conversationID)
+        Task {
+            do {
+                try await barrier.value
+                ensureConversationState(id: conversationID).setError(nil)
+            } catch {
+                ensureConversationState(id: conversationID).setError("Unable to stop this run: \(error.localizedDescription)")
+            }
+        }
     }
 
     /// Both user and CLI delivery use this admission point. A false result means
@@ -2079,10 +2168,21 @@ final class ApplicationModel {
         if isBackendFrontend {
             // IPC handoff can have an uncertain outcome. Its execution owner
             // creates a separate native fence; do not classify it as unsent.
+            let admission = try backendDispatchAdmission(conversationID: conversation.id)
             try dispatchFence.claimDispatch()
-            return try await sendBackendCommand(.sendMessage(conversationID: conversation.id, input: input, noteID: note?.id)).accepted
+            do {
+                return try await sendBackendCommand(.sendMessageFenced(conversationID: conversation.id,
+                    input: input, noteID: note?.id, admission: admission)).accepted
+            } catch {
+                // Refresh the backend lifetime/revision for an explicit retry;
+                // never automatically resend an input with an uncertain receipt.
+                try? await refreshBackendApplicationState()
+                throw error
+            }
         }
 
+        try await waitForAgentStop(conversationID: conversation.id)
+        try dispatchFence.check()
         guard let dashboardStore, let agentTools else { throw ApplicationModelError.dashboardStoreUnavailable }
         try await applyPendingSessionSelections(conversationID: conversation.id)
         try dispatchFence.check()
@@ -3413,28 +3513,10 @@ final class ApplicationModel {
     func cancelLocalACPPrompt(conversationID: String) {
         cancelPendingAgentDispatch(conversationID: conversationID)
         if isBackendFrontend {
-            Task {
-                do { _ = try await sendBackendCommand(.cancelSession(conversationID: conversationID)) }
-                catch { ensureConversationState(id: conversationID).setError(error.localizedDescription) }
-            }
+            stopBackendFromFrontend(conversationID: conversationID)
             return
         }
-
-        if let openCode = openCodeModel(for: conversationID), openCode.links[conversationID] != nil {
-            openCode.cancelPendingInput(conversationID)
-            openCode.perform { _ = try await openCode.sessionCall(conversationID, "/interrupt", method: "POST") }
-            return
-        }
-        let permissionIDs = pendingLocalACPPermissions
-            .filter { $0.conversationID == conversationID }
-            .map(\.id)
-        for permissionID in permissionIDs {
-            resolveLocalACPPermission(id: permissionID, optionID: nil)
-        }
-        cancelLocalACPInteractions(conversationID: conversationID)
-        Task {
-            await dashboardStore?.cancelLocalACPPrompt(conversationID: conversationID)
-        }
+        stopAgentLocally(conversationID: conversationID)
     }
 
     func shutdownLocalACPSessions() {
@@ -4562,33 +4644,10 @@ final class ApplicationModel {
     func cancelOpenClawGatewayPrompt(conversationID: String) {
         cancelPendingAgentDispatch(conversationID: conversationID)
         if isBackendFrontend {
-            Task {
-                do { _ = try await sendBackendCommand(.cancelSession(conversationID: conversationID)) }
-                catch { ensureConversationState(id: conversationID).setError(error.localizedDescription) }
-            }
+            stopBackendFromFrontend(conversationID: conversationID)
             return
         }
-
-        let permissionIDs = pendingLocalACPPermissions
-            .filter { $0.conversationID == conversationID }
-            .map(\.id)
-        for permissionID in permissionIDs {
-            resolveLocalACPPermission(id: permissionID, optionID: nil)
-        }
-        Task {
-            guard let dashboardStore else { return }
-            do {
-                try await dashboardStore.cancelOpenClawGatewayPrompt(
-                    conversationID: conversationID
-                )
-                ensureConversationState(id: conversationID).setError(nil)
-            } catch {
-                await refreshConversation(id: conversationID)
-                ensureConversationState(id: conversationID).setError(
-                    "Unable to stop OpenClaw Gateway run: \(error.localizedDescription)"
-                )
-            }
-        }
+        stopAgentLocally(conversationID: conversationID)
     }
 
     func patchOpenClawGatewaySession(
@@ -4994,6 +5053,8 @@ struct BackendApplicationState: Codable, Sendable {
     let sessionAccess: [WorkspaceCoordinationAccessRequest]
     let sessionAccessError: String?
     let executionErrors: [String: String]
+    var dispatchInstanceID: UUID? = nil
+    var dispatchStopRevisions: [String: UInt64]? = nil
 }
 
 extension ApplicationModel {
@@ -5133,7 +5194,9 @@ extension ApplicationModel {
               permissions: pendingLocalACPPermissions, interactions: pendingLocalACPInteractions,
               composerPrefills: pendingComposerPrefills, calendarErrors: remoteCalendarGatewayErrors,
               sessionAccess: pendingSessionAccess, sessionAccessError: sessionAccessError,
-              executionErrors: conversationStatesByID.compactMapValues { $0.error })
+              executionErrors: conversationStatesByID.compactMapValues { $0.error },
+              dispatchInstanceID: backendApplicationService?.instanceID,
+              dispatchStopRevisions: backendApplicationService?.dispatchStopRevisions)
     }
 
     private func observeBackendApplicationState() {
@@ -5218,7 +5281,7 @@ extension ApplicationModel {
                 try Task.checkCancellation()
                 if let data = try? await client.call(method: "application.readiness"),
                    let status = try? JSONDecoder().decode(BackendApplicationReadiness.self, from: data), status.ready {
-                    guard status.protocolVersion == 1 else { throw BackendRPCError.remote("The background service needs to be updated with this app.") }
+                    guard status.protocolVersion == 1, status.capabilities.contains("session.dispatch-epochs") else { throw AgentDispatchAdmissionError.invalid }
                     guard status.completeClientRouting else {
                         throw BackendRPCError.remote("Background execution is not ready in this build. Keep using the normal app while integration is completed.")
                     }
@@ -5289,7 +5352,19 @@ extension ApplicationModel {
     }
 
     private func refreshBackendApplicationState() async throws {
+        backendApplicationStateGeneration &+= 1
+        let generation = backendApplicationStateGeneration
         let snapshot = try JSONDecoder().decode(BackendApplicationState.self, from: await callBackend(method: "application.state"))
+        guard generation == backendApplicationStateGeneration else { return }
+        if backendDispatchInstanceID != snapshot.dispatchInstanceID {
+            backendDispatchInstanceID = snapshot.dispatchInstanceID
+            backendDispatchStopSequences.removeAll()
+            backendDispatchStopRevisions = snapshot.dispatchStopRevisions ?? [:]
+        } else {
+            for (id, revision) in snapshot.dispatchStopRevisions ?? [:] {
+                backendDispatchStopRevisions[id] = max(backendDispatchStopRevisions[id] ?? 0, revision)
+            }
+        }
         localRunningConversationIDs = snapshot.runningConversationIDs
         localACPSessionMetadata = snapshot.metadata
         pendingLocalACPPermissions = snapshot.permissions
@@ -5304,8 +5379,10 @@ extension ApplicationModel {
         }
         for (id, error) in snapshot.executionErrors { ensureConversationState(id: id).setError(error) }
         backendExecutionErrorIDs = Set(snapshot.executionErrors.keys)
-        applyBackendRuntimeSnapshot(try JSONDecoder().decode(BackendRuntimeSnapshot.self,
-            from: await callBackend(method: "runtime.snapshot")))
+        let runtime = try JSONDecoder().decode(BackendRuntimeSnapshot.self,
+            from: await callBackend(method: "runtime.snapshot"))
+        guard generation == backendApplicationStateGeneration else { return }
+        applyBackendRuntimeSnapshot(runtime)
     }
 
     func changeLocalBackgroundExecution(enabled: Bool) async throws {

@@ -361,17 +361,25 @@ extension ApplicationModel {
                 ? nativeLocation?["workspaceID"].string : nil, tools: tools)
     }
 
-    func dispatchToolDelivery(_ delivery: WorkspaceSessionDelivery) async throws -> WovenMatterToolResponse {
+    func dispatchToolDelivery(_ delivery: WorkspaceSessionDelivery,
+                              dispatchFence suppliedFence: AgentDispatchFence? = nil) async throws -> WovenMatterToolResponse {
         guard let database = dashboardStore?.database else { throw CancellationError() }
+        // Claiming and loading the target are part of preparation. Stop must
+        // own a fence before either database suspension, including scheduled input.
+        let dispatchFence = suppliedFence ?? beginAgentDispatch(conversationID: delivery.targetID)
+        defer { if suppliedFence == nil { finishAgentDispatch(conversationID: delivery.targetID, fence: dispatchFence) } }
         guard let claimed = try await database.claimToolDelivery(id: delivery.id) else { return try await .value(database.toolDelivery(id: delivery.id) ?? delivery) }
         do {
+            try dispatchFence.check()
             let target = try await toolConversation(claimed.targetID)
+            try dispatchFence.check()
             if claimed.kind == .calendar, target.localRuntimeKind == .opencode,
                target.remoteWorkspaceID == nil, openCode?.isEnabled != true {
                 throw WorkspaceToolError.invalid("Enable OpenCode in Local agent workspace before running this task.")
             }
             let sent = try await dispatchAgentMessage(conversation: target,
-                input: .init(text: claimed.text, historyDeliveryID: claimed.id), allowSteering: claimed.kind != .calendar)
+                input: .init(text: claimed.text, historyDeliveryID: claimed.id), allowSteering: claimed.kind != .calendar,
+                dispatchFence: dispatchFence)
             guard sent else {
                 if claimed.kind == .calendar {
                     try await database.setToolDeliveryStatus(id: claimed.id, status: "queued")
@@ -385,7 +393,11 @@ extension ApplicationModel {
         } catch LocalACPSessionDatabaseError.steeringUnsupported {
             try await database.setToolDeliveryStatus(id: claimed.id, status: "queued")
         } catch {
-            try await database.failToolDeliveryAttempt(id: claimed.id)
+            if dispatchFence.isCancelled, !dispatchFence.hasDispatched {
+                // A user-stopped occurrence must not reappear from the scheduler's
+                // retry queue. Once native dispatch starts, preserve uncertainty.
+                try await database.setToolDeliveryStatus(id: claimed.id, status: "cancelled")
+            } else { try await database.failToolDeliveryAttempt(id: claimed.id) }
             throw error
         }
         return try await .value(database.toolDelivery(id: claimed.id) ?? claimed)

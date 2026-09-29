@@ -24,6 +24,8 @@ final class WorkspaceAgentToolsModel {
     var backendMutation: (@MainActor (BackendToolsMutation) async throws -> Void)?
     private let passiveProjection: Bool
     private var pendingSettingsWrites = 0
+    private var settingsEditGeneration = UUID()
+    private var committedSettings: WorkspaceToolSettings
     private var mutationTask: Task<Void, Never>?
     let calendarTaskHandler: CalendarTaskHandler?
     let database: WorkspaceDatabase
@@ -54,7 +56,9 @@ final class WorkspaceAgentToolsModel {
         self.passiveProjection = passiveProjection
         self.calendarTaskHandler = calendarTaskHandler
         self.database = database
-        self.settings = try await database.toolSettings()
+        let settings = try await database.toolSettings()
+        self.settings = settings
+        self.committedSettings = settings
         self.sessionHandler = sessionHandler
         self.noteHandler = noteHandler
         self.noteRestoreHandler = noteRestoreHandler
@@ -109,7 +113,10 @@ final class WorkspaceAgentToolsModel {
         let snapshot = try await database.toolStateSnapshot(sessionIDs: observed.union(sessionPolicies.keys),
             oldestReceipts: oldest, receiptSessionIDs: observed)
         guard generation == reloadGeneration, !stopped else { return }
-        if mayPublishSettings, pendingSettingsWrites == 0, settings != snapshot.settings { settings = snapshot.settings }
+        if mayPublishSettings, pendingSettingsWrites == 0 {
+            committedSettings = snapshot.settings
+            if settings != snapshot.settings { settings = snapshot.settings }
+        }
         let relationships = Dictionary(uniqueKeysWithValues: snapshot.relationships.map { ($0.sessionID, $0) })
         if self.relationships != relationships { self.relationships = relationships }
         if timers != snapshot.timers { timers = snapshot.timers }
@@ -204,18 +211,37 @@ final class WorkspaceAgentToolsModel {
     }
 
     func saveSettingsFromUI(_ value: WorkspaceToolSettings) {
+        let generation = UUID()
+        settingsEditGeneration = generation
         reloadGeneration = UUID()
         settings = value
         pendingSettingsWrites += 1
         let previous = mutationTask
         mutationTask = Task {
             await previous?.value
-            defer { pendingSettingsWrites -= 1 }
+            var failure: String?
             do {
                 if let backendMutation { try await backendMutation(.saveSettings(value)) }
                 else { try await database.saveToolSettings(value) }
-                error = nil
-            } catch { self.error = error.localizedDescription }
+                committedSettings = value
+            } catch { failure = error.localizedDescription }
+            pendingSettingsWrites -= 1
+            guard settingsEditGeneration == generation, pendingSettingsWrites == 0, !stopped else { return }
+            guard let failure else { error = nil; return }
+
+            // A failed optimistic edit must not keep displaying unsaved defaults.
+            // Preserve newer edits, and reconcile an uncertain backend reply with
+            // its committed database value without allowing a stale read to win.
+            settings = committedSettings
+            error = failure
+            let rollbackGeneration = UUID()
+            reloadGeneration = rollbackGeneration
+            if let saved = try? await database.toolSettings() {
+                guard settingsEditGeneration == generation, pendingSettingsWrites == 0,
+                      reloadGeneration == rollbackGeneration, !stopped else { return }
+                committedSettings = saved
+                if settings != saved { settings = saved }
+            }
         }
     }
 
@@ -226,10 +252,8 @@ final class WorkspaceAgentToolsModel {
     }
 
     func saveSettings(_ value: WorkspaceToolSettings) async {
-        reloadGeneration = UUID()
-        if passiveProjection { settings = value; enqueue(.saveSettings(value)); return }
-        do { try await database.saveToolSettings(value); settings = value; error = nil }
-        catch { self.error = error.localizedDescription }
+        saveSettingsFromUI(value)
+        await mutationTask?.value
     }
 
     func setEnabled(_ group: WorkspaceToolGroup, enabled: Bool, sessionID: String, confirmedPausingTimers: Bool = false) async throws {

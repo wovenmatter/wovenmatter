@@ -10,7 +10,7 @@ struct OpenCodeIntegrationTests {
     @Test func dispatchFenceIsCheckedAfterOutboundHistory() async throws {
         let fixture = OpenCodeFixture(); FixtureProtocol.fixture = fixture
         let fence = AgentDispatchFence()
-        let client = OpenCodeHTTPClient(connection: connection(), session: fixtureSession()).recording { direction, _ in
+        let client = OpenCodeHTTPClient(connection: try connection(), session: fixtureSession()).recording { direction, _ in
             if direction == "out" { fence.cancel() }
         }
         await #expect(throws: CancellationError.self) {

@@ -6,6 +6,26 @@ import WovenMatterCore
 
 @Suite(.serialized)
 struct OpenCodeApprovalHandlingTests {
+    @Test func stoppedSessionRejectsManualApprovalsAndDoesNotRescheduleAutomaticOnRefresh() async throws {
+        let context = try await ApprovalContext()
+        defer { context.clean() }
+        let coordinator = context.coordinator()
+        try await coordinator.connect(context.connection)
+        _ = try await coordinator.setSessionPermission(conversationID: context.a.conversationID, permission: "full")
+        await coordinator.cancelPendingInput(conversationID: context.a.conversationID)
+        await context.fixture.setRequests([request("per_stopped", "ses_a")], session: "ses_a")
+        try await coordinator.refresh(context.a)
+        await #expect(throws: CancellationError.self) {
+            try await coordinator.sessionCall(context.a, suffix: "/permission/per_stopped/reply", method: "POST", body: ["reply": "once"])
+        }
+        await #expect(throws: CancellationError.self) {
+            try await coordinator.sessionCall(context.a, suffix: "/form/form_stopped/reply", method: "POST", body: ["answer": "yes"])
+        }
+        _ = try await coordinator.sessionCall(context.a, suffix: "/permission/per_stopped/reply", method: "POST", body: ["reply": "reject"])
+        #expect(await context.fixture.replies.map { $0.1 } == [["reply": "reject"]])
+        await coordinator.shutdown()
+    }
+
     @Test func fullAccessRepliesStayInOneSessionAndNeverHandleFormsQuestionsOrAuthentication() async throws {
         let context = try await ApprovalContext()
         defer { context.clean() }
