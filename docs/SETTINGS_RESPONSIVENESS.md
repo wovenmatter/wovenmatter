@@ -117,6 +117,32 @@ each scope settled. These checks did not modify drafts or saved preferences and
 did not run inference. Source/diff review passed; no CI, test suites, or session
 timers were run for this pass.
 
+## Explicit catalog browsing
+
+The enabled-only follow-up is owned by PR #87 commits `83aadf0` and `d420b63`.
+The signed Dev build `8f128674a72aa9082d02b04e68cb5c7228dc48a1` compiled,
+passed code-signature verification, and launched successfully.
+
+Native inspection verified six enabled models on initial page entry and in the
+unopened-catalog default chooser, including Opus 5.5. Explicit browsing from the
+chooser exposed all 421 models. Full-catalog search for Opus 5.5 returned one
+match; “Show enabled models” cleared the filters and returned to six models.
+Leaving and reopening the page, and switching All workspaces → Local → All
+workspaces, each returned to the six enabled models. These checks left saved
+model preferences unchanged and restored All workspaces with the enabled list.
+
+Source review verified that entry and chooser opening do not launch the catalog
+helper. The backend publishes only the selected projection, including the
+intermediate scope-change snapshot. Small metadata reads and per-scope cache
+serialization run off the main actor, with cancellation and scope guards. Cached
+Claude alias names are revalidated against local runtime metadata; local aliases
+never establish a remote runtime's model version. Full discovery, explicit
+connection refresh, and existing runtime selection remain separate operations.
+
+This pass verifies deferred work and the native UI behavior. It does not add a
+controlled latency benchmark or live remote/provider acceptance result. No CI,
+test suites, provider inference, account authentication, or session timers ran.
+
 ## Validation boundary
 
 This session deliberately runs no CI or test suites. Regression cases are added
