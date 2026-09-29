@@ -72,9 +72,10 @@ struct SettingsDefaultAgentSDKView: View {
             Text(sdk.installedVersion.map { "Version \($0)" } ?? "Not installed").font(.caption).monospacedDigit().foregroundStyle(.secondary)
             if sdk.updateAvailable, let latest = sdk.latestVersion {
                 Text("Version \(latest) available").font(.caption).foregroundStyle(.secondary)
-            } else if sdk.latestVersion != nil {
+            } else if sdk.latestVersion != nil && sdk.notice == nil && sdk.consistent != false {
                 Text("Up to date").font(.caption).foregroundStyle(.secondary)
             }
+            if let notice = sdk.notice { Text(notice).font(.caption).foregroundStyle(.secondary) }
         }
     }
 

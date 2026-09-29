@@ -7,6 +7,8 @@ public struct DefaultAgentSDKStatus: Codable, Equatable, Sendable {
         public let installedVersion: String?
         public let latestVersion: String?
         public let updateAvailable: Bool
+        public let notice: String?
+        public let consistent: Bool?
     }
     public let sdks: [SDK]
     public let generation: String?
