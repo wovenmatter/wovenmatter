@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import Testing
 import WovenMatterCore
@@ -5,6 +6,35 @@ import WovenMatterCore
 
 @Suite(.timeLimit(.minutes(1)))
 struct ACPSessionPermissionTests {
+    @Test func cancellingFixtureOwnerReapsAPeerBlockedDuringInitialization() async throws {
+        let markerRoot = FileManager.default.temporaryDirectory.appending(path: "permission-owner-\(UUID())")
+        try FileManager.default.createDirectory(at: markerRoot, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: markerRoot) }
+        let marker = markerRoot.appending(path: "waiting")
+        let request = Task {
+            try await withClient(state: [:], sessionPrelude: """
+                printf '%s\\n' "$$" > '\(marker.path).pending'
+                mv '\(marker.path).pending' '\(marker.path)'
+                IFS= read -r owner_shutdown
+                """) { _, _, _ in
+                Issue.record("A cancelled initialization unexpectedly reached the test body")
+            }
+        }
+        defer { request.cancel() }
+        while !FileManager.default.fileExists(atPath: marker.path) {
+            try Task.checkCancellation()
+            await Task.yield()
+        }
+        let pid = try #require(Int32(try String(contentsOf: marker, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines)))
+        request.cancel()
+        await #expect(throws: CancellationError.self) { try await request.value }
+        // The helper does not finish cancellation until its own peer is reaped.
+        let alive = kill(pid, 0)
+        let processError = errno
+        #expect(alive == -1 && processError == ESRCH)
+    }
+
     @Test(arguments: [AgentRuntimeKind.codex, .claudeCode])
     func nativeConfigurationAndLabelsSurviveOtherSelections(kind: AgentRuntimeKind) async throws {
         let state = configuration(permission: "default")
@@ -536,19 +566,23 @@ struct ACPSessionPermissionTests {
         let fixture = try PermissionFixture(kind: kind, state: state, handlers: handlers, sessionPrelude: sessionPrelude)
         defer { try? FileManager.default.removeItem(at: fixture.root) }
         let client = try fixture.client(requestedPermission: requestedPermission)
-        let deadline = Task {
-            do { try await Task.sleep(for: .seconds(10)) } catch { return }
-            await client.shutdown()
-        }
-        do {
-            let initialized = try await client.initializeSession(workingDirectory: fixture.root, existingSessionID: existingID, title: nil)
-            try await body(client, fixture, initialized)
-            deadline.cancel()
-            await client.shutdown()
-        } catch {
-            deadline.cancel()
-            await client.shutdown()
-            throw error
+        // The suite owns the test deadline. A separate wall-clock lifetime can
+        // kill a healthy fake peer while its client waits for executor time or
+        // an interactive answer, then misreport that as a transport failure.
+        try await withTaskCancellationHandler {
+            do {
+                try Task.checkCancellation()
+                let initialized = try await client.initializeSession(workingDirectory: fixture.root, existingSessionID: existingID, title: nil)
+                try await body(client, fixture, initialized)
+                try Task.checkCancellation()
+                await client.shutdown()
+            } catch {
+                await client.shutdown()
+                try Task.checkCancellation()
+                throw error
+            }
+        } onCancel: {
+            Task { await client.shutdown() }
         }
     }
 
