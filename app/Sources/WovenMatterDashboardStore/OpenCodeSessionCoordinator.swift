@@ -25,6 +25,7 @@ public actor OpenCodeSessionCoordinator {
     private var eventRefreshDirty: Set<String> = []
     private var refreshing: Set<String> = []
     private var sending: Set<String> = []
+    private var pendingDispatches: [String: (link: OpenCodeSessionLink, fence: AgentDispatchFence)] = [:]
     private var automaticApprovalTasks: [String: Task<Void, Never>] = [:]
     private var automaticApprovalEpochs: [String: UUID] = [:]
     private var automaticallyReplied: [String: Set<String>] = [:]
@@ -65,6 +66,7 @@ public actor OpenCodeSessionCoordinator {
         }
     }
     public func disconnect(connectionID: String) async {
+        for value in pendingDispatches.values where value.link.connectionID == connectionID { value.fence.cancel() }
         connectionTokens.removeValue(forKey: connectionID)
         clients.removeValue(forKey: connectionID)
         let links = (try? await database.openCodeLinks()) ?? []
@@ -81,7 +83,7 @@ public actor OpenCodeSessionCoordinator {
             emit(link.conversationID, status: "Disconnected")
         }
     }
-    public func shutdown() { automaticApprovalTasks.values.forEach { $0.cancel() }; automaticApprovalTasks.removeAll(); automaticApprovalEpochs.removeAll(); automaticallyReplied.removeAll(); automaticApprovalFailures.removeAll(); workers.values.forEach { $0.cancel() }; eventRefreshes.values.forEach { $0.cancel() }; workers.removeAll(); eventRefreshes.removeAll(); eventRefreshTokens.removeAll(); eventRefreshDirty.removeAll(); generations.removeAll(); clients.removeAll(); connectionTokens.removeAll(); pendingCursors.removeAll() }
+    public func shutdown() { pendingDispatches.values.forEach { $0.fence.cancel() }; automaticApprovalTasks.values.forEach { $0.cancel() }; automaticApprovalTasks.removeAll(); automaticApprovalEpochs.removeAll(); automaticallyReplied.removeAll(); automaticApprovalFailures.removeAll(); workers.values.forEach { $0.cancel() }; eventRefreshes.values.forEach { $0.cancel() }; workers.removeAll(); eventRefreshes.removeAll(); eventRefreshTokens.removeAll(); eventRefreshDirty.removeAll(); generations.removeAll(); clients.removeAll(); connectionTokens.removeAll(); pendingCursors.removeAll() }
     public func call(connectionID: String, method: String = "GET", path: String,
                      query: [String: String] = [:], body: OpenCodeValue? = nil) async throws -> OpenCodeValue {
         guard let client = clients[connectionID] else { throw OpenCodeError.message("Connect to the OpenCode service first.") }
@@ -496,19 +498,30 @@ public actor OpenCodeSessionCoordinator {
         guard generation == generations[link.conversationID], token == connectionTokens[link.connectionID] else { throw CancellationError() }
         snapshots[link.conversationID] = snapshot; emit(link.conversationID, status: "Connected")
     }
-    public func prompt(_ link: OpenCodeSessionLink, input: AgentMessageInput, discovery: String? = nil) async throws {
-        try await submit(link, input: input, command: nil, discovery: discovery)
+    public func cancelPendingInput(conversationID: String) {
+        pendingDispatches[conversationID]?.fence.cancel()
+        stopAutomaticApprovals(conversationID)
     }
-    public func command(_ link: OpenCodeSessionLink, name: String, input: AgentMessageInput, discovery: String? = nil) async throws {
-        try await submit(link, input: input, command: name, discovery: discovery)
+    public func prompt(_ link: OpenCodeSessionLink, input: AgentMessageInput, discovery: String? = nil,
+                       dispatchFence: AgentDispatchFence? = nil) async throws {
+        try await submit(link, input: input, command: nil, discovery: discovery, dispatchFence: dispatchFence)
     }
-    private func submit(_ link: OpenCodeSessionLink, input: AgentMessageInput, command: String?, discovery: String?) async throws {
+    public func command(_ link: OpenCodeSessionLink, name: String, input: AgentMessageInput, discovery: String? = nil,
+                        dispatchFence: AgentDispatchFence? = nil) async throws {
+        try await submit(link, input: input, command: name, discovery: discovery, dispatchFence: dispatchFence)
+    }
+    private func submit(_ link: OpenCodeSessionLink, input: AgentMessageInput, command: String?, discovery: String?,
+                        dispatchFence: AgentDispatchFence?) async throws {
+        let fence = dispatchFence ?? AgentDispatchFence()
+        try fence.check()
         guard sending.insert(link.conversationID).inserted else { throw OpenCodeError.message("The previous input is still being submitted.") }
-        defer { sending.remove(link.conversationID) }
+        pendingDispatches[link.conversationID] = (link, fence)
+        defer { sending.remove(link.conversationID); pendingDispatches.removeValue(forKey: link.conversationID) }
         guard let client = clients[link.connectionID] else { throw OpenCodeError.message("Connect to OpenCode before sending input.") }
         guard try await database.openCodeUncertainSubmissions(conversationID: link.conversationID).isEmpty else {
             throw OpenCodeError.message("Resolve the uncertain input in session controls before sending another message.")
         }
+        try fence.check()
         let deliveryText = (discovery.map { $0 + "\n\n" } ?? "") + input.textWithReferenceContext
         let id = "msg_" + UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
         var files: [OpenCodeValue] = []
@@ -533,12 +546,17 @@ public actor OpenCodeSessionCoordinator {
                 "text": .string(deliveryText), "files": .array(files)]
             if input.historyDeliveryID != nil { commandPayload["delivery"] = .string("steer") }
             let payload = OpenCodeValue.object(commandPayload)
+            try fence.check()
             if let deliveryID = input.historyDeliveryID {
                 try await database.markToolDeliveryTransportStarted(id: deliveryID, targetID: link.conversationID, nativeCommand: command)
             }
             do {
-                _ = try await client.call("POST", "/api/session/\(OpenCodeHTTPClient.segment(link.sessionID))/command", body: payload)
+                _ = try await client.call("POST", "/api/session/\(OpenCodeHTTPClient.segment(link.sessionID))/command", body: payload, dispatchFence: fence)
             } catch {
+                if !fence.hasDispatched {
+                    if let deliveryID = input.historyDeliveryID { try await database.setToolDeliveryStatus(id: deliveryID, status: "failed") }
+                    throw error
+                }
                 if case OpenCodeError.http(let code) = error, [400, 401, 403, 404, 422].contains(code) {
                     if let deliveryID = input.historyDeliveryID { try await database.setToolDeliveryStatus(id: deliveryID, status: "failed") }
                     throw error
@@ -553,12 +571,18 @@ public actor OpenCodeSessionCoordinator {
         var promptPayload: [String: OpenCodeValue] = ["id": .string(id), "text": .string(deliveryText), "files": .array(files)]
         if input.historyDeliveryID != nil { promptPayload["delivery"] = .string("steer") }
         let payload = OpenCodeValue.object(promptPayload)
+        try fence.check()
         try await database.saveOpenCodeSubmission(conversationID: link.conversationID, id: id, payload: payload, status: "sending", visibleText: input.text, deliveryID: input.historyDeliveryID, input: input)
         do {
-            let result = try await client.call("POST", "/api/session/\(OpenCodeHTTPClient.segment(link.sessionID))/prompt", body: payload)
+            let result = try await client.call("POST", "/api/session/\(OpenCodeHTTPClient.segment(link.sessionID))/prompt", body: payload, dispatchFence: fence)
             guard result["data"]["id"].text == id else { throw OpenCodeError.uncertain(id) }
             try await database.saveOpenCodeSubmission(conversationID: link.conversationID, id: id, payload: payload, status: "accepted")
         } catch {
+            if !fence.hasDispatched {
+                try await database.saveOpenCodeSubmission(conversationID: link.conversationID, id: id, payload: payload, status: "rejected")
+                if let deliveryID = input.historyDeliveryID { try await database.setToolDeliveryStatus(id: deliveryID, status: "failed") }
+                throw error
+            }
             if case OpenCodeError.http(let code) = error, [400, 401, 403, 404, 422].contains(code) {
                 try await database.saveOpenCodeSubmission(conversationID: link.conversationID, id: id, payload: payload, status: "rejected")
                 if let deliveryID = input.historyDeliveryID { try await database.setToolDeliveryStatus(id: deliveryID, status: "failed") }

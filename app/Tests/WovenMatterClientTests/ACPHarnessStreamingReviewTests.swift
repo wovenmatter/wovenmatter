@@ -96,6 +96,27 @@ struct ACPHarnessStreamingReviewTests {
     #expect(try fixture.log().components(separatedBy: "Unique initial instructions").count - 1 == 1)
   }
 
+  @Test func stoppedDispatchFenceNeverWritesPromptAfterHistorySuspension() async throws {
+    let fixture = try ACPHarnessFixture(kind: .codex, initialize: #"{"protocolVersion":1}"#,
+      session: #"{"sessionId":"stopped"}"#, extras: [:])
+    defer { fixture.remove() }
+    let fence = AgentDispatchFence()
+    let client = try fixture.client { direction, data in
+      guard direction == "out",
+        let value = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+        value["method"] as? String == "session/prompt" else { return }
+      fence.cancel()
+    }
+    _ = try await client.initializeSession(workingDirectory: fixture.root, existingSessionID: nil, title: nil)
+    await #expect(throws: LocalACPClientError.activeInputUnsupported) {
+      try await client.prompt("Never send", dispatchFence: fence)
+    }
+    #expect(!fence.hasDispatched)
+    #expect(await client.activePromptRequestCount == 0)
+    await client.shutdown()
+    #expect(!(try fixture.log()).contains(#""method":"session/prompt""#))
+  }
+
   @Test func rejectedHistoryWriteReleasesInitialInstructionsForRetry() async throws {
     actor Recorder {
       var reject = true

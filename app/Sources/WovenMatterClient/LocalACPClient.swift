@@ -558,6 +558,7 @@ public actor LocalACPClient {
     private let requestedPermission: String?
     private var sessionCancellationRequested = false
     private var pendingPermissionRequestIDs: [ACPJSONValue] = []
+    private var interactiveResponses: [UUID: (id: ACPJSONValue, fence: AgentDispatchFence)] = [:]
     private var builtInPermissionTasks: [String: Task<String?, Never>] = [:]
     private var cancelledBuiltInPermissions: Set<String> = []
     private struct PendingCursorRequest {
@@ -1128,13 +1129,15 @@ public actor LocalACPClient {
         _ text: String,
         onEvent: EventHandler? = nil,
         onPermission: PermissionHandler? = nil,
-        onInteraction: InteractionHandler? = nil
+        onInteraction: InteractionHandler? = nil,
+        dispatchFence: AgentDispatchFence? = nil
     ) async throws -> LocalACPStopReason {
         try await prompt(
             AgentMessageInput(text: text),
             onEvent: onEvent,
             onPermission: onPermission,
-            onInteraction: onInteraction
+            onInteraction: onInteraction,
+            dispatchFence: dispatchFence
         )
     }
 
@@ -1142,14 +1145,17 @@ public actor LocalACPClient {
         _ input: AgentMessageInput,
         onEvent: EventHandler? = nil,
         onPermission: PermissionHandler? = nil,
-        onInteraction: InteractionHandler? = nil
+        onInteraction: InteractionHandler? = nil,
+        dispatchFence: AgentDispatchFence? = nil
     ) async throws -> LocalACPStopReason {
+        try dispatchFence?.check()
         sessionCancellationRequested = false
         return try await beginPrompt(
             input,
             onEvent: onEvent,
             onPermission: onPermission,
-            onInteraction: onInteraction
+            onInteraction: onInteraction,
+            dispatchFence: dispatchFence
         ).value
     }
 
@@ -1159,14 +1165,17 @@ public actor LocalACPClient {
     /// ACP prompt lets the adapter apply its native queue, redirect, or
     /// stop-and-send behavior.
     public func beginActiveInput(
-        _ text: String
+        _ text: String,
+        dispatchFence: AgentDispatchFence? = nil
     ) async throws -> LocalACPActiveInputReceipt {
-        try await beginActiveInput(AgentMessageInput(text: text))
+        try await beginActiveInput(AgentMessageInput(text: text), dispatchFence: dispatchFence)
     }
 
     public func beginActiveInput(
-        _ input: AgentMessageInput
+        _ input: AgentMessageInput,
+        dispatchFence: AgentDispatchFence? = nil
     ) async throws -> LocalACPActiveInputReceipt {
+        try dispatchFence?.check()
         guard let sessionID else {
             throw LocalACPClientError.sessionNotInitialized
         }
@@ -1186,14 +1195,15 @@ public actor LocalACPClient {
                         ]),
                     ]),
                 ]),
-                waitsForNotifications: false
+                waitsForNotifications: false,
+                dispatchFence: dispatchFence
             )
             switch response?["outcome"]?.stringValue {
             case "injected", "startedNewTurn":
                 return LocalACPActiveInputReceipt(completion: Task { nil })
             case "promptRequired":
                 return await LocalACPActiveInputReceipt(
-                    completion: try beginActivePrompt(input)
+                    completion: try beginActivePrompt(input, dispatchFence: dispatchFence)
                 )
             default:
                 throw LocalACPClientError.invalidActiveInputResponse
@@ -1201,7 +1211,7 @@ public actor LocalACPClient {
         case .grokInterjection:
             if !input.files.isEmpty {
                 return await LocalACPActiveInputReceipt(
-                    completion: try beginActivePrompt(input)
+                    completion: try beginActivePrompt(input, dispatchFence: dispatchFence)
                 )
             }
             do {
@@ -1211,17 +1221,18 @@ public actor LocalACPClient {
                         "sessionId": .string(sessionID),
                         "text": .string(input.transportText()),
                     ]),
-                    waitsForNotifications: false
+                    waitsForNotifications: false,
+                    dispatchFence: dispatchFence
                 )
                 return LocalACPActiveInputReceipt(completion: Task { nil })
             } catch LocalACPClientError.agent(let code, _) where code == -32_601 {
                 return await LocalACPActiveInputReceipt(
-                    completion: try beginActivePrompt(input)
+                    completion: try beginActivePrompt(input, dispatchFence: dispatchFence)
                 )
             }
         case .concurrentPrompt:
             return await LocalACPActiveInputReceipt(
-                completion: try beginActivePrompt(input)
+                completion: try beginActivePrompt(input, dispatchFence: dispatchFence)
             )
         case .piRPC, .unsupported:
             throw LocalACPClientError.activeInputUnsupported
@@ -1247,13 +1258,16 @@ public actor LocalACPClient {
     }
 
     private func beginActivePrompt(
-        _ input: AgentMessageInput
+        _ input: AgentMessageInput,
+        dispatchFence: AgentDispatchFence? = nil
     ) async throws -> Task<LocalACPStopReason?, any Error> {
+        guard !sessionCancellationRequested else { throw LocalACPClientError.activeInputUnsupported }
         let prompt = try await beginPrompt(
             input,
             onEvent: activeEventHandler,
             onPermission: activePermissionHandler,
-            onInteraction: activeInteractionHandler
+            onInteraction: activeInteractionHandler,
+            dispatchFence: dispatchFence
         )
         return Task { try await prompt.value }
     }
@@ -1262,7 +1276,8 @@ public actor LocalACPClient {
         _ input: AgentMessageInput,
         onEvent: EventHandler?,
         onPermission: PermissionHandler?,
-        onInteraction: InteractionHandler?
+        onInteraction: InteractionHandler?,
+        dispatchFence: AgentDispatchFence? = nil
     ) async throws -> Task<LocalACPStopReason, any Error> {
         guard let sessionID else {
             throw LocalACPClientError.sessionNotInitialized
@@ -1291,7 +1306,8 @@ public actor LocalACPClient {
                     "sessionId": .string(sessionID),
                     "prompt": blocks,
                     "_meta": (runtimeKind == .defaultAgent || durableRemoteACP) ? .object(["wovenRunID": .string(defaultAgentRunID ?? UUID().uuidString.lowercased())]) : .object([:]),
-                ])
+                ]),
+                dispatchFence: dispatchFence
             )
         } catch {
             if initialSystemPrompt != nil { resolveInitialSystemPrompt(succeeded: false) }
@@ -1427,14 +1443,19 @@ public actor LocalACPClient {
     public func cancel() async throws {
         guard let sessionID else { return }
         sessionCancellationRequested = true
+        for response in interactiveResponses.values { response.fence.cancel() }
         for task in builtInPermissionTasks.values { task.cancel() }
-        let pending = pendingPermissionRequestIDs
+        let pending = pendingPermissionRequestIDs.filter { id in
+            !interactiveResponses.values.contains { $0.id == id && $0.fence.hasDispatched }
+        }
+        let cursorRequests = pendingCursorRequests.filter { request in
+            !interactiveResponses.values.contains { $0.id == request.id && $0.fence.hasDispatched }
+        }
         pendingPermissionRequestIDs.removeAll()
+        pendingCursorRequests.removeAll()
         for id in pending {
             try await respondWithCancelledPermission(id: id)
         }
-        let cursorRequests = pendingCursorRequests
-        pendingCursorRequests.removeAll()
         for request in cursorRequests {
             try await respondToCancelledCursorRequest(request)
         }
@@ -1451,6 +1472,7 @@ public actor LocalACPClient {
         }
         guard !closed else { return }
         closed = true
+        for response in interactiveResponses.values { response.fence.cancel() }
         dismissBuiltInPermissions()
         readerTask?.cancel()
         readerTask = nil
@@ -1500,11 +1522,13 @@ public actor LocalACPClient {
     private func request(
         method: String,
         params: ACPJSONValue,
-        waitsForNotifications: Bool = true
+        waitsForNotifications: Bool = true,
+        dispatchFence: AgentDispatchFence? = nil
     ) async throws -> ACPJSONValue? {
         let response = try await beginRequest(
             method: method,
-            params: params
+            params: params,
+            dispatchFence: dispatchFence
         ).value
         if waitsForNotifications {
             try await response.notificationBarrier?.value
@@ -1514,7 +1538,8 @@ public actor LocalACPClient {
 
     private func beginRequest(
         method: String,
-        params: ACPJSONValue
+        params: ACPJSONValue,
+        dispatchFence: AgentDispatchFence? = nil
     ) async throws -> Task<ACPRequestResponse, any Error> {
         startReaderIfNeeded()
         let id = nextID
@@ -1526,7 +1551,7 @@ public actor LocalACPClient {
                 id: .integer(id),
                 method: method,
                 params: params
-            ))
+            ), dispatchFence: dispatchFence)
         } catch {
             pendingRequests.removeValue(forKey: id)
             pair.continuation.finish(throwing: error)
@@ -1565,6 +1590,7 @@ public actor LocalACPClient {
         let envelope = try Self.decodeEnvelope(data)
         if runtimeKind == .defaultAgent, envelope.method == "woven/permission_cancel",
            let id = envelope.params?["requestID"]?.stringValue {
+            for response in interactiveResponses.values where response.id.stringValue == id { response.fence.cancel() }
             // This must bypass the notification barrier held by the dialog.
             // Cancelling its task also removes the app's pending approval UI.
             if let task = builtInPermissionTasks[id] { task.cancel() }
@@ -2069,16 +2095,13 @@ public actor LocalACPClient {
         } else {
             selectedID = await handler?(request)
         }
-        guard let pendingIndex = pendingPermissionRequestIDs.firstIndex(of: id) else {
-            return
-        }
-        pendingPermissionRequestIDs.remove(at: pendingIndex)
+        guard pendingPermissionRequestIDs.contains(id) else { return }
         let selected = selectedID.flatMap { candidate in
             options.first { $0.id == candidate }
         }
 
         if let selected {
-            try await write(ACPEnvelope(
+            try await writeInteractiveResponse(ACPEnvelope(
                 id: id,
                 result: .object([
                     "outcome": .object([
@@ -2088,6 +2111,7 @@ public actor LocalACPClient {
                 ])
             ))
         } else {
+            pendingPermissionRequestIDs.removeAll { $0 == id }
             try await respondWithCancelledPermission(id: id)
         }
     }
@@ -2131,9 +2155,13 @@ public actor LocalACPClient {
             questions: questions
         )
         let pending = PendingCursorRequest(id: id, method: "cursor/ask_question")
+        guard !sessionCancellationRequested else {
+            try await respondToCancelledCursorRequest(pending)
+            return
+        }
         pendingCursorRequests.append(pending)
         let response = await handler?(.questions(request)) ?? .cancelled
-        guard removePendingCursorRequest(id: id) else { return }
+        guard pendingCursorRequests.contains(where: { $0.id == id }) else { return }
 
         let answers: [String: ACPJSONValue]
         if case .answers(let values) = response {
@@ -2148,7 +2176,7 @@ public actor LocalACPClient {
         } else {
             answers = [:]
         }
-        try await write(ACPEnvelope(
+        try await writeInteractiveResponse(ACPEnvelope(
             id: id,
             result: .object(["answers": .object(answers)])
         ))
@@ -2172,18 +2200,44 @@ public actor LocalACPClient {
                 : markdown
         )
         let pending = PendingCursorRequest(id: id, method: "cursor/create_plan")
+        guard !sessionCancellationRequested else {
+            try await respondToCancelledCursorRequest(pending)
+            return
+        }
         pendingCursorRequests.append(pending)
         let response = await handler?(.plan(request)) ?? .cancelled
-        guard removePendingCursorRequest(id: id) else { return }
+        guard pendingCursorRequests.contains(where: { $0.id == id }) else { return }
         let accepted = if case .planAccepted(let accepted) = response {
             accepted
         } else {
             false
         }
-        try await write(ACPEnvelope(
+        try await writeInteractiveResponse(ACPEnvelope(
             id: id,
             result: .object(["accepted": .bool(accepted)])
         ))
+    }
+
+    private func writeInteractiveResponse(_ envelope: ACPEnvelope) async throws {
+        guard let id = envelope.id else { return }
+        let key = UUID()
+        let fence = AgentDispatchFence()
+        interactiveResponses[key] = (id, fence)
+        defer {
+            interactiveResponses.removeValue(forKey: key)
+            pendingPermissionRequestIDs.removeAll { $0 == id }
+            _ = removePendingCursorRequest(id: id)
+        }
+        do {
+            try await write(envelope, dispatchFence: fence)
+        } catch is CancellationError where !fence.hasDispatched {
+            // Stop snapshots the IDs before yielding and owns those cancellations.
+            // A remote built-in cancellation still needs its one protocol response.
+            if !sessionCancellationRequested, pendingPermissionRequestIDs.contains(id) {
+                try await respondWithCancelledPermission(id: id)
+            }
+            return
+        }
     }
 
     private func removePendingCursorRequest(id: ACPJSONValue) -> Bool {
@@ -2228,7 +2282,7 @@ public actor LocalACPClient {
         else { outgoingWaiters.removeFirst().resume() }
     }
 
-    private func write(_ envelope: ACPEnvelope) async throws {
+    private func write(_ envelope: ACPEnvelope, dispatchFence: AgentDispatchFence? = nil) async throws {
         await acquireOutgoing()
         defer { releaseOutgoing() }
         guard !closed else { throw LocalACPClientError.processExited }
@@ -2236,7 +2290,13 @@ public actor LocalACPClient {
         var data = try JSONEncoder().encode(envelope)
         if runtimeKind != .defaultAgent { try await historyRecorder?("out", data) }
         guard !closed else { throw LocalACPClientError.processExited }
-        if envelope.method == "session/prompt" { try Task.checkCancellation() }
+        let isInput = ["session/prompt", "_session/steering", "_x.ai/interject"].contains(envelope.method ?? "")
+        if isInput, Task.isCancelled || sessionCancellationRequested { throw LocalACPClientError.activeInputUnsupported }
+        do { try dispatchFence?.claimDispatch() }
+        catch {
+            if isInput { throw LocalACPClientError.activeInputUnsupported }
+            throw error
+        }
         data.append(0x0A)
         try input.write(contentsOf: data)
     }

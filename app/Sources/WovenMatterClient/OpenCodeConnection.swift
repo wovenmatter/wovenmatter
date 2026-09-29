@@ -133,9 +133,13 @@ public struct OpenCodeHTTPClient: Sendable {
         return request
     }
     public func call(_ method: String = "GET", _ path: String,
-                     query: [String: String] = [:], body: OpenCodeValue? = nil) async throws -> OpenCodeValue {
+                     query: [String: String] = [:], body: OpenCodeValue? = nil,
+                     dispatchFence: AgentDispatchFence? = nil) async throws -> OpenCodeValue {
+        try dispatchFence?.check()
         let request = try request(method, path, query: query, body: body)
         try await record("out", method: method, path: path, query: query, data: request.httpBody ?? Data())
+        try Task.checkCancellation()
+        try dispatchFence?.claimDispatch()
         let (bytes, response) = try await session.bytes(for: request)
         defer { bytes.task.cancel() }
         var data = Data()

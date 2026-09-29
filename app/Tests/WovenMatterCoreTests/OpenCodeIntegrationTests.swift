@@ -7,6 +7,66 @@ import WovenMatterCore
 
 @Suite(.serialized)
 struct OpenCodeIntegrationTests {
+    @Test func dispatchFenceIsCheckedAfterOutboundHistory() async throws {
+        let fixture = OpenCodeFixture(); FixtureProtocol.fixture = fixture
+        let fence = AgentDispatchFence()
+        let client = OpenCodeHTTPClient(connection: connection(), session: fixtureSession()).recording { direction, _ in
+            if direction == "out" { fence.cancel() }
+        }
+        await #expect(throws: CancellationError.self) {
+            _ = try await client.call("POST", "/api/session/ses_fixture/prompt",
+                body: ["id": "msg_stopped", "text": "Never send"], dispatchFence: fence)
+        }
+        #expect(!fence.hasDispatched)
+        #expect(fixture.promptCount == 0)
+    }
+
+    @Test(arguments: [false, true])
+    func stopDuringAdmissionRejectsOnlyDefinitelyUnsentInput(isCommand: Bool) async throws {
+        let fixture = OpenCodeFixture(); FixtureProtocol.fixture = fixture
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+        let id = try await database.createLocalACPSession(runtimeKind: .opencode, title: "Stopped admission", ownerDeviceID: UUID(), openCodeAssociation: ("fixture", "ses_fixture"))
+        let source = try await database.createLocalACPSession(runtimeKind: .codex, title: "Coordinator", ownerDeviceID: UUID())
+        let deliveryID = UUID().uuidString.lowercased()
+        _ = try await database.reserveToolDelivery(sourceID: source, targetID: id, text: "Never send", requestID: deliveryID)
+        _ = try await database.claimToolDelivery(id: deliveryID)
+        let link = OpenCodeSessionLink(conversationID: id, connectionID: "fixture", sessionID: "ses_fixture")
+        let session = fixtureSession()
+        let coordinator = OpenCodeSessionCoordinator(database: database,
+            clientFactory: { OpenCodeHTTPClient(connection: $0, session: session) })
+        try await coordinator.connect(connection())
+        let entered = AsyncStream<Void>.makeStream()
+        let release = DispatchSemaphore(value: 0)
+        defer { release.signal() }
+        let blocked = Task { try await database.write { _ in
+            entered.continuation.yield(())
+            #expect(release.wait(timeout: .now() + 60) == .success)
+        } }
+        var iterator = entered.stream.makeAsyncIterator()
+        await iterator.next()
+        let pending = Task {
+            let input = AgentMessageInput(text: "Never send", historyDeliveryID: deliveryID)
+            if isCommand { try await coordinator.command(link, name: "review", input: input) }
+            else { try await coordinator.prompt(link, input: input) }
+        }
+        let deadline = ContinuousClock.now + .seconds(60)
+        while database.workerMetrics[0].pending < 2 {
+            guard ContinuousClock.now < deadline else { throw DatabaseWorkerError.timedOut }
+            try await Task.sleep(for: .milliseconds(1))
+        }
+        await coordinator.cancelPendingInput(conversationID: id)
+        release.signal()
+        try await blocked.value
+        await #expect(throws: CancellationError.self) { try await pending.value }
+        #expect(fixture.promptCount == 0 && fixture.commandCount == 0)
+        #expect(try await database.openCodeUncertainSubmissions(conversationID: id).isEmpty)
+        #expect(try await database.toolDelivery(id: deliveryID)?.status == "failed")
+        await coordinator.shutdown()
+    }
+
     @Test func shutdownInvalidatesConnectionWaitingForDatabase() async throws {
         let fixture = OpenCodeFixture(); FixtureProtocol.fixture = fixture
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)

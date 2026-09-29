@@ -70,6 +70,7 @@ final class OpenCodeModel {
     private(set) var hiddenModels: Set<String> = []
     private(set) var settingsModels: [OpenCodeValue] = []
     private var selectionTasks: [String: Task<Void, Error>] = [:]
+    private var pendingDispatches: [String: AgentDispatchFence] = [:]
     private var defaultModels: [String: OpenCodeValue] = [:]
     private var models: [String: [OpenCodeValue]] = [:]
     private var commands: [String: [OpenCodeValue]] = [:]
@@ -276,6 +277,7 @@ final class OpenCodeModel {
     }
 
     func stopServer() async throws {
+        pendingDispatches.values.forEach { $0.cancel() }
         if isBackendProjection { _ = try await backendCommand(.stop); return }
         guard !isControllingServer, !isConnecting else { throw OpenCodeError.message("Wait for the current server operation to finish.") }
         isControllingServer = true
@@ -296,6 +298,7 @@ final class OpenCodeModel {
     }
 
     func prepareToQuit() async throws {
+        pendingDispatches.values.forEach { $0.cancel() }
         if isBackendProjection { return }
         quitting = true
         serverStopped = true
@@ -314,6 +317,7 @@ final class OpenCodeModel {
     }
 
     func suspendConnection() async {
+        pendingDispatches.values.forEach { $0.cancel() }
         if isBackendProjection { do { _ = try await backendCommand(.suspend) } catch { self.error = error.localizedDescription }; return }
         connectionGeneration = UUID()
         connectionTask?.cancel(); connectionTask = nil; isConnecting = false
@@ -323,6 +327,7 @@ final class OpenCodeModel {
     }
 
     func disable() async {
+        pendingDispatches.values.forEach { $0.cancel() }
         if isBackendProjection { do { _ = try await backendCommand(.disable) } catch { self.error = error.localizedDescription }; return }
         guard !isRemote else { await suspendConnection(); return }
         connectionGeneration = UUID()
@@ -451,6 +456,10 @@ final class OpenCodeModel {
     }
 
     func sessionCall(_ id: String, _ suffix: String = "", method: String = "GET", body: OpenCodeValue? = nil) async throws -> OpenCodeValue {
+        if method == "POST", suffix == "/interrupt" {
+            cancelPendingInput(id)
+            if !isBackendProjection { await coordinator.cancelPendingInput(conversationID: id) }
+        }
         if isBackendProjection { return try await backendCommand(.sessionCall(id, suffix, method, body)).value ?? .null }
         guard let link = links[id], isLocalSession(id) else { throw OpenCodeError.message("This is a saved transcript. Start a new OpenCode chat to continue.") }
         let result = try await coordinator.call(connectionID: connectionID, method: method,
@@ -635,9 +644,19 @@ final class OpenCodeModel {
             workspace: workspace, selections: nativeSelections(id))
     }
 
-    func send(_ id: String, input: AgentMessageInput, discovery: String? = nil) async throws {
+    func cancelPendingInput(_ id: String) { pendingDispatches[id]?.cancel() }
+
+    func send(_ id: String, input: AgentMessageInput, discovery: String? = nil,
+              dispatchFence: AgentDispatchFence? = nil) async throws {
+        let fence = dispatchFence ?? AgentDispatchFence()
+        try fence.check()
+        guard pendingDispatches[id] == nil else { throw OpenCodeError.message("The previous input is still being submitted.") }
+        pendingDispatches[id] = fence
+        defer { pendingDispatches.removeValue(forKey: id) }
         if isBackendProjection {
             if let selection = selectionTasks[id] { try await selection.value }
+            // IPC dispatch may reach the execution owner even if its reply is lost.
+            try fence.claimDispatch()
             _ = try await backendCommand(.send(id, input, discovery)); return
         }
         guard let link = links[id], isLocalSession(id) else { throw OpenCodeError.message("This saved transcript is read-only. Create a new OpenCode chat.") }
@@ -648,22 +667,26 @@ final class OpenCodeModel {
         }
         guard !serverStopped else { throw OpenCodeError.message("Start OpenCode from its settings page before sending.") }
         if !isReady { try await connectLocal() }
+        try fence.check()
         // A failed selection remains a send barrier until the user selects again.
         if let selection = selectionTasks[id] { try await selection.value }
+        try fence.check()
         if let captured = sessionPreferences.conversation(id: id), captured.requiresApplication {
             try await applySessionSelections(id, selections: captured.desiredSelections)
             sessionPreferences.markApplied(id: id)
+            try fence.check()
         }
         var input = input
         if let configuration = remoteConfiguration, !input.files.isEmpty {
             guard let remoteWorkspaces else { throw OpenCodeError.message("This remote workspace is unavailable.") }
             input = try await remoteWorkspaces.stagingFiles(of: input, in: configuration.id)
         }
+        try fence.check()
         if let command = OpenCodeComposerMetadata.invocation(input.text, commands: commands[id] ?? []) {
             try await coordinator.command(link, name: command.name,
-                input: AgentMessageInput(text: command.arguments, attachments: input.attachments, historyDeliveryID: input.historyDeliveryID), discovery: discovery)
+                input: AgentMessageInput(text: command.arguments, attachments: input.attachments, historyDeliveryID: input.historyDeliveryID), discovery: discovery, dispatchFence: fence)
         } else {
-            try await coordinator.prompt(link, input: input, discovery: discovery)
+            try await coordinator.prompt(link, input: input, discovery: discovery, dispatchFence: fence)
         }
     }
 
