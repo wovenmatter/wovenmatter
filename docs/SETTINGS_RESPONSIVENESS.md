@@ -27,8 +27,21 @@ those rows inside eager section and row stacks. Each model row has two toggles
 and two ordering buttons, so entering the page could construct 160 model controls
 before the user scrolled to them. The follow-up changes those two stacks to lazy
 stacks within the existing page scroll viewport. Pagination and catalog behavior
-remain unchanged; a new Dev build and matching profile are needed to measure the
-improvement.
+remain unchanged.
+
+The signed Dev build at `9634251`, containing the lazy-row correction `5309b8c`
+and SDK display change `eb7faaa`, compiled and launched successfully. Follow-up
+entry samples captured 343 samples under synchronous click rendering on initial
+entry, versus 726 before, and 237 on repeated entry, versus 1,900 before. No
+main-thread Keychain reads appeared in those samples. These captures support less
+render work on entry; they are not a controlled benchmark, and sample counts must
+not be treated as wall-clock latency or a guaranteed speedup. A capture that missed
+the entry click was excluded from this comparison.
+
+Native inspection initially exposed a lazy model list; scrolling materialized the
+row controls. Next moved the browser to models 41–80 of 421, an Opus 5.5 search
+returned one matching model, and clearing the search restored models 1–40 of 421.
+The SDK version disclosure also expanded and collapsed successfully.
 
 These observations do not establish the duration of every reported stall, or
 that the separate long-conversation slowdown has the same cause.
@@ -72,7 +85,8 @@ part of the separate asynchronous-database work.
 ## Validation boundary
 
 This session deliberately runs no CI or test suites. Regression cases are added
-for future main-branch validation. Native compilation and the shared Dev build
-are the immediate delivery checks. Responsiveness during real Settings navigation,
-account changes, long drafts, and tool-heavy conversations remains live acceptance;
-no universal latency claim is inferred from source review.
+for future main-branch validation. The signed Dev build, entry profiles, and native
+scrolling, pagination, search, and disclosure checks above are the completed
+delivery checks. Broader responsiveness during account changes, long drafts, and
+tool-heavy conversations remains live acceptance; the targeted entry evidence
+does not establish a universal latency guarantee.
