@@ -26,7 +26,7 @@ test('menu attribution is distinct from inline names and actual connection route
     'openai-codex': 'ChatGPT subscription', openai: 'OpenAI subscription',
     openrouter: 'OpenRouter subscription', 'opencode-go': 'OpenCode Go',
     xai: 'Grok subscription', 'xai-api': 'XAI subscription',
-    'claude-subscription': 'Anthropic subscription', anthropic: 'Anthropic subscription',
+    'claude-subscription': 'Claude subscription', anthropic: 'Anthropic subscription',
   })) {
     const option = modelOption({ id: `${provider}/fixture`, name: 'Fixture Model', provider, providerName: 'Actual connection route' });
     assert.equal(option.value, `${provider}/fixture`);

@@ -6,7 +6,7 @@ const modelConnectionNames = {
   'opencode-go': 'OpenCode Go',
   xai: 'Grok subscription',
   'xai-api': 'XAI subscription',
-  'claude-subscription': 'Anthropic subscription',
+  'claude-subscription': 'Claude subscription',
   anthropic: 'Anthropic subscription',
 };
 
