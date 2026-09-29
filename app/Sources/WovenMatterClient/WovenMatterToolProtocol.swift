@@ -90,7 +90,11 @@ public struct WovenMatterToolCommand: Sendable {
   }
 
   public init(_ arguments: [String]) throws {
-    var args = arguments
+    guard arguments.count <= 1_024 else {
+      throw WorkspaceToolError.invalid("A tool command must contain at most 1,024 arguments.")
+    }
+    // ArraySlice removes from the front in constant time, even for malformed input.
+    var args = arguments[...]
     if args.isEmpty || ["help", "--help", "-h"].contains(args[0]) {
       self.group = nil; self.action = "help"; self.positional = []; self.options = [:]; self.optionIndices = [:]; self.operationArguments = arguments; self.wantsHelp = true
       return
@@ -100,7 +104,7 @@ public struct WovenMatterToolCommand: Sendable {
       throw WorkspaceToolError.invalid("Unknown tool group '\(domain)'. Run wovenmatter help.")
     }
     self.group = group
-    if args.isEmpty || [["help"], ["--help"], ["-h"]].contains(args) {
+    if args.isEmpty || [["help"], ["--help"], ["-h"]].contains(Array(args)) {
       self.action = "help"; self.wantsHelp = true
       self.positional = []; self.options = [:]; self.optionIndices = [:]; self.operationArguments = arguments; return
     }

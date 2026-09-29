@@ -4,7 +4,7 @@ import SQLite3
 import WovenMatterCore
 import WovenMatterClient
 
-extension WorkspaceDatabase {
+extension WorkspaceDatabaseConnection {
   func canonicalToolRequestID(_ value: String) throws -> String {
     guard let id = UUID(uuidString: value) else {
       throw WorkspaceToolError.invalid("A mutation request needs a UUID request ID.")
@@ -453,7 +453,7 @@ private struct CoordinationMutationInput: Codable {
 }
 
 
-extension WorkspaceDatabase {
+extension WorkspaceDatabaseConnection {
   /// Must run inside the mutation's transaction. A receipt and its write commit
   /// together, including when independent connections retry after an app restart.
   /// Callers recheck current authority before returning either a new or saved result.

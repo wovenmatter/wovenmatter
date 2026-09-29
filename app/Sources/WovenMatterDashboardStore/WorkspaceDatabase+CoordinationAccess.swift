@@ -2,7 +2,7 @@ import Foundation
 import WovenMatterCore
 import WovenMatterClient
 
-extension WorkspaceDatabase {
+extension WorkspaceDatabaseConnection {
   /// A durable intent returns immediately instead of keeping a CLI connection
   /// open while the user considers an access sheet. Replays never reacquire a
   /// completed or released assignment and never create a second sheet.

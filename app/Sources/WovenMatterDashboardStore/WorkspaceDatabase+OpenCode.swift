@@ -4,7 +4,7 @@ import WovenMatterClient
 import WovenMatterCore
 
 // Canonical OpenCode projections; legacy ACP rows are never migrated.
-extension WorkspaceDatabase {
+extension WorkspaceDatabaseConnection {
   public func knownOpenCodeSessionIDs(connectionID: String) throws -> Set<String> {
     try knownSessionIDs(sql: "SELECT session_id FROM desktop_opencode_sessions WHERE connection_id = ?", scope: connectionID)
   }

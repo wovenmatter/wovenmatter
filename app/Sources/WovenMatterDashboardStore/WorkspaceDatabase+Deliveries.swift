@@ -3,7 +3,7 @@ import SQLite3
 import WovenMatterCore
 import WovenMatterClient
 
-extension WorkspaceDatabase {
+extension WorkspaceDatabaseConnection {
   /// Only the app scheduler uses timer/notification kinds. Agent commands always
   /// use message/created with a caller bound to their endpoint.
   public func reserveToolDelivery(sourceID: String, targetID: String, text: String, requestID: String,
@@ -252,5 +252,54 @@ extension WorkspaceDatabase {
       targetModel: r["target_model"]?.stringValue, purpose: r["purpose"]?.stringValue, createdAt: string("created_at"),
       sequence: r["sequence"]?.intValue.map(Int64.init), nativeCommand: r["native_command"]?.stringValue,
       failureCode: r["failure_code"]?.stringValue, failureReason: r["failure_reason"]?.stringValue)
+  }
+}
+
+// MARK: - Async worker boundary
+
+extension WorkspaceDatabase {
+  public func reserveToolDelivery(sourceID: String, targetID: String, text: String, requestID: String,
+                                  kind: WorkspaceSessionDeliveryKind = .message, purpose: String? = nil,
+                                  eventKey: String? = nil) async throws -> WorkspaceSessionDelivery {
+    try await write { try $0.reserveToolDelivery(sourceID: sourceID, targetID: targetID, text: text, requestID: requestID, kind: kind, purpose: purpose, eventKey: eventKey) }
+  }
+
+  public func claimToolDelivery(id: String, now: Date = Date()) async throws -> WorkspaceSessionDelivery? {
+    try await write { try $0.claimToolDelivery(id: id, now: now) }
+  }
+
+  public func validateClaimedToolDelivery(id: String) async throws {
+    try await read { try $0.validateClaimedToolDelivery(id: id) }
+  }
+
+  public func markToolDeliveryTransportStarted(id: String, targetID: String? = nil, nativeCommand: String? = nil) async throws {
+    try await write { try $0.markToolDeliveryTransportStarted(id: id, targetID: targetID, nativeCommand: nativeCommand) }
+  }
+
+  public func failToolDeliveryAttempt(id: String, now: Date = Date()) async throws {
+    try await finishWrite { try $0.failToolDeliveryAttempt(id: id, now: now) }
+  }
+
+  public func setToolDeliveryStatus(id: String, status: String, messageID: String? = nil,
+                                    failureCode: String? = nil, failureReason: String? = nil) async throws {
+    // Resolving an already claimed delivery is cleanup, including returning a
+    // known-unsent attempt to the queue. Preserve its outcome on cancellation.
+    try await finishWrite { try $0.setToolDeliveryStatus(id: id, status: status, messageID: messageID, failureCode: failureCode, failureReason: failureReason) }
+  }
+
+  public func recoverToolDeliveries() async throws {
+    try await write { try $0.recoverToolDeliveries() }
+  }
+
+  public func toolDelivery(id: String) async throws -> WorkspaceSessionDelivery? {
+    try await read { try $0.toolDelivery(id: id) }
+  }
+
+  public func sessionDeliveries(sessionID: String? = nil, queuedOnly: Bool = false, limit: Int = 200, beforeID: String? = nil, outgoingOnly: Bool = false, activityOnly: Bool = false, includeCalendar: Bool = true) async throws -> [WorkspaceSessionDelivery] {
+    try await read { try $0.sessionDeliveries(sessionID: sessionID, queuedOnly: queuedOnly, limit: limit, beforeID: beforeID, outgoingOnly: outgoingOnly, activityOnly: activityOnly, includeCalendar: includeCalendar) }
+  }
+
+  public func sessionActivityWindow(sessionID: String, throughID: String) async throws -> [WorkspaceSessionDelivery] {
+    try await read { try $0.sessionActivityWindow(sessionID: sessionID, throughID: throughID) }
   }
 }

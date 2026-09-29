@@ -4,7 +4,7 @@ import SQLite3
 import WovenMatterClient
 import WovenMatterCore
 
-extension WorkspaceDatabase {
+extension WorkspaceDatabaseConnection {
   func migrateLibrary() throws {
     try transaction {
       try executeUnlocked(

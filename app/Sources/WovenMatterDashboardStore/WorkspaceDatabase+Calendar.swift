@@ -3,7 +3,7 @@ import CryptoKit
 import WovenMatterCore
 import WovenMatterClient
 
-extension WorkspaceDatabase {
+extension WorkspaceDatabaseConnection {
   public func calendarEvent(id: String, callerID: String) throws -> WorkspaceCalendarItemRecord {
     try withLock {
       try requireToolUnlocked(.calendar, sessionID: callerID)
@@ -440,7 +440,7 @@ public struct RemoteCalendarScheduleExport: Sendable {
   public let runs: [WorkspaceCalendarRun]
 }
 
-extension WorkspaceDatabase {
+extension WorkspaceDatabaseConnection {
   func remoteCalendarWorkspaceIDsUnlocked() throws -> Set<String> {
     Set(try historyRowsUnlocked("SELECT workspace_id FROM workspace_calendar_remote_ownership", values: [])
       .compactMap { $0.objectValue?["workspace_id"]?.stringValue })
@@ -525,7 +525,7 @@ extension WorkspaceDatabase {
   }
 }
 
-extension WorkspaceDatabase {
+extension WorkspaceDatabaseConnection {
   /// Atomic transcript projection and receipt: a crash/repeated fetch cannot
   /// duplicate a prompt or assistant reply. Native updates are retained verbatim.
   public func importRemoteCalendarTranscript(receiptID: String, run: WorkspaceCalendarRun,
@@ -631,7 +631,7 @@ extension WorkspaceDatabase {
   }
 }
 
-extension WorkspaceDatabase {
+extension WorkspaceDatabaseConnection {
   /// Call only after the remote gateway confirms it is disabled and its result
   /// journal is drained. Keep the durable fence until this checkpoint is saved.
   public func restoreRemoteCalendarExecutionCheckpoint(workspaceID: UUID, schedules: [RemoteTaskGatewaySchedule]) throws {

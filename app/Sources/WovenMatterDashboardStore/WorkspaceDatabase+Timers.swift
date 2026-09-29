@@ -2,7 +2,7 @@ import Foundation
 import WovenMatterCore
 import WovenMatterClient
 
-extension WorkspaceDatabase {
+extension WorkspaceDatabaseConnection {
   /// The app is the scheduler. No timer is installed with a provider or operating system.
   public func sessionTimers(sessionID: String? = nil) throws -> [WorkspaceSessionTimer] {
     try withLock { try timersUnlocked(sessionID: sessionID) }

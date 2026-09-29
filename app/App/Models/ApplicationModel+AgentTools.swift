@@ -108,7 +108,7 @@ extension ApplicationModel {
                     catch { agentTools?.error = error.localizedDescription }
                 }
             }
-            for delivery in try database.sessionDeliveries(queuedOnly: true, includeCalendar: false) {
+            for delivery in try await database.sessionDeliveries(queuedOnly: true, includeCalendar: false) {
                 guard !Task.isCancelled else { return }
                 // Initial sends try steering. A deferred send waits for an idle
                 // target instead of repeatedly trying an unsupported operation.
@@ -165,9 +165,9 @@ extension ApplicationModel {
         return try .value(samples)
     }
 
-    private func toolConversation(_ id: String) throws -> WorkspaceConversationRecord {
+    private func toolConversation(_ id: String) async throws -> WorkspaceConversationRecord {
         guard let database = dashboardStore?.database,
-              let conversation = try database.workspaceOverview().conversations.first(where: { $0.id == id }) else {
+              let conversation = try await database.workspaceOverview().conversations.first(where: { $0.id == id }) else {
             throw WorkspaceToolError.notFound("The requested session is unavailable.")
         }
         return conversation
@@ -193,17 +193,17 @@ extension ApplicationModel {
             return .init(success: outcome.error == nil, result: value.result, error: outcome.error)
         case "release":
             let id = try command.required("id", allowPositional: true)
-            return try .value(database.releaseAgentCoordination(sourceID: callerID, targetID: id,
+            return try await .value(database.releaseAgentCoordination(sourceID: callerID, targetID: id,
                 epoch: command.required("epoch"), requestID: request.requestID))
         case "notifications":
             let id = try command.required("id", allowPositional: true)
             let raw = try command.required("enabled")
             guard ["true", "false"].contains(raw) else { throw WorkspaceToolError.invalid("--enabled must be true or false.") }
-            return try .value(database.setAgentCoordinationNotifications(sourceID: callerID, targetID: id,
+            return try await .value(database.setAgentCoordinationNotifications(sourceID: callerID, targetID: id,
                 epoch: command.required("epoch"), enabled: raw == "true", requestID: request.requestID))
         case "receipts":
             let limit = try command.integer("limit", default: 100, range: 1...200)
-            var receipts = try database.sessionDeliveries(sessionID: callerID,
+            var receipts = try await database.sessionDeliveries(sessionID: callerID,
                 limit: limit + 1, beforeID: command.options["before"])
             let more = receipts.count > limit
             if more { receipts.removeLast() }
@@ -255,7 +255,7 @@ extension ApplicationModel {
                   purpose.utf8.count <= 65_536 else {
                 throw WorkspaceToolError.invalid("A session purpose must be at most 64 KiB.")
             }
-            let reservation = try store.database.reserveToolSessionCreation(sourceID: source.id, requestID: request.requestID,
+            let reservation = try await store.database.reserveToolSessionCreation(sourceID: source.id, requestID: request.requestID,
                 arguments: request.operationArguments, purpose: purpose, managed: command.options["independent"] == nil)
             guard let id = reservation.objectValue?["target_id"]?.stringValue, let uuid = UUID(uuidString: id) else {
                 throw WorkspaceToolError.invalid("Unable to reserve the new session.")
@@ -263,8 +263,8 @@ extension ApplicationModel {
             // Completed delivery receipts must replay before admission: unrelated
             // running sessions cannot turn a successful creation into at_capacity.
             if reservation.objectValue?["status"]?.stringValue == "ready",
-               try store.database.toolDelivery(id: request.requestID) != nil {
-                let delivery = try store.database.reserveToolDelivery(sourceID: source.id, targetID: id, text: text,
+               try await store.database.toolDelivery(id: request.requestID) != nil {
+                let delivery = try await store.database.reserveToolDelivery(sourceID: source.id, targetID: id, text: text,
                     requestID: request.requestID, kind: .created, purpose: purpose)
                 return try await self.dispatchToolDelivery(delivery)
             }
@@ -272,7 +272,7 @@ extension ApplicationModel {
             let admission = self.toolSessionAdmission.begin(id, running: self.runningToolSessionIDs,
                 limit: agentTools.settings.maximumRunningSessions)
             if admission == .atCapacity {
-                try? store.database.failToolSessionCreation(requestID: request.requestID)
+                try? await store.database.failToolSessionCreation(requestID: request.requestID)
                 throw WorkspaceToolError.atCapacity(agentTools.settings.maximumRunningSessions)
             }
             if admission == .preparing { throw ApplicationModelError.localSessionConfigurationInProgress }
@@ -284,7 +284,7 @@ extension ApplicationModel {
                         configuration = try JSONDecoder().decode(WorkspaceSessionCreationConfiguration.self, from: Data(json.utf8))
                     } else {
                         let proposed = try await self.resolveToolSessionCreation(source: source, command: command, title: title)
-                        configuration = try store.database.saveToolSessionCreationConfiguration(requestID: request.requestID,
+                        configuration = try await store.database.saveToolSessionCreationConfiguration(requestID: request.requestID,
                             sourceID: source.id, configuration: proposed)
                     }
                     let runtime = configuration.runtimeKind
@@ -299,7 +299,7 @@ extension ApplicationModel {
                         }
                         remoteTarget = .init(configuration: workspace, harness: harness)
                     } else { remoteTarget = nil }
-                    if (try? self.toolConversation(id)) == nil {
+                    if (try? await self.toolConversation(id)) == nil {
                         let directory = configuration.nativeWorkingDirectory.map { URL(fileURLWithPath: $0) }
                         let created: String?
                         if let remoteTarget {
@@ -311,14 +311,14 @@ extension ApplicationModel {
                         }
                         guard created == id else { throw WorkspaceToolError.invalid(self.localRunError ?? "Unable to create the session.") }
                     }
-                    let target = try self.toolConversation(id)
+                    let target = try await self.toolConversation(id)
                     guard target.localRuntimeKind == runtime, target.remoteWorkspaceID == configuration.workspaceID else {
                         throw WorkspaceToolError.invalid("The saved session does not match this creation request's destination.")
                     }
-                    try store.database.requireTool(.sessions, sessionID: source.id)
+                    try await store.database.requireTool(.sessions, sessionID: source.id)
                     if runtime == .openclaw {
                         try await self.prepareCreatedOpenClawSession(target, configuration: configuration)
-                        try store.database.requireTool(.sessions, sessionID: source.id)
+                        try await store.database.requireTool(.sessions, sessionID: source.id)
                     }
                     // Initial title/folder/tools commit with session insertion.
                     // Retrying preparation must preserve any later user edits.
@@ -327,20 +327,20 @@ extension ApplicationModel {
                         guard self.sessionSelectionPreferences.conversation(id: id)?.requiresApplication == false else {
                             throw WorkspaceToolError.invalid("The session's initial settings are not ready. Retry after connecting its harness.")
                         }
-                        try store.database.markToolSessionCreationConfigured(requestID: request.requestID, sourceID: source.id)
+                        try await store.database.markToolSessionCreationConfigured(requestID: request.requestID, sourceID: source.id)
                     }
-                    try store.database.completeToolSessionCreation(requestID: request.requestID, sourceID: source.id)
+                    try await store.database.completeToolSessionCreation(requestID: request.requestID, sourceID: source.id)
                 }
-                let delivery = try store.database.reserveToolDelivery(sourceID: source.id, targetID: id, text: text,
+                let delivery = try await store.database.reserveToolDelivery(sourceID: source.id, targetID: id, text: text,
                     requestID: request.requestID, kind: .created, purpose: purpose)
                 await self.refreshWorkspace()
                 return try await self.dispatchToolDelivery(delivery, admissionDecision: admission)
             } catch {
-                try? store.database.failToolSessionCreation(requestID: request.requestID)
-                if let delivery = try? store.database.toolDelivery(id: request.requestID) {
+                try? await store.database.failToolSessionCreation(requestID: request.requestID)
+                if let delivery = try? await store.database.toolDelivery(id: request.requestID) {
                     return try self.toolDeliveryResponse(delivery)
                 }
-                if (try? self.toolConversation(id)) != nil {
+                if (try? await self.toolConversation(id)) != nil {
                     return .init(success: false, result: .object([
                         "id": .string(id), "state": .string("created_not_started")
                     ]), error: error.localizedDescription, code: "created_not_started")
@@ -414,11 +414,11 @@ extension ApplicationModel {
     func dispatchToolDelivery(_ delivery: WorkspaceSessionDelivery,
                               admissionDecision: WorkspaceSessionAdmission.Decision? = nil) async throws -> WovenMatterToolResponse {
         guard let database = dashboardStore?.database else { throw CancellationError() }
-        guard let claimed = try database.claimToolDelivery(id: delivery.id) else {
-            return try toolDeliveryResponse(database.toolDelivery(id: delivery.id) ?? delivery)
+        guard let claimed = try await database.claimToolDelivery(id: delivery.id) else {
+            return try await toolDeliveryResponse(database.toolDelivery(id: delivery.id) ?? delivery)
         }
         do {
-            let target = try toolConversation(claimed.targetID)
+            let target = try await toolConversation(claimed.targetID)
             if claimed.kind == .calendar, target.localRuntimeKind == .opencode,
                target.remoteWorkspaceID == nil, openCode?.isEnabled != true {
                 throw WorkspaceToolError.invalid("Enable OpenCode in Local agent workspace before running this task.")
@@ -428,32 +428,32 @@ extension ApplicationModel {
                 allowSteering: claimed.kind != .calendar, admissionDecision: admissionDecision)
             guard sent else {
                 if claimed.kind == .calendar {
-                    try database.setToolDeliveryStatus(id: claimed.id, status: "queued")
+                    try await database.setToolDeliveryStatus(id: claimed.id, status: "queued")
                     return try .value(database.toolDelivery(id: claimed.id) ?? claimed)
                 }
                 // Capacity is not a scheduler. No new queue is created by the limit.
                 let limit = agentTools?.settings.maximumRunningSessions ?? 16
                 let error = WorkspaceToolError.atCapacity(limit)
-                try database.setToolDeliveryStatus(id: claimed.id, status: "cancelled",
+                try await database.setToolDeliveryStatus(id: claimed.id, status: "cancelled",
                     failureCode: "at_capacity", failureReason: error.localizedDescription)
-                return try toolDeliveryResponse(database.toolDelivery(id: claimed.id) ?? claimed)
+                return try await toolDeliveryResponse(database.toolDelivery(id: claimed.id) ?? claimed)
             }
-            try database.setToolDeliveryStatus(id: claimed.id, status: "accepted")
+            try await database.setToolDeliveryStatus(id: claimed.id, status: "accepted")
         } catch LocalACPSessionDatabaseError.steeringUnsupported {
-            try database.setToolDeliveryStatus(id: claimed.id, status: "queued")
+            try await database.setToolDeliveryStatus(id: claimed.id, status: "queued")
         } catch {
-            try database.failToolDeliveryAttempt(id: claimed.id)
-            if let failed = try database.toolDelivery(id: claimed.id),
+            try await database.failToolDeliveryAttempt(id: claimed.id)
+            if let failed = try await database.toolDelivery(id: claimed.id),
                ["cancelled", "failed", "uncertain"].contains(failed.status) {
                 let code = failed.status == "uncertain" ? "delivery_uncertain"
                     : failed.status == "cancelled" ? "delivery_cancelled" : "delivery_failed"
-                try database.setToolDeliveryStatus(id: failed.id, status: failed.status,
+                try await database.setToolDeliveryStatus(id: failed.id, status: failed.status,
                     failureCode: code, failureReason: String(error.localizedDescription.prefix(256)))
-                return try toolDeliveryResponse(database.toolDelivery(id: failed.id) ?? failed)
+                return try await toolDeliveryResponse(database.toolDelivery(id: failed.id) ?? failed)
             }
             throw error
         }
-        return try toolDeliveryResponse(database.toolDelivery(id: claimed.id) ?? claimed)
+        return try await toolDeliveryResponse(database.toolDelivery(id: claimed.id) ?? claimed)
     }
 
     private func toolDeliveryResponse(_ delivery: WorkspaceSessionDelivery) throws -> WovenMatterToolResponse {

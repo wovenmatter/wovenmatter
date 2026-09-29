@@ -2,7 +2,7 @@ import Foundation
 import WovenMatterCore
 import WovenMatterClient
 
-extension WorkspaceDatabase {
+extension WorkspaceDatabaseConnection {
   /// App launch routing reads the original resolved location, including after a
   /// restart or failed final coordination. It never derives a path from a title.
   public func toolSessionCreationConfiguration(targetID: String) throws -> WorkspaceSessionCreationConfiguration? {

@@ -9,6 +9,7 @@ import shutil
 import socket
 import sys
 import threading
+import time
 import uuid
 
 REQUEST_LIMIT = 4 * 1024 * 1024
@@ -18,9 +19,14 @@ RELAY_TIMEOUT = 75
 CLI_TIMEOUT = 90
 
 
-def receive_all(connection, maximum):
+def receive_all(connection, maximum, timeout=RELAY_TIMEOUT):
     chunks, size = [], 0
+    deadline = time.monotonic() + timeout
     while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("Tool message timed out.")
+        connection.settimeout(remaining)
         chunk = connection.recv(min(65536, maximum + 1 - size))
         if not chunk:
             return b"".join(chunks)
@@ -30,7 +36,7 @@ def receive_all(connection, maximum):
         chunks.append(chunk)
 
 
-def option_indices(arguments):
+def option_indices(arguments, positional=None):
     # Values may themselves look like flags. Only inspect argument positions,
     # never a literal message or document value, for CLI-side transformations.
     boolean_flags = {"all-workspace", "independent", "no-notify", "paused", "all-day", "timed", "no-repeat", "regular-event", "json", "header", "help"}
@@ -40,6 +46,8 @@ def option_indices(arguments):
     while index < len(arguments):
         item = arguments[index]
         if not item.startswith("--"):
+            if positional is not None and item != "-h":
+                positional.append(item)
             index += 1
             continue
         key = item[2:]
@@ -51,8 +59,11 @@ def option_indices(arguments):
 
 
 def build_request(arguments, environment):
+    if len(arguments) > 1024:
+        raise ValueError("A tool command must contain at most 1,024 arguments.")
     args = list(arguments)
-    options = option_indices(args)
+    positional = []
+    options = option_indices(args, positional)
     if "file" in options:
         index = options["file"]
         if args[:2] not in (["notes", "apply"], ["notes", "set-html"]) or index + 1 >= len(args):
@@ -62,7 +73,9 @@ def build_request(arguments, environment):
         if len(data) > 3 * 1024 * 1024:
             raise ValueError("Input files must be at most 3 MiB.")
         args[index:index + 2] = ["--html" if args[1] == "set-html" else "--json", data.decode("utf-8")]
-    if len(args) > 1 and args[0] == "notes" and args[1] not in ("list", "create", "versions", "version", "restore", "help"):
+    if (len(args) > 1 and args[0] == "notes"
+            and args[1] not in ("list", "folders", "create", "versions", "version", "restore", "help")
+            and not (args[1] == "read" and positional)):
         if "note-id" not in options and environment.get("WOVENMATTER_NOTE_ID"):
             args += ["--note-id", environment["WOVENMATTER_NOTE_ID"]]
     request_id = str(uuid.uuid4())
@@ -86,7 +99,7 @@ def run_cli(arguments):
             connection.connect(endpoint)
             connection.sendall(request)
             connection.shutdown(socket.SHUT_WR)
-            response = receive_all(connection, RESPONSE_LIMIT)
+            response = receive_all(connection, RESPONSE_LIMIT, timeout=CLI_TIMEOUT)
         result = json.loads(response)
         if not result.get("silent", False):
             sys.stdout.buffer.write(response + b"\n")

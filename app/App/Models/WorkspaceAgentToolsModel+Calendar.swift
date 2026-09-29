@@ -19,7 +19,7 @@ extension WorkspaceAgentToolsModel {
             let event = try database.calendarEvent(id: command.required("id", allowPositional: true), callerID: callerID)
             if command.action == "read" {
                 return .init(result: .object(["event": try WovenMatterToolResponse.value(event).result ?? .null,
-                    "runs": try database.queryCalendarRuns(eventID: event.id,
+                    "runs": try await database.queryCalendarRuns(eventID: event.id,
                         after: command.integer("after", default: 0, range: 0...Int.max),
                         limit: command.integer("limit", default: 100, range: 1...200))]))
             }

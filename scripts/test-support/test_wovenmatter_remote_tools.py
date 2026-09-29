@@ -53,6 +53,37 @@ class RemoteToolTests(unittest.TestCase):
         args = ["notes", "append", "--text", "--request-id"]
         self.assertEqual(json.loads(tools.build_request(args, {}))["arguments"], args)
 
+    def test_attached_note_does_not_override_explicit_read_or_folder_discovery(self):
+        for args in [["notes", "folders"], ["notes", "read", "explicit-note"],
+                     ["notes", "read", "--offset", "10", "explicit-note"]]:
+            request = json.loads(tools.build_request(args, {"WOVENMATTER_NOTE_ID": "attached-note"}))
+            self.assertEqual(request["arguments"], args)
+        args = ["notes", "read", "--offset", "10"]
+        request = json.loads(tools.build_request(args, {"WOVENMATTER_NOTE_ID": "attached-note"}))
+        self.assertEqual(request["arguments"], args + ["--note-id", "attached-note"])
+        with self.assertRaises(ValueError):
+            tools.build_request(["notes", "list"] + [""] * 1023, {})
+
+    def test_receive_deadline_cannot_be_extended_by_trickle_input(self):
+        class TrickleConnection:
+            def __init__(self):
+                self.timeouts = []
+                self.reads = 0
+
+            def settimeout(self, timeout):
+                self.timeouts.append(timeout)
+
+            def recv(self, maximum):
+                self.reads += 1
+                return b"x"
+
+        connection = TrickleConnection()
+        with patch.object(tools.time, "monotonic", side_effect=[0, 0, 0.5, 1.1]):
+            with self.assertRaises(TimeoutError):
+                tools.receive_all(connection, 1024, timeout=1)
+        self.assertEqual(connection.reads, 2)
+        self.assertEqual(connection.timeouts, [1, 0.5])
+
     def test_relay_binds_private_endpoint_and_closes_with_app(self):
         with tempfile.TemporaryDirectory(prefix="wmt-", dir="/tmp") as root:
             relay_dir = Path(root) / "relay"

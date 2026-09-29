@@ -764,14 +764,14 @@ public actor DashboardStore {
 
   public func handleNoteEditingRequest(
     _ request: NoteEditingRequest
-  ) throws -> NoteEditingResponse {
+  ) async throws -> NoteEditingResponse {
     do {
       let response: NoteEditingResponse = switch request.command {
-      case .read: try database.readNoteForEditing(id:request.noteID)
-      case .apply: try database.applyNoteEdits(request)
+      case .read: try await database.readNoteForEditing(id:request.noteID)
+      case .apply: try await database.applyNoteEdits(request)
       }
       if case .apply = request.command {
-        try database.recordHistory(WorkspaceHistoryEvent(harness:"woven-note",kind:"cli.mutation",
+        try await database.recordHistory(WorkspaceHistoryEvent(harness:"woven-note",kind:"cli.mutation",
           payload:String(decoding:try JSONEncoder().encode([
             "action":"apply", "noteID":request.noteID, "success":"true"
           ]),as:UTF8.self)))
@@ -779,7 +779,7 @@ public actor DashboardStore {
       return response
     } catch {
       if case .apply = request.command {
-        try database.recordHistory(WorkspaceHistoryEvent(harness:"woven-note",kind:"cli.mutation",
+        try await database.recordHistory(WorkspaceHistoryEvent(harness:"woven-note",kind:"cli.mutation",
           payload:String(decoding:try JSONEncoder().encode([
             "action":"apply", "noteID":request.noteID, "success":"false"
           ]),as:UTF8.self)))

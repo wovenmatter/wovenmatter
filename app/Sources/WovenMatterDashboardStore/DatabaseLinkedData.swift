@@ -20,7 +20,7 @@ public enum DatabaseLinkedDataError: LocalizedError, Equatable, Sendable {
     case .unsupportedFormat: "Linked artifacts currently support JSON and SQLite files."
     case .malformedJSON: "The linked JSON file could not be converted to tabular data."
     case .sqliteQueryRequired: "Add a read-only SQLite query to this artifact link."
-    case .sqliteReadOnlyQueryRequired: "Only one read-only SQLite SELECT, WITH, or PRAGMA query is allowed."
+    case .sqliteReadOnlyQueryRequired: "Only one read-only SQLite SELECT or WITH query is allowed."
     case .sqliteQueryLimitExceeded: "The linked SQLite query exceeded its execution limit."
     case .sqliteResultTooLarge: "The linked SQLite result is too large to render safely."
     case .sqliteFailure(let detail): "SQLite could not read the linked data: \(detail)"
@@ -48,9 +48,9 @@ public enum DatabaseLinkedData {
           queryResponse.rows.allSatisfy({ $0.count == queryResponse.columns.count }) else {
       throw DatabaseLinkedDataError.sqliteFailure("The database returned an invalid query response.")
     }
-    var resultBytes = 0
+    var resultBytes = 2
     for column in queryResponse.columns {
-      let (next, overflow) = resultBytes.addingReportingOverflow(column.utf8.count)
+      let (next, overflow) = resultBytes.addingReportingOverflow(try sqliteJSONStringBytes(column))
       guard !overflow, column.utf8.count <= maximumSQLiteCellBytes,
             next <= maximumSQLiteResultBytes else {
         throw DatabaseLinkedDataError.sqliteResultTooLarge
@@ -58,8 +58,9 @@ public enum DatabaseLinkedData {
       resultBytes = next
     }
     for row in queryResponse.rows {
+      resultBytes += 3 // Object delimiters and its array separator, including empty rows.
       for (index, value) in row.enumerated() {
-        let (namedBytes, nameOverflow) = value.utf8.count.addingReportingOverflow(queryResponse.columns[index].utf8.count)
+        let (namedBytes, nameOverflow) = try sqliteJSONStringBytes(value).addingReportingOverflow(sqliteJSONStringBytes(queryResponse.columns[index]))
         let (cellBytes, cellOverflow) = namedBytes.addingReportingOverflow(8)
         let (next, totalOverflow) = resultBytes.addingReportingOverflow(cellBytes)
         guard !nameOverflow, !cellOverflow, !totalOverflow, value.utf8.count <= maximumSQLiteCellBytes,
@@ -232,7 +233,7 @@ public enum DatabaseLinkedData {
       : query
     let firstWord = normalized.split(whereSeparator: \.isWhitespace).first?.lowercased()
     guard normalized.utf8.count <= maximumSQLiteQueryBytes,
-          let firstWord, ["select", "with", "pragma"].contains(firstWord),
+          let firstWord, ["select", "with"].contains(firstWord),
           !normalized.contains(";") else {
       throw DatabaseLinkedDataError.sqliteReadOnlyQueryRequired
     }
@@ -254,7 +255,7 @@ public enum DatabaseLinkedData {
     sqlite3_limit(connection, SQLITE_LIMIT_EXPR_DEPTH, 100)
     sqlite3_set_authorizer(connection, { _, action, _, _, _, _ in
       switch action {
-      case SQLITE_ATTACH, SQLITE_DETACH, SQLITE_ALTER_TABLE, SQLITE_ANALYZE,
+      case SQLITE_PRAGMA, SQLITE_ATTACH, SQLITE_DETACH, SQLITE_ALTER_TABLE, SQLITE_ANALYZE,
            SQLITE_CREATE_INDEX, SQLITE_CREATE_TABLE, SQLITE_CREATE_TEMP_INDEX,
            SQLITE_CREATE_TEMP_TABLE, SQLITE_CREATE_TEMP_TRIGGER, SQLITE_CREATE_TEMP_VIEW,
            SQLITE_CREATE_TRIGGER, SQLITE_CREATE_VIEW, SQLITE_CREATE_VTABLE,
@@ -291,9 +292,9 @@ public enum DatabaseLinkedData {
     }
     let columns = uniqueColumnNames(rawColumns)
     var rows: [[String]] = []
-    var resultBytes = 0
+    var resultBytes = 2
     for column in columns {
-      let (next, overflow) = resultBytes.addingReportingOverflow(column.utf8.count)
+      let (next, overflow) = resultBytes.addingReportingOverflow(try sqliteJSONStringBytes(column))
       guard !overflow, next <= maximumSQLiteResultBytes else {
         throw DatabaseLinkedDataError.sqliteResultTooLarge
       }
@@ -307,11 +308,12 @@ public enum DatabaseLinkedData {
       guard result == SQLITE_ROW else {
         throw DatabaseLinkedDataError.sqliteFailure(String(cString: sqlite3_errmsg(connection)))
       }
+      resultBytes += 3
       var row: [String] = []
       row.reserveCapacity(count)
       for index in 0..<count {
         let value = try sqliteValue(statement, index: Int32(index))
-        let (namedBytes, nameOverflow) = value.utf8.count.addingReportingOverflow(columns[index].utf8.count)
+        let (namedBytes, nameOverflow) = try sqliteJSONStringBytes(value).addingReportingOverflow(sqliteJSONStringBytes(columns[index]))
         let (cellBytes, cellOverflow) = namedBytes.addingReportingOverflow(8)
         let (next, totalOverflow) = resultBytes.addingReportingOverflow(cellBytes)
         guard !nameOverflow, !cellOverflow, !totalOverflow,
@@ -333,6 +335,26 @@ public enum DatabaseLinkedData {
       rows: rows,
       json: canonicalJSONString(objects)
     )
+  }
+
+  // Budget the emitted JSON, including escaped controls and repeated object keys,
+  // before allocating dictionaries and the final serialization.
+  private static func sqliteJSONStringBytes(_ value: String) throws -> Int {
+    guard value.utf8.count <= maximumSQLiteCellBytes else {
+      throw DatabaseLinkedDataError.sqliteResultTooLarge
+    }
+    var bytes = 2 // String quotes.
+    for scalar in value.unicodeScalars {
+      switch scalar.value {
+      case 0...0x1f, 0x2028, 0x2029: bytes += 6
+      case 0x22, 0x2f, 0x5c: bytes += 2
+      case 0...0x7f: bytes += 1
+      case 0...0x7ff: bytes += 2
+      case 0...0xffff: bytes += 3
+      default: bytes += 4
+      }
+    }
+    return bytes
   }
 
   private static func sqliteValue(_ statement: OpaquePointer, index: Int32) throws -> String {

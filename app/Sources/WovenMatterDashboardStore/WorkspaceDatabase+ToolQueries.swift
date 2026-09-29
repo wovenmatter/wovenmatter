@@ -2,7 +2,7 @@ import Foundation
 import WovenMatterCore
 import WovenMatterClient
 
-extension WorkspaceDatabase {
+extension WorkspaceDatabaseConnection {
   /// This is the only history entry point exposed to agent endpoints. Identity is
   /// supplied by the service binding, never decoded from the agent's request.
   public func queryAgentHistory(_ input: WorkspaceHistoryQuery, callerID: String,

@@ -11,22 +11,22 @@ struct WorkspaceAgentToolsServiceTests {
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
-        let database = try WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
-        let local = try database.createFolder(name: "Caller folder")
-        let elsewhere = try database.createFolder(name: "Other folder")
-        let caller = try database.createLocalACPSession(runtimeKind: .codex, title: "Caller", ownerDeviceID: UUID())
-        let target = try database.createLocalACPSession(runtimeKind: .pi, title: "Relevant work", ownerDeviceID: UUID())
-        _ = try database.moveConversation(id: caller, toFolderID: local)
-        _ = try database.moveConversation(id: target, toFolderID: elsewhere)
-        try database.recordHistory(.init(id: "actual-result", conversationID: target, harness: "pi",
+        let database = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
+        let local = try await database.createFolder(name: "Caller folder")
+        let elsewhere = try await database.createFolder(name: "Other folder")
+        let caller = try await database.createLocalACPSession(runtimeKind: .codex, title: "Caller", ownerDeviceID: UUID())
+        let target = try await database.createLocalACPSession(runtimeKind: .pi, title: "Relevant work", ownerDeviceID: UUID())
+        _ = try await database.moveConversation(id: caller, toFolderID: local)
+        _ = try await database.moveConversation(id: target, toFolderID: elsewhere)
+        try await database.recordHistory(.init(id: "actual-result", conversationID: target, harness: "pi",
             kind: "wire.in", payload: "rare-search-phrase in the other folder"))
-        let service = try WorkspaceAgentToolsModel(database: database,
+        let service = try await WorkspaceAgentToolsModel(database: database,
             sessionHandler: { _, _, _ in throw CancellationError() },
             noteHandler: { _, _, _ in throw CancellationError() },
             noteRestoreHandler: { _, _, _, _, _ in throw CancellationError() },
             usageHandler: { _ in throw CancellationError() }, onMutation: {})
         defer { service.stop() }
-        let endpoint = try service.endpoint(for: caller)
+        let endpoint = try await service.endpoint(for: caller)
         func request(_ arguments: [String]) async throws -> WovenMatterToolResponse {
             let data = try JSONEncoder().encode(WovenMatterToolRequest(arguments: arguments))
             let response = try await runBlockingToolFixture { try WovenMatterCommandLine.forward(data, to: endpoint) }
@@ -52,7 +52,7 @@ struct WorkspaceAgentToolsServiceTests {
         } == true)
         let explicitAudit = try await request(["history", "search", "rare-search-phrase", "--kind", "cli.request"])
         #expect(explicitAudit.result?.objectValue?["rows"]?.arrayValue?.isEmpty == true)
-        try database.recordHistory(.init(id: "local-result", conversationID: caller, harness: "codex",
+        try await database.recordHistory(.init(id: "local-result", conversationID: caller, harness: "codex",
             kind: "wire.in", payload: "rare-search-phrase now exists locally"))
         let localResponse = try await request(["history", "search", "rare-search-phrase"])
         #expect(localResponse.result?.objectValue?["scope"]?.stringValue == "folder")
@@ -94,25 +94,25 @@ extension WorkspaceAgentToolsServiceTests {
         let root = FileManager.default.temporaryDirectory.appending(path: "cli-hardening-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
-        let database = try WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
-        let caller = try database.createLocalACPSession(runtimeKind: .codex, title: "Writer", ownerDeviceID: UUID())
-        let historian = try database.createLocalACPSession(runtimeKind: .pi, title: "Historian", ownerDeviceID: UUID())
-        try database.setSessionTools(.init(enabled: [.history]), sessionID: historian)
-        let model = try WorkspaceAgentToolsModel(database: database,
+        let database = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
+        let caller = try await database.createLocalACPSession(runtimeKind: .codex, title: "Writer", ownerDeviceID: UUID())
+        let historian = try await database.createLocalACPSession(runtimeKind: .pi, title: "Historian", ownerDeviceID: UUID())
+        try await database.setSessionTools(.init(enabled: [.history]), sessionID: historian)
+        let model = try await WorkspaceAgentToolsModel(database: database,
             sessionHandler: { _, _, _ in throw CancellationError() },
             noteHandler: { caller, request, id in
                 switch request.command {
-                case .read: return try database.readNoteForEditing(id: request.noteID, callerConversationID: caller)
-                case .apply: return try database.applyNoteEdits(request, callerConversationID: caller, requestID: id)
+                case .read: return try await database.readNoteForEditing(id: request.noteID, callerConversationID: caller)
+                case .apply: return try await database.applyNoteEdits(request, callerConversationID: caller, requestID: id)
                 }
             },
             noteRestoreHandler: { _, _, _, _, _ in throw CancellationError() },
             usageHandler: { _ in throw CancellationError() }, onMutation: {})
         defer { model.stop() }
-        try database.beginCoordination(sourceID: caller, targetID: historian, purpose: "Audit")
+        try await database.beginCoordination(sourceID: caller, targetID: historian, purpose: "Audit")
         let status = await model.handle(.init(arguments: ["sessions", "status", historian]), callerID: caller)
         #expect(status.result?.objectValue?["relationship"]?.objectValue?["coordinationEpoch"]?.stringValue != nil)
-        let note = try database.createNote(folderID: nil, title: "Private", callerConversationID: caller,
+        let note = try await database.createNote(folderID: nil, title: "Private", callerConversationID: caller,
             requestID: UUID().uuidString)
         let missingRevision = await model.handle(.init(arguments: ["notes", "set-title", "--note-id", note,
             "--title", "Unsafe overwrite"]), callerID: caller)
@@ -125,7 +125,7 @@ extension WorkspaceAgentToolsServiceTests {
         #expect(first.success && replay.success)
         #expect(first.result?.objectValue?["document"] == nil)
         #expect(replay.result?.objectValue?["replayed"]?.boolValue == true)
-        #expect(try database.readNoteForEditing(id: note).document?.plainText
+        #expect(try await database.readNoteForEditing(id: note).document?.plainText
             .components(separatedBy: secret).count == 2)
 
         let mismatchedID = UUID().uuidString.lowercased()
@@ -133,7 +133,7 @@ extension WorkspaceAgentToolsServiceTests {
             requestID: UUID().uuidString), callerID: caller)
         #expect(!mismatch.success && mismatch.code == "invalid_request")
         #expect(mismatch.error?.contains("match the request envelope") == true)
-        #expect(try database.readNoteForEditing(id: note).document?.plainText
+        #expect(try await database.readNoteForEditing(id: note).document?.plainText
             .components(separatedBy: secret).count == 2)
 
         let read = await model.handle(.init(arguments: ["notes", "read", note,
@@ -159,16 +159,16 @@ extension WorkspaceAgentToolsServiceTests {
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
-        let database = try WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
-        let caller = try database.createLocalACPSession(runtimeKind: .codex, title: "Reader", ownerDeviceID: UUID())
-        let model = try WorkspaceAgentToolsModel(database: database,
+        let database = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
+        let caller = try await database.createLocalACPSession(runtimeKind: .codex, title: "Reader", ownerDeviceID: UUID())
+        let model = try await WorkspaceAgentToolsModel(database: database,
             sessionHandler: { _, _, _ in throw CancellationError() },
             noteHandler: { _, _, _ in throw CancellationError() },
             noteRestoreHandler: { _, _, _, _, _ in throw CancellationError() },
             usageHandler: { _ in throw CancellationError() }, onMutation: {})
         defer { model.stop() }
         for _ in 0..<20 {
-            try database.saveSessionTimer(.init(sessionID: caller, instruction: String(repeating: "x", count: 65_536),
+            try await database.saveSessionTimer(.init(sessionID: caller, instruction: String(repeating: "x", count: 65_536),
                 nextFireAt: Date(timeIntervalSince1970: 4_000_000_000)), callerID: caller)
         }
         let request = WovenMatterToolRequest(arguments: ["timers", "list"])

@@ -4,6 +4,12 @@ import WovenMatterCore
 @testable import WovenMatterClient
 
 struct WovenMatterToolProtocolTests {
+  @Test func oversizedArgumentArraysAreRejectedBeforeParsing() {
+    #expect(throws: WorkspaceToolError.invalid("A tool command must contain at most 1,024 arguments.")) {
+      try WovenMatterToolCommand(["notes", "list"] + Array(repeating: "", count: 1_023))
+    }
+  }
+
   @Test func unsuccessfulNoteResponseRemainsAnUnsuccessfulCLIResponse() throws {
     let response = try WovenMatterToolResponse.note(.init(success: false, noteID: "note", error: "Revision conflict"))
     #expect(!response.success && response.error == "Revision conflict")

@@ -32,7 +32,7 @@ private final class GatewayHistoryRequestCorrelation: @unchecked Sendable {
 }
 
 // MARK: - User-owned history (same workspace.sqlite; independent of UI projections)
-extension WorkspaceDatabase {
+extension WorkspaceDatabaseConnection {
   func migrateWorkspaceHistory() throws {
     try transaction {
       try executeUnlocked(
@@ -644,13 +644,13 @@ extension WorkspaceDatabase {
   }
 }
 
-extension WorkspaceDatabase {
+extension WorkspaceDatabaseConnection {
   public func checkpointNote(id: String) throws {
     try transaction { try checkpointNoteUnlocked(id: id, source: "editor-checkpoint", force: true) }
   }
 }
 
-extension WorkspaceDatabase {
+extension WorkspaceDatabaseConnection {
   // Timestamp-shaped tokens stay compatible with existing clients but must be
   // strictly increasing even when multiple agent edits occur in one millisecond.
   func nextNoteRevisionUnlocked(id: String, now: Date = Date()) throws -> String {
@@ -664,7 +664,7 @@ extension WorkspaceDatabase {
   }
 }
 
-extension WorkspaceDatabase {
+extension WorkspaceDatabaseConnection {
   func attachSessionMessageUnlocked(requestID: String, messageID: String) throws {
     let requestID = try canonicalDeliveryID(requestID)
     try validateClaimedToolDeliveryUnlocked(id: requestID)

@@ -8,25 +8,27 @@ import WovenMatterCore
 
 @Suite("Workspace history and bounded versions")
 struct WorkspaceHistoryTests {
-  @Test func legacyCompletedStreamsRemainSearchableAfterMigration() throws {
-    let (db, url) = try database()
+  @Test func legacyCompletedStreamsRemainSearchableAfterMigration() async throws {
+    let (db, url) = try await database()
     defer { try? FileManager.default.removeItem(at: url) }
-    let session = try db.createLocalACPSession(runtimeKind: .codex, title: "Legacy", ownerDeviceID: UUID())
-    let run = try db.beginLocalACPRun(conversationID: session, content: "Prompt")
-    try db.appendLocalACPAssistantChunk(runID: run.runID, chunk: "legacy violet harbor")
-    try db.completeLocalACPRun(runID: run.runID)
-    try db.transaction {
+    let session = try await db.createLocalACPSession(runtimeKind: .codex, title: "Legacy", ownerDeviceID: UUID())
+    let run = try await db.beginLocalACPRun(conversationID: session, content: "Prompt")
+    try await db.appendLocalACPAssistantChunk(runID: run.runID, chunk: "legacy violet harbor")
+    try await db.completeLocalACPRun(runID: run.runID)
+    try await db.write { connection in
+      try connection.transaction {
       // Old triggers stored deltas; their terminal event normally had no content.
-      try db.toolsExecuteUnlocked("UPDATE workspace_history_events SET payload=json_set(payload,'$.content','','$.contentMode','append') WHERE run_id=? AND kind='message.update'", [run.runID])
-      try db.toolsExecuteUnlocked("INSERT INTO workspace_history_events(id,conversation_id,run_id,harness,kind,payload) VALUES(?,?,?,?,?,?)",
-        [UUID().uuidString, session, run.runID, "codex", "message.update",
-         try db.toolsJSON(["id": run.assistantMessageID, "status": "streaming", "content": "legacy violet harbor", "contentMode": "append"])])
-      try db.toolsExecuteUnlocked("DELETE FROM workspace_history_schema WHERE version=2")
+        try connection.toolsExecuteUnlocked("UPDATE workspace_history_events SET payload=json_set(payload,'$.content','','$.contentMode','append') WHERE run_id=? AND kind='message.update'", [run.runID])
+        try connection.toolsExecuteUnlocked("INSERT INTO workspace_history_events(id,conversation_id,run_id,harness,kind,payload) VALUES(?,?,?,?,?,?)",
+          [UUID().uuidString, session, run.runID, "codex", "message.update",
+           try connection.toolsJSON(["id": run.assistantMessageID, "status": "streaming", "content": "legacy violet harbor", "contentMode": "append"])])
+        try connection.toolsExecuteUnlocked("DELETE FROM workspace_history_schema WHERE version=2")
+      }
     }
-    let reopened = try WorkspaceDatabase(url: url.appending(path: "workspace.sqlite"))
-    let matches = rows(try reopened.queryHistory(.init(command: "search", search: "legacy violet harbor", conversationID: session)))
+    let reopened = try await WorkspaceDatabase(url: url.appending(path: "workspace.sqlite"))
+    let matches = rows(try await reopened.queryHistory(.init(command: "search", search: "legacy violet harbor", conversationID: session)))
     #expect(matches.contains { $0.objectValue?["kind"]?.stringValue == "message.snapshot" })
-    #expect(rows(try reopened.queryHistory(.init(command: "events", runID: run.runID, kind: "message.update")))
+    #expect(rows(try await reopened.queryHistory(.init(command: "events", runID: run.runID, kind: "message.update")))
       .allSatisfy { $0.objectValue?["payload"]?.stringValue?.contains("streaming") == false })
   }
 
@@ -40,24 +42,24 @@ struct WorkspaceHistoryTests {
     #expect(redacted.components(separatedBy: "[Woven Matter session tool endpoint]").count == 3)
   }
 
-  @Test func terminalStreamSnapshotsAreSearchableWithoutPerChunkHistory() throws {
-    let (db, url) = try database()
+  @Test func terminalStreamSnapshotsAreSearchableWithoutPerChunkHistory() async throws {
+    let (db, url) = try await database()
     defer { try? FileManager.default.removeItem(at: url) }
-    let session = try db.createLocalACPSession(runtimeKind: .codex, title: "Stream", ownerDeviceID: UUID())
-    let run = try db.beginLocalACPRun(conversationID: session, content: "Prompt")
+    let session = try await db.createLocalACPSession(runtimeKind: .codex, title: "Stream", ownerDeviceID: UUID())
+    let run = try await db.beginLocalACPRun(conversationID: session, content: "Prompt")
     for chunk in ["violet ", "harbor", " final"] {
-      try db.appendLocalACPAssistantChunk(runID: run.runID, chunk: chunk)
+      try await db.appendLocalACPAssistantChunk(runID: run.runID, chunk: chunk)
     }
-    try db.completeLocalACPRun(runID: run.runID)
-    let updates = rows(try db.queryHistory(.init(command: "events", runID: run.runID,
+    try await db.completeLocalACPRun(runID: run.runID)
+    let updates = rows(try await db.queryHistory(.init(command: "events", runID: run.runID,
       kind: "message.update", limit: 20)))
     #expect(updates.count == 1)
-    let matches = rows(try db.queryHistory(.init(command: "search", search: "violet harbor",
+    let matches = rows(try await db.queryHistory(.init(command: "search", search: "violet harbor",
       conversationID: session)))
     #expect(matches.contains { $0.objectValue?["kind"]?.stringValue == "message.update" })
   }
 
-  @Test func legacyCLIContentIsScrubbedBeforeSearchRebuild() throws {
+  @Test func legacyCLIContentIsScrubbedBeforeSearchRebuild() async throws {
     let url = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
     try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: url) }
@@ -66,26 +68,28 @@ struct WorkspaceHistoryTests {
       + "/" + String(repeating: "B", count: 32) + ".sock"
     let endpointEventID = UUID().uuidString.lowercased()
     do {
-      let db = try WorkspaceDatabase(url: url.appending(path: "workspace.sqlite"))
-      try db.transaction {
-        try db.toolsExecuteUnlocked("DELETE FROM workspace_history_schema WHERE version=2")
-      try db.toolsExecuteUnlocked("INSERT INTO workspace_history_events(id,harness,kind,payload) VALUES(?,?,?,?)",
-          [UUID().uuidString.lowercased(), "wovenmatter", "cli.response", secret + " " + endpoint])
-        try db.toolsExecuteUnlocked("INSERT INTO workspace_history_events(id,harness,kind,payload) VALUES(?,?,?,?)",
-          [UUID().uuidString.lowercased(), "woven-history", "cli.query", secret])
-        try db.toolsExecuteUnlocked("INSERT INTO workspace_history_events(id,harness,kind,payload) VALUES(?,?,?,?)",
-          [endpointEventID, "pi", "wire.in", endpoint])
+      let db = try await WorkspaceDatabase(url: url.appending(path: "workspace.sqlite"))
+      try await db.write { connection in
+        try connection.transaction {
+          try connection.toolsExecuteUnlocked("DELETE FROM workspace_history_schema WHERE version=2")
+          try connection.toolsExecuteUnlocked("INSERT INTO workspace_history_events(id,harness,kind,payload) VALUES(?,?,?,?)",
+            [UUID().uuidString.lowercased(), "wovenmatter", "cli.response", secret + " " + endpoint])
+          try connection.toolsExecuteUnlocked("INSERT INTO workspace_history_events(id,harness,kind,payload) VALUES(?,?,?,?)",
+            [UUID().uuidString.lowercased(), "woven-history", "cli.query", secret])
+          try connection.toolsExecuteUnlocked("INSERT INTO workspace_history_events(id,harness,kind,payload) VALUES(?,?,?,?)",
+            [endpointEventID, "pi", "wire.in", endpoint])
+        }
       }
     }
-    let reopened = try WorkspaceDatabase(url: url.appending(path: "workspace.sqlite"))
-    let events = rows(try reopened.queryHistory(.init(command: "events", harness: "wovenmatter",
+    let reopened = try await WorkspaceDatabase(url: url.appending(path: "workspace.sqlite"))
+    let events = rows(try await reopened.queryHistory(.init(command: "events", harness: "wovenmatter",
       kind: "cli.response")))
     #expect(events.last?.objectValue?["payload"]?.stringValue == #"{"legacyRedacted":true}"#)
-    let queries = rows(try reopened.queryHistory(.init(command: "events", harness: "woven-history",
+    let queries = rows(try await reopened.queryHistory(.init(command: "events", harness: "woven-history",
       kind: "cli.query")))
     #expect(queries.first?.objectValue?["payload"]?.stringValue == #"{"legacyRedacted":true}"#)
-    #expect(rows(try reopened.queryHistory(.init(command: "search", search: secret))).isEmpty)
-    let endpointEvent = rows(try reopened.queryHistory(.init(command: "event", id: endpointEventID))).first
+    #expect(rows(try await reopened.queryHistory(.init(command: "search", search: secret))).isEmpty)
+    let endpointEvent = rows(try await reopened.queryHistory(.init(command: "event", id: endpointEventID))).first
     #expect(endpointEvent?.objectValue?["payload"]?.stringValue == "[Woven Matter session tool endpoint]")
   }
 

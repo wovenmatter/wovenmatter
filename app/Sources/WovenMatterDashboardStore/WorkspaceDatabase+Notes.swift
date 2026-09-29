@@ -31,7 +31,7 @@ public struct PendingRemoteNoteEdit: Equatable, Sendable {
 }
 
 // Note drafts, editing and mediated edit recovery within the original transactions.
-extension WorkspaceDatabase {
+extension WorkspaceDatabaseConnection {
   func insertNoteContextUnlocked(
     _ context: AgentNoteContext?,
     identifiers: LocalACPRunIdentifiers,
@@ -480,13 +480,16 @@ extension WorkspaceDatabase {
                              requestID: String? = nil) throws -> NoteEditingResponse {
     try transaction {
       if let callerConversationID { try requireToolUnlocked(.notes, sessionID: callerConversationID) }
-      if RemoteNoteEditEnvelope.requiresRevision(request.operations),
-         request.expectedRevision == nil {
-        throw WorkspaceToolError.revisionRequired("This note operation requires --revision. Read the note again and pass its current revision.")
-      }
       return try performToolMutationUnlocked(callerID: callerConversationID, requestID: requestID,
         operation: "notes.apply", input: request, receipt: noteMutationReceipt) {
-          try applyNoteEditsUnlocked(request)
+          // Upgraded clients must still replay a completed legacy receipt whose
+          // original request predates mandatory revisions. Only new writes need
+          // the revision; current tool authority is checked before either path.
+          if RemoteNoteEditEnvelope.requiresRevision(request.operations),
+             request.expectedRevision == nil {
+            throw WorkspaceToolError.revisionRequired("This note operation requires --revision. Read the note again and pass its current revision.")
+          }
+          return try applyNoteEditsUnlocked(request)
         }.result
     }
   }
