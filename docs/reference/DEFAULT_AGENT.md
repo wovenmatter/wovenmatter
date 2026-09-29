@@ -26,6 +26,19 @@ atomically activating an immutable generation. Existing generations remain
 available to running helpers. A helper-source fingerprint prevents an app
 update from selecting an older copied helper implementation.
 
+Local installer cancellation is confined to the owned maintenance process group and
+escalates if its children ignore termination. Once activation commits, later
+worker restart or label refresh failures do not turn the installation into a
+failure; installed-version metadata remains the source of truth. A successful
+update invalidates cached full and enabled model labels for every scope using
+that installation, without eagerly loading the full model catalog.
+
+SDK export and native-signature checks cover the inspected package contract.
+They do not prove an unseen vendor release preserves native authentication
+storage behavior. Claude integration continues to rely on the native secure
+storage environment and the existing filesystem policy; changes to those
+upstream conventions require compatibility review.
+
 Local ACP starts through `main.mjs`, which selects a generation before importing
 SDK code. The remote HTTP service delegates Built-in execution to a managed child
 process, retaining credentials only in the existing private process boundary.

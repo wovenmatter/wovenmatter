@@ -59,7 +59,9 @@ struct BackendConnectionsSnapshot: Codable, Equatable {
             let command = try JSONDecoder().decode(DefaultAgentSDKCommand.self, from: payload)
             if method == "connections.sdks.command" {
                 guard let remoteWorkspaces else { throw BackendRPCError.remote("The workspace service is unavailable.") }
-                model.sdks.start(command, remoteWorkspaces: remoteWorkspaces)
+                model.sdks.start(command, remoteWorkspaces: remoteWorkspaces) { [weak model] in
+                    model?.invalidateSDKCatalog(scopeKey: command.key)
+                }
             }
             return try JSONEncoder().encode(model.sdks.state(for: command.key))
         }

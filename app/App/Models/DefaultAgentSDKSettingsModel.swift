@@ -68,13 +68,10 @@ final class DefaultAgentSDKSettingsModel {
 
     private func refreshModels(after command: DefaultAgentSDKCommand, connections: DefaultAgentSettingsModel,
                                remoteWorkspaces: RemoteWorkspacesModel) {
-        guard command.request.action == .update, !connections.busy else { return }
-        if let id = command.workspaceID {
-            guard connections.scope == command.key, let remote = remoteWorkspaces.configuration(id: id) else { return }
-            connections.refresh(remote: remote)
-        } else if connections.scope == "global" || connections.scope == "local" {
-            connections.refresh()
-        }
+        guard command.request.action == .update else { return }
+        // The invalidator refreshes only the backend projection and enabled labels.
+        // Do not start full helper discovery merely because an SDK was replaced.
+        connections.invalidateSDKCatalog(scopeKey: command.key)
     }
 
     func start(_ command: DefaultAgentSDKCommand, remoteWorkspaces: RemoteWorkspacesModel,
@@ -82,11 +79,14 @@ final class DefaultAgentSDKSettingsModel {
         guard !state(for: command.key).busy else { return }
         workspaces[command.key, default: .init()].operation = command.request
         workspaces[command.key]?.error = nil
+        // Capture the destination before scheduling work; a later configuration
+        // edit must fail the existing request identity instead of retargeting it.
+        let remote = command.workspaceID.flatMap { remoteWorkspaces.configuration(id: $0) }
         operations[command.key] = Task { [weak self] in
             do {
                 let status: DefaultAgentSDKStatus
-                if let id = command.workspaceID {
-                    guard let configuration = remoteWorkspaces.configuration(id: id) else {
+                if command.workspaceID != nil {
+                    guard let configuration = remote else {
                         throw BackendRPCError.remote("This workspace is no longer configured.")
                     }
                     status = try await remoteWorkspaces.defaultAgentSDKs(command.request, configuration: configuration)

@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { access, chmod, cp, lstat, mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { access, chmod, cp, lstat, mkdir, open, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -14,9 +15,29 @@ const newer = (a, b) => a.split('.').map(Number).some((v, i, aa) => v > b.split(
 export class SDKMaintenanceError extends Error {}
 const fail = message => new SDKMaintenanceError(message);
 const aborted = signal => { if (signal?.aborted) throw fail('SDK update was cancelled.'); };
-const readJSON = async (path, fallback = null) => {
-  try { return JSON.parse(await readFile(path, 'utf8')); } catch (error) { if (error.code === 'ENOENT') return fallback; throw error; }
+const readJSON = async (path, fallback = null, maximumBytes = 1_048_576) => {
+  let file;
+  try {
+    file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    const stat = await file.stat();
+    if (!stat.isFile() || stat.size > maximumBytes) throw fail('SDK metadata is invalid or too large.');
+    const chunks = [], buffer = Buffer.alloc(Math.min(maximumBytes + 1, 65536));
+    let size = 0;
+    while (true) {
+      const { bytesRead } = await file.read(buffer, 0, Math.min(buffer.length, maximumBytes + 1 - size));
+      if (!bytesRead) break;
+      size += bytesRead;
+      if (size > maximumBytes) throw fail('SDK metadata is invalid or too large.');
+      chunks.push(Buffer.from(buffer.subarray(0, bytesRead)));
+    }
+    return JSON.parse(Buffer.concat(chunks, size).toString('utf8'));
+  } catch (error) { if (error.code === 'ENOENT') return fallback; throw error; }
+  finally { await file?.close().catch(() => {}); }
 };
+async function ownedDirectory(path) {
+  const info = await lstat(path);
+  return info.isDirectory() && !info.isSymbolicLink() && info.uid === process.getuid();
+}
 const packageVersion = async (root, name) => (await readJSON(join(root, 'node_modules', name, 'package.json')))?.version ?? null;
 async function privateDirectory(path) {
   await mkdir(path, { recursive: true, mode: 0o700 });
@@ -27,7 +48,8 @@ async function privateDirectory(path) {
 async function atomicJSON(path, value) {
   const temporary = `${path}.${randomUUID()}.tmp`;
   try { await writeFile(temporary, JSON.stringify(value), { mode: 0o600, flag: 'wx' }); await rename(temporary, path); }
-  finally { await rm(temporary, { force: true }); }
+  // Cleanup cannot change the outcome after rename committed the new value.
+  finally { await rm(temporary, { force: true }).catch(() => {}); }
 }
 let fingerprintPromise;
 async function fingerprint() {
@@ -47,12 +69,16 @@ function paths(directory) {
 }
 export async function resolveSDKRuntime({ directory }) {
   const p = paths(directory), base = await fingerprint();
-  const active = await readJSON(p.active).catch(() => null);
+  // Validate each updater-owned ancestor, not only the final generation. A
+  // symlinked generations directory must never select code outside this store.
+  const owned = await ownedDirectory(p.root).catch(() => false)
+    && await ownedDirectory(p.generations).catch(() => false);
+  const active = owned ? await readJSON(p.active, null, 4096).catch(() => null) : null;
   if (active?.base === base && /^[a-f0-9-]{36}$/.test(active.generation ?? '')) {
     const root = join(p.generations, active.generation);
     try {
       const info = await lstat(root);
-      const manifest = await readJSON(join(root, 'woven-sdk-generation.json'));
+      const manifest = await readJSON(join(root, 'woven-sdk-generation.json'), null, 4096);
       if (info.isDirectory() && !info.isSymbolicLink() && info.uid === process.getuid() && manifest?.base === base && manifest?.generation === active.generation) {
         await access(join(root, 'src/main-runtime.mjs'));
         return { root, generation: active.generation, base };
@@ -63,7 +89,7 @@ export async function resolveSDKRuntime({ directory }) {
 }
 export async function sdkStatus({ directory }) {
   const runtime = await resolveSDKRuntime({ directory });
-  const cached = await readJSON(paths(directory).latest).catch(() => null);
+  const cached = await readJSON(paths(directory).latest, null, 16384).catch(() => null);
   const sdks = await Promise.all(definitions.map(async definition => {
     const versions = await Promise.all(definition.packages.map(name => packageVersion(runtime.root, name).catch(() => null)));
     const installedVersion = versions[0];
@@ -97,7 +123,7 @@ function compatible(version, installed) {
 export async function checkSDKUpdates({ directory, id, signal, fetchImplementation } = {}) {
   aborted(signal);
   const runtime = await resolveSDKRuntime({ directory });
-  const previous = await readJSON(paths(directory).latest).catch(() => null);
+  const previous = await readJSON(paths(directory).latest, null, 16384).catch(() => null);
   const versions = previous?.base === runtime.base ? { ...previous.versions } : {};
   if (id !== undefined && !definitions.some(definition => definition.id === id)) throw fail('Choose Pi SDK or Claude SDK.');
   for (const definition of definitions.filter(value => id === undefined || value.id === id)) {
@@ -168,7 +194,8 @@ const claude = await import('@anthropic-ai/claude-agent-sdk');
 if (typeof claude.query !== 'function') throw Error('Claude API unavailable');
 await import('./src/engine.mjs');
 `;
-export async function updateSDK({ directory, id, version, signal }) {
+// The second argument is an in-process fixture seam; transports only supply the request.
+export async function updateSDK({ directory, id, version, signal }, { registryFetch, run = command, installer = npmCLI, lock = acquireLock } = {}) {
   const lockController = new AbortController();
   signal = signal ? AbortSignal.any([signal, lockController.signal]) : lockController.signal;
   aborted(signal);
@@ -176,11 +203,11 @@ export async function updateSDK({ directory, id, version, signal }) {
   if (!definition) throw fail('Choose Pi SDK or Claude SDK.');
   const p = paths(directory);
   await privateDirectory(p.root); await privateDirectory(p.generations);
-  const unlock = await acquireLock(p.lock, () => lockController.abort());
+  const unlock = await lock(p.lock, () => lockController.abort());
   let stage;
   try {
     const before = await resolveSDKRuntime({ directory });
-    const checked = await checkSDKUpdates({ directory, id, signal });
+    const checked = await checkSDKUpdates({ directory, id, signal, fetchImplementation: registryFetch });
     const selected = checked.sdks.find(value => value.id === id);
     if (version !== undefined && version !== selected.latestVersion) throw fail('The available SDK version changed. Check for updates again.');
     if (!selected.updateAvailable && selected.consistent) return checked;
@@ -199,13 +226,13 @@ export async function updateSDK({ directory, id, version, signal }) {
     const config = join(stage, '.user-npmrc'), globalConfig = join(stage, '.global-npmrc');
     await writeFile(config, '', { mode: 0o600 }); await writeFile(globalConfig, '', { mode: 0o600 });
     const env = safeEnvironment(home, temporary);
-    await command(process.execPath, [await npmCLI(), 'install', '--prefix', stage, '--ignore-scripts', '--omit=dev', '--no-audit', '--no-fund', '--save-exact', '--engine-strict', '--registry=https://registry.npmjs.org', '--userconfig=' + config, '--globalconfig=' + globalConfig, '--cache=' + join(stage, '.npm-cache')], { cwd: stage, env, timeout: 600000, signal });
+    await run(process.execPath, [await installer(), 'install', '--prefix', stage, '--ignore-scripts', '--omit=dev', '--no-audit', '--no-fund', '--save-exact', '--engine-strict', '--registry=https://registry.npmjs.org', '--userconfig=' + config, '--globalconfig=' + globalConfig, '--cache=' + join(stage, '.npm-cache')], { cwd: stage, env, timeout: 600000, signal });
     for (const pkg of definition.packages) if (await packageVersion(stage, pkg) !== selected.latestVersion) throw fail('The SDK installation did not match the requested version. The previous SDKs were kept.');
     // Imports only: no credentials, model discovery, account checks, or inference.
-    await command(process.execPath, ['--input-type=module', '--eval', verificationSource], { cwd: stage, env, signal });
+    await run(process.execPath, ['--input-type=module', '--eval', verificationSource], { cwd: stage, env, signal });
     const claude = join(stage, 'node_modules', `@anthropic-ai/claude-agent-sdk-${process.platform}-${process.arch}`, 'claude');
-    if (process.platform === 'darwin') await command('/usr/bin/codesign', ['--verify', '--strict', claude], { cwd: stage, env, signal });
-    const engineVersion = await command(claude, ['--version'], { cwd: stage, env, signal });
+    if (process.platform === 'darwin') await run('/usr/bin/codesign', ['--verify', '--strict', claude], { cwd: stage, env, signal });
+    const engineVersion = await run(claude, ['--version'], { cwd: stage, env, signal });
     if (!/\d+\.\d+\.\d+/.test(engineVersion)) throw fail('The Claude SDK runtime could not be verified. The previous SDKs were kept.');
     await atomicJSON(join(stage, 'woven-sdk-generation.json'), { base: before.base, generation });
     for (const name of ['.installer-home', '.installer-tmp', '.npm-cache', '.user-npmrc', '.global-npmrc']) await rm(join(stage, name), { recursive: true, force: true });
@@ -215,8 +242,13 @@ export async function updateSDK({ directory, id, version, signal }) {
     aborted(signal);
     // Atomic activation is the only mutation visible to new helper processes.
     // Existing generations are intentionally retained for live conversations.
+    const installed = { ...checked, generation, sdks: checked.sdks.map(sdk => sdk.id === id
+      ? { ...sdk, installedVersion: selected.latestVersion, consistent: true, updateAvailable: false, notice: undefined }
+      : sdk), notice: 'SDK updated. Running turns finish with their current SDK; new turns use the update.' };
     await atomicJSON(p.active, { base: before.base, generation });
-    return { ...await sdkStatus({ directory }), notice: 'SDK updated. Running turns finish with their current SDK; new turns use the update.' };
+    // No fallible metadata reads after activation: a late cancellation/error
+    // must never claim that the previous generation was kept after this commit.
+    return installed;
   } catch (error) {
     if (error instanceof SDKMaintenanceError) throw error;
     throw fail(signal?.aborted ? 'SDK update was cancelled.' : 'SDK update could not complete. The previous SDKs were kept.');
