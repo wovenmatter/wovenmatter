@@ -519,9 +519,15 @@ final class DefaultAgentSettingsModel {
         notice = nil
         error = nil
     }
+    private func clearCatalogRequest() {
+        catalogOnly = false
+        catalogRequestConfiguration = nil
+        catalogRequestKey = nil
+    }
     func cancel() {
         if forward(.init(action: "cancel")) { return }
         generation = UUID()
+        clearCatalogRequest()
         operationTask?.cancel()
         operationTask = nil
         accountsTask?.cancel()
@@ -572,7 +578,7 @@ final class DefaultAgentSettingsModel {
         // Repeated page/configuration requests can arrive before the helper
         // returns. Keep the matching request instead of cancelling and spawning
         // another helper. Explicit connection refreshes still bypass this path.
-        if busy, catalogOnly, catalogRequestKey == cacheKey,
+        if busy, catalogOnly, error == nil, catalogRequestKey == cacheKey,
            catalogRequestConfiguration == config, activeRemote == remote { return }
         if let value = catalogCache[cacheKey], value.configuration == config {
             if catalog != value.models { catalog = value.models }
@@ -692,6 +698,7 @@ final class DefaultAgentSettingsModel {
                 write(body)
             } catch {
                 guard generation == runID else { return }
+                clearCatalogRequest()
                 busy = false
                 self.error = error.localizedDescription
                 finishSignIn()
@@ -701,6 +708,7 @@ final class DefaultAgentSettingsModel {
     private func finishHelperIfNeeded() {
         guard outputEnded, terminationStatus != nil, !processingResult, !receivedResult else { return }
         if error == nil { error = "Built-in setup did not complete. Try again." }
+        clearCatalogRequest()
         busy = false
         finishSignIn()
     }
@@ -730,6 +738,7 @@ final class DefaultAgentSettingsModel {
             }
             if let error = object["error"] as? String {
                 receivedResult = true
+                clearCatalogRequest()
                 self.error = error
                 busy = false
                 finishSignIn()
@@ -754,7 +763,13 @@ final class DefaultAgentSettingsModel {
         }
     }
     private func receiveResult(_ result: [String: Any], runID: UUID, context: ResultContext) async {
-        defer { if generation == runID { processingResult = false; finishHelperIfNeeded() } }
+        defer {
+            if generation == runID {
+                if context.catalogOnly { clearCatalogRequest() }
+                processingResult = false
+                finishHelperIfNeeded()
+            }
+        }
         let data = try? JSONSerialization.data(withJSONObject: result)
         if context.catalogOnly {
             guard generation == runID else { return }
@@ -762,7 +777,14 @@ final class DefaultAgentSettingsModel {
             if let data, let response = try? JSONDecoder().decode(Catalog.self, from: data) {
                 if let requested = context.catalogConfiguration, let cacheKey = context.catalogKey {
                     catalogCache[cacheKey] = (requested, response.models)
-                    if catalogConfiguration != requested { loadCatalog(remote: activeRemote); return }
+                    if catalogConfiguration != requested {
+                        // A replacement can be a cache hit, so finish the old
+                        // request before asking for the current configuration.
+                        clearCatalogRequest()
+                        busy = false
+                        loadCatalog(remote: activeRemote)
+                        return
+                    }
                 }
                 catalog = response.models
             } else { error = "The model catalog could not be loaded. Try again." }
