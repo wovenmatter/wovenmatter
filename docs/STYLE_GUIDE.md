@@ -18,6 +18,12 @@ when an intentional design change is accepted.
   styles in `DashboardDesign.swift`, and the page/row patterns in
   [SettingsComponents.swift](../app/App/Views/SettingsComponents.swift).
   Preserve intentional differences such as borderless Usage sections.
+- **Built-in SDK settings:** place SDK management directly below the workspace
+  scope controls. Each workspace has a disclosure row, collapsed by default,
+  containing Pi SDK and Claude SDK versions and explicit check/update actions.
+  All workspaces lists the local location and configured remote workspaces; an
+  individual scope shows only that location. Keep progress and errors with their
+  workspace and preserve operation state when a row is collapsed.
 - **Icons:** use the existing `DashboardLucideIcon` glyphs and bundled harness
   logos, matching nearby icon sizes and stroke weights.
 - **Calendar:** keep the four-item legend below the selected-day list. Use the
