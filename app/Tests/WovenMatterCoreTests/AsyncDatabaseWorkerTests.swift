@@ -200,6 +200,36 @@ struct AsyncDatabaseWorkerTests {
     let rows = try await database.read { try $0.historyRowsUnlocked("SELECT count(*) AS n FROM async_transaction_probe", values: []) }
     #expect(rows.first?.objectValue?["n"]?.intValue == 0)
   }
+
+  @Test func multipleQueriesKeepOneSnapshotAcrossConcurrentCommit() async throws {
+    let (database, root, _) = try await fixture()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let entered = AsyncStream<Void>.makeStream()
+    let release = DispatchSemaphore(value: 0)
+    defer { release.signal() }
+    let snapshot = Task { try await database.read { connection in
+      let before = try connection.workspaceOverview().folders.count
+      entered.continuation.yield(())
+      #expect(release.wait(timeout: .now() + 60) == .success)
+      return (before, try connection.workspaceOverview().folders.count)
+    } }
+    var iterator = entered.stream.makeAsyncIterator()
+    await iterator.next()
+    _ = try await database.createFolder(name: "Committed while reader was active")
+    release.signal()
+    let counts = try await snapshot.value
+    #expect(counts.0 == counts.1)
+    #expect(try await database.workspaceOverview().folders.count == counts.0 + 1)
+  }
+
+  @Test func policySnapshotDoesNotLoadUnobservedReceiptPages() async throws {
+    let (database, root, owner) = try await fixture()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let id = try await database.createLocalACPSession(runtimeKind: .codex, title: "Policy", ownerDeviceID: owner)
+    let snapshot = try await database.toolStateSnapshot(sessionIDs: [id], oldestReceipts: [:], receiptSessionIDs: [])
+    #expect(snapshot.policies[id] != nil)
+    #expect(snapshot.receipts.isEmpty)
+  }
   @Test func streamFlushDoesNotLoseChunksAcrossDatabaseSuspension() async throws {
     let (database, root, owner) = try await fixture()
     defer { try? FileManager.default.removeItem(at: root) }

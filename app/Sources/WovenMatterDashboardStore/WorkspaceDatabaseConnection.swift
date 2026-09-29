@@ -167,21 +167,14 @@ final class WorkspaceDatabaseConnection {
     return date(value)
   }
 
-  private static func formatter(includingFractionalSeconds: Bool) -> ISO8601DateFormatter {
-    let formatter = ISO8601DateFormatter()
-    formatter.formatOptions = includingFractionalSeconds
-      ? [.withInternetDateTime, .withFractionalSeconds]
-      : [.withInternetDateTime]
-    return formatter
-  }
+  private static let timestamps = WorkspaceTimestampCodec()
 
   static func timestamp(_ date: Date) -> String {
-    formatter(includingFractionalSeconds: true).string(from: date)
+    timestamps.string(from: date)
   }
 
   static func date(_ value: String) -> Date? {
-    formatter(includingFractionalSeconds: true).date(from: value)
-      ?? formatter(includingFractionalSeconds: false).date(from: value)
+    timestamps.date(from: value)
   }
 
   // Domain helpers execute only on the connection owner queue. Their historical
@@ -192,6 +185,29 @@ final class WorkspaceDatabaseConnection {
   }
 
   var changedRowCountUnlocked: Int32 { sqlite3_changes(connection) }
+}
+
+/// The configured formatters are reused across worker connections. Their mutable
+/// Foundation implementation is accessed only while holding this lock.
+private final class WorkspaceTimestampCodec: @unchecked Sendable {
+  private let lock = NSLock()
+  private let fractional: ISO8601DateFormatter
+  private let whole: ISO8601DateFormatter
+
+  init() {
+    fractional = ISO8601DateFormatter()
+    fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    whole = ISO8601DateFormatter()
+    whole.formatOptions = [.withInternetDateTime]
+  }
+
+  func string(from date: Date) -> String {
+    lock.withLock { fractional.string(from: date) }
+  }
+
+  func date(from value: String) -> Date? {
+    lock.withLock { fractional.date(from: value) ?? whole.date(from: value) }
+  }
 }
 
 private let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)

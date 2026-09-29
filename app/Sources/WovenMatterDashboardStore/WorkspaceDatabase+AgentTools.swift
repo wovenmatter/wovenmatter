@@ -142,19 +142,34 @@ extension WorkspaceDatabaseConnection {
   public func setSessionTools(_ tools: WorkspaceSessionTools, sessionID: String,
                               confirmedPausingTimers: Bool = false) throws {
     try transaction {
-      try requireToolSessionUnlocked(sessionID)
-      if !tools.enabled.contains(.timers) {
-        let active = try historyRowsUnlocked("SELECT id FROM workspace_session_timers WHERE session_id=? AND is_paused=0 LIMIT 1", values: [sessionID])
-        guard active.isEmpty || confirmedPausingTimers else { throw WorkspaceToolError.timerPauseConfirmation }
-        try toolsExecuteUnlocked("UPDATE workspace_session_timers SET is_paused=1,pending_delivery_id=NULL WHERE session_id=?", [sessionID])
-      }
-      if !tools.enabled.contains(.sessions) {
-        try toolsExecuteUnlocked("UPDATE workspace_session_relationships SET coordinator_id=NULL WHERE coordinator_id=?", [sessionID])
-        // Approved access lasts for a management assignment; attachments are independent.
-        try toolsExecuteUnlocked("DELETE FROM workspace_session_grants WHERE source_id=? AND kind='approved'", [sessionID])
-      }
-      try toolsExecuteUnlocked("UPDATE workspace_session_tools SET enabled_json=?,defaults_applied=1 WHERE session_id=?", [try toolsJSON(tools.enabled), sessionID])
+      try setSessionToolsUnlocked(tools, sessionID: sessionID, confirmedPausingTimers: confirmedPausingTimers)
     }
+  }
+
+  func setSessionToolEnabled(_ group: WorkspaceToolGroup, enabled: Bool,
+    sessionID: String, confirmedPausingTimers: Bool) throws -> WorkspaceSessionTools {
+    try transaction {
+      var policy = try sessionToolsUnlocked(sessionID)
+      if enabled { policy.enabled.insert(group) } else { policy.enabled.remove(group) }
+      try setSessionToolsUnlocked(policy, sessionID: sessionID, confirmedPausingTimers: confirmedPausingTimers)
+      return policy
+    }
+  }
+
+  private func setSessionToolsUnlocked(_ tools: WorkspaceSessionTools, sessionID: String,
+    confirmedPausingTimers: Bool) throws {
+    try requireToolSessionUnlocked(sessionID)
+    if !tools.enabled.contains(.timers) {
+      let active = try historyRowsUnlocked("SELECT id FROM workspace_session_timers WHERE session_id=? AND is_paused=0 LIMIT 1", values: [sessionID])
+      guard active.isEmpty || confirmedPausingTimers else { throw WorkspaceToolError.timerPauseConfirmation }
+      try toolsExecuteUnlocked("UPDATE workspace_session_timers SET is_paused=1,pending_delivery_id=NULL WHERE session_id=?", [sessionID])
+    }
+    if !tools.enabled.contains(.sessions) {
+      try toolsExecuteUnlocked("UPDATE workspace_session_relationships SET coordinator_id=NULL WHERE coordinator_id=?", [sessionID])
+      // Approved access lasts for a management assignment; attachments are independent.
+      try toolsExecuteUnlocked("DELETE FROM workspace_session_grants WHERE source_id=? AND kind='approved'", [sessionID])
+    }
+    try toolsExecuteUnlocked("UPDATE workspace_session_tools SET enabled_json=?,defaults_applied=1 WHERE session_id=?", [try toolsJSON(tools.enabled), sessionID])
   }
 
   /// New-chat defaults are applied at most once, before any tools run. An
@@ -466,12 +481,15 @@ public struct WorkspaceToolStateSnapshot: Sendable {
 }
 
 extension WorkspaceDatabase {
-  public func toolStateSnapshot(sessionIDs: Set<String>, oldestReceipts: [String: String]) async throws -> WorkspaceToolStateSnapshot {
+  public func toolStateSnapshot(sessionIDs: Set<String>, oldestReceipts: [String: String],
+    receiptSessionIDs: Set<String>? = nil) async throws -> WorkspaceToolStateSnapshot {
     try await read { connection in
       var policies: [String: WorkspaceSessionTools] = [:]
       var receipts: [String: [WorkspaceSessionDelivery]] = [:]
       for id in sessionIDs {
         policies[id] = try? connection.sessionTools(id)
+      }
+      for id in receiptSessionIDs ?? sessionIDs {
         if let oldest = oldestReceipts[id] {
           receipts[id] = try connection.sessionActivityWindow(sessionID: id, throughID: oldest)
         } else {
@@ -486,11 +504,7 @@ extension WorkspaceDatabase {
 
   public func setSessionToolEnabled(_ group: WorkspaceToolGroup, enabled: Bool,
     sessionID: String, confirmedPausingTimers: Bool = false) async throws -> WorkspaceSessionTools {
-    try await write { connection in
-      var policy = try connection.sessionTools(sessionID)
-      if enabled { policy.enabled.insert(group) } else { policy.enabled.remove(group) }
-      try connection.setSessionTools(policy, sessionID: sessionID, confirmedPausingTimers: confirmedPausingTimers)
-      return policy
-    }
+    try await write { try $0.setSessionToolEnabled(group, enabled: enabled,
+      sessionID: sessionID, confirmedPausingTimers: confirmedPausingTimers) }
   }
 }

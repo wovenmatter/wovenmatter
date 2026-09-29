@@ -101,13 +101,15 @@ final class WorkspaceAgentToolsModel {
     func reload() async throws {
         let generation = UUID()
         reloadGeneration = generation
+        let mayPublishSettings = pendingSettingsWrites == 0
         let observed = Set(observedSessions.values)
         let oldest = Dictionary(uniqueKeysWithValues: observed.compactMap { id in
             receipts[id]?.last.map { (id, $0.id) }
         })
-        let snapshot = try await database.toolStateSnapshot(sessionIDs: observed.union(sessionPolicies.keys), oldestReceipts: oldest)
+        let snapshot = try await database.toolStateSnapshot(sessionIDs: observed.union(sessionPolicies.keys),
+            oldestReceipts: oldest, receiptSessionIDs: observed)
         guard generation == reloadGeneration, !stopped else { return }
-        if pendingSettingsWrites == 0, settings != snapshot.settings { settings = snapshot.settings }
+        if mayPublishSettings, pendingSettingsWrites == 0, settings != snapshot.settings { settings = snapshot.settings }
         let relationships = Dictionary(uniqueKeysWithValues: snapshot.relationships.map { ($0.sessionID, $0) })
         if self.relationships != relationships { self.relationships = relationships }
         if timers != snapshot.timers { timers = snapshot.timers }
@@ -202,6 +204,7 @@ final class WorkspaceAgentToolsModel {
     }
 
     func saveSettingsFromUI(_ value: WorkspaceToolSettings) {
+        reloadGeneration = UUID()
         settings = value
         pendingSettingsWrites += 1
         let previous = mutationTask
@@ -223,6 +226,7 @@ final class WorkspaceAgentToolsModel {
     }
 
     func saveSettings(_ value: WorkspaceToolSettings) async {
+        reloadGeneration = UUID()
         if passiveProjection { settings = value; enqueue(.saveSettings(value)); return }
         do { try await database.saveToolSettings(value); settings = value; error = nil }
         catch { self.error = error.localizedDescription }
