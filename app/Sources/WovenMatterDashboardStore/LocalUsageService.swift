@@ -159,6 +159,7 @@ public actor LocalUsageService {
   private let credentialStore: any UsageCredentialStoring
   private let databaseURL: URL
   private let usesSharedConnections: Bool
+  private let importPreparationWorker: DatabaseWorker?
   private let sharedConnectionRevision: @Sendable () -> UInt64
   private let limitCollector: @Sendable (UsageLimitsRequest) async -> [UsageLimitAccount]
   private let openRouterActivityFetcher: @Sendable (String) async throws -> OpenRouterActivityResult
@@ -199,6 +200,7 @@ public actor LocalUsageService {
     self.fileManager = fileManager
     credentialStore = UsageCredentialStore(service: credentialService)
     usesSharedConnections = true
+    importPreparationWorker = nil
     sharedConnectionRevision = { DefaultAgentSupport.revision }
     openRouterCredentialRevision = DefaultAgentSupport.revision
     limitCollector = { request in
@@ -229,6 +231,7 @@ public actor LocalUsageService {
     usageDatabaseURL: URL,
     usesSharedConnections: Bool = false,
     sharedConnectionRevision: @escaping @Sendable () -> UInt64 = { DefaultAgentSupport.revision },
+    importPreparationWorker: DatabaseWorker? = nil,
     limitCollector: @escaping @Sendable (UsageLimitsRequest) async -> [UsageLimitAccount] = {
       await $0.collect()
     },
@@ -240,6 +243,7 @@ public actor LocalUsageService {
     self.fileManager = fileManager
     self.credentialStore = credentialStore
     self.usesSharedConnections = usesSharedConnections
+    self.importPreparationWorker = importPreparationWorker
     self.sharedConnectionRevision = sharedConnectionRevision
     openRouterCredentialRevision = sharedConnectionRevision()
     self.limitCollector = limitCollector
@@ -746,7 +750,8 @@ public actor LocalUsageService {
     let home = homeDirectory
     let outcomes = importOutcomes
     do {
-      let importer = UsageTranscriptImporter(homeDirectory: home, outcomes: outcomes, ownership: generation)
+      let importer = UsageTranscriptImporter(homeDirectory: home, outcomes: outcomes, ownership: generation,
+        preparationWorker: importPreparationWorker)
       let complete = try await importer.run(store: store, cutoff: cutoff, enabledProviders: enabledProviders, now: now)
       let updatedOutcomes = await importer.importOutcomes
       guard isCurrentAnalytics(generation) else { return false }
