@@ -30,6 +30,20 @@ struct DefaultAgentSDKControlTests {
     while :; do wait; done
     """#
 
+    @Test func cancellationBeforeExecutionStartsDoesNotSpawnAHelper() async throws {
+        let root = try directory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let operation = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try await DefaultAgentSDKControl.run(.init(action: .status),
+                executable: URL(filePath: "/bin/sh"),
+                arguments: ["-c", "printf started > \"$1/parent\"", "fixture", root.path], timeout: 1)
+        }
+        do { _ = try await operation.value; Issue.record("Cancelled maintenance unexpectedly ran") }
+        catch is CancellationError { }
+        #expect(!FileManager.default.fileExists(atPath: root.appending(path: "parent").path))
+    }
+
     @Test func timeoutReapsOnlyItsOwnedProcessGroup() async throws {
         let root = try directory()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -98,13 +112,24 @@ extension DefaultAgentSDKControlTests {
             os._exit(0)
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
         with open(root + '/parent', 'w') as output: output.write(str(os.getpid()))
+        while not os.path.isfile(root + '/child'): time.sleep(0.01)
         print(json.dumps({'result': {'sdks': [], 'generation': 'confirmed-installed'}}), flush=True)
+        with open(root + '/ready', 'w') as output: output.write('ready')
         if mode == 'exit': os._exit(0)
         while True: time.sleep(0.01)
         """#
+        let operation = Task {
+            try await DefaultAgentSDKControl.run(.init(action: .update, id: "claude"),
+                executable: URL(filePath: "/usr/bin/python3"),
+                arguments: ["-c", script, root.path, mode], timeout: 30)
+        }
+        defer { operation.cancel() }
+        // This checks pipe teardown after a confirmed result, not Python's
+        // cold startup speed. Timeout behavior has its own shell fixture above.
+        try await awaitFile(root.appending(path: "ready"))
         let start = ContinuousClock.now
-        let result = try await DefaultAgentSDKControl.run(.init(action: .update, id: "claude"),
-            executable: URL(filePath: "/usr/bin/python3"), arguments: ["-c", script, root.path, mode], timeout: 0.1)
+        if mode == "wait" { operation.cancel() }
+        let result = try await operation.value
         #expect(result.generation == "confirmed-installed")
         #expect(start.duration(to: .now) < .seconds(5))
         try assertReaped(root.appending(path: "parent"))
