@@ -54,6 +54,8 @@ Trash also rejects native OpenCode active snapshots and sending or uncertain
 submissions before a normalized run exists. New submission admission checks chat
 visibility inside its write transaction; terminal receipt settlement stays legal.
 The app's shared send/Trash reservation covers native slash-command preparation.
+After the awaited live-chat check, PR86's `dispatchFence.check()` also rejects Stop
+requests received during that read before control reaches OpenCode's transport.
 
 Regression source covers the async worker boundary, queued/accepted/running and
 native OpenCode admission, and exports under a reduced SQLite bind limit. These

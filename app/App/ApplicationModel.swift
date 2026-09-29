@@ -2076,7 +2076,7 @@ final class ApplicationModel {
                 // Native slash commands do not create a submission row. Check visibility
                 // while this dispatcher still owns the shared send/Trash reservation.
                 _ = try await dashboardStore.database.localACPSession(conversationID: conversation.id)
-                try Task.checkCancellation()
+                try dispatchFence.check()
                 try await openCode.send(conversation.id, input: normalized, discovery: discovery)
             } else if steering {
                 if isOpenClawGatewayConversation(conversation.id) {
