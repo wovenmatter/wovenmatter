@@ -113,6 +113,12 @@ ownership instead. Staged exports receive owner-only filesystem permissions.
 HTML artifacts preserve their retained HTML verbatim, including scripts, and are
 not opened or executed by export. Linked databases are not queried.
 
-Source regressions cover oversized raw trace fields, empty-row bounds, sparse
-note normalization, cancelled destination replacement, rename validation, and
-folder ownership on restore. They have not been executed in this audit.
+Provider-free regressions cover oversized raw trace fields, empty-row bounds,
+sparse note normalization, cancelled destination replacement, rename validation,
+and folder ownership on restore. After integrating the async persistence and SDK
+prerequisites, all 43 tests in `WorkspaceConversationActionsTests`,
+`WorkspaceNoteActionsTests`, `WorkspaceDatabaseTextTests`,
+`WorkspaceHistoryTextWindowTests`, and `WorkspaceLibraryTests` passed. The foreign
+folder fixture keeps an ordinary local session as its workspace ownership anchor,
+matching app startup's seeded local agent catalog. Native Save-panel behavior,
+final combined-head validation, and hosted CI remain separate acceptance checks.

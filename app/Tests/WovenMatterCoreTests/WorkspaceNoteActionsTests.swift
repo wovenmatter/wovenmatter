@@ -67,6 +67,9 @@ struct WorkspaceNoteActionsTests {
 
   @Test func moveRejectsForeignFolderAndRestoreFallsBackAfterFolderRemoval() async throws {
     let f = try await Fixture(); defer { f.close() }
+    // App startup seeds local agents before asset mutations. Keep that ownership
+    // anchor while the synthetic foreign folder outlives the local note's folder.
+    _ = try await f.db.createLocalACPSession(runtimeKind: .codex, title: "Workspace owner", ownerDeviceID: UUID())
     let folder = try await f.db.createFolder(name: "Previous folder")
     let id = try await f.db.createNote(folderID: folder, title: "Retained")
     try await f.db.write { connection in try connection.transaction {
@@ -78,6 +81,7 @@ struct WorkspaceNoteActionsTests {
     #expect(try await f.db.workspaceOverview().notes.first?.folderID == folder)
     try await f.db.mutateNote(id: id, mutation: .moveToTrash, expectedRevision: f.db.noteActionRevision(id: id))
     _ = try await f.db.deleteFolder(id: folder)
+    #expect(try await f.db.trashedNotes().contains { $0.id == id && $0.title == "Retained" })
     try await f.db.mutateNote(id: id, mutation: .restore, expectedRevision: f.db.noteActionRevision(id: id, trashed: true))
     #expect(try await f.db.workspaceOverview().notes.first?.folderID == nil)
   }

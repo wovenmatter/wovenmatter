@@ -109,6 +109,11 @@ struct WorkspaceConversationActionsTests {
       await #expect(throws: WorkspaceConversationActionError.self) { try await f.db.mutateConversation(id: f.chat, mutation: .moveToTrash) }
     }
     #expect(try await f.db.trashedConversations().isEmpty)
+    // The statuses above exercise Trash admission. Ordinary completion still
+    // requires a running owner; remote uncertainty has its own reconciliation.
+    try await f.db.write { connection in
+      try connection.toolsExecuteUnlocked("UPDATE dashboard_runs SET status='running' WHERE id=?", [run.runID])
+    }
     try await f.db.completeLocalACPRun(runID: run.runID)
     try await f.db.mutateConversation(id: f.chat, mutation: .moveToTrash)
     #expect(try await f.db.workspaceOverview().conversations.isEmpty)
