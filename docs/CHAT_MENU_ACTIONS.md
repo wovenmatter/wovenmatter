@@ -71,8 +71,11 @@ Cancel, and error paths remove it.
 
 Notes expose Pin/Unpin, Rename, Move to Folder, Export note, Export document, and
 Move to Trash from the sidebar. Trash includes notes and chats, each with Restore.
-Pinning and moving a note retain its document and history. Restore keeps its pin
-and returns it to the original folder when that folder remains available.
+Pinning and moving a note retain its document and history. Pin/Unpin changes only
+the pin state for notes, spreadsheets, and HTML artifacts: their activity timestamp
+and chronological order stay unchanged, apart from any genuine draft edits saved
+by the existing flush barrier. Pinned-section membership still follows pin state.
+Restore keeps its pin and returns it to the original folder when that folder remains available.
 
 Menu identity includes the fields that affect its labels and actions. This forces
 macOS to discard a cached Pin/Unpin menu after the state changes without rebuilding

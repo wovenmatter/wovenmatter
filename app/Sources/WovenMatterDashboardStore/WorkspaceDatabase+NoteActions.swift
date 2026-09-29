@@ -20,11 +20,13 @@ extension WorkspaceDatabaseConnection {
       let current = try noteActionRevision(id: id, trashed: restoring)
       guard current == expectedRevision else { throw WorkspaceNoteMutationError.revisionConflict }
       let operatorID = try localMutationOperatorIDUnlocked()
-      let revision = try nextNoteRevisionUnlocked(id: id)
+      let revision = if case .setPinned = mutation { current } else { try nextNoteRevisionUnlocked(id: id) }
       switch mutation {
       case .setPinned(let pinned):
-        try toolsExecuteUnlocked("UPDATE notes SET is_pinned = ?, updated_at = ? WHERE id = ? AND user_id = ?",
-          [pinned ? "1" : "0", revision, id, operatorID])
+        // Pin state is not document activity. The dashboard UPDATE trigger still
+        // refreshes presentation without changing the note's revision or order.
+        try toolsExecuteUnlocked("UPDATE notes SET is_pinned = ? WHERE id = ? AND user_id = ?",
+          [pinned ? "1" : "0", id, operatorID])
       case .rename(let title):
         let title = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty else { throw WorkspaceNoteActionError.emptyTitle }

@@ -40,7 +40,14 @@ struct WorkspaceNoteActionsTests {
       let document = NoteDocument(kind: kind, blocks: [.richText(.init(text: "Retained content"))], html: "<h1>Original HTML</h1>")
       let content = try document.encoded()
       let id = try await f.db.createNote(folderID: folder, title: kind.displayName, content: content, kind: kind)
-      try await f.db.mutateNote(id: id, mutation: .setPinned(true), expectedRevision: f.db.noteActionRevision(id: id))
+      let original = try #require(try await f.db.workspaceOverview().notes.first { $0.id == id })
+      let revision = try await f.db.noteActionRevision(id: id)
+      for pinned in [true, false, true] {
+        try await f.db.mutateNote(id: id, mutation: .setPinned(pinned), expectedRevision: revision)
+        let saved = try #require(try await f.db.workspaceOverview().notes.first { $0.id == id })
+        #expect(saved.isPinned == pinned && saved.updatedAt == original.updatedAt && saved.createdAt == original.createdAt)
+        #expect(try await f.db.noteActionRevision(id: id) == revision)
+      }
       let before = try await f.db.readNoteForEditing(id: id)
       let versions = try await f.db.noteAssetVersions(id: id)
       try await f.db.mutateNote(id: id, mutation: .moveToTrash, expectedRevision: f.db.noteActionRevision(id: id))
