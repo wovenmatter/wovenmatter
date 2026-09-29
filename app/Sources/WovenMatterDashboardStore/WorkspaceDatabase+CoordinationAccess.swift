@@ -10,7 +10,8 @@ extension WorkspaceDatabaseConnection {
                                        notifications: Bool = true, requestID: String) throws -> WorkspaceCoordinationAccessRequest {
     try transaction {
       try requireToolUnlocked(.sessions, sessionID: sourceID)
-      guard UUID(uuidString: requestID) != nil, !purpose.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+      let requestID = try persistedToolRequestID(requestID, in: .coordination)
+      guard !purpose.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
             purpose.utf8.count <= 65_536 else { throw WorkspaceToolError.invalid("A valid request ID and management purpose are required.") }
       if let existing = try coordinationAccessRequestUnlocked(requestID) {
         guard existing.sourceID == sourceID, existing.targetID == targetID,
@@ -31,10 +32,11 @@ extension WorkspaceDatabaseConnection {
       } else {
         try beginCoordinationUnlocked(sourceID: sourceID, targetID: targetID, purpose: purpose, notifications: notifications)
       }
+      let epoch = pending ? nil : try relationshipUnlocked(targetID).coordinationEpoch
       try toolsExecuteUnlocked("""
-        INSERT INTO workspace_coordination_access_requests(id,source_id,target_id,purpose,notifications,state)
-        VALUES(?,?,?,?,?,?)
-        """, [requestID, sourceID, targetID, purpose, notifications ? "1" : "0", pending ? "pending" : "accepted"])
+        INSERT INTO workspace_coordination_access_requests(id,source_id,target_id,purpose,notifications,state,coordination_epoch)
+        VALUES(?,?,?,?,?,?,?)
+        """, [requestID, sourceID, targetID, purpose, notifications ? "1" : "0", pending ? "pending" : "accepted", epoch])
       guard let result = try coordinationAccessRequestUnlocked(requestID) else { throw WorkspaceToolError.invalid("Unable to save management request.") }
       return result
     }
@@ -50,6 +52,7 @@ extension WorkspaceDatabaseConnection {
   /// repeated inside the same transaction as acquiring coordination.
   public func resolveCoordinationAccess(requestID: String, allowed: Bool) throws -> WorkspaceCoordinationAccessRequest {
     try transaction {
+      let requestID = try persistedToolRequestID(requestID, in: .coordination)
       guard let request = try coordinationAccessRequestUnlocked(requestID) else { throw WorkspaceToolError.invalid("The access request is unavailable.") }
       guard request.state == "pending" else { return request }
       var state = "rejected"
@@ -65,7 +68,8 @@ extension WorkspaceDatabaseConnection {
           state = "failed"; reason = error.localizedDescription
         }
       }
-      try toolsExecuteUnlocked("UPDATE workspace_coordination_access_requests SET state=?,error=? WHERE id=?", [state, reason, requestID])
+      let epoch = state == "accepted" ? try relationshipUnlocked(request.targetID).coordinationEpoch : nil
+      try toolsExecuteUnlocked("UPDATE workspace_coordination_access_requests SET state=?,error=?,coordination_epoch=? WHERE id=?", [state, reason, epoch, requestID])
       guard let result = try coordinationAccessRequestUnlocked(requestID) else { throw WorkspaceToolError.invalid("The access request is unavailable.") }
       return result
     }
@@ -84,7 +88,8 @@ extension WorkspaceDatabaseConnection {
 
   private var coordinationAccessSelect: String {
     """
-      SELECT r.*,s.title AS source_title,t.title AS target_title FROM workspace_coordination_access_requests r
+      SELECT r.*,s.title AS source_title,t.title AS target_title
+      FROM workspace_coordination_access_requests r
       JOIN dashboard_conversations s ON s.id=r.source_id JOIN dashboard_conversations t ON t.id=r.target_id
       """
   }
@@ -98,7 +103,8 @@ extension WorkspaceDatabaseConnection {
     func text(_ key: String) -> String { value[key]?.stringValue ?? "" }
     return .init(id: text("id"), sourceID: text("source_id"), targetID: text("target_id"),
       sourceTitle: text("source_title"), targetTitle: text("target_title"), purpose: text("purpose"),
-      notifications: value["notifications"]?.intValue == 1, state: text("state"), error: value["error"]?.stringValue)
+      notifications: value["notifications"]?.intValue == 1, state: text("state"), error: value["error"]?.stringValue,
+      coordinationEpoch: value["coordination_epoch"]?.stringValue)
   }
 }
 

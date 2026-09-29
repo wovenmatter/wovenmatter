@@ -483,7 +483,7 @@ extension WorkspaceDatabaseConnection {
       try requireToolUnlocked(.library, sessionID: callerID)
       if let id {
         guard let item = try libraryItemUnlocked(id: id) else {
-          throw WorkspaceToolError.invalid("Library item not found.")
+          throw WorkspaceToolError.notFound("Library item not found.")
         }
         return try JSONDecoder().decode(GatewayJSONValue.self, from: JSONEncoder().encode(item))
       }

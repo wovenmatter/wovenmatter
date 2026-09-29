@@ -214,7 +214,7 @@ final class ApplicationModel {
     var sessionAccessError: String?
     @ObservationIgnored var toolRuntimeTask: Task<Void, Never>?
     @ObservationIgnored var toolCreationTasks: [String: Task<WovenMatterToolResponse, any Error>] = [:]
-    @ObservationIgnored private var toolSessionAdmission = WorkspaceSessionAdmission()
+    @ObservationIgnored var toolSessionAdmission = WorkspaceSessionAdmission()
     @ObservationIgnored private var pendingAgentDispatches: [String: [ObjectIdentifier: AgentDispatchFence]] = [:]
     @ObservationIgnored private let backendDispatchClientID = UUID()
     @ObservationIgnored private var backendDispatchInstanceID: UUID?
@@ -2175,6 +2175,7 @@ final class ApplicationModel {
         input: AgentMessageInput,
         note: WorkspaceNoteRecord? = nil,
         allowSteering: Bool = true,
+        admissionDecision: WorkspaceSessionAdmission.Decision? = nil,
         dispatchFence suppliedFence: AgentDispatchFence? = nil
     ) async throws -> Bool {
         let dispatchFence = suppliedFence ?? beginAgentDispatch(conversationID: conversation.id)
@@ -2211,12 +2212,16 @@ final class ApplicationModel {
         // during asynchronous settings preparation.
         guard allowSteering || !runningToolSessionIDs.contains(conversation.id) else { return false }
         guard !backendStopping else { throw BackendRPCError.remote("The background service is stopping.") }
-        let decision = toolSessionAdmission.begin(conversation.id, running: runningToolSessionIDs,
+        let ownsAdmission = admissionDecision == nil
+        let decision = admissionDecision ?? toolSessionAdmission.begin(conversation.id, running: runningToolSessionIDs,
             limit: agentTools.settings.maximumRunningSessions)
         if decision == .atCapacity { return false }
         if decision == .preparing { throw ApplicationModelError.localSessionConfigurationInProgress }
-        let steering = decision == .steer
-        defer { toolSessionAdmission.finish(conversation.id) }
+        // A pre-reserved start can cross asynchronous session preparation. If
+        // that session became active meanwhile, use its steering path instead
+        // of attempting a second start for the same conversation.
+        let steering = decision == .steer || runningToolSessionIDs.contains(conversation.id)
+        defer { if ownsAdmission { toolSessionAdmission.finish(conversation.id) } }
         if conversation.localRuntimeKind == .hermes, conversation.remoteWorkspaceID == nil,
            !buzzBoundLocalACPConversationIDs.contains(conversation.id) {
             try await requireLocalHermesLink(conversationID: conversation.id)
