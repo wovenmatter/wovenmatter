@@ -44,13 +44,14 @@ public struct WorkspaceTrashedConversation: Codable, Identifiable, Sendable {
 }
 
 public enum WorkspaceConversationActionError: LocalizedError {
-  case unavailable, emptyTitle, running
+  case unavailable, emptyTitle, running, pendingInput
 
   public var errorDescription: String? {
     switch self {
     case .unavailable: "This chat is no longer available. Refresh and try again."
     case .emptyTitle: "Enter a name for this chat."
     case .running: "Stop this chat before moving it to Trash."
+    case .pendingInput: "Resolve this chat’s pending input before moving it to Trash."
     }
   }
 }

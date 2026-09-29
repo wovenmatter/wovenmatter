@@ -32,7 +32,7 @@ struct DashboardRenameConversationSheet: View {
                 .focused($titleFocused)
                 .onSubmit(save)
                 .disabled(saving)
-            if let error { Text(error).font(.callout).foregroundStyle(.red) }
+            if let error { Text(error).font(.callout).foregroundStyle(DashboardPalette.danger) }
             HStack {
                 Spacer()
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction).disabled(saving)
@@ -70,11 +70,12 @@ struct DashboardConversationTrashSheet: View {
     @State private var error: String?
     @State private var loading = true
     @State private var restoringIDs: Set<String> = []
+    @State private var reloadGeneration = 0
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Chats in Trash").font(.headline)
-            if let error { Text(error).font(.callout).foregroundStyle(.red) }
+            if let error { Text(error).font(.callout).foregroundStyle(DashboardPalette.danger) }
             if loading {
                 ProgressView().frame(maxWidth: .infinity)
             } else if conversations.isEmpty {
@@ -104,8 +105,17 @@ struct DashboardConversationTrashSheet: View {
     }
 
     private func reload() async {
-        do { conversations = try await model.trashedConversations() }
-        catch { self.error = error.localizedDescription }
+        reloadGeneration += 1
+        let generation = reloadGeneration
+        do {
+            let snapshot = try await model.trashedConversations()
+            guard generation == reloadGeneration, !Task.isCancelled else { return }
+            conversations = snapshot
+            error = nil
+        } catch {
+            guard generation == reloadGeneration, !Task.isCancelled else { return }
+            self.error = error.localizedDescription
+        }
         loading = false
     }
 
@@ -126,7 +136,8 @@ struct DashboardConversationTrashSheet: View {
 enum DashboardConversationExport {
     /// The backend stages the snapshot; only the UI owns the user-selected destination.
     static func save(url: URL, title: String, format: WorkspaceConversationExportFormat) async throws -> Bool {
-        defer { try? FileManager.default.removeItem(at: url) }
+        var removeStagedFile = true
+        defer { if removeStagedFile { try? FileManager.default.removeItem(at: url) } }
         let panel = NSSavePanel()
         panel.title = format == .messages ? "Export messages" : "Export full run"
         panel.nameFieldStringValue = format.suggestedFilename(title: title)
@@ -136,11 +147,21 @@ enum DashboardConversationExport {
             panel.begin { continuation.resume(returning: $0) }
         }
         guard response == .OK, let destination = panel.url else { return false }
+        // The chosen destination owns the file, even if the user selects its staging path.
+        if destination.resolvingSymlinksInPath() == url.resolvingSymlinksInPath() {
+            removeStagedFile = false
+            return true
+        }
         let accessing = destination.startAccessingSecurityScopedResource()
         defer { if accessing { destination.stopAccessingSecurityScopedResource() } }
-        try await Task.detached(priority: .userInitiated) {
-            try Data(contentsOf: url, options: .mappedIfSafe).write(to: destination, options: .atomic)
-        }.value
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            DispatchQueue.global(qos: .userInitiated).async {
+                do {
+                    try Data(contentsOf: url, options: .mappedIfSafe).write(to: destination, options: .atomic)
+                    continuation.resume()
+                } catch { continuation.resume(throwing: error) }
+            }
+        }
         return true
     }
 }

@@ -4,7 +4,7 @@ import WovenMatterClient
 import WovenMatterCore
 
 // Conversation metadata and read projections for messages, references and activity.
-extension WorkspaceDatabase {
+extension WorkspaceDatabaseConnection {
   public func dashboardRevision() throws -> Int64 {
     try withLock {
       let statement = try prepareUnlocked(
@@ -185,8 +185,8 @@ extension WorkspaceDatabase {
       conversationID: id,
       messages: messages,
       runs: runs,
-      attachments: try messageAttachmentRecordsUnlocked(messageIDs: messages.map(\.id)),
-      references: try messageReferenceRecordsUnlocked(messageIDs: messages.map(\.id))
+      attachments: messages.isEmpty ? [] : try messageAttachmentRecordsUnlocked(conversationID: id),
+      references: messages.isEmpty ? [] : try messageReferenceRecordsUnlocked(conversationID: id)
     )
   }
 
@@ -310,10 +310,14 @@ extension WorkspaceDatabase {
   }
 
   private func messageAttachmentRecordsUnlocked(
-    messageIDs: [String]
+    messageIDs: [String] = [], conversationID: String? = nil
   ) throws -> [WorkspaceMessageAttachmentRecord] {
-    guard !messageIDs.isEmpty else { return [] }
-    let placeholders = Array(repeating: "?", count: messageIDs.count).joined(separator: ", ")
+    guard conversationID != nil || !messageIDs.isEmpty else { return [] }
+    // A full history must not allocate one SQLite parameter per retained message.
+    let placeholders = conversationID != nil
+      ? "SELECT id FROM dashboard_messages WHERE conversation_id = ?"
+      : Array(repeating: "?", count: messageIDs.count).joined(separator: ", ")
+    let bindings = conversationID.map { [$0] } ?? messageIDs
     return try decodeCanonicalRowsUnlocked(
       """
       SELECT json_object(
@@ -326,16 +330,20 @@ extension WorkspaceDatabase {
       WHERE message_id IN (\(placeholders))
       ORDER BY created_at, id
       """,
-      bindings: messageIDs,
+      bindings: bindings,
       as: WorkspaceMessageAttachmentRecord.self
     )
   }
 
   private func messageReferenceRecordsUnlocked(
-    messageIDs: [String]
+    messageIDs: [String] = [], conversationID: String? = nil
   ) throws -> [WorkspaceMessageReferenceRecord] {
-    guard !messageIDs.isEmpty else { return [] }
-    let placeholders = Array(repeating: "?", count: messageIDs.count).joined(separator: ", ")
+    guard conversationID != nil || !messageIDs.isEmpty else { return [] }
+    // A full history must not allocate one SQLite parameter per retained message.
+    let placeholders = conversationID != nil
+      ? "SELECT id FROM dashboard_messages WHERE conversation_id = ?"
+      : Array(repeating: "?", count: messageIDs.count).joined(separator: ", ")
+    let bindings = conversationID.map { [$0] } ?? messageIDs
     return try decodeCanonicalRowsUnlocked(
       """
       SELECT json_object(
@@ -352,17 +360,21 @@ extension WorkspaceDatabase {
       WHERE message_id IN (\(placeholders))
       ORDER BY created_at, id
       """,
-      bindings: messageIDs,
+      bindings: bindings,
       as: WorkspaceMessageReferenceRecord.self
     )
   }
 
   func runActivityRecordsUnlocked(
-    runIDs: [String],
-    assistantOnly: Bool = false
+    runIDs: [String] = [],
+    assistantOnly: Bool = false,
+    conversationID: String? = nil
   ) throws -> [WorkspaceRunActivityRecord] {
-    guard !runIDs.isEmpty else { return [] }
-    let placeholders = Array(repeating: "?", count: runIDs.count).joined(separator: ", ")
+    guard conversationID != nil || !runIDs.isEmpty else { return [] }
+    let placeholders = conversationID != nil
+      ? "SELECT id FROM dashboard_runs WHERE conversation_id = ?"
+      : Array(repeating: "?", count: runIDs.count).joined(separator: ", ")
+    let bindings = conversationID.map { [$0] } ?? runIDs
     var records: [WorkspaceRunActivityRecord] = []
     let events = try prepareUnlocked("""
       SELECT id, run_id, conversation_id, event_type, content, created_at, rowid
@@ -372,7 +384,7 @@ extension WorkspaceDatabase {
       ORDER BY created_at, rowid
       """)
     defer { sqlite3_finalize(events) }
-    for (index, runID) in runIDs.enumerated() {
+    for (index, runID) in bindings.enumerated() {
       try bind(runID, at: Int32(index + 1), to: events)
     }
     while true {
@@ -416,7 +428,7 @@ extension WorkspaceDatabase {
       ORDER BY created_at, seq, id
       """)
     defer { sqlite3_finalize(traces) }
-    for (index, runID) in runIDs.enumerated() {
+    for (index, runID) in bindings.enumerated() {
       try bind(runID, at: Int32(index + 1), to: traces)
     }
     while true {

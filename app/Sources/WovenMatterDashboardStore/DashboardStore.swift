@@ -684,19 +684,34 @@ public actor DashboardStore {
     return try await snapshot()
   }
 
-  public func mutateConversation(id: String, mutation: WorkspaceConversationMutation) throws {
-    try database.mutateConversation(id: id, mutation: mutation)
+  public func mutateConversation(id: String, mutation: WorkspaceConversationMutation) async throws {
+    try await database.mutateConversation(id: id, mutation: mutation)
   }
 
-  public func trashedConversations() throws -> [WorkspaceTrashedConversation] {
-    try database.trashedConversations()
+  public func trashedConversations() async throws -> [WorkspaceTrashedConversation] {
+    try await database.trashedConversations()
   }
 
-  public func exportConversation(id: String, format: WorkspaceConversationExportFormat) throws -> URL {
-    let data = try database.conversationExport(id: id, format: format)
+  public func exportConversation(id: String, format: WorkspaceConversationExportFormat) async throws -> URL {
+    let data = try await database.conversationExport(id: id, format: format)
     let url = FileManager.default.temporaryDirectory
       .appending(path: "wovenmatter-export-" + UUID().uuidString + "." + format.fileExtension)
-    try data.write(to: url, options: [.atomic, .completeFileProtection])
+    try Task.checkCancellation()
+    // SQL and encoding ran on the reader worker. File I/O also stays off the
+    // cooperative executor, and only the staging URL crosses backend IPC.
+    try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+      DispatchQueue.global(qos: .userInitiated).async {
+        do {
+          try data.write(to: url, options: [.atomic, .completeFileProtection])
+          continuation.resume()
+        } catch {
+          try? FileManager.default.removeItem(at: url)
+          continuation.resume(throwing: error)
+        }
+      }
+    }
+    do { try Task.checkCancellation() }
+    catch { try? FileManager.default.removeItem(at: url); throw error }
     return url
   }
 

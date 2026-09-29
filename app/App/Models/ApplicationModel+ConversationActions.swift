@@ -17,7 +17,10 @@ extension ApplicationModel {
 
     func trashedConversations() async throws -> [WorkspaceTrashedConversation] {
         if isBackendFrontend {
-            return try await sendBackendCommand(.trashedConversations).trashedConversations ?? []
+            guard let conversations = try await sendBackendCommand(.trashedConversations).trashedConversations else {
+                throw WorkspaceConversationActionError.unavailable
+            }
+            return conversations
         }
         guard let dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
         return try await dashboardStore.trashedConversations()

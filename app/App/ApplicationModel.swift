@@ -2073,6 +2073,10 @@ final class ApplicationModel {
         do {
             if conversation.localRuntimeKind == .opencode {
                 guard let openCode = openCodeModel(for: conversation.id) else { throw OpenCodeError.message("This workspace's OpenCode connection is unavailable.") }
+                // Native slash commands do not create a submission row. Check visibility
+                // while this dispatcher still owns the shared send/Trash reservation.
+                _ = try await dashboardStore.database.localACPSession(conversationID: conversation.id)
+                try Task.checkCancellation()
                 try await openCode.send(conversation.id, input: normalized, discovery: discovery)
             } else if steering {
                 if isOpenClawGatewayConversation(conversation.id) {

@@ -14,7 +14,7 @@ private struct ConversationRunExport: Encodable {
   let traceEvents: [GatewayJSONValue]
 }
 
-extension WorkspaceDatabase {
+extension WorkspaceDatabaseConnection {
   public func conversationExport(id: String, format: WorkspaceConversationExportFormat) throws -> Data {
     // One transaction keeps metadata, messages and events at the same point in time.
     try transaction {
@@ -43,7 +43,7 @@ extension WorkspaceDatabase {
         return Data((sections.joined(separator: "\n\n") + "\n").utf8)
       case .fullRun:
         let export = ConversationRunExport(exportedAt: Self.timestamp(Date()), conversation: conversation,
-          content: content, activities: try runActivityRecordsUnlocked(runIDs: content.runs.map(\.id)),
+          content: content, activities: try runActivityRecordsUnlocked(conversationID: id),
           historyEvents: try historyRowsUnlocked("""
             SELECT * FROM workspace_history_events WHERE conversation_id = ?
               OR run_id IN (SELECT id FROM dashboard_runs WHERE conversation_id = ?)
@@ -56,5 +56,11 @@ extension WorkspaceDatabase {
         return try encoder.encode(export)
       }
     }
+  }
+}
+
+extension WorkspaceDatabase {
+  public func conversationExport(id: String, format: WorkspaceConversationExportFormat) async throws -> Data {
+    try await read { try $0.conversationExport(id: id, format: format) }
   }
 }

@@ -4,7 +4,7 @@ import WovenMatterClient
 import WovenMatterCore
 
 // Canonical OpenCode projections; legacy ACP rows are never migrated.
-extension WorkspaceDatabase {
+extension WorkspaceDatabaseConnection {
   public func knownOpenCodeSessionIDs(connectionID: String) throws -> Set<String> {
     try knownSessionIDs(sql: "SELECT session_id FROM desktop_opencode_sessions WHERE connection_id = ?", scope: connectionID)
   }
@@ -143,6 +143,9 @@ extension WorkspaceDatabase {
 
   public func saveOpenCodeSubmission(conversationID: String, id: String, payload: OpenCodeValue, status: String, visibleText: String? = nil, deliveryID: String? = nil, input: AgentMessageInput? = nil) throws {
     try transaction {
+      // Fence new admission against Trash in the same writer transaction. Terminal
+      // receipts must still settle after caller cancellation or a later visibility change.
+      if status == "sending" { _ = try localACPSession(conversationID: conversationID) }
       if let deliveryID { try markToolDeliveryTransportStartedUnlocked(id: deliveryID) }
       let statement = try prepareUnlocked("""
         INSERT INTO desktop_opencode_submissions(id, conversation_id, payload_json, status) VALUES (?, ?, ?, ?)

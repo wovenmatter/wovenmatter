@@ -1,7 +1,7 @@
 import Foundation
 import WovenMatterCore
 
-extension WorkspaceDatabase {
+extension WorkspaceDatabaseConnection {
   public func mutateConversation(id: String, mutation: WorkspaceConversationMutation) throws {
     try transaction {
       let restoring: Bool = if case .restore = mutation { true } else { false }
@@ -34,6 +34,15 @@ extension WorkspaceDatabase {
           SELECT 1 FROM dashboard_runs WHERE conversation_id = ?
             AND status IN ('queued', 'accepted', 'running') LIMIT 1
           """, values: [id]).isEmpty else { throw WorkspaceConversationActionError.running }
+        // Native OpenCode work can exist before its first normalized dashboard run.
+        guard try historyRowsUnlocked("""
+          SELECT 1 FROM desktop_opencode_sessions WHERE conversation_id = ?
+            AND json_extract(snapshot_json, '$.active') = 1 LIMIT 1
+          """, values: [id]).isEmpty else { throw WorkspaceConversationActionError.running }
+        guard try historyRowsUnlocked("""
+          SELECT 1 FROM desktop_opencode_submissions WHERE conversation_id = ?
+            AND status IN ('sending', 'uncertain') LIMIT 1
+          """, values: [id]).isEmpty else { throw WorkspaceConversationActionError.pendingInput }
         try toolsExecuteUnlocked("""
           UPDATE dashboard_conversations SET deleted_at = ?, updated_at = ?,
             original_folder_id = folder_id WHERE id = ?
@@ -72,5 +81,16 @@ extension WorkspaceDatabase {
           return WorkspaceTrashedConversation(id: id, title: title, deletedAt: date)
         }
     }
+  }
+}
+
+// Keep each mutation inside one complete worker transaction.
+extension WorkspaceDatabase {
+  public func mutateConversation(id: String, mutation: WorkspaceConversationMutation) async throws {
+    try await write { try $0.mutateConversation(id: id, mutation: mutation) }
+  }
+
+  public func trashedConversations() async throws -> [WorkspaceTrashedConversation] {
+    try await read { try $0.trashedConversations() }
   }
 }

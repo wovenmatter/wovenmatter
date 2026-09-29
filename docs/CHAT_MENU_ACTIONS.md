@@ -39,3 +39,28 @@ open chat panels.
 folder moves, user-title preservation, validation and read-only boundaries,
 active-run rejection, trash/restoration, timer/delivery behavior, and complete
 exports with older messages, reference snapshots, and untruncated history events.
+
+## Integration dependency and acceptance
+
+This feature depends on PR #86 (async internal database workers) landing first.
+Its SQL implementation extends `WorkspaceDatabaseConnection`; its public APIs
+queue one complete write transaction or one coherent read snapshot. Export SQL
+and JSON encoding run on a reader worker; staging and destination file I/O use a
+dispatch queue. No full transcript is encoded into the backend RPC response.
+Full-history queries use conversation subqueries instead of one bind parameter
+per message or run.
+
+Trash also rejects native OpenCode active snapshots and sending or uncertain
+submissions before a normalized run exists. New submission admission checks chat
+visibility inside its write transaction; terminal receipt settlement stays legal.
+The app's shared send/Trash reservation covers native slash-command preparation.
+
+Regression source covers the async worker boundary, queued/accepted/running and
+native OpenCode admission, and exports under a reduced SQLite bind limit. These
+checks were added during review but were not executed at the user's direction.
+Native acceptance still needs narrow/wide sidebar menus, Rename Save/Cancel and
+errors, concurrent restores, active-work rejection, and both Save dialog formats
+including cancel and a destination write failure, in embedded and separate-backend
+modes. Interrupted delivery of an export response can leave a staged temporary
+export; normal Save,
+Cancel, and error paths remove it.
