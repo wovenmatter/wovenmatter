@@ -109,4 +109,50 @@ struct WorkspaceNoteActionsTests {
     #expect(bounded.suggestedFilename.decomposedStringWithCanonicalMapping.utf8.count <= 255)
     #expect(!bounded.suggestedFilename.contains("/") && !bounded.suggestedFilename.contains(":"))
   }
+
+  @Test func renameValidationPreservesNoteRevision() async throws {
+    let f = try await Fixture(); defer { f.close() }
+    let id = try await f.db.createNote(folderID: nil, title: "Original")
+    let revision = try await f.db.noteActionRevision(id: id)
+    for title in ["\0Hidden", "Visible\0hidden", String(repeating: "界", count: 1_366)] {
+      await #expect(throws: WorkspaceNoteActionError.invalidTitle) {
+        try await f.db.mutateNote(id: id, mutation: .rename(title), expectedRevision: revision)
+      }
+    }
+    #expect(try await f.db.noteActionRevision(id: id) == revision)
+    #expect(try await f.db.readNoteForEditing(id: id).title == "Original")
+  }
+
+  @Test func sparseTablesAreBoundedBeforeNormalizationAndEmptyDocumentsExport() throws {
+    let sparse = NoteDocument(kind: .spreadsheet, blocks: [.table(.init(
+      columns: (0..<200).map { _ in .init() },
+      rows: (0..<200).map { _ in .init(cells: []) }
+    ))])
+    // encoded() normalizes; retained wire bytes must be checked before that expansion.
+    let content = String(decoding: try JSONEncoder().encode(sparse), as: UTF8.self)
+    #expect(content.utf8.count < WorkspaceExportBudget.maximumStoredBytes)
+    #expect(throws: WorkspaceExportError.tooLarge) {
+      try NoteDocument.exportRetained(content: content, title: "Sparse", format: .standard)
+    }
+    let empty = try NoteDocument.exportRetained(content: "", title: "Empty", format: .standard)
+    #expect(empty.fileExtension == "md" && String(decoding: empty.data, as: UTF8.self).contains("# Empty"))
+    let linked = NoteDocument(databaseLink: .init(sourceID: "source", databaseID: "db", relativePath: "file",
+      sqliteQuery: String(repeating: "x", count: WorkspaceExportBudget.maximumStoredBytes + 1)))
+    #expect(throws: WorkspaceExportError.tooLarge) { try linked.exported(title: "Linked", format: .document) }
+  }
+
+  @Test func cancelledExportNeverTouchesAnExistingDestination() async throws {
+    let f = try await Fixture(); defer { f.close() }
+    let destination = f.root.appending(path: "keep.md")
+    try Data("Keep existing file".utf8).write(to: destination)
+    let cancelled = Task {
+      withUnsafeCurrentTask { $0?.cancel() }
+      try await WorkspaceExportFileIO.perform {
+        try Data("Replacement".utf8).write(to: destination, options: .atomic)
+      }
+    }
+    await #expect(throws: CancellationError.self) { try await cancelled.value }
+    #expect(String(decoding: try Data(contentsOf: destination), as: UTF8.self) == "Keep existing file")
+  }
+
 }

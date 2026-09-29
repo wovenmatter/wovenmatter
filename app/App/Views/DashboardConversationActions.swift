@@ -281,32 +281,36 @@ enum DashboardConversationExport {
 @MainActor
 enum DashboardStagedExport {
     /// The backend stages the snapshot; only the UI owns the user-selected destination.
-    static func save(url: URL, panelTitle: String, suggestedFilename: String, contentType: UTType) async throws -> Bool {
+    static func save(url stagedURL: URL, panelTitle: String, suggestedFilename: String, contentType: UTType) async throws -> Bool {
         var removeStagedFile = true
-        defer { if removeStagedFile { try? FileManager.default.removeItem(at: url) } }
+        defer { if removeStagedFile { try? FileManager.default.removeItem(at: stagedURL) } }
+        try Task.checkCancellation()
         let panel = NSSavePanel()
         panel.title = panelTitle
         panel.nameFieldStringValue = suggestedFilename
         panel.allowedContentTypes = [contentType]
         panel.canCreateDirectories = true
-        let response = await withCheckedContinuation { continuation in
-            panel.begin { continuation.resume(returning: $0) }
+        let response = await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                guard !Task.isCancelled else { continuation.resume(returning: NSApplication.ModalResponse.cancel); return }
+                panel.begin { continuation.resume(returning: $0) }
+            }
+        } onCancel: {
+            Task { @MainActor in panel.cancel(nil) }
         }
+        try Task.checkCancellation()
         guard response == .OK, let destination = panel.url else { return false }
         // The chosen destination owns the file, even if the user selects its staging path.
-        if destination.resolvingSymlinksInPath() == url.resolvingSymlinksInPath() {
+        if destination.resolvingSymlinksInPath() == stagedURL.resolvingSymlinksInPath() {
             removeStagedFile = false
             return true
         }
         let accessing = destination.startAccessingSecurityScopedResource()
         defer { if accessing { destination.stopAccessingSecurityScopedResource() } }
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            DispatchQueue.global(qos: .userInitiated).async {
-                do {
-                    try Data(contentsOf: url, options: .mappedIfSafe).write(to: destination, options: .atomic)
-                    continuation.resume()
-                } catch { continuation.resume(throwing: error) }
-            }
+        // Atomic replacement preserves any existing destination on failure. Never
+        // delete the user's destination during error or cancellation cleanup.
+        try await WorkspaceExportFileIO.perform {
+            try Data(contentsOf: stagedURL, options: .mappedIfSafe).write(to: destination, options: .atomic)
         }
         return true
     }

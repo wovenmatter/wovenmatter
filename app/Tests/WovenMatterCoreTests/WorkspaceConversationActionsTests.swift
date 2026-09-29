@@ -102,7 +102,7 @@ struct WorkspaceConversationActionsTests {
     _ = try await f.db.moveConversation(id: f.chat, toFolderID: folder)
     try await f.db.mutateConversation(id: f.chat, mutation: .setPinned(true))
     let run = try await f.db.beginLocalACPRun(conversationID: f.chat, content: "Keep this message")
-    for status in ["queued", "accepted", "running"] {
+    for status in ["queued", "accepted", "running", "uncertain"] {
       try await f.db.write { connection in try connection.transaction {
         try connection.toolsExecuteUnlocked("UPDATE dashboard_runs SET status = ? WHERE id = ?", [status, run.runID])
       } }
@@ -278,4 +278,58 @@ struct WorkspaceConversationActionsTests {
     #expect(WorkspaceConversationExportFormat.messages.suggestedFilename(title: " ") == "Chat-messages.md")
     await #expect(throws: WorkspaceConversationActionError.self) { try await f.db.conversationExport(id: "missing", format: .fullRun) }
   }
+
+  @Test func renameRejectsSilentCStringTruncationAndOversizedNames() async throws {
+    let f = try await Fixture(); defer { f.close() }
+    for title in ["\0Hidden", "Visible\0hidden", String(repeating: "界", count: 1_366)] {
+      await #expect(throws: WorkspaceConversationActionError.invalidTitle) {
+        try await f.db.mutateConversation(id: f.chat, mutation: .rename(title))
+      }
+    }
+    #expect(try await f.db.localACPSession(conversationID: f.chat).title == "New Codex chat")
+  }
+
+  @Test func restoreDoesNotAdoptAFolderThatChangedOwnership() async throws {
+    let f = try await Fixture(); defer { f.close() }
+    let folder = try await f.db.createFolder(name: "Original")
+    _ = try await f.db.moveConversation(id: f.chat, toFolderID: folder)
+    try await f.db.mutateConversation(id: f.chat, mutation: .moveToTrash)
+    try await f.db.write { connection in try connection.transaction {
+      try connection.toolsExecuteUnlocked("UPDATE folders SET user_id='someone-else' WHERE id=?", [folder])
+    } }
+    try await f.db.mutateConversation(id: f.chat, mutation: .restore)
+    #expect(try await f.db.workspaceOverview().conversations.first?.folderID == nil)
+  }
+
+  @Test func exportBudgetIncludesRawPayloadsBeforeDecodingAndCountsEmptyRows() async throws {
+    let f = try await Fixture(); defer { f.close() }
+    let run = try await f.db.beginLocalACPRun(conversationID: f.chat, content: "Small message")
+    try await f.db.completeLocalACPRun(runID: run.runID)
+    let largePayload = String(repeating: "x", count: 16_384)
+    for column in ["raw_event_json", "stream_event_json"] {
+      try await f.db.write { connection in try connection.transaction {
+        try connection.toolsExecuteUnlocked("DELETE FROM dashboard_run_trace_events WHERE conversation_id=?", [f.chat])
+        // Deliberately malformed oversized JSON proves the preflight runs first.
+        try connection.toolsExecuteUnlocked("INSERT INTO dashboard_run_trace_events(id,run_id,conversation_id,\(column)) VALUES('large',?,?,?)",
+          [run.runID, f.chat, largePayload])
+      } }
+      let messages = try await f.db.read { connection in
+        try connection.conversationExport(id: f.chat, format: .messages, budget: .init(maximumBytes: 12_000))
+      }
+      #expect(String(decoding: messages, as: UTF8.self).contains("Small message"))
+      await #expect(throws: WorkspaceExportError.tooLarge) {
+        try await f.db.read { connection in
+          try connection.conversationExport(id: f.chat, format: .fullRun, budget: .init(maximumBytes: 12_000))
+        }
+      }
+    }
+    await #expect(throws: WorkspaceExportError.tooLarge) {
+      try await f.db.read { connection in
+        try connection.conversationExport(id: f.chat, format: .messages, budget: .init(maximumItems: 1))
+      }
+    }
+    // A refusal leaves the retained snapshot intact.
+    #expect(try await f.db.conversationContent(id: f.chat).messages.first?.content == "Small message")
+  }
+
 }

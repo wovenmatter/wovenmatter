@@ -50,6 +50,8 @@ dispatch queue. No full transcript is encoded into the backend RPC response.
 Full-history queries use conversation subqueries instead of one bind parameter
 per message or run.
 
+Trash rejects durable `uncertain` runs until PR84 resolves their exact native
+identity; a lost continuation receipt is not proof that remote work stopped.
 Trash also rejects native OpenCode active snapshots and sending or uncertain
 submissions before a normalized run exists. New submission admission checks chat
 visibility inside its write transaction; terminal receipt settlement stays legal.
@@ -57,7 +59,7 @@ The app's shared send/Trash reservation covers native slash-command preparation.
 After the awaited live-chat check, PR86's `dispatchFence.check()` also rejects Stop
 requests received during that read before control reaches OpenCode's transport.
 
-Regression source covers the async worker boundary, queued/accepted/running and
+Regression source covers the async worker boundary, queued/accepted/running/uncertain and
 native OpenCode admission, and exports under a reduced SQLite bind limit. These
 checks were added during review but were not executed at the user's direction.
 Native acceptance still needs narrow/wide sidebar menus, Rename Save/Cancel and
@@ -90,3 +92,27 @@ Export note produces Markdown for ordinary notes, CSV for spreadsheets, and HTML
 for HTML artifacts. Export document preserves the complete structured document as
 JSON. Native Save dialogs support cancellation; export encoding and file writes
 stay off the UI thread. Exports use the saved snapshot after the draft barrier.
+
+## Export resource and cancellation limits
+
+Exports are complete snapshots or fail with a size error; they never silently
+truncate retained content. On the same reader snapshot, preflight counts every
+column in the selected metadata, messages, runs, attachment/reference metadata,
+delivery metadata, and (for full-run JSON) history/events/traces. It admits at most
+16 MiB of stored bytes plus field overhead and 20,000 retained rows, then limits
+encoded output to 64 MiB. Encoding expansion can temporarily exceed the final
+output cap, but the admitted source graph is bounded. Notes also validate text,
+link metadata, and table dimensions before normalization can expand sparse cells.
+These limits do not change or delete the stored chat or note.
+
+Task cancellation closes an outstanding Save dialog and prevents queued file
+writes from starting. An atomic write that already started finishes to its
+success/error outcome. Cleanup removes only the generated staging snapshot,
+never the user-selected destination; selecting the staging path itself transfers
+ownership instead. Staged exports receive owner-only filesystem permissions.
+HTML artifacts preserve their retained HTML verbatim, including scripts, and are
+not opened or executed by export. Linked databases are not queried.
+
+Source regressions cover oversized raw trace fields, empty-row bounds, sparse
+note normalization, cancelled destination replacement, rename validation, and
+folder ownership on restore. They have not been executed in this audit.

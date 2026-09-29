@@ -20,6 +20,9 @@ extension WorkspaceDatabaseConnection {
       case .rename(let title):
         let cleanTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleanTitle.isEmpty else { throw WorkspaceConversationActionError.emptyTitle }
+        guard !cleanTitle.contains("\0"), cleanTitle.utf8.count <= 4_096 else {
+          throw WorkspaceConversationActionError.invalidTitle
+        }
         try toolsExecuteUnlocked("""
           INSERT INTO desktop_conversation_titles(conversation_id, title) VALUES (?, ?)
           ON CONFLICT(conversation_id) DO UPDATE SET title = excluded.title
@@ -30,10 +33,15 @@ extension WorkspaceDatabaseConnection {
           [cleanTitle, timestamp, id])
       case .moveToTrash:
         // Recheck at the write boundary, including work admitted after the menu opened.
-        guard try historyRowsUnlocked("""
-          SELECT 1 FROM dashboard_runs WHERE conversation_id = ?
-            AND status IN ('queued', 'accepted', 'running') LIMIT 1
-          """, values: [id]).isEmpty else { throw WorkspaceConversationActionError.running }
+        if let run = try historyRowsUnlocked("""
+          SELECT status FROM dashboard_runs WHERE conversation_id = ?
+            AND status IN ('queued', 'accepted', 'running', 'uncertain') LIMIT 1
+          """, values: [id]).first {
+          // A lost continuation receipt is still unresolved native work even if
+          // the original prompt has finished. PR84 owns exact-ID reconciliation.
+          throw run.objectValue?["status"]?.stringValue == "uncertain"
+            ? WorkspaceConversationActionError.pendingInput : WorkspaceConversationActionError.running
+        }
         // Native OpenCode work can exist before its first normalized dashboard run.
         guard try historyRowsUnlocked("""
           SELECT 1 FROM desktop_opencode_sessions WHERE conversation_id = ?
@@ -59,9 +67,9 @@ extension WorkspaceDatabaseConnection {
         // A folder may have been removed while this chat was in Trash.
         try toolsExecuteUnlocked("""
           UPDATE dashboard_conversations SET deleted_at = NULL, updated_at = ?,
-            folder_id = (SELECT id FROM folders WHERE id = original_folder_id), original_folder_id = NULL
+            folder_id = (SELECT id FROM folders WHERE id = original_folder_id AND user_id = ?), original_folder_id = NULL
           WHERE id = ?
-          """, [timestamp, id])
+          """, [timestamp, try localMutationOperatorIDUnlocked(), id])
       }
     }
   }

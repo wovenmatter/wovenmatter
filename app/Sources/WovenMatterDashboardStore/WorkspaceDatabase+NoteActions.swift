@@ -30,6 +30,9 @@ extension WorkspaceDatabaseConnection {
       case .rename(let title):
         let title = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty else { throw WorkspaceNoteActionError.emptyTitle }
+        guard !title.contains("\0"), title.utf8.count <= 4_096 else {
+          throw WorkspaceNoteActionError.invalidTitle
+        }
         try checkpointNoteUnlocked(id: id, source: "before-rename", force: true)
         try toolsExecuteUnlocked("UPDATE notes SET title = ?, updated_at = ? WHERE id = ? AND user_id = ?",
           [title, revision, id, operatorID])
@@ -79,9 +82,12 @@ extension WorkspaceDatabaseConnection {
   public func noteExport(id: String, format: WorkspaceNoteExportFormat, expectedRevision: String) throws -> WorkspaceNoteExportContent {
     try withLock {
       let operatorID = try localMutationOperatorIDUnlocked()
+      var budget = WorkspaceExportBudget()
+      try consumeExportRows(table: "notes", predicate: "id = ? AND user_id = ? AND deleted_at IS NULL",
+        values: [id, operatorID], budget: &budget)
       let note = try noteForEditingUnlocked(id: id, operatorID: operatorID)
       guard note.revision == expectedRevision else { throw WorkspaceNoteMutationError.revisionConflict }
-      return try NoteDocument.decode(note.content).exported(title: note.title, format: format)
+      return try NoteDocument.exportRetained(content: note.content, title: note.title, format: format)
     }
   }
 }

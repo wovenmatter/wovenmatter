@@ -46,13 +46,15 @@ public struct WorkspaceNoteExportContent: Sendable {
   }
 }
 
-public enum WorkspaceNoteActionError: LocalizedError {
+public enum WorkspaceNoteActionError: LocalizedError, Equatable, Sendable {
   case emptyTitle
+  case invalidTitle
   case busy
 
   public var errorDescription: String? {
     switch self {
     case .emptyTitle: "Enter a name for this note."
+    case .invalidTitle: "This name contains unsupported characters or is too long."
     case .busy: "Finish the current note action before trying again."
     }
   }

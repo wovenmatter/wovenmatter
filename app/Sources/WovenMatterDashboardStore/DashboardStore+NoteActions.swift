@@ -12,22 +12,21 @@ extension DashboardStore {
 
   public func exportNote(id: String, format: WorkspaceNoteExportFormat, expectedRevision: String) async throws -> WorkspaceNoteExport {
     let content = try await database.noteExport(id: id, format: format, expectedRevision: expectedRevision)
-    let url = FileManager.default.temporaryDirectory
+    let stagedURL = FileManager.default.temporaryDirectory
       .appending(path: "wovenmatter-note-export-" + UUID().uuidString + "." + content.fileExtension)
     try Task.checkCancellation()
-    try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-      DispatchQueue.global(qos: .userInitiated).async {
-        do {
-          try content.data.write(to: url, options: [.atomic, .completeFileProtection])
-          continuation.resume()
-        } catch {
-          try? FileManager.default.removeItem(at: url)
-          continuation.resume(throwing: error)
-        }
+    do {
+      try await WorkspaceExportFileIO.perform {
+        try content.data.write(to: stagedURL, options: [.atomic, .completeFileProtection])
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: stagedURL.path)
       }
+    } catch {
+      // This path was generated above exclusively for this temporary snapshot.
+      try? FileManager.default.removeItem(at: stagedURL)
+      throw error
     }
     do { try Task.checkCancellation() }
-    catch { try? FileManager.default.removeItem(at: url); throw error }
-    return WorkspaceNoteExport(url: url, suggestedFilename: content.suggestedFilename, fileExtension: content.fileExtension)
+    catch { try? FileManager.default.removeItem(at: stagedURL); throw error }
+    return WorkspaceNoteExport(url: stagedURL, suggestedFilename: content.suggestedFilename, fileExtension: content.fileExtension)
   }
 }

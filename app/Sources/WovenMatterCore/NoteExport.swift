@@ -1,8 +1,24 @@
 import Foundation
 
 extension NoteDocument {
+  /// Validate sparse table dimensions before normalization can fill missing cells.
+  public static func exportRetained(content: String, title: String, format: WorkspaceNoteExportFormat) throws -> WorkspaceNoteExportContent {
+    var budget = WorkspaceExportBudget()
+    try budget.consume(content)
+    try budget.consume(title)
+    let document: NoteDocument
+    if let decoded = try? JSONDecoder().decode(NoteDocument.self, from: Data(content.utf8)) {
+      try decoded.validateExportBudget(title: title)
+      document = decoded.normalized()
+    } else {
+      document = Self.decode(content)
+    }
+    return try document.exported(title: title, format: format)
+  }
+
   /// Exports retained content only; linked databases and remote resources are not queried.
   public func exported(title: String, format: WorkspaceNoteExportFormat) throws -> WorkspaceNoteExportContent {
+    try validateExportBudget(title: title)
     let data: Data
     let fileExtension: String
     if format == .document {
@@ -64,8 +80,53 @@ extension NoteDocument {
         fileExtension = "md"
       }
     }
-    return WorkspaceNoteExportContent(data: data,
+    return WorkspaceNoteExportContent(data: try WorkspaceExportBudget.checked(data),
       suggestedFilename: Self.exportFilename(title: title, extension: fileExtension), fileExtension: fileExtension)
+  }
+
+  private func validateExportBudget(title: String) throws {
+    var budget = WorkspaceExportBudget()
+    try budget.consume(title)
+    try budget.consume(html)
+    func link(_ link: DatabaseArtifactLink?, budget: inout WorkspaceExportBudget) throws {
+      guard let link else { return }
+      try budget.consume(link.sourceID); try budget.consume(link.databaseID)
+      try budget.consume(link.relativePath); try budget.consume(link.sqliteQuery)
+    }
+    func runs(_ runs: [NoteTextRun], budget: inout WorkspaceExportBudget) throws {
+      try budget.consume(bytes: 128 * min(runs.count, WorkspaceExportBudget.maximumItems + 1), items: runs.count)
+      for run in runs {
+        try budget.consume(run.text); try budget.consume(run.link); try budget.consume(run.fontFamily)
+        try budget.consume(run.foregroundHex); try budget.consume(run.highlightHex)
+      }
+    }
+    try link(databaseLink, budget: &budget)
+    try budget.consume(items: blocks.count)
+    for block in blocks {
+      switch block {
+      case .richText(let text):
+        try budget.consume(text.id)
+        try runs(text.runs, budget: &budget)
+      case .table(let table):
+        try budget.consume(table.id)
+        try link(table.databaseLink, budget: &budget)
+        let columns = max(1, table.columns.count)
+        let rows = max(1, table.rows.count)
+        guard columns <= WorkspaceExportBudget.maximumItems,
+              rows <= budget.remainingItems / columns else { throw WorkspaceExportError.tooLarge }
+        try budget.consume(items: columns * rows)
+        for column in table.columns { try budget.consume(column.id) }
+        for row in table.rows {
+          try budget.consume(row.id)
+          // Count extra stored cells as well, even though normalization drops them.
+          try budget.consume(items: max(0, row.cells.count - columns))
+          for cell in row.cells {
+            try budget.consume(cell.id); try budget.consume(cell.backgroundHex)
+            try runs(cell.runs, budget: &budget)
+          }
+        }
+      }
+    }
   }
 
   private static func markdownText(_ value: String) -> String {

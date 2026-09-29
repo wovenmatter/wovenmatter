@@ -16,13 +16,22 @@ private struct ConversationRunExport: Encodable {
 
 extension WorkspaceDatabaseConnection {
   public func conversationExport(id: String, format: WorkspaceConversationExportFormat) throws -> Data {
+    try conversationExport(id: id, format: format, budget: WorkspaceExportBudget())
+  }
+
+  func conversationExport(id: String, format: WorkspaceConversationExportFormat, budget: WorkspaceExportBudget) throws -> Data {
     // One transaction keeps metadata, messages and events at the same point in time.
     try transaction {
       guard let operatorID = try canonicalWorkspaceOperatorIDUnlocked(),
-            let conversation = try historyRowsUnlocked("""
-              SELECT * FROM dashboard_conversations WHERE id = ? AND (user_id = ? OR desktop_owned = 1)
+            let _ = try historyRowsUnlocked("""
+              SELECT id FROM dashboard_conversations WHERE id = ? AND (user_id = ? OR desktop_owned = 1)
                 AND deleted_at IS NULL AND is_archived = 0 AND governing_plane = 'wovenmatter_macos'
               """, values: [id, operatorID]).first else { throw WorkspaceConversationActionError.unavailable }
+      var budget = budget
+      try checkConversationExportBudget(id: id, format: format, budget: &budget)
+      guard let conversation = try historyRowsUnlocked("SELECT * FROM dashboard_conversations WHERE id = ?", values: [id]).first else {
+        throw WorkspaceConversationActionError.unavailable
+      }
       let content = try conversationContentUnlocked(id: id)
       switch format {
       case .messages:
@@ -40,7 +49,7 @@ extension WorkspaceDatabaseConnection {
           }
           sections.append(section)
         }
-        return Data((sections.joined(separator: "\n\n") + "\n").utf8)
+        return try WorkspaceExportBudget.checked(Data((sections.joined(separator: "\n\n") + "\n").utf8))
       case .fullRun:
         let export = ConversationRunExport(exportedAt: Self.timestamp(Date()), conversation: conversation,
           content: content, activities: try runActivityRecordsUnlocked(conversationID: id),
@@ -53,7 +62,7 @@ extension WorkspaceDatabaseConnection {
           traceEvents: try historyRowsUnlocked("SELECT * FROM dashboard_run_trace_events WHERE conversation_id = ? ORDER BY created_at, seq, id", values: [id]))
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-        return try encoder.encode(export)
+        return try WorkspaceExportBudget.checked(encoder.encode(export))
       }
     }
   }
