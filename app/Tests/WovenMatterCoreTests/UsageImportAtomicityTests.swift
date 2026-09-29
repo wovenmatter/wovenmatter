@@ -63,29 +63,17 @@ struct UsageImportAtomicityTests {
   @Test("OpenCode step errors retain indexed history and report partial coverage")
   func readerStepFailure() async throws {
     let fixture = try UsageSQLFixture()
-    let sourceURL = fixture.url.appending(path: ".local/share/opencode/opencode.db")
-    try FileManager.default.createDirectory(at: sourceURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-    let timestamp = Int64(now.addingTimeInterval(-1).timeIntervalSince1970 * 1_000)
-    try fixture.execute(at: sourceURL, sql: """
-      CREATE TABLE message(id TEXT, data TEXT, time_created INTEGER);
-      CREATE TABLE session(id TEXT, directory TEXT);
-      CREATE TABLE raw_part(id TEXT, session_id TEXT, message_id TEXT, data TEXT);
-      CREATE VIEW part AS SELECT id, session_id, message_id,
-        CASE WHEN id = 'broken' THEN json_extract('invalid json', '$') ELSE data END AS data
-        FROM raw_part;
-      INSERT INTO message VALUES('message', '{"providerID":"opencode-go","modelID":"gpt-5.4","time":{"created":\(timestamp)}}', \(timestamp));
-      INSERT INTO raw_part VALUES('original', 'session', 'message', '{"type":"step-finish","tokens":{"input":8,"output":3},"cost":0.01}');
-      """)
+    let sourceURL = try fixture.openCodeSource(now: now)
     // This fixture imports only its own SQLite files. The production initializer
     // watches the app-wide account revision, including mock credential changes
     // made by other tests, even when credential reads are disabled.
     let service = fixture.service()
     let initial = try await service.analyticsSnapshot(range: .last24Hours, enabledProviders: [.openCodeGo], allowCredentialAccess: false, now: now)
-    #expect(initial.samples.count == 1)
+    try #require(initial.samples.count == 1, "Initial import coverage: \(initial.sources)")
     let store = try UsageStore(databaseURL: fixture.indexURL)
-    let originalFingerprint = try store.source("opencode:database")?.fingerprint
-    let originalCoverage = try store.metadataDate("usage.local-indexed-after")
-    let originalImportDate = try store.metadataDate("usage.local-import-at")
+    let originalFingerprint = try #require(try store.source("opencode:database")).fingerprint
+    let originalCoverage = try #require(try store.metadataDate("usage.local-indexed-after"))
+    let originalImportDate = try #require(try store.metadataDate("usage.local-import-at"))
     try fixture.execute(at: sourceURL, sql: "INSERT INTO raw_part VALUES('broken', 'session', 'message', '{}');")
     try FileManager.default.setAttributes([.modificationDate: now.addingTimeInterval(10)], ofItemAtPath: sourceURL.path)
     let failed = try await service.analyticsSnapshot(range: .last7Days, enabledProviders: [.openCodeGo], allowCredentialAccess: false, now: now.addingTimeInterval(1))
@@ -95,6 +83,47 @@ struct UsageImportAtomicityTests {
     // A failed wider scan cannot claim coverage or defer its retry.
     #expect(try store.metadataDate("usage.local-indexed-after") == originalCoverage)
     #expect(try store.metadataDate("usage.local-import-at") == originalImportDate)
+  }
+
+  @Test("A full import lane reports failed coverage and retries without claiming an empty index")
+  func importCapacityAndFixtureIsolation() async throws {
+    let fixture = try UsageSQLFixture()
+    _ = try fixture.openCodeSource(now: now)
+    let preparation = DatabaseWorker(label: "usage.import.capacity.fixture", capacity: 1)
+    let entered = AsyncStream<Void>.makeStream()
+    let release = DispatchSemaphore(value: 0)
+    defer { release.signal() }
+    let blocked = Task { try await preparation.perform { _ in
+      entered.continuation.yield(())
+      release.wait()
+    } }
+    for await _ in entered.stream { break }
+    let service = fixture.service(preparationWorker: preparation)
+    let full = try await service.analyticsSnapshot(range: .last24Hours, enabledProviders: [.openCodeGo],
+      allowCredentialAccess: false, now: now)
+    #expect(preparation.metrics.rejected == 1)
+    #expect(full.samples.isEmpty)
+    #expect(full.sources.first { $0.id == "wovenmatter:index" }?.status == .failed)
+    let store = try UsageStore(databaseURL: fixture.indexURL)
+    #expect(try store.source("opencode:database") == nil)
+    #expect(try store.metadataDate("usage.local-indexed-after") == nil)
+    #expect(try store.metadataDate("usage.local-import-at") == nil)
+
+    // An unrelated fixture owns its lane and cannot inherit this admission failure.
+    let isolated = try UsageSQLFixture()
+    _ = try isolated.openCodeSource(now: now)
+    let independent = try await isolated.service().analyticsSnapshot(range: .last24Hours,
+      enabledProviders: [.openCodeGo], allowCredentialAccess: false, now: now)
+    #expect(independent.samples.count == 1)
+
+    release.signal()
+    try await blocked.value
+    let recovered = try await service.analyticsSnapshot(range: .last24Hours, enabledProviders: [.openCodeGo],
+      allowCredentialAccess: false, now: now)
+    #expect(recovered.samples.count == 1)
+    #expect(!recovered.sources.contains { $0.id == "wovenmatter:index" })
+    #expect(try store.source("opencode:database") != nil)
+    #expect(try store.metadataDate("usage.local-import-at") == now)
   }
 
   @Test("Only shared-account analytics observe account revision changes", arguments: [false, true])
@@ -161,10 +190,29 @@ private final class UsageSQLFixture: @unchecked Sendable {
   init() throws { try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true) }
   deinit { try? FileManager.default.removeItem(at: url) }
 
-  func service(sharedAccounts: Bool = false, revision: @escaping @Sendable () -> UInt64 = { 0 }) -> LocalUsageService {
+  func service(sharedAccounts: Bool = false, revision: @escaping @Sendable () -> UInt64 = { 0 },
+    preparationWorker: DatabaseWorker? = nil) -> LocalUsageService {
     LocalUsageService(homeDirectory: url, fileManager: .default,
       credentialStore: UsageImportNoCredentials(), usageDatabaseURL: indexURL,
-      usesSharedConnections: sharedAccounts, sharedConnectionRevision: revision)
+      usesSharedConnections: sharedAccounts, sharedConnectionRevision: revision,
+      importPreparationWorker: preparationWorker ?? DatabaseWorker(label: "usage.import.fixture", capacity: 4))
+  }
+
+  func openCodeSource(now: Date) throws -> URL {
+    let sourceURL = url.appending(path: ".local/share/opencode/opencode.db")
+    try FileManager.default.createDirectory(at: sourceURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+    let timestamp = Int64(now.addingTimeInterval(-1).timeIntervalSince1970 * 1_000)
+    try execute(at: sourceURL, sql: """
+      CREATE TABLE message(id TEXT, data TEXT, time_created INTEGER);
+      CREATE TABLE session(id TEXT, directory TEXT);
+      CREATE TABLE raw_part(id TEXT, session_id TEXT, message_id TEXT, data TEXT);
+      CREATE VIEW part AS SELECT id, session_id, message_id,
+        CASE WHEN id = 'broken' THEN json_extract('invalid json', '$') ELSE data END AS data
+        FROM raw_part;
+      INSERT INTO message VALUES('message', '{"providerID":"opencode-go","modelID":"gpt-5.4","time":{"created":\(timestamp)}}', \(timestamp));
+      INSERT INTO raw_part VALUES('original', 'session', 'message', '{"type":"step-finish","tokens":{"input":8,"output":3},"cost":0.01}');
+      """)
+    return sourceURL
   }
 
   func execute(at url: URL, sql: String) throws {
