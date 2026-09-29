@@ -10,6 +10,7 @@ enum BackendCronCommand: Codable, Sendable {
     case routeHermes(agentID: UUID, jobID: String, destination: String)
     case changeHermes(agentID: UUID, jobID: String, action: String)
     case refreshOpenClaw
+    case loadOlderOpenClaw(agentID: UUID, jobID: String)
     case saveOpenClaw(agentID: UUID, jobID: String?, name: String, message: String,
                       expression: String, timeZone: String, declarationKey: String,
                       destination: String, preserveSchedule: Bool)
@@ -32,6 +33,7 @@ struct BackendCronSnapshot: Codable, Sendable {
     var refreshingOpenClaw: Bool
     var openClawBusy: Bool
     var openClawError: String?
+    var openClawHasOlderRuns: Set<String>? = nil
 }
 
 struct BackendCronResponse: Codable, Sendable {

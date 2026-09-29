@@ -133,6 +133,40 @@ struct ConversationMessageLayoutTests {
             try require(unsplit.count == 1 && unsplit[0].content == .message,
                 "\(role) rendering was unexpectedly fragmented")
         }
+        // Failure visibility must not depend on activity records or disclosure
+        // state; the view renders this detail before its expandable work history.
+        for hasActivities in [false, true] {
+            let failure = ConversationWorkTranscriptPresentation(
+                runStatus: "failed", runError: "  Request failed\n", hasVisibleActivities: hasActivities
+            )
+            try require(failure.isVisible && failure.failureMessage == "Request failed",
+                "A failed run lost its error when activity visibility changed")
+            try require(failure.hasVisibleActivities == hasActivities,
+                "A failure invented an empty activity disclosure")
+            try require(!ConversationMessageLayout.showsAssistantBody(
+                content: "  Request failed\n", displayedBody: "Request failed", failedRunError: failure.failureMessage
+            ), "The error would be repeated in the assistant body")
+            try require(ConversationMessageLayout.showsAssistantBody(
+                content: "Partial reply", displayedBody: "Partial reply", failedRunError: failure.failureMessage
+            ), "A failed run hid its useful partial reply")
+
+            let missingErrors: [String?] = [nil, "", " \n\t"]
+            for missingError in missingErrors {
+                let fallback = ConversationWorkTranscriptPresentation(
+                    runStatus: "failed", runError: missingError, hasVisibleActivities: hasActivities
+                )
+                try require(fallback.isVisible && fallback.failureMessage == "No error details were provided.",
+                    "A failed run without saved error details became invisible")
+            }
+            for status in ["running", "completed", "cancelled"] {
+                let other = ConversationWorkTranscriptPresentation(
+                    runStatus: status, runError: "Old error", hasVisibleActivities: hasActivities
+                )
+                try require(other.failureMessage == nil && other.isVisible == hasActivities,
+                    "A nonfailed run acquired a stale error or empty work transcript")
+            }
+        }
+
         let failed = rows("  Request failed\n", failedRunError: "Request failed")
         try require(failed.count == 2 && failed[0].content == .message && failed[1].content == .fileChanges,
             "Duplicate failed reply left empty Markdown rows")

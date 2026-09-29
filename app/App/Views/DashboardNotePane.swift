@@ -45,6 +45,7 @@ struct DashboardNotePane: View {
         Binding(
             get: { documentCache.value(noteID: note.id, source: model.noteDraft(for: note).content) },
             set: { updated in
+                guard !model.noteEditingSuspended else { return }
                 guard let content = try? documentCache.encode(updated, noteID: note.id) else { return }
                 model.updateNoteDraft(note: note, content: content)
             }
@@ -82,8 +83,10 @@ struct DashboardNotePane: View {
             HStack(spacing: 8) {
                 if showBack {
                     Button {
-                        model.flushNoteDrafts()
-                        onBack()
+                        Task {
+                            _ = await model.flushNoteDrafts()
+                            onBack()
+                        }
                     } label: {
                         DashboardLucideIcon(glyph: .arrowLeft, size: 16).frame(width: 32, height: 32)
                     }
@@ -155,8 +158,10 @@ struct DashboardNotePane: View {
                     .help(isFocused ? "Restore chat and note" : "Focus note")
                 }
                 Button {
-                    model.flushNoteDrafts()
-                    onClose()
+                    Task {
+                        _ = await model.flushNoteDrafts()
+                        onClose()
+                    }
                 } label: {
                     DashboardLucideIcon(glyph: noteOnLeft ? .panelLeftClose : .panelRightClose, size: 16)
                         .frame(width: 32, height: 32)
@@ -229,6 +234,7 @@ struct DashboardNotePane: View {
         }
         .disabled(model.noteActionIDs.contains(note.id))
         .background(theme.palette.workspace)
+        .disabled(model.noteEditingSuspended)
         .sheet(isPresented: $showsVersionHistory) { WorkspaceNoteRecovery(model: model, noteID: note.id) }
         .onAppear {
             model.prepareNoteDraft(note)
@@ -246,7 +252,7 @@ struct DashboardNotePane: View {
             }
             await refreshLinkedData()
         }
-        .onDisappear { model.flushNoteDrafts() }
+        .onDisappear { Task { _ = await model.flushNoteDrafts() } }
     }
 
     private func refreshLinkedData() async {

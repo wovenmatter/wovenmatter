@@ -77,6 +77,7 @@ private enum DashboardConversationDisplayRow: Identifiable {
 
 struct DashboardCloudConversation: View {
     @Environment(\.dashboardTheme) private var theme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Bindable var model: ApplicationModel
     let agent: WorkspaceAgent?
     let conversation: WorkspaceConversationRecord?
@@ -115,6 +116,7 @@ struct DashboardCloudConversation: View {
     @State private var pendingBottomConversationID: String?
     @State private var bottomPositionRevision = 0
     @State private var scrollPositionID: String?
+    @State private var composerCollapseOverride: Bool?
     @State private var bottomStackHeight: CGFloat = 0
     @State private var scrollInteractionRevision = 0
     @State private var isUserScrolling = false
@@ -202,7 +204,7 @@ struct DashboardCloudConversation: View {
                             }
                             if let sessionID = conversation?.id, model.agentTools?.hasOlderReceipts.contains(sessionID) == true {
                                 Button("Load earlier session activity") {
-                                    model.agentTools?.loadOlderReceipts(sessionID: sessionID)
+                                    Task { await model.agentTools?.loadOlderReceipts(sessionID: sessionID) }
                                 }
                                 .buttonStyle(SettingsQuietButtonStyle())
                                 .padding(.bottom, 32)
@@ -259,7 +261,7 @@ struct DashboardCloudConversation: View {
                 .task(id: [model.libraryMessageTarget?.id, conversation?.id]) {
                     await scrollToLibraryMessage(using: proxy)
                 }
-                .onDisappear { model.agentTools?.observeSession(nil, token: toolObservationToken) }
+                .onDisappear { model.agentTools?.observeSessionFromUI(nil, token: toolObservationToken) }
                 .environment(\.conversationTranscriptInteraction) {
                     transcriptOwnsScroll = true
                     scrollInteractionRevision += 1
@@ -321,7 +323,7 @@ struct DashboardCloudConversation: View {
                     draft = draft.isEmpty ? text : draft + "\n" + text
                 }
                 .onChange(of: conversation?.id, initial: true) { _, conversationID in
-                    model.agentTools?.observeSession(conversationID, token: toolObservationToken)
+                    model.agentTools?.observeSessionFromUI(conversationID, token: toolObservationToken)
                     isUserScrolling = false
                     transcriptOwnsScroll = model.libraryMessageTarget?.conversationID == conversationID
                     scrollInteractionRevision += 1
@@ -518,6 +520,7 @@ struct DashboardCloudConversation: View {
                                 || model.updatingLocalACPSessionIDs.contains($0.id)
                         } ?? false),
                         startsCollapsed: startsComposerCollapsed,
+                        collapseOverride: $composerCollapseOverride,
                         focusRequestGeneration: focusRequestGeneration,
                         onActivate: onActivatePanel,
                         onSelectModel: { selection in
@@ -532,10 +535,9 @@ struct DashboardCloudConversation: View {
                                 return
                             }
                             if conversation.localRuntimeKind != nil {
-                                model.updateLocalACPSession(
-                                    conversation: conversation,
-                                    model: selection
-                                )
+                                Task { await model.updateLocalACPSession(
+                                    conversation: conversation, model: selection
+                                ) }
                                 return
                             }
                         },
@@ -551,10 +553,9 @@ struct DashboardCloudConversation: View {
                                 return
                             }
                             if conversation.localRuntimeKind != nil {
-                                model.updateLocalACPSession(
-                                    conversation: conversation,
-                                    thinking: selection
-                                )
+                                Task { await model.updateLocalACPSession(
+                                    conversation: conversation, thinking: selection
+                                ) }
                                 return
                             }
                         },
@@ -574,7 +575,7 @@ struct DashboardCloudConversation: View {
                                 return
                             }
                             if let runtimeKind = conversation.localRuntimeKind, runtimeKind != .pi {
-                                model.updateLocalACPSession(conversation: conversation, permission: selection)
+                                Task { await model.updateLocalACPSession(conversation: conversation, permission: selection) }
                             }
                         },
                         onAttachmentAction: onAttachmentAction,
@@ -598,8 +599,14 @@ struct DashboardCloudConversation: View {
                             .accessibilityHidden(true)
                     }
                 }
+                // Animate the whole row so the outside buttons follow the
+                // composer height in the same layout transaction.
+                .animation(
+                    reduceMotion ? nil : .easeOut(duration: 0.15),
+                    value: composerCollapseOverride ?? startsComposerCollapsed
+                )
             }
-            .frame(maxWidth: 768)
+            .frame(maxWidth: .infinity)
             .padding(.horizontal, usesCompactPanelSpacing ? 12 : 32)
             .padding(.top, 8)
             .onGeometryChange(for: CGFloat.self) { geometry in
@@ -1098,9 +1105,9 @@ struct DashboardMessageRow: View {
             HStack {
                 ConversationChangedFilesCard(records: activities, topSpacing: {
                     if showsAssistantBody { return 18 }
-                    guard run != nil else { return 0 }
-                    return ConversationWorkTranscript.hasVisibleActivities(
-                        in: activities, commentaryIDs: Set(transcript.commentary.map(\.id))
+                    guard let run else { return 0 }
+                    return ConversationWorkTranscript.hasVisibleContent(
+                        run: run, in: activities, commentaryIDs: Set(transcript.commentary.map(\.id))
                     ) ? 18 : 0
                 })
                 .frame(maxWidth: .infinity, alignment: .leading)

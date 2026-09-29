@@ -258,7 +258,7 @@ final class ApplicationUsageModel {
     }
 
     func usageDestinationAppeared(range: UsageTimeRange) async {
-        updateSharedConnectionPresence()
+        await updateSharedConnectionPresence()
         await refreshLocalUsage(
             range: range,
             refreshLimits: true,
@@ -267,12 +267,15 @@ final class ApplicationUsageModel {
     }
     func sharedConnectionsChanged() async {
         if isBackendProjection { await forward(.sharedConnectionsChanged); return }
-        updateSharedConnectionPresence()
+        await updateSharedConnectionPresence()
         await refreshLocalUsage(range: currentUsageRange, refreshLimits: true, reason: .credentialChanged)
     }
-    private func updateSharedConnectionPresence() {
+    private func updateSharedConnectionPresence() async {
         guard !isBackendProjection else { return }
-        guard let configured = try? DefaultAgentSupport.hasKey("openrouter") else { return }
+        guard let configured = try? await ProviderConnectionStore.shared.perform(invalidatesAccounts: false, {
+            try DefaultAgentSupport.hasKey("openrouter")
+        }) else { return }
+        guard !Task.isCancelled else { return }
         isOpenRouterCredentialConfigured = configured
         applicationDefaults.set(configured, forKey: Self.openRouterCredentialConfiguredDefaultsKey)
     }

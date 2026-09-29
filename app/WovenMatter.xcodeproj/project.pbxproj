@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		DA2090000000000000000012 /* SettingsDefaultAgentSDKView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA2090000000000000000011 /* SettingsDefaultAgentSDKView.swift */; };
+		DA2090000000000000000002 /* DefaultAgentSDKSettingsModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA2090000000000000000001 /* DefaultAgentSDKSettingsModel.swift */; };
 		F2F8DB61A6E248D0FCD77382 /* BackendOpenCodeService.swift in Sources */ = {isa = PBXBuildFile; fileRef = F178B05B2AE0D773B0C59957 /* BackendOpenCodeService.swift */; };
 		A71B00000000000000000101 /* LibraryModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A71B00000000000000000102 /* LibraryModel.swift */; };
 		A71B00000000000000000001 /* DashboardLibraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A71B00000000000000000002 /* DashboardLibraryView.swift */; };
@@ -106,6 +108,8 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		DA2090000000000000000011 /* SettingsDefaultAgentSDKView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsDefaultAgentSDKView.swift; sourceTree = "<group>"; };
+		DA2090000000000000000001 /* DefaultAgentSDKSettingsModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DefaultAgentSDKSettingsModel.swift; sourceTree = "<group>"; };
 		F178B05B2AE0D773B0C59957 /* BackendOpenCodeService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BackendOpenCodeService.swift"; sourceTree = "<group>"; };
 		A71B00000000000000000102 /* LibraryModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryModel.swift; sourceTree = "<group>"; };
 		A71B00000000000000000002 /* DashboardLibraryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardLibraryView.swift; sourceTree = "<group>"; };
@@ -264,6 +268,7 @@
 			children = (
 				7E4AE75EDB3C1EE9E7043F59 /* DictationModel.swift */,
 				DA2000000000000000000001 /* DefaultAgentSettingsModel.swift */,
+				DA2090000000000000000001 /* DefaultAgentSDKSettingsModel.swift */,
 				A14000000000000000000002 /* ApplicationModel+SessionSelections.swift */,
 				3CE258FB55B3D55A39972D5B /* OpenCodeModel.swift */,
 				D472AB9160464F1FAB826C11 /* ApplicationModel+AgentTools.swift */,
@@ -302,6 +307,7 @@
 				4D25E89AA1F9ECDB61C4EDEF /* SettingsConnectionsView.swift */,
 				E8A44EB04E09581B6A85026F /* DictationControls.swift */,
 				DA2000000000000000000003 /* SettingsDefaultAgentView.swift */,
+				DA2090000000000000000011 /* SettingsDefaultAgentSDKView.swift */,
 				6F6AFCDD4A429E11B0945492 /* OpenCodeSessionView.swift */,
 				17AF06D69A7DE73E3F94E40A /* OpenCodeInteractionView.swift */,
 				97160C827D94B74AFAB2961A /* OpenCodeSettingsView.swift */,
@@ -475,7 +481,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "set -eu\n\"${SRCROOT}/../scripts/prepare-default-agent.sh\" \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/default-agent\"\n/usr/bin/xattr -cr \"${TARGET_BUILD_DIR}/${WRAPPER_NAME}\"\n/bin/rm -rf \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/remote/test\"\n/bin/rm -f \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/remote/.env.example\" \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/remote/compose.yaml\"\ntouch \"${DERIVED_FILE_DIR}/bundle-metadata-cleaned.stamp\"\n";
+			shellScript = "set -eu\n\"${SRCROOT}/../scripts/prepare-default-agent.sh\" \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/default-agent\"\n\"${SRCROOT}/../scripts/build-power-helper.sh\" \"${TARGET_BUILD_DIR}/${WRAPPER_NAME}\"\n/usr/bin/xattr -cr \"${TARGET_BUILD_DIR}/${WRAPPER_NAME}\"\n/bin/rm -rf \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/remote/test\"\n/bin/rm -f \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/remote/.env.example\" \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/remote/compose.yaml\"\ntouch \"${DERIVED_FILE_DIR}/bundle-metadata-cleaned.stamp\"\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -491,6 +497,8 @@
 				5C2F6DF3B2A02B37BECD38D0 /* SettingsConnectionsView.swift in Sources */,
 				8BD4FF831500CD09DE10FC28 /* DictationControls.swift in Sources */,
 				DA2000000000000000000004 /* SettingsDefaultAgentView.swift in Sources */,
+				DA2090000000000000000012 /* SettingsDefaultAgentSDKView.swift in Sources */,
+				DA2090000000000000000002 /* DefaultAgentSDKSettingsModel.swift in Sources */,
 				DA2000000000000000000002 /* DefaultAgentSettingsModel.swift in Sources */,
 				46E81C4CE9571D1C715098CA /* OpenCodeSessionView.swift in Sources */,
 				8B47C81B917AA853D87FB56A /* OpenCodeInteractionView.swift in Sources */,

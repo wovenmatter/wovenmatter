@@ -1,9 +1,39 @@
 import Foundation
 import Network
 import Testing
+import WovenMatterCore
 @testable import WovenMatterClient
 
 struct HermesGatewayRPCTests {
+    @Test func stopDuringResponseJournalPreventsNativeWrite() async throws {
+        let server = try HermesWireFixture()
+        let port = try await server.start()
+        let fence = AgentDispatchFence()
+        let client = HermesGatewayRPC(connection: HermesGatewayConnection(home: "/tmp/hermes-wire", port: port, token: "fixture", pid: 1),
+            historyRecorder: { direction, data in
+                if direction == "out", String(decoding: data, as: UTF8.self).contains("blocked-approval") {
+                    await Task.yield()
+                    fence.cancel()
+                }
+            })
+        do {
+            try await client.connect()
+            await #expect(throws: CancellationError.self) {
+                try await client.respond(id: "blocked-approval", result: ["choice": "once"], dispatchFence: fence)
+            }
+            #expect(!fence.hasDispatched)
+            // Flush a later request through the peer, proving no earlier blocked
+            // response was sent, while a normal denial still uses native schema.
+            try await client.respond(id: "denied", result: ["choice": "deny"])
+            _ = try await client.call("ping")
+            #expect(await !server.receivedIDs.contains("blocked-approval"))
+            #expect(await server.receivedIDs.contains("denied"))
+        } catch {
+            await client.disconnect(); await server.stop(); throw error
+        }
+        await client.disconnect(); await server.stop()
+    }
+
     @Test func routesServerRequestsAndRequiresAFreshReplayEpochOnReconnect() async throws {
         let server = try HermesWireFixture()
         let port = try await server.start()
@@ -49,6 +79,7 @@ private final class HermesWireCapture: @unchecked Sendable {
 private actor HermesWireFixture {
     private let listener: NWListener
     private var connections: [NWConnection] = []
+    var receivedIDs: [String] = []
     private var requestID: HermesValue = .null
     private let queue = DispatchQueue(label: "hermes-wire-fixture")
 
@@ -105,6 +136,7 @@ private actor HermesWireFixture {
     }
 
     private func handle(_ frame: HermesValue, connection: NWConnection) async {
+        if let id = frame["id"].string { receivedIDs.append(id) }
         let result: HermesValue
         switch frame["method"].text {
         case "ping": result = ["pong": .bool(true)]

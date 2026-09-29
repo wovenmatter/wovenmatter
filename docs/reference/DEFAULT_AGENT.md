@@ -15,6 +15,39 @@ and runtime binaries are build products, not checked into Git. Remote deployment
 archives include only the helper's source and package manifests; local binaries,
 dependencies, tests, and build caches are not uploaded.
 
+SDK management is scoped to the executing location. Installed-version reads use
+package metadata only; registry checks and updates are explicit user actions.
+The macOS bundle includes npm alongside its pinned Node distribution so updates
+do not depend on a user-installed package manager. Installation occurs under
+`<agent-directory>/sdk-runtime/generations`, outside the signed app bundle.
+Updates stage a complete locked dependency graph, keep the two Pi packages
+aligned, disable npm lifecycle scripts, and verify required SDK exports before
+atomically activating an immutable generation. Existing generations remain
+available to running helpers. A helper-source fingerprint prevents an app
+update from selecting an older copied helper implementation.
+
+Local installer cancellation is confined to the owned maintenance process group and
+escalates if its children ignore termination. Once activation commits, later
+worker restart or label refresh failures do not turn the installation into a
+failure; installed-version metadata remains the source of truth. A successful
+update invalidates cached full and enabled model labels for every scope using
+that installation, without eagerly loading the full model catalog.
+
+SDK export and native-signature checks cover the inspected package contract.
+They do not prove an unseen vendor release preserves native authentication
+storage behavior. Claude integration continues to rely on the native secure
+storage environment and the existing filesystem policy; changes to those
+upstream conventions require compatibility review.
+
+Local ACP starts through `main.mjs`, which selects a generation before importing
+SDK code. The remote HTTP service delegates Built-in execution to a managed child
+process, retaining credentials only in the existing private process boundary.
+It waits for active work and admission leases before switching generations;
+scheduled runs hold a lease through setup and completion. SDK commands use the
+same authenticated workspace connection as other maintenance operations. The
+native background service owns update jobs across settings navigation; status,
+progress, and errors are scoped to their workspace.
+
 `DefaultAgentSettingsScope` stores non-secret preferences and per-workspace
 replacements. API keys and owned OAuth credentials use macOS Keychain.
 Connections is the central account management surface for Built-in, Usage,
@@ -120,10 +153,16 @@ Connections starts the bundled runtime’s native sign-in locally or through the
 workspace’s existing SSH/docker-exec route. The authorization link appears beneath
 the account; the user completes sign-in in their browser.
 No authentication UI is driven by automated tests. On macOS,
-`CLAUDE_SECURESTORAGE_CONFIG_DIR` targets a private, read-only directory: the pinned
-runtime uses its path to identify the native Keychain entry, and its disk fallback
-cannot write there. Runtime settings use a separate writable config directory.
-This native storage contract must be rechecked when updating the runtime pin.
+`CLAUDE_SECURESTORAGE_CONFIG_DIR` keeps a stable private path that identifies the
+native Keychain entry. An `everyone deny add_file` macOS ACL blocks regular-file
+creation, including temporary files used by the plaintext fallback. Owner mode
+`0700` still permits the pinned runtime to create and remove its
+`.storage-write.lock` directory before accessing Keychain. The ACL is installed
+before enabling directory writes; existing non-directory entries stop setup
+without reading or removing their contents. Runtime settings use a separate
+writable config directory. A native login exit code of zero is followed by a
+native status check; an unsaved or unverifiable connection is reported as a
+failure. This storage contract must be rechecked when updating the runtime pin.
 Linux uses a private, verified tmpfs directory for native state. Host swap and
 memory snapshots remain outside the file-storage guarantee.
 

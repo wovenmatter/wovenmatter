@@ -48,8 +48,14 @@ export async function runStdioRelay({ channelID, harnessID, cwd, permission, nat
             incomingRequests.add(pending.id)
             await write(pending)
           }
-          const deadline = Date.now() + loadTimeout
-          while (state.busy && Date.now() < deadline && !stopped) {
+          let deadline = Date.now() + loadTimeout
+          while (state.busy && !stopped) {
+            // A restored callback can wait on the user. Its deliberation time
+            // must not expire initialization and disconnect the approval UI.
+            // Once callbacks settle, retain the normal bounded completion wait.
+            if (state.pendingRequests?.some(request => !pi || ['select', 'confirm', 'input', 'editor'].includes(request.method))) {
+              deadline = Date.now() + loadTimeout
+            } else if (Date.now() >= deadline) break
             await new Promise(resolve => setTimeout(resolve, 100))
             // The main event wait keeps state current without a second poll loop.
           }

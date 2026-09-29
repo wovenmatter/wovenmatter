@@ -97,9 +97,14 @@ public final class ProviderAccountCoordinator {
     private let renewRejected: RenewRejected
     private let version: @Sendable () -> UInt64
     private let clock: @Sendable () -> Date
+    private let configurationVersion: @Sendable () -> UInt64
+    private let scopeVersion: @Sendable () -> UInt64
+    private let reconfigure: @Sendable (DefaultAgentPayload) -> DefaultAgentPayload
     private var knownScopes: Set<String> = ["local", "global"]
     private var cached: [String: DefaultAgentPayload] = [:]
     private var cachedVersion: UInt64?
+    private var cachedConfigurationVersion: UInt64?
+    private var cachedScopeVersion: UInt64?
     private var nextCheck = Date.distantPast
     private var pending: (id: UUID, task: Task<Void, any Error>)?
     private var timer: Task<Void, Never>?
@@ -109,12 +114,18 @@ public final class ProviderAccountCoordinator {
         refresh: @escaping Refresh = ProviderAccountCoordinator.refreshStored,
         renewRejected: @escaping RenewRejected = ProviderAccountCoordinator.renewRejectedStored,
         version: @escaping @Sendable () -> UInt64 = { DefaultAgentSupport.revision },
-        clock: @escaping @Sendable () -> Date = Date.init
+        clock: @escaping @Sendable () -> Date = Date.init,
+        configurationVersion: @escaping @Sendable () -> UInt64 = { DefaultAgentSupport.configurationRevision },
+        scopeVersion: @escaping @Sendable () -> UInt64 = { DefaultAgentSupport.credentialScopeRevision },
+        reconfigure: @escaping @Sendable (DefaultAgentPayload) -> DefaultAgentPayload = DefaultAgentSupport.applyingConfiguration
     ) {
         self.refresh = refresh
         self.renewRejected = renewRejected
         self.version = version
         self.clock = clock
+        self.configurationVersion = configurationVersion
+        self.scopeVersion = scopeVersion
+        self.reconfigure = reconfigure
     }
     public func start() {
         guard timer == nil else { return }
@@ -159,13 +170,23 @@ public final class ProviderAccountCoordinator {
             try await waitForPending()
             return try await prepare(workspace)
         }
-        if cachedVersion == version(), clock() < nextCheck, let value = cached[workspace] { return value }
+        try Task.checkCancellation()
+        if cachedVersion == version(), cachedScopeVersion == scopeVersion(), clock() < nextCheck,
+            cached[workspace] != nil {
+            try updateCachedConfiguration()
+            return cached[workspace]!
+        }
         if signInID != nil {
-            if let value = cached[workspace] { return value }
+            if cachedScopeVersion == scopeVersion(), cached[workspace] != nil {
+                try updateCachedConfiguration()
+                return cached[workspace]!
+            }
             throw DefaultAgentError.message("Finish sign-in in Connections before connecting this workspace.")
         }
         let scopes = Array(knownScopes)
         let revision = version()
+        let configurationRevision = configurationVersion()
+        let scopeRevision = scopeVersion()
         let task = Task {
             let values = try await refresh(scopes)
             guard !Task.isCancelled else { throw CancellationError() }
@@ -177,6 +198,8 @@ public final class ProviderAccountCoordinator {
             }
             cached = prepared
             cachedVersion = revision
+            cachedConfigurationVersion = configurationRevision
+            cachedScopeVersion = scopeRevision
             let now = clock()
             let expiry = prepared.values.flatMap { $0.credentials.values }.compactMap(\.expires).min()
             // A near-expiry token after an unsuccessful renewal gets backoff;
@@ -198,10 +221,26 @@ public final class ProviderAccountCoordinator {
             lastError = error.localizedDescription
             // Preserve still-valid access on transient control/Keychain failures.
             nextCheck = clock().addingTimeInterval(30)
-            if let existing = cached[workspace], cachedVersion == version() { return existing }
+            if cached[workspace] != nil, cachedVersion == version(), cachedScopeVersion == scopeVersion() {
+                try updateCachedConfiguration()
+                return cached[workspace]!
+            }
             throw error
         }
         return try await prepare(workspace)
+    }
+    private func updateCachedConfiguration() throws {
+        let revision = configurationVersion()
+        guard cachedConfigurationVersion != revision else { return }
+        var updated: [String: DefaultAgentPayload] = [:]
+        for (scope, payload) in cached {
+            var value = reconfigure(payload)
+            value.revision = nil
+            value.revision = SHA256.hash(data: try value.data()).map { String(format: "%02x", $0) }.joined()
+            updated[scope] = value
+        }
+        cached = updated
+        cachedConfigurationVersion = revision
     }
     /// A provider can reject an access token before its advertised expiry. All
     /// app consumers share this renewal lock, including the ordinary timer.

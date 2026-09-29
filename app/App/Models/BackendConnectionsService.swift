@@ -16,6 +16,7 @@ struct BackendConnectionsCommand: Codable {
     var removingAccount: String? = nil
     var reconnectingAccount: String? = nil
     var configuration: DefaultAgentSettings? = nil
+    var configurationBase: DefaultAgentSettings? = nil
     var server: LocalModelServer? = nil
 }
 
@@ -26,11 +27,14 @@ struct BackendConnectionsSnapshot: Codable, Equatable {
     var scope: String
     var settings: DefaultAgentSettingsScope
     var catalog: [DefaultAgentSettingsModel.Model]
+    var catalogIncludesAllModels: Bool?
+    var resolvedDefaultModelID: String?
     var providers: [DefaultAgentSettingsModel.Provider]
     var searchConfigured: Bool
     var accounts: [String: [ProviderConnectionAccounts.Account]]
     var cursorAccountStatus: String
     var signInProvider: String?
+    var signInOutcome: DefaultAgentSettingsModel.SignInOutcome?
     var busy: Bool
     var error: String?
     var notice: String?
@@ -43,8 +47,11 @@ struct BackendConnectionsSnapshot: Codable, Equatable {
     @MainActor init(_ model: DefaultAgentSettingsModel) {
         localServers = model.localServers
         scope = model.scope; settings = model.settings; catalog = model.catalog; providers = model.providers
+        catalogIncludesAllModels = model.catalogIncludesAllModels
+        resolvedDefaultModelID = model.resolvedDefaultModelID
         searchConfigured = model.searchConfigured; accounts = model.accounts
         cursorAccountStatus = model.cursorAccountStatus; signInProvider = model.signInProvider
+        signInOutcome = model.signInOutcome
         busy = model.busy; error = model.error; notice = model.notice
         signInURL = model.signInURL; signInCode = model.signInCode
         prompt = model.prompt; promptID = model.promptID
@@ -53,33 +60,50 @@ struct BackendConnectionsSnapshot: Codable, Equatable {
 }
 
 @MainActor enum BackendConnectionsService {
-    static func handle(method: String, payload: Data, model: DefaultAgentSettingsModel) async throws -> Data {
+    static func handle(method: String, payload: Data, model: DefaultAgentSettingsModel,
+                       remoteWorkspaces: RemoteWorkspacesModel? = nil) async throws -> Data {
+        if method == "connections.sdks.command" || method == "connections.sdks.snapshot" {
+            let command = try JSONDecoder().decode(DefaultAgentSDKCommand.self, from: payload)
+            if method == "connections.sdks.command" {
+                guard let remoteWorkspaces else { throw BackendRPCError.remote("The workspace service is unavailable.") }
+                model.sdks.start(command, remoteWorkspaces: remoteWorkspaces) { [weak model] in
+                    model?.invalidateSDKCatalog(scopeKey: command.key)
+                }
+            }
+            return try JSONEncoder().encode(model.sdks.state(for: command.key))
+        }
         if method == "connections.command" {
             let c = try JSONDecoder().decode(BackendConnectionsCommand.self, from: payload)
             switch c.action {
             case "localServers": break
             case "connectServer":
                 let enteredKey = (c.value ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-                let savedKey = enteredKey.isEmpty ? try c.server.flatMap { try DefaultAgentSupport.key($0.id) } : enteredKey
+                let existingServerID = c.server?.id
+                let savedKey = try await ProviderConnectionStore.shared.perform(invalidatesAccounts: false) {
+                    enteredKey.isEmpty ? try existingServerID.flatMap { try DefaultAgentSupport.key($0) } : enteredKey
+                }
                 guard let savedKey, !savedKey.isEmpty else { throw DefaultAgentError.message("Enter the server API key.") }
                 _ = try await LocalModelServerStore.connect(url: c.label ?? "", key: savedKey, replacing: c.server)
             case "removeServer":
-                if let server = c.server { try LocalModelServerStore.remove(server) }
-            case "configuration": if let value = c.configuration { model.configuration = value }
+                if let server = c.server { try await LocalModelServerStore.remove(server) }
+            case "configuration": if let value = c.configuration { model.applyConfiguration(value, base: c.configurationBase) }
             case "inherits": model.setInherits(c.flag ?? false)
-            case "saveKey": _ = model.saveKey(c.value ?? "", provider: c.provider ?? "", label: c.label)
-            case "accounts": model.loadAccounts()
-            case "select": model.selectAccount(c.value ?? "", provider: c.provider ?? "", remote: c.remote)
-            case "move": model.moveAccount(c.value ?? "", provider: c.provider ?? "", offset: c.offset ?? 0)
-            case "remove": model.removeAccount(c.value ?? "", provider: c.provider ?? "", remote: c.remote)
-            case "reconnect": model.reconnectAccount(c.value ?? "", provider: c.provider ?? "", remote: c.remote)
-            case "signOut": model.signOut(c.provider ?? "", remote: c.remote)
+            case "saveKey": _ = await model.saveKey(c.value ?? "", provider: c.provider ?? "", label: c.label)
+            case "accounts": await model.loadAccountsAndWait()
+            case "select": await model.selectAccount(c.value ?? "", provider: c.provider ?? "", remote: c.remote)
+            case "move": await model.moveAccount(c.value ?? "", provider: c.provider ?? "", offset: c.offset ?? 0)
+            case "remove": await model.removeAccount(c.value ?? "", provider: c.provider ?? "", remote: c.remote)
+            case "reconnect": await model.reconnectAccount(c.value ?? "", provider: c.provider ?? "", remote: c.remote)
+            case "signOut": await model.signOut(c.provider ?? "", remote: c.remote)
             case "claude": model.signInClaude(remote: c.remote)
             case "cursorStatus": await model.refreshCursorStatus()
             case "cursorSignIn": model.signInCursor()
             case "scope": model.changeScope(c.value ?? "global")
             case "cancel": model.cancel()
             case "respond": model.respond(c.value ?? "")
+            case "catalog":
+                model.loadCatalog(remote: c.remote, includeAllModels: c.flag ?? false)
+                if c.flag != true { await model.waitForEnabledMetadata() }
             case "refresh": model.refresh(remote: c.remote, login: c.provider, action: c.value, profile: c.profile,
                 removingAccount: c.removingAccount, reconnectingAccount: c.reconnectingAccount)
             default: throw CocoaError(.featureUnsupported)

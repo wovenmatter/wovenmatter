@@ -61,7 +61,9 @@ struct BackendOpenCodeService {
         case .selections(let id, let selections): try await model.applySessionSelections(id, selections: selections)
         case .updateSelection(let id, let selected, let thinking, let permission):
             if let task = model.updateSelection(id, model: selected, thinking: thinking, permission: permission) { try await task.value }
-        case .send(let id, let input, let discovery): try await model.send(id, input: input, discovery: discovery)
+        case .send:
+            // Composer sends use application.command with causal Stop admission.
+            throw AgentDispatchAdmissionError.invalid
         case .visible(let key, let visible): model.setModelVisible(key, visible: visible)
         case .watch(let id): if let link = model.links[id] { await model.watch(link) }
         case .older(let id): if let link = model.links[id] { try await model.loadOlder(link) }

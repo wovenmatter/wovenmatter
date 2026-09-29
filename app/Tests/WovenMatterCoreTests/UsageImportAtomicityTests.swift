@@ -76,17 +76,52 @@ struct UsageImportAtomicityTests {
       INSERT INTO message VALUES('message', '{"providerID":"opencode-go","modelID":"gpt-5.4","time":{"created":\(timestamp)}}', \(timestamp));
       INSERT INTO raw_part VALUES('original', 'session', 'message', '{"type":"step-finish","tokens":{"input":8,"output":3},"cost":0.01}');
       """)
-    let service = LocalUsageService(homeDirectory: fixture.url, usageDatabaseURL: fixture.indexURL)
+    // This fixture imports only its own SQLite files. The production initializer
+    // watches the app-wide account revision, including mock credential changes
+    // made by other tests, even when credential reads are disabled.
+    let service = fixture.service()
     let initial = try await service.analyticsSnapshot(range: .last24Hours, enabledProviders: [.openCodeGo], allowCredentialAccess: false, now: now)
     #expect(initial.samples.count == 1)
     let store = try UsageStore(databaseURL: fixture.indexURL)
     let originalFingerprint = try store.source("opencode:database")?.fingerprint
+    let originalCoverage = try store.metadataDate("usage.local-indexed-after")
+    let originalImportDate = try store.metadataDate("usage.local-import-at")
     try fixture.execute(at: sourceURL, sql: "INSERT INTO raw_part VALUES('broken', 'session', 'message', '{}');")
     try FileManager.default.setAttributes([.modificationDate: now.addingTimeInterval(10)], ofItemAtPath: sourceURL.path)
-    let failed = try await service.analyticsSnapshot(range: .last24Hours, enabledProviders: [.openCodeGo], allowCredentialAccess: false, now: now.addingTimeInterval(1))
+    let failed = try await service.analyticsSnapshot(range: .last7Days, enabledProviders: [.openCodeGo], allowCredentialAccess: false, now: now.addingTimeInterval(1))
     #expect(failed.samples == initial.samples)
     #expect(failed.sources.first { $0.id == "opencode" }?.status == .partial)
     #expect(try store.source("opencode:database")?.fingerprint == originalFingerprint)
+    // A failed wider scan cannot claim coverage or defer its retry.
+    #expect(try store.metadataDate("usage.local-indexed-after") == originalCoverage)
+    #expect(try store.metadataDate("usage.local-import-at") == originalImportDate)
+  }
+
+  @Test("Only shared-account analytics observe account revision changes", arguments: [false, true])
+  func analyticsRevisionOwnership(sharedAccounts: Bool) async throws {
+    final class ChangingRevision: @unchecked Sendable {
+      private let lock = NSLock()
+      private var value: UInt64 = 0
+      func read() -> UInt64 { lock.withLock { value += 1; return value } }
+      var reads: UInt64 { lock.withLock { value } }
+    }
+    let fixture = try UsageSQLFixture()
+    let revision = ChangingRevision()
+    // Advancing on each read deterministically represents another account
+    // mutation between capture and validation, without process-global changes.
+    let service = fixture.service(sharedAccounts: sharedAccounts, revision: { revision.read() })
+    if sharedAccounts {
+      await #expect(throws: CancellationError.self) {
+        try await service.analyticsSnapshot(range: .last24Hours, enabledProviders: [.openCodeGo],
+          allowCredentialAccess: false, now: now)
+      }
+      #expect(revision.reads > 1)
+    } else {
+      let result = try await service.analyticsSnapshot(range: .last24Hours, enabledProviders: [.openCodeGo],
+        allowCredentialAccess: false, now: now)
+      #expect(result.samples.isEmpty)
+      #expect(revision.reads == 1) // Initialization only; local imports have no account ownership.
+    }
   }
 
   @Test("Metadata and cursor step failures throw instead of resembling missing rows")
@@ -126,6 +161,12 @@ private final class UsageSQLFixture: @unchecked Sendable {
   init() throws { try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true) }
   deinit { try? FileManager.default.removeItem(at: url) }
 
+  func service(sharedAccounts: Bool = false, revision: @escaping @Sendable () -> UInt64 = { 0 }) -> LocalUsageService {
+    LocalUsageService(homeDirectory: url, fileManager: .default,
+      credentialStore: UsageImportNoCredentials(), usageDatabaseURL: indexURL,
+      usesSharedConnections: sharedAccounts, sharedConnectionRevision: revision)
+  }
+
   func execute(at url: URL, sql: String) throws {
     var connection: OpaquePointer?
     guard sqlite3_open(url.path, &connection) == SQLITE_OK, let connection else {
@@ -137,4 +178,13 @@ private final class UsageSQLFixture: @unchecked Sendable {
       throw UsageStoreError.step(String(cString: sqlite3_errmsg(connection)))
     }
   }
+}
+
+private struct UsageImportNoCredentials: UsageCredentialStoring {
+  private func unexpectedAccess() { Issue.record("SQLite import fixtures must not access credentials") }
+  func hasOpenRouterAPIKey() throws -> Bool { unexpectedAccess(); return false }
+  func authorizeOpenRouterAPIKey() throws -> String? { unexpectedAccess(); return nil }
+  func loadOpenRouterAPIKey() throws -> String? { unexpectedAccess(); return nil }
+  func saveOpenRouterAPIKey(_ key: String) throws { unexpectedAccess() }
+  func deleteOpenRouterAPIKey() throws { unexpectedAccess() }
 }

@@ -18,23 +18,28 @@ actor UsageRunRecorder {
     let costUSD: Double?
   }
 
-  private let store: UsageStore
-  private var sequence: Int64
+  private let store: AsyncUsageStore
 
-  init(databaseURL: URL) throws {
-    store = try UsageStore(databaseURL: databaseURL)
-    let wallClock = Int64(Date().timeIntervalSince1970 * 1_000_000)
-    let persisted = try store.runtimeSyncState(endpoint: "wovenmatter://local")
-      .flatMap { Int64($0.cursor) } ?? 0
-    sequence = max(wallClock, persisted)
+  init(databaseURL: URL) async throws {
+    store = try await AsyncUsageStore(databaseURL: databaseURL)
   }
 
-  func record(_ observation: Observation) throws {
-    let next = sequence.addingReportingOverflow(1)
-    guard !next.overflow else {
-      throw UsageStoreError.step("Woven usage sequence is exhausted")
+  func record(_ observation: Observation) async throws {
+    try await store.write { connection in
+      // Allocate from the durable cursor on the same lane as ingestion. Actor
+      // calls can reach an async store in a different order after suspension.
+      let wallClock = Int64(Date().timeIntervalSince1970 * 1_000_000)
+      let persisted = try connection.runtimeSyncState(endpoint: "wovenmatter://local")
+        .flatMap { Int64($0.cursor) } ?? 0
+      let next = max(wallClock, persisted).addingReportingOverflow(1)
+      guard !next.overflow else {
+        throw UsageStoreError.step("Woven usage sequence is exhausted")
+      }
+      try Self.record(observation, sequence: next.partialValue, store: connection)
     }
-    sequence = next.partialValue
+  }
+
+  private static func record(_ observation: Observation, sequence: Int64, store: UsageStore) throws {
     let route = Self.route(for: observation.runtimeKind, model: observation.model)
     let event = UsageIngestionEvent(
       id: "\(observation.sessionID):\(observation.runID)",

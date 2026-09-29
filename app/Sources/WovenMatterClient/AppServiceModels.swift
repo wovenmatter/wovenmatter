@@ -5,11 +5,13 @@ public struct SessionOptionMetadata: Codable, Equatable, Sendable {
     public let name: String?
     public let description: String?
     public let modelGroup: String?
+    public let modelName: String?
 
-    public init(name: String? = nil, description: String? = nil, modelGroup: String? = nil) {
+    public init(name: String? = nil, description: String? = nil, modelGroup: String? = nil, modelName: String? = nil) {
         self.name = Self.nonempty(name)
         self.description = Self.nonempty(description)
         self.modelGroup = modelGroup
+        self.modelName = Self.nonempty(modelName)
     }
 
     public static func modelLabel(id: String, metadata: Self?) -> String {
@@ -21,6 +23,37 @@ public struct SessionOptionMetadata: Codable, Equatable, Sendable {
         }
         return name
     }
+
+    /// The compact composer uses the model alone; the menu keeps its full label.
+    public static func modelButtonLabel(id: String, metadata: Self?) -> String {
+        if let name = metadata?.modelName {
+            return modelLabel(id: id, metadata: Self(name: name))
+        }
+        // Old Built-in sessions predate modelName. Recognize only their exact
+        // provider-qualified IDs and corresponding emitted suffix, never split
+        // arbitrary provider-supplied names on a separator.
+        if let separator = id.firstIndex(of: "/"), let name = metadata?.name {
+            let provider = String(id[..<separator])
+            if let attribution = legacyBuiltInAttributions[provider] {
+                let suffix = " · " + attribution
+                if name.hasSuffix(suffix), name.count > suffix.count {
+                    return String(name.dropLast(suffix.count))
+                }
+            }
+        }
+        return modelLabel(id: id, metadata: metadata)
+    }
+
+    private static let legacyBuiltInAttributions = [
+        "openai-codex": "OpenAI · ChatGPT subscription",
+        "openai": "OpenAI · API key",
+        "openrouter": "OpenRouter",
+        "opencode-go": "OpenCode Go",
+        "xai": "Grok subscription",
+        "xai-api": "xAI · API key",
+        "claude-subscription": "Claude · Subscription",
+        "anthropic": "Claude · API key",
+    ]
 
     private static func nonempty(_ value: String?) -> String? {
         guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else { return nil }
