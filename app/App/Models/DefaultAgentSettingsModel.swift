@@ -569,6 +569,11 @@ final class DefaultAgentSettingsModel {
         if forward(.init(action: "catalog", remote: remote)) { return }
         let config = catalogConfiguration
         let cacheKey = scope + ":" + (remote?.id.uuidString ?? "local")
+        // Repeated page/configuration requests can arrive before the helper
+        // returns. Keep the matching request instead of cancelling and spawning
+        // another helper. Explicit connection refreshes still bypass this path.
+        if busy, catalogOnly, catalogRequestKey == cacheKey,
+           catalogRequestConfiguration == config, activeRemote == remote { return }
         if let value = catalogCache[cacheKey], value.configuration == config {
             if catalog != value.models { catalog = value.models }
             loadAccounts()
