@@ -59,9 +59,14 @@ The app's shared send/Trash reservation covers native slash-command preparation.
 After the awaited live-chat check, PR86's `dispatchFence.check()` also rejects Stop
 requests received during that read before control reaches OpenCode's transport.
 
-Regression source covers the async worker boundary, queued/accepted/running/uncertain and
-native OpenCode admission, and exports under a reduced SQLite bind limit. These
-checks were added during review but were not executed at the user's direction.
+Regression coverage includes the async worker boundary, queued/accepted/running/uncertain
+and native OpenCode admission, and exports under a reduced SQLite bind limit.
+Tests were deferred during the initial review, then the user authorized full
+validation. At `77843526e6df8ac594f8677d522657c7eb5af28a`,
+`scripts/test-changes.sh --all` passed: 825 Swift tests, 113 Built-in agent tests,
+125 remote tests with one intentional skip, native app build and bundle
+validation, and six CLI tests. This records that exact head; later dependency
+changes and hosted CI require their own final-head results.
 Native acceptance still needs narrow/wide sidebar menus, Rename Save/Cancel and
 errors, concurrent restores, active-work rejection, and both Save dialog formats
 including cancel and a destination write failure, in embedded and separate-backend
