@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import Testing
 @testable import WovenMatterClient
@@ -305,6 +306,29 @@ struct WorkspaceFolderRecoveryTests {
             #expect(!LocalACPWorkspaceProvisioner.isSymbolicLink(original))
             #expect(try Data(contentsOf: original.appending(path: "marker")) == Data("keep".utf8))
         }
+    }
+
+    @Test("an agent holding an empty default folder can keep writing after relinking")
+    func emptyDefaultRetainsOpenDirectoryOwnership() async throws {
+        let f = try Fixture()
+        defer { f.remove() }
+        let store = f.store("held-default")
+        try #require((await store.resolve()).availability.isReady)
+        let descriptor = open(f.repos.path, O_RDONLY | O_DIRECTORY)
+        try #require(descriptor >= 0)
+        defer { close(descriptor) }
+        let destination = try f.directory("external")
+        let change = try await store.configureRepositories(destination)
+
+        // An agent can hold this directory as its cwd before its first write.
+        // rmdir succeeds on an empty open directory but strands that writer.
+        let created = mkdirat(descriptor, "late-repository", 0o700)
+        let creationError = errno
+        try #require(created == 0, "Held directory lost write ownership: errno \(creationError)")
+        let backup = try #require(change.backupURL)
+        #expect(FileManager.default.fileExists(atPath: backup.appending(path: "late-repository").path))
+        #expect(!FileManager.default.fileExists(atPath: destination.appending(path: "late-repository").path))
+        #expect(f.repos.resolvingSymlinksInPath() == destination)
     }
 
     @Test("readers never lose the folder while links and defaults are exchanged")
