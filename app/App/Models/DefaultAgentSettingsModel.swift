@@ -570,6 +570,9 @@ final class DefaultAgentSettingsModel {
         metadataTask?.cancel()
         metadataGeneration = UUID()
         requestedAllModels = false
+        // The scope command has its own backend snapshot. Do not serialize the
+        // previous full inventory before the enabled-only request follows it.
+        catalog = []
         catalogIncludesAllModels = false
         resolvedDefaultModelID = nil
         publishedCatalogKey = nil
