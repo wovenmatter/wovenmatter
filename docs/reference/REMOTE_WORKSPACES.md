@@ -55,3 +55,35 @@ an explicit migration.
 [remote/compose.yaml](../../remote/compose.yaml) is a single-workspace example.
 The app uses [remote-workspace.sh](../../scripts/remote-workspace.sh) to manage
 several independently named workspaces.
+
+## Built-in SDK updates
+
+Each workspace service owns its Built-in Pi SDK and Claude SDK installation.
+The Built-in Agent settings page groups their installed versions and update
+controls beneath expandable workspace rows. **All workspaces** lists the local
+installation and each configured remote workspace; choosing one workspace
+limits the list to that workspace.
+
+The token-authenticated control API exposes `GET /v1/default-agent/sdks` for
+installed package metadata, without initializing an agent, unlocking credentials,
+or checking the network. `POST` to the same endpoint accepts
+`{"action":"check"}` for an explicit registry check, or
+`{"action":"update","id":"claude","version":"x.y.z"}` for an update.
+The SDK identifier is `pi` or `claude`; the checked version is optional. Responses contain `sdks` entries with `id`,
+`name`, `installedVersion`, `latestVersion`, and `updateAvailable`, plus the
+installation `generation` and an optional `notice`. Request bodies are bounded
+to 4 KiB. Disconnection cancels work before activation; an already activated
+installation remains installed.
+
+Updates run as the existing workspace owner and persist in its named volume.
+They do not modify the read-only container image or the separately installed
+agent CLIs. Package installation stages an immutable generation and verifies it
+before activation. Running conversations retain their generation; the service
+only replaces an idle worker. Scheduled tasks hold a runtime lease from session
+setup through completion so an update cannot split their model, permission,
+and prompt setup between workers. Credentials and conversation files remain in
+the same workspace storage.
+
+Older workspace services that do not expose this endpoint must be updated
+through the existing workspace update control before managing SDKs. Opening
+SDK settings does not update or start a workspace automatically.
