@@ -1482,7 +1482,8 @@ enum RemoteWorkspaceProcess {
         executable: String,
         arguments: [String],
         input: Data? = nil,
-        timeLimit: TimeInterval? = nil
+        timeLimit: TimeInterval? = nil,
+        onProcessStarted: (@Sendable (pid_t) -> Void)? = nil
     ) throws -> Result {
         let process = Process()
         let fileManager = FileManager.default
@@ -1533,7 +1534,11 @@ enum RemoteWorkspaceProcess {
             try? fileManager.removeItem(at: outputURL)
             try? fileManager.removeItem(at: errorURL)
         }
+        try Task.checkCancellation()
         try process.run()
+        // Internal readiness observation keeps cancellation fixtures tied to
+        // the owned child rather than detached-task scheduling latency.
+        onProcessStarted?(process.processIdentifier)
         if let timeLimit {
             let deadline = ProcessInfo.processInfo.systemUptime + timeLimit
             while process.isRunning {
