@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process'
 import { mkdir, open, readFile, realpath } from 'node:fs/promises'
 import { resolve, sep } from 'node:path'
 import { createInterface } from 'node:readline'
+import { randomUUID } from 'node:crypto'
 
 const identifier = value => {
   if (typeof value !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(value)) throw new Error('Invalid channel identifier')
@@ -341,7 +342,15 @@ export function createDurableACP({ catalog, workspaceRoot, environment, isEnable
       if (!await isEnabled()) throw new Error('Background execution is disabled')
       if (!['attach', 'message', 'poll', 'recover'].includes(operation)) throw new Error('Unknown relay operation')
       const channel = await channelFor(body.channelID, body.harnessID, body.cwd, body.permission, body.nativeSessionID, operation === 'recover')
+      if (['attach', 'recover'].includes(operation) && body.attachmentProtocol === 1) {
+        // This shares the native admission queue: earlier requests are already
+        // accounted for, while delayed requests from the old relay cannot admit.
+        channel.attachmentToken = randomUUID()
+      }
       if (operation === 'message') {
+        if ((channel.attachmentToken || body.attachmentToken) && body.attachmentToken !== channel.attachmentToken) {
+          throw new Error('This session attachment was replaced. Reconnect before sending another message.')
+        }
         identifier(body.deliveryID)
         if (!body.message || (channel.harnessID === 'pi' ? typeof body.message.type !== 'string' : body.message.jsonrpc !== '2.0')) throw new Error('Invalid ACP message')
         if (channel.accepted.has(body.deliveryID)) return { accepted: true, duplicate: true }
@@ -390,8 +399,11 @@ export function createDurableACP({ catalog, workspaceRoot, environment, isEnable
       if (!Number.isSafeInteger(after) || after < 0) throw new Error('Invalid output cursor')
       const publicSnapshot = { initialized: channel.snapshot.initialized, piState: channel.snapshot.piState, session: channel.snapshot.session,
         busy: channel.snapshot.busy, pendingRequests: channel.snapshot.pendingRequests,
+        recoveryComplete: !!channel.attachmentToken && body.attachmentToken === channel.attachmentToken
+          && !channel.snapshot.busy && !channel.failure && channel.state === 'running',
         ...((['attach', 'recover'].includes(operation) || body.includeRecovery) ? { recoveredRuns: channel.snapshot.recoveredRuns } : {}) }
       return { channelID: channel.id, state: channel.state, failure: channel.failure,
+        ...(['attach', 'recover'].includes(operation) && body.attachmentProtocol === 1 ? { attachmentToken: channel.attachmentToken } : {}),
         snapshot: publicSnapshot, events: channel.events.slice(after, after + 256) }
     })
     if (operation === 'poll' && body.waitMs != null) {

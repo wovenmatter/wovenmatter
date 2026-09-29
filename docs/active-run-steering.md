@@ -53,3 +53,57 @@ coordinator checks run ownership and Stop intent again before dispatch. The same
 dispatch fence reaches the native transport after outbound history persistence,
 so an input revoked before send remains a definite rejection while uncertain
 receipts retain their original continuation identity.
+
+Gateway admission errors use the dispatch fence to distinguish a queued request
+that never reached the socket from a lost receipt after dispatch. Recovered-run
+idle reconciliation also shares the steering admission lock and checks the input
+identity captured before fetching history, so an old snapshot cannot close a
+newly admitted continuation. Regression sources cover both boundaries; this
+audit has performed source parsing and diff checks, without executing them.
+
+## Detached remote outcomes
+
+Native receipt or observation loss does not prove that a service-owned task
+stopped. Actual durable routes register the run, workspace and allocated native
+session identity in one transaction before dispatch. Unknown initial prompts or
+continuations retain `uncertain` run/assistant status and their original input
+identities. They continue to count as active work, block another initial prompt,
+and remain visible even without tool activity. PR #88's Trash guard includes
+this status. Local Built-in and foreground SSH runs keep their existing local
+process lifecycle.
+
+Recovery requires a fresh attachment that fences older admissions. The durable
+ACP service rotates an attachment token on its serialized admission queue;
+delayed messages from replaced attachments cannot reach native stdin. Built-in
+uses a separate setup queue per native session, with prompt execution outside
+that queue. Prompt/steering/configuration/Stop and approval replies validate
+their attachment; trusted workspace shutdown has a separate cancellation path.
+Stop also invalidates pending setup before it can start native execution.
+Read-only polling remains available. New adapters fail closed with an update
+message if an old service cannot issue the attachment capability.
+
+Only an explicit fenced idle result for the same workspace and native session
+can reconcile uncertain rows. Exact terminal snapshots restore their content;
+if that authoritative idle result has no retained receipt, the run becomes
+failed with a missing-result explanation. Timeouts, disconnected clients, an
+old logical-run snapshot, and another session's idle result cannot clear it.
+Reopening the conversation's session configuration reattaches without resending
+the input. Successful scoped recovery also clears the matching failed native
+Stop identity from PR #86; the outer Stop barrier still requires explicit retry.
+
+The route marker is additive. Startup preserves marked durable runs as
+uncertain and backfills older remote Built-in runs only when their saved native
+identity matches the run. Older non-Built-in remote rows do not reveal whether
+they used foreground SSH or the durable relay, so they retain the prior startup
+policy. Do not treat upgrading an already detached, unmarked remote run as proof
+of its native outcome.
+
+This audit passed all 34 durable-relay fixtures and eight new provider-free
+Built-in attachment/admission/transport fixtures. The Built-in tests used an
+exact source copy in a temporary directory with already installed dependencies;
+no provider or account operation ran. New Swift regressions cover preserved
+first-receipt identity, startup route classification, blocked admission, plain
+snapshot rejection, wrong-session/workspace rejection, and fenced terminal or
+missing-receipt recovery. Those regressions and the Gateway additions still
+require execution after the PR #86 dependency is combined. Source parsing and
+whitespace checks pass; native/provider acceptance remains separate.

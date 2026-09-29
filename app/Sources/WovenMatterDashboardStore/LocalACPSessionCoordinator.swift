@@ -282,6 +282,8 @@ public actor LocalACPSessionCoordinator {
     private var runTasks: [String: Task<Void, any Error>] = [:]
     private var runIDsByConversation: [String: String] = [:]
     private var cancellationRequestedRunIDs: Set<String> = []
+    private var durableRemoteRunIDs: Set<String> = []
+    private var uncertainRemoteInputRunIDs: Set<String> = []
     private var streamWritersByRunID: [String: LocalACPAssistantStreamWriter] = [:]
     private var eventBuffersByRunID: [String: LocalACPRunEventBuffer] = [:]
     private var acceptingActiveInputRunIDs: Set<String> = []
@@ -443,6 +445,10 @@ public actor LocalACPSessionCoordinator {
                 phase: .content
             )
             acceptingActiveInputRunIDs.insert(run.runID)
+            if descriptor.remoteWorkspaceID != nil,
+               descriptor.runtimeKind == .defaultAgent || launch.environment["WOVEN_DURABLE_REMOTE_ACP"] == "1" {
+                durableRemoteRunIDs.insert(run.runID)
+            }
             let task = Task { [self] in
                 try await driveAcceptedRun(
                     descriptor: descriptor,
@@ -493,6 +499,13 @@ public actor LocalACPSessionCoordinator {
                 systemPrompt: systemPrompt,
                 runID: run.runID
             )
+            if durableRemoteRunIDs.contains(run.runID), let workspaceID = descriptor.remoteWorkspaceID {
+                let stored = try await database.localACPSession(conversationID: descriptor.conversationID)
+                guard let sessionID = activeSessions[descriptor.conversationID]?.pendingDurableSessionID ?? stored.acpSessionID else {
+                    throw LocalACPClientError.sessionNotInitialized
+                }
+                try await database.registerDurableLocalACPRun(runID: run.runID, remoteWorkspaceID: workspaceID, sessionID: sessionID)
+            }
             if cancellationRequestedRunIDs.contains(run.runID) {
                 try database.cancelLocalACPRun(runID: run.runID)
                 publishChange(
@@ -590,10 +603,12 @@ public actor LocalACPSessionCoordinator {
             streamWritersByRunID[run.runID] = streamWriter
             resumeStreamWriterWaiters(runID: run.runID, writer: streamWriter)
             let initialResult: Result<LocalACPStopReason, any Error>
+            var promptDispatchAttempted = false
             do {
                 try dispatchFence?.check()
                 guard !cancellationRequestedRunIDs.contains(run.runID), !isShutDown else { throw CancellationError() }
                 let reason: LocalACPStopReason
+                promptDispatchAttempted = true
                 if let dispatchFence, let fencedPrompt = client.fencedPrompt {
                     reason = try await fencedPrompt(input, { try await eventBuffer.receive($0) },
                         permissionHandler, interactionHandler, dispatchFence)
@@ -603,7 +618,14 @@ public actor LocalACPSessionCoordinator {
                         permissionHandler, interactionHandler)
                 }
                 initialResult = .success(reason)
-            } catch { initialResult = .failure(error) }
+            } catch {
+                if durableRemoteRunIDs.contains(run.runID),
+                   dispatchFence?.hasDispatched ?? promptDispatchAttempted,
+                   !Self.isDefinitiveSteeringRejection(error) {
+                    uncertainRemoteInputRunIDs.insert(run.runID)
+                }
+                initialResult = .failure(error)
+            }
             let stopReason = try await drainActiveInputs(
                 runID: run.runID,
                 conversationID: descriptor.conversationID,
@@ -623,7 +645,10 @@ public actor LocalACPSessionCoordinator {
             )
             try await streamWriter.finish()
             await client.finishRun?()
-            switch stopReason {
+            if uncertainRemoteInputRunIDs.contains(run.runID) {
+                try await database.markLocalACPRunUncertain(runID: run.runID,
+                    detail: "The connection ended before the remote outcome was confirmed. Reconnect this conversation to recover its result.")
+            } else { switch stopReason {
             case .endTurn, .maxTokens, .maxTurnRequests:
                 try database.completeLocalACPRun(runID: run.runID)
             case .cancelled:
@@ -633,20 +658,28 @@ public actor LocalACPSessionCoordinator {
                     runID: run.runID,
                     error: "The local ACP agent refused this prompt."
                 )
-            }
+            } }
             publishChange(
                 conversationID: descriptor.conversationID,
                 runID: run.runID,
                 phase: .terminal
             )
-            await releaseSession(conversationID: descriptor.conversationID)
+            if uncertainRemoteInputRunIDs.contains(run.runID),
+               let active = activeSessions.removeValue(forKey: descriptor.conversationID) {
+                await shutDownSession(active, conversationID: descriptor.conversationID)
+            } else {
+                await releaseSession(conversationID: descriptor.conversationID)
+            }
         } catch {
             // Terminalize only after the coalesced tail is durable. Once the
             // run is completed the database correctly rejects later chunks.
             if let writer = streamWritersByRunID[run.runID] {
                 try? await writer.finish()
             }
-            if cancellationRequestedRunIDs.contains(run.runID) || error is CancellationError {
+            if uncertainRemoteInputRunIDs.contains(run.runID) {
+                try? await database.markLocalACPRunUncertain(runID: run.runID,
+                    detail: "The connection ended before the remote outcome was confirmed. Reconnect this conversation to recover its result.")
+            } else if cancellationRequestedRunIDs.contains(run.runID) || error is CancellationError {
                 try? database.cancelLocalACPRun(runID: run.runID)
             } else {
                 try? database.completeLocalACPRun(
@@ -669,6 +702,8 @@ public actor LocalACPSessionCoordinator {
     }
 
     private func finishAcceptedRun(conversationID: String, runID: String) {
+        durableRemoteRunIDs.remove(runID)
+        uncertainRemoteInputRunIDs.remove(runID)
         runTasks.removeValue(forKey: runID)
         streamWritersByRunID.removeValue(forKey: runID)
         eventBuffersByRunID.removeValue(forKey: runID)
@@ -953,6 +988,9 @@ public actor LocalACPSessionCoordinator {
             }
             // Dispatch may have succeeded. Keep the durable input and let the
             // run report the error; restoring its draft would invite a duplicate.
+            if durableRemoteRunIDs.contains(runID) {
+                uncertainRemoteInputRunIDs.insert(runID)
+            }
             completion = Task { throw error }
         }
         activeInputTasksByRunID[runID, default: []].append(ActiveInputTask(
@@ -1019,6 +1057,9 @@ public actor LocalACPSessionCoordinator {
                     }
                 } catch {
                     initialError = error
+                    if durableRemoteRunIDs.contains(runID), !Self.isDefinitiveSteeringRejection(error) {
+                        uncertainRemoteInputRunIDs.insert(runID)
+                    }
                     try? database.completeLocalACPAssistantMessage(
                         runID: runID,
                         assistantMessageID: input.assistantMessageID,
@@ -1397,7 +1438,17 @@ public actor LocalACPSessionCoordinator {
                     )
                 }
             }
-            if !initialized.recoveredDefaultAgentRuns.isEmpty {
+            if let workspaceID = descriptor.remoteWorkspaceID,
+               initialized.loadedExistingSession,
+               initialized.sessionID == descriptor.acpSessionID,
+               initialized.confirmedRemoteIdleSessionID == initialized.sessionID {
+                try await database.reconcileUncertainRemoteRuns(conversationID: descriptor.conversationID,
+                    remoteWorkspaceID: workspaceID, sessionID: initialized.sessionID,
+                    snapshots: initialized.recoveredDefaultAgentRuns)
+                confirmRecoveredStop(conversationID: descriptor.conversationID,
+                    nativeSessionID: initialized.sessionID, remoteWorkspaceID: workspaceID)
+                publishChange(conversationID: descriptor.conversationID, runID: "", phase: .terminal)
+            } else if !initialized.recoveredDefaultAgentRuns.isEmpty {
                 try database.recoverRemoteAgentRuns(conversationID: descriptor.conversationID, snapshots: initialized.recoveredDefaultAgentRuns)
                 publishChange(conversationID: descriptor.conversationID, runID: "", phase: .terminal)
             }

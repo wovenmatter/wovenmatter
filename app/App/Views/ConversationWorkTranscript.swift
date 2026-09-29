@@ -67,6 +67,20 @@ struct ConversationWorkTranscript: View {
     }
 
     var body: some View {
+        // Lost receipts can have no assistant output or tool activity at all.
+        // Keep the recovery state visible independently of the work disclosure.
+        if run.status == "uncertain" {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Waiting to confirm the remote outcome")
+                    .font(.system(size: 13, weight: .medium))
+                Text(RemoteNoteEditEnvelope.redactingEnvelopes(in: run.error
+                    ?? "Reconnect this conversation to recover its result."))
+                    .font(.system(size: 13))
+                    .textSelection(.enabled)
+            }
+            .foregroundStyle(DashboardPalette.mutedForeground)
+            .fixedSize(horizontal: false, vertical: true)
+        }
         if activities.contains(where: { $0.kind != .fileChange }) {
             VStack(alignment: .leading, spacing: 0) {
                 Button {
@@ -135,6 +149,8 @@ struct ConversationWorkTranscript: View {
             Text("Run failed\(presentation?.completedDuration.map { " after \($0)" } ?? "")")
         } else if run.status == "cancelled" {
             Text("Stopped\(presentation?.completedDuration.map { " after \($0)" } ?? "")")
+        } else if run.status == "uncertain" {
+            Text("Waiting to confirm the remote outcome")
         } else {
             Text(run.status.capitalized)
         }

@@ -21,6 +21,43 @@ async function fixture(t) {
   return { call, relay, child, options, launches: () => launches, received: () => received, disable: () => { enabled = false } }
 }
 
+test('replacement attachment fences delayed old input, cancel and approval without blocking read-only polling', async t => {
+  const f = await fixture(t)
+  const old = await f.call('attach', { attachmentProtocol: 1 })
+  const current = await f.call('attach', { attachmentProtocol: 1 })
+  assert.notEqual(current.attachmentToken, old.attachmentToken)
+  for (const message of [
+    { jsonrpc: '2.0', id: 1, method: 'session/prompt', params: { sessionId: 'native' } },
+    { jsonrpc: '2.0', method: 'session/cancel', params: { sessionId: 'native' } },
+    { jsonrpc: '2.0', id: 'permission', result: { outcome: 'selected' } },
+  ]) {
+    await assert.rejects(f.call('message', { attachmentToken: old.attachmentToken, deliveryID: 'late', message }), /attachment was replaced/)
+    await assert.rejects(f.call('message', { deliveryID: 'legacy', message }), /attachment was replaced/)
+  }
+  assert.equal(f.received(), '')
+  assert.equal((await f.call('poll')).snapshot.recoveryComplete, false)
+  assert.equal((await f.call('poll', { attachmentToken: old.attachmentToken })).snapshot.recoveryComplete, false)
+  assert.equal((await f.call('poll', { attachmentToken: current.attachmentToken })).snapshot.recoveryComplete, true)
+})
+
+test('fenced recovery remains busy through every already admitted continuation', async t => {
+  const f = await fixture(t)
+  const old = await f.call('attach', { attachmentProtocol: 1 })
+  for (const id of [1, 2]) await f.call('message', { attachmentToken: old.attachmentToken, deliveryID: 'input-' + id,
+    message: { jsonrpc: '2.0', id, method: 'session/prompt', params: { sessionId: 'native', _meta: { wovenRunID: 'logical-run' } } } })
+  const current = await f.call('attach', { attachmentProtocol: 1 })
+  const snapshot = async () => (await f.call('poll', { attachmentToken: current.attachmentToken, includeRecovery: true })).snapshot
+  assert.equal((await snapshot()).recoveryComplete, false)
+  f.child.stdout.write('{"jsonrpc":"2.0","id":1,"result":{"stopReason":"end_turn"}}\n')
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal((await snapshot()).recoveryComplete, false)
+  f.child.stdout.write('{"jsonrpc":"2.0","id":2,"result":{"stopReason":"end_turn"}}\n')
+  await new Promise(resolve => setImmediate(resolve))
+  const terminal = await snapshot()
+  assert.equal(terminal.recoveryComplete, true)
+  assert.equal(terminal.recoveredRuns[0].runID, 'logical-run')
+})
+
 test('reattaching preserves process and journaled output without resubmitting accepted prompts', async t => {
   const f = await fixture(t)
   assert.equal((await f.call('attach')).state, 'running')
@@ -468,7 +505,7 @@ for (const pi of [false, true]) test(`stdio relay distinguishes a lost dispatch 
   let result
   output.on('data', bytes => { result = JSON.parse(bytes); input.end() })
   const request = async (url, options) => {
-    if (url.endsWith('/attach')) return { ok: true, json: async () => ({ state: 'running', snapshot: { busy: false }, events: [] }) }
+    if (url.endsWith('/attach')) return { ok: true, json: async () => ({ state: 'running', attachmentToken: 'fixture-attachment', snapshot: { busy: false }, events: [] }) }
     if (url.endsWith('/message')) throw new Error('connection lost after dispatch')
     return new Promise((_, reject) => options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true }))
   }

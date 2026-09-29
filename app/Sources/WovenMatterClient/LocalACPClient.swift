@@ -218,17 +218,20 @@ public struct LocalACPInitializedSession: Equatable, Sendable {
     public let sessionID: String
     public let loadedExistingSession: Bool
     public let recoveredDefaultAgentRuns: [DefaultAgentRunSnapshot]
+    public let confirmedRemoteIdleSessionID: String?
     public let configuration: LocalACPSessionConfiguration
 
     public init(
         sessionID: String,
         loadedExistingSession: Bool,
         configuration: LocalACPSessionConfiguration = .empty,
-        recoveredDefaultAgentRuns: [DefaultAgentRunSnapshot] = []
+        recoveredDefaultAgentRuns: [DefaultAgentRunSnapshot] = [],
+        confirmedRemoteIdleSessionID: String? = nil
     ) {
         self.sessionID = sessionID
         self.loadedExistingSession = loadedExistingSession
         self.recoveredDefaultAgentRuns = recoveredDefaultAgentRuns
+        self.confirmedRemoteIdleSessionID = confirmedRemoteIdleSessionID
         self.configuration = configuration
     }
 }
@@ -756,7 +759,9 @@ public actor LocalACPClient {
                     sessionID: existingSessionID,
                     loadedExistingSession: true,
                     configuration: configuration,
-                    recoveredDefaultAgentRuns: (runtimeKind == .defaultAgent || durableRemoteACP) ? ((try? JSONDecoder().decode([DefaultAgentRunSnapshot].self, from: JSONEncoder().encode(loaded?["_meta"]?["recoveredRuns"] ?? .array([])))) ?? []) : []
+                    recoveredDefaultAgentRuns: (runtimeKind == .defaultAgent || durableRemoteACP) ? ((try? JSONDecoder().decode([DefaultAgentRunSnapshot].self, from: JSONEncoder().encode(loaded?["_meta"]?["recoveredRuns"] ?? .array([])))) ?? []) : [],
+                    confirmedRemoteIdleSessionID: loaded?["_meta"]?["recoveryComplete"]?.boolValue == true
+                        ? loaded?["_meta"]?["recoverySessionID"]?.stringValue : nil
                 )
             } catch LocalACPClientError.agent(let code, let message)
                 where Self.isMissingSessionError(

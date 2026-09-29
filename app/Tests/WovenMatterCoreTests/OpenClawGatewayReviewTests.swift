@@ -5,6 +5,71 @@ import WovenMatterCore
 @testable import WovenMatterDashboardStore
 
 struct OpenClawGatewayReviewTests {
+  @Test(.timeLimit(.minutes(1)))
+  func recoveredIdleSnapshotCannotCloseANewerSteeringInput() async throws {
+    let fixture = try await ReviewGatewayFixture()
+    defer { fixture.remove() }
+    let id = try await fixture.database.importOpenClawGatewaySession(agentID: fixture.agentID, session: fixture.session)
+    let run = try await fixture.database.beginLocalACPRun(conversationID: id, content: "start")
+    await fixture.socket.holdNextHistoryResponse()
+    let active = try OpenClawGatewayHistory(payload: .object([
+      "messages": .array([]), "sessionInfo": .object(["hasActiveRun": .bool(true)])
+    ]))
+    try await fixture.coordinator.recoverSessionRuns(conversationID: id, history: active)
+    for _ in 0..<500 {
+      if await fixture.socket.hasPendingHistory { break }
+      try await Task.sleep(for: .milliseconds(5))
+    }
+    #expect(await fixture.socket.hasPendingHistory)
+    let steering = Task { try await fixture.coordinator.sendActiveInput(conversationID: id, content: "correction") }
+    for _ in 0..<500 {
+      if await fixture.socket.pendingSteering != nil { break }
+      try await Task.sleep(for: .milliseconds(5))
+    }
+    #expect(await fixture.socket.pendingSteering != nil)
+    try await fixture.socket.acknowledgeSteering(rejected: false)
+    #expect(try await steering.value.runID == run.runID)
+    await fixture.socket.setHistory(.object([
+      "messages": .array([]), "sessionInfo": .object(["hasActiveRun": .bool(true)])
+    ]))
+    // Release the idle response captured before the newer native admission.
+    try await fixture.socket.releaseHistoryResponse()
+    for _ in 0..<1_000 {
+      if await fixture.socket.historyCalls >= 2 { break }
+      try await Task.sleep(for: .milliseconds(5))
+    }
+    #expect(await fixture.socket.historyCalls >= 2)
+    #expect(try await fixture.database.activeDeviceOwnedConversationIDs().contains(id))
+    await fixture.coordinator.shutdown()
+  }
+
+  @Test(.timeLimit(.minutes(1)), arguments: [false, true])
+  func steeringFailureRollsBackOnlyBeforeNativeDispatch(dispatched: Bool) async throws {
+    let fixture = try await ReviewGatewayFixture(failSteeringTransport: dispatched,
+      historyRecorder: { direction, data in
+        let frame = try JSONDecoder().decode(GatewayJSONValue.self, from: data)
+        if !dispatched, direction == "out", frame.objectValue?["method"] == .string("chat.send"),
+           frame.objectValue?["params"]?.objectValue?["queueMode"] == .string("steer") {
+          throw OpenClawGatewayClientError.connectionClosed
+        }
+      })
+    defer { fixture.remove() }
+    let id = try await fixture.database.importOpenClawGatewaySession(agentID: fixture.agentID, session: fixture.session)
+    let run = try await fixture.coordinator.accept(conversationID: id, content: "start")
+    if dispatched {
+      _ = try await fixture.coordinator.sendActiveInput(conversationID: id, content: "correction")
+    } else {
+      await #expect(throws: OpenClawGatewayClientError.connectionClosed) {
+        try await fixture.coordinator.sendActiveInput(conversationID: id, content: "correction")
+      }
+    }
+    let content = try await fixture.database.conversationContent(id: id)
+    #expect(content.messages.filter { $0.role == "user" }.map(\.content) == (dispatched ? ["start", "correction"] : ["start"]))
+    #expect(try await fixture.database.openClawRunAssistantIDs(runID: run.runID).count == (dispatched ? 2 : 1))
+    #expect(await fixture.socket.requestMethods.filter { $0 == "chat.send" }.count == (dispatched ? 2 : 1))
+    await fixture.coordinator.shutdown()
+  }
+
   @Test(.timeLimit(.minutes(1)), arguments: [false, true])
   func composerSteeringWaitsForNativeAdmissionWithoutInterrupting(rejected: Bool) async throws {
     let fixture = try ReviewGatewayFixture()
@@ -529,7 +594,8 @@ private struct ReviewGatewayFixture {
     .object(["id": .string("high"), "label": .string("High effort"),
       "description": .string("Thorough reasoning")]),
     .object(["id": .string("low"), "label": .string("Low effort")]),
-  ]), beforeConnect: (@Sendable () async -> Void)? = nil) throws {
+  ]), beforeConnect: (@Sendable () async -> Void)? = nil,
+    failSteeringTransport: Bool = false, historyRecorder: WorkspaceWireRecorder? = nil) throws {
     directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     database = try WorkspaceDatabase(url: directory.appending(path: "review.sqlite"))
@@ -539,10 +605,12 @@ private struct ReviewGatewayFixture {
     try database.saveOpenClawGatewayLink(OpenClawGatewayLink(agentID: agentID, location: .localAgentWorkspace, endpoint: endpoint))
     session = try #require(OpenClawGatewaySession(payload: .object(["key": .string("agent:eddie:shared") ])))
     socket = ReviewGatewaySocket(
-      denyHistory: denyHistory, modelThinkingLevels: modelThinkingLevels
+      denyHistory: denyHistory, modelThinkingLevels: modelThinkingLevels,
+      failSteeringTransport: failSteeringTransport
     )
     let socket = socket
-    let client = OpenClawGatewayClient(endpoint: endpoint, credentialStore: ReviewCredentials(), socketFactory: { _ in socket })
+    let client = OpenClawGatewayClient(endpoint: endpoint, credentialStore: ReviewCredentials(),
+      historyRecorder: historyRecorder, socketFactory: { _ in socket })
     coordinator = OpenClawGatewayCoordinator(database: database, client: client, connectClient: {
       await beforeConnect?()
       return try await $0.connect()
@@ -559,6 +627,7 @@ private struct ReviewCredentials: OpenClawGatewayCredentialStore {
 private actor ReviewGatewaySocket: OpenClawGatewaySocket {
   let denyHistory: Bool
   let modelThinkingLevels: GatewayJSONValue?
+  let failSteeringTransport: Bool
   var modelParameters: GatewayJSONValue?
   var creationParameters: GatewayJSONValue?
   var steeringParameters: GatewayJSONValue?
@@ -573,15 +642,26 @@ private actor ReviewGatewaySocket: OpenClawGatewaySocket {
   var historyCalls = 0
   var requestMethods: [String] = []
   private var historyPayload: GatewayJSONValue?
+  private var holdsNextHistory = false
+  private var pendingHistory: (id: GatewayJSONValue, payload: GatewayJSONValue)?
+  var hasPendingHistory: Bool { pendingHistory != nil }
+  func holdNextHistoryResponse() { holdsNextHistory = true }
+  func releaseHistoryResponse() throws {
+    guard let pendingHistory else { return }
+    self.pendingHistory = nil
+    try push(.object(["type": .string("res"), "id": pendingHistory.id,
+      "ok": .bool(true), "payload": pendingHistory.payload]))
+  }
   private var workspaceSessions: [String: GatewayJSONValue] = [:]
   func setHistory(_ payload: GatewayJSONValue) { historyPayload = payload }
   func setWorkspaceSession(_ key: String, row: GatewayJSONValue) { workspaceSessions[key] = row }
   private var frames: [Data] = []
   private var waiter: CheckedContinuation<Data, any Error>?
   private var closed = false
-  init(denyHistory: Bool, modelThinkingLevels: GatewayJSONValue?) {
+  init(denyHistory: Bool, modelThinkingLevels: GatewayJSONValue?, failSteeringTransport: Bool = false) {
     self.denyHistory = denyHistory
     self.modelThinkingLevels = modelThinkingLevels
+    self.failSteeringTransport = failSteeringTransport
   }
   func start() async {
     try? push(.object(["type": .string("event"), "event": .string("connect.challenge"),
@@ -598,6 +678,7 @@ private actor ReviewGatewaySocket: OpenClawGatewaySocket {
     if method == "sessions.create" { creationParameters = row["params"] }
     if method == "agent.wait" { return } // The test owns native completion.
     if method == "chat.send", row["params"]?.objectValue?["queueMode"] == .string("steer") {
+      if failSteeringTransport { throw OpenClawGatewayClientError.connectionClosed }
       steeringParameters = row["params"]; pendingSteering = .object(row); return
     }
     let payload: GatewayJSONValue
@@ -643,6 +724,11 @@ private actor ReviewGatewaySocket: OpenClawGatewaySocket {
       workspaceSessions[key] = entry
       payload = .object(["key": .string(key), "entry": entry])
     default: payload = .object(["messages": .array([]), "sessionInfo": .object(["hasActiveRun": .bool(false)])])
+    }
+    if method == "chat.history", holdsNextHistory {
+      holdsNextHistory = false
+      pendingHistory = (row["id"] ?? .null, payload)
+      return
     }
     try push(.object(["type": .string("res"), "id": row["id"] ?? .null,
       "ok": .bool(!rejected), "payload": payload,

@@ -27,4 +27,20 @@ extension WorkspaceDatabase {
     // Settling that durable receipt must still reach the writer.
     try await finishWrite { try $0.rejectLocalACPSteeringTurn(reservation) }
   }
+
+  func markLocalACPRunUncertain(runID: String, detail: String) async throws {
+    try await finishWrite { try $0.markLocalACPRunUncertain(runID: runID, detail: detail) }
+  }
+
+  func registerDurableLocalACPRun(runID: String, remoteWorkspaceID: UUID, sessionID: String) async throws {
+    try await write { try $0.registerDurableLocalACPRun(runID: runID, remoteWorkspaceID: remoteWorkspaceID, sessionID: sessionID) }
+  }
+
+  func reconcileUncertainRemoteRuns(conversationID: String, remoteWorkspaceID: UUID,
+    sessionID: String, snapshots: [DefaultAgentRunSnapshot]) async throws {
+    try await finishWrite {
+      try $0.reconcileUncertainRemoteRuns(conversationID: conversationID, remoteWorkspaceID: remoteWorkspaceID,
+        sessionID: sessionID, snapshots: snapshots)
+    }
+  }
 }

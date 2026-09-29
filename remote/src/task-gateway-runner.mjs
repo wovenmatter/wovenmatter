@@ -134,24 +134,25 @@ export function createTaskExecutor({ catalog,workspaceRoot,environment,defaultAg
 async function runBuiltIn({run,nativeSessionID,signal,publish,bindSession,defaultAgent,workspaceRoot}) {
   const cwd = run.task.configuration.nativeWorkingDirectory ?? workspaceRoot
   if (!isAbsolute(cwd) || cwd.includes('\0')) throw before('The task working directory is invalid.')
-  let sessionID,accepted=false
+  let sessionID,attachmentToken,accepted=false
   try {
     if((await defaultAgent.status()).locked) throw Object.assign(before('Waiting for Woven Matter to reconnect and unlock the Built-in agent.'),{deferred:true})
-    const opened=await defaultAgent.invoke({method:nativeSessionID?'session/load':'session/new',params:{cwd,...(nativeSessionID?{sessionId:nativeSessionID}:{})}})
+    const opened=await defaultAgent.invoke({method:nativeSessionID?'session/load':'session/new',attachmentProtocol:1,params:{cwd,...(nativeSessionID?{sessionId:nativeSessionID}:{})}})
     const session=opened.result
+    attachmentToken=session?._meta?.attachmentToken ?? opened.attachmentToken
     sessionID=session?.sessionId ?? nativeSessionID
     if(!sessionID) throw before('The Built-in task session is unavailable.')
     bindSession(sessionID)
-    await applyTaskConfiguration(async(method,params)=>(await defaultAgent.invoke({method,params})).result,sessionID,session,run.task.configuration)
+    await applyTaskConfiguration(async(method,params)=>(await defaultAgent.invoke({method,params,attachmentToken})).result,sessionID,session,run.task.configuration)
     if(signal.aborted) throw before('Background execution was turned off.')
     accepted=true
-    const {operationID}=await defaultAgent.invoke({operationID:run.id,method:'session/prompt',params:{sessionId:sessionID,prompt:[{type:'text',text:backgroundPrompt(run)}],_meta:{wovenRunID:run.id}}})
+    const {operationID}=await defaultAgent.invoke({operationID:run.id,method:'session/prompt',attachmentToken,params:{sessionId:sessionID,prompt:[{type:'text',text:backgroundPrompt(run)}],_meta:{wovenRunID:run.id}}})
     let cursor=0,cancelled=false,needsApproval=false
     while(true) {
-      if(signal.aborted && !cancelled) { cancelled=true;await defaultAgent.invoke({method:'session/cancel',params:{sessionId:sessionID}}) }
+      if(signal.aborted && !cancelled) { cancelled=true;await defaultAgent.invoke({method:'session/cancel',attachmentToken,params:{sessionId:sessionID}}) }
       const page=await defaultAgent.poll(operationID,cursor)
       for(const update of page.updates) {
-        if(update.sessionUpdate==='woven_permission') { needsApproval=true;await defaultAgent.invoke({method:'woven/permission',params:{id:update.id,result:{outcome:{outcome:'cancelled'}}}}) }
+        if(update.sessionUpdate==='woven_permission') { needsApproval=true;await defaultAgent.invoke({method:'woven/permission',attachmentToken,params:{sessionId:sessionID,id:update.id,result:{outcome:{outcome:'cancelled'}}}}) }
         else publish(update)
       }
       cursor=page.cursor
@@ -160,7 +161,7 @@ async function runBuiltIn({run,nativeSessionID,signal,publish,bindSession,defaul
     }
   } catch(error) {
     if (accepted && sessionID) {
-      try { await defaultAgent.invoke({method:'session/cancel',params:{sessionId:sessionID}}) } catch {}
+      try { await defaultAgent.invoke({method:'session/cancel',attachmentToken,params:{sessionId:sessionID}}) } catch {}
     } else error.beforePrompt = true
     throw error
   }

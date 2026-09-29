@@ -228,6 +228,14 @@ extension WorkspaceDatabase {
         PRIMARY KEY (conversation_id, remote_run_id)
       );
       CREATE INDEX IF NOT EXISTS desktop_openclaw_run_inputs_local ON desktop_openclaw_run_inputs(local_run_id);
+      CREATE TABLE IF NOT EXISTS desktop_local_acp_durable_runs (
+        run_id TEXT PRIMARY KEY, remote_workspace_id TEXT NOT NULL,
+        native_session_id TEXT NOT NULL
+      );
+      CREATE TRIGGER IF NOT EXISTS desktop_local_acp_durable_runs_delete
+      AFTER DELETE ON dashboard_runs BEGIN
+        DELETE FROM desktop_local_acp_durable_runs WHERE run_id=OLD.id;
+      END;
       CREATE TRIGGER IF NOT EXISTS desktop_openclaw_run_inputs_delete
       AFTER DELETE ON dashboard_conversations BEGIN
         DELETE FROM desktop_openclaw_run_inputs WHERE conversation_id = OLD.id;

@@ -10,18 +10,20 @@ export async function runStdioRelay({ channelID, harnessID, cwd, permission, nat
   const lifecycle = new AbortController()
   const pi = harnessID === 'pi'
   let stopped = false, cursor = 0, state, observingRun = false, piReconnecting = false, idleBackoff = 100
+  let attachmentToken
   const attachment = randomUUID(), requestIDs = new Map(), requestMethods = new Map(), incomingRequests = new Set()
   const write = message => new Promise((resolve, reject) => output.write(JSON.stringify(message) + '\n', error => error ? reject(error) : resolve()))
   async function call(operation, values = {}) {
     const response = await request(`http://127.0.0.1:${port}/v1/durable-acp/${operation}`, {
       method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ channelID, harnessID, cwd, permission, nativeSessionID, ...values }), signal: AbortSignal.any([lifecycle.signal, AbortSignal.timeout(15000)]),
+      body: JSON.stringify({ channelID, harnessID, cwd, permission, nativeSessionID, attachmentToken, ...values }), signal: AbortSignal.any([lifecycle.signal, AbortSignal.timeout(15000)]),
     })
     if (!response.ok) throw new Error(`Remote session relay failed (${response.status})`)
     return response.json()
   }
-  let attached = await call('attach')
-  if (attached.state === 'stopped') attached = await call('recover')
+  let attached = await call('attach', { attachmentProtocol: 1 })
+  if (attached.state === 'stopped') attached = await call('recover', { attachmentProtocol: 1 })
+  attachmentToken = attached.attachmentToken
   state = attached.snapshot
   piReconnecting = pi && !!state.piState
   // Historical notifications are reconciled through recoveredRuns, never blindly
@@ -38,6 +40,9 @@ export async function runStdioRelay({ channelID, harnessID, cwd, permission, nat
   async function handleMessage(message) {
       let dispatched = false
       try {
+        if (!attachmentToken && !['initialize', 'session/load', 'get_state', 'get_available_models', 'get_available_thinking_levels', 'get_commands'].includes(message.method ?? message.type)) {
+          throw new Error('Update the workspace service and reconnect before sending messages; this service cannot fence replaced attachments.')
+        }
         if (message.method === 'initialize' && state.initialized) {
           await write({ jsonrpc: '2.0', id: message.id, result: state.initialized }); return
         }
@@ -59,12 +64,12 @@ export async function runStdioRelay({ channelID, harnessID, cwd, permission, nat
           if (pi) {
             piReconnecting = false
             await write({ type: 'response', id: message.id, command: 'get_state', success: true, data: {
-              ...state.piState, _meta: { recoveredRuns: state.recoveredRuns },
+              ...state.piState, _meta: { recoveredRuns: state.recoveredRuns, recoveryComplete: state.recoveryComplete === true, recoverySessionID: state.piState?.sessionId ?? state.piState?.session_id },
             } }); return
           }
           const { sessionId, ...result } = state.session
           await write({ jsonrpc: '2.0', id: message.id, result: {
-            ...result, _meta: { ...result._meta, recoveredRuns: state.recoveredRuns },
+            ...result, _meta: { ...result._meta, recoveredRuns: state.recoveredRuns, recoveryComplete: state.recoveryComplete === true, recoverySessionID: sessionId },
           } }); return
         }
         if (attached.state !== 'running') throw new Error('Remote process stopped; start a new session to continue')
@@ -120,10 +125,10 @@ export async function runStdioRelay({ channelID, harnessID, cwd, permission, nat
           if (requestIDs.has(message.id)) {
             let delivered = { ...message, id: requestIDs.get(message.id) }
             if (requestMethods.get(message.id) === 'session/load' && message.result) delivered.result = {
-              ...message.result, _meta: { ...message.result._meta, recoveredRuns: state.recoveredRuns ?? [] },
+              ...message.result, _meta: { ...message.result._meta, recoveredRuns: state.recoveredRuns ?? [], recoveryComplete: state.recoveryComplete === true, recoverySessionID: state.session?.sessionId },
             }
             if (pi && requestMethods.get(message.id) === 'get_state' && message.success) delivered.data = {
-              ...message.data, _meta: { ...message.data?._meta, recoveredRuns: state.recoveredRuns ?? [] },
+              ...message.data, _meta: { ...message.data?._meta, recoveredRuns: state.recoveredRuns ?? [], recoveryComplete: state.recoveryComplete === true, recoverySessionID: state.piState?.sessionId ?? state.piState?.session_id },
             }
             await write(delivered)
             requestIDs.delete(message.id)

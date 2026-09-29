@@ -84,6 +84,7 @@ public actor PiRPCClient {
     private var sessionID: String?
     private var runID: String?
     private var recoveredRuns: [DefaultAgentRunSnapshot] = []
+    private var confirmedRemoteIdleSessionID: String?
     private var configuration = LocalACPSessionConfiguration.empty
     private var pendingResponses: [String: CheckedContinuation<[String: Any], any Error>] = [:]
     private var promptEvents: LocalACPClient.EventHandler?
@@ -200,7 +201,8 @@ public actor PiRPCClient {
             sessionID: sessionID,
             loadedExistingSession: existingSessionID != nil,
             configuration: configuration,
-            recoveredDefaultAgentRuns: recoveredRuns
+            recoveredDefaultAgentRuns: recoveredRuns,
+            confirmedRemoteIdleSessionID: confirmedRemoteIdleSessionID
         )
     }
 
@@ -312,6 +314,9 @@ public actor PiRPCClient {
                 }
                 let response = try await sendCommand(command)
                 if response["success"] as? Bool != true {
+                    if dictionary(response["_meta"])?["deliveryUncertain"] as? Bool == true {
+                        throw PiRPCClientError.deliveryUncertain(string(response["error"]) ?? "The remote prompt receipt was lost.")
+                    }
                     throw PiRPCClientError.commandFailed(
                         string(response["error"]) ?? "Pi rejected the prompt."
                     )
@@ -607,6 +612,11 @@ public actor PiRPCClient {
         let thinking = try await sendCommand(["type": "get_available_thinking_levels"])
         let commands = try await sendCommand(["type": "get_commands"])
         let data = dictionary(state["data"])
+        if launch.environment["WOVEN_DURABLE_REMOTE_ACP"] == "1" {
+            let metadata = dictionary(data?["_meta"])
+            confirmedRemoteIdleSessionID = metadata?["recoveryComplete"] as? Bool == true
+                ? string(metadata?["recoverySessionID"]) : nil
+        }
         if launch.environment["WOVEN_DURABLE_REMOTE_ACP"] == "1",
            let recovery = dictionary(data?["_meta"])?["recoveredRuns"] {
             recoveredRuns = try JSONDecoder().decode([DefaultAgentRunSnapshot].self,
