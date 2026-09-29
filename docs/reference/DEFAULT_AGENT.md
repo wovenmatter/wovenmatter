@@ -26,7 +26,9 @@ atomically activating an immutable generation. Existing generations remain
 available to running helpers. A helper-source fingerprint prevents an app
 update from selecting an older copied helper implementation.
 
-Local installer cancellation is confined to the owned maintenance process group and
+The blocking local maintenance loop owns an OS thread, so saturation of Swift's
+cooperative executor or the shared dispatch pool cannot prevent helper admission
+and cancellation. Local installer cancellation is confined to the owned maintenance process group and
 escalates if its children ignore termination. Once activation commits, later
 worker restart or label refresh failures do not turn the installation into a
 failure; installed-version metadata remains the source of truth. A successful
