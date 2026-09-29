@@ -250,13 +250,13 @@ public actor PiRPCClient {
         return try await prompt(payload.text, images: payload.images, onEvent: onEvent, onPermission: onPermission)
     }
 
-    public func steer(_ input: AgentMessageInput) async throws {
-        _ = try await beginActiveInput(input)
+    public func steer(_ input: AgentMessageInput, dispatchFence: AgentDispatchFence? = nil) async throws {
+        _ = try await beginActiveInput(input, dispatchFence: dispatchFence)
     }
 
-    public func beginActiveInput(_ input: AgentMessageInput) async throws -> LocalACPActiveInputReceipt {
+    public func beginActiveInput(_ input: AgentMessageInput, dispatchFence: AgentDispatchFence? = nil) async throws -> LocalACPActiveInputReceipt {
         let payload = try Self.attachmentPayload(input)
-        return try await beginActiveInput(payload.text, images: payload.images)
+        return try await beginActiveInput(payload.text, images: payload.images, dispatchFence: dispatchFence)
     }
 
     static func attachmentPayload(_ input: AgentMessageInput) throws -> (text: String, images: [[String: String]]) {
@@ -334,11 +334,13 @@ public actor PiRPCClient {
         }
     }
 
-    public func steer(_ text: String, images: [[String: String]] = []) async throws {
-        _ = try await beginActiveInput(text, images: images)
+    public func steer(_ text: String, images: [[String: String]] = [], dispatchFence: AgentDispatchFence? = nil) async throws {
+        _ = try await beginActiveInput(text, images: images, dispatchFence: dispatchFence)
     }
 
-    private func beginActiveInput(_ text: String, images: [[String: String]]) async throws -> LocalACPActiveInputReceipt {
+    private func beginActiveInput(_ text: String, images: [[String: String]], dispatchFence: AgentDispatchFence? = nil) async throws -> LocalACPActiveInputReceipt {
+        let fence = dispatchFence ?? AgentDispatchFence()
+        try fence.check()
         guard !cancelled else { throw CancellationError() }
         settlementGeneration += 1
         settlement = nil
@@ -351,7 +353,7 @@ public actor PiRPCClient {
         do {
             // Native prompt preflight atomically steers a running loop or starts
             // an idle one. `steer` alone can strand a late message in Pi's queue.
-            let response = try await sendCommand(command)
+            let response = try await sendCommand(command, dispatchFence: fence)
             guard response["success"] as? Bool == true else {
                 if dictionary(response["_meta"])?["deliveryUncertain"] as? Bool == true {
                     throw PiRPCClientError.deliveryUncertain(string(response["error"]) ?? "The remote steering receipt was lost.")
@@ -680,9 +682,10 @@ public actor PiRPCClient {
         }
     }
 
-    private func sendCommand(_ payload: [String: Any]) async throws -> [String: Any] {
+    private func sendCommand(_ payload: [String: Any], dispatchFence: AgentDispatchFence? = nil) async throws -> [String: Any] {
         try Task.checkCancellation()
         if let transportError { throw transportError }
+        try dispatchFence?.check()
         guard !closed, let input else {
             throw PiRPCClientError.sessionNotInitialized
         }
@@ -698,6 +701,7 @@ public actor PiRPCClient {
         return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<[String: Any], any Error>) in
             pendingResponses[id] = continuation
             do {
+                try dispatchFence?.claimDispatch()
                 try input.write(contentsOf: line)
             } catch {
                 pendingResponses.removeValue(forKey: id)
