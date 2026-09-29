@@ -1314,8 +1314,7 @@ public struct RemoteWorkspaceServiceClient: Sendable {
                 if (response as? HTTPURLResponse)?.statusCode == 404 {
                     throw RemoteWorkspaceClientError.invalidResponse("Update this workspace service in Settings to manage its Built-in SDKs.")
                 }
-                struct Failure: Decodable { let error: String }
-                let detail = (try? JSONDecoder().decode(Failure.self, from: data))?.error
+                let detail = (try? JSONDecoder().decode([String: String].self, from: data))?["error"]
                 throw RemoteWorkspaceClientError.invalidResponse(detail ?? "SDK maintenance could not complete in this workspace.")
             }
             if path.hasPrefix("v1/task-gateway") {
