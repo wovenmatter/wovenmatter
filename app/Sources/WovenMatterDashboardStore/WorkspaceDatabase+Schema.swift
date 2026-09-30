@@ -91,6 +91,10 @@ extension WorkspaceDatabaseConnection {
         created_at TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL DEFAULT '',
         desktop_owned INTEGER NOT NULL DEFAULT 0
       );
+      CREATE TABLE IF NOT EXISTS desktop_conversation_titles (
+        conversation_id TEXT PRIMARY KEY REFERENCES dashboard_conversations(id) ON DELETE CASCADE,
+        title TEXT NOT NULL
+      );
       CREATE TABLE IF NOT EXISTS dashboard_messages (
         id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL DEFAULT '', client_message_id TEXT,
         run_id TEXT, role TEXT NOT NULL DEFAULT 'assistant',
@@ -228,6 +232,14 @@ extension WorkspaceDatabaseConnection {
         PRIMARY KEY (conversation_id, remote_run_id)
       );
       CREATE INDEX IF NOT EXISTS desktop_openclaw_run_inputs_local ON desktop_openclaw_run_inputs(local_run_id);
+      CREATE TABLE IF NOT EXISTS desktop_local_acp_durable_runs (
+        run_id TEXT PRIMARY KEY, remote_workspace_id TEXT NOT NULL,
+        native_session_id TEXT NOT NULL
+      );
+      CREATE TRIGGER IF NOT EXISTS desktop_local_acp_durable_runs_delete
+      AFTER DELETE ON dashboard_runs BEGIN
+        DELETE FROM desktop_local_acp_durable_runs WHERE run_id=OLD.id;
+      END;
       CREATE TRIGGER IF NOT EXISTS desktop_openclaw_run_inputs_delete
       AFTER DELETE ON dashboard_conversations BEGIN
         DELETE FROM desktop_openclaw_run_inputs WHERE conversation_id = OLD.id;
@@ -357,6 +369,8 @@ extension WorkspaceDatabaseConnection {
         ON desktop_openclaw_cron_jobs(agent_id, archive_state, updated_at DESC);
       CREATE INDEX IF NOT EXISTS desktop_openclaw_cron_runs_job
         ON desktop_openclaw_cron_runs(agent_id, remote_job_id, started_at DESC);
+      CREATE INDEX IF NOT EXISTS desktop_openclaw_cron_runs_history
+        ON desktop_openclaw_cron_runs(agent_id, remote_job_id, COALESCE(started_at, completed_at) DESC, remote_run_id DESC);
       """)
   }
 

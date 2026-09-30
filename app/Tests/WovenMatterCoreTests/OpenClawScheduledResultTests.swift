@@ -6,6 +6,36 @@ import WovenMatterClient
 @testable import WovenMatterDashboardStore
 
 struct OpenClawScheduledResultTests {
+  @Test func presentationWindowsKeepPerJobHistoryAndLeaveDeliveryHistoryUnbounded() async throws {
+    let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = try await DashboardStore(supportDirectory: root)
+    let db = store.database
+    _ = try await db.createLocalACPSession(runtimeKind: .openclaw, title: "Seed", ownerDeviceID: UUID())
+    let agentID = try #require(await db.dashboardAgents().first).id
+    let jobs = ["frequent", "quiet"].map {
+      OpenClawCronJob(id: $0, agentID: agentID, name: $0, schedule: "daily", enabled: true, remotePayload: Data())
+    }
+    var runs = (0..<55).map {
+      OpenClawCronRun(id: "run-\($0)", jobID: "frequent", agentID: agentID, status: "ok", output: "Output \($0)",
+        startedAt: Date(timeIntervalSince1970: Double($0 + 100)), remotePayload: Data())
+    }
+    runs.append(OpenClawCronRun(id: "quiet-run", jobID: "quiet", agentID: agentID, status: "ok",
+      completedAt: Date(timeIntervalSince1970: 1), remotePayload: Data()))
+    try await db.replaceOpenClawCronSnapshot(agentID: agentID, jobs: jobs, runs: runs)
+    let initial = try await store.openClawCronPresentation(limits: [:])
+    let key = DashboardStore.openClawCronHistoryKey(agentID: agentID, jobID: "frequent")
+    #expect(initial.runs.filter { $0.jobID == "frequent" }.count == 50)
+    #expect(initial.runs.contains { $0.id == "quiet-run" })
+    #expect(initial.hasOlder == [key])
+    let expanded = try await store.openClawCronPresentation(limits: [key: 100])
+    #expect(expanded.runs.count == 56)
+    #expect(expanded.hasOlder.isEmpty)
+    #expect(try await db.openClawCronRuns(agentID: agentID).count == 56)
+    #expect(try await db.openClawCronRuns(agentID: agentID, jobID: "frequent", limit: 1).first?.id == "run-54")
+  }
+
   @Test func retainedResultsSurviveSummaryRefreshAndDeliverOnceAcrossRestartAndDeletion() async throws {
     let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

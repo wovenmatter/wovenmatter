@@ -528,6 +528,30 @@ public actor DashboardStore {
     try await database.openClawCronRuns(agentID: agentID)
   }
 
+  public nonisolated static func openClawCronHistoryKey(agentID: UUID, jobID: String) -> String {
+    agentID.uuidString.lowercased() + "/" + jobID
+  }
+
+  public func openClawCronPresentation(limits: [String: Int]) async throws -> (
+    jobs: [OpenClawCronJob], runs: [OpenClawCronRun], hasOlder: Set<String>, routes: [UUID: [String: String]]
+  ) {
+    try await database.openClawCronPresentation(limits: limits)
+  }
+
+  public func hermesResultRoutes(agentID: UUID) async throws -> [String: String] {
+    try await database.hermesResultRoutes(agentID: agentID)
+  }
+
+  public func collectHermesResult(agentID: UUID, jobID: String, runID: String, title: String, output: String,
+                                 ownerDeviceID: UUID, remoteWorkspaceID: UUID?, remoteWorkspaceName: String) async throws {
+    _ = try await database.collectHermesResult(agentID: agentID, jobID: jobID, runID: runID, title: title, output: output,
+      ownerDeviceID: ownerDeviceID, remoteWorkspaceID: remoteWorkspaceID, remoteWorkspaceName: remoteWorkspaceName)
+  }
+
+  public func sessionNativeWorkingDirectories(ids: [String]) async throws -> [String: String] {
+    try await database.sessionNativeWorkingDirectories(ids: ids)
+  }
+
   public func emptyOpenClawCronTrash(agentID: UUID? = nil) async throws {
     try await database.emptyOpenClawCronTrash(agentID: agentID)
   }
@@ -682,6 +706,36 @@ public actor DashboardStore {
     }
   }
 
+  public func mutateConversation(id: String, mutation: WorkspaceConversationMutation) async throws {
+    try await database.mutateConversation(id: id, mutation: mutation)
+  }
+
+  public func trashedConversations() async throws -> [WorkspaceTrashedConversation] {
+    try await database.trashedConversations()
+  }
+
+  public func exportConversation(id: String, format: WorkspaceConversationExportFormat) async throws -> URL {
+    let data = try await database.conversationExport(id: id, format: format)
+    let stagedURL = FileManager.default.temporaryDirectory
+      .appending(path: "wovenmatter-export-" + UUID().uuidString + "." + format.fileExtension)
+    try Task.checkCancellation()
+    // SQL and encoding ran on the reader worker. File I/O also stays off the
+    // cooperative executor, and only the staging URL crosses backend IPC.
+    do {
+      try await WorkspaceExportFileIO.perform {
+        try data.write(to: stagedURL, options: [.atomic, .completeFileProtection])
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: stagedURL.path)
+      }
+    } catch {
+      // This path was generated above exclusively for this temporary snapshot.
+      try? FileManager.default.removeItem(at: stagedURL)
+      throw error
+    }
+    do { try Task.checkCancellation() }
+    catch { try? FileManager.default.removeItem(at: stagedURL); throw error }
+    return stagedURL
+  }
+
   private nonisolated static func snapshot(connection: WorkspaceDatabaseConnection) throws -> DashboardStoreSnapshot {
     DashboardStoreSnapshot(agents: try connection.dashboardAgents(),
       workspace: try connection.workspaceOverview(), calendarItems: try connection.calendarItems(),
@@ -770,18 +824,25 @@ public actor DashboardStore {
   public func handleNoteEditingRequest(
     _ request: NoteEditingRequest
   ) async throws -> NoteEditingResponse {
-    try await database.recordHistory(WorkspaceHistoryEvent(harness:"woven-note",kind:"cli.request",
-      payload:String(decoding:try JSONEncoder().encode(request),as:UTF8.self)))
     do {
       let response: NoteEditingResponse = switch request.command {
       case .read: try await database.readNoteForEditing(id:request.noteID)
       case .apply: try await database.applyNoteEdits(request)
       }
-      try await database.recordHistory(WorkspaceHistoryEvent(harness:"woven-note",kind:"cli.response",
-        payload:String(decoding:try JSONEncoder().encode(response),as:UTF8.self)))
+      if case .apply = request.command {
+        try await database.recordHistory(WorkspaceHistoryEvent(harness:"woven-note",kind:"cli.mutation",
+          payload:String(decoding:try JSONEncoder().encode([
+            "action":"apply", "noteID":request.noteID, "success":"true"
+          ]),as:UTF8.self)))
+      }
       return response
     } catch {
-      try await database.recordHistory(WorkspaceHistoryEvent(harness:"woven-note",kind:"cli.error",payload:error.localizedDescription))
+      if case .apply = request.command {
+        try await database.recordHistory(WorkspaceHistoryEvent(harness:"woven-note",kind:"cli.mutation",
+          payload:String(decoding:try JSONEncoder().encode([
+            "action":"apply", "noteID":request.noteID, "success":"false"
+          ]),as:UTF8.self)))
+      }
       throw error
     }
   }

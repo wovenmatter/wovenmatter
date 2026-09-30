@@ -1,15 +1,18 @@
 import Foundation
+import WovenMatterCore
 
 /// Provider-supplied presentation kept separate from the exact selection ID.
 public struct SessionOptionMetadata: Codable, Equatable, Sendable {
     public let name: String?
     public let description: String?
     public let modelGroup: String?
+    public let modelName: String?
 
-    public init(name: String? = nil, description: String? = nil, modelGroup: String? = nil) {
+    public init(name: String? = nil, description: String? = nil, modelGroup: String? = nil, modelName: String? = nil) {
         self.name = Self.nonempty(name)
         self.description = Self.nonempty(description)
         self.modelGroup = modelGroup
+        self.modelName = Self.nonempty(modelName)
     }
 
     public static func modelLabel(id: String, metadata: Self?) -> String {
@@ -21,6 +24,37 @@ public struct SessionOptionMetadata: Codable, Equatable, Sendable {
         }
         return name
     }
+
+    /// The compact composer uses the model alone; the menu keeps its full label.
+    public static func modelButtonLabel(id: String, metadata: Self?) -> String {
+        if let name = metadata?.modelName {
+            return modelLabel(id: id, metadata: Self(name: name))
+        }
+        // Old Built-in sessions predate modelName. Recognize only their exact
+        // provider-qualified IDs and corresponding emitted suffix, never split
+        // arbitrary provider-supplied names on a separator.
+        if let separator = id.firstIndex(of: "/"), let name = metadata?.name {
+            let provider = String(id[..<separator])
+            if let attribution = legacyBuiltInAttributions[provider] {
+                let suffix = " · " + attribution
+                if name.hasSuffix(suffix), name.count > suffix.count {
+                    return String(name.dropLast(suffix.count))
+                }
+            }
+        }
+        return modelLabel(id: id, metadata: metadata)
+    }
+
+    private static let legacyBuiltInAttributions = [
+        "openai-codex": "OpenAI · ChatGPT subscription",
+        "openai": "OpenAI · API key",
+        "openrouter": "OpenRouter",
+        "opencode-go": "OpenCode Go",
+        "xai": "Grok subscription",
+        "xai-api": "xAI · API key",
+        "claude-subscription": "Claude · Subscription",
+        "anthropic": "Claude · API key",
+    ]
 
     private static func nonempty(_ value: String?) -> String? {
         guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else { return nil }
@@ -111,6 +145,26 @@ public struct LocalACPSessionMetadata: Codable, Equatable, Sendable {
             let value = $0.trimmingCharacters(in: .whitespacesAndNewlines)
             return !value.isEmpty && seen.insert(value).inserted ? value : nil
         }
+    }
+}
+
+/// Restored native chats may appear before their local or remote launch context.
+/// Include readiness in the SwiftUI task key so discovery completion retries a
+/// skipped refresh, without polling or restarting on unchanged runtime snapshots.
+public struct LocalACPSessionMetadataTaskIdentity: Hashable, Sendable {
+    private let conversationID: String
+    private let runtimeKind: AgentRuntimeKind
+    private let launchAvailable: Bool?
+
+    public init?(conversationID: String, runtimeKind: AgentRuntimeKind?,
+                 usesOpenClawGateway: Bool, launchAvailable: @autoclosure () -> Bool) {
+        guard let runtimeKind else { return nil }
+        self.conversationID = conversationID
+        self.runtimeKind = runtimeKind
+        // These paths watch an existing native session or gateway connection.
+        // Do not observe unrelated CLI launch state for either one.
+        self.launchAvailable = runtimeKind == .opencode || usesOpenClawGateway
+            ? nil : launchAvailable()
     }
 }
 

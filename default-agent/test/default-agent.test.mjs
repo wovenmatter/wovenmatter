@@ -101,6 +101,8 @@ test('cancel during credential preparation never starts a model turn or fallback
   let prompts = 0;
   record.session.prompt = async () => { prompts++; };
   record.session.abort = async () => {};
+  let cleared = false;
+  record.session.clearQueue = () => { cleared = true; };
   engine.sessions.set('fixture', record);
   const prompt = engine.prompt(record, 'do not send', () => {});
   await preparing;
@@ -108,6 +110,7 @@ test('cancel during credential preparation never starts a model turn or fallback
   release();
   assert.equal((await prompt).stopReason, 'cancelled');
   assert.equal(prompts, 0);
+  assert.equal(cleared, true);
   assert.deepEqual(selected, []);
   assert.equal(record.busy, false);
 });
@@ -332,4 +335,22 @@ test('native profile sharing includes only an identifier, never native credentia
     { 'claude-subscription': { type: 'native', accountId: 'profile-1' } });
   assert.deepEqual(sharedCredentials({ 'claude-subscription': { type: 'native', accountId: '../outside' } }), {});
   assert.deepEqual(sharedAccounts({ 'claude-subscription': [{ id: 'fixture', label: 'Invalid', credential: { type: 'native', accountId: '../outside' } }] }), { 'claude-subscription': [] });
+});
+
+test('remote recovery combines late continuation operations in submission order', async t => {
+  const directory = await temporary(t);
+  const service = createDefaultAgentService({ cwd: directory, directory });
+  await service.configure({ workspace: 'fixture', unlockKey: randomBytes(32).toString('base64'), config: {}, credentials: {}, revision: '1' });
+  const engine = await service.engine();
+  engine.handle = async () => ({});
+  engine.create = async () => ({});
+  engine.configuration = () => ({});
+  for (const [id, startedAt, content] of [
+    ['ffffffff-ffff-4fff-afff-ffffffffffff', 1, 'before '],
+    ['aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa', 2, 'after'],
+  ]) await writePrivateJSON(join(directory, `run-${id}.json`), {
+    sessionID: 'native', startedAt, snapshot: { runID: 'logical-run', content, error: null },
+  });
+  const loaded = await service.invoke({ method: 'session/load', params: { sessionId: 'native' } });
+  assert.deepEqual(loaded.result._meta.recoveredRuns, [{ runID: 'logical-run', content: 'before after', error: null }]);
 });

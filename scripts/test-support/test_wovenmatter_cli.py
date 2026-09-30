@@ -21,6 +21,7 @@ class BundledCLITests(unittest.TestCase):
             response = json.loads(result.stdout)
             self.assertNotEqual(result.returncode, 0)
             self.assertFalse(response["success"])
+            self.assertEqual(response["code"], "transport_error")
             self.assertEqual(len(response["requestID"]), 36)
 
     def invoke(self, arguments, response, environment=None):
@@ -88,6 +89,13 @@ class BundledCLITests(unittest.TestCase):
                 {"success": True, "silent": False}, {"WOVENMATTER_NOTE_ID": "note-fixture"})
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(request["arguments"], ["notes", "set-html", "--html", "<p>Fixture body</p>", "--note-id", "note-fixture"])
+
+    def test_attached_note_does_not_override_explicit_read_or_folder_discovery(self):
+        for args in [["notes", "folders"], ["notes", "read", "explicit-note"]]:
+            result, request = self.invoke(args, {"success": True, "silent": False},
+                {"WOVENMATTER_NOTE_ID": "attached-note"})
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(request["arguments"], args)
 
     def test_silent_capacity_response_and_explicit_errors(self):
         result, _ = self.invoke(["sessions", "send", "destination", "--text", "Fixture"],

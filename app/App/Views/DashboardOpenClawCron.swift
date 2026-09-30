@@ -294,6 +294,11 @@ struct OpenClawCronSurface: View {
                             }.padding(.top, 5)
                         }
                     }
+                    if model.openClawCronHasOlderRuns.contains(ApplicationModel.openClawCronHistoryKey(job)) {
+                        Button("Load older runs") { Task { await model.loadOlderOpenClawCronRuns(job: job) } }
+                            .buttonStyle(DashboardQuietButtonStyle())
+                            .disabled(model.loadingOlderOpenClawCronJobs.contains(ApplicationModel.openClawCronHistoryKey(job)))
+                    }
                 }.padding(.top, 6)
             }
             if job.archiveState == .active {

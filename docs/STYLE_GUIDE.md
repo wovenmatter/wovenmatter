@@ -13,11 +13,22 @@ when an intentional design change is accepted.
   numeric displays.
 - **Composer selectors:** use title-case popout headings, such as `Thinking Level`,
   without all-caps styling or expanded letter spacing. Keep saved-default actions
-  out of the conversation selector popouts.
+  out of the conversation selector popouts. Composer model buttons show only the
+  model name and version; connection attribution belongs in the model popout.
+  Permission buttons use the fullest label that fits, then explicit shorter
+  labels, then an icon. Never ellipsize these labels or collapse distinct modes
+  such as Auto and Auto Accept into the same text. Popouts retain full labels
+  and descriptions.
 - **Components:** reuse the shared cards, selectors, search fields, and button
   styles in `DashboardDesign.swift`, and the page/row patterns in
   [SettingsComponents.swift](../app/App/Views/SettingsComponents.swift).
   Preserve intentional differences such as borderless Usage sections.
+- **Built-in SDK settings:** place SDK management directly below the workspace
+  scope controls. Each workspace has a disclosure row, collapsed by default,
+  containing Pi SDK and Claude SDK versions and explicit check/update actions.
+  All workspaces lists the local location and configured remote workspaces; an
+  individual scope shows only that location. Keep progress and errors with their
+  workspace and preserve operation state when a row is collapsed.
 - **Icons:** use the existing `DashboardLucideIcon` glyphs and bundled harness
   logos, matching nearby icon sizes and stroke weights.
 - **Calendar:** keep the four-item legend below the selected-day list. Use the

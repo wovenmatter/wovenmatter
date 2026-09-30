@@ -8,6 +8,119 @@ import WovenMatterCore
 
 @Suite("Workspace history and bounded versions")
 struct WorkspaceHistoryTests {
+  @Test func legacyCompletedStreamsRemainSearchableAfterMigration() async throws {
+    let (db, url) = try await database()
+    defer { try? FileManager.default.removeItem(at: url) }
+    let session = try await db.createLocalACPSession(runtimeKind: .codex, title: "Legacy", ownerDeviceID: UUID())
+    let run = try await db.beginLocalACPRun(conversationID: session, content: "Prompt")
+    try await db.appendLocalACPAssistantChunk(runID: run.runID, chunk: "legacy violet harbor")
+    try await db.completeLocalACPRun(runID: run.runID)
+    try await db.write { connection in
+      try connection.transaction {
+      // Old triggers stored deltas; their terminal event normally had no content.
+        try connection.toolsExecuteUnlocked("UPDATE workspace_history_events SET payload=json_set(payload,'$.content','','$.contentMode','append') WHERE run_id=? AND kind='message.update'", [run.runID])
+        try connection.toolsExecuteUnlocked("INSERT INTO workspace_history_events(id,conversation_id,run_id,harness,kind,payload) VALUES(?,?,?,?,?,?)",
+          [UUID().uuidString, session, run.runID, "codex", "message.update",
+           try connection.toolsJSON(["id": run.assistantMessageID, "status": "streaming", "content": "legacy violet harbor", "contentMode": "append"])])
+        try connection.toolsExecuteUnlocked("DELETE FROM workspace_history_schema WHERE version=2")
+      }
+    }
+    let reopened = try await WorkspaceDatabase(url: url.appending(path: "workspace.sqlite"))
+    let matches = rows(try await reopened.queryHistory(.init(command: "search", search: "legacy violet harbor", conversationID: session)))
+    #expect(matches.contains { $0.objectValue?["kind"]?.stringValue == "message.snapshot" })
+    #expect(rows(try await reopened.queryHistory(.init(command: "events", runID: run.runID, kind: "message.update")))
+      .allSatisfy { $0.objectValue?["payload"]?.stringValue?.contains("streaming") == false })
+  }
+
+  @Test func legacyEndpointScrubbingCrossesIdentityPageBoundary() async throws {
+    let url = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: url) }
+    let endpoint = "/private/tmp/wmtools-" + String(repeating: "a", count: 32)
+      + "/" + String(repeating: "b", count: 32) + ".sock"
+    do {
+      let database = try await WorkspaceDatabase(url: url.appending(path: "workspace.sqlite"))
+      try await database.write { connection in
+        try connection.transaction {
+          try connection.executeUnlocked("DELETE FROM workspace_history_schema WHERE version=2")
+          for index in 0..<501 {
+            try connection.toolsExecuteUnlocked("INSERT INTO workspace_history_events(id,harness,kind,payload) VALUES(?,?,?,?)",
+              ["legacy-page-\(index)", "pi", "wire.in", "retained-marker-\(index) " + endpoint])
+          }
+        }
+      }
+    }
+    let reopened = try await WorkspaceDatabase(url: url.appending(path: "workspace.sqlite"))
+    let counts = try await reopened.read { connection in
+      try connection.historyRowsUnlocked("SELECT count(*) AS total,sum(instr(payload,?)>0) AS leaked,sum(instr(payload,'[Woven Matter session tool endpoint]')>0) AS scrubbed FROM workspace_history_events WHERE id LIKE 'legacy-page-%'", values: [endpoint])
+    }
+    #expect(counts.first?.objectValue?["total"]?.intValue == 501)
+    #expect(counts.first?.objectValue?["leaked"]?.intValue == 0)
+    #expect(counts.first?.objectValue?["scrubbed"]?.intValue == 501)
+    #expect(!rows(try await reopened.queryHistory(.init(command: "search", search: "retained-marker-500"))).isEmpty)
+  }
+
+  @Test func uppercaseSessionEndpointsAreRedacted() {
+    let owner = String(repeating: "A", count: 32)
+    let endpoint = String(repeating: "B", count: 32)
+    let local = "/private/tmp/wmtools-\(owner)/\(endpoint).sock"
+    let remote = "/home/.wmt/\(owner)/\(endpoint)/rpc.sock"
+    let redacted = WorkspaceHistoryPrivacy.redactingToolEndpoints("local=\(local) remote=\(remote)")
+    #expect(!redacted.contains(local) && !redacted.contains(remote))
+    #expect(redacted.components(separatedBy: "[Woven Matter session tool endpoint]").count == 3)
+  }
+
+  @Test func terminalStreamSnapshotsAreSearchableWithoutPerChunkHistory() async throws {
+    let (db, url) = try await database()
+    defer { try? FileManager.default.removeItem(at: url) }
+    let session = try await db.createLocalACPSession(runtimeKind: .codex, title: "Stream", ownerDeviceID: UUID())
+    let run = try await db.beginLocalACPRun(conversationID: session, content: "Prompt")
+    for chunk in ["violet ", "harbor", " final"] {
+      try await db.appendLocalACPAssistantChunk(runID: run.runID, chunk: chunk)
+    }
+    try await db.completeLocalACPRun(runID: run.runID)
+    let updates = rows(try await db.queryHistory(.init(command: "events", runID: run.runID,
+      kind: "message.update", limit: 20)))
+    #expect(updates.count == 1)
+    let matches = rows(try await db.queryHistory(.init(command: "search", search: "violet harbor",
+      conversationID: session)))
+    #expect(matches.contains { $0.objectValue?["kind"]?.stringValue == "message.update" })
+  }
+
+  @Test func legacyCLIContentIsScrubbedBeforeSearchRebuild() async throws {
+    let url = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: url) }
+    let secret = "legacy-secret-" + UUID().uuidString.lowercased()
+    let endpoint = "/private/tmp/wmtools-" + String(repeating: "A", count: 32)
+      + "/" + String(repeating: "B", count: 32) + ".sock"
+    let endpointEventID = UUID().uuidString.lowercased()
+    do {
+      let db = try await WorkspaceDatabase(url: url.appending(path: "workspace.sqlite"))
+      try await db.write { connection in
+        try connection.transaction {
+          try connection.toolsExecuteUnlocked("DELETE FROM workspace_history_schema WHERE version=2")
+          try connection.toolsExecuteUnlocked("INSERT INTO workspace_history_events(id,harness,kind,payload) VALUES(?,?,?,?)",
+            [UUID().uuidString.lowercased(), "wovenmatter", "cli.response", secret + " " + endpoint])
+          try connection.toolsExecuteUnlocked("INSERT INTO workspace_history_events(id,harness,kind,payload) VALUES(?,?,?,?)",
+            [UUID().uuidString.lowercased(), "woven-history", "cli.query", secret])
+          try connection.toolsExecuteUnlocked("INSERT INTO workspace_history_events(id,harness,kind,payload) VALUES(?,?,?,?)",
+            [endpointEventID, "pi", "wire.in", endpoint])
+        }
+      }
+    }
+    let reopened = try await WorkspaceDatabase(url: url.appending(path: "workspace.sqlite"))
+    let events = rows(try await reopened.queryHistory(.init(command: "events", harness: "wovenmatter",
+      kind: "cli.response")))
+    #expect(events.last?.objectValue?["payload"]?.stringValue == #"{"legacyRedacted":true}"#)
+    let queries = rows(try await reopened.queryHistory(.init(command: "events", harness: "woven-history",
+      kind: "cli.query")))
+    #expect(queries.first?.objectValue?["payload"]?.stringValue == #"{"legacyRedacted":true}"#)
+    #expect(rows(try await reopened.queryHistory(.init(command: "search", search: secret))).isEmpty)
+    let endpointEvent = rows(try await reopened.queryHistory(.init(command: "event", id: endpointEventID))).first
+    #expect(endpointEvent?.objectValue?["payload"]?.stringValue == "[Woven Matter session tool endpoint]")
+  }
+
   @Test func nativeHTTPHistoryIsAdoptedOnlyByTheMatchingWorkspaceImport() async throws {
     let (db, url) = try await database()
     defer { try? FileManager.default.removeItem(at: url) }
@@ -161,9 +274,12 @@ struct WorkspaceHistoryTests {
     let restored = try await db.restoreNoteAssetVersion(
       noteID: note, versionID: original.id, expectedRevision: try #require(current.revision))
     #expect(restored.document?.plainText == NoteDocument.decode(original.content).plainText)
+    var revision = try #require(restored.revision)
     for n in 0..<65 {
-      _ = try await db.applyNoteEdits(
-        .init(command: .apply, noteID: note, operations: [.setTitle("Version \(n)")]))
+      let response = try await db.applyNoteEdits(
+        .init(command: .apply, noteID: note, expectedRevision: revision,
+          operations: [.setTitle("Version \(n)")]))
+      revision = try #require(response.revision)
     }
     #expect(try await db.noteAssetVersions(id: note).count == 50)
     #expect(try await db.readNoteForEditing(id: note).title == "Version 64")
@@ -183,11 +299,15 @@ struct WorkspaceHistoryTests {
       try await db.checkpointNote(id: note)
       #expect(try await db.noteAssetVersions(id: note).count == 2)
       if kind == .html {
+        let revision = try await #require(db.readNoteForEditing(id: note).revision)
         _ = try await db.applyNoteEdits(
-          .init(command: .apply, noteID: note, operations: [.setHTML("<h1>Changed</h1>")]))
+          .init(command: .apply, noteID: note, expectedRevision: revision,
+            operations: [.setHTML("<h1>Changed</h1>")]))
       } else {
+        let revision = try await #require(db.readNoteForEditing(id: note).revision)
         _ = try await db.applyNoteEdits(
-          .init(command: .apply, noteID: note, operations: [.setTitle("Agent title")]))
+          .init(command: .apply, noteID: note, expectedRevision: revision,
+            operations: [.setTitle("Agent title")]))
       }
       #expect(try await db.noteAssetVersions(id: note).count == 3)
     }
@@ -213,7 +333,7 @@ struct WorkspaceHistoryTests {
     defer { try? FileManager.default.removeItem(at: url) }
     let note = try await db.createNote(folderID: nil, title: "Large HTML", kind: .html)
     var previous = try await #require(db.readNoteForEditing(id: note).revision)
-    let body = String(repeating: "x", count: 1024 * 1024)
+    let body = String(repeating: "x", count: 900 * 1024)
     for n in 0..<23 {
       let response = try await db.applyNoteEdits(
         .init(

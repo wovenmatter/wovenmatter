@@ -9,18 +9,24 @@ import shutil
 import socket
 import sys
 import threading
+import time
 import uuid
 
 REQUEST_LIMIT = 4 * 1024 * 1024
-RESPONSE_LIMIT = 32 * 1024 * 1024
+RESPONSE_LIMIT = 1024 * 1024
 # The Swift forwarder has a 55s total deadline; leave time for SSH replies.
 RELAY_TIMEOUT = 75
 CLI_TIMEOUT = 90
 
 
-def receive_all(connection, maximum):
+def receive_all(connection, maximum, timeout=RELAY_TIMEOUT):
     chunks, size = [], 0
+    deadline = time.monotonic() + timeout
     while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("Tool message timed out.")
+        connection.settimeout(remaining)
         chunk = connection.recv(min(65536, maximum + 1 - size))
         if not chunk:
             return b"".join(chunks)
@@ -30,7 +36,7 @@ def receive_all(connection, maximum):
         chunks.append(chunk)
 
 
-def option_indices(arguments):
+def option_indices(arguments, positional=None):
     # Values may themselves look like flags. Only inspect argument positions,
     # never a literal message or document value, for CLI-side transformations.
     boolean_flags = {"all-workspace", "independent", "no-notify", "paused", "all-day", "timed", "no-repeat", "regular-event", "json", "header", "help"}
@@ -40,6 +46,8 @@ def option_indices(arguments):
     while index < len(arguments):
         item = arguments[index]
         if not item.startswith("--"):
+            if positional is not None and item != "-h":
+                positional.append(item)
             index += 1
             continue
         key = item[2:]
@@ -51,8 +59,11 @@ def option_indices(arguments):
 
 
 def build_request(arguments, environment):
+    if len(arguments) > 1024:
+        raise ValueError("A tool command must contain at most 1,024 arguments.")
     args = list(arguments)
-    options = option_indices(args)
+    positional = []
+    options = option_indices(args, positional)
     if "file" in options:
         index = options["file"]
         if args[:2] not in (["notes", "apply"], ["notes", "set-html"]) or index + 1 >= len(args):
@@ -62,7 +73,9 @@ def build_request(arguments, environment):
         if len(data) > 3 * 1024 * 1024:
             raise ValueError("Input files must be at most 3 MiB.")
         args[index:index + 2] = ["--html" if args[1] == "set-html" else "--json", data.decode("utf-8")]
-    if len(args) > 1 and args[0] == "notes" and args[1] not in ("list", "create", "versions", "version", "restore", "help"):
+    if (len(args) > 1 and args[0] == "notes"
+            and args[1] not in ("list", "folders", "create", "versions", "version", "restore", "help")
+            and not (args[1] == "read" and positional)):
         if "note-id" not in options and environment.get("WOVENMATTER_NOTE_ID"):
             args += ["--note-id", environment["WOVENMATTER_NOTE_ID"]]
     request_id = str(uuid.uuid4())
@@ -86,16 +99,33 @@ def run_cli(arguments):
             connection.connect(endpoint)
             connection.sendall(request)
             connection.shutdown(socket.SHUT_WR)
-            response = receive_all(connection, RESPONSE_LIMIT)
+            response = receive_all(connection, RESPONSE_LIMIT, timeout=CLI_TIMEOUT)
         result = json.loads(response)
         if not result.get("silent", False):
             sys.stdout.buffer.write(response + b"\n")
         return 0 if result.get("success", False) else 1
-    except (OSError, ValueError) as error:
+    except (OSError, ValueError, RecursionError) as error:
         # A lost reply is not permission to create a new mutation identity.
         print(json.dumps({"success": False, "error": str(error), "silent": False,
-                          "requestID": json.loads(request)["requestID"]}))
+                          "code": "transport_error", "requestID": json.loads(request)["requestID"]}))
         return 1
+
+
+def reject_busy(connection):
+    # Match the local endpoint: refuse before dispatch, then drain the caller's
+    # request so closing unread input does not turn the busy reply into EPIPE.
+    deadline = time.monotonic() + 0.25
+    try:
+        connection.settimeout(0.25)
+        connection.sendall(json.dumps({"success": False, "silent": False,
+                                      "error": "The tool service is busy. Retry later.",
+                                      "code": "busy"}).encode())
+        connection.shutdown(socket.SHUT_WR)
+        receive_all(connection, REQUEST_LIMIT, timeout=deadline - time.monotonic())
+    except (OSError, ValueError):
+        pass
+    finally:
+        connection.close()
 
 
 def run_relay(directory):
@@ -148,22 +178,30 @@ def run_relay(directory):
     def forward(connection):
         identity = str(uuid.uuid4())
         request_id = None
+        error_code = "invalid_request"
         try:
             connection.settimeout(RELAY_TIMEOUT)
             data = receive_all(connection, REQUEST_LIMIT)
             request = json.loads(data)
             if not isinstance(request, dict):
                 raise ValueError("A tool request must be a JSON object.")
-            request_id = request.get("requestID")
+            raw_request_id = request.get("requestID")
+            if not isinstance(raw_request_id, str):
+                raise ValueError("A tool request requires a UUID requestID.")
+            try:
+                request_id = str(uuid.UUID(raw_request_id))
+            except ValueError:
+                raise ValueError("A tool request requires a UUID requestID.") from None
+            error_code = "transport_error"
             waiter = queue.Queue(maxsize=1)
             with lock:
                 pending[identity] = waiter
             write_packet({"id": identity, "payload": base64.b64encode(data).decode("ascii")})
             response = waiter.get(timeout=RELAY_TIMEOUT)
             connection.sendall(response)
-        except (OSError, ValueError, queue.Empty) as error:
+        except (OSError, ValueError, RecursionError, queue.Empty) as error:
             try:
-                connection.sendall(json.dumps({"success": False, "error": str(error) or "The tool relay timed out.", "silent": False, "requestID": request_id}).encode())
+                connection.sendall(json.dumps({"success": False, "error": str(error) or "The tool relay timed out.", "silent": False, "code": error_code, "requestID": request_id}).encode())
             except OSError:
                 pass
         finally:
@@ -186,7 +224,7 @@ def run_relay(directory):
                 except socket.timeout:
                     continue
                 if not capacity.acquire(blocking=False):
-                    connection.close()
+                    reject_busy(connection)
                     continue
                 with lock:
                     connections.add(connection)

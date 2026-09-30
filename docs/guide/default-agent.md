@@ -31,6 +31,17 @@ are reused. Changes synchronize to connected workspaces automatically. **Apply t
 New workspaces inherit these settings automatically. An offline workspace gets
 the current settings when it reconnects.
 
+SDK versions appear below **Settings for**. Expand a workspace to see its
+**Pi SDK** and **Claude SDK** versions. Use **Check for updates**, then **Update**
+for the SDK you want to update. **All workspaces** lists each location; choosing
+one workspace limits the list to that location. Collapsing a workspace hides its
+SDK details without discarding update progress.
+
+SDK installations belong to each location, independently of inherited provider
+preferences. Updating the local SDK does not update remote workspaces or the
+separately installed Pi and Claude Code CLIs. Older remote workspace services
+need a workspace software update before they can expose SDK management.
+
 Fallback applies when a connection loses authentication or exhausts its available
 usage. Woven Matter tries the preferred account and its ordered backups first,
 then your enabled fallback models in order, updates the
