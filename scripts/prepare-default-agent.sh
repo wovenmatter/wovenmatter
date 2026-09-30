@@ -44,6 +44,11 @@ fi
 mkdir -p "$output/node_modules"
 rsync -a --delete "$dependency_root/node_modules/" "$output/node_modules/"
 
+# The SDK imports pi-tui's JavaScript, but this headless integration never uses
+# its optional terminal clipboard/modifier helpers. Do not ship native binaries
+# for unused macOS, Linux, or Windows terminal interfaces.
+rm -rf "$output/node_modules/@earendil-works/pi-tui/native"
+
 claude_binary="$output/node_modules/@anthropic-ai/claude-agent-sdk-darwin-$node_arch/claude"
 test -x "$claude_binary"
 # Preserve Anthropic's signed, unmodified runtime. Never re-sign or patch it.
@@ -55,5 +60,7 @@ cp "$cache/LICENSE" "$output/bin/NODE-LICENSE"
 mkdir -p "$output/lib/npm"
 rsync -a --delete "$cache/lib/node_modules/npm/" "$output/lib/npm/"
 if [ "${CODE_SIGNING_ALLOWED:-NO}" = YES ] && [ -n "${EXPANDED_CODE_SIGN_IDENTITY:-}" ]; then
-  codesign --force --sign "$EXPANDED_CODE_SIGN_IDENTITY" --options runtime --entitlements "$repo_root/default-agent/node-entitlements.plist" "$output/bin/node"
+  timestamp=--timestamp=none
+  if [ "${CONFIGURATION:-Debug}" = Release ]; then timestamp=--timestamp; fi
+  codesign --force --sign "$EXPANDED_CODE_SIGN_IDENTITY" --options runtime "$timestamp" --entitlements "$repo_root/default-agent/node-entitlements.plist" "$output/bin/node"
 fi

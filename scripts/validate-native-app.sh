@@ -28,6 +28,8 @@ resources="${app}/Contents/Resources"
 test -x "${resources}/default-agent/bin/node"
 test -f "${resources}/default-agent/src/main.mjs"
 test -f "${resources}/default-agent/node_modules/@earendil-works/pi-coding-agent/package.json"
+test -f "${resources}/default-agent/node_modules/@earendil-works/pi-tui/dist/index.js"
+test ! -e "${resources}/default-agent/node_modules/@earendil-works/pi-tui/native"
 test -f "${resources}/default-agent/node_modules/@anthropic-ai/claude-agent-sdk/package.json"
 claude_arch="$(uname -m)"
 if [ "$claude_arch" = x86_64 ]; then claude_arch=x64; fi
