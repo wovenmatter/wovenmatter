@@ -166,6 +166,10 @@ test('remote service owns an accepted run and completion can be recovered withou
   let page;
   do { await new Promise(resolve => setTimeout(resolve, 5)); page = await service.poll(operationID); } while (!page.done);
   assert.equal(page.updates[0].content.text, 'finished remotely');
+  // Completed runs use their durable record, without retaining every streamed
+  // update in the service for the rest of its lifetime.
+  assert.equal(page.snapshot.runID, operationID);
+  assert.equal((await service.poll(operationID, 1)).updates.length, 0);
   const recovered = createDefaultAgentService({ cwd: directory, directory });
   const restored = await recovered.poll(operationID);
   assert.equal(restored.done, true);

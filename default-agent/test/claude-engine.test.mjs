@@ -10,7 +10,7 @@ import { ClaudeRuntime } from '../src/claude-runtime.mjs';
 import { createDefaultAgentService } from '../src/service.mjs';
 import { PermissionRequests, RemotePermissionRequests } from '../src/permissions.mjs';
 
-async function fixture(t, { credentials = {}, config = {}, requestPermission } = {}) {
+async function fixture(t, { credentials = {}, credentialAccounts = {}, config = {}, requestPermission } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'woven-claude-engine-'));
   const claude = {
     checks: 0,
@@ -19,7 +19,7 @@ async function fixture(t, { credentials = {}, config = {}, requestPermission } =
     async status() { this.checks++; return { connected: true }; },
     sdkQuery: async () => { throw new Error('A fixture must never call the Claude runtime.'); },
   };
-  const options = { cwd: root, directory: root, claude, credentials, requestPermission,
+  const options = { cwd: root, directory: root, claude, credentials, credentialAccounts, requestPermission,
     config: { providers: ['claude-subscription'], defaultModel: 'claude-subscription/sonnet', ...config } };
   const engine = await new DefaultAgentEngine(options).initialize();
   t.after(async () => {
@@ -64,6 +64,79 @@ test('ordinary Claude submissions reuse the selected model without spawning nati
   await engine.prompt(record, 'Second', () => {});
   assert.equal(claude.checks, beforeChecks);
   assert.equal(record.manager.getEntries().filter(entry => entry.type === 'model_change').length, beforeChanges);
+});
+
+test('real ModelRuntime uses ambient Claude auth while native profiles retain account routing', async t => {
+  const first = { type: 'native', accountId: 'profile-first' };
+  const second = { type: 'native', accountId: 'profile-second' };
+  const accounts = [
+    { id: 'first', label: 'First', credential: first },
+    { id: 'second', label: 'Second', credential: second },
+  ];
+  const { engine, claude, root } = await fixture(t, {
+    credentials: { 'claude-subscription': first },
+    credentialAccounts: { 'claude-subscription': accounts },
+  });
+  // Use the real native profile context without starting a native process.
+  const profiles = new ClaudeRuntime(root);
+  claude.withProfile = profiles.withProfile.bind(profiles);
+  const seenProfiles = [];
+  const synthetic = syntheticAssistant([{ type: 'text', text: 'Fixture reply' }]);
+  const stream = (...args) => {
+    seenProfiles.push(profiles.profileDirectory());
+    return synthetic(...args);
+  };
+  const provider = engine.runtime.getProvider('claude-subscription');
+  engine.runtime.registerNativeProvider({ ...provider, stream, streamSimple: stream });
+  await engine.runtime.refresh({ allowNetwork: false });
+  const selected = engine.resolveModel('claude-subscription/sonnet');
+  const auth = await engine.runtime.getAuth(selected);
+  assert.equal(auth.source, 'Claude runtime');
+  assert.equal(auth.auth.apiKey, undefined);
+  assert.equal(auth.auth.headers, undefined);
+  assert.deepEqual(await engine.runtime.models.getAuth(selected), { auth: {}, source: 'Claude runtime' });
+  assert.deepEqual(await engine.credentials.read('claude-subscription'), first);
+  assert.deepEqual((await engine.credentials.candidates('claude-subscription')).map(value => value.credential), [first, second]);
+
+  // Keep Pi's real stream/auth machinery; replace only the provider transport.
+  const checks = claude.checks;
+  const record = await engine.create();
+  assert.equal((await engine.prompt(record, 'First account', () => {})).stopReason, 'end_turn');
+  assert.equal(record.session.messages.at(-1).content[0].text, 'Fixture reply');
+  await engine.apply({ credentials: { 'claude-subscription': second },
+    credentialAccounts: { 'claude-subscription': [accounts[1], accounts[0]] } });
+  assert.equal((await engine.prompt(record, 'Second account', () => {})).stopReason, 'end_turn');
+  assert.deepEqual(seenProfiles, [join(root, 'claude-accounts', 'profile-first'), join(root, 'claude-accounts', 'profile-second')]);
+  assert.equal(claude.checks, checks);
+  assert.deepEqual(await engine.credentials.read('claude-subscription'), second);
+  const controller = new AbortController(); controller.abort();
+  await assert.rejects(engine.runtime.getAuth(selected, { signal: controller.signal }), { name: 'AbortError' });
+});
+
+test('Claude profile adaptation preserves unrelated provider credentials and rejects unknown types', async t => {
+  const key = { type: 'api_key', key: 'fixture-key' };
+  const oauth = { type: 'oauth', access: 'fixture-access', refresh: 'fixture-refresh', expires: Date.now() + 3600000 };
+  const unknown = { type: 'native', accountId: 'not-an-openrouter-credential' };
+  const { engine } = await fixture(t, { credentials: {
+    'claude-subscription': { type: 'native', accountId: 'fixture-profile' },
+    openai: key, xai: oauth, openrouter: unknown,
+  } });
+  const store = engine.credentials.forModelRuntime();
+  assert.equal(await store.read('claude-subscription'), undefined);
+  assert.deepEqual(await store.read('openai'), key);
+  assert.deepEqual(await store.read('xai'), oauth);
+  assert.deepEqual(await store.read('openrouter'), unknown);
+  assert.equal((await engine.runtime.getAuth('openai')).auth.apiKey, key.key);
+  assert.equal(await engine.runtime.getAuth('openrouter'), undefined);
+  assert.equal((await store.list()).some(value => value.providerId === 'claude-subscription'), false);
+  assert.equal((await engine.credentials.list()).some(value => value.providerId === 'claude-subscription'), true);
+  await store.modify('openai', current => ({ ...current, key: 'fixture-replacement' }));
+  assert.equal((await engine.credentials.read('openai')).key, 'fixture-replacement');
+  await store.delete('openai');
+  assert.equal(await engine.credentials.read('openai'), undefined);
+  // A wrong credential type on Claude is not treated as native profile metadata.
+  await engine.apply({ credentials: { 'claude-subscription': oauth } });
+  assert.equal(await engine.runtime.getAuth('claude-subscription'), undefined);
 });
 
 test('an Exa key and disabled model credentials do not hide the native Claude default', async t => {
