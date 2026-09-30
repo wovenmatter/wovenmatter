@@ -49,6 +49,12 @@ rsync -a --delete "$dependency_root/node_modules/" "$output/node_modules/"
 # for unused macOS, Linux, or Windows terminal interfaces.
 rm -rf "$output/node_modules/@earendil-works/pi-tui/native"
 
+# Chord's optional plugin compiler uses esbuild, but the Built-in agent disables
+# Pi extensions and uses only Chord's runtime APIs. Keep Chord and omit the
+# unused compiler, its platform executables, and its CLI link from the app.
+rm -rf "$output/node_modules/esbuild" "$output/node_modules/@esbuild"
+rm -f "$output/node_modules/.bin/esbuild"
+
 claude_binary="$output/node_modules/@anthropic-ai/claude-agent-sdk-darwin-$node_arch/claude"
 test -x "$claude_binary"
 # Preserve Anthropic's signed, unmodified runtime. Never re-sign or patch it.

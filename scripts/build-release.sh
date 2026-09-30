@@ -67,6 +67,7 @@ xcodebuild -quiet \
 scripts/validate-native-app.sh "$app"
 codesign --verify --deep --strict --verbose=2 "$app"
 codesign -dvv "$app" 2>&1 | grep -F 'Authority=Developer ID Application:' >/dev/null
+python3 scripts/validate-release-code.py "$app"
 
 notarize() {
   local artifact="$1"
