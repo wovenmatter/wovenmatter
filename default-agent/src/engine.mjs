@@ -8,6 +8,7 @@ import { providerFetch } from './transport.mjs';
 import { registerLocalServers } from './local-servers.mjs';
 import { ClaudeRuntime, isClaude } from './claude-runtime.mjs';
 import { registerClaudeProviders } from './claude-provider.mjs';
+import { modelOption } from './model-presentation.mjs';
 
 const builtInInstructions = 'You are Built-in in Woven Matter. Work in the supplied agent workspace. Use the wovenmatter CLI and workspace instructions for notes and databases. Use web_search and web_read for current information and cite source URLs. If search is not configured, direct the user to Settings → Connections. Never claim a tool succeeded when it failed.';
 
@@ -78,13 +79,25 @@ export class DefaultAgentEngine {
     return this.runtime.getModels().filter(m => this.config.providers.includes(m.provider)).map(m => ({ id: modelRef(m), name: m.name, provider: m.provider, providerName: this.providerName(m.provider) }));
   }
   providerName(id) { return providerNames[id] ?? this.config.customServers.find(s => s.id === id)?.url ?? id; }
-  async status() {
-    const subscription = await this.claude.status((await this.credentials.read('claude-subscription'))?.accountId);
+  async status({ signal } = {}) {
+    signal?.throwIfAborted();
+    const subscription = await this.claude.status((await this.credentials.read('claude-subscription'))?.accountId, { signal });
+    signal?.throwIfAborted();
     if (subscription.connected || await this.credentials.read('anthropic')) {
-      try { const discover = async () => this.claude.discover(subscription.connected ? undefined : (await this.credentials.read('anthropic'))?.key); if (this.claude.withProfile) await this.claude.withProfile((await this.credentials.read('claude-subscription'))?.accountId, discover); else await discover(); registerClaudeProviders(this.runtime, this.claude, this.credentials); } catch { /* Keep the bundled aliases available when discovery is offline. */ }
+      try {
+        const discover = async () => this.claude.discover(subscription.connected ? undefined : (await this.credentials.read('anthropic'))?.key, { signal });
+        if (this.claude.withProfile) await this.claude.withProfile((await this.credentials.read('claude-subscription'))?.accountId, discover);
+        else await discover();
+        registerClaudeProviders(this.runtime, this.claude, this.credentials);
+      } catch {
+        signal?.throwIfAborted(); // Cancellation is not an offline inventory fallback.
+        // Keep the bundled aliases available when discovery is offline.
+      }
     }
+    signal?.throwIfAborted();
     return { providers: await Promise.all([...providers, ...this.config.customServers.map(s => s.id)].map(async id => { if (id === 'claude-subscription') return { id, name: this.providerName(id), ...subscription }; const c = await this.credentials.read(id); const expired = c?.type === 'oauth' && c.expires <= Date.now(); return { id, name: this.providerName(id), connected: Boolean(c) && !expired, state: !c || expired ? 'sign_in_required' : 'credentials_present', detail: expired ? 'Access expired. Reconnect Woven Matter or sign in.' : c ? 'Credentials stored; provider access has not been verified.' : 'No credentials stored.' }; })), models: this.catalog(), searchConfigured: Boolean((await this.credentials.read('exa'))?.key) };
   }
+
   modelOptions() {
     const all = this.catalog();
     const ids = [...this.config.models];
@@ -106,7 +119,7 @@ export class DefaultAgentEngine {
     const levels = this.thinkingLevels(record);
     const thinking = record.session.thinkingLevel;
     return { configOptions: [{ id: 'model', name: 'Model', category: 'model', type: 'select', currentValue: record.selected,
-      options: this.modelOptions().map(m => ({ value: m.id, name: `${m.name} · ${m.providerName}` })) },
+      options: this.modelOptions().map(modelOption) },
       ...(levels.length > 1 ? [{ id: 'thinking', name: 'Thinking Level', category: 'thought_level', type: 'select', currentValue: thinking,
         options: levels.map(value => ({ value, name: value[0].toUpperCase() + value.slice(1) })) }] : []),
       { id: 'permission_mode', name: 'Permissions', type: 'select', currentValue: record.permission ?? 'normal', options: [
@@ -232,12 +245,17 @@ export class DefaultAgentEngine {
     if (record.busy) throw new DefaultAgentError('This Built-in session already has an active turn.');
     this.normalizeSelection(record);
     record.busy = true;
+    let ready;
+    record.steeringReady = new Promise(resolve => { ready = resolve; });
+    let finished;
+    record.promptFinished = new Promise(resolve => { finished = resolve; });
     const controller = new AbortController();
     record.promptController = controller;
     record.requestPermission = requestPermission;
     const beforeMessages = [...record.session.messages];
     const beforeLeaf = record.manager.getLeafId();
     let visible = false;
+    let steered = false;
     const usage = { inputTokens: 0, outputTokens: 0, cachedReadTokens: 0, cachedWriteTokens: 0 };
     let messageSequence = 0;
     const unsubscribe = record.session.subscribe(event => {
@@ -268,6 +286,9 @@ export class DefaultAgentEngine {
         if (!this.config.providers.includes(reference.split('/')[0])) { reason = 'The previous connection is disabled in Settings → Built-in Agent.'; continue; }
         record.httpAccessFailure = undefined;
         try {
+          const withAccount = action => this.credentials.runWithAccount(provider, account, () =>
+            provider === 'claude-subscription' && this.claude.withProfile
+              ? this.claude.withProfile(account.credential?.accountId, action) : action());
           const run = async () => {
           const model = this.resolveModel(reference);
           if (!model) throw new Error('Model is no longer available. Select a model in Settings → Built-in Agent.');
@@ -290,18 +311,54 @@ export class DefaultAgentEngine {
           this.persistOptions(record);
           const configuration = this.configuration(record, fallbackReason);
           emit({ sessionUpdate: 'config_option_update', ...configuration, _meta: { ...configuration._meta, engineUsed: true } });
-          await record.session.prompt(text);
+          const continuations = [];
+          const acceptSteer = input => new Promise((resolve, reject) => {
+            controller.signal.throwIfAborted();
+            let accepted = false;
+            const task = withAccount(() => record.session.prompt(input, {
+              streamingBehavior: 'steer',
+              preflightResult: ok => {
+                if (ok) {
+                  // Stop can arrive while extension preflight is suspended.
+                  // Prevent its late completion from starting a fresh loop.
+                  if (controller.signal.aborted) { record.session.clearQueue(); controller.signal.throwIfAborted(); }
+                  accepted = true; steered = true; resolve({ outcome: 'injected' });
+                }
+              },
+            }));
+            // Native preflight either injects into the current loop or starts
+            // a continuation if that loop just ended. Keep the same credentials,
+            // event subscription and ACP prompt alive until both have settled.
+            continuations.push(task.catch(error => {
+              reject(error);
+              if (accepted) return error;
+            }));
+          });
+          try {
+            let initialError;
+            try {
+              await record.session.prompt(text, { preflightResult: ok => {
+                if (ok) { controller.signal.throwIfAborted(); record.acceptSteer = acceptSteer; ready(); }
+              } });
+            } catch (error) { initialError = error; }
+            let continuationError;
+            while (continuations.length) {
+              const errors = await Promise.all(continuations.splice(0));
+              continuationError ??= errors.find(Boolean);
+            }
+            if (continuationError) throw continuationError;
+            if (initialError) throw initialError;
+          } finally { record.acceptSteer = undefined; }
           if (controller.signal.aborted) return { stopReason: 'cancelled', usage };
           const last = record.session.messages.at(-1);
           if (last?.role === 'assistant' && last.stopReason === 'error') throw new Error(last.errorMessage ?? 'The model request failed.');
           return { stopReason: last?.stopReason === 'aborted' ? 'cancelled' : 'end_turn', usage };
           };
-          return await this.credentials.runWithAccount(provider, account, () => provider === 'claude-subscription' && this.claude.withProfile
-            ? this.claude.withProfile(account.credential?.accountId, run) : run());
+          return await withAccount(run);
         } catch (error) {
           if (controller.signal.aborted) return { stopReason: 'cancelled' };
           reason = record.httpAccessFailure !== undefined ? record.httpAccessFailure : (error.accessReason ?? accessFailure(error));
-          if (!reason || visible) throw new DefaultAgentError(reason ?? (error instanceof DefaultAgentError ? error.message : 'The model request failed. Retry or check Settings → Connections.'));
+          if (!reason || visible || steered) throw new DefaultAgentError(reason ?? (error instanceof DefaultAgentError ? error.message : 'The model request failed. Retry or check Settings → Connections.'));
           if (beforeLeaf) record.manager.branch(beforeLeaf); else record.manager.resetLeaf();
           record.session.agent.state.messages = beforeMessages;
         }
@@ -313,12 +370,24 @@ export class DefaultAgentEngine {
     } finally {
       unsubscribe();
       record.busy = false;
+      ready();
+      record.steeringReady = undefined;
+      finished();
+      record.promptFinished = undefined;
       record.promptController = undefined;
       record.requestPermission = undefined;
     }
   }
+  async steer(record, text) {
+    if (!text.trim()) throw new DefaultAgentError('A message is required.');
+    if (!record.busy) return { outcome: 'promptRequired' };
+    await record.steeringReady;
+    if (record.promptController?.signal.aborted) throw new DefaultAgentError('The run is stopping. Send this message after it stops.');
+    if (!record.acceptSteer) { await record.promptFinished; return { outcome: 'promptRequired' }; }
+    return record.acceptSteer(text);
+  }
   async handle(method, params = {}, emit = () => {}, requestPermission) {
-    if (method === 'initialize') return { protocolVersion: 1, agentInfo: { name: 'wovenmatter-default-agent', version: '0.1.0' }, agentCapabilities: { loadSession: true, promptCapabilities: { image: false } }, authMethods: [] };
+    if (method === 'initialize') return { protocolVersion: 1, agentInfo: { name: 'wovenmatter-default-agent', version: '0.1.0' }, agentCapabilities: { loadSession: true, promptCapabilities: { image: false } }, authMethods: [], _meta: { steering: { supported: true } } };
     if (method === 'woven/status') return this.status();
     if (method === 'session/new' || method === 'session/load') {
       const record = await this.create(method === 'session/load' ? params.sessionId : undefined, params.cwd);
@@ -328,9 +397,11 @@ export class DefaultAgentEngine {
     if (method === 'session/set_config_option') return this.select(record, params.value, params.configId ?? params.id ?? 'model');
     if (method === 'session/cancel') {
       record.promptController?.abort();
+      record.session.clearQueue();
       await record.session.abort();
       return {};
     }
+    if (method === '_session/steering') return this.steer(record, (params.prompt ?? []).filter(p => p.type === 'text').map(p => p.text).join('\n'));
     if (method === 'session/prompt') return this.prompt(record, (params.prompt ?? []).filter(p => p.type === 'text').map(p => p.text).join('\n'), emit, requestPermission);
     throw new Error('Unsupported Built-in operation.');
   }

@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process'
 import { mkdir, open, readFile, realpath } from 'node:fs/promises'
 import { resolve, sep } from 'node:path'
 import { createInterface } from 'node:readline'
+import { randomUUID } from 'node:crypto'
 
 const identifier = value => {
   if (typeof value !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(value)) throw new Error('Invalid channel identifier')
@@ -12,9 +13,24 @@ function newSnapshot(history) {
   const state = { initialized: null, session: null, recoveredRuns: [], busy: false, pendingRequests: [] }
   Object.defineProperties(state, {
     requests: { value: new Map() }, runs: { value: new Map() }, callbacks: { value: new Map() },
+    steers: { value: new Map() }, codexStatuses: { value: new Map() }, inputSequences: { value: new Map() },
   })
   for (const item of history) updateSnapshot(state, item)
   return state
+}
+function finishPiRuns(state) {
+  for (const run of new Set(state.runs.values())) if (run.runID) state.recoveredRuns.push({
+    runID: run.runID, content: run.content, ...(run.error ? { error: run.error } : {}),
+  })
+  state.runs.clear()
+}
+function resumeRun(state, runID, sessionID) {
+  const index = runID ? state.recoveredRuns.findIndex(run => run.runID === runID) : -1
+  const previous = index < 0 ? undefined : state.recoveredRuns.splice(index, 1)[0]
+  // A promptRequired continuation can arrive after the original reply. Keep
+  // one cumulative recovery record for the logical run across that gap.
+  return { runID, sessionID, content: previous?.content ?? '', completed: previous?.content ?? '', error: previous?.error,
+    nextInputSequence: 0, completedInputSequence: -1 }
 }
 function updatePiSnapshot(state, item) {
   const message = item.message
@@ -22,23 +38,29 @@ function updatePiSnapshot(state, item) {
     if (message.type === 'extension_ui_response') state.callbacks.delete(message.id)
     else if (message.id !== undefined) {
       state.requests.set(message.id, message)
-      if (message.type === 'prompt') state.runs.set(message.id, {
-        runID: message._meta?.wovenRunID, content: '', completed: '', error: null,
-      })
+      if (message.type === 'prompt') {
+        const runID = message._meta?.wovenRunID
+        const existing = runID && [...state.runs.values()].find(run => run.runID === runID)
+        state.runs.set(message.id, existing ?? resumeRun(state, runID))
+      }
     }
   } else if (item.type === 'output') {
     if (message.type === 'extension_ui_request') state.callbacks.set(message.id, message)
     if (message.type === 'response') {
       const request = state.requests.get(message.id)
-      if (request?.type === 'get_state' && message.success) state.piState = message.data
+      if (request?.type === 'get_state' && message.success) {
+        state.piState = message.data
+        if (message.data?.isStreaming === false && message.data?.isCompacting === false && message.data?.pendingMessageCount === 0
+          && ![...state.requests.values()].some(request => request.type === 'prompt')) finishPiRuns(state)
+      }
       if (request?.type === 'prompt' && message.success === false) {
         const run = state.runs.get(message.id)
-        if (run?.runID) state.recoveredRuns.push({ runID: run.runID, content: run.content, error: message.error ?? 'Pi rejected the task' })
         state.runs.delete(message.id)
+        if (run?.runID && ![...state.runs.values()].includes(run)) state.recoveredRuns.push({ runID: run.runID, content: run.content, error: message.error ?? 'Pi rejected the task' })
       }
       state.requests.delete(message.id)
     }
-    for (const run of state.runs.values()) {
+    for (const run of new Set(state.runs.values())) {
       if (message.type === 'message_update' && message.assistantMessageEvent?.type === 'text_delta') {
         run.content += message.assistantMessageEvent.delta ?? ''
       }
@@ -50,20 +72,29 @@ function updatePiSnapshot(state, item) {
         run.error = message.message.stopReason === 'error' ? message.message.errorMessage ?? 'Pi task failed' : null
       }
     }
-    if (message.type === 'agent_settled') {
-      for (const run of state.runs.values()) if (run.runID) state.recoveredRuns.push({
-        runID: run.runID, content: run.content, ...(run.error ? { error: run.error } : {}),
-      })
-      state.runs.clear()
-    }
+    if (message.type === 'agent_settled' && ![...state.requests.values()].some(request => request.type === 'prompt' && request.streamingBehavior === 'steer')) finishPiRuns(state)
   }
   state.busy = state.runs.size > 0
   state.pendingRequests = [...state.callbacks.values()]
 }
+function finishACPInput(state, id, error, ownsCompletion = true) {
+  const run = state.runs.get(id)
+  const sequence = state.inputSequences.get(id)
+  if (run && ownsCompletion && sequence > run.completedInputSequence) {
+    run.completedInputSequence = sequence
+    run.error = error
+  }
+  state.inputSequences.delete(id)
+  state.runs.delete(id)
+  state.steers.delete(id)
+  if (run?.runID && ![...state.runs.values()].includes(run)) state.recoveredRuns.push({
+    runID: run.runID, content: run.content, ...(run.error ? { error: run.error } : {}),
+  })
+}
 function updateSnapshot(state, item) {
   if (item.type === 'stopped') {
-    for (const run of state.runs.values()) if (run.runID) state.recoveredRuns.push({ runID: run.runID, content: run.content, error: 'Remote execution stopped before completion' })
-    state.runs.clear(); state.callbacks.clear(); state.requests.clear()
+    for (const run of new Set(state.runs.values())) if (run.runID) state.recoveredRuns.push({ runID: run.runID, content: run.content, error: 'Remote execution stopped before completion' })
+    state.runs.clear(); state.callbacks.clear(); state.requests.clear(); state.steers.clear(); state.inputSequences.clear()
     state.pendingRequests = []; state.busy = false
     return
   }
@@ -76,16 +107,54 @@ function updateSnapshot(state, item) {
   if (message.type) { updatePiSnapshot(state, item); return }
   if (item.type === 'accepted') {
     if (message.method && message.id !== undefined) {
-      state.requests.set(message.id, message)
-      if (message.method === 'session/prompt') state.runs.set(message.id, {
-        runID: message.params?._meta?.wovenRunID, content: '', sessionID: message.params?.sessionId,
-      })
+      const status = state.codexStatuses.get(message.params?.sessionId)
+      state.requests.set(message.id, message.method === 'session/prompt'
+        ? { ...message, codexExpectedGeneration: (status?.generation ?? 0) + (status?.active ? 0 : 1) } : message)
+      if (message.method === 'session/prompt') {
+        const runID = message.params?._meta?.wovenRunID
+        // Concurrent ACP prompts steer one logical run. Share its accumulator
+        // and wait for every prompt response before exposing terminal recovery.
+        const existing = runID && [...state.runs.values()].find(run => run.runID === runID && run.sessionID === message.params?.sessionId)
+        state.runs.set(message.id, existing ?? resumeRun(state, runID, message.params?.sessionId))
+        state.inputSequences.set(message.id, state.runs.get(message.id).nextInputSequence++)
+      }
+      if (message.method === '_session/steering') {
+        const runID = message.params?._meta?.wovenRunID
+        const run = [...state.runs.values()].find(run => run.sessionID === message.params?.sessionId)
+          ?? (typeof runID === 'string' ? resumeRun(state, runID, message.params?.sessionId) : undefined)
+        if (run) {
+          state.runs.set(message.id, run)
+          state.inputSequences.set(message.id, run.nextInputSequence++)
+          const status = state.codexStatuses.get(run.sessionID)
+          const previousGeneration = Math.max(status?.generation ?? 0, ...[...state.requests.values()]
+            .filter(request => request.method === 'session/prompt' && request.params?.sessionId === run.sessionID)
+            .map(request => request.codexExpectedGeneration ?? 0))
+          state.steers.set(message.id, { previousGeneration, started: false, settled: false, detached: false })
+        }
+      }
     } else if (message.id !== undefined) state.callbacks.delete(message.id)
   }
   if (item.type === 'output') {
     if (message.method && message.id !== undefined) state.callbacks.set(message.id, message)
     if (message.method === 'session/update' && message.params?.update?.sessionUpdate === 'agent_message_chunk') {
-      for (const run of state.runs.values()) if (run.sessionID === message.params.sessionId) run.content += message.params.update.content?.text ?? ''
+      for (const run of new Set(state.runs.values())) if (run.sessionID === message.params.sessionId) run.content += message.params.update.content?.text ?? ''
+    }
+    const status = message.params?.update?._meta?.codex?.threadStatus?.type
+    if (message.method === 'session/update' && status) {
+      const sessionID = message.params.sessionId
+      const previous = state.codexStatuses.get(sessionID)
+      const active = status === 'active'
+      const generation = (previous?.generation ?? 0) + (active && !previous?.active ? 1 : 0)
+      state.codexStatuses.set(sessionID, { active, generation })
+      for (const [id, steer] of state.steers) {
+        if (state.runs.get(id)?.sessionID !== sessionID) continue
+        if (status === 'active' && generation > steer.previousGeneration) { steer.started = true; steer.settled = false; steer.error = undefined }
+        if (status === 'idle' && steer.started) steer.settled = true
+        if (steer.started && (status === 'systemError' || status === 'notLoaded')) {
+          steer.settled = true; steer.error = 'Codex stopped before completing the steering message'
+        }
+        if (steer.detached && steer.settled) finishACPInput(state, id, steer.error)
+      }
     }
     if (message.id !== undefined && !message.method) {
       const request = state.requests.get(message.id)
@@ -94,10 +163,18 @@ function updateSnapshot(state, item) {
         ...message.result, sessionId: message.result.sessionId ?? request.params.sessionId,
       }
       if (state.runs.has(message.id)) {
-        const run = state.runs.get(message.id)
-        if (run.runID) state.recoveredRuns.push({ runID: run.runID, content: run.content,
-          ...(message.error ? { error: message.error.message ?? 'Remote task failed' } : {}) })
-        state.runs.delete(message.id)
+        const steer = state.steers.get(message.id)
+        if (steer && message.result?.outcome === 'startedNewTurn') {
+          steer.detached = true
+          // Woven's Codex client marks adapter commands that complete without
+          // starting native work; their receipt is also their completion.
+          if (steer.settled || request.params?._meta?.wovenCommandOnly === true) finishACPInput(state, message.id, steer.error)
+        } else {
+          // Rejected/injected steering receipts do not settle the underlying
+          // prompt or overwrite its error. Concurrent prompt outcomes follow
+          // submission order, even when their responses arrive out of order.
+          finishACPInput(state, message.id, message.error?.message, !steer)
+        }
       }
       state.requests.delete(message.id)
     }
@@ -265,14 +342,34 @@ export function createDurableACP({ catalog, workspaceRoot, environment, isEnable
       if (!await isEnabled()) throw new Error('Background execution is disabled')
       if (!['attach', 'message', 'poll', 'recover'].includes(operation)) throw new Error('Unknown relay operation')
       const channel = await channelFor(body.channelID, body.harnessID, body.cwd, body.permission, body.nativeSessionID, operation === 'recover')
+      if (['attach', 'recover'].includes(operation) && body.attachmentProtocol === 1) {
+        // This shares the native admission queue: earlier requests are already
+        // accounted for, while delayed requests from the old relay cannot admit.
+        channel.attachmentToken = randomUUID()
+      }
       if (operation === 'message') {
+        if ((channel.attachmentToken || body.attachmentToken) && body.attachmentToken !== channel.attachmentToken) {
+          throw new Error('This session attachment was replaced. Reconnect before sending another message.')
+        }
         identifier(body.deliveryID)
         if (!body.message || (channel.harnessID === 'pi' ? typeof body.message.type !== 'string' : body.message.jsonrpc !== '2.0')) throw new Error('Invalid ACP message')
         if (channel.accepted.has(body.deliveryID)) return { accepted: true, duplicate: true }
         if ((!body.message.method && !body.message.type || body.message.type === 'extension_ui_response') && body.message.id !== undefined && !channel.snapshot.callbacks.has(body.message.id)) return { accepted: true, duplicate: true }
         if (!channel.process || channel.state !== 'running') throw new Error('Session interrupted; explicit recovery is required')
-        if (channel.snapshot.busy && ['session/prompt', 'session/load', 'session/new', 'session/set_model', 'session/set_mode', 'session/set_config_option'].includes(body.message.method)) throw new Error('Remote task is still running; reconnect after it finishes')
-        if (channel.snapshot.busy && channel.harnessID === 'pi' && !['get_state', 'get_available_models', 'get_available_thinking_levels', 'get_commands', 'abort', 'steer', 'follow_up', 'extension_ui_response'].includes(body.message.type)) throw new Error('Remote task is still running; reconnect after it finishes')
+        const sameRunSteering = body.message.method === 'session/prompt'
+          && typeof body.message.params?._meta?.wovenRunID === 'string'
+          && [...channel.snapshot.runs.values()].some(run => run.runID === body.message.params._meta.wovenRunID
+            && run.sessionID === body.message.params.sessionId)
+        if (channel.snapshot.busy && body.message.method === '_session/steering'
+          && ![...channel.snapshot.runs.values()].some(run => run.sessionID === body.message.params?.sessionId
+            && (body.message.params?._meta?.wovenRunID === undefined || run.runID === body.message.params._meta.wovenRunID))) {
+          throw new Error('Steering input belongs to another remote task')
+        }
+        if (channel.snapshot.busy && !sameRunSteering && ['session/prompt', 'session/load', 'session/new', 'session/set_model', 'session/set_mode', 'session/set_config_option'].includes(body.message.method)) throw new Error('Remote task is still running; reconnect after it finishes')
+        const samePiRunSteering = body.message.type === 'prompt' && body.message.streamingBehavior === 'steer'
+          && typeof body.message._meta?.wovenRunID === 'string'
+          && [...channel.snapshot.runs.values()].some(run => run.runID === body.message._meta.wovenRunID)
+        if (channel.snapshot.busy && channel.harnessID === 'pi' && !samePiRunSteering && !['get_state', 'get_available_models', 'get_available_thinking_levels', 'get_commands', 'abort', 'steer', 'follow_up', 'extension_ui_response'].includes(body.message.type)) throw new Error('Remote task is still running; reconnect after it finishes')
         const outgoing = { ...body.message }
         if (channel.harnessID === 'pi') delete outgoing._meta
         const line = JSON.stringify(outgoing) + '\n'
@@ -282,14 +379,31 @@ export function createDurableACP({ catalog, workspaceRoot, environment, isEnable
         updateSnapshot(channel.snapshot, accepted)
         channel.accepted.add(body.deliveryID)
         channel.process.stdin.write(line)
-        return { accepted: true }
+        const stoppedPreflight = channel.harnessID === 'pi' && body.message.type === 'abort'
+          && body.message._meta?.wovenStopPreflight === true
+        // Pi aborts the active loop, but an extension preflight can otherwise
+        // finish later and start another loop. Explicit Stop retires this
+        // service-owned process just as local cancellation retires local Pi.
+        if (stoppedPreflight) {
+          channel.state = 'stopped'
+          const child = channel.process
+          await new Promise(resolve => {
+            const timer = setTimeout(() => { if (channel.process === child) child.kill('SIGKILL') }, 1500)
+            child.once('close', () => { clearTimeout(timer); resolve() })
+            child.kill('SIGTERM')
+          })
+        }
+        return { accepted: true, ...(stoppedPreflight ? { stoppedPreflight: true } : {}) }
       }
       const after = body.after ?? 0
       if (!Number.isSafeInteger(after) || after < 0) throw new Error('Invalid output cursor')
       const publicSnapshot = { initialized: channel.snapshot.initialized, piState: channel.snapshot.piState, session: channel.snapshot.session,
         busy: channel.snapshot.busy, pendingRequests: channel.snapshot.pendingRequests,
+        recoveryComplete: !!channel.attachmentToken && body.attachmentToken === channel.attachmentToken
+          && !channel.snapshot.busy && !channel.failure && channel.state === 'running',
         ...((['attach', 'recover'].includes(operation) || body.includeRecovery) ? { recoveredRuns: channel.snapshot.recoveredRuns } : {}) }
       return { channelID: channel.id, state: channel.state, failure: channel.failure,
+        ...(['attach', 'recover'].includes(operation) && body.attachmentProtocol === 1 ? { attachmentToken: channel.attachmentToken } : {}),
         snapshot: publicSnapshot, events: channel.events.slice(after, after + 256) }
     })
     if (operation === 'poll' && body.waitMs != null) {

@@ -36,10 +36,24 @@ run_static_checks() {
 }
 
 run_package_tests() {
-  env \
-    CLANG_MODULE_CACHE_PATH="${cache_root}/ModuleCache" \
-    SWIFTPM_MODULECACHE_OVERRIDE="${cache_root}/ModuleCache" \
-    swift test --package-path app --scratch-path "$swift_scratch"
+  local suite
+  local process_suites=(DefaultAgentSDKControlTests RemoteAttachmentStagingTests)
+  local isolated_filter
+  printf -v isolated_filter '%s|' "${process_suites[@]}"
+  isolated_filter="${isolated_filter%|}"
+  local test_command=(env
+    "CLANG_MODULE_CACHE_PATH=${cache_root}/ModuleCache"
+    "SWIFTPM_MODULECACHE_OVERRIDE=${cache_root}/ModuleCache"
+    swift test --package-path app --scratch-path "$swift_scratch")
+  # These fixtures measure OS-process startup, deadlines, and reaping. The SDK
+  # suite also deliberately saturates the shared dispatch pool. Keep them out of
+  # the aggregate runner so unrelated parallel tests cannot consume their timing
+  # budgets. Every excluded suite runs below, with its original bounds and its
+  # explicit concurrency tests intact, using the same compiled test artifacts.
+  "${test_command[@]}" --skip "$isolated_filter"
+  for suite in "${process_suites[@]}"; do
+    "${test_command[@]}" --skip-build --filter "$suite"
+  done
   WOVENMATTER_TEST_CACHE_DIR="$cache_root" scripts/test-application-usage.sh
   WOVENMATTER_TEST_CACHE_DIR="$cache_root" scripts/test-backend-process.sh
 }

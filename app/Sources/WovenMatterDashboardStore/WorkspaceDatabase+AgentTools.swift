@@ -5,6 +5,39 @@ import WovenMatterCore
 import WovenMatterClient
 
 extension WorkspaceDatabaseConnection {
+  func canonicalToolRequestID(_ value: String) throws -> String {
+    guard let id = UUID(uuidString: value) else {
+      throw WorkspaceToolError.invalid("A mutation request needs a UUID request ID.")
+    }
+    return id.uuidString.lowercased()
+  }
+
+  enum ToolReceiptTable: String {
+    case mutations = "workspace_tool_mutations"
+    case deliveries = "workspace_session_deliveries"
+    case creations = "workspace_session_creations"
+    case coordination = "workspace_coordination_access_requests"
+  }
+
+  /// New IDs use lowercase UUIDs; existing IDs retain their spelling so all
+  /// persisted references continue to work. Never guess between legacy collisions.
+  func persistedToolRequestID(_ value: String, in table: ToolReceiptTable,
+                              sourceID: String? = nil) throws -> String {
+    let canonical = try canonicalToolRequestID(value)
+    let column = table == .mutations ? "request_id" : "id"
+    var sql = "SELECT \(column) AS id FROM \(table.rawValue) WHERE \(column)=? COLLATE NOCASE"
+    var values: [String?] = [canonical]
+    if table == .mutations {
+      guard let sourceID else { throw WorkspaceToolError.invalid("A mutation needs a bound caller.") }
+      sql += " AND source_id=?"; values.append(sourceID)
+    }
+    let matches = try historyRowsUnlocked(sql + " LIMIT 2", values: values)
+    guard matches.count <= 1 else {
+      throw WorkspaceToolError.invalid("This request ID has conflicting legacy receipts. Inspect the existing results before starting a new request.")
+    }
+    return matches.first?.objectValue?["id"]?.stringValue ?? canonical
+  }
+
   func migrateAgentTools() throws {
     try transaction {
       try executeUnlocked("""
@@ -47,6 +80,10 @@ extension WorkspaceDatabaseConnection {
           target_id TEXT NOT NULL UNIQUE, arguments_json TEXT NOT NULL,
           purpose TEXT NOT NULL, managed INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'planned');
         """)
+      for table in [ToolReceiptTable.mutations, .deliveries, .creations, .coordination] {
+        let columns = table == .mutations ? "source_id,request_id COLLATE NOCASE" : "id COLLATE NOCASE"
+        try executeUnlocked("CREATE INDEX IF NOT EXISTS \(table.rawValue)_request_case ON \(table.rawValue)(\(columns))")
+      }
       try toolsExecuteUnlocked("INSERT OR IGNORE INTO workspace_tool_settings(id,value) VALUES(1,?)",
                                [try toolsJSON(WorkspaceToolSettings())])
       let toolColumns = Set(try historyRowsUnlocked("PRAGMA table_info(workspace_session_tools)", values: []).compactMap { $0.objectValue?["name"]?.stringValue })
@@ -61,6 +98,11 @@ extension WorkspaceDatabaseConnection {
       }
       if !creationColumns.contains("configuration_applied") {
         try executeUnlocked("ALTER TABLE workspace_session_creations ADD COLUMN configuration_applied INTEGER NOT NULL DEFAULT 0")
+      }
+      let accessColumns = Set(try historyRowsUnlocked("PRAGMA table_info(workspace_coordination_access_requests)", values: [])
+        .compactMap { $0.objectValue?["name"]?.stringValue })
+      if !accessColumns.contains("coordination_epoch") {
+        try executeUnlocked("ALTER TABLE workspace_coordination_access_requests ADD COLUMN coordination_epoch TEXT")
       }
       let relationshipColumns = Set(try historyRowsUnlocked("PRAGMA table_info(workspace_session_relationships)", values: []).compactMap { $0.objectValue?["name"]?.stringValue })
       for column in ["coordination_epoch", "coordination_since"] where !relationshipColumns.contains(column) {
@@ -77,7 +119,8 @@ extension WorkspaceDatabaseConnection {
       for (name, type) in [("kind", "TEXT NOT NULL DEFAULT 'message'"), ("purpose", "TEXT"),
                            ("target_title", "TEXT"), ("target_harness", "TEXT"), ("target_model", "TEXT"), ("event_key", "TEXT"),
                            ("transport_started", "INTEGER NOT NULL DEFAULT 1"), ("retry_after", "REAL"),
-                           ("native_command", "TEXT")] where !columns.contains(name) {
+                           ("native_command", "TEXT"), ("failure_code", "TEXT"),
+                           ("failure_reason", "TEXT")] where !columns.contains(name) {
         try executeUnlocked("ALTER TABLE workspace_session_deliveries ADD COLUMN \(name) \(type)")
       }
       try executeUnlocked("CREATE UNIQUE INDEX IF NOT EXISTS workspace_delivery_event ON workspace_session_deliveries(event_key) WHERE event_key IS NOT NULL")
@@ -165,7 +208,7 @@ extension WorkspaceDatabaseConnection {
       try toolsExecuteUnlocked("UPDATE workspace_session_timers SET is_paused=1,pending_delivery_id=NULL WHERE session_id=?", [sessionID])
     }
     if !tools.enabled.contains(.sessions) {
-      try toolsExecuteUnlocked("UPDATE workspace_session_relationships SET coordinator_id=NULL WHERE coordinator_id=?", [sessionID])
+      try toolsExecuteUnlocked("UPDATE workspace_session_relationships SET coordinator_id=NULL,coordination_epoch=NULL,coordination_since=NULL WHERE coordinator_id=?", [sessionID])
       // Approved access lasts for a management assignment; attachments are independent.
       try toolsExecuteUnlocked("DELETE FROM workspace_session_grants WHERE source_id=? AND kind='approved'", [sessionID])
     }
@@ -248,7 +291,9 @@ extension WorkspaceDatabaseConnection {
     let r = value.objectValue ?? [:]
     return WorkspaceSessionRelationship(sessionID: r["session_id"]?.stringValue ?? "",
       createdBy: r["created_by"]?.stringValue, coordinatorID: r["coordinator_id"]?.stringValue,
-      purpose: r["purpose"]?.stringValue, notificationsEnabled: r["notifications_enabled"]?.intValue == 1)
+      purpose: r["purpose"]?.stringValue, notificationsEnabled: r["notifications_enabled"]?.intValue == 1,
+      coordinationEpoch: r["coordination_epoch"]?.stringValue,
+      coordinationSince: r["coordination_since"]?.stringValue)
   }
 
   /// Called only after app-owned session creation succeeds. Origin cannot be reassigned.
@@ -339,6 +384,57 @@ extension WorkspaceDatabaseConnection {
     }
   }
 
+  public func setAgentCoordinationNotifications(sourceID: String, targetID: String, epoch: String,
+                                                 enabled: Bool, requestID: String) throws -> WorkspaceCoordinationMutationReceipt {
+    try transaction {
+      try requireToolUnlocked(.sessions, sessionID: sourceID)
+      let input = CoordinationMutationInput(targetID: targetID, epoch: epoch, enabled: enabled)
+      let outcome = try performToolMutationUnlocked(callerID: sourceID, requestID: requestID,
+        operation: "sessions.notifications", input: input, receipt: { (value: WorkspaceCoordinationMutationReceipt) in
+          var stored = value; stored.replayed = true; return stored
+        }) {
+          let relationship = try relationshipUnlocked(targetID)
+          guard relationship.coordinatorID == sourceID else {
+            throw WorkspaceToolError.accessRequired(targetID)
+          }
+          guard !epoch.isEmpty, epoch.utf8.count <= 128,
+                relationship.coordinationEpoch == epoch else {
+            throw WorkspaceToolError.revisionConflict("The coordination epoch is stale. Read sessions status and retry with its current epoch.")
+          }
+          try toolsExecuteUnlocked("UPDATE workspace_session_relationships SET notifications_enabled=? WHERE session_id=?", [enabled ? "1" : "0", targetID])
+          return WorkspaceCoordinationMutationReceipt(sessionID: targetID,
+            coordinationEpoch: epoch, action: "notifications", notificationsEnabled: enabled)
+        }
+      return outcome.result
+    }
+  }
+
+  public func releaseAgentCoordination(sourceID: String, targetID: String, epoch: String,
+                                       requestID: String) throws -> WorkspaceCoordinationMutationReceipt {
+    try transaction {
+      try requireToolUnlocked(.sessions, sessionID: sourceID)
+      let input = CoordinationMutationInput(targetID: targetID, epoch: epoch, enabled: nil)
+      let outcome = try performToolMutationUnlocked(callerID: sourceID, requestID: requestID,
+        operation: "sessions.release", input: input, receipt: { (value: WorkspaceCoordinationMutationReceipt) in
+          var stored = value; stored.replayed = true; return stored
+        }) {
+          let relationship = try relationshipUnlocked(targetID)
+          guard relationship.coordinatorID == sourceID else {
+            throw WorkspaceToolError.accessRequired(targetID)
+          }
+          guard !epoch.isEmpty, epoch.utf8.count <= 128,
+                relationship.coordinationEpoch == epoch else {
+            throw WorkspaceToolError.revisionConflict("The coordination epoch is stale. Read sessions status and retry with its current epoch.")
+          }
+          try toolsExecuteUnlocked("UPDATE workspace_session_relationships SET coordinator_id=NULL,coordination_epoch=NULL,coordination_since=NULL WHERE session_id=?", [targetID])
+          try toolsExecuteUnlocked("DELETE FROM workspace_session_grants WHERE target_id=? AND kind='approved'", [targetID])
+          return WorkspaceCoordinationMutationReceipt(sessionID: targetID,
+            coordinationEpoch: epoch, action: "released")
+        }
+      return outcome.result
+    }
+  }
+
   /// sourceID is bound by the endpoint. The user may stop any assignment through the UI.
   public func endCoordination(targetID: String, sourceID: String? = nil) throws {
     try transaction {
@@ -348,7 +444,7 @@ extension WorkspaceDatabaseConnection {
           throw WorkspaceToolError.coordinationConflict(existing)
         }
       }
-      try toolsExecuteUnlocked("UPDATE workspace_session_relationships SET coordinator_id=NULL WHERE session_id=?", [targetID])
+      try toolsExecuteUnlocked("UPDATE workspace_session_relationships SET coordinator_id=NULL,coordination_epoch=NULL,coordination_since=NULL WHERE session_id=?", [targetID])
       try toolsExecuteUnlocked("DELETE FROM workspace_session_grants WHERE target_id=? AND kind='approved'", [targetID])
     }
   }
@@ -365,6 +461,12 @@ extension WorkspaceDatabaseConnection {
   }
 }
 
+private struct CoordinationMutationInput: Codable {
+  let targetID: String
+  let epoch: String
+  let enabled: Bool?
+}
+
 
 extension WorkspaceDatabaseConnection {
   /// Must run inside the mutation's transaction. A receipt and its write commit
@@ -374,10 +476,11 @@ extension WorkspaceDatabaseConnection {
     callerID: String?, requestID: String?, operation: String, input: Input,
     receipt: (Output) -> Output = { $0 }, mutation: () throws -> Output
   ) throws -> (result: Output, replayed: Bool) {
-    guard let requestID else { return (try mutation(), false) }
-    guard let callerID, UUID(uuidString: requestID) != nil else {
+    guard let rawRequestID = requestID else { return (try mutation(), false) }
+    guard let callerID else {
       throw WorkspaceToolError.invalid("A mutation request needs a bound caller and UUID request ID.")
     }
+    let requestID = try persistedToolRequestID(rawRequestID, in: .mutations, sourceID: callerID)
     let encoder = JSONEncoder()
     encoder.outputFormatting = [.sortedKeys]
     let digest = SHA256.hash(data: try encoder.encode(input)).map { String(format: "%02x", $0) }.joined()

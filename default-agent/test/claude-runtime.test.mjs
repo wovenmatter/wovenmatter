@@ -134,6 +134,42 @@ test('cancelling inline native login terminates its child and does not report su
   assert.deepEqual(signals, ['SIGTERM']);
 });
 
+
+test('cancelling a native status check aborts the child without reporting sign-out', async () => {
+  const controller = new AbortController();
+  const runtime = new ClaudeRuntime('/fixture', {
+    directories: async () => ({ config: '/fixture/config', storage: '/fixture/native-store' }),
+    executeCommand: async (_path, _args, options) => {
+      assert.equal(options.signal, controller.signal);
+      controller.abort();
+      options.signal.throwIfAborted();
+    },
+  });
+  await assert.rejects(runtime.status(undefined, { signal: controller.signal }), { name: 'AbortError' });
+});
+
+test('cancelling model discovery closes the SDK child and discards its result', async () => {
+  const controller = new AbortController();
+  let closed = false;
+  let sdkSignal;
+  const runtime = new ClaudeRuntime('/fixture', {
+    directories: async () => ({ config: '/fixture/config', storage: '/fixture/native-store' }),
+    query: async ({ options }) => {
+      sdkSignal = options.abortController.signal;
+      return {
+        supportedModels: async () => {
+          controller.abort();
+          sdkSignal.throwIfAborted();
+        },
+        close: () => { closed = true; },
+      };
+    },
+  });
+  await assert.rejects(runtime.discover(undefined, { signal: controller.signal }), { name: 'AbortError' });
+  assert.equal(sdkSignal.aborted, true);
+  assert.equal(closed, true);
+});
+
 for (const host of ['claude.com', 'claude.ai', 'platform.claude.com', 'console.anthropic.com']) {
   test(`inline Claude login forwards the authorization link on ${host}`, async () => {
     const child = new EventEmitter(); child.stdout = new PassThrough(); child.stderr = new PassThrough();

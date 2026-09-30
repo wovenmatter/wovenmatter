@@ -131,7 +131,7 @@ extension WorkspaceDatabaseConnection {
           try bind(runStatus, at: 1, to: finish); try bind(runID, at: 2, to: finish); try stepDone(finish)
         }
       }
-      let update = try prepareUnlocked("UPDATE dashboard_conversations SET title=?, last_message_preview=?, last_message_at=MAX(?, COALESCE((SELECT imported_at FROM desktop_session_imports WHERE conversation_id=dashboard_conversations.id), '')), updated_at=? WHERE id=?")
+      let update = try prepareUnlocked("UPDATE dashboard_conversations SET title=COALESCE((SELECT title FROM desktop_conversation_titles WHERE conversation_id=dashboard_conversations.id), ?), last_message_preview=?, last_message_at=MAX(?, COALESCE((SELECT imported_at FROM desktop_session_imports WHERE conversation_id=dashboard_conversations.id), '')), updated_at=? WHERE id=?")
       defer { sqlite3_finalize(update) }
       try bind(snapshot.info["title"].string ?? fallbackTitle, at: 1, to: update)
       let lastID = snapshot.messages.last?["id"].text ?? ""
@@ -143,6 +143,10 @@ extension WorkspaceDatabaseConnection {
 
   public func saveOpenCodeSubmission(conversationID: String, id: String, payload: OpenCodeValue, status: String, visibleText: String? = nil, deliveryID: String? = nil, input: AgentMessageInput? = nil) throws {
     try transaction {
+      // Fence new admission against Trash in the same writer transaction. Terminal
+      // receipts must still settle after caller cancellation or a later visibility change.
+      if status == "sending" { _ = try localACPSession(conversationID: conversationID) }
+      let deliveryID = try deliveryID.map(canonicalDeliveryID)
       if let deliveryID { try markToolDeliveryTransportStartedUnlocked(id: deliveryID) }
       let statement = try prepareUnlocked("""
         INSERT INTO desktop_opencode_submissions(id, conversation_id, payload_json, status) VALUES (?, ?, ?, ?)

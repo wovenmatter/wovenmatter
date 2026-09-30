@@ -570,7 +570,7 @@ public actor OpenCodeSessionCoordinator {
             // Never journal or retry them as idempotent prompt submissions.
             var commandPayload: [String: OpenCodeValue] = ["command": .string(command),
                 "text": .string(deliveryText), "files": .array(files)]
-            if input.historyDeliveryID != nil { commandPayload["delivery"] = .string("steer") }
+            commandPayload["delivery"] = .string("steer")
             let payload = OpenCodeValue.object(commandPayload)
             try fence.check()
             if let deliveryID = input.historyDeliveryID {
@@ -595,7 +595,9 @@ public actor OpenCodeSessionCoordinator {
             return
         }
         var promptPayload: [String: OpenCodeValue] = ["id": .string(id), "text": .string(deliveryText), "files": .array(files)]
-        if input.historyDeliveryID != nil { promptPayload["delivery"] = .string("steer") }
+        // Let native state choose live injection or an idle start. A cached
+        // activity snapshot can lag a rapid second composer submission.
+        promptPayload["delivery"] = .string("steer")
         let payload = OpenCodeValue.object(promptPayload)
         try fence.check()
         try await database.saveOpenCodeSubmission(conversationID: link.conversationID, id: id, payload: payload, status: "sending", visibleText: input.text, deliveryID: input.historyDeliveryID, input: input)

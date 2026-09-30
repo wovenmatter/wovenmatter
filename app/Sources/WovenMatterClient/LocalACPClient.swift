@@ -218,17 +218,20 @@ public struct LocalACPInitializedSession: Equatable, Sendable {
     public let sessionID: String
     public let loadedExistingSession: Bool
     public let recoveredDefaultAgentRuns: [DefaultAgentRunSnapshot]
+    public let confirmedRemoteIdleSessionID: String?
     public let configuration: LocalACPSessionConfiguration
 
     public init(
         sessionID: String,
         loadedExistingSession: Bool,
         configuration: LocalACPSessionConfiguration = .empty,
-        recoveredDefaultAgentRuns: [DefaultAgentRunSnapshot] = []
+        recoveredDefaultAgentRuns: [DefaultAgentRunSnapshot] = [],
+        confirmedRemoteIdleSessionID: String? = nil
     ) {
         self.sessionID = sessionID
         self.loadedExistingSession = loadedExistingSession
         self.recoveredDefaultAgentRuns = recoveredDefaultAgentRuns
+        self.confirmedRemoteIdleSessionID = confirmedRemoteIdleSessionID
         self.configuration = configuration
     }
 }
@@ -567,6 +570,7 @@ public actor LocalACPClient {
     }
     private var pendingCursorRequests: [PendingCursorRequest] = []
     private struct PendingRequest {
+        let codexExpectedGeneration: Int64?
         let continuation: AsyncThrowingStream<ACPRequestResponse, any Error>.Continuation
     }
     private struct ACPRequestResponse: Sendable {
@@ -584,11 +588,17 @@ public actor LocalACPClient {
         let onInteraction: InteractionHandler?
     }
     private var activePrompts: [ActivePrompt] = []
-    private var activeEventHandler: EventHandler? { activePrompts.last?.onEvent }
-    private var activePermissionHandler: PermissionHandler? { activePrompts.last?.onPermission }
+    private var retainedRunHandlers: ActivePrompt?
+    private var activeEventHandler: EventHandler? { (activePrompts.last ?? retainedRunHandlers)?.onEvent }
+    private var activePermissionHandler: PermissionHandler? { (activePrompts.last ?? retainedRunHandlers)?.onPermission }
     private var resumePermissionHandler: PermissionHandler?
-    private var activeInteractionHandler: InteractionHandler? { activePrompts.last?.onInteraction }
+    private var activeInteractionHandler: InteractionHandler? { (activePrompts.last ?? retainedRunHandlers)?.onInteraction }
     var activePromptRequestCount: Int { activePrompts.count }
+    // A steer receipt is separate from completion. In particular Codex can
+    // start a continuation when the original turn ends during admission.
+    private var codexSteeringObservers: [UUID: AsyncThrowingStream<ACPRequestResponse, any Error>.Continuation] = [:]
+    private var codexNativeGeneration: Int64 = 0
+    private var codexThreadIsActive = false
     // ACP does not provide an identifier for thought chunks. Keep one stable
     // identity for adjacent deltas, then advance it when another stream kind
     // separates reasoning phases so distinct commentary is not merged.
@@ -759,7 +769,9 @@ public actor LocalACPClient {
                     sessionID: existingSessionID,
                     loadedExistingSession: true,
                     configuration: configuration,
-                    recoveredDefaultAgentRuns: (runtimeKind == .defaultAgent || durableRemoteACP) ? ((try? JSONDecoder().decode([DefaultAgentRunSnapshot].self, from: JSONEncoder().encode(loaded?["_meta"]?["recoveredRuns"] ?? .array([])))) ?? []) : []
+                    recoveredDefaultAgentRuns: (runtimeKind == .defaultAgent || durableRemoteACP) ? ((try? JSONDecoder().decode([DefaultAgentRunSnapshot].self, from: JSONEncoder().encode(loaded?["_meta"]?["recoveredRuns"] ?? .array([])))) ?? []) : [],
+                    confirmedRemoteIdleSessionID: loaded?["_meta"]?["recoveryComplete"]?.boolValue == true
+                        ? loaded?["_meta"]?["recoverySessionID"]?.stringValue : nil
                 )
             } catch LocalACPClientError.agent(let code, let message)
                 where Self.isMissingSessionError(
@@ -1160,10 +1172,8 @@ public actor LocalACPClient {
     }
 
     /// Accepts another user message while the session has an active prompt.
-    /// Each adapter keeps ownership of delivery semantics: steering extensions
-    /// are used only when the provider exposes them, otherwise a concurrent
-    /// ACP prompt lets the adapter apply its native queue, redirect, or
-    /// stop-and-send behavior.
+    /// Returns on admission; the receipt retains any continuation's completion.
+    /// Never cancel the current prompt to simulate steering.
     public func beginActiveInput(
         _ text: String,
         dispatchFence: AgentDispatchFence? = nil
@@ -1179,28 +1189,91 @@ public actor LocalACPClient {
         guard let sessionID else {
             throw LocalACPClientError.sessionNotInitialized
         }
+        guard !sessionCancellationRequested else { throw LocalACPClientError.activeInputUnsupported }
         switch Self.activeInputRoute(
             runtimeKind: runtimeKind,
             steeringSupported: steeringSupported
         ) {
         case .acpSteering:
+            // Register before dispatch: the new turn may finish before its
+            // steering acknowledgement reaches us. Buffer native lifecycle
+            // events without blocking their ordered transcript processing.
+            let observerID = UUID()
+            // Ignore the old turn's idle event even if it arrives before the
+            // receipt and the continuation's active event arrives after it.
+            let previousGeneration = max(codexNativeGeneration,
+                pendingRequests.values.compactMap(\.codexExpectedGeneration).max() ?? codexNativeGeneration)
+            let lifecycle = AsyncThrowingStream<ACPRequestResponse, any Error>.makeStream()
+            if runtimeKind == .codex { codexSteeringObservers[observerID] = lifecycle.continuation }
+            var followsDetachedTurn = false
+            defer {
+                if !followsDetachedTurn {
+                    codexSteeringObservers.removeValue(forKey: observerID)?.finish()
+                }
+            }
+            var steeringMetadata: [String: ACPJSONValue] = [
+                "steering": .object(["idleBehavior": .string("promptRequired")]),
+            ]
+            let promptBlocks = try Self.promptBlocks(input)
+            let commandOnly = runtimeKind == .codex && Self.codexCommandCompletesWithoutTurn(
+                promptBlocks.arrayValue?.first?["text"]?.stringValue ?? ""
+            )
+            if commandOnly { steeringMetadata["wovenCommandOnly"] = .bool(true) }
+            if durableRemoteACP, let defaultAgentRunID {
+                steeringMetadata["wovenRunID"] = .string(defaultAgentRunID)
+            }
             let response = try await request(
                 method: "_session/steering",
                 params: .object([
                     "sessionId": .string(sessionID),
-                    "prompt": try Self.promptBlocks(input),
-                    "_meta": .object([
-                        "steering": .object([
-                            "idleBehavior": .string("promptRequired"),
-                        ]),
-                    ]),
+                    "prompt": promptBlocks,
+                    "_meta": .object(steeringMetadata),
                 ]),
                 waitsForNotifications: false,
                 dispatchFence: dispatchFence
             )
             switch response?["outcome"]?.stringValue {
-            case "injected", "startedNewTurn":
+            case "injected":
                 return LocalACPActiveInputReceipt(completion: Task { nil })
+            case "startedNewTurn" where runtimeKind == .codex:
+                // Codex ACP also uses this outcome after a command-only prompt
+                // has already completed. Those commands never emit active/idle.
+                if commandOnly {
+                    let barrier = notificationTask
+                    return LocalACPActiveInputReceipt(completion: Task {
+                        try await barrier?.value
+                        return self.sessionCancellationRequested ? .cancelled : .endTurn
+                    })
+                }
+                if sessionCancellationRequested { try await cancel() }
+                followsDetachedTurn = true
+                lifecycle.continuation.yield(ACPRequestResponse(value: .object(["type": .string("steeringAccepted")]), notificationBarrier: nil))
+                return LocalACPActiveInputReceipt(completion: Task {
+                    defer {
+                        self.codexSteeringObservers.removeValue(forKey: observerID)?.finish()
+                    }
+                    var started = false
+                    var acknowledged = false
+                    var terminal: ACPRequestResponse?
+                    for try await status in lifecycle.stream {
+                        switch status.value?["type"]?.stringValue {
+                        case "active" where (status.value?["wovenGeneration"]?.integerValue ?? 0) > previousGeneration:
+                            started = true; terminal = nil
+                        case "idle" where started: terminal = status
+                        case "systemError", "notLoaded": if started { terminal = status }
+                        case "steeringAccepted": acknowledged = true
+                        default: break
+                        }
+                        if acknowledged, let terminal {
+                            try await terminal.notificationBarrier?.value
+                            guard terminal.value?["type"]?.stringValue == "idle" else {
+                                throw LocalACPClientError.invalidResponse("Codex stopped before completing the steering message.")
+                            }
+                            return self.sessionCancellationRequested ? .cancelled : .endTurn
+                        }
+                    }
+                    throw LocalACPClientError.processExited
+                })
             case "promptRequired":
                 return await LocalACPActiveInputReceipt(
                     completion: try beginActivePrompt(input, dispatchFence: dispatchFence)
@@ -1244,14 +1317,12 @@ public actor LocalACPClient {
         steeringSupported: Bool
     ) -> LocalACPActiveInputRoute {
         switch runtimeKind {
-        case .codex, .claudeCode:
+        case .codex, .claudeCode, .defaultAgent:
             steeringSupported ? .acpSteering : .unsupported
         case .grokBuild:
             .grokInterjection
         case .hermes, .cursor, .opencode, .openclaw:
             .concurrentPrompt
-        case .defaultAgent:
-            .unsupported
         case .pi:
             .piRPC
         }
@@ -1261,6 +1332,8 @@ public actor LocalACPClient {
         _ input: AgentMessageInput,
         dispatchFence: AgentDispatchFence? = nil
     ) async throws -> Task<LocalACPStopReason?, any Error> {
+        // A promptRequired receipt may arrive after Stop. Never start its
+        // fallback prompt after the native cancellation has already been sent.
         guard !sessionCancellationRequested else { throw LocalACPClientError.activeInputUnsupported }
         let prompt = try await beginPrompt(
             input,
@@ -1270,6 +1343,24 @@ public actor LocalACPClient {
             dispatchFence: dispatchFence
         )
         return Task { try await prompt.value }
+    }
+
+    nonisolated static func codexCommandCompletesWithoutTurn(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix("/") else { return false }
+        let parts = trimmed.dropFirst().trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(maxSplits: 1, whereSeparator: \.isWhitespace)
+        guard let command = parts.first else { return false }
+        let argument = parts.dropFirst().first.map(String.init)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        // Codex ACP 1.13.1 CodexCommands: these branches are entirely local to
+        // the adapter. Review, compact, goal creation and unknown commands may
+        // start native work and must retain the lifecycle observer.
+        switch command.lowercased() {
+        case "plan", "status", "rename", "logout", "skills", "mcp": return true
+        case "review-branch", "review-commit": return argument.isEmpty
+        case "goal": return ["", "pause", "clear"].contains(argument.lowercased()) || argument.utf16.count > 4_000
+        default: return false
+        }
     }
 
     private func beginPrompt(
@@ -1305,7 +1396,10 @@ public actor LocalACPClient {
                 params: .object([
                     "sessionId": .string(sessionID),
                     "prompt": blocks,
-                    "_meta": (runtimeKind == .defaultAgent || durableRemoteACP) ? .object(["wovenRunID": .string(defaultAgentRunID ?? UUID().uuidString.lowercased())]) : .object([:]),
+                    "_meta": (runtimeKind == .defaultAgent || durableRemoteACP) ? .object([
+                        "wovenRunID": .string(defaultAgentRunID ?? UUID().uuidString.lowercased()),
+                        "wovenInputID": .string(UUID().uuidString.lowercased()),
+                    ]) : .object([:]),
                 ]),
                 dispatchFence: dispatchFence
             )
@@ -1314,6 +1408,8 @@ public actor LocalACPClient {
             promptRequestFinished(promptID)
             throw error
         }
+        retainedRunHandlers = ActivePrompt(id: promptID, onEvent: onEvent,
+            onPermission: onPermission, onInteraction: onInteraction)
         return Task {
             do {
                 let result = try await response.value
@@ -1335,6 +1431,12 @@ public actor LocalACPClient {
                 throw error
             }
         }
+    }
+
+    /// Called by the coordinator only after every admitted input has settled.
+    public func finishRun() {
+        retainedRunHandlers = nil
+        activePrompts.removeAll()
     }
 
     private func promptRequestFinished(_ id: UUID) {
@@ -1472,6 +1574,7 @@ public actor LocalACPClient {
         }
         guard !closed else { return }
         closed = true
+        finishRun()
         for response in interactiveResponses.values { response.fence.cancel() }
         dismissBuiltInPermissions()
         readerTask?.cancel()
@@ -1545,7 +1648,10 @@ public actor LocalACPClient {
         let id = nextID
         nextID += 1
         let pair = AsyncThrowingStream<ACPRequestResponse, any Error>.makeStream()
-        pendingRequests[id] = PendingRequest(continuation: pair.continuation)
+        pendingRequests[id] = PendingRequest(
+            codexExpectedGeneration: method == "session/prompt" ? codexNativeGeneration + (codexThreadIsActive ? 0 : 1) : nil,
+            continuation: pair.continuation
+        )
         do {
             try await write(ACPEnvelope(
                 id: .integer(id),
@@ -1626,6 +1732,19 @@ public actor LocalACPClient {
             return
         }
         enqueueNotification(envelope)
+        if runtimeKind == .codex, envelope.method == "session/update", belongsToActiveSession(envelope),
+           let status = envelope.params?["update"]?["_meta"]?["codex"]?["threadStatus"] {
+            let isActive = status["type"]?.stringValue == "active"
+            if isActive && !codexThreadIsActive { codexNativeGeneration += 1 }
+            codexThreadIsActive = isActive
+            let sequencedStatus: ACPJSONValue = .object([
+                "type": status["type"] ?? .null,
+                "wovenGeneration": .integer(codexNativeGeneration),
+            ])
+            for observer in codexSteeringObservers.values {
+                observer.yield(ACPRequestResponse(value: sequencedStatus, notificationBarrier: notificationTask))
+            }
+        }
     }
 
     private func enqueueNotification(_ envelope: ACPEnvelope) {
@@ -1732,6 +1851,8 @@ public actor LocalACPClient {
     }
 
     private func failPendingRequests(with error: any Error) {
+        for observer in codexSteeringObservers.values { observer.finish(throwing: error) }
+        codexSteeringObservers.removeAll()
         let pending = pendingRequests.values
         pendingRequests.removeAll()
         for request in pending {
@@ -1976,7 +2097,8 @@ public actor LocalACPClient {
         for option in options {
             if let id = option["value"]?.stringValue {
                 result[id] = SessionOptionMetadata(name: option["name"]?.stringValue,
-                    description: option["description"]?.stringValue)
+                    description: option["description"]?.stringValue,
+                    modelName: option["_meta"]?["modelName"]?.stringValue)
             } else {
                 result.merge(configurationOptionMetadata(option["options"]?.arrayValue ?? [])) { _, latest in latest }
             }
@@ -2310,6 +2432,9 @@ public actor LocalACPClient {
     }
 
     private static func agentError(_ error: ACPErrorBody) -> LocalACPClientError {
+        if error.data?["deliveryUncertain"]?.boolValue == true {
+            return .deliveryUncertain(error.message ?? "The remote steering receipt was lost.")
+        }
         let detail = error.data?["details"]?.stringValue
         let dataMessage = error.data?["message"]?.stringValue
         let message = [error.message, detail, dataMessage]
@@ -2586,6 +2711,7 @@ private extension String {
 }
 
 public enum LocalACPClientError: LocalizedError, Sendable {
+    case deliveryUncertain(String)
     case invalidLaunchConfiguration
     case lineTooLarge
     case processExited
@@ -2606,6 +2732,7 @@ public enum LocalACPClientError: LocalizedError, Sendable {
 
     public var errorDescription: String? {
         switch self {
+        case .deliveryUncertain(let message): message
         case .invalidLaunchConfiguration:
             "The local agent's wrapped launch command is invalid."
         case .lineTooLarge:

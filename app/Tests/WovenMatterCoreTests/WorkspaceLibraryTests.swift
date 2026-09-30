@@ -142,7 +142,7 @@ struct WorkspaceLibraryTests {
     #expect(try Data(contentsOf: opened) == Data([1, 2, 3]))
   }
 
-  @Test("archive preserves items, deletion removes items and defeats a late transfer")
+  @Test("archive preserves items, trash hides items and defeats a late transfer")
   func deletion() async throws {
     let f = try await Fixture()
     defer { f.close() }
@@ -520,6 +520,14 @@ struct WorkspaceLibraryTests {
     try await f.db.applyInitialSessionTools(.init(enabled: [.library]), sessionID: chat)
     let result = try await f.db.queryAgentLibrary(callerID: chat)
     #expect(result.objectValue?["items"]?.arrayValue?.count == 1)
+    do {
+      _ = try await f.db.queryAgentLibrary(callerID: chat, id: UUID().uuidString)
+      Issue.record("Expected a missing library item to fail")
+    } catch WorkspaceToolError.notFound(let message) {
+      #expect(message == "Library item not found.")
+    } catch {
+      Issue.record("Expected not_found, received \(error)")
+    }
     try await f.db.setSessionTools(.init(enabled: []), sessionID: chat)
     await #expect(throws: WorkspaceToolError.self) { try await f.db.queryAgentLibrary(callerID: chat) }
   }

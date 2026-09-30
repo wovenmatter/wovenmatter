@@ -4,6 +4,45 @@ import WovenMatterCore
 @testable import WovenMatterDashboardStore
 
 struct ACPAssistantStreamWriterTests {
+  @Test func decisionQueuedDuringBoundaryPersistenceDoesNotWaitForResume() async throws {
+    let acquired = AsyncStream<Void>.makeStream()
+    let queued = AsyncStream<Void>.makeStream()
+    let fixture = try await WriterFixture(onPersistenceEvent: { event in
+      switch event {
+      case .acquired: acquired.continuation.yield(())
+      case .queued: queued.continuation.yield(())
+      }
+    })
+    defer { fixture.remove() }
+    let entered = AsyncStream<Void>.makeStream()
+    let release = DispatchSemaphore(value: 0)
+    defer { release.signal() }
+    let blocked = Task { try await fixture.database.write { _ in
+      entered.continuation.yield(())
+      #expect(release.wait(timeout: .now() + 60) == .success)
+    } }
+    var iterator = entered.stream.makeAsyncIterator()
+    await iterator.next()
+    let boundary = Task { try await fixture.writer.finishSegmentAndPause() }
+    #expect(await receiveWriterSignal(acquired.stream))
+    let completed = AsyncStream<Void>.makeStream()
+    let decision = Task {
+      try await fixture.writer.finishSegmentForDecision()
+      completed.continuation.yield(())
+    }
+    // Prove the decision is queued behind the boundary before releasing SQLite;
+    // no scheduler delay or polling interval is used to establish this ordering.
+    #expect(await receiveWriterSignal(queued.stream))
+    release.signal()
+    try await blocked.value
+    try await boundary.value
+    let finishedBeforeResume = await receiveWriterSignal(completed.stream)
+    // Always release a regressed waiter, so a failure does not hang the suite.
+    await fixture.writer.resumeAfterSegmentBoundary()
+    try await decision.value
+    #expect(finishedBeforeResume)
+  }
+
   @Test func boundariesAndSnapshotPreserveCanonicalSteeringPrefix() async throws {
     let fixture = try await WriterFixture()
     defer { fixture.remove() }
@@ -56,6 +95,22 @@ struct ACPAssistantStreamWriterTests {
   }
 }
 
+private func receiveWriterSignal(_ stream: AsyncStream<Void>) async -> Bool {
+  await withTaskGroup(of: Bool.self) { group in
+    group.addTask {
+      var iterator = stream.makeAsyncIterator()
+      return await iterator.next() != nil
+    }
+    group.addTask {
+      try? await Task.sleep(for: .seconds(10))
+      return false
+    }
+    let received = await group.next() ?? false
+    group.cancelAll()
+    return received
+  }
+}
+
 private struct WriterFixture {
   let root: URL
   let database: WorkspaceDatabase
@@ -63,7 +118,7 @@ private struct WriterFixture {
   let run: LocalACPRunIdentifiers
   let writer: LocalACPAssistantStreamWriter
 
-  init() async throws {
+  init(onPersistenceEvent: (@Sendable (LocalACPAssistantStreamWriter.PersistenceEvent) -> Void)? = nil) async throws {
     root = FileManager.default.temporaryDirectory.appending(path: "acp-writer-\(UUID())")
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     database = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
@@ -73,7 +128,7 @@ private struct WriterFixture {
     run = try await database.beginLocalACPRun(conversationID: conversationID, content: "Start")
     writer = LocalACPAssistantStreamWriter(
       database: database, runID: run.runID, assistantMessageID: run.assistantMessageID,
-      conversationID: conversationID, onChange: nil
+      conversationID: conversationID, onChange: nil, onPersistenceEvent: onPersistenceEvent
     )
   }
 

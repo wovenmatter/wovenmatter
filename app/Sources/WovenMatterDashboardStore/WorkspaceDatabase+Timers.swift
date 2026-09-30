@@ -8,6 +8,39 @@ extension WorkspaceDatabaseConnection {
     try withLock { try timersUnlocked(sessionID: sessionID) }
   }
 
+  public func querySessionTimers(callerID: String, sessionID: String, after: Int64 = 0,
+                                 limit: Int = 100) throws -> GatewayJSONValue {
+    try withLock {
+      try requireTimerAccessUnlocked(sourceID: callerID, targetID: sessionID)
+      guard after >= 0, (1...200).contains(limit) else {
+        throw WorkspaceToolError.invalid("Invalid pagination.")
+      }
+      var rows = try historyRowsUnlocked("""
+        SELECT t.rowid AS sequence,t.* FROM workspace_session_timers t
+        JOIN dashboard_conversations c ON c.id=t.session_id
+        WHERE c.deleted_at IS NULL AND t.session_id=? AND t.rowid>?
+        ORDER BY t.rowid LIMIT ?
+        """, values: [sessionID, String(after), String(limit + 1)])
+      let more = rows.count > limit
+      if more { rows.removeLast() }
+      rows = rows.map { value in
+        guard var row = value.objectValue else { return value }
+        if let seconds = row.removeValue(forKey: "next_fire_at")?.doubleValue {
+          row["nextFireAt"] = .string(Self.timestamp(Date(timeIntervalSince1970: seconds)))
+        }
+        row["id"] = row.removeValue(forKey: "id") ?? .null
+        row["sessionID"] = row.removeValue(forKey: "session_id") ?? .null
+        row["instruction"] = row.removeValue(forKey: "instruction") ?? .null
+        row["intervalSeconds"] = row.removeValue(forKey: "interval_seconds") ?? .null
+        row["isPaused"] = .bool(row.removeValue(forKey: "is_paused")?.intValue == 1)
+        row["pendingDeliveryID"] = row.removeValue(forKey: "pending_delivery_id") ?? .null
+        return .object(row)
+      }
+      return .object(["rows": .array(rows), "hasMore": .bool(more),
+        "nextCursor": rows.last?.objectValue?["sequence"] ?? .number(Double(after))])
+    }
+  }
+
   private func timersUnlocked(sessionID: String? = nil) throws -> [WorkspaceSessionTimer] {
     let sql = "SELECT t.* FROM workspace_session_timers t JOIN dashboard_conversations c ON c.id=t.session_id WHERE c.deleted_at IS NULL"
       + (sessionID == nil ? "" : " AND t.session_id=?") + " ORDER BY t.next_fire_at,t.id"
@@ -44,7 +77,7 @@ extension WorkspaceDatabaseConnection {
         let existing = try historyRowsUnlocked("SELECT session_id FROM workspace_session_timers WHERE id=?", values: [timer.id])
           .first?.objectValue?["session_id"]?.stringValue
         if creating == true, existing != nil { throw WorkspaceToolError.invalid("Timer already exists.") }
-        if creating == false, existing == nil { throw WorkspaceToolError.invalid("Timer not found.") }
+        if creating == false, existing == nil { throw WorkspaceToolError.notFound("Timer not found.") }
         var saved = timer
         if creating == false, let existing { saved.sessionID = existing }
         try requireTimerAccessUnlocked(sourceID: callerID, targetID: saved.sessionID)
@@ -71,7 +104,7 @@ extension WorkspaceDatabaseConnection {
       let outcome = try performToolMutationUnlocked(callerID: callerID, requestID: requestID,
         operation: paused ? "timers.pause" : "timers.resume", input: id) {
         guard let timer = try timersUnlocked().first(where: { $0.id == id }) else {
-          throw WorkspaceToolError.invalid("Timer not found.")
+          throw WorkspaceToolError.notFound("Timer not found.")
         }
         if let callerID { try requireTimerAccessUnlocked(sourceID: callerID, targetID: timer.sessionID) }
         if !paused { try requireToolUnlocked(.timers, sessionID: timer.sessionID) }

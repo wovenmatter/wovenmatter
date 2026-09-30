@@ -6,6 +6,340 @@ import WovenMatterClient
 
 @Suite("Agent tools access, coordination and timers")
 struct WorkspaceAgentToolTests {
+  @Test func replacementTablesAreValidatedBeforeApplyingABatch() async throws {
+    let malformed = NoteTableBlock(id: "table", columns: [NoteTableColumn()],
+      rows: [NoteTableRow(cells: [])])
+    let operations: [NoteEditOperation] = [
+      .replaceBlock(id: "original", block: .table(malformed)),
+      .setTableCell(tableID: "table", row: 0, column: 0, runs: [.init(text: "value")])
+    ]
+    // Applying this malformed batch before validating its shape indexes an empty cell array.
+    #expect(throws: (any Error).self) {
+      try RemoteNoteEditEnvelope.validate(operations: operations, noteKind: .note)
+    }
+    var oversized = malformed
+    oversized.columns = Array(repeating: NoteTableColumn(), count: 129)
+    #expect(throws: (any Error).self) {
+      try RemoteNoteEditEnvelope.validate(operations: [.replaceBlock(id: "original", block: .table(oversized))], noteKind: .note)
+    }
+  }
+
+  @Test func indexedTableInsertionsRequireTheRevisionTheyWerePlannedAgainst() async throws {
+    let (db, dir, caller, _) = try await fixture()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let note = try await db.createNote(folderID: nil, callerConversationID: caller, requestID: UUID().uuidString)
+    let table = try await db.applyNoteEdits(.init(command: .apply, noteID: note,
+      operations: [.createTable(afterBlockID: nil, rows: 2, columns: 2, headerRow: false)]),
+      callerConversationID: caller, requestID: UUID().uuidString)
+    let tableID = try #require(table.document?.blocks.last?.id)
+    for operation: NoteEditOperation in [.addTableRow(tableID: tableID, after: 0), .addTableColumn(tableID: tableID, after: 0)] {
+      await #expect(throws: (any Error).self) {
+        try await db.applyNoteEdits(.init(command: .apply, noteID: note, operations: [operation]),
+          callerConversationID: caller, requestID: UUID().uuidString)
+      }
+    }
+    #expect(try await db.readNoteForEditing(id: note) == table)
+    let appended = try await db.applyNoteEdits(.init(command: .apply, noteID: note,
+      operations: [.addTableRow(tableID: tableID, after: nil)]), callerConversationID: caller, requestID: UUID().uuidString)
+    #expect(appended.success)
+  }
+
+  @Test func legacyRevisionlessReceiptsReplayWithoutPermittingNewRevisionlessWrites() async throws {
+    let (db, dir, caller, _) = try await fixture()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let note = try await db.createNote(folderID: nil, title: "Original")
+    let initial = try await db.readNoteForEditing(id: note)
+    let requestID = UUID().uuidString.lowercased()
+    let legacyRequest = NoteEditingRequest(command: .apply, noteID: note,
+      operations: [.setTitle("Legacy edit")])
+    let applied = try await db.applyNoteEdits(.init(command: .apply, noteID: note,
+      expectedRevision: initial.revision, operations: legacyRequest.operations))
+    // Model the durable pre-upgrade receipt, whose input had no revision. The
+    // edit above already committed; seed its acknowledgement without nesting
+    // applyNoteEdits' transaction inside the receipt fixture transaction.
+    _ = try await db.write { connection in
+      try connection.transaction {
+        try connection.performToolMutationUnlocked(callerID: caller, requestID: requestID,
+          operation: "notes.apply", input: legacyRequest, receipt: connection.noteMutationReceipt) {
+            applied
+          }.result
+      }
+    }
+    let later = try await db.applyNoteEdits(.init(command: .apply, noteID: note,
+      expectedRevision: applied.revision, operations: [.setTitle("Later user edit")]))
+    let reopened = try await WorkspaceDatabase(url: dir.appending(path: "workspace.sqlite"))
+    let replay = try await reopened.applyNoteEdits(legacyRequest, callerConversationID: caller,
+      requestID: requestID)
+    #expect(replay.replayed == true && replay.revision == applied.revision)
+    #expect(try await reopened.readNoteForEditing(id: note) == later)
+    await #expect(throws: WorkspaceToolError.revisionRequired(
+      "This note operation requires --revision. Read the note again and pass its current revision.")) {
+      try await reopened.applyNoteEdits(legacyRequest, callerConversationID: caller,
+        requestID: UUID().uuidString)
+    }
+    try await reopened.setSessionTools(.init(enabled: []), sessionID: caller)
+    await #expect(throws: WorkspaceToolError.disabled(.notes)) {
+      try await reopened.applyNoteEdits(legacyRequest, callerConversationID: caller,
+        requestID: requestID)
+    }
+  }
+
+  @Test func legacyUppercaseRequestIDsKeepTheirReceiptsAfterUpgrade() async throws {
+    let (db, dir, caller, target) = try await fixture()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let note = try await db.createNote(folderID: nil)
+    let requestID = UUID().uuidString
+    let request = NoteEditingRequest(command: .apply, noteID: note, operations: [.appendText("one append", .paragraph)])
+    _ = try await db.applyNoteEdits(request, callerConversationID: caller, requestID: requestID)
+    try await db.write { connection in
+      try connection.toolsExecuteUnlocked("UPDATE workspace_tool_mutations SET request_id=upper(request_id) WHERE source_id=? AND request_id=?", [caller, requestID.lowercased()])
+    }
+    let replay = try await db.applyNoteEdits(request, callerConversationID: caller, requestID: requestID.lowercased())
+    #expect(replay.replayed == true)
+    #expect(try await db.readNoteForEditing(id: note).document?.plainText.components(separatedBy: "one append").count == 2)
+
+    try await db.beginCoordination(sourceID: caller, targetID: target, purpose: "Retry")
+    let deliveryID = UUID().uuidString
+    _ = try await db.reserveToolDelivery(sourceID: caller, targetID: target, text: "Delivered once", requestID: deliveryID)
+    try await db.write { connection in
+      try connection.toolsExecuteUnlocked("UPDATE workspace_session_deliveries SET id=upper(id) WHERE id=?", [deliveryID.lowercased()])
+    }
+    #expect(try await db.toolDelivery(id: deliveryID.lowercased()) != nil)
+    #expect(try await db.claimToolDelivery(id: deliveryID.lowercased()) != nil)
+    try await db.setToolDeliveryStatus(id: deliveryID.lowercased(), status: "accepted")
+    #expect(try await db.reserveToolDelivery(sourceID: caller, targetID: target, text: "Delivered once", requestID: deliveryID.lowercased()).status == "accepted")
+
+    let creationID = UUID().uuidString
+    let arguments = ["sessions", "create", "--title", "Once"]
+    let reservation = try await db.reserveToolSessionCreation(sourceID: caller, requestID: creationID, arguments: arguments, purpose: "Retry", managed: false)
+    try await db.write { connection in
+      try connection.toolsExecuteUnlocked("UPDATE workspace_session_creations SET id=upper(id) WHERE id=?", [creationID.lowercased()])
+    }
+    let retry = try await db.reserveToolSessionCreation(sourceID: caller, requestID: creationID.lowercased(), arguments: arguments, purpose: "Retry", managed: false)
+    #expect(retry.objectValue?["target_id"] == reservation.objectValue?["target_id"])
+    // Old builds could persist both spellings. Preserve that evidence and reject ambiguity.
+    try await db.write { connection in
+      try connection.toolsExecuteUnlocked("INSERT INTO workspace_tool_mutations SELECT source_id,lower(request_id),operation,input_digest,result_json FROM workspace_tool_mutations WHERE source_id=? AND request_id=?", [caller, requestID])
+    }
+    await #expect(throws: (any Error).self) {
+      _ = try await db.applyNoteEdits(request, callerConversationID: caller, requestID: requestID.lowercased())
+    }
+  }
+
+  @Test func linkedSQLiteRejectsPragmasBeforeOpeningAnyDatabase() {
+    // Use a nonexistent path: this assertion never executes a process-wide
+    // allocator-changing pragma even if prefix validation regresses.
+    #expect(throws: DatabaseLinkedDataError.sqliteReadOnlyQueryRequired) {
+      try DatabaseLinkedData.load(from: URL(fileURLWithPath: "/nonexistent/pr85-linked-data.sqlite"),
+        preference: .sqlite, sqliteQuery: "PRAGMA hard_heap_limit=1")
+    }
+  }
+
+  @Test func linkedSQLitePreservesEmbeddedNULTextAndBudgetsItsSuffix() async throws {
+    let (db, dir, _, _) = try await fixture()
+    _ = db
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let url = dir.appending(path: "workspace.sqlite")
+    let table = try DatabaseLinkedData.load(from: url, preference: .sqlite,
+      sqliteQuery: "SELECT 'before'||char(0)||'after 🪡' AS value")
+    #expect(table.rows == [["before\0after 🪡"]])
+    let object = try JSONSerialization.jsonObject(with: Data(table.json.utf8)) as? [[String: String]]
+    #expect(object?.first?["value"] == "before\0after 🪡")
+    #expect(throws: DatabaseLinkedDataError.sqliteResultTooLarge) {
+      try DatabaseLinkedData.load(from: url, preference: .sqlite,
+        sqliteQuery: "WITH n(x) AS (VALUES(1),(2),(3)) SELECT char(0)||replace(hex(zeroblob(100000)),'0',char(1)) AS value FROM n")
+    }
+  }
+
+  @Test func sqliteResultBudgetsIncludeJSONEscaping() async throws {
+    let control = String(repeating: "\u{0001}", count: 200_000)
+    #expect(throws: DatabaseLinkedDataError.sqliteResultTooLarge) {
+      try DatabaseLinkedData.load(queryResponse: .init(columns: ["value"],
+        rows: Array(repeating: [control], count: 3)))
+    }
+    #expect(throws: DatabaseLinkedDataError.sqliteResultTooLarge) {
+      try DatabaseLinkedData.load(queryResponse: .init(columns: [String(repeating: "\u{0001}", count: 4_000)],
+        rows: Array(repeating: ["value"], count: 100)))
+    }
+    let (db, dir, _, _) = try await fixture()
+    _ = db
+    defer { try? FileManager.default.removeItem(at: dir) }
+    #expect(throws: DatabaseLinkedDataError.sqliteResultTooLarge) {
+      try DatabaseLinkedData.load(from: dir.appending(path: "workspace.sqlite"), preference: .sqlite,
+        sqliteQuery: "WITH n(x) AS (VALUES(1),(2),(3)) SELECT replace(hex(zeroblob(100000)),'0',char(1)) AS value FROM n")
+    }
+  }
+
+  @Test func remoteSQLiteBudgetsIncludeRepeatedColumnNames() async throws {
+    #expect(throws: DatabaseLinkedDataError.sqliteResultTooLarge) {
+      try DatabaseLinkedData.load(queryResponse: .init(columns: [String(repeating: "c", count: 3_000)],
+        rows: Array(repeating: ["v"], count: 1_000)))
+    }
+  }
+
+  @Test func managementReceiptKeepsItsOriginalCoordinationEpoch() async throws {
+    let (db, dir, caller, target) = try await fixture()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let requestID = UUID().uuidString
+    let first = try await db.requestCoordinationAccess(sourceID: caller, targetID: target, purpose: "First", requestID: requestID)
+    let accepted = first.state == "pending" ? try await db.resolveCoordinationAccess(requestID: requestID, allowed: true) : first
+    let epoch = try #require(accepted.coordinationEpoch)
+    try await db.endCoordination(targetID: target, sourceID: caller)
+    try await db.beginCoordination(sourceID: caller, targetID: target, purpose: "New", userApprovedAccess: true)
+    let replay = try await db.requestCoordinationAccess(sourceID: caller, targetID: target, purpose: "First", requestID: requestID)
+    #expect(replay.coordinationEpoch == epoch)
+    #expect(try await replay.coordinationEpoch != db.sessionRelationship(target).coordinationEpoch)
+  }
+
+  @Test func editBatchesCannotExceedDocumentLimitsBetweenOperations() async throws {
+    let document = NoteDocument(blocks: [.richText(.init(id: "left")), .richText(.init(id: "right"))])
+    var left = NoteTableBlock(rows: 100, columns: 100); left.id = "left"
+    var right = left; right.id = "right"
+    let operations: [NoteEditOperation] = [.replaceBlock(id: "left", block: .table(left)),
+      .replaceBlock(id: "right", block: .table(right)), .deleteBlock(id: "right")]
+    #expect(throws: RemoteNoteEditError.operationTooLarge) {
+      try RemoteNoteEditEnvelope.validate(operations: operations, applyingTo: document)
+    }
+  }
+
+  @Test func linkedSQLiteQueriesHaveExecutionAndResultBudgets() async throws {
+    let (db, dir, _, _) = try await fixture()
+    _ = db
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let url = dir.appending(path: "workspace.sqlite")
+    #expect(throws: DatabaseLinkedDataError.sqliteResultTooLarge) {
+      try DatabaseLinkedData.load(from: url, preference: .sqlite,
+        sqliteQuery: "SELECT hex(randomblob(300000)) AS payload")
+    }
+    #expect(throws: DatabaseLinkedDataError.sqliteQueryLimitExceeded) {
+      try DatabaseLinkedData.load(from: url, preference: .sqlite,
+        sqliteQuery: "WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<100000000) SELECT sum(x) FROM n")
+    }
+    #expect(throws: DatabaseLinkedDataError.sqliteResultTooLarge) {
+      try DatabaseLinkedData.load(queryResponse: .init(columns: ["value"],
+        rows: [[String(repeating: "x", count: DatabaseLinkedData.maximumSQLiteCellBytes + 1)]]))
+    }
+  }
+
+  @Test func coordinationEpochsMakeReleaseAndNotificationRetriesSafe() async throws {
+    let (db, dir, source, target) = try await fixture()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    try await db.beginCoordination(sourceID: source, targetID: target, purpose: "First assignment")
+    let firstEpoch = try await #require(db.sessionRelationship(target).coordinationEpoch)
+    let notificationID = UUID().uuidString
+    let changed = try await db.setAgentCoordinationNotifications(sourceID: source, targetID: target,
+      epoch: firstEpoch, enabled: false, requestID: notificationID)
+    let notificationReplay = try await db.setAgentCoordinationNotifications(sourceID: source, targetID: target,
+      epoch: firstEpoch, enabled: false, requestID: notificationID.lowercased())
+    #expect(!changed.replayed && notificationReplay.replayed)
+
+    let releaseID = UUID().uuidString
+    let released = try await db.releaseAgentCoordination(sourceID: source, targetID: target,
+      epoch: firstEpoch, requestID: releaseID)
+    #expect(!released.replayed)
+    try await db.beginCoordination(sourceID: source, targetID: target, purpose: "New assignment")
+    let secondEpoch = try await #require(db.sessionRelationship(target).coordinationEpoch)
+    #expect(secondEpoch != firstEpoch)
+    let replay = try await db.releaseAgentCoordination(sourceID: source, targetID: target,
+      epoch: firstEpoch, requestID: releaseID.lowercased())
+    #expect(replay.replayed)
+    #expect(try await db.sessionRelationship(target).coordinationEpoch == secondEpoch)
+    await #expect(throws: WorkspaceToolError.revisionConflict(
+      "The coordination epoch is stale. Read sessions status and retry with its current epoch.")) {
+      try await db.releaseAgentCoordination(sourceID: source, targetID: target,
+        epoch: firstEpoch, requestID: UUID().uuidString)
+    }
+    #expect(try await db.sessionRelationship(target).coordinationEpoch == secondEpoch)
+  }
+
+  @Test func noteMutationLimitsRejectOversizedAndInvalidWorkAtomically() async throws {
+    let (db, dir, caller, _) = try await fixture()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let note = try await db.createNote(folderID: nil, callerConversationID: caller,
+      requestID: UUID().uuidString)
+    let original = try await db.readNoteForEditing(id: note)
+    await #expect(throws: (any Error).self) {
+      try await db.applyNoteEdits(.init(command: .apply, noteID: note,
+        operations: Array(repeating: .appendText("x", .paragraph), count: 129)),
+        callerConversationID: caller, requestID: UUID().uuidString)
+    }
+    await #expect(throws: (any Error).self) {
+      try await db.applyNoteEdits(.init(command: .apply, noteID: note,
+        operations: [.createTable(afterBlockID: nil, rows: -1, columns: 2, headerRow: false)]),
+        callerConversationID: caller, requestID: UUID().uuidString)
+    }
+    await #expect(throws: (any Error).self) {
+      try await db.applyNoteEdits(.init(command: .apply, noteID: note,
+        expectedRevision: original.revision, operations: [.setTitle(String(repeating: "t", count: 1_025))]),
+        callerConversationID: caller, requestID: UUID().uuidString)
+    }
+    let table = try await db.applyNoteEdits(.init(command: .apply, noteID: note,
+      operations: [.createTable(afterBlockID: nil, rows: 1, columns: 1, headerRow: false)]),
+      callerConversationID: caller, requestID: UUID().uuidString)
+    let tableID = try #require(table.document?.blocks.last?.id)
+    await #expect(throws: (any Error).self) {
+      try await db.applyNoteEdits(.init(command: .apply, noteID: note,
+        operations: [.addTableRow(tableID: tableID, after: Int.max)]),
+        callerConversationID: caller, requestID: UUID().uuidString)
+    }
+    let beforeAtomicFailure = try await db.readNoteForEditing(id: note)
+    await #expect(throws: (any Error).self) {
+      try await db.applyNoteEdits(.init(command: .apply, noteID: note,
+        expectedRevision: beforeAtomicFailure.revision,
+        operations: [.appendText("must roll back", .paragraph), .deleteBlock(id: "missing")]),
+        callerConversationID: caller, requestID: UUID().uuidString)
+    }
+    #expect(try await db.readNoteForEditing(id: note) == beforeAtomicFailure)
+  }
+
+  @Test func discoveryPaginationAndRequestIDCanonicalizationAreConsistent() async throws {
+    let (db, dir, caller, _) = try await fixture()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let expectedFolders = [
+      try await db.createFolder(name: "Discoverable"),
+      try await db.createFolder(name: "Second folder"),
+      try await db.createFolder(name: "Third folder")
+    ]
+    let note = try await db.createNote(folderID: nil, title: "Deep search", kind: .note,
+      callerConversationID: caller, requestID: UUID().uuidString)
+    let requestID = UUID().uuidString
+    let text = String(repeating: "prefix ", count: 100) + "distantneedle"
+    _ = try await db.applyNoteEdits(.init(command: .apply, noteID: note,
+      operations: [.appendText(text, .paragraph)]), callerConversationID: caller, requestID: requestID)
+    _ = try await db.applyNoteEdits(.init(command: .apply, noteID: note,
+      operations: [.appendText(text, .paragraph)]), callerConversationID: caller,
+      requestID: requestID.lowercased())
+    #expect(try await db.readNoteForEditing(id: note).document?.plainText
+      .components(separatedBy: "distantneedle").count == 2)
+    let notes = try await db.listAgentNotes(callerID: caller, search: "distantneedle", limit: 1)
+    #expect(notes.objectValue?["rows"]?.arrayValue?.first?.objectValue?["kind"]?.stringValue == "note")
+    let newer = try await db.createNote(folderID: nil, title: "Newer", callerConversationID: caller,
+      requestID: UUID().uuidString)
+    let newest = try await db.listAgentNotes(callerID: caller, limit: 1)
+    let oldest = try await db.listAgentNotes(callerID: caller, after: 0, limit: 1, newestFirst: false)
+    #expect(newest.objectValue?["rows"]?.arrayValue?.first?.objectValue?["id"]?.stringValue == newer)
+    #expect(oldest.objectValue?["rows"]?.arrayValue?.first?.objectValue?["id"]?.stringValue == note)
+
+    try await db.setSessionTools(.init(enabled: [.notes, .timers]), sessionID: caller)
+    let folders = try await db.listAgentFolders(callerID: caller, requiredTool: .notes, limit: 1)
+    #expect(folders.objectValue?["rows"]?.arrayValue?.count == 1)
+    let firstFolder = folders.objectValue?["rows"]?.arrayValue?.first?.objectValue?["id"]?.stringValue
+    let folderCursor = Int64(folders.objectValue?["nextCursor"]?.intValue ?? 0)
+    let remainingFolders = try await db.listAgentFolders(callerID: caller, requiredTool: .notes,
+      after: folderCursor, limit: 200)
+    let folderIDs = ([firstFolder] + (remainingFolders.objectValue?["rows"]?.arrayValue?.map {
+      $0.objectValue?["id"]?.stringValue
+    } ?? [])).compactMap { $0 }
+    #expect(folderIDs == expectedFolders)
+    for index in 0..<3 {
+      try await db.saveSessionTimer(.init(sessionID: caller, instruction: "Timer \(index)",
+        nextFireAt: Date(timeIntervalSince1970: 4_000_000_000 + Double(index))), callerID: caller)
+    }
+    let timers = try await db.querySessionTimers(callerID: caller, sessionID: caller, limit: 1)
+    #expect(timers.objectValue?["rows"]?.arrayValue?.count == 1)
+    #expect(timers.objectValue?["hasMore"]?.boolValue == true)
+  }
+
   @Test func builtInClaudeUsageKeepsSubscriptionAndAPIKeyBillingDistinct() async throws {
     let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -522,14 +856,16 @@ extension WorkspaceAgentToolTests {
     #expect(responses.filter { $0.replayed != true }.count == 1)
     #expect(Set(responses.compactMap(\.revision)).count == 1)
     #expect(try await db.noteAssetVersions(id: note).count == before + 1)
-    let userEdit = try await db.applyNoteEdits(.init(command: .apply, noteID: note, operations: [.setTitle("Later user edit")]))
+    let userEdit = try await db.applyNoteEdits(.init(command: .apply, noteID: note,
+      expectedRevision: responses.first?.revision, operations: [.setTitle("Later user edit")]))
     let reopened = try await WorkspaceDatabase(url: dir.appending(path: "workspace.sqlite"))
     let replay = try await reopened.applyNoteEdits(request, callerConversationID: caller, requestID: requestID)
     #expect(replay.replayed == true && replay.document == nil && replay.title == nil)
     #expect(replay.revision == responses.first?.revision)
     #expect(try await reopened.readNoteForEditing(id: note) == userEdit)
     await #expect(throws: (any Error).self) {
-      try await reopened.applyNoteEdits(.init(command: .apply, noteID: note, operations: [.setTitle("Changed payload")]),
+      try await reopened.applyNoteEdits(.init(command: .apply, noteID: note,
+        expectedRevision: userEdit.revision, operations: [.setTitle("Changed payload")]),
         callerConversationID: caller, requestID: requestID)
     }
     try await reopened.setSessionTools(.init(enabled: []), sessionID: caller)
@@ -546,13 +882,16 @@ extension WorkspaceAgentToolTests {
     #expect(try await db.createNote(folderID: nil, title: "Original", callerConversationID: caller, requestID: creationID) == note)
     #expect(try await db.listAgentNotes(callerID: caller).objectValue?["rows"]?.arrayValue?.count == 1)
     let version = try await #require(db.noteAssetVersions(id: note).first)
-    let edited = try await db.applyNoteEdits(.init(command: .apply, noteID: note, operations: [.setTitle("Second")]))
+    let initialRevision = try await #require(db.readNoteForEditing(id: note).revision)
+    let edited = try await db.applyNoteEdits(.init(command: .apply, noteID: note,
+      expectedRevision: initialRevision, operations: [.setTitle("Second")]))
     let expected = try #require(edited.revision)
     let restoreID = UUID().uuidString
     let restored = try await db.restoreNoteAssetVersion(noteID: note, versionID: version.id, expectedRevision: expected,
       callerConversationID: caller, requestID: restoreID)
     #expect(restored.title == "Original")
-    let latest = try await db.applyNoteEdits(.init(command: .apply, noteID: note, operations: [.setTitle("Third")]))
+    let latest = try await db.applyNoteEdits(.init(command: .apply, noteID: note,
+      expectedRevision: restored.revision, operations: [.setTitle("Third")]))
     // A receipt remains usable after its old version has been pruned.
     try await db.write { connection in try connection.transaction { try connection.toolsExecuteUnlocked("DELETE FROM note_asset_versions WHERE id=?", [version.id])  } }
     let replay = try await db.restoreNoteAssetVersion(noteID: note, versionID: version.id, expectedRevision: expected,
@@ -571,15 +910,16 @@ extension WorkspaceAgentToolTests {
     defer { try? FileManager.default.removeItem(at: dir) }
     let note = try await db.createNote(folderID: nil)
     let requestID = UUID().uuidString
-    let request = NoteEditingRequest(command: .apply, noteID: note,
-      operations: [.appendText("Must roll back", .paragraph), .deleteBlock(id: "missing-block")])
     let original = try await db.readNoteForEditing(id: note)
+    let request = NoteEditingRequest(command: .apply, noteID: note, expectedRevision: original.revision,
+      operations: [.appendText("Must roll back", .paragraph), .deleteBlock(id: "missing-block")])
     let versions = try await db.noteAssetVersions(id: note)
     await #expect(throws: (any Error).self) { try await db.applyNoteEdits(request, callerConversationID: caller, requestID: requestID) }
     #expect(try await db.readNoteForEditing(id: note) == original)
     #expect(try await db.noteAssetVersions(id: note).map(\.id) == versions.map(\.id))
     // A failed transaction did not burn the request ID.
-    let success = try await db.applyNoteEdits(.init(command: .apply, noteID: note, operations: [.setTitle("Recovered")]),
+    let success = try await db.applyNoteEdits(.init(command: .apply, noteID: note,
+      expectedRevision: original.revision, operations: [.setTitle("Recovered")]),
       callerConversationID: caller, requestID: requestID)
     #expect(success.title == "Recovered" && success.replayed != true)
   }

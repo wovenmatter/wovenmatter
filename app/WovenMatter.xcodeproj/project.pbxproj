@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		DA2090000000000000000012 /* SettingsDefaultAgentSDKView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA2090000000000000000011 /* SettingsDefaultAgentSDKView.swift */; };
+		DA2090000000000000000002 /* DefaultAgentSDKSettingsModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA2090000000000000000001 /* DefaultAgentSDKSettingsModel.swift */; };
 		F2F8DB61A6E248D0FCD77382 /* BackendOpenCodeService.swift in Sources */ = {isa = PBXBuildFile; fileRef = F178B05B2AE0D773B0C59957 /* BackendOpenCodeService.swift */; };
 		A71B00000000000000000101 /* LibraryModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A71B00000000000000000102 /* LibraryModel.swift */; };
 		A71B00000000000000000001 /* DashboardLibraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A71B00000000000000000002 /* DashboardLibraryView.swift */; };
@@ -99,9 +101,15 @@
 		4ECDD63540C793A047BDD9CC /* BackendConnectionsService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 296D14690B191EF43D51603C /* BackendConnectionsService.swift */; };
 		CBCBD600AB92468988000001 /* BackendSpeechService.swift in Sources */ = {isa = PBXBuildFile; fileRef = CBCBD600AB92468988000002 /* BackendSpeechService.swift */; };
 		281F6DF22C3AE19CCE3FC99D /* BackendLibraryService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 753DF034EE6D727B6091929D /* BackendLibraryService.swift */; };
+		C131C0A00000000000000002 /* ApplicationModel+ConversationActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = C131C0A00000000000000001 /* ApplicationModel+ConversationActions.swift */; };
+		C131C0B00000000000000002 /* ApplicationModel+NoteActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = C131C0B00000000000000001 /* ApplicationModel+NoteActions.swift */; };
+		C131C0A00000000000000004 /* DashboardConversationActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = C131C0A00000000000000003 /* DashboardConversationActions.swift */; };
+		C131C0B00000000000000004 /* DashboardNoteActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = C131C0B00000000000000003 /* DashboardNoteActions.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		DA2090000000000000000011 /* SettingsDefaultAgentSDKView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsDefaultAgentSDKView.swift; sourceTree = "<group>"; };
+		DA2090000000000000000001 /* DefaultAgentSDKSettingsModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DefaultAgentSDKSettingsModel.swift; sourceTree = "<group>"; };
 		F178B05B2AE0D773B0C59957 /* BackendOpenCodeService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BackendOpenCodeService.swift"; sourceTree = "<group>"; };
 		A71B00000000000000000102 /* LibraryModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryModel.swift; sourceTree = "<group>"; };
 		A71B00000000000000000002 /* DashboardLibraryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardLibraryView.swift; sourceTree = "<group>"; };
@@ -195,6 +203,10 @@
 		296D14690B191EF43D51603C /* BackendConnectionsService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BackendConnectionsService.swift"; sourceTree = "<group>"; };
 		CBCBD600AB92468988000002 /* BackendSpeechService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BackendSpeechService.swift"; sourceTree = "<group>"; };
 		753DF034EE6D727B6091929D /* BackendLibraryService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BackendLibraryService.swift"; sourceTree = "<group>"; };
+		C131C0A00000000000000001 /* ApplicationModel+ConversationActions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ApplicationModel+ConversationActions.swift"; sourceTree = "<group>"; };
+		C131C0B00000000000000001 /* ApplicationModel+NoteActions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ApplicationModel+NoteActions.swift"; sourceTree = "<group>"; };
+		C131C0A00000000000000003 /* DashboardConversationActions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DashboardConversationActions.swift"; sourceTree = "<group>"; };
+		C131C0B00000000000000003 /* DashboardNoteActions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DashboardNoteActions.swift"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -256,6 +268,7 @@
 			children = (
 				7E4AE75EDB3C1EE9E7043F59 /* DictationModel.swift */,
 				DA2000000000000000000001 /* DefaultAgentSettingsModel.swift */,
+				DA2090000000000000000001 /* DefaultAgentSDKSettingsModel.swift */,
 				A14000000000000000000002 /* ApplicationModel+SessionSelections.swift */,
 				3CE258FB55B3D55A39972D5B /* OpenCodeModel.swift */,
 				D472AB9160464F1FAB826C11 /* ApplicationModel+AgentTools.swift */,
@@ -270,6 +283,8 @@
 				296D14690B191EF43D51603C /* BackendConnectionsService.swift */,
 				CBCBD600AB92468988000002 /* BackendSpeechService.swift */,
 				753DF034EE6D727B6091929D /* BackendLibraryService.swift */,
+				C131C0A00000000000000001 /* ApplicationModel+ConversationActions.swift */,
+				C131C0B00000000000000001 /* ApplicationModel+NoteActions.swift */,
 				B88F25850147F01B163EDF7E /* ApplicationModel+Calendar.swift */,
 				20E807F893654CD4A1F24D40 /* WorkspaceAgentToolsModel.swift */,
 				7C678F616FB535F772A00598 /* WorkspaceAgentToolsModel+Calendar.swift */,
@@ -292,12 +307,15 @@
 				4D25E89AA1F9ECDB61C4EDEF /* SettingsConnectionsView.swift */,
 				E8A44EB04E09581B6A85026F /* DictationControls.swift */,
 				DA2000000000000000000003 /* SettingsDefaultAgentView.swift */,
+				DA2090000000000000000011 /* SettingsDefaultAgentSDKView.swift */,
 				6F6AFCDD4A429E11B0945492 /* OpenCodeSessionView.swift */,
 				17AF06D69A7DE73E3F94E40A /* OpenCodeInteractionView.swift */,
 				97160C827D94B74AFAB2961A /* OpenCodeSettingsView.swift */,
 				D7A74DFD3BA4438CB7357741 /* SettingsHermesView.swift */,
 				E45100000000000000000002 /* DashboardHermesCron.swift */,
 				502EF864DA314DFBB322C973 /* DashboardLocalSecretCard.swift */,
+				C131C0A00000000000000003 /* DashboardConversationActions.swift */,
+				C131C0B00000000000000003 /* DashboardNoteActions.swift */,
 				40D1B5DEF1B0023CB8C52B6D /* DashboardSharedViews.swift */,
 				C04200000000000000000002 /* DashboardConversationPopover.swift */,
 				3AB89D5EB3D93F04C3A5CB5E /* DashboardOpenClawCron.swift */,
@@ -479,6 +497,8 @@
 				5C2F6DF3B2A02B37BECD38D0 /* SettingsConnectionsView.swift in Sources */,
 				8BD4FF831500CD09DE10FC28 /* DictationControls.swift in Sources */,
 				DA2000000000000000000004 /* SettingsDefaultAgentView.swift in Sources */,
+				DA2090000000000000000012 /* SettingsDefaultAgentSDKView.swift in Sources */,
+				DA2090000000000000000002 /* DefaultAgentSDKSettingsModel.swift in Sources */,
 				DA2000000000000000000002 /* DefaultAgentSettingsModel.swift in Sources */,
 				46E81C4CE9571D1C715098CA /* OpenCodeSessionView.swift in Sources */,
 				8B47C81B917AA853D87FB56A /* OpenCodeInteractionView.swift in Sources */,
@@ -488,6 +508,8 @@
 				ECBF462874DF484F9FDD5C91 /* DashboardLocalSecretCard.swift in Sources */,
 				A14000000000000000000001 /* ApplicationModel+SessionSelections.swift in Sources */,
 				4C606D43824083BD3A612FF1 /* OpenCodeModel.swift in Sources */,
+				C131C0A00000000000000004 /* DashboardConversationActions.swift in Sources */,
+				C131C0B00000000000000004 /* DashboardNoteActions.swift in Sources */,
 				923D138C1F54FC887AA90493 /* DashboardSharedViews.swift in Sources */,
 				C04200000000000000000001 /* DashboardConversationPopover.swift in Sources */,
 				BAAE9A1BC06C8AC78E67AA1B /* DashboardOpenClawCron.swift in Sources */,
@@ -518,6 +540,8 @@
 				4ECDD63540C793A047BDD9CC /* BackendConnectionsService.swift in Sources */,
 				CBCBD600AB92468988000001 /* BackendSpeechService.swift in Sources */,
 				281F6DF22C3AE19CCE3FC99D /* BackendLibraryService.swift in Sources */,
+				C131C0A00000000000000002 /* ApplicationModel+ConversationActions.swift in Sources */,
+				C131C0B00000000000000002 /* ApplicationModel+NoteActions.swift in Sources */,
 				A13EC094A3DEA4F302868640 /* ApplicationModel+Calendar.swift in Sources */,
 				5C84BF439B9047118002DD70 /* WorkspaceAgentToolsModel.swift in Sources */,
 				E9A58E7B05C5C2726FA4EE82 /* WorkspaceAgentToolsModel+Calendar.swift in Sources */,

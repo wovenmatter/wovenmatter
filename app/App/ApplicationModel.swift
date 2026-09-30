@@ -188,6 +188,10 @@ final class ApplicationModel {
     private(set) var openClawGatewaySessionMetadata: [String: LocalACPSessionMetadata] = [:]
     private(set) var openClawCronJobs: [OpenClawCronJob] = []
     private(set) var openClawCronRuns: [OpenClawCronRun] = []
+    private(set) var openClawCronHasOlderRuns: Set<String> = []
+    private(set) var loadingOlderOpenClawCronJobs: Set<String> = []
+    private var openClawCronRunLimits: [String: Int] = [:]
+    private var openClawCronSnapshotGeneration: UInt64 = 0
     private(set) var isRefreshingOpenClawCron = false
     private(set) var openClawCronError: String?
     private(set) var openClawCronBusy = false
@@ -214,7 +218,7 @@ final class ApplicationModel {
     var sessionAccessError: String?
     @ObservationIgnored var toolRuntimeTask: Task<Void, Never>?
     @ObservationIgnored var toolCreationTasks: [String: Task<WovenMatterToolResponse, any Error>] = [:]
-    @ObservationIgnored private var toolSessionAdmission = WorkspaceSessionAdmission()
+    @ObservationIgnored var toolSessionAdmission = WorkspaceSessionAdmission()
     @ObservationIgnored private var pendingAgentDispatches: [String: [ObjectIdentifier: AgentDispatchFence]] = [:]
     @ObservationIgnored private let backendDispatchClientID = UUID()
     @ObservationIgnored private var backendDispatchInstanceID: UUID?
@@ -230,6 +234,7 @@ final class ApplicationModel {
     var remoteCalendarResultCursors: [UUID: String] = [:]
     var isCreatingCalendarItem = false
     private(set) var noteDrafts: [String: DashboardNoteDraft] = [:]
+    var noteActionIDs: Set<String> = []
     private var consumedBackendPrefills: [String: String] = [:]
     var pendingComposerPrefills: [String: String] = [:]
     private(set) var localACPSessionMetadata: [
@@ -780,7 +785,10 @@ final class ApplicationModel {
         checkingLocalSignIn = true
         defer { checkingLocalSignIn = false }
         do {
-            let snapshot = try DefaultAgentSupport.snapshot(workspace: "local")
+            let snapshot = try await ProviderConnectionStore.shared.perform(invalidatesAccounts: false) {
+                try DefaultAgentSupport.snapshot(workspace: "local")
+            }
+            try Task.checkCancellation()
             var body = try JSONSerialization.jsonObject(with: snapshot.data()) as! [String: Any]
             body["action"] = "sign-in-status"
             let resolver = localACPRuntimeResolver.snapshottingExecutableSearchDirectories()
@@ -791,9 +799,11 @@ final class ApplicationModel {
             }
             struct Result: Decodable { let statuses: [AgentSignInStatus] }
             let response = try await DefaultAgentControl.run(JSONSerialization.data(withJSONObject: body))
+            try Task.checkCancellation()
             localSignInStatuses = try JSONDecoder().decode(Result.self, from: response).statuses
             localSignInError = nil
-        } catch { localSignInError = "Could not check sign-in status. Previous results are unchanged. " + error.localizedDescription }
+        } catch is CancellationError { }
+        catch { localSignInError = "Could not check sign-in status. Previous results are unchanged. " + error.localizedDescription }
     }
 
     var defaultAgentFallbackNotice: String?
@@ -1093,22 +1103,23 @@ final class ApplicationModel {
             }
             let priorRevision = force || workspaceOverview == nil ? nil : workspaceRevision
             if let snapshot = try await dashboardStore.snapshot(ifChangedFrom: priorRevision) {
-                guard generation == workspaceRefreshGeneration, !Task.isCancelled else { return }
+                guard self.dashboardStore === dashboardStore, generation == workspaceRefreshGeneration, !Task.isCancelled else { return }
                 apply(snapshot)
             }
-            guard generation == workspaceRefreshGeneration, !Task.isCancelled else { return }
-            var libraryLocations: [LibraryLocation] = []
-            for conversation in workspaceOverview?.conversations ?? [] {
+            guard self.dashboardStore === dashboardStore, generation == workspaceRefreshGeneration, !Task.isCancelled else { return }
+            let nativeDirectories = try await dashboardStore.sessionNativeWorkingDirectories(
+                ids: (workspaceOverview?.conversations ?? []).map(\.id))
+            guard self.dashboardStore === dashboardStore, generation == workspaceRefreshGeneration, !Task.isCancelled else { return }
+            let libraryLocations = (workspaceOverview?.conversations ?? []).map { conversation in
                 let remote = conversation.remoteWorkspaceID.flatMap { remoteWorkspaces.configuration(id: $0) }
                 let nativeDirectory = openCodeModel(for: conversation.id)?.snapshots[conversation.id]?.info["location"]["directory"].string
-                let savedDirectory = try? await dashboardStore.database.toolSessionCreationConfiguration(targetID: conversation.id)?.nativeWorkingDirectory
                 let root = nativeDirectory.flatMap { $0.isEmpty ? nil : $0 }
-                    ?? savedDirectory
+                    ?? nativeDirectories[conversation.id]
                     ?? remote.map { remoteWorkspaces.remoteWorkspaceRoot(for: $0) }
                     ?? localACPWorkspaceLaunchConfiguration?.rootURL.path
                     ?? FileManager.default.homeDirectoryForCurrentUser.appending(path: ".woven-matter").path
                 let name = remote?.name ?? (conversation.remoteWorkspaceID == nil ? "Local workspace" : "Remote workspace")
-                libraryLocations.append(LibraryLocation(conversationID: conversation.id, name: name, root: root))
+                return LibraryLocation(conversationID: conversation.id, name: name, root: root)
             }
             guard generation == workspaceRefreshGeneration, !Task.isCancelled else { return }
             let libraryBackend: LibraryModel.BackendExecutor?
@@ -1125,7 +1136,7 @@ final class ApplicationModel {
                 backendExecutor: libraryBackend)
             let reconciledRunning = try await dashboardStore
                 .activeAgentConversationIDs()
-            guard generation == workspaceRefreshGeneration, !Task.isCancelled else { return }
+            guard self.dashboardStore === dashboardStore, generation == workspaceRefreshGeneration, !Task.isCancelled else { return }
             if localRunningConversationIDs != reconciledRunning {
                 localRunningConversationIDs = reconciledRunning
                 trimConversationStateCacheIfNeeded()
@@ -1133,6 +1144,8 @@ final class ApplicationModel {
             if workspaceError != nil {
                 workspaceError = nil
             }
+            try await agentTools?.reloadInBackground(policyIDs: Set(conversationStatesByID.keys))
+        } catch is CancellationError {
         } catch {
             guard generation == workspaceRefreshGeneration, !Task.isCancelled else { return }
             workspaceError = error.localizedDescription
@@ -1657,6 +1670,7 @@ final class ApplicationModel {
             noteMutationError = "Note editing is paused while Woven Matter closes or restarts."
             return
         }
+        guard !noteActionIDs.contains(note.id) else { return }
         prepareNoteDraft(note)
         guard var draft = noteDrafts[note.id] else { return }
         draft.edit(title: title, content: content)
@@ -1664,7 +1678,7 @@ final class ApplicationModel {
     }
 
     func retryNoteDraft(note: WorkspaceNoteRecord) {
-        guard !noteEditingSuspended else { return }
+        guard !noteEditingSuspended, !noteActionIDs.contains(note.id) else { return }
         prepareNoteDraft(note)
         guard var draft = noteDrafts[note.id] else { return }
         draft.editRevision &+= 1
@@ -2175,6 +2189,7 @@ final class ApplicationModel {
         input: AgentMessageInput,
         note: WorkspaceNoteRecord? = nil,
         allowSteering: Bool = true,
+        admissionDecision: WorkspaceSessionAdmission.Decision? = nil,
         dispatchFence suppliedFence: AgentDispatchFence? = nil
     ) async throws -> Bool {
         let dispatchFence = suppliedFence ?? beginAgentDispatch(conversationID: conversation.id)
@@ -2211,12 +2226,16 @@ final class ApplicationModel {
         // during asynchronous settings preparation.
         guard allowSteering || !runningToolSessionIDs.contains(conversation.id) else { return false }
         guard !backendStopping else { throw BackendRPCError.remote("The background service is stopping.") }
-        let decision = toolSessionAdmission.begin(conversation.id, running: runningToolSessionIDs,
+        let ownsAdmission = admissionDecision == nil
+        let decision = admissionDecision ?? toolSessionAdmission.begin(conversation.id, running: runningToolSessionIDs,
             limit: agentTools.settings.maximumRunningSessions)
         if decision == .atCapacity { return false }
         if decision == .preparing { throw ApplicationModelError.localSessionConfigurationInProgress }
-        let steering = decision == .steer
-        defer { toolSessionAdmission.finish(conversation.id) }
+        // A pre-reserved start can cross asynchronous session preparation. If
+        // that session became active meanwhile, use its steering path instead
+        // of attempting a second start for the same conversation.
+        let steering = decision == .steer || runningToolSessionIDs.contains(conversation.id)
+        defer { if ownsAdmission { toolSessionAdmission.finish(conversation.id) } }
         if conversation.localRuntimeKind == .hermes, conversation.remoteWorkspaceID == nil,
            !buzzBoundLocalACPConversationIDs.contains(conversation.id) {
             try await requireLocalHermesLink(conversationID: conversation.id)
@@ -2232,8 +2251,11 @@ final class ApplicationModel {
         }
         var context: AgentNoteContext?
         if let note, try await dashboardStore.database.sessionTools(conversation.id).enabled.contains(.notes) {
+            guard self.dashboardStore === dashboardStore, self.agentTools === agentTools, !backendStopping else { throw CancellationError() }
             guard await flushNoteDrafts() else { throw ApplicationModelError.noteDraftSaveFailed }
             let response = try await dashboardStore.database.readNoteForEditing(id: note.id, callerConversationID: conversation.id)
+            guard self.dashboardStore === dashboardStore, self.agentTools === agentTools, !backendStopping else { throw CancellationError() }
+            try dispatchFence.check()
             guard let revision = response.revision else { throw ApplicationModelError.noteContextUnavailable }
             context = AgentNoteContext(noteID: note.id, title: response.title ?? note.title, folderID: note.folderID, revision: revision)
         }
@@ -2250,6 +2272,10 @@ final class ApplicationModel {
         do {
             if conversation.localRuntimeKind == .opencode {
                 guard let openCode = openCodeModel(for: conversation.id) else { throw OpenCodeError.message("This workspace's OpenCode connection is unavailable.") }
+                // Native slash commands do not create a submission row. Check visibility
+                // while this dispatcher still owns the shared send/Trash reservation.
+                _ = try await dashboardStore.database.localACPSession(conversationID: conversation.id)
+                try dispatchFence.check()
                 try await openCode.send(conversation.id, input: normalized, discovery: discovery, dispatchFence: dispatchFence)
             } else if steering {
                 if isOpenClawGatewayConversation(conversation.id) {
@@ -2282,6 +2308,18 @@ final class ApplicationModel {
         }
         scheduleConversationTitleGeneration(conversation: conversation, firstPrompt: normalized.previewText)
         return true
+    }
+
+    // Share the send-preparation reservation so a trash write cannot race a new dispatch.
+    func beginConversationTrash(id: String) throws {
+        guard !runningToolSessionIDs.contains(id),
+              toolSessionAdmission.begin(id, running: runningToolSessionIDs, limit: Int.max) == .start else {
+            throw WorkspaceConversationActionError.running
+        }
+    }
+
+    func finishConversationTrash(id: String) {
+        toolSessionAdmission.finish(id)
     }
 
     var runningToolSessionIDs: Set<String> {
@@ -3228,17 +3266,30 @@ final class ApplicationModel {
         lastHermesCronRefresh = Date()
         defer { isRefreshingHermesCron = false }
         for agent in hermesCronAgents {
+            let expectedWorkspace = agent.runtimeDeviceID.flatMap { remoteWorkspaces.configuration(id: $0) }
+            let expectedHome = applicationDefaults.string(forKey: "hermes.gateway.link." + agent.id.uuidString)
+            func isCurrent() -> Bool {
+                self.dashboardStore === dashboardStore && !Task.isCancelled
+                    && hermesCronAgents.contains(where: { $0.id == agent.id })
+                    && agent.runtimeDeviceID.flatMap { remoteWorkspaces.configuration(id: $0) } == expectedWorkspace
+                    && applicationDefaults.string(forKey: "hermes.gateway.link." + agent.id.uuidString) == expectedHome
+            }
             do {
                 let connection = try await cronHermesConnection(agent:agent)
+                guard isCurrent() else { continue }
                 let query = try await HermesDelivery.profileQuery(connection:connection)
                 let document = try await HermesSessionHistory.fetch(connection:connection,path:"/api/cron/jobs" + query)
+                guard isCurrent() else { continue }
                 guard case .array(let jobs) = document, jobs.allSatisfy({!$0["id"].text.isEmpty}) else {
                     throw HermesGatewayError.message("Hermes returned an incomplete scheduled-job list.")
                 }
                 hermesCronJobs[agent.id] = jobs
                 let sourcePrefix=connection.identity + "::"
-                hermesResultRoutes[agent.id] = Dictionary(uniqueKeysWithValues: try await dashboardStore.database.hermesResultRoutes(agentID:agent.id).filter{$0.key.hasPrefix(sourcePrefix)}.map{(String($0.key.dropFirst(sourcePrefix.count)),$0.value)})
+                let routes = try await dashboardStore.hermesResultRoutes(agentID: agent.id)
+                guard isCurrent() else { continue }
+                hermesResultRoutes[agent.id] = Dictionary(uniqueKeysWithValues: routes.filter{$0.key.hasPrefix(sourcePrefix)}.map{(String($0.key.dropFirst(sourcePrefix.count)),$0.value)})
                 let owner = try await dashboardStore.dashboardDeviceID()
+                guard isCurrent() else { continue }
                 var offset = 0
                 var all:[HermesScheduledResult] = []
                 var collectionError: String?
@@ -3248,24 +3299,31 @@ final class ApplicationModel {
                     if let workspaceID=connection.remoteWorkspaceID, let configuration=remoteWorkspaces.configuration(id:workspaceID) {
                         page = try await remoteWorkspaces.hermesResults(for:configuration,offset:offset)
                     } else {
-                        page = try HermesResultQueue.read(home:connection.home,offset:offset)
+                        let home = connection.home, pageOffset = offset
+                        page = try await Task.detached(priority: .utility) {
+                            try HermesResultQueue.read(home: home, offset: pageOffset)
+                        }.value
                     }
-                    guard hermesCronAgents.contains(where:{$0.id == agent.id}) else { throw CancellationError() }
+                    guard isCurrent() else { throw CancellationError() }
                     for result in page {
                       do {
-                        _ = try await dashboardStore.database.collectHermesResult(agentID:agent.id,jobID:connection.identity + "::" + result.jobID,runID:result.runID,
+                        guard isCurrent() else { throw CancellationError() }
+                        try await dashboardStore.collectHermesResult(agentID:agent.id,jobID:connection.identity + "::" + result.jobID,runID:result.runID,
                             title:jobs.first(where:{$0["id"].text == result.jobID})?["name"].string ?? "Hermes scheduled result",output:result.output,
                             ownerDeviceID:owner,remoteWorkspaceID:connection.remoteWorkspaceID,
                             remoteWorkspaceName:connection.remoteWorkspaceID.flatMap{remoteWorkspaces.configuration(id:$0)?.name} ?? "")
-                      } catch { collectionError = collectionError ?? error.localizedDescription }
+                      } catch is CancellationError { throw CancellationError() }
+                      catch { collectionError = collectionError ?? error.localizedDescription }
                     }
                     all.append(contentsOf:page)
                     if page.count < 100 { break }
                     offset += page.count
                 }
+                guard isCurrent() else { continue }
                 hermesCronResults[agent.id] = all
                 hermesCronErrors[agent.id] = collectionError
-            } catch { hermesCronErrors[agent.id] = error.localizedDescription }
+            } catch is CancellationError { }
+            catch { if isCurrent() { hermesCronErrors[agent.id] = error.localizedDescription } }
         }
     }
 
@@ -4935,15 +4993,41 @@ final class ApplicationModel {
 
     private func loadOpenClawCronSnapshot() async {
         guard let dashboardStore else { return }
+        openClawCronSnapshotGeneration &+= 1
+        let generation = openClawCronSnapshotGeneration
         do {
-            openClawCronJobs = try await dashboardStore.openClawCronJobs()
-            openClawCronRuns = try await dashboardStore.openClawCronRuns()
-            for link in openClawGatewayLinks {
-                openClawResultRoutes[link.agentID] = try await dashboardStore.openClawResultRoutes(agentID: link.agentID)
-            }
+            let snapshot = try await dashboardStore.openClawCronPresentation(limits: openClawCronRunLimits)
+            guard self.dashboardStore === dashboardStore, generation == openClawCronSnapshotGeneration,
+                  !Task.isCancelled else { return }
+            if openClawCronJobs != snapshot.jobs { openClawCronJobs = snapshot.jobs }
+            if openClawCronRuns != snapshot.runs { openClawCronRuns = snapshot.runs }
+            if openClawCronHasOlderRuns != snapshot.hasOlder { openClawCronHasOlderRuns = snapshot.hasOlder }
+            if openClawResultRoutes != snapshot.routes { openClawResultRoutes = snapshot.routes }
+            let keys = Set(snapshot.jobs.map { Self.openClawCronHistoryKey($0) })
+            openClawCronRunLimits = openClawCronRunLimits.filter { keys.contains($0.key) }
+        } catch is CancellationError {
         } catch {
+            guard self.dashboardStore === dashboardStore, generation == openClawCronSnapshotGeneration else { return }
             openClawCronError = error.localizedDescription
         }
+    }
+
+    static func openClawCronHistoryKey(_ job: OpenClawCronJob) -> String {
+        DashboardStore.openClawCronHistoryKey(agentID: job.agentID, jobID: job.id)
+    }
+
+    func loadOlderOpenClawCronRuns(job: OpenClawCronJob) async {
+        let key = Self.openClawCronHistoryKey(job)
+        guard !loadingOlderOpenClawCronJobs.contains(key) else { return }
+        loadingOlderOpenClawCronJobs.insert(key)
+        defer { loadingOlderOpenClawCronJobs.remove(key) }
+        if isBackendFrontend {
+            _ = await forwardBackendCron(.loadOlderOpenClaw(agentID: job.agentID, jobID: job.id))
+            return
+        }
+        guard openClawCronJobs.contains(where: { $0.agentID == job.agentID && $0.id == job.id }) else { return }
+        openClawCronRunLimits[key] = min(openClawCronRunLimits[key] ?? 50, Int.max - 51) + 50
+        await loadOpenClawCronSnapshot()
     }
 
     private static func openClawSessionKey(conversationID: String) -> String {
@@ -5147,7 +5231,7 @@ extension ApplicationModel {
                 return .init(id: request.id, result: try JSONEncoder().encode(macSurfaceProfile))
             }
             if request.method.hasPrefix("connections.") {
-                return .init(id: request.id, result: try await BackendConnectionsService.handle(method: request.method, payload: request.payload, model: connections))
+                return .init(id: request.id, result: try await BackendConnectionsService.handle(method: request.method, payload: request.payload, model: connections, remoteWorkspaces: remoteWorkspaces))
             }
             if request.method == "opencode.snapshot" {
                 return .init(id: request.id, result: try JSONEncoder().encode(backendOpenCodeSnapshot()))
@@ -5195,7 +5279,7 @@ extension ApplicationModel {
                 guard await !backendSpeech.isActive else {
                     throw BackendRPCError.remote("Finish dictation before stopping the background service.")
                 }
-                guard backendCommandsInFlight == 0, !executionHasPendingOperations, !connections.busy, remoteWorkspaces.busyWorkspaceIDs.isEmpty,
+                guard backendCommandsInFlight == 0, !executionHasPendingOperations, !connections.busy, !connections.sdks.isBusy, remoteWorkspaces.busyWorkspaceIDs.isEmpty,
                       !remoteWorkspaces.isCreating, runningToolSessionIDs.isEmpty, pendingLocalACPPermissions.isEmpty,
                       pendingLocalACPInteractions.isEmpty, pendingSessionAccess.isEmpty else {
                     throw BackendRPCError.remote("Wait for running sessions and pending approvals before stopping the background service.")
@@ -5269,9 +5353,14 @@ extension ApplicationModel {
         }
     }
     private func refreshBackendConnectionsState() async throws {
+        let revision = connections.backendSnapshotGeneration
+        let catalogGeneration = connections.catalogSnapshotGeneration
         let snapshot = try JSONDecoder().decode(BackendConnectionsSnapshot.self,
             from: await callBackend(method: "connections.snapshot"))
-        if snapshot != BackendConnectionsSnapshot(connections) { connections.applyBackendSnapshot(snapshot) }
+        if snapshot != BackendConnectionsSnapshot(connections) {
+            connections.applyBackendSnapshot(snapshot, expectedGeneration: revision,
+                expectedCatalogGeneration: catalogGeneration)
+        }
     }
     private func refreshBackendRemoteState() async throws {
         remoteWorkspaces.applyBackendSnapshot(try JSONDecoder().decode(RemoteWorkspacesModel.BackendSnapshot.self,
@@ -5363,7 +5452,7 @@ extension ApplicationModel {
                         }
                         if change.requiresReload || change.scopes.contains(.usage) { await self.usage.refreshBackendSnapshot() }
                         if !change.conversationIDs.isEmpty { try await Task.sleep(for: .milliseconds(16)) }
-                        if change.requiresReload || change.scopes.contains(.settings) { try await self.agentTools?.reload() }
+                        if change.requiresReload || change.scopes.contains(.settings) { try await self.agentTools?.reloadInBackground() }
                         let visible = Set(self.conversationStatesByID.keys)
                         for id in change.requiresReload ? visible : change.conversationIDs.intersection(visible) {
                             await self.refreshConversation(id: id)
@@ -5650,7 +5739,8 @@ extension ApplicationModel {
               hermesErrors: hermesCronErrors, refreshingHermes: isRefreshingHermesCron,
               openClawJobs: openClawCronJobs, openClawRuns: openClawCronRuns,
               openClawRoutes: openClawResultRoutes, refreshingOpenClaw: isRefreshingOpenClawCron,
-              openClawBusy: openClawCronBusy, openClawError: openClawCronError)
+              openClawBusy: openClawCronBusy, openClawError: openClawCronError,
+              openClawHasOlderRuns: openClawCronHasOlderRuns)
     }
 
     func applyBackendCronSnapshot(_ value: BackendCronSnapshot) {
@@ -5662,6 +5752,7 @@ extension ApplicationModel {
         isRefreshingHermesCron = value.refreshingHermes
         openClawCronJobs = value.openClawJobs
         openClawCronRuns = value.openClawRuns
+        openClawCronHasOlderRuns = value.openClawHasOlderRuns ?? []
         openClawResultRoutes = value.openClawRoutes
         isRefreshingOpenClawCron = value.refreshingOpenClaw
         openClawCronBusy = value.openClawBusy
@@ -5714,6 +5805,7 @@ extension ApplicationModel {
         case let .changeHermes(id, jobID, action):
             await changeHermesCron(agent: try agent(id), jobID: jobID, action: action)
         case .refreshOpenClaw: await refreshOpenClawCron()
+        case let .loadOlderOpenClaw(id, jobID): await loadOlderOpenClawCronRuns(job: try job(id, jobID))
         case let .saveOpenClaw(id, jobID, name, message, expression, zone, key, destination, preserve):
             error = await saveOpenClawCron(agentID: id, job: try jobID.map { try job(id, $0) },
                 name: name, message: message, expression: expression, timeZone: zone,

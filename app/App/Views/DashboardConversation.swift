@@ -77,6 +77,7 @@ private enum DashboardConversationDisplayRow: Identifiable {
 
 struct DashboardCloudConversation: View {
     @Environment(\.dashboardTheme) private var theme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Bindable var model: ApplicationModel
     let agent: WorkspaceAgent?
     let conversation: WorkspaceConversationRecord?
@@ -115,6 +116,7 @@ struct DashboardCloudConversation: View {
     @State private var pendingBottomConversationID: String?
     @State private var bottomPositionRevision = 0
     @State private var scrollPositionID: String?
+    @State private var composerCollapseOverride: Bool?
     @State private var bottomStackHeight: CGFloat = 0
     @State private var scrollInteractionRevision = 0
     @State private var isUserScrolling = false
@@ -518,6 +520,7 @@ struct DashboardCloudConversation: View {
                                 || model.updatingLocalACPSessionIDs.contains($0.id)
                         } ?? false),
                         startsCollapsed: startsComposerCollapsed,
+                        collapseOverride: $composerCollapseOverride,
                         focusRequestGeneration: focusRequestGeneration,
                         onActivate: onActivatePanel,
                         onSelectModel: { selection in
@@ -596,8 +599,14 @@ struct DashboardCloudConversation: View {
                             .accessibilityHidden(true)
                     }
                 }
+                // Animate the whole row so the outside buttons follow the
+                // composer height in the same layout transaction.
+                .animation(
+                    reduceMotion ? nil : .easeOut(duration: 0.15),
+                    value: composerCollapseOverride ?? startsComposerCollapsed
+                )
             }
-            .frame(maxWidth: 768)
+            .frame(maxWidth: .infinity)
             .padding(.horizontal, usesCompactPanelSpacing ? 12 : 32)
             .padding(.top, 8)
             .onGeometryChange(for: CGFloat.self) { geometry in
@@ -620,17 +629,14 @@ struct DashboardCloudConversation: View {
         }
     }
 
-    private var sessionIdentity: String? {
+    private var sessionIdentity: LocalACPSessionMetadataTaskIdentity? {
         guard let conversation else { return nil }
-        if let runtimeKind = conversation.localRuntimeKind {
-            // A restored chat can appear before CLI discovery finishes. Retry
-            // its metadata task when the launch context becomes available.
-            if [.codex, .claudeCode, .grokBuild, .cursor].contains(runtimeKind) {
-                return "local:\(conversation.id):\(model.isLocalACPSessionLaunchAvailable(conversation))"
-            }
-            return "local:\(conversation.id)"
-        }
-        return nil
+        return LocalACPSessionMetadataTaskIdentity(
+            conversationID: conversation.id,
+            runtimeKind: conversation.localRuntimeKind,
+            usesOpenClawGateway: model.isOpenClawGatewayConversation(conversation.id),
+            launchAvailable: model.isLocalACPSessionLaunchAvailable(conversation)
+        )
     }
 
     private var conversationState: DashboardConversationState? {

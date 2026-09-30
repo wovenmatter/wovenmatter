@@ -124,40 +124,58 @@ struct RemoteAttachmentStagingTests {
 
   @Test("cancelling a running attachment subprocess terminates it")
   func transferCancellation() async throws {
-    let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: root) }
-    let marker = root.appending(path: "pid")
+    let cancellation = SpawnCancellation()
     let task = Task.detached {
-      try RemoteWorkspaceProcess.run(executable: "/bin/sh",
-        arguments: ["-c", "echo $$ > \"$1\"; exec /bin/sleep 30", "attachment-fixture", marker.path], timeLimit: 60)
+      try RemoteWorkspaceProcess.run(executable: "/bin/sleep",
+        arguments: ["30"], timeLimit: 60, onProcessStarted: cancellation.processStarted)
     }
     defer { task.cancel() }
-    // Cancellation before Task.detached starts only measures executor latency.
-    // Wait for the real child, then verify cancellation and process cleanup.
-    // The transfer intentionally blocks a cooperative-executor thread. Watch
-    // from an independent queue so a busy, low-core CI runner can cancel the
-    // live child before its sleep finishes, rather than testing executor load.
-    let processID: pid_t? = await withCheckedContinuation { continuation in
-      DispatchQueue(label: "attachment-fixture-cancellation").async {
-        let deadline = ContinuousClock.now.advanced(by: .seconds(30))
-        var processID: pid_t?
-        while processID == nil, ContinuousClock.now < deadline {
-          processID = (try? String(contentsOf: marker, encoding: .utf8))
-            .flatMap { pid_t($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
-          if processID == nil { Thread.sleep(forTimeInterval: 0.02) }
-        }
-        task.cancel()
-        continuation.resume(returning: processID)
-      }
-    }
+    // Either handle installation or child launch may win. Cancellation is
+    // requested only once both have happened, directly from those events.
+    cancellation.install(task)
     await #expect(throws: CancellationError.self) { try await task.value }
-    let pid = try #require(processID)
+    let pid = try #require(cancellation.processID)
     #expect(pid > 0)
     let status = kill(pid, 0)
     let error = errno
     #expect(status == -1)
     #expect(error == ESRCH)
+  }
+
+  @Test("a cancelled attachment task never launches its subprocess")
+  func cancellationBeforeLaunch() async throws {
+    let observation = SpawnCancellation()
+    let task = Task.detached {
+      withUnsafeCurrentTask { $0?.cancel() }
+      return try RemoteWorkspaceProcess.run(executable: "/bin/sleep",
+        arguments: ["30"], timeLimit: 60, onProcessStarted: observation.processStarted)
+    }
+    await #expect(throws: CancellationError.self) { try await task.value }
+    #expect(observation.processID == nil)
+  }
+
+  private final class SpawnCancellation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var task: Task<RemoteWorkspaceProcess.Result, any Error>?
+    private var startedPID: pid_t?
+
+    var processID: pid_t? { lock.withLock { startedPID } }
+
+    func install(_ task: Task<RemoteWorkspaceProcess.Result, any Error>) {
+      let hasStarted = lock.withLock {
+        self.task = task
+        return startedPID != nil
+      }
+      if hasStarted { task.cancel() }
+    }
+
+    func processStarted(_ pid: pid_t) {
+      let task = lock.withLock {
+        startedPID = pid
+        return self.task
+      }
+      task?.cancel()
+    }
   }
 
   @Test("changed local bytes are rejected before SSH")

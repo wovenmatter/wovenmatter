@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs'
-const defaultAgentModule = new URL('../default-agent/src/service.mjs', import.meta.url)
-const { createDefaultAgentService } = await import(existsSync(defaultAgentModule) ? defaultAgentModule.href : new URL('../../default-agent/src/service.mjs', import.meta.url).href)
-const { signInStatuses } = await import(new URL('./sign-in-status.mjs', existsSync(defaultAgentModule) ? defaultAgentModule : new URL('../../default-agent/src/service.mjs', import.meta.url)).href)
+const defaultAgentModule = new URL('../default-agent/src/managed-service.mjs', import.meta.url)
+const { createManagedDefaultAgentService } = await import(existsSync(defaultAgentModule) ? defaultAgentModule.href : new URL('../../default-agent/src/managed-service.mjs', import.meta.url).href)
+const { signInStatuses } = await import(new URL('./sign-in-status.mjs', existsSync(defaultAgentModule) ? defaultAgentModule : new URL('../../default-agent/src/managed-service.mjs', import.meta.url)).href)
 import { databaseOperation } from './database-catalog.mjs'
 import { createHermesInstance } from './hermes-instance.mjs'
 import { createRuntimeMaintenance, acquireHostLock } from './runtime-maintenance.mjs'
@@ -42,7 +42,7 @@ if (catalogDocument.schemaVersion !== 4 || !Array.isArray(catalogDocument.harnes
   throw new Error('Unsupported harness catalog')
 }
 const catalog = new Map(catalogDocument.harnesses.map((entry) => [entry.id, entry]))
-const defaultAgent = createDefaultAgentService({ cwd: workspaceRoot, directory: resolve(workspaceRoot, '.wovenmatter/default-agent') })
+const defaultAgent = createManagedDefaultAgentService({ cwd: workspaceRoot, directory: resolve(workspaceRoot, '.wovenmatter/default-agent') })
 const authenticationSessions = new Map()
 const foregroundDefaultRuns = new Map()
 const maximumRetainedTerminalRecords = 64
@@ -111,6 +111,9 @@ const server = createServer(async (request, response) => {
       statuses.unshift(...(agent.locked ? [{ id: 'default_agent', name: 'Built-in', state: 'locked', detail: 'Reconnect Woven Matter to unlock stored credentials.' }]
         : agent.providers.map(p => ({ ...p, name: 'Built-in · ' + p.name }))));
       return json(response, 200, { statuses });
+    }
+    if (url.pathname === '/v1/default-agent/sdks' && ['GET', 'POST'].includes(request.method)) {
+      return json(response, 200, await defaultAgentSDKRequest(request, response, defaultAgent))
     }
     if (url.pathname === '/v1/default-agent/configuration'  && request.method === 'POST') {
       return json(response, 200, await defaultAgent.configure(await readJSON(request)))
@@ -306,7 +309,7 @@ if (runningAsService) {
       if (taskGateway.enabled()) { foregroundDefaultRuns.delete(id); continue }
       if (Date.now() - lease.lastSeen > 30000) {
         foregroundDefaultRuns.delete(id)
-        void defaultAgent.invoke({method:'session/cancel',params:{sessionId:lease.sessionID}}).catch(() => {})
+        void defaultAgent.cancelSession(lease.sessionID).catch(() => {})
       }
     }
   }, 5000).unref()
@@ -326,7 +329,7 @@ if (runningAsService) {
   })
   process.once('SIGTERM', async () => {
     server.close()
-    try { await taskGateway.close(); await durableACP.stopAll(); await stopGateway(); releaseTaskOwner?.(); process.exit(0) }
+    try { await taskGateway.close(); await durableACP.stopAll(); await defaultAgent.close(); await stopGateway(); releaseTaskOwner?.(); process.exit(0) }
     catch { process.exit(1) }
   })
 }
@@ -1105,17 +1108,48 @@ function harnessEnvironment() {
   }
 }
 
-async function readJSON(request) {
+async function readJSON(request, maximumBytes = 1_048_576) {
   const chunks = []
   let bytes = 0
   for await (const chunk of request) {
     bytes += chunk.length
-    if (bytes > 1_048_576) throw httpError(413, 'request_too_large')
+    if (bytes > maximumBytes) throw httpError(413, 'request_too_large')
     chunks.push(chunk)
   }
   if (chunks.length === 0) return {}
   try { return JSON.parse(Buffer.concat(chunks).toString('utf8')) }
   catch { throw httpError(400, 'invalid_json') }
+}
+
+// Status reads package metadata only. Registry access and installation are always
+// explicit requests, and installation belongs to this workspace's service owner.
+export async function defaultAgentSDKRequest(request, response, service) {
+  if (request.method === 'GET') return service.sdkStatus()
+  const body = await readJSON(request, 4_096)
+  if (!body || typeof body !== 'object' || Array.isArray(body)
+    || !['check', 'update'].includes(body.action)) throw httpError(400, 'invalid_sdk_action')
+  if ((body.action === 'update' || body.id != null) && !['pi', 'claude'].includes(body.id)) throw httpError(400, 'invalid_sdk_identifier')
+  if (body.version != null && (typeof body.version !== 'string'
+    || !/^\d+\.\d+\.\d+$/.test(body.version))) throw httpError(400, 'invalid_sdk_version')
+
+  const controller = new AbortController()
+  const abort = () => controller.abort()
+  const disconnected = () => { if (!response.writableEnded) abort() }
+  const timeout = setTimeout(abort, body.action === 'update' ? 900_000 : 90_000)
+  timeout.unref?.()
+  request.once('aborted', abort)
+  response.once('close', disconnected)
+  if (request.aborted || response.destroyed) abort()
+  try {
+    controller.signal.throwIfAborted()
+    return body.action === 'check'
+      ? await service.checkSDKUpdates({ id: body.id, signal: controller.signal })
+      : await service.updateSDK({ id: body.id, version: body.version, signal: controller.signal })
+  } finally {
+    clearTimeout(timeout)
+    request.removeListener('aborted', abort)
+    response.removeListener('close', disconnected)
+  }
 }
 
 function requireHarness(id) {

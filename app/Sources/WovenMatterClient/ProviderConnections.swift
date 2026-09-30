@@ -220,3 +220,53 @@ public enum ProviderConnectionAccounts {
         return saved
     }
 }
+
+/// Serial background owner for Settings account reads and writes. The cache holds
+/// display metadata only; secrets remain in Keychain and the existing coordinator.
+public actor ProviderConnectionStore {
+    public static let shared = ProviderConnectionStore()
+    public struct Snapshot: Sendable {
+        public let revision: UInt64
+        public let accounts: [String: [ProviderConnectionAccounts.Account]]
+    }
+    public typealias Read = @Sendable (String) throws -> [String: [ProviderConnectionAccounts.Account]]
+    private let read: Read
+    private let version: @Sendable () -> UInt64
+    private let clock: @Sendable () -> Date
+    private var cached: [String: (snapshot: Snapshot, expires: Date)] = [:]
+    public init(
+        read: @escaping Read = ProviderConnectionStore.readStored,
+        version: @escaping @Sendable () -> UInt64 = { DefaultAgentSupport.revision },
+        clock: @escaping @Sendable () -> Date = Date.init
+    ) {
+        self.read = read; self.version = version; self.clock = clock
+    }
+    public func accounts(scope: String, force: Bool = false) throws -> Snapshot {
+        try Task.checkCancellation()
+        if !force, let value = cached[scope], value.snapshot.revision == version(), clock() < value.expires {
+            return value.snapshot
+        }
+        // A change concurrent with a Keychain read must never publish an old account list.
+        while true {
+            try Task.checkCancellation()
+            let revision = version()
+            let values = try read(scope)
+            guard revision == version() else { continue }
+            let result = Snapshot(revision: revision, accounts: values)
+            cached[scope] = (result, clock().addingTimeInterval(300))
+            return result
+        }
+    }
+    public func perform<Value: Sendable>(invalidatesAccounts: Bool = true, _ operation: @Sendable () throws -> Value) throws -> Value {
+        try Task.checkCancellation()
+        defer { if invalidatesAccounts { cached.removeAll() } }
+        return try operation()
+    }
+    nonisolated public static func readStored(_ scope: String) throws -> [String: [ProviderConnectionAccounts.Account]] {
+        var values: [String: [ProviderConnectionAccounts.Account]] = [:]
+        for provider in ["openai-codex", "openai", "claude-subscription", "anthropic", "xai", "xai-api", "openrouter", "opencode-go", "exa", "cursor"] {
+            values[provider] = try ProviderConnectionAccounts.list(provider: provider, scope: scope)
+        }
+        return values
+    }
+}
