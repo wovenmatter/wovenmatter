@@ -63,4 +63,8 @@ if [ "${CODE_SIGNING_ALLOWED:-NO}" = YES ] && [ -n "${EXPANDED_CODE_SIGN_IDENTIT
   timestamp=--timestamp=none
   if [ "${CONFIGURATION:-Debug}" = Release ]; then timestamp=--timestamp; fi
   codesign --force --sign "$EXPANDED_CODE_SIGN_IDENTITY" --options runtime "$timestamp" --entitlements "$repo_root/default-agent/node-entitlements.plist" "$output/bin/node"
+  esbuild_binary="$output/node_modules/@esbuild/darwin-$node_arch/bin/esbuild"
+  test -x "$esbuild_binary"
+  codesign --force --sign "$EXPANDED_CODE_SIGN_IDENTITY" --options runtime "$timestamp" "$esbuild_binary"
+  codesign --verify --strict "$esbuild_binary"
 fi
