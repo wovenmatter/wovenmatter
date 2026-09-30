@@ -5,7 +5,7 @@ import WovenMatterClient
 import WovenMatterCore
 
 // Agent identity, catalog reconciliation and display metadata.
-extension WorkspaceDatabase {
+extension WorkspaceDatabaseConnection {
   private static func localCLIAgentID(
     for runtimeKind: AgentRuntimeKind,
     ownerDeviceID: UUID
@@ -486,5 +486,57 @@ extension WorkspaceDatabase {
         ?? object["imageDigest"] as? String
         ?? object["image_digest"] as? String
     )
+  }
+}
+
+// MARK: - Async worker boundary
+
+extension WorkspaceDatabase {
+  @discardableResult
+  public func ensureRemoteHarnessAgent(
+    runtimeKind: AgentRuntimeKind,
+    remoteWorkspaceID: UUID,
+    remoteWorkspaceName: String,
+    ownerDeviceID: UUID,
+    status: AgentRuntimeStatus = .ready,
+    updatedAt: Date = Date()
+  ) async throws -> UUID {
+    try await write { try $0.ensureRemoteHarnessAgent(runtimeKind: runtimeKind, remoteWorkspaceID: remoteWorkspaceID, remoteWorkspaceName: remoteWorkspaceName, ownerDeviceID: ownerDeviceID, status: status, updatedAt: updatedAt) }
+  }
+
+  public func reconcileLocalCLIAgentCatalog(
+    ownerDeviceID: UUID,
+    statuses: [AgentRuntimeKind: AgentRuntimeStatus] = [:],
+    updatedAt: Date = Date()
+  ) async throws {
+    try await write { try $0.reconcileLocalCLIAgentCatalog(ownerDeviceID: ownerDeviceID, statuses: statuses, updatedAt: updatedAt) }
+  }
+
+  public func dashboardAgents() async throws -> [WorkspaceAgent] {
+    try await read { try $0.dashboardAgents() }
+  }
+
+  public func renameOpenClawAgent(
+    id: UUID,
+    displayName: String,
+    updatedAt: Date = Date()
+  ) async throws {
+    try await write { try $0.renameOpenClawAgent(id: id, displayName: displayName, updatedAt: updatedAt) }
+  }
+
+  public func renameHermesAgent(
+    id: UUID,
+    displayName: String,
+    updatedAt: Date = Date()
+  ) async throws {
+    try await write { try $0.renameHermesAgent(id: id, displayName: displayName, updatedAt: updatedAt) }
+  }
+
+  public func renameOpenCodeAgent(
+    id: UUID,
+    displayName: String,
+    updatedAt: Date = Date()
+  ) async throws {
+    try await write { try $0.renameOpenCodeAgent(id: id, displayName: displayName, updatedAt: updatedAt) }
   }
 }

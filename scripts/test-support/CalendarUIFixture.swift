@@ -29,45 +29,45 @@ func dashboardParsedDate(_ value: String) -> Date? {
     var calendarMutationError: String?
     var remoteCalendarGatewayErrors: [UUID: String] = [:]
     var isCreatingCalendarItem = false
-    init() {
+    init() async {
         let root = FileManager.default.temporaryDirectory.appending(path: "wm-calendar-ui-" + UUID().uuidString)
         try! FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        database = try! WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
+        database = try! await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
         let calendar = Calendar.current
         let day = calendar.startOfDay(for: Date())
         let start = calendar.date(bySettingHour: 9, minute: 0, second: 0, of: day)!
-        _ = try! database.createFolder(name: "Product")
-        _ = try! database.saveCalendarEvent(draft: .init(title: "Project review", details: "Discuss the next milestone.", startsAt: start,
+        _ = try! await database.createFolder(name: "Product")
+        _ = try! await database.saveCalendarEvent(draft: .init(title: "Project review", details: "Discuss the next milestone.", startsAt: start,
             endsAt: start.addingTimeInterval(3600)), creating: true)
         var scheduled = calendarTaskDefaults(runtime: .codex, workspaceID: nil, title: "Daily project summary")
         scheduled.prompt = "Summarize the project changes and identify the next useful task."
-        let id = try! database.saveCalendarEvent(draft: .init(title: "Daily project summary", startsAt: start.addingTimeInterval(7200),
+        let id = try! await database.saveCalendarEvent(draft: .init(title: "Daily project summary", startsAt: start.addingTimeInterval(7200),
             endsAt: start.addingTimeInterval(9000), recurrence: .init(unit: .day), task: scheduled), creating: true)
-        _ = try! database.saveCalendarEvent(draft: .init(title: "Planning day", startsAt: day, allDay: true), creating: true)
-        if let run = try! database.dueCalendarRuns(now: start.addingTimeInterval(7200)).first(where: { $0.eventID == id }) {
-            _ = try! database.createLocalACPSession(runtimeKind: .codex, title: "Summary", ownerDeviceID: UUID(), requestedConversationID: UUID(uuidString: run.sessionID))
-            _ = try! database.prepareCalendarDelivery(runID: run.id, now: start.addingTimeInterval(7200))
-            _ = try! database.claimToolDelivery(id: run.id)
-            try! database.setToolDeliveryStatus(id: run.id, status: "accepted")
-            try! database.settleCalendarRuns()
-            let event = try! database.calendarItems().first { $0.id == id }!
+        _ = try! await database.saveCalendarEvent(draft: .init(title: "Planning day", startsAt: day, allDay: true), creating: true)
+        if let run = try! await database.dueCalendarRuns(now: start.addingTimeInterval(7200)).first(where: { $0.eventID == id }) {
+            _ = try! await database.createLocalACPSession(runtimeKind: .codex, title: "Summary", ownerDeviceID: UUID(), requestedConversationID: UUID(uuidString: run.sessionID))
+            _ = try! await database.prepareCalendarDelivery(runID: run.id, now: start.addingTimeInterval(7200))
+            _ = try! await database.claimToolDelivery(id: run.id)
+            try! await database.setToolDeliveryStatus(id: run.id, status: "accepted")
+            try! await database.settleCalendarRuns()
+            let event = try! await database.calendarItems().first { $0.id == id }!
             var changed = WorkspaceCalendarDraft(event)
             changed.title = "Daily release review"
             changed.startsAt = start.addingTimeInterval(10800)
             changed.endsAt = start.addingTimeInterval(12600)
             changed.task?.prompt = "Review the release checklist and report any blockers."
-            try! database.saveCalendarEvent(id: id, draft: changed, creating: false, now: start.addingTimeInterval(10801))
+            try! await database.saveCalendarEvent(id: id, draft: changed, creating: false, now: start.addingTimeInterval(10801))
         }
-        _ = try! database.saveCalendarEvent(draft: .init(title: "Weekly planning", startsAt: start.addingTimeInterval(18000),
+        _ = try! await database.saveCalendarEvent(draft: .init(title: "Weekly planning", startsAt: start.addingTimeInterval(18000),
             endsAt: start.addingTimeInterval(21600), recurrence: .init(unit: .week)), creating: true)
-        _ = try! database.saveCalendarEvent(draft: .init(title: "One-time project summary", startsAt: start.addingTimeInterval(21600),
+        _ = try! await database.saveCalendarEvent(draft: .init(title: "One-time project summary", startsAt: start.addingTimeInterval(21600),
             endsAt: start.addingTimeInterval(23400), task: scheduled), creating: true)
-        refresh()
+        await refresh()
     }
-    func refresh() {
-        workspaceOverview = try! database.workspaceOverview()
-        calendarItems = try! database.calendarItems()
-        calendarRuns = try! database.calendarRuns()
+    func refresh() async {
+        workspaceOverview = try! await database.workspaceOverview()
+        calendarItems = try! await database.calendarItems()
+        calendarRuns = try! await database.calendarRuns()
     }
     func clearCalendarMutationError() { calendarMutationError = nil }
     func calendarTaskDefaults(runtime: AgentRuntimeKind, workspaceID: UUID?, title: String = "") -> WorkspaceCalendarTask {
@@ -81,25 +81,30 @@ func dashboardParsedDate(_ value: String) -> Date? {
     }
     func saveCalendarEvent(_ draft: WorkspaceCalendarDraft, event: WorkspaceCalendarItemRecord? = nil, detaching occurrence: Int? = nil) async -> Bool {
         do {
-            try database.saveCalendarEvent(id: event?.id ?? UUID().uuidString.lowercased(), draft: draft, creating: event == nil,
+            try await database.saveCalendarEvent(id: event?.id ?? UUID().uuidString.lowercased(), draft: draft, creating: event == nil,
                 expectedRevision: event?.calendar.revision, detaching: occurrence)
-            refresh(); return true
+            await refresh(); return true
         } catch { calendarMutationError = error.localizedDescription; return false }
     }
     func deleteCalendarEvent(_ event: WorkspaceCalendarItemRecord, occurrence: Int? = nil) async -> Bool {
         do {
-            try database.deleteCalendarEvent(id: event.id, occurrence: occurrence, expectedRevision: event.calendar.revision)
-            refresh(); return true
+            try await database.deleteCalendarEvent(id: event.id, occurrence: occurrence, expectedRevision: event.calendar.revision)
+            await refresh(); return true
         } catch { calendarMutationError = error.localizedDescription; return false }
     }
 }
 
 @main struct CalendarUIFixture: App {
-    @State private var model = ApplicationModel()
+    @State private var model: ApplicationModel?
     @State private var openedSession: String?
     var body: some Scene {
         WindowGroup("Calendar Preview") {
-            DashboardCalendarSurface(model: model, onOpenSession: { openedSession = $0 })
+            Group {
+                if let model {
+                    DashboardCalendarSurface(model: model, onOpenSession: { openedSession = $0 })
+                } else { ProgressView("Preparing calendar…") }
+            }
+                .task { if model == nil { model = await ApplicationModel() } }
                 .environment(\.dashboardTheme, CommandLine.arguments.contains("--cognac") ? .cognac : .green)
                 .frame(maxWidth: CommandLine.arguments.contains("--narrow") ? 600 : nil)
                 .frame(minWidth: 600, minHeight: 650)

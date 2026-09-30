@@ -18,7 +18,7 @@ public enum WorkspaceFolderMutationError: LocalizedError, Equatable, Sendable {
 }
 
 // Workspace ownership, surface preferences, folders, overview and calendar.
-extension WorkspaceDatabase {
+extension WorkspaceDatabaseConnection {
   public func bindDeviceOwnership(
     ownerDeviceID: UUID,
     boundAt: Date = Date()
@@ -651,5 +651,95 @@ extension WorkspaceDatabase {
       return []
     }
     return identifiers.compactMap(UUID.init(uuidString:))
+  }
+}
+
+// MARK: - Async worker boundary
+
+extension WorkspaceDatabase {
+  public func bindDeviceOwnership(
+    ownerDeviceID: UUID,
+    boundAt: Date = Date()
+  ) async throws {
+    try await write { try $0.bindDeviceOwnership(ownerDeviceID: ownerDeviceID, boundAt: boundAt) }
+  }
+
+  public func macSurfaceProfile(
+    ownerDeviceID: UUID,
+    bootstrap: SurfaceProfile,
+    createdAt: Date = Date()
+  ) async throws -> SurfaceProfile {
+    try await write { try $0.macSurfaceProfile(ownerDeviceID: ownerDeviceID, bootstrap: bootstrap, createdAt: createdAt) }
+  }
+
+  public func updateMacSurfaceProfile(
+    _ profile: SurfaceProfile,
+    ownerDeviceID: UUID,
+    updatedAt: Date = Date()
+  ) async throws -> SurfaceProfile {
+    try await write { try $0.updateMacSurfaceProfile(profile, ownerDeviceID: ownerDeviceID, updatedAt: updatedAt) }
+  }
+
+  @discardableResult
+  public func createFolder(
+    id: UUID = UUID(),
+    name: String,
+    createdAt: Date = Date()
+  ) async throws -> String {
+    try await write { try $0.createFolder(id: id, name: name, createdAt: createdAt) }
+  }
+
+  @discardableResult
+  public func renameFolder(
+    id: String,
+    name: String,
+    updatedAt: Date = Date()
+  ) async throws -> Bool {
+    try await write { try $0.renameFolder(id: id, name: name, updatedAt: updatedAt) }
+  }
+
+  @discardableResult
+  public func setFolderPinned(
+    id: String,
+    isPinned: Bool,
+    updatedAt: Date = Date()
+  ) async throws -> Bool {
+    try await write { try $0.setFolderPinned(id: id, isPinned: isPinned, updatedAt: updatedAt) }
+  }
+
+  @discardableResult
+  public func moveFolder(
+    id: String,
+    direction: WorkspaceFolderMoveDirection,
+    updatedAt: Date = Date()
+  ) async throws -> Bool {
+    try await write { try $0.moveFolder(id: id, direction: direction, updatedAt: updatedAt) }
+  }
+
+  @discardableResult
+  public func deleteFolder(
+    id: String
+  ) async throws -> Bool {
+    try await write { try $0.deleteFolder(id: id) }
+  }
+
+  public func dashboardRecordCounts() async throws -> DashboardRecordCounts {
+    try await read { try $0.dashboardRecordCounts() }
+  }
+
+  public func calendarItems() async throws -> [WorkspaceCalendarItemRecord] {
+    try await read { try $0.calendarItems() }
+  }
+
+  @discardableResult
+  public func createCalendarItem(
+    id: UUID = UUID(), title: String, details: String? = nil, startsAt: Date,
+    endsAt: Date?, allDay: Bool, createdAt: Date = Date()
+  ) async throws -> String {
+    try await write { try $0.createCalendarItem(id: id, title: title, details: details, startsAt: startsAt, endsAt: endsAt, allDay: allDay, createdAt: createdAt) }
+  }
+
+  public func workspaceOverview() async throws -> WorkspaceSnapshot {
+    try await read { try $0.workspaceOverview() }
   }
 }

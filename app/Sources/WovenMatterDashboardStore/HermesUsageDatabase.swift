@@ -5,7 +5,9 @@ import WovenMatterCore
 struct HermesUsageDatabase {
   let databaseURL: URL
 
-  func samples(cutoff: Date, now: Date) throws -> [UsageSample] {
+  func samples(cutoff: Date, now: Date,
+    check: @escaping @Sendable () throws -> Void = {}) throws -> [UsageSample] {
+    try check()
     var database: OpaquePointer?
     guard sqlite3_open_v2(databaseURL.path, &database, SQLITE_OPEN_READONLY, nil) == SQLITE_OK,
           let database else {
@@ -14,6 +16,9 @@ struct HermesUsageDatabase {
     }
     defer { sqlite3_close(database) }
     sqlite3_busy_timeout(database, 500)
+    let cancellation = UsageSourceQueryCancellation(check)
+    cancellation.install(on: database)
+    defer { cancellation.remove(from: database) }
 
     let sql = """
       SELECT u.session_id, u.model, u.billing_provider, u.billing_base_url,
@@ -36,7 +41,9 @@ struct HermesUsageDatabase {
 
     var result: [UsageSample] = []
     while true {
-      switch sqlite3_step(statement) {
+      let status = sqlite3_step(statement)
+      try check()
+      switch status {
       case SQLITE_DONE:
         return result
       case SQLITE_ROW:

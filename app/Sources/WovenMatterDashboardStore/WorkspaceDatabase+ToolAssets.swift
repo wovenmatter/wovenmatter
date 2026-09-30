@@ -3,7 +3,7 @@ import SQLite3
 import WovenMatterCore
 import WovenMatterClient
 
-extension WorkspaceDatabase {
+extension WorkspaceDatabaseConnection {
   public func listAgentNotes(callerID: String, search: String? = nil, folderID: String? = nil,
                               after: Int64 = 0, limit: Int = 50) throws -> GatewayJSONValue {
     try withLock {
@@ -63,5 +63,33 @@ extension WorkspaceDatabase {
 
   public func removeAgentCalendar(callerID: String, id: String, requestID: String? = nil) throws {
     try deleteCalendarEvent(id: id, callerID: callerID, requestID: requestID)
+  }
+}
+
+// MARK: - Async worker boundary
+
+extension WorkspaceDatabase {
+  public func listAgentNotes(callerID: String, search: String? = nil, folderID: String? = nil,
+                              after: Int64 = 0, limit: Int = 50) async throws -> GatewayJSONValue {
+    try await read { try $0.listAgentNotes(callerID: callerID, search: search, folderID: folderID, after: after, limit: limit) }
+  }
+
+  public func listAgentFolders(callerID: String) async throws -> GatewayJSONValue {
+    try await read { try $0.listAgentFolders(callerID: callerID) }
+  }
+
+  public func listAgentCalendar(callerID: String, since: Date? = nil, until: Date? = nil,
+                                 after: Int64 = 0, limit: Int = 100) async throws -> GatewayJSONValue {
+    try await read { try $0.listAgentCalendar(callerID: callerID, since: since, until: until, after: after, limit: limit) }
+  }
+
+  public func saveAgentCalendar(callerID: String, id: String = UUID().uuidString.lowercased(),
+                                 creating: Bool, title: String, details: String?,
+                                 startsAt: Date, endsAt: Date?, allDay: Bool, requestID: String? = nil) async throws -> String {
+    try await write { try $0.saveAgentCalendar(callerID: callerID, id: id, creating: creating, title: title, details: details, startsAt: startsAt, endsAt: endsAt, allDay: allDay, requestID: requestID) }
+  }
+
+  public func removeAgentCalendar(callerID: String, id: String, requestID: String? = nil) async throws {
+    try await write { try $0.removeAgentCalendar(callerID: callerID, id: id, requestID: requestID) }
   }
 }
