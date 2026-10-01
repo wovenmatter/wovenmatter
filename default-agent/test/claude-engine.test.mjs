@@ -66,6 +66,58 @@ test('ordinary Claude submissions reuse the selected model without spawning nati
   assert.equal(record.manager.getEntries().filter(entry => entry.type === 'model_change').length, beforeChanges);
 });
 
+test('Pi 1.0 fallback rebuilds canonical history without replaying the failed prompt', async t => {
+  const { engine, options } = await fixture(t, {
+    credentials: { openai: { type: 'api_key', key: 'fixture' } },
+    config: { providers: ['openai', 'claude-subscription'], defaultModel: 'openai/gpt-4o',
+      models: ['claude-subscription/sonnet'], fallbackModels: ['claude-subscription/sonnet'] },
+  });
+  const record = await engine.create();
+  const respond = syntheticAssistant([{ type: 'text', text: 'Fixture reply' }]);
+  record.session.agent.streamFunction = respond;
+  await engine.prompt(record, 'Earlier question', () => {});
+  const contexts = [];
+  record.session.agent.streamFunction = (model, context) => {
+    contexts.push({ provider: model.provider, messages: context.messages });
+    if (model.provider === 'openai') {
+      const stream = createAssistantMessageEventStream();
+      const result = { role: 'assistant', api: model.api, provider: model.provider, model: model.id,
+        content: [], timestamp: Date.now(), stopReason: 'error', errorMessage: 'insufficient_quota',
+        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
+      stream.push({ type: 'error', reason: 'error', error: result }); stream.end(result);
+      return stream;
+    }
+    return respond(model);
+  };
+  assert.equal((await engine.prompt(record, 'New question', () => {})).stopReason, 'end_turn');
+  assert.deepEqual(contexts.map(context => context.provider), ['openai', 'claude-subscription']);
+  const fallback = contexts[1].messages;
+  assert.equal(fallback.filter(message => message.role === 'user').length, 2);
+  assert.ok(fallback.some(message => message.role === 'assistant' && message.content.some(block => block.text === 'Fixture reply')));
+  assert.ok(!fallback.some(message => message.stopReason === 'error'));
+  const restored = await new DefaultAgentEngine(options).initialize();
+  const resumed = await restored.create(record.session.sessionId);
+  t.after(() => resumed.session.dispose());
+  assert.equal(resumed.session.messages.filter(message => message.role === 'user').length, 2);
+  assert.equal(resumed.session.messages.filter(message => message.role === 'assistant').length, 2);
+});
+
+test('handled Pi preflight cannot acknowledge steering as injected', async t => {
+  const { engine } = await fixture(t);
+  const record = await engine.create();
+  const started = Promise.withResolvers(), finish = Promise.withResolvers();
+  record.session.prompt = async (text, options) => {
+    options.preflightResult(text === 'start' ? 'started' : 'handled');
+    if (text === 'start') { started.resolve(); await finish.promise; }
+  };
+  const turn = engine.prompt(record, 'start', () => {});
+  await started.promise;
+  await assert.rejects(engine.steer(record, 'intercepted'), /without entering the model conversation/);
+  finish.resolve();
+  await turn;
+});
+
 test('real ModelRuntime uses ambient Claude auth while native profiles retain account routing', async t => {
   const first = { type: 'native', accountId: 'profile-first' };
   const second = { type: 'native', accountId: 'profile-second' };
@@ -453,7 +505,7 @@ test('an accepted continuation failure drains newer inputs before retiring the r
   const gate = () => Promise.withResolvers();
   const initial = gate(), first = gate(), second = gate(), ready = gate();
   record.session.prompt = async (text, options) => {
-    options.preflightResult(true);
+    options.preflightResult(text === 'start' ? 'started' : 'queued');
     if (text === 'start') { ready.resolve(); await initial.promise; }
     else await (text === 'first' ? first : second).promise;
   };

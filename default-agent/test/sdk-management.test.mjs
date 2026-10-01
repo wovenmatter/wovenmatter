@@ -19,7 +19,7 @@ async function fixture(t) {
     await mkdir(join(root, 'src'), { recursive: true });
     await writeFile(join(root, 'src/main-runtime.mjs'), 'export const fixture = true;');
     await writeFile(join(root, 'woven-sdk-generation.json'), JSON.stringify({ base: bundled.base, generation: id }));
-    const dependencies = { '@earendil-works/pi-coding-agent': '0.86.1', '@earendil-works/pi-ai': '0.86.1', '@anthropic-ai/claude-agent-sdk': '0.3.284', ...versions };
+    const dependencies = { '@earendil-works/pi-coding-agent': '1.0.0', '@earendil-works/pi-ai': '1.0.0', '@anthropic-ai/claude-agent-sdk': '0.3.284', ...versions };
     await writeFile(join(root, 'package.json'), JSON.stringify({ dependencies }));
     await writeFile(join(root, 'package-lock.json'), JSON.stringify({ lockfileVersion: 3, packages: {} }));
     for (const [name, version] of Object.entries(dependencies)) {
@@ -43,7 +43,7 @@ test('helper generation selection remains immutable while new launches see activ
 });
 
 test('metadata status detects an inconsistent Pi pair without loading SDKs', async t => {
-  const f = await fixture(t), installed = await f.generation({ '@earendil-works/pi-ai': '0.85.0' });
+  const f = await fixture(t), installed = await f.generation({ '@earendil-works/pi-ai': '1.0.1' });
   await installed.activate();
   const status = await sdkStatus({ directory: f.directory });
   assert.equal(status.sdks.find(sdk => sdk.id === 'pi').consistent, false);
@@ -54,10 +54,10 @@ test('a per-SDK check never queries the other SDK and preserves active installat
   const f = await fixture(t), installed = await f.generation(); await installed.activate();
   const before = await readFile(f.active, 'utf8'), calls = [];
   const status = await checkSDKUpdates({ directory: f.directory, id: 'pi', fetchImplementation: async url => {
-    calls.push(url); return new Response(JSON.stringify({ version: '0.87.1' }));
+    calls.push(url); return new Response(JSON.stringify({ version: '1.1.0' }));
   } });
   assert.equal(calls.length, 1); assert.match(decodeURIComponent(calls[0]), /pi-coding-agent/);
-  assert.equal(status.sdks.find(sdk => sdk.id === 'pi').latestVersion, '0.87.1');
+  assert.equal(status.sdks.find(sdk => sdk.id === 'pi').latestVersion, '1.1.0');
   assert.equal(status.sdks.find(sdk => sdk.id === 'claude').latestVersion, null);
   assert.equal(await readFile(f.active, 'utf8'), before);
 });
@@ -66,14 +66,22 @@ test('incompatible or cancelled updates cannot replace the active generation', a
   const f = await fixture(t), installed = await f.generation(); await installed.activate();
   const before = await readFile(f.active, 'utf8');
   await assert.rejects(checkSDKUpdates({ directory: f.directory, id: 'claude', fetchImplementation: async () => new Response(JSON.stringify({ version: '1.0.0' })) }), /incompatible/);
+  await assert.rejects(checkSDKUpdates({ directory: f.directory, id: 'claude', fetchImplementation: async () => new Response(JSON.stringify({ version: '0.4.0' })) }), /incompatible/);
+  await assert.rejects(checkSDKUpdates({ directory: f.directory, id: 'pi', fetchImplementation: async () => new Response(JSON.stringify({ version: '2.0.0' })) }), /incompatible/);
   await assert.rejects(updateSDK({ directory: f.directory, id: 'claude', signal: AbortSignal.abort() }), /cancelled/);
   assert.equal(await readFile(f.active, 'utf8'), before);
 });
 
 test('an app-source fingerprint change rejects stale copied helper code', async t => {
-  const f = await fixture(t), installed = await f.generation(); await installed.activate();
+  const f = await fixture(t), installed = await f.generation({ '@earendil-works/pi-coding-agent': '0.86.1', '@earendil-works/pi-ai': '0.86.1' }); await installed.activate();
   await writeFile(f.active, JSON.stringify({ base: 'old-app-build', generation: installed.id }));
   assert.equal((await resolveSDKRuntime({ directory: f.directory })).root, f.bundled.root);
+  const status = await checkSDKUpdates({ directory: f.directory, id: 'pi', fetchImplementation: async () => new Response(JSON.stringify({ version: '1.0.0' })) });
+  const pi = status.sdks.find(sdk => sdk.id === 'pi');
+  assert.equal(pi.installedVersion, '1.0.0');
+  assert.equal(pi.latestVersion, '1.0.0');
+  assert.equal(pi.consistent, true);
+  assert.equal(pi.updateAvailable, false);
 });
 
 test('Claude cached aliases are accepted only for the installed SDK version', async t => {
@@ -135,7 +143,7 @@ async function materializeManifest(_args, { cwd }) {
 test('mock installer failure rolls back staging and preserves the exact prior activation', async t => {
   const f = await fixture(t), installed = await f.generation(); await installed.activate();
   const before = await readFile(f.active, 'utf8');
-  await assert.rejects(updateSDK({ directory: f.directory, id: 'pi' }, mockInstaller('0.87.1', async () => {
+  await assert.rejects(updateSDK({ directory: f.directory, id: 'pi' }, mockInstaller('1.0.1', async () => {
     throw Error('fixture installer failure');
   })), /previous SDKs were kept/);
   assert.equal(await readFile(f.active, 'utf8'), before);
@@ -146,17 +154,17 @@ test('cancellation after mock installation but before activation keeps the old g
   const f = await fixture(t), installed = await f.generation(); await installed.activate();
   const before = await readFile(f.active, 'utf8'), controller = new AbortController();
   await assert.rejects(updateSDK({ directory: f.directory, id: 'pi', signal: controller.signal },
-    mockInstaller('0.87.1', async (...args) => { await materializeManifest(...args); controller.abort(); })), /cancelled/);
+    mockInstaller('1.0.1', async (...args) => { await materializeManifest(...args); controller.abort(); })), /cancelled/);
   assert.equal(await readFile(f.active, 'utf8'), before);
   assert.deepEqual(await readdir(join(f.directory, 'sdk-runtime/generations')), [installed.id]);
 });
 
 test('successful mock installation activates coherent Pi packages and retains the untouched SDK', async t => {
   const f = await fixture(t), installed = await f.generation(); await installed.activate();
-  const result = await updateSDK({ directory: f.directory, id: 'pi', version: '0.87.1' },
-    mockInstaller('0.87.1', materializeManifest));
+  const result = await updateSDK({ directory: f.directory, id: 'pi', version: '1.0.1' },
+    mockInstaller('1.0.1', materializeManifest));
   assert.notEqual(result.generation, installed.id);
-  assert.equal(result.sdks.find(sdk => sdk.id === 'pi').installedVersion, '0.87.1');
+  assert.equal(result.sdks.find(sdk => sdk.id === 'pi').installedVersion, '1.0.1');
   assert.equal(result.sdks.find(sdk => sdk.id === 'claude').installedVersion, '0.3.284');
   const actual = await sdkStatus({ directory: f.directory });
   assert.equal(actual.generation, result.generation);

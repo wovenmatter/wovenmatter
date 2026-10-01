@@ -116,8 +116,8 @@ async function registryVersion(name, signal, fetchImplementation = fetch) {
   return version;
 }
 function compatible(version, installed) {
-  // Claude's minor line is its SDK API compatibility boundary. Pi remains 0.x;
-  // allow its minor releases only after the provider-free contract check below.
+  // Pi 1.x updates stay on the reviewed major line and must pass the
+  // provider-free contract check below. Claude also keeps its minor boundary.
   return stableVersion(version) && stableVersion(installed) && version.split('.')[0] === installed.split('.')[0];
 }
 export async function checkSDKUpdates({ directory, id, signal, fetchImplementation } = {}) {
@@ -186,6 +186,7 @@ async function npmCLI() {
 const verificationSource = `
 const pi = await import('@earendil-works/pi-coding-agent');
 for (const name of ['createAgentSession','createCodingTools','DefaultResourceLoader','ModelRuntime','SessionManager','SettingsManager']) if (typeof pi[name] !== 'function') throw Error('Pi API unavailable');
+if (typeof pi.AgentSession?.prototype.refreshContext !== 'function') throw Error('Pi context API unavailable');
 const ai = await import('@earendil-works/pi-ai');
 for (const name of ['InMemoryCredentialStore','createAssistantMessageEventStream']) if (typeof ai[name] !== 'function') throw Error('Pi API unavailable');
 const transcript = await import('@earendil-works/pi-ai/utils/transcript');

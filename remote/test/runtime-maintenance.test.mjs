@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import { createRuntimeMaintenance, sanitize } from '../src/runtime-maintenance.mjs'
 
-const pi = {id:'pi',displayName:'Pi',command:'pi',cliCommand:'pi',install:{kind:'npm-global',package:'@earendil-works/pi-coding-agent@0.84.3'}}
+const pi = {id:'pi',displayName:'Pi',command:'pi',cliCommand:'pi',install:{kind:'npm-global',package:'@earendil-works/pi-coding-agent@1.0.0'}}
 async function fixture(t, overrides = {}) {
   const root = await mkdtemp(resolve(tmpdir(),'wm-maintenance-'))
   t.after(() => rm(root, {recursive:true,force:true}))
@@ -234,7 +234,7 @@ test('npm action rejects foreign packages, tags and incompatible OpenCode pins; 
   assert.equal(f.executions, 0)
   await f.service.start(pi, 'install', { confirmed: true })
   await finished(f.service)
-  assert.ok(f.calls.some(c => c.includes("'@earendil-works/pi-coding-agent@0.84.3'")))
+  assert.ok(f.calls.some(c => c.includes("'@earendil-works/pi-coding-agent@1.0.0'")))
   const h = { id: 'opencode', displayName: 'OpenCode', command: 'opencode2', cliCommand: 'opencode2', install: { kind: 'npm-global', package: '@opencode/cli@0.0.0-beta-19278' } }
   const other = await fixture(t, { catalog: new Map([['opencode', h]]) })
   const preview = await other.service.npmPreview(h)

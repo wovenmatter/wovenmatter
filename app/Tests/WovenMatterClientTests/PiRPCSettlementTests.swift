@@ -398,6 +398,8 @@ private struct PiPipeFixture: Sendable {
       let type = command["type"] as! String
       var data: [String: Any]
       switch type {
+      case "prompt":
+        data = ["disposition": "started"]
       case "get_state":
         if let resumeApproval {
           try events.fileHandleForWriting.write(contentsOf: Data(
@@ -640,6 +642,7 @@ struct PiHandledCommandTests {
       var data: [String: Any] = [:]
       if type == "prompt" {
         prompts += 1
+        data = ["disposition": normalStartup || prompts > 1 ? "started" : "handled"]
         #expect(command["message"] as? String == (prompts == 1 ? firstPrompt : "ordinary message"))
         if let pending { await pending.pause(); return }
         if prompts == 1 && !normalStartup {

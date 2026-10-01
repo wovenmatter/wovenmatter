@@ -10,6 +10,14 @@ agents do not receive unrestricted SQL or credentials. Capability checks are
 enforced at the service, not only described in prompts. Help is available without
 loading unrelated history or tool documentation into the conversation.
 
+Built-in uses the Pi 1.x SDK with extensions disabled. Its model-visible tools
+are Pi's `read`, `bash`, `edit`, `write`, `grep`, `find`, and `ls`, plus Woven Matter's
+`web_search` and `web_read`. Mutating Pi tools retain Woven Matter approval checks.
+App capabilities are discovered through the session-bound CLI using `bash` and
+on-demand help; they are not a second independently maintained SDK tool catalog.
+Pi's MCP, code mode, tool search, and Durable runtime are not enabled by updating
+the SDK. Adding them requires a separate integration decision.
+
 ## Tools and access
 
 The composer has a compact Tools dropdown with seven independent groups:
