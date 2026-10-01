@@ -77,7 +77,7 @@ final class CompanionModelTests: XCTestCase {
   @MainActor func testWorkspaceRetryRetainsCommandIdentityAfterLostAcknowledgement() async throws {
     let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent("store.json")
     let store = try MobileStore(file: file)
-    try await store.apply(.init(workspaceID: "workspace", cursor: 1))
+    try await store.apply(CompanionSnapshot(workspaceID: "workspace", cursor: 1))
     let mac = ModelMac(); await mac.release(); await mac.loseNextReply()
     let model = CompanionModel(store: store, transport: mac)
     let action = CompanionWorkspaceAction.saveCalendar(id: UUID().uuidString.lowercased(), revision: nil,
