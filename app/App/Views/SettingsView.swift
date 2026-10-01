@@ -212,13 +212,16 @@ struct SettingsView: View {
                 SettingsDestinationRow(
                     title: "Connections",
                     detail: "Shared accounts, API keys, and local model servers.",
-                    icon: { DashboardLucideIcon(glyph: .settings, size: 15) },
+                    icon: {
+                        DashboardLucideIcon(glyph: .plug, size: 15)
+                            .rotationEffect(.degrees(45))
+                    },
                     action: { section = .connections("global") }
                 )
                 SettingsDestinationRow(
                     title: "Built-in Agent",
                     detail: "Providers, search, and models across your workspaces.",
-                    icon: { DashboardLucideIcon(glyph: .terminal, size: 15) },
+                    icon: { DashboardLucideIcon(glyph: .bot, size: 15) },
                     action: { section = .defaultAgent("global", .landing) }
                 )
                 SettingsDestinationRow(

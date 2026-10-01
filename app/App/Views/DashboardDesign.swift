@@ -462,6 +462,7 @@ struct DashboardLucideGlyph: Hashable, Sendable {
     static let database = Self("database")
     static let barChart = Self("bar-chart-3")
     static let settings = Self("settings")
+    static let plug = Self("plug")
     static let plus = Self("plus")
     static let folderOpen = Self("folder-open")
     static let folder = Self("folder")
