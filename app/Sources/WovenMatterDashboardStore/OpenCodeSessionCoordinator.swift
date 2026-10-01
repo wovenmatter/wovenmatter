@@ -37,6 +37,8 @@ public actor OpenCodeSessionCoordinator {
     private var eventRefreshDirty: Set<String> = []
     private var refreshing: Set<String> = []
     private var sending: Set<String> = []
+    private var pendingDispatches: [String: (link: OpenCodeSessionLink, fence: AgentDispatchFence)] = [:]
+    private var interactionFences: [String: AgentDispatchFence] = [:]
     private var automaticApprovalTasks: [String: Task<Void, Never>] = [:]
     private var automaticApprovalEpochs: [String: UUID] = [:]
     private var automaticallyReplied: [String: Set<String>] = [:]
@@ -58,19 +60,40 @@ public actor OpenCodeSessionCoordinator {
         updates = stream.stream; continuation = stream.continuation
     }
     public func connect(_ connection: OpenCodeConnection) async throws {
-        for link in (try? database.openCodeLinks()) ?? [] where link.connectionID == connection.identity {
+        let token = UUID(); connectionTokens[connection.identity] = token
+        let links = (try? await database.openCodeLinks()) ?? []
+        try Task.checkCancellation()
+        guard connectionTokens[connection.identity] == token else { throw CancellationError() }
+        for link in links where link.connectionID == connection.identity {
             stopAutomaticApprovals(link.conversationID)
         }
-        let token = UUID(); connectionTokens[connection.identity] = token
-        let client = clientFactory(connection).recording(database.openCodeHistoryRecorder(connectionID: connection.identity))
+        let client = recordedClient(connection, token: token)
         _ = try await client.health()
         try Task.checkCancellation()
         guard connectionTokens[connection.identity] == token else { throw CancellationError() }
         clients[connection.identity] = client
     }
-    public func disconnect(connectionID: String) {
+    private func isCurrentConnection(_ id: String, token: UUID) -> Bool {
+        connectionTokens[id] == token
+    }
+    private func recordedClient(_ connection: OpenCodeConnection, token: UUID) -> OpenCodeHTTPClient {
+        let recorder = database.openCodeHistoryRecorder(connectionID: connection.identity)
+        return clientFactory(connection).recording { [weak self] direction, data in
+            guard await self?.isCurrentConnection(connection.identity, token: token) == true else { throw CancellationError() }
+            try await recorder(direction, data)
+            // A disconnect may occur while outbound history is queued. Never
+            // send that old client's request after the replacement takes over.
+            guard await self?.isCurrentConnection(connection.identity, token: token) == true else { throw CancellationError() }
+        }
+    }
+    public func disconnect(connectionID: String) async {
+        for value in pendingDispatches.values where value.link.connectionID == connectionID { value.fence.cancel() }
         connectionTokens.removeValue(forKey: connectionID)
-        for link in (try? database.openCodeLinks()) ?? [] where link.connectionID == connectionID {
+        clients.removeValue(forKey: connectionID)
+        let links = (try? await database.openCodeLinks()) ?? []
+        // A replacement connection may have started during the database read.
+        guard connectionTokens[connectionID] == nil else { return }
+        for link in links where link.connectionID == connectionID {
             stopAutomaticApprovals(link.conversationID)
             workers.removeValue(forKey: link.conversationID)?.cancel()
             eventRefreshes.removeValue(forKey: link.conversationID)?.cancel()
@@ -80,18 +103,36 @@ public actor OpenCodeSessionCoordinator {
             pendingCursors.removeValue(forKey: link.conversationID)
             emit(link.conversationID, status: "Disconnected")
         }
-        clients.removeValue(forKey: connectionID)
-        pruneNativeInteractionGuards(connectionID: connectionID)
+        await pruneNativeInteractionGuards(connectionID: connectionID)
     }
-    public func shutdown() { automaticApprovalTasks.values.forEach { $0.cancel() }; automaticApprovalTasks.removeAll(); automaticApprovalEpochs.removeAll(); automaticallyReplied.removeAll(); automaticApprovalFailures.removeAll(); workers.values.forEach { $0.cancel() }; eventRefreshes.values.forEach { $0.cancel() }; workers.removeAll(); eventRefreshes.removeAll(); eventRefreshTokens.removeAll(); eventRefreshDirty.removeAll(); generations.removeAll(); clients.removeAll(); connectionTokens.removeAll(); pendingCursors.removeAll(); pruneNativeInteractionGuards() }
+    public func shutdown() { interactionFences.values.forEach { $0.cancel() }; pendingDispatches.values.forEach { $0.fence.cancel() }; automaticApprovalTasks.values.forEach { $0.cancel() }; automaticApprovalTasks.removeAll(); automaticApprovalEpochs.removeAll(); automaticallyReplied.removeAll(); automaticApprovalFailures.removeAll(); workers.values.forEach { $0.cancel() }; eventRefreshes.values.forEach { $0.cancel() }; workers.removeAll(); eventRefreshes.removeAll(); eventRefreshTokens.removeAll(); eventRefreshDirty.removeAll(); generations.removeAll(); clients.removeAll(); connectionTokens.removeAll(); pendingCursors.removeAll(); Task { await pruneNativeInteractionGuards() } }
     public func call(connectionID: String, method: String = "GET", path: String,
-                     query: [String: String] = [:], body: OpenCodeValue? = nil) async throws -> OpenCodeValue {
+                     query: [String: String] = [:], body: OpenCodeValue? = nil,
+                     dispatchFence: AgentDispatchFence? = nil) async throws -> OpenCodeValue {
         guard let client = clients[connectionID] else { throw OpenCodeError.message("Connect to the OpenCode service first.") }
         let token = connectionTokens[connectionID]
-        let result = try await client.call(method, path, query: query, body: body)
+        let result = try await client.call(method, path, query: query, body: body, dispatchFence: dispatchFence)
         guard token == connectionTokens[connectionID] else { throw CancellationError() }
         return result
     }
+    private func interactionFence(_ conversationID: String) -> AgentDispatchFence {
+        if let fence = interactionFences[conversationID] { return fence }
+        let fence = AgentDispatchFence()
+        interactionFences[conversationID] = fence
+        return fence
+    }
+
+    public func sessionCall(_ link: OpenCodeSessionLink, suffix: String, method: String,
+                            body: OpenCodeValue?) async throws -> OpenCodeValue {
+        if method == "POST", suffix == "/interrupt" { cancelPendingInput(conversationID: link.conversationID) }
+        let fence = OpenCodePermissionHandling.requiresActiveTurn(method: method, suffix: suffix, body: body)
+            ? interactionFence(link.conversationID) : nil
+        try fence?.check()
+        return try await call(connectionID: link.connectionID, method: method,
+            path: "/api/session/" + OpenCodeHTTPClient.segment(link.sessionID) + suffix,
+            body: body, dispatchFence: fence)
+    }
+
     /// Persist only this conversation's approval handling. The native service
     /// still decides allow/ask/deny; automatic replies never create saved grants.
     @discardableResult
@@ -101,7 +142,7 @@ public actor OpenCodeSessionCoordinator {
             throw OpenCodeError.message("Wait for the current approval setting change to finish.")
         }
         defer { changingPermissionHandling.remove(conversationID) }
-        guard let link = try database.openCodeLinks().first(where: { $0.conversationID == conversationID }) else {
+        guard let link = try await database.openCodeLinks().first(where: { $0.conversationID == conversationID }) else {
             throw OpenCodeError.message("This OpenCode conversation is no longer available.")
         }
         // Cancel queued replies immediately when changing modes, even if a
@@ -113,7 +154,7 @@ public actor OpenCodeSessionCoordinator {
         try Task.checkCancellation()
         refreshing.insert(conversationID)
         defer { refreshing.remove(conversationID) }
-        let persisted = try database.openCodeSnapshot(conversationID: conversationID)
+        let persisted = try await database.openCodeSnapshot(conversationID: conversationID)
         var snapshot = snapshots[conversationID] ?? persisted ?? OpenCodeSessionSnapshot()
         // New conversations may not have a canonical projection yet. Publishing
         // an empty projection here would erase the composer's initial model.
@@ -131,11 +172,11 @@ public actor OpenCodeSessionCoordinator {
             snapshot.info = native["data"]
         }
         snapshot.approvalMode = mode
-        try database.saveOpenCodeSnapshot(snapshot, conversationID: conversationID)
+        try await database.saveOpenCodeSnapshot(snapshot, conversationID: conversationID)
         snapshots[conversationID] = snapshot
         emit(conversationID, status: clients[link.connectionID] == nil ? "Disconnected" : "Connected")
         changingPermissionHandling.remove(conversationID)
-        scheduleAutomaticApprovals(link)
+        await scheduleAutomaticApprovals(link)
         return mode
     }
 
@@ -146,10 +187,11 @@ public actor OpenCodeSessionCoordinator {
         automaticApprovalFailures.removeValue(forKey: conversationID)
     }
 
-    private func scheduleAutomaticApprovals(_ link: OpenCodeSessionLink) {
-        guard (try? database.openCodeLinks())?.contains(link) == true,
+    private func scheduleAutomaticApprovals(_ link: OpenCodeSessionLink) async {
+        guard (try? await database.openCodeLinks())?.contains(link) == true,
               OpenCodePermissionHandling.normalized(snapshots[link.conversationID]?.approvalMode) != "normal",
               !changingPermissionHandling.contains(link.conversationID),
+              interactionFences[link.conversationID]?.isCancelled != true,
               automaticApprovalTasks[link.conversationID] == nil,
               let token = connectionTokens[link.connectionID], clients[link.connectionID] != nil else { return }
         let epoch = automaticApprovalEpochs[link.conversationID] ?? UUID()
@@ -177,13 +219,14 @@ public actor OpenCodeSessionCoordinator {
             resolvingNativeInteractions.insert(key)
             defer {
                 resolvingNativeInteractions.remove(key)
-                pruneNativeInteractionGuards(connectionID: link.connectionID)
+                Task { await pruneNativeInteractionGuards(connectionID: link.connectionID) }
             }
             do {
                 // Native TUI uses this same reply: once, never always. The
                 // permission endpoint binds the request to the supplied session.
                 _ = try await client.call("POST", "/api/session/" + OpenCodeHTTPClient.segment(link.sessionID)
-                    + "/permission/" + OpenCodeHTTPClient.segment(requestID) + "/reply", body: ["reply": "once"])
+                    + "/permission/" + OpenCodeHTTPClient.segment(requestID) + "/reply", body: ["reply": "once"],
+                    dispatchFence: interactionFence(link.conversationID))
             } catch OpenCodeError.http(404) {
                 // Another native client may already have answered this request.
             } catch {
@@ -233,7 +276,7 @@ public actor OpenCodeSessionCoordinator {
     public func importableSessions(connectionID: String, cursor: String? = nil) async throws -> (sessions: [OpenCodeValue], next: String?) {
         guard let client = clients[connectionID] else { throw OpenCodeError.message("Connect to OpenCode first.") }
         let token = connectionTokens[connectionID]
-        var excluded = try database.knownOpenCodeSessionIDs(connectionID: connectionID)
+        var excluded = try await database.knownOpenCodeSessionIDs(connectionID: connectionID)
         var result: [OpenCodeValue] = []
         var next = cursor
         var visited: Set<String> = []
@@ -262,7 +305,7 @@ public actor OpenCodeSessionCoordinator {
         let path = "/api/session/" + OpenCodeHTTPClient.segment(sessionID)
         let info = try await client.call("GET", path)["data"]
         guard info["metadata"]["wovenmatter"]["origin"].text != "created",
-              !(try database.knownOpenCodeSessionIDs(connectionID: connectionID)).contains(sessionID) else {
+              !(try await database.knownOpenCodeSessionIDs(connectionID: connectionID)).contains(sessionID) else {
             throw OpenCodeError.message("This session is already in Woven Matter. Refresh the list.")
         }
         guard info["id"].text == sessionID, !info["location"]["directory"].text.isEmpty else {
@@ -301,9 +344,13 @@ public actor OpenCodeSessionCoordinator {
         guard let client = clients[connectionID] else { throw OpenCodeError.message("OpenCode is disconnected.") }
         return try await client.readFile(path: path, query: query)
     }
-    public func watch(_ link: OpenCodeSessionLink) {
+    public func watch(_ link: OpenCodeSessionLink) async {
         guard workers[link.conversationID] == nil, clients[link.connectionID] != nil else { return }
-        snapshots[link.conversationID] = (try? database.openCodeSnapshot(conversationID: link.conversationID)) ?? OpenCodeSessionSnapshot()
+        let token = connectionTokens[link.connectionID]
+        let snapshot = (try? await database.openCodeSnapshot(conversationID: link.conversationID)) ?? OpenCodeSessionSnapshot()
+        guard !Task.isCancelled, token == connectionTokens[link.connectionID],
+              clients[link.connectionID] != nil, workers[link.conversationID] == nil else { return }
+        snapshots[link.conversationID] = snapshot
         let generation = UUID(); generations[link.conversationID] = generation
         workers[link.conversationID] = Task { await self.follow(link, generation: generation) }
     }
@@ -313,9 +360,9 @@ public actor OpenCodeSessionCoordinator {
             let connectedAt = ContinuousClock.now
             do {
                 guard var client = clients[link.connectionID] else { return }
-                let token = connectionTokens[link.connectionID]
+                guard let token = connectionTokens[link.connectionID] else { return }
                 if let registration = client.connection.registration {
-                    client = clientFactory(try .discover(file: registration))
+                    client = recordedClient(try .discover(file: registration), token: token)
                     _ = try await client.health()
                     try Task.checkCancellation()
                     guard generations[link.conversationID] == generation, token == connectionTokens[link.connectionID] else { continue }
@@ -375,10 +422,15 @@ public actor OpenCodeSessionCoordinator {
         guard eventRefreshes[link.conversationID] == nil else { return }
         scheduleEventRefresh(link, generation: generation, delay: !terminal)
     }
-    func receiveLogEvent(_ event: OpenCodeValue, link: OpenCodeSessionLink) {
+    func receiveLogEvent(_ event: OpenCodeValue, link: OpenCodeSessionLink) async {
         if generations[link.conversationID] == nil {
-            snapshots[link.conversationID] = (try? database.openCodeSnapshot(conversationID: link.conversationID)) ?? OpenCodeSessionSnapshot()
-            generations[link.conversationID] = UUID()
+            let token = connectionTokens[link.connectionID]
+            let snapshot = (try? await database.openCodeSnapshot(conversationID: link.conversationID)) ?? OpenCodeSessionSnapshot()
+            guard !Task.isCancelled, token != nil, token == connectionTokens[link.connectionID] else { return }
+            if generations[link.conversationID] == nil {
+                snapshots[link.conversationID] = snapshot
+                generations[link.conversationID] = UUID()
+            }
         }
         guard let generation = generations[link.conversationID] else { return }
         logEvent(event, link: link, generation: generation)
@@ -425,7 +477,9 @@ public actor OpenCodeSessionCoordinator {
         let responses = try await (info, messages, permissions, forms, inbox, active)
         try Task.checkCancellation()
         guard capturedGeneration == generations[link.conversationID], token == connectionTokens[link.connectionID] else { throw CancellationError() }
-        let persisted = try database.openCodeSnapshot(conversationID: link.conversationID)
+        let persisted = try await database.openCodeSnapshot(conversationID: link.conversationID)
+        try Task.checkCancellation()
+        guard capturedGeneration == generations[link.conversationID], token == connectionTokens[link.connectionID] else { throw CancellationError() }
         var snapshot = snapshots[link.conversationID] ?? persisted ?? OpenCodeSessionSnapshot()
         snapshot.info = responses.0["data"]
         guard snapshot.info["id"].text == link.sessionID else { throw OpenCodeError.message("OpenCode returned a different session identity.") }
@@ -469,14 +523,17 @@ public actor OpenCodeSessionCoordinator {
         try Task.checkCancellation()
         guard capturedGeneration == generations[link.conversationID], token == connectionTokens[link.connectionID] else { throw CancellationError() }
         if snapshots[link.conversationID] != snapshot {
-            try database.saveOpenCodeSnapshot(snapshot, conversationID: link.conversationID)
+            try await database.saveOpenCodeSnapshot(snapshot, conversationID: link.conversationID)
+            try Task.checkCancellation()
+            guard capturedGeneration == generations[link.conversationID], token == connectionTokens[link.connectionID] else { throw CancellationError() }
             snapshots[link.conversationID] = snapshot
             emit(link.conversationID, status: "Connected")
         }
         try await reconcileSubmissions(link, client: client, snapshot: snapshot, token: token)
         guard capturedGeneration == generations[link.conversationID], token == connectionTokens[link.connectionID] else { throw CancellationError() }
         pruneNativeInteractionGuards(link: link, snapshot: snapshot)
-        scheduleAutomaticApprovals(link)
+        await scheduleAutomaticApprovals(link)
+        guard !Task.isCancelled, capturedGeneration == generations[link.conversationID], token == connectionTokens[link.connectionID] else { throw CancellationError() }
         emit(link.conversationID, status: "Connected")
     }
     public func loadOlder(_ link: OpenCodeSessionLink) async throws {
@@ -494,16 +551,25 @@ public actor OpenCodeSessionCoordinator {
         var snapshot = snapshots[link.conversationID] ?? OpenCodeSessionSnapshot()
         snapshot.mergeMessages(Array(page["data"].array.reversed()), older: true)
         snapshot.olderCursor = page["data"].array.count == 100 ? page["cursor"]["next"].string : nil
-        try database.saveOpenCodeSnapshot(snapshot, conversationID: link.conversationID)
+        try await database.saveOpenCodeSnapshot(snapshot, conversationID: link.conversationID)
+        try Task.checkCancellation()
+        guard generation == generations[link.conversationID], token == connectionTokens[link.connectionID] else { throw CancellationError() }
         snapshots[link.conversationID] = snapshot; emit(link.conversationID, status: "Connected")
     }
-    @discardableResult
-    public func prompt(_ link: OpenCodeSessionLink, input: AgentMessageInput, discovery: String? = nil, requiresIdle: Bool = false) async throws -> OpenCodeSubmissionReceipt {
-        try await submit(link, input: input, command: nil, discovery: discovery, requiresIdle: requiresIdle)
+    public func cancelPendingInput(conversationID: String) {
+        interactionFence(conversationID).cancel()
+        pendingDispatches[conversationID]?.fence.cancel()
+        stopAutomaticApprovals(conversationID)
     }
     @discardableResult
-    public func command(_ link: OpenCodeSessionLink, name: String, input: AgentMessageInput, discovery: String? = nil, requiresIdle: Bool = false) async throws -> OpenCodeSubmissionReceipt {
-        try await submit(link, input: input, command: name, discovery: discovery, requiresIdle: requiresIdle)
+    public func prompt(_ link: OpenCodeSessionLink, input: AgentMessageInput, discovery: String? = nil,
+                       requiresIdle: Bool = false, dispatchFence: AgentDispatchFence? = nil) async throws -> OpenCodeSubmissionReceipt {
+        try await submit(link, input: input, command: nil, discovery: discovery, requiresIdle: requiresIdle, dispatchFence: dispatchFence)
+    }
+    @discardableResult
+    public func command(_ link: OpenCodeSessionLink, name: String, input: AgentMessageInput, discovery: String? = nil,
+                        requiresIdle: Bool = false, dispatchFence: AgentDispatchFence? = nil) async throws -> OpenCodeSubmissionReceipt {
+        try await submit(link, input: input, command: name, discovery: discovery, requiresIdle: requiresIdle, dispatchFence: dispatchFence)
     }
 
     public func replyToPermission(_ link: OpenCodeSessionLink, expectedRequest: OpenCodeValue,
@@ -558,8 +624,8 @@ public actor OpenCodeSessionCoordinator {
         }
     }
 
-    private func pruneNativeInteractionGuards(connectionID: String? = nil) {
-        guard let links = try? database.openCodeLinks() else { return }
+    private func pruneNativeInteractionGuards(connectionID: String? = nil) async {
+        guard let links = try? await database.openCodeLinks() else { return }
         let pending = links.reduce(into: Set<NativeInteractionKey>()) { result, link in
             if let snapshot = snapshots[link.conversationID] {
                 result.formUnion(nativeInteractionKeys(link, snapshot: snapshot))
@@ -576,6 +642,8 @@ public actor OpenCodeSessionCoordinator {
 
     private func resolveNativeInteraction(_ link: OpenCodeSessionLink, kind: String,
         expectedRequest: OpenCodeValue, expectedRunID: String?, suffix: String, body: OpenCodeValue?) async throws {
+        let dispatchFence = interactionFence(link.conversationID)
+        try dispatchFence.check()
         let requestID = expectedRequest["id"].text
         let key = nativeInteractionKey(link, kind: kind, id: requestID)
         guard !requestID.isEmpty, !resolvedNativeInteractions.contains(key),
@@ -584,7 +652,7 @@ public actor OpenCodeSessionCoordinator {
         }
         defer {
             resolvingNativeInteractions.remove(key)
-            pruneNativeInteractionGuards(connectionID: link.connectionID)
+            Task { await pruneNativeInteractionGuards(connectionID: link.connectionID) }
         }
         guard let token = connectionTokens[link.connectionID], let client = clients[link.connectionID] else {
             throw OpenCodeError.message("Connect to OpenCode before answering this request.")
@@ -595,12 +663,12 @@ public actor OpenCodeSessionCoordinator {
         guard pending?.contains(expectedRequest) == true else {
             throw OpenCodeError.message("This OpenCode request changed or has already ended. Refresh it before answering.")
         }
-        if let expectedRunID, try database.activeRunID(conversationID: link.conversationID) != expectedRunID {
+        if let expectedRunID, try await database.activeRunID(conversationID: link.conversationID) != expectedRunID {
             throw OpenCodeError.message("This OpenCode request belongs to a different run. Refresh it before answering.")
         }
         do {
             _ = try await client.call("POST", "/api/session/" + OpenCodeHTTPClient.segment(link.sessionID)
-                + "/" + kind + "/" + OpenCodeHTTPClient.segment(requestID) + suffix, body: body)
+                + "/" + kind + "/" + OpenCodeHTTPClient.segment(requestID) + suffix, body: body, dispatchFence: dispatchFence)
         } catch {
             if connectionTokens[link.connectionID] != token { resolvedNativeInteractions.insert(key) }
             throw error
@@ -616,7 +684,7 @@ public actor OpenCodeSessionCoordinator {
         defer { sending.remove(link.conversationID) }
         if let expectedRunID {
             try await refresh(link)
-            guard try database.activeRunID(conversationID: link.conversationID) == expectedRunID else {
+            guard try await database.activeRunID(conversationID: link.conversationID) == expectedRunID else {
                 throw LocalACPSessionDatabaseError.runNotFound
             }
         }
@@ -625,19 +693,27 @@ public actor OpenCodeSessionCoordinator {
         try? await refresh(link)
     }
 
-    private func submit(_ link: OpenCodeSessionLink, input: AgentMessageInput, command: String?, discovery: String?, requiresIdle: Bool) async throws -> OpenCodeSubmissionReceipt {
+    private func submit(_ link: OpenCodeSessionLink, input: AgentMessageInput, command: String?, discovery: String?,
+                        requiresIdle: Bool, dispatchFence: AgentDispatchFence?) async throws -> OpenCodeSubmissionReceipt {
+        let fence = dispatchFence ?? AgentDispatchFence()
+        try fence.check()
         guard sending.insert(link.conversationID).inserted else { throw OpenCodeError.message("The previous input is still being submitted.") }
-        defer { sending.remove(link.conversationID) }
+        pendingDispatches[link.conversationID] = (link, fence)
+        defer { sending.remove(link.conversationID); pendingDispatches.removeValue(forKey: link.conversationID) }
         if requiresIdle {
             try await refresh(link)
             guard snapshots[link.conversationID]?.active != true,
-                  try database.activeRunID(conversationID: link.conversationID) == nil else {
+                  try await database.activeRunID(conversationID: link.conversationID) == nil else {
                 throw LocalACPSessionDatabaseError.runAlreadyActive
             }
         }
         guard let client = clients[link.connectionID] else { throw OpenCodeError.message("Connect to OpenCode before sending input.") }
-        guard try database.openCodeUncertainSubmissions(conversationID: link.conversationID).isEmpty else {
+        guard try await database.openCodeUncertainSubmissions(conversationID: link.conversationID).isEmpty else {
             throw OpenCodeError.message("Resolve the uncertain input in session controls before sending another message.")
+        }
+        try fence.check()
+        if interactionFences[link.conversationID]?.isCancelled == true {
+            interactionFences[link.conversationID] = AgentDispatchFence()
         }
         let deliveryText = (discovery.map { $0 + "\n\n" } ?? "") + input.textWithReferenceContext
         let id = "msg_" + UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
@@ -661,42 +737,55 @@ public actor OpenCodeSessionCoordinator {
             // Never journal or retry them as idempotent prompt submissions.
             var commandPayload: [String: OpenCodeValue] = ["command": .string(command),
                 "text": .string(deliveryText), "files": .array(files)]
-            if input.historyDeliveryID != nil { commandPayload["delivery"] = .string("steer") }
+            commandPayload["delivery"] = .string("steer")
             let payload = OpenCodeValue.object(commandPayload)
+            try fence.check()
             if let deliveryID = input.historyDeliveryID {
-                try database.markToolDeliveryTransportStarted(id: deliveryID, targetID: link.conversationID, nativeCommand: command)
+                try await database.markToolDeliveryTransportStarted(id: deliveryID, targetID: link.conversationID, nativeCommand: command)
             }
             do {
-                _ = try await client.call("POST", "/api/session/\(OpenCodeHTTPClient.segment(link.sessionID))/command", body: payload)
+                _ = try await client.call("POST", "/api/session/\(OpenCodeHTTPClient.segment(link.sessionID))/command", body: payload, dispatchFence: fence)
             } catch {
+                if !fence.hasDispatched {
+                    if let deliveryID = input.historyDeliveryID { try await database.setToolDeliveryStatus(id: deliveryID, status: "failed") }
+                    throw error
+                }
                 if case OpenCodeError.http(let code) = error, [400, 401, 403, 404, 422].contains(code) {
-                    if let deliveryID = input.historyDeliveryID { try database.setToolDeliveryStatus(id: deliveryID, status: "failed") }
+                    if let deliveryID = input.historyDeliveryID { try await database.setToolDeliveryStatus(id: deliveryID, status: "failed") }
                     throw error
                 }
                 try? await refresh(link)
                 throw OpenCodeError.message("OpenCode did not confirm the command outcome. Check the session before running it again; Woven Matter has not retried it.")
             }
-            if let deliveryID = input.historyDeliveryID { try database.setToolDeliveryStatus(id: deliveryID, status: "accepted") }
+            if let deliveryID = input.historyDeliveryID { try await database.setToolDeliveryStatus(id: deliveryID, status: "accepted") }
             try? await refresh(link)
             return OpenCodeSubmissionReceipt()
         }
         var promptPayload: [String: OpenCodeValue] = ["id": .string(id), "text": .string(deliveryText), "files": .array(files)]
-        if input.historyDeliveryID != nil { promptPayload["delivery"] = .string("steer") }
+        // Let native state choose live injection or an idle start. A cached
+        // activity snapshot can lag a rapid second composer submission.
+        promptPayload["delivery"] = .string("steer")
         let payload = OpenCodeValue.object(promptPayload)
-        try database.saveOpenCodeSubmission(conversationID: link.conversationID, id: id, payload: payload, status: "sending", visibleText: input.text, deliveryID: input.historyDeliveryID)
+        try fence.check()
+        try await database.saveOpenCodeSubmission(conversationID: link.conversationID, id: id, payload: payload, status: "sending", visibleText: input.text, deliveryID: input.historyDeliveryID, input: input)
         do {
-            let result = try await client.call("POST", "/api/session/\(OpenCodeHTTPClient.segment(link.sessionID))/prompt", body: payload)
+            let result = try await client.call("POST", "/api/session/\(OpenCodeHTTPClient.segment(link.sessionID))/prompt", body: payload, dispatchFence: fence)
             guard result["data"]["id"].text == id else { throw OpenCodeError.uncertain(id) }
-            try database.saveOpenCodeSubmission(conversationID: link.conversationID, id: id, payload: payload, status: "accepted")
+            try await database.saveOpenCodeSubmission(conversationID: link.conversationID, id: id, payload: payload, status: "accepted")
         } catch {
-            if case OpenCodeError.http(let code) = error, [400, 401, 403, 404, 422].contains(code) {
-                try database.saveOpenCodeSubmission(conversationID: link.conversationID, id: id, payload: payload, status: "rejected")
-                if let deliveryID = input.historyDeliveryID { try database.setToolDeliveryStatus(id: deliveryID, status: "failed") }
+            if !fence.hasDispatched {
+                try await database.saveOpenCodeSubmission(conversationID: link.conversationID, id: id, payload: payload, status: "rejected")
+                if let deliveryID = input.historyDeliveryID { try await database.setToolDeliveryStatus(id: deliveryID, status: "failed") }
                 throw error
             }
-            try database.saveOpenCodeSubmission(conversationID: link.conversationID, id: id, payload: payload, status: "uncertain")
+            if case OpenCodeError.http(let code) = error, [400, 401, 403, 404, 422].contains(code) {
+                try await database.saveOpenCodeSubmission(conversationID: link.conversationID, id: id, payload: payload, status: "rejected")
+                if let deliveryID = input.historyDeliveryID { try await database.setToolDeliveryStatus(id: deliveryID, status: "failed") }
+                throw error
+            }
+            try await database.saveOpenCodeSubmission(conversationID: link.conversationID, id: id, payload: payload, status: "uncertain")
             try? await refresh(link)
-            if try database.openCodeUncertainSubmissions(conversationID: link.conversationID).isEmpty {
+            if try await database.openCodeUncertainSubmissions(conversationID: link.conversationID).isEmpty {
                 return OpenCodeSubmissionReceipt(nativeUserMessageID: id)
             }
             throw OpenCodeError.uncertain(id)
@@ -705,7 +794,7 @@ public actor OpenCodeSessionCoordinator {
         return OpenCodeSubmissionReceipt(nativeUserMessageID: id)
     }
     private func reconcileSubmissions(_ link: OpenCodeSessionLink, client: OpenCodeHTTPClient, snapshot: OpenCodeSessionSnapshot, token: UUID?) async throws {
-        for item in try database.openCodeUncertainSubmissions(conversationID: link.conversationID) {
+        for item in try await database.openCodeUncertainSubmissions(conversationID: link.conversationID) {
             let id = item["id"].text
             var accepted = snapshot.containsInput(id)
             if !accepted {
@@ -714,7 +803,7 @@ public actor OpenCodeSessionCoordinator {
             }
             try Task.checkCancellation()
             guard token == connectionTokens[link.connectionID] else { throw CancellationError() }
-            if accepted { try database.saveOpenCodeSubmission(conversationID: link.conversationID, id: id, payload: item["payload"], status: "accepted") }
+            if accepted { try await database.saveOpenCodeSubmission(conversationID: link.conversationID, id: id, payload: item["payload"], status: "accepted") }
         }
     }
     private func emit(_ id: String, status: String, error: String? = nil) {

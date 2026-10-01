@@ -1,5 +1,8 @@
 # Everyday workspace performance
 
+Historical measurements from PR #64. The candidate status and manual-test gaps
+below describe that review, not the current release audit.
+
 This audit uses the real native views and database with disposable, provider-free
 fixtures. It compares ordinary light use with a larger workspace; the larger
 case is a stress case, not a claim about a typical user's data.

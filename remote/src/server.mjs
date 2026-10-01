@@ -1,6 +1,13 @@
+import { existsSync } from 'node:fs'
+const defaultAgentModule = new URL('../default-agent/src/managed-service.mjs', import.meta.url)
+const { createManagedDefaultAgentService } = await import(existsSync(defaultAgentModule) ? defaultAgentModule.href : new URL('../../default-agent/src/managed-service.mjs', import.meta.url).href)
+const { signInStatuses } = await import(new URL('./sign-in-status.mjs', existsSync(defaultAgentModule) ? defaultAgentModule : new URL('../../default-agent/src/managed-service.mjs', import.meta.url)).href)
 import { databaseOperation } from './database-catalog.mjs'
 import { createHermesInstance } from './hermes-instance.mjs'
 import { createRuntimeMaintenance, acquireHostLock } from './runtime-maintenance.mjs'
+import { createTaskGateway } from './task-gateway.mjs'
+import { createTaskExecutor } from './task-gateway-runner.mjs'
+import { createDurableACP } from './durable-acp.mjs'
 import { createWorkspaceInstances } from './workspace-instances.mjs'
 import { prepareOpenClawResults } from './prepare-openclaw-results.mjs'
 import { durableJSON } from './openclaw-results/store.mjs'
@@ -35,7 +42,9 @@ if (catalogDocument.schemaVersion !== 4 || !Array.isArray(catalogDocument.harnes
   throw new Error('Unsupported harness catalog')
 }
 const catalog = new Map(catalogDocument.harnesses.map((entry) => [entry.id, entry]))
+const defaultAgent = createManagedDefaultAgentService({ cwd: workspaceRoot, directory: resolve(workspaceRoot, '.wovenmatter/default-agent') })
 const authenticationSessions = new Map()
+const foregroundDefaultRuns = new Map()
 const maximumRetainedTerminalRecords = 64
 const maximumInstallerBytes = 5_242_880
 const installerDownloadTimeoutMilliseconds = 30_000
@@ -65,13 +74,67 @@ const instances = createWorkspaceInstances({
 const maintenance = createRuntimeMaintenance({
   catalog, workspaceRoot, environment: harnessEnvironment, verifiedInstaller,
   hasActiveRuntime: async id => (id === 'hermes' && hermes.hasActiveRuntime()) || await instances.hasActiveRuntime(id)
+    || taskGateway?.hasActiveRuntime(id) || durableACP.hasActiveRuntime(id)
     || [...authenticationSessions.values()].some(s => s.harness.id === id && s.state === 'waiting_for_user'),
 })
+
+// One service owns autonomous work for a workspace volume, including during
+// replacement-container startup. Never run two schedulers against the same journal.
+const releaseTaskOwner = runningAsService
+  ? await acquireHostLock(resolve(workspaceRoot,'.wovenmatter/task-gateway.owner.lock'),harnessEnvironment(),workspaceRoot)
+  : null
+const durableACP = createDurableACP({ catalog, workspaceRoot, environment:harnessEnvironment,
+  isEnabled:async () => taskGateway?.enabled() === true, isHarnessEnabled:id => maintenance.isEnabled(id) })
+const taskGateway = runningAsService ? createTaskGateway({
+  directory:resolve(workspaceRoot,'.wovenmatter/task-gateway'),
+  execute:createTaskExecutor({catalog,workspaceRoot,environment:harnessEnvironment,defaultAgent,hermes,instances,
+    isEnabled:id => maintenance.isEnabled(id)}),
+  onDisable:async () => { await Promise.all([durableACP.stopAll(), defaultAgent.cancelActive()]); foregroundDefaultRuns.clear() },
+}) : null
 
 const server = createServer(async (request, response) => {
   try {
     if (!authorized(request)) return json(response, 401, { error: 'unauthorized' })
     const url = new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`)
+    if (url.pathname === '/v1/task-gateway' && request.method === 'GET') return json(response,200,taskGateway.status())
+    if (url.pathname === '/v1/task-gateway' && request.method === 'PATCH') return json(response,200,await taskGateway.configure(await readJSON(request)))
+    if (url.pathname === '/v1/task-gateway/schedules' && request.method === 'GET') return json(response,200,taskGateway.schedules())
+    if (url.pathname === '/v1/task-gateway/schedules' && request.method === 'PUT') return json(response,200,taskGateway.publish(await readJSON(request)))
+    if (url.pathname === '/v1/task-gateway/results' && request.method === 'GET') return json(response,200,taskGateway.results(url.searchParams.get('after') ?? '0'))
+    if (url.pathname.startsWith('/v1/durable-acp/') && request.method === 'POST') return json(response,200,await durableACP.handle(request.method,url.pathname,await readJSON(request)))
+    if (url.pathname === '/v1/sign-in-status' && request.method === 'GET') {
+      const agent = await defaultAgent.status();
+      const entries = await Promise.all([...catalog.values()].map(async h => ({
+        id: h.id, name: h.displayName, executable: await commandExists(h.cliCommand) ? h.cliCommand : null,
+      })));
+      const statuses = await signInStatuses(entries);
+      statuses.unshift(...(agent.locked ? [{ id: 'default_agent', name: 'Built-in', state: 'locked', detail: 'Reconnect Woven Matter to unlock stored credentials.' }]
+        : agent.providers.map(p => ({ ...p, name: 'Built-in · ' + p.name }))));
+      return json(response, 200, { statuses });
+    }
+    if (url.pathname === '/v1/default-agent/sdks' && ['GET', 'POST'].includes(request.method)) {
+      return json(response, 200, await defaultAgentSDKRequest(request, response, defaultAgent))
+    }
+    if (url.pathname === '/v1/default-agent/configuration'  && request.method === 'POST') {
+      return json(response, 200, await defaultAgent.configure(await readJSON(request)))
+    }
+    if (url.pathname === '/v1/default-agent/status' && request.method === 'GET') return json(response, 200, await defaultAgent.status())
+    if (url.pathname === '/v1/default-agent/rpc' && request.method === 'POST') {
+      const message = await readJSON(request)
+      const result = await defaultAgent.invoke(message)
+      if (message.method === 'session/prompt' && result.operationID && !taskGateway.enabled()) {
+        foregroundDefaultRuns.set(result.operationID, { sessionID:message.params?.sessionId, lastSeen:Date.now() })
+      }
+      return json(response, 200, result)
+    }
+    const defaultRun = url.pathname.match(/^\/v1\/default-agent\/runs\/([0-9a-f-]+)$/)
+    if (defaultRun && request.method === 'GET') {
+      const lease = foregroundDefaultRuns.get(defaultRun[1]); if (lease) lease.lastSeen = Date.now()
+      const page = await defaultAgent.poll(defaultRun[1], Number(url.searchParams.get('after') ?? 0))
+      if (page.done) foregroundDefaultRuns.delete(defaultRun[1])
+      return json(response, 200, page)
+    }
+
 
     if (request.method === 'GET' && url.pathname === '/v1/databases') {
       return json(response, 200, await databaseOperation(workspaceRoot, { action: 'list' }))
@@ -111,6 +174,7 @@ const server = createServer(async (request, response) => {
 
     if (request.method === 'GET' && url.pathname === '/v1/harnesses') {
       const statuses = await Promise.all([...catalog.values()].map(harnessStatus))
+      statuses.unshift({ id: 'default_agent', displayName: 'Built-in', transport: 'woven-default-agent', capabilities: ['conversations', 'resume'], state: 'ready', installationStatus: 'installed', authenticationStatus: 'configured_in_settings', transportStatus: 'ready', setupMethods: [], detectedProviders: [] })
       return json(response, 200, { harnesses: statuses })
     }
 
@@ -239,6 +303,16 @@ if (runningAsService) {
   } catch (error) {
     if (error.code !== 'ENOENT') gateway.lastError = 'openclaw_desired_state_unavailable'
   }
+  taskGateway.start()
+  setInterval(() => {
+    for (const [id, lease] of foregroundDefaultRuns) {
+      if (taskGateway.enabled()) { foregroundDefaultRuns.delete(id); continue }
+      if (Date.now() - lease.lastSeen > 30000) {
+        foregroundDefaultRuns.delete(id)
+        void defaultAgent.cancelSession(lease.sessionID).catch(() => {})
+      }
+    }
+  }, 5000).unref()
   void hermes.restore()
   server.listen(listenPort, listenHost, () => {
     process.stdout.write(`Woven Matter remote service listening on ${listenHost}:${listenPort}\n`)
@@ -255,7 +329,7 @@ if (runningAsService) {
   })
   process.once('SIGTERM', async () => {
     server.close()
-    try { await stopGateway(); process.exit(0) }
+    try { await taskGateway.close(); await durableACP.stopAll(); await defaultAgent.close(); await stopGateway(); releaseTaskOwner?.(); process.exit(0) }
     catch { process.exit(1) }
   })
 }
@@ -1034,17 +1108,48 @@ function harnessEnvironment() {
   }
 }
 
-async function readJSON(request) {
+async function readJSON(request, maximumBytes = 1_048_576) {
   const chunks = []
   let bytes = 0
   for await (const chunk of request) {
     bytes += chunk.length
-    if (bytes > 1_048_576) throw httpError(413, 'request_too_large')
+    if (bytes > maximumBytes) throw httpError(413, 'request_too_large')
     chunks.push(chunk)
   }
   if (chunks.length === 0) return {}
   try { return JSON.parse(Buffer.concat(chunks).toString('utf8')) }
   catch { throw httpError(400, 'invalid_json') }
+}
+
+// Status reads package metadata only. Registry access and installation are always
+// explicit requests, and installation belongs to this workspace's service owner.
+export async function defaultAgentSDKRequest(request, response, service) {
+  if (request.method === 'GET') return service.sdkStatus()
+  const body = await readJSON(request, 4_096)
+  if (!body || typeof body !== 'object' || Array.isArray(body)
+    || !['check', 'update'].includes(body.action)) throw httpError(400, 'invalid_sdk_action')
+  if ((body.action === 'update' || body.id != null) && !['pi', 'claude'].includes(body.id)) throw httpError(400, 'invalid_sdk_identifier')
+  if (body.version != null && (typeof body.version !== 'string'
+    || !/^\d+\.\d+\.\d+$/.test(body.version))) throw httpError(400, 'invalid_sdk_version')
+
+  const controller = new AbortController()
+  const abort = () => controller.abort()
+  const disconnected = () => { if (!response.writableEnded) abort() }
+  const timeout = setTimeout(abort, body.action === 'update' ? 900_000 : 90_000)
+  timeout.unref?.()
+  request.once('aborted', abort)
+  response.once('close', disconnected)
+  if (request.aborted || response.destroyed) abort()
+  try {
+    controller.signal.throwIfAborted()
+    return body.action === 'check'
+      ? await service.checkSDKUpdates({ id: body.id, signal: controller.signal })
+      : await service.updateSDK({ id: body.id, version: body.version, signal: controller.signal })
+  } finally {
+    clearTimeout(timeout)
+    request.removeListener('aborted', abort)
+    response.removeListener('close', disconnected)
+  }
 }
 
 function requireHarness(id) {

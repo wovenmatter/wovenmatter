@@ -3,7 +3,7 @@ import Security
 import WovenMatterCore
 
 /// Captures authorization and destination before suspension; stale responses must not apply.
-public struct RemoteWorkspaceRequestIdentity: Sendable {
+public struct RemoteWorkspaceRequestIdentity: Sendable, Equatable {
     public let configuration: RemoteWorkspaceConfiguration
     public let credentialEpoch: UUID
     public let workspaceEpoch: UUID
@@ -45,6 +45,7 @@ public struct RemoteWorkspaceConfiguration: Codable, Equatable, Identifiable, Se
     public var memoryLimit: String?
     public var swapLimit: String?
     public var createdAt: Date
+    public var backgroundExecutionEnabled: Bool
 
     public init(
         id: UUID = UUID(),
@@ -55,7 +56,8 @@ public struct RemoteWorkspaceConfiguration: Codable, Equatable, Identifiable, Se
         remotePort: Int = 7337,
         memoryLimit: String? = nil,
         swapLimit: String? = nil,
-        createdAt: Date = Date()
+        createdAt: Date = Date(),
+        backgroundExecutionEnabled: Bool = true
     ) {
         self.id = id
         self.name = name
@@ -66,7 +68,27 @@ public struct RemoteWorkspaceConfiguration: Codable, Equatable, Identifiable, Se
         self.memoryLimit = memoryLimit
         self.swapLimit = swapLimit
         self.createdAt = createdAt
+        self.backgroundExecutionEnabled = backgroundExecutionEnabled
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, workspaceID, hostName, userName, remotePort, memoryLimit, swapLimit, createdAt, backgroundExecutionEnabled
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(UUID.self, forKey: .id)
+        name = try values.decode(String.self, forKey: .name)
+        workspaceID = try values.decode(String.self, forKey: .workspaceID)
+        hostName = try values.decode(String.self, forKey: .hostName)
+        userName = try values.decodeIfPresent(String.self, forKey: .userName)
+        remotePort = try values.decode(Int.self, forKey: .remotePort)
+        memoryLimit = try values.decodeIfPresent(String.self, forKey: .memoryLimit)
+        swapLimit = try values.decodeIfPresent(String.self, forKey: .swapLimit)
+        createdAt = try values.decode(Date.self, forKey: .createdAt)
+        backgroundExecutionEnabled = try values.decodeIfPresent(Bool.self, forKey: .backgroundExecutionEnabled) ?? true
+    }
+
 }
 
 public struct RemoteHarnessLaunchContext: Sendable {
@@ -88,17 +110,17 @@ public enum RemoteHarnessLaunchResolver {
         runtimeKind: AgentRuntimeKind,
         processWorkingDirectory: URL,
         workspaceRoot: URL = URL(fileURLWithPath: "/home/.woven-matter"),
-        workingDirectory: URL? = nil
+        workingDirectory: URL? = nil,
+        durableChannelID: String? = nil
     ) throws -> RemoteHarnessLaunchContext {
         let idPattern = /^[a-z0-9][a-z0-9-]{0,47}$/
         guard configuration.workspaceID.wholeMatch(of: idPattern) != nil else {
             throw RemoteWorkspaceClientError.invalidWorkspaceID
         }
-        guard let harness = try HarnessCatalog.loadBundled().harnesses.first(
+        let harness = try HarnessCatalog.loadBundled().harnesses.first(
             where: { $0.id == runtimeKind }
-        ) else {
-            throw RemoteWorkspaceClientError.harnessUnavailable
-        }
+        )
+        guard harness != nil || runtimeKind == .defaultAgent else { throw RemoteWorkspaceClientError.harnessUnavailable }
         let destination = try RemoteWorkspaceSSHClient.validatedDestination(
             hostName: configuration.hostName,
             userName: configuration.userName
@@ -113,20 +135,40 @@ public enum RemoteHarnessLaunchResolver {
             "wovenmatter-\(configuration.workspaceID)",
             "env",
             "HOME=/home",
+            "WOVEN_DEFAULT_AGENT_DIRECTORY=/home/.woven-matter/.wovenmatter/default-agent",
             "PATH=/home/.local/bin:/home/.npm-global/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
         ]
         for (key, value) in LocalACPRuntimeCatalog
             .definition(for: runtimeKind)?.environment.sorted(by: { $0.key < $1.key }) ?? [] {
             command.append("\(key)=\(value)")
         }
-        command.append(contentsOf: [
-            "bash", "-c",
-            #"mkdir -p /home/.wovenmatter && exec 9>/home/.wovenmatter/runtime-operation.lock && { flock --shared --nonblock 9 || { printf '%s\n' 'Runtime maintenance is in progress. Retry after it finishes.' >&2; exit 75; }; } && exec "$@""#,
-            "woven-runtime",
-        ])
-        command.append(harness.command)
-        let harnessArgumentsStartIndex = command.count
-        command.append(contentsOf: harness.arguments)
+        var harnessArgumentsStartIndex = command.count
+        let supportsDurableRelay = harness.map {
+            ["acp", "agent-stdio", "acp-and-gateway"].contains($0.transport)
+                || (runtimeKind == .pi && $0.transport == "rpc")
+        } ?? false
+        let usesDurableRelay = configuration.backgroundExecutionEnabled
+            && durableChannelID != nil && runtimeKind != .defaultAgent && supportsDurableRelay
+        if usesDurableRelay, let durableChannelID {
+            guard UUID(uuidString: durableChannelID) != nil else {
+                throw WorkspaceToolError.invalid("The background session identifier is invalid.")
+            }
+            harnessArgumentsStartIndex = command.count + 2
+            command.append(contentsOf: ["node", "/opt/wovenmatter/src/durable-acp-stdio.mjs",
+                                       "--channel-id", durableChannelID, "--harness-id", runtimeKind.rawValue,
+                                       "--cwd", remoteRoot.path])
+        } else if runtimeKind == .defaultAgent {
+            command.append(contentsOf: ["sh", "-c", #"ulimit -c 0; exec "$@""#, "woven-default-agent", "node", "/opt/wovenmatter/default-agent/src/main.mjs", "--remote"])
+        } else if let harness {
+            command.append(contentsOf: [
+                "bash", "-c",
+                #"mkdir -p /home/.wovenmatter && exec 9>/home/.wovenmatter/runtime-operation.lock && { flock --shared --nonblock 9 || { printf '%s\n' 'Runtime maintenance is in progress. Retry after it finishes.' >&2; exit 75; }; } && exec "$@""#,
+                "woven-runtime",
+            ])
+            command.append(harness.command)
+            harnessArgumentsStartIndex = command.count
+            command.append(contentsOf: harness.arguments)
+        }
         let remoteCommand = command.map(shellQuote).joined(separator: " ")
         let sshArguments = [
             "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", destination, remoteCommand,
@@ -136,6 +178,8 @@ public enum RemoteHarnessLaunchResolver {
                 runtimeKind: runtimeKind,
                 executableURL: URL(fileURLWithPath: "/usr/bin/ssh"),
                 arguments: sshArguments,
+                environment: runtimeKind == .defaultAgent ? ["WOVEN_DEFAULT_AGENT_SCOPE": configuration.id.uuidString.lowercased()]
+                    : (usesDurableRelay ? ["WOVEN_DURABLE_REMOTE_ACP": "1"] : [:]),
                 processWorkingDirectoryURL: processWorkingDirectory,
                 wrappedCommand: LocalACPRuntimeWrappedCommand(
                     argumentIndex: sshArguments.count - 1,
@@ -146,7 +190,7 @@ public enum RemoteHarnessLaunchResolver {
             workspace: LocalACPWorkspaceLaunchConfiguration(
                 rootURL: remoteRoot,
                 repositoriesURL: workspaceRoot.appending(
-                    path: "REPOS",
+                    path: "Repos",
                     directoryHint: .isDirectory
                 ),
                 databasesURL: workspaceRoot.appending(path: "Databases", directoryHint: .isDirectory)
@@ -814,12 +858,14 @@ public actor RemoteWorkspaceSSHClient {
         let result = try RemoteWorkspaceProcess.run(
             executable: "/usr/bin/tar",
             arguments: [
-                "-czf", "-",
+                "--no-mac-metadata", "-czf", "-",
+                "--exclude=.DS_Store",
                 "--exclude=remote/test",
                 "--exclude=remote/.env.example",
                 "--exclude=remote/compose.yaml",
                 "-C", root.path,
                 "remote", "harnesses",
+                "default-agent/package.json", "default-agent/package-lock.json", "default-agent/src",
             ]
         )
         guard result.status == 0 else {
@@ -924,6 +970,78 @@ public actor RemoteWorkspaceTunnel {
     }
 }
 
+public struct RemoteTaskGatewaySchedule: Codable, Equatable, Sendable {
+    public var id: String
+    public var title: String
+    public var startsAt: Date
+    public var timeZoneID: String
+    public var recurrence: WorkspaceCalendarRecurrence?
+    public var excludedOccurrences: Set<Int>
+    public var revision: Int
+    public var nextFireAt: Date?
+    public var taskSessionID: String?
+    public var nativeSessionID: String?
+    public var task: WorkspaceCalendarTask
+    public init(id: String, title: String, startsAt: Date, timeZoneID: String,
+                recurrence: WorkspaceCalendarRecurrence? = nil, excludedOccurrences: Set<Int> = [], revision: Int,
+                nextFireAt: Date?, taskSessionID: String? = nil, nativeSessionID: String? = nil, task: WorkspaceCalendarTask) {
+        self.id = id; self.title = title; self.startsAt = startsAt; self.timeZoneID = timeZoneID
+        self.recurrence = recurrence; self.excludedOccurrences = excludedOccurrences; self.revision = revision
+        self.nextFireAt = nextFireAt; self.taskSessionID = taskSessionID; self.nativeSessionID = nativeSessionID; self.task = task
+    }
+}
+
+public struct RemoteTaskGatewayKnownRun: Codable, Equatable, Sendable {
+    public let eventID: String
+    public let scheduledAt: Date
+    public init(eventID: String, scheduledAt: Date) { self.eventID = eventID; self.scheduledAt = scheduledAt }
+}
+
+public struct RemoteTaskGatewayPublication: Codable, Equatable, Sendable {
+    public let publicationID: String
+    public let schedules: [RemoteTaskGatewaySchedule]
+    public let knownRuns: [RemoteTaskGatewayKnownRun]
+    public init(publicationID: String = UUID().uuidString, schedules: [RemoteTaskGatewaySchedule], knownRuns: [RemoteTaskGatewayKnownRun]) {
+        self.publicationID = publicationID; self.schedules = schedules; self.knownRuns = knownRuns
+    }
+}
+
+public struct RemoteTaskGatewaySchedules: Codable, Equatable, Sendable {
+    public let schedules: [RemoteTaskGatewaySchedule]
+    public let enabled: Bool
+    public let epoch: String
+    public let activeRuns: Int
+    public let scheduleCount: Int
+}
+
+public struct RemoteTaskGatewayResult: Codable, Equatable, Sendable {
+    public let id: String
+    public let run: WorkspaceCalendarRun
+    public let nativeSessionID: String?
+    public let updates: [GatewayJSONValue]
+    public let result: GatewayJSONValue?
+    public let error: String?
+    public let completedAt: Date
+    public let eventRevision: Int?
+    public init(id: String, run: WorkspaceCalendarRun, nativeSessionID: String? = nil,
+                updates: [GatewayJSONValue] = [], result: GatewayJSONValue? = nil, error: String? = nil, completedAt: Date, eventRevision: Int? = nil) {
+        self.id = id; self.run = run; self.nativeSessionID = nativeSessionID; self.updates = updates
+        self.result = result; self.error = error; self.completedAt = completedAt; self.eventRevision = eventRevision
+    }
+}
+
+public struct RemoteTaskGatewayResults: Codable, Equatable, Sendable {
+    public let entries: [RemoteTaskGatewayResult]
+    public let cursor: String
+}
+
+public struct RemoteTaskGatewayStatus: Codable, Equatable, Sendable {
+    public let enabled: Bool
+    public let epoch: String
+    public let activeRuns: Int
+    public let scheduleCount: Int
+}
+
 public struct RemoteWorkspaceServiceClient: Sendable {
     private let baseURL: URL
     private let token: String
@@ -933,6 +1051,32 @@ public struct RemoteWorkspaceServiceClient: Sendable {
         self.baseURL = baseURL
         self.token = token
         self.session = session
+    }
+
+    public func publishTaskGatewaySchedules(_ publication: RemoteTaskGatewayPublication) async throws -> RemoteTaskGatewayStatus {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .custom { date, encoder in
+            var value = encoder.singleValueContainer()
+            try value.encode(WorkspaceCalendarSchedule.timestamp(date))
+        }
+        return try await request(path: "v1/task-gateway/schedules", method: "PUT", body: encoder.encode(publication))
+    }
+
+    public func taskGatewaySchedules() async throws -> RemoteTaskGatewaySchedules {
+        try await request(path: "v1/task-gateway/schedules", method: "GET", body: nil)
+    }
+
+    public func taskGatewayResults(after cursor: String = "0") async throws -> RemoteTaskGatewayResults {
+        try await request(path: "v1/task-gateway/results", method: "GET", body: nil,
+                          queryItems: [URLQueryItem(name: "after", value: cursor)])
+    }
+
+    public func taskGatewayStatus() async throws -> RemoteTaskGatewayStatus {
+        try await request(path: "v1/task-gateway", method: "GET", body: nil)
+    }
+
+    public func setTaskGatewayEnabled(_ enabled: Bool) async throws -> RemoteTaskGatewayStatus {
+        try await request(path: "v1/task-gateway", method: "PATCH", body: JSONEncoder().encode(["enabled": enabled]))
     }
 
     public func databases() async throws -> [RemoteAgentDatabase] {
@@ -1120,6 +1264,22 @@ public struct RemoteWorkspaceServiceClient: Sendable {
         )
     }
 
+    public func configureDefaultAgent(_ payload: Data) async throws -> DefaultAgentSyncReceipt {
+        try await request(path: "v1/default-agent/configuration", method: "POST", body: payload)
+    }
+    public func defaultAgentStatus() async throws -> DefaultAgentStatus {
+        try await request(path: "v1/default-agent/status", method: "GET", body: nil)
+    }
+    public func defaultAgentSDKs(_ command: DefaultAgentSDKRequest) async throws -> DefaultAgentSDKStatus {
+        try await request(path: "v1/default-agent/sdks", method: command.action == .status ? "GET" : "POST",
+                          body: command.action == .status ? nil : JSONEncoder().encode(command))
+    }
+    public func signInStatuses() async throws -> [AgentSignInStatus] {
+        struct Response: Decodable { let statuses: [AgentSignInStatus] }
+        let value: Response = try await request(path: "v1/sign-in-status", method: "GET", body: nil)
+        return value.statuses
+    }
+
     private func request<Value: Decodable>(
         path: String,
         method: String,
@@ -1141,6 +1301,7 @@ public struct RemoteWorkspaceServiceClient: Sendable {
         request.httpMethod = method
         request.httpBody = body
         if path.hasPrefix("v1/databases") { request.timeoutInterval = 15 }
+        if path == "v1/default-agent/sdks" { request.timeoutInterval = 900 }
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         if body != nil {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -1149,6 +1310,20 @@ public struct RemoteWorkspaceServiceClient: Sendable {
         guard let http = response as? HTTPURLResponse,
               (200..<300).contains(http.statusCode)
         else {
+            if path == "v1/default-agent/sdks" {
+                if (response as? HTTPURLResponse)?.statusCode == 404 {
+                    throw RemoteWorkspaceClientError.invalidResponse("Update this workspace service in Settings to manage its Built-in SDKs.")
+                }
+                let detail = (try? JSONDecoder().decode([String: String].self, from: data))?["error"]
+                throw RemoteWorkspaceClientError.invalidResponse(detail ?? "SDK maintenance could not complete in this workspace.")
+            }
+            if path.hasPrefix("v1/task-gateway") {
+                throw RemoteWorkspaceClientError.invalidResponse(
+                    (response as? HTTPURLResponse)?.statusCode == 404
+                    ? "Update this workspace service in Settings to use background execution."
+                    : "The remote task gateway could not complete this request. Reconnect and try again."
+                )
+            }
             if path.hasPrefix("v1/databases") {
                 if (response as? HTTPURLResponse)?.statusCode == 404 {
                     throw RemoteWorkspaceClientError.invalidResponse("Update this workspace service in Settings to use remote databases.")
@@ -1160,7 +1335,22 @@ public struct RemoteWorkspaceServiceClient: Sendable {
                 String(decoding: data, as: UTF8.self)
             )
         }
-        return try JSONDecoder().decode(Value.self, from: data)
+        let decoder = JSONDecoder()
+        if path.hasPrefix("v1/task-gateway") {
+            decoder.dateDecodingStrategy = .custom { decoder in
+                let value = try decoder.singleValueContainer()
+                let text = try value.decode(String.self)
+                let formatter = ISO8601DateFormatter()
+                formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+                if let date = formatter.date(from: text) { return date }
+                formatter.formatOptions = [.withInternetDateTime]
+                guard let date = formatter.date(from: text) else {
+                    throw DecodingError.dataCorruptedError(in: value, debugDescription: "Invalid gateway timestamp")
+                }
+                return date
+            }
+        }
+        return try decoder.decode(Value.self, from: data)
     }
 }
 
@@ -1292,7 +1482,8 @@ enum RemoteWorkspaceProcess {
         executable: String,
         arguments: [String],
         input: Data? = nil,
-        timeLimit: TimeInterval? = nil
+        timeLimit: TimeInterval? = nil,
+        onProcessStarted: (@Sendable (pid_t) -> Void)? = nil
     ) throws -> Result {
         let process = Process()
         let fileManager = FileManager.default
@@ -1343,7 +1534,11 @@ enum RemoteWorkspaceProcess {
             try? fileManager.removeItem(at: outputURL)
             try? fileManager.removeItem(at: errorURL)
         }
+        try Task.checkCancellation()
         try process.run()
+        // Internal readiness observation keeps cancellation fixtures tied to
+        // the owned child rather than detached-task scheduling latency.
+        onProcessStarted?(process.processIdentifier)
         if let timeLimit {
             let deadline = ProcessInfo.processInfo.systemUptime + timeLimit
             while process.isRunning {

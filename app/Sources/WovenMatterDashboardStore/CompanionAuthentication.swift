@@ -18,6 +18,7 @@ public actor CompanionAuthentication {
   private struct State: Codable { var version = 1; var devices: [CompanionPairedDevice] = [] }
   private struct Offer { let digest: Data; let expiresAt: Date }
   private let fileURL: URL
+  public static let maximumPairedDevices = 16
   private var state: State
   private var offer: Offer?
   private var attempts: [Date] = []
@@ -37,8 +38,8 @@ public actor CompanionAuthentication {
   public func devices() -> [CompanionPairedDevice] { state.devices.filter { $0.revokedAt == nil } }
 
   public func createOffer(endpoint: URL) throws -> (payload: CompanionPairingPayload, expiresAt: Date) {
-    guard !state.devices.contains(where: { $0.revokedAt == nil }) else {
-      throw Self.error("already_paired", "Revoke the paired iPhone before pairing another device.")
+    guard state.devices.filter({ $0.revokedAt == nil }).count < Self.maximumPairedDevices else {
+      throw Self.error("device_limit", "Revoke an unused device before pairing another. Up to 16 devices can share this Mac.")
     }
     let secret = try Self.randomToken()
     let expiresAt = now().addingTimeInterval(300)
@@ -63,8 +64,9 @@ public actor CompanionAuthentication {
     guard UUID(uuidString: request.deviceID) != nil,
           !request.deviceName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
           request.deviceName.utf8.count <= 120,
-          !state.devices.contains(where: { $0.revokedAt == nil }) else {
-      throw Self.error("invalid_device", "This iPhone cannot be paired. Check the Mac's paired-device settings.")
+          state.devices.filter({ $0.revokedAt == nil }).count < Self.maximumPairedDevices,
+          !state.devices.contains(where: { $0.revokedAt == nil && $0.id.lowercased() == request.deviceID.lowercased() }) else {
+      throw Self.error("invalid_device", "This device cannot be paired. Check the Mac's paired-device settings.")
     }
     let credential = try Self.randomToken()
     let device = CompanionPairedDevice(id: request.deviceID,
@@ -72,7 +74,7 @@ public actor CompanionAuthentication {
       credentialHash: Self.digest(credential))
     var next = state
     // Revoked secrets cannot authorize requests and need no unbounded retention.
-    next.devices = [device]
+    next.devices = state.devices.filter { $0.revokedAt == nil } + [device]
     try persist(next)
     state = next
     self.offer = nil

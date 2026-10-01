@@ -6,7 +6,7 @@ import WovenMatterDashboardStore
 @testable import WovenMatterAppFacade
 
 struct CompanionNativeInteractionTests {
-    @Test func nativePermissionIdentityAndOptionsPreserveProviderScopeWithoutInventingARun() throws {
+    @Test func nativePermissionIdentityAndOptionsPreserveProviderScopeWithoutInventingARun() async throws {
         let link = OpenCodeSessionLink(conversationID: "conversation", connectionID: "native", sessionID: "ses_a")
         var snapshot = OpenCodeSessionSnapshot()
         snapshot.permissions = [["id": "per_a", "sessionID": "ses_a", "action": "bash",
@@ -24,7 +24,7 @@ struct CompanionNativeInteractionTests {
         #expect(CompanionNativeInteractionProjection.pending(link: link, snapshot: snapshot, runID: nil).first?.options.map(\.id) == ["once", "reject"])
     }
 
-    @Test func formsRemainOnMacAndFieldValuesCannotEnterPhoneCommandJournal() throws {
+    @Test func formsRemainOnMacAndFieldValuesCannotEnterPhoneCommandJournal() async throws {
         let link = OpenCodeSessionLink(conversationID: "conversation", connectionID: "native", sessionID: "ses_a")
         var snapshot = OpenCodeSessionSnapshot()
         snapshot.forms = [["id": "form_a", "fields": .array([["key": "secret", "default": "private fixture"]])]]

@@ -45,6 +45,9 @@ struct SettingsRemoteWorkspacesView: View {
                 credentialAccessCard
                 if let selectedWorkspace {
                     workspaceCard(selectedWorkspace)
+                    SettingsSignInStatusCard(statuses: model.signInStatuses[selectedWorkspace.id] ?? [], checking: model.checkingSignIn.contains(selectedWorkspace.id), error: model.signInErrors[selectedWorkspace.id], scope: selectedWorkspace.id.uuidString.lowercased()) {
+                        Task { await model.refreshSignInStatus(selectedWorkspace) }
+                    }
                     resourceCard(selectedWorkspace)
                     harnessesCard(selectedWorkspace)
                     if let progress = model.progress {
@@ -297,6 +300,27 @@ struct SettingsRemoteWorkspacesView: View {
             .buttonStyle(SettingsQuietButtonStyle())
             .disabled(busy)
 
+            VStack(alignment: .leading, spacing: 6) {
+                Toggle("Keep tasks and sessions running in the background", isOn: Binding(
+                    get: { workspace.backgroundExecutionEnabled },
+                    set: { model.setBackgroundExecution($0, for: workspace) }
+                ))
+                .disabled(busy || model.changingTaskGatewayIDs.contains(workspace.id) || !model.isCredentialAccessEnabled)
+                Text("Enabled by default. Tasks and sessions continue while this host is running. Results sync when you reconnect. Built-in needs this Mac to unlock credentials after a remote restart.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                if let gateway = model.taskGatewayStatuses[workspace.id], gateway.enabled != workspace.backgroundExecutionEnabled {
+                    Text("Waiting for this workspace to apply the background execution setting.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                if model.changingTaskGatewayIDs.contains(workspace.id) {
+                    ProgressView().controlSize(.small)
+                }
+                if let error = model.taskGatewayErrors[workspace.id] {
+                    Text(error).font(.caption).foregroundStyle(.secondary)
+                }
+            }
+
             if let status {
                 VStack(alignment: .leading, spacing: 10) {
                     remoteValueRow(label: "Health", value: status.health?.capitalized ?? "Starting")
@@ -524,7 +548,9 @@ struct SettingsRemoteWorkspacesView: View {
                                 harness.state.replacingOccurrences(of: "_", with: " ").capitalized,
                                 tone: harness.state == "ready" ? .neutral : .warning
                             )
-                            runtimeButtons(harness, workspace: workspace)
+                            if harness.id == .defaultAgent {
+                                Button("Settings") { onMoreRuntime(.defaultAgent, workspace) }.buttonStyle(SettingsQuietButtonStyle())
+                            } else { runtimeButtons(harness, workspace: workspace) }
                         }
                         if let runtime = model.runtimeMaintenance[workspace.id]?.first(where: { $0.id == harness.id }) {
                             runtimeInventory(runtime, workspace: workspace)

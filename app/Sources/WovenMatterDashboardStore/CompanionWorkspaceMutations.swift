@@ -3,7 +3,7 @@ import Foundation
 import SQLite3
 import WovenMatterCore
 
-extension WorkspaceDatabase {
+extension WorkspaceDatabaseConnection {
   public func applyCompanionMutation(_ request: CompanionMutation) throws -> CompanionMutationResult {
     try transaction {
       let fingerprint = try companionFingerprint(request)
@@ -177,5 +177,20 @@ extension WorkspaceDatabase {
       guard code == SQLITE_ROW else { throw stepError() }
       return try JSONDecoder().decode(CompanionCommandReceipt.self, from: blob(statement, column: 0))
     }
+  }
+}
+
+extension WorkspaceDatabase {
+  public func applyCompanionMutation(_ request: CompanionMutation) async throws -> CompanionMutationResult {
+    try await write { try $0.applyCompanionMutation(request) }
+  }
+  public func reserveCompanionCommand(_ request: CompanionCommand) async throws -> CompanionCommandReservation {
+    try await write { try $0.reserveCompanionCommand(request) }
+  }
+  public func finishCompanionCommand(_ receipt: CompanionCommandReceipt) async throws {
+    try await finishWrite { try $0.finishCompanionCommand(receipt) }
+  }
+  public func companionCommandReceipt(deviceID: String, commandID: String) async throws -> CompanionCommandReceipt? {
+    try await read { try $0.companionCommandReceipt(deviceID: deviceID, commandID: commandID) }
   }
 }

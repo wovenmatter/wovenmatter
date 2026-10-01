@@ -100,6 +100,9 @@ struct DashboardSidebarActions {
     let onSetFolderPinned: (String, Bool) -> Void
     let onMoveFolder: (String, WorkspaceFolderMoveDirection) -> Void
     let onDeleteFolder: (String) -> Void
+    let onShowTrash: () -> Void
+    let onConversationAction: (WorkspaceConversationRecord, DashboardConversationMenuAction) -> Void
+    let onNoteAction: (WorkspaceNoteRecord, DashboardNoteMenuAction) -> Void
     let onMoveConversation: (String, String?) -> Void
     let onUnavailableMutation: (String) -> Void
 }
@@ -176,6 +179,10 @@ struct DashboardSidebarRail: View {
             onSetFolderPinned: actions.onSetFolderPinned,
             onMoveFolder: actions.onMoveFolder,
             onDeleteFolder: actions.onDeleteFolder,
+            onShowTrash: actions.onShowTrash,
+            onConversationAction: actions.onConversationAction,
+            onNoteAction: actions.onNoteAction,
+            onMoveConversation: actions.onMoveConversation,
             onUnavailableMutation: actions.onUnavailableMutation
         )
     }
@@ -203,8 +210,9 @@ struct DashboardSidebarRail: View {
             onCreateNote: actions.onCreateNote,
             onSelectConversation: actions.onSelectConversation,
             onSelectNote: actions.onSelectNote,
+            onConversationAction: actions.onConversationAction,
+            onNoteAction: actions.onNoteAction,
             onMoveConversation: actions.onMoveConversation,
-            onUnavailableMutation: actions.onUnavailableMutation,
             onSurfaceProfileChange: onSurfaceProfileChange
         )
     }
@@ -256,6 +264,10 @@ struct DashboardSidebarNavigationPage: View {
     let onSetFolderPinned: (String, Bool) -> Void
     let onMoveFolder: (String, WorkspaceFolderMoveDirection) -> Void
     let onDeleteFolder: (String) -> Void
+    let onShowTrash: () -> Void
+    let onConversationAction: (WorkspaceConversationRecord, DashboardConversationMenuAction) -> Void
+    let onNoteAction: (WorkspaceNoteRecord, DashboardNoteMenuAction) -> Void
+    let onMoveConversation: (String, String?) -> Void
     let onUnavailableMutation: (String) -> Void
 
     @AppStorage(DashboardWorkspaceSidebarVisibility.localWorkspace.storageKey)
@@ -266,6 +278,7 @@ struct DashboardSidebarNavigationPage: View {
     private var showsBuzzWorkspaces = true
 
     @State private var agentsOpen = true
+    @AppStorage(DefaultAgentSupport.lastEngineKey) private var builtInEngine = "pi"
     @State private var foldersOpen = true
     @State private var recentsOpen = true
     @State private var scrollHoverCoordinator = DashboardScrollHoverCoordinator()
@@ -386,7 +399,7 @@ struct DashboardSidebarNavigationPage: View {
             }
             DashboardRailRow(
                 icon: .calendarClock,
-                title: "Cron Jobs",
+                title: "Scheduled Tasks",
                 hoverID: "destination:cron-jobs",
                 selected: destination == .cronJobs
             ) {
@@ -579,7 +592,7 @@ struct DashboardSidebarNavigationPage: View {
                     DashboardRailRow(
                         icon: .container,
                         harnessLogo: DashboardHarnessLogo(runtimeKind: target.harness.id),
-                        title: target.harness.displayName,
+                        title: target.harness.id == .defaultAgent ? DefaultAgentSupport.sidebarName(engine: builtInEngine) : target.harness.displayName,
                         hoverID: "remote-harness:\(target.id)",
                         selected: agent.map {
                             destination == .workspace && selectedAgentID == $0.id
@@ -684,7 +697,7 @@ struct DashboardSidebarNavigationPage: View {
         return DashboardRailRow(
             icon: dashboardAgentGlyph(agent, iconKey: presentation.iconKey),
             harnessLogo: DashboardHarnessLogo(runtimeKind: agent.runtimeKind),
-            title: presentation.displayName,
+            title: agent.runtimeKind == .defaultAgent ? DefaultAgentSupport.sidebarName(engine: builtInEngine) : presentation.displayName,
             hoverID: "agent:\(agent.id.uuidString)",
             trailing: agent.runtimeStatus == .running ? "Running" : nil,
             showsPin: isPinned,
@@ -802,7 +815,7 @@ struct DashboardSidebarNavigationPage: View {
                     title: "Trash",
                     hoverID: "folder:trash"
                 ) {
-                    onUnavailableMutation("Trash management")
+                    onShowTrash()
                 }
             }
         }
@@ -896,6 +909,13 @@ struct DashboardSidebarNavigationPage: View {
                             ) {
                                 onSelectConversation(conversation.id)
                             }
+                            .modifier(DashboardConversationContextMenu(
+                                conversation: conversation,
+                                folders: folders,
+                                isRunning: runningConversationIDs.contains(conversation.id),
+                                onMove: onMoveConversation,
+                                onAction: onConversationAction
+                            ))
                         case .note(let note):
                             DashboardRailRow(
                                 icon: .fileText,
@@ -904,6 +924,11 @@ struct DashboardSidebarNavigationPage: View {
                             ) {
                                 onSelectNote(note.id)
                             }
+                            .modifier(DashboardNoteContextMenu(
+                                note: note,
+                                folders: folders,
+                                onAction: onNoteAction
+                            ))
                         }
                     }
                 }
@@ -1450,8 +1475,9 @@ struct DashboardSidebarWorkspacePage: View {
     let onCreateNote: () -> Void
     let onSelectConversation: (String) -> Void
     let onSelectNote: (String) -> Void
+    let onConversationAction: (WorkspaceConversationRecord, DashboardConversationMenuAction) -> Void
+    let onNoteAction: (WorkspaceNoteRecord, DashboardNoteMenuAction) -> Void
     let onMoveConversation: (String, String?) -> Void
-    let onUnavailableMutation: (String) -> Void
     let onSurfaceProfileChange: () -> Void
 
     @State private var query = ""
@@ -1760,7 +1786,7 @@ struct DashboardSidebarWorkspacePage: View {
             detailCardState: $conversationDetailCardState,
             folders: folders,
             onMoveConversation: onMoveConversation,
-            onUnavailableMutation: onUnavailableMutation
+            onConversationAction: onConversationAction
         ) {
             onSelectConversation(presentation.id)
         }
@@ -1770,7 +1796,8 @@ struct DashboardSidebarWorkspacePage: View {
         DashboardNoteRow(
             presentation: presentation,
             selected: selectedNoteID == presentation.id,
-            onUnavailableMutation: onUnavailableMutation
+            folders: folders,
+            onNoteAction: onNoteAction
         ) {
             onSelectNote(presentation.id)
         }

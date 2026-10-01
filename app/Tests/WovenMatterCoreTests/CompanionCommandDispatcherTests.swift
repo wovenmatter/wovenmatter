@@ -5,7 +5,7 @@ import WovenMatterCore
 
 struct CompanionCommandDispatcherTests {
     @Test @MainActor func changedPayloadRejectedBeforeAndAfterFinishAndLostAckRetryDoesNotExecute() async throws {
-        let fixture = try CompanionCommandFixture()
+        let fixture = try await CompanionCommandFixture()
         defer { fixture.remove() }
         let dispatcher = CompanionCommandDispatcher(database: fixture.database)
         let request = CompanionCommand(deviceID: UUID().uuidString, kind: .send,
@@ -28,7 +28,7 @@ struct CompanionCommandDispatcherTests {
             return .init(commandID: changed.commandID, deviceID: changed.deviceID, status: .completed)
         }
         #expect(during.status == .rejected)
-        #expect(try dispatcher.receipt(commandID: request.commandID, deviceID: request.deviceID)?.status == .accepted)
+        #expect(try await dispatcher.receipt(commandID: request.commandID, deviceID: request.deviceID)?.status == .accepted)
         first.cancel() // The HTTP caller went away; the command itself must keep running.
         await gate.release()
         let accepted = try await first.value
@@ -44,7 +44,7 @@ struct CompanionCommandDispatcherTests {
             return receipt
         }
         #expect(retry == accepted)
-        let reopened = try WorkspaceDatabase(url: fixture.url)
+        let reopened = try await WorkspaceDatabase(url: fixture.url)
         let restarted = CompanionCommandDispatcher(database: reopened)
         let recovered = try await restarted.execute(request) { receipt in
             Issue.record("Restart reexecuted completed command")
@@ -54,13 +54,13 @@ struct CompanionCommandDispatcherTests {
     }
 
     @Test @MainActor func interruptedAcceptanceIsVisibleAndNeverRedispatched() async throws {
-        let fixture = try CompanionCommandFixture()
+        let fixture = try await CompanionCommandFixture()
         defer { fixture.remove() }
         let request = CompanionCommand(deviceID: UUID().uuidString, kind: .send,
             conversationID: UUID().uuidString, text: "May have run")
-        #expect(try fixture.database.reserveCompanionCommand(request).isNew)
-        let restarted = CompanionCommandDispatcher(database: try WorkspaceDatabase(url: fixture.url))
-        #expect(try restarted.receipt(commandID: request.commandID, deviceID: request.deviceID)?.status == .outcomeUnknown)
+        #expect(try await fixture.database.reserveCompanionCommand(request).isNew)
+        let restarted = CompanionCommandDispatcher(database: try await WorkspaceDatabase(url: fixture.url))
+        #expect(try await restarted.receipt(commandID: request.commandID, deviceID: request.deviceID)?.status == .outcomeUnknown)
         let retry = try await restarted.execute(request) { receipt in
             Issue.record("Indeterminate command was reexecuted")
             return receipt
@@ -73,11 +73,11 @@ private struct CompanionCommandFixture {
     let directory: URL
     let url: URL
     let database: WorkspaceDatabase
-    init() throws {
+    init() async throws {
         directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         url = directory.appending(path: "workspace.sqlite")
-        database = try WorkspaceDatabase(url: url)
+        database = try await WorkspaceDatabase(url: url)
     }
     func remove() { try? FileManager.default.removeItem(at: directory) }
 }

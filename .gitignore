@@ -9,3 +9,5 @@ xcuserdata/
 .env
 Config/Local.xcconfig
 build/
+
+default-agent/bin/

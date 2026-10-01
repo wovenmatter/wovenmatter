@@ -2,10 +2,17 @@
 set -euo pipefail
 mode="${1:---package}"
 case "$mode" in
-  --package|--simulator|--ui) ;;
-  *) printf '%s\n' 'usage: scripts/test-ios.sh [--package|--simulator|--ui]' >&2; exit 64 ;;
+  --package|--simulator|--ui|--all-devices) ;;
+  *) printf '%s\n' 'usage: scripts/test-ios.sh [--package|--simulator|--ui|--all-devices]' >&2; exit 64 ;;
 esac
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [[ "$mode" == "--all-devices" ]]; then
+  "$root/scripts/test-ios.sh" --ui
+  WOVENMATTER_IOS_SIMULATOR_DESTINATION="" \
+    WOVENMATTER_IOS_SIMULATOR_DEVICE_TYPE="${WOVENMATTER_IOS_TABLET_DEVICE_TYPE:-com.apple.CoreSimulator.SimDeviceType.iPad-Air-11-inch-M4}" \
+    "$root/scripts/test-ios.sh" --ui
+  exit 0
+fi
 cache="${WOVENMATTER_IOS_TEST_CACHE_DIR:-${TMPDIR:-/tmp}/wovenmatter-ios-tests}"
 mkdir -p "$cache"
 export CLANG_MODULE_CACHE_PATH="$cache/modules"
@@ -35,7 +42,9 @@ if [[ "$mode" != "--package" ]]; then
   fi
   xcode_arguments=(-project "$root/ios/WovenMatterCompanion.xcodeproj" -scheme WovenMatterCompanion
     -configuration Debug -destination "$destination" -derivedDataPath "$cache/xcode"
-    -destination-timeout 120 -parallel-testing-enabled NO)
+    -destination-timeout 120 -parallel-testing-enabled NO
+    -collect-test-diagnostics "${WOVENMATTER_IOS_TEST_DIAGNOSTICS:-never}")
   if [[ "$mode" == "--simulator" ]]; then xcode_arguments+=(-only-testing:CompanionAppTests); fi
+  if [[ -n "${WOVENMATTER_IOS_TEST_ONLY:-}" ]]; then xcode_arguments+=("-only-testing:$WOVENMATTER_IOS_TEST_ONLY"); fi
   xcodebuild "${xcode_arguments[@]}" CODE_SIGNING_ALLOWED=NO test
 fi

@@ -22,7 +22,7 @@ provided for their conversation, rather than editing the app's SQLite store dire
 ## Shared folder layout
 
 The [workspace tree](../../README.md#workspace-layout) shows the initial layout.
-`REPOS` holds repository checkouts and `Databases` holds named data folders.
+`Repos` holds repository checkouts and `Databases` holds named data folders.
 Use `GUIDES`, `PLANS`, `RESEARCH`, and `WORK_LOGS` for work you want to keep,
 `OUTBOX` for deliverables, and `.scratch` for temporary work.
 
@@ -31,8 +31,24 @@ block and preserves the text outside it. New workspaces get a `CLAUDE.md` link
 to `AGENTS.md`; an existing file or link is preserved.
 
 In **Settings → Local agent workspace**, use **Choose repositories folder** or
-**Choose databases folder** to link folders you already use. The app will not
-replace a nonempty default folder with a link; resolve its contents first.
+**Choose databases folder** to link folders you already use. These controls and
+**Open workspace** remain available if setup fails. Existing folders and links
+are shared by development and regular builds; startup reads them without resetting
+their destinations. Populated default folders also work normally.
+
+When you replace a populated default folder, the app asks before changing it.
+**Copy files and relink** keeps the original folder as a backup and copies its
+contents into the selected destination. **Keep backup only** preserves the original
+folder without copying. Neither option overwrites an existing destination item;
+name conflicts remain in the backup and are listed afterward. Use **Open backup**
+to review or move those files. Cancelling keeps the current folder in use.
+If a copy fails, the original folder stays in use. Completed copies may remain
+in the destination, but an incomplete repository is not left under its final name;
+you can fix the reported error and retry.
+
+The repositories folder is named `Repos`. Older `REPOS` folders are renamed while
+preserving their contents or link destination; on case-sensitive filesystems the
+old path remains as a compatibility link for existing sessions.
 
 ## Remote storage
 

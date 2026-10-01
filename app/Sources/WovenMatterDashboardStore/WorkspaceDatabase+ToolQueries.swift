@@ -2,7 +2,7 @@ import Foundation
 import WovenMatterCore
 import WovenMatterClient
 
-extension WorkspaceDatabase {
+extension WorkspaceDatabaseConnection {
   /// This is the only history entry point exposed to agent endpoints. Identity is
   /// supplied by the service binding, never decoded from the agent's request.
   public func queryAgentHistory(_ input: WorkspaceHistoryQuery, callerID: String,
@@ -11,7 +11,8 @@ extension WorkspaceDatabase {
       var query = input
       query.callerConversationID = callerID
       guard query.schemaVersion == 1, (1...200).contains(query.limit), query.after >= 0,
-            query.offset >= 0, query.offset < Int.max, (1...65536).contains(query.characters) else {
+            query.offset >= 0, query.offset < Int.max, (1...65536).contains(query.characters),
+            ["oldest", "newest"].contains(query.sort) else {
         throw WorkspaceToolError.invalid("Unsupported schema or invalid pagination.")
       }
       let groups = try sessionToolsUnlocked(callerID).enabled
@@ -31,7 +32,14 @@ extension WorkspaceDatabase {
         default: lookup = "SELECT conversation_id FROM dashboard_runs WHERE id=?"; id = query.runID ?? query.id
         }
         guard let id else { throw WorkspaceToolError.invalid("A record ID is required.") }
-        let rows = try historyRowsUnlocked(lookup, values: [id])
+        var rows = try historyRowsUnlocked(lookup, values: [id])
+        if rows.isEmpty, query.command == "trace" {
+          rows = try historyRowsUnlocked(
+            "SELECT conversation_id FROM workspace_history_events WHERE run_id=? LIMIT 1", values: [id])
+        }
+        guard !rows.isEmpty else {
+          throw WorkspaceToolError.notFound("The requested record was not found.")
+        }
         if let target = rows.first?.objectValue?["conversation_id"]?.stringValue {
           try requireTranscriptAccessUnlocked(sourceID: callerID, targetID: target)
         } else { try requireToolUnlocked(.history, sessionID: callerID) }
@@ -54,6 +62,10 @@ extension WorkspaceDatabase {
         result = try queryHistoryUnlocked(query)
         scope = "workspace"
       }
+      if ["message", "event", "version"].contains(query.command),
+         result.objectValue?["rows"]?.arrayValue?.isEmpty == true {
+        throw WorkspaceToolError.notFound("The requested record was not found.")
+      }
       let ids = (result.objectValue?["rows"]?.arrayValue ?? []).compactMap { $0.objectValue?["id"]?.stringValue }
       try recordHistoryUnlocked(.init(conversationID: callerID, harness: "wovenmatter", kind: "cli.history.read",
         payload: try toolsJSON(["command": query.command, "resultIDs": ids.joined(separator: ",")])))
@@ -61,5 +73,14 @@ extension WorkspaceDatabase {
       object["scope"] = .string(scope)
       return .object(object)
     }
+  }
+}
+
+// MARK: - Async worker boundary
+
+extension WorkspaceDatabase {
+  public func queryAgentHistory(_ input: WorkspaceHistoryQuery, callerID: String,
+                                allWorkspace: Bool = false) async throws -> GatewayJSONValue {
+    try await write { try $0.queryAgentHistory(input, callerID: callerID, allWorkspace: allWorkspace) }
   }
 }

@@ -31,7 +31,7 @@ public struct PendingRemoteNoteEdit: Equatable, Sendable {
 }
 
 // Note drafts, editing and mediated edit recovery within the original transactions.
-extension WorkspaceDatabase {
+extension WorkspaceDatabaseConnection {
   func insertNoteContextUnlocked(
     _ context: AgentNoteContext?,
     identifiers: LocalACPRunIdentifiers,
@@ -331,11 +331,17 @@ extension WorkspaceDatabase {
   ) throws -> String {
     try transaction {
       if let callerConversationID { try requireToolUnlocked(.notes, sessionID: callerConversationID) }
+      guard title.utf8.count <= 1_024 else {
+        throw WorkspaceToolError.invalid("A note title must be at most 1,024 bytes.")
+      }
       return try performToolMutationUnlocked(callerID: callerConversationID, requestID: requestID,
         operation: "notes.create", input: [folderID, title, content, kind.rawValue]) {
         let content = try (content.isEmpty
           ? NoteDocument(kind: kind)
           : NoteDocument.editableDocument(from: content)).encoded()
+        guard content.utf8.count <= RemoteNoteEditEnvelope.maximumEnvelopeBytes else {
+          throw WorkspaceToolError.invalid("A note document must be at most 1 MiB.")
+        }
         let noteID = id.uuidString.lowercased()
         let operatorID = try localMutationOperatorIDUnlocked()
         try validateFolderUnlocked(id: folderID, operatorID: operatorID)
@@ -379,8 +385,13 @@ extension WorkspaceDatabase {
     updatedAt: Date = Date(),
     expectedRevision: String? = nil
   ) throws -> Bool {
-    try persistNoteDraft(id: id, title: title, content: content,
-                         updatedAt: updatedAt, expectedRevision: expectedRevision)
+    // Legacy in-process callers may intentionally replace the current value.
+    // Client autosave uses persistNoteDraft with the revision it actually read.
+    try withLock {
+      let revision = try expectedRevision ?? noteForEditingUnlocked(id: id, operatorID: localMutationOperatorIDUnlocked()).revision
+      return try persistNoteDraft(id: id, title: title, content: content,
+                                  updatedAt: updatedAt, expectedRevision: revision)
+    }
   }
 
   /// Whole-document autosave shares the optimistic boundary used by mobile and
@@ -457,7 +468,14 @@ extension WorkspaceDatabase {
       if let callerConversationID { try requireToolUnlocked(.notes, sessionID: callerConversationID) }
       return try performToolMutationUnlocked(callerID: callerConversationID, requestID: requestID,
         operation: "notes.apply", input: request, receipt: noteMutationReceipt) {
-          try applyNoteEditsUnlocked(request)
+          // Upgraded clients must still replay a completed legacy receipt whose
+          // original request predates mandatory revisions. Only new writes need
+          // the revision; current tool authority is checked before either path.
+          if RemoteNoteEditEnvelope.requiresRevision(request.operations),
+             request.expectedRevision == nil {
+            throw WorkspaceToolError.revisionRequired("This note operation requires --revision. Read the note again and pass its current revision.")
+          }
+          return try applyNoteEditsUnlocked(request)
         }.result
     }
   }
@@ -467,7 +485,7 @@ extension WorkspaceDatabase {
   ) throws -> NoteEditingResponse {
     let operatorID = try localMutationOperatorIDUnlocked()
     let note = try noteForEditingUnlocked(id: request.noteID, operatorID: operatorID)
-    if !request.operations.isEmpty, request.expectedRevision != note.revision {
+    if let expected = request.expectedRevision, expected != note.revision {
       throw WorkspaceNoteMutationError.revisionConflict
     }
     guard !request.operations.isEmpty else {
@@ -476,8 +494,10 @@ extension WorkspaceDatabase {
         revision: note.revision, document: try NoteDocument.editableDocument(from: note.content)
       )
     }
+    let currentDocument = try NoteDocument.editableDocument(from: note.content)
+    try RemoteNoteEditEnvelope.validate(operations: request.operations, applyingTo: currentDocument)
     try checkpointNoteUnlocked(id: request.noteID, source: "before-agent-edit", force: true)
-    var document = try NoteDocument.editableDocument(from: note.content)
+    var document = currentDocument
     if document.kind == .html,
        request.operations.contains(where: {
          if case .setTitle = $0 { true } else { false }
@@ -581,5 +601,76 @@ extension WorkspaceDatabase {
       .joined(separator: " ")
       .trimmingCharacters(in: .whitespacesAndNewlines)
     return text.count > 180 ? "\(text.prefix(177))..." : text
+  }
+}
+
+// MARK: - Async worker boundary
+
+extension WorkspaceDatabase {
+  public func pendingRemoteNoteEdits() async throws -> [PendingRemoteNoteEdit] {
+    try await read { try $0.pendingRemoteNoteEdits() }
+  }
+
+  public func applyPendingRemoteNoteEdit(
+    _ pending: PendingRemoteNoteEdit,
+    envelope: RemoteNoteEditEnvelope,
+    visibleAssistantContent: String
+  ) async throws -> NoteEditingResponse {
+    try await write { try $0.applyPendingRemoteNoteEdit(pending, envelope: envelope, visibleAssistantContent: visibleAssistantContent) }
+  }
+
+  public func dismissPendingRemoteNoteEdit(runID: String) async throws {
+    try await write { try $0.dismissPendingRemoteNoteEdit(runID: runID) }
+  }
+
+  public func dismissTerminalRemoteNoteEdits() async throws {
+    try await write { try $0.dismissTerminalRemoteNoteEdits() }
+  }
+
+  @discardableResult
+  public func createNote(
+    id: UUID = UUID(),
+    folderID: String?,
+    title: String = "Untitled Note",
+    content: String = "",
+    kind: NoteArtifactKind = .note,
+    createdAt: Date = Date(),
+    callerConversationID: String? = nil,
+    requestID: String? = nil
+  ) async throws -> String {
+    try await write { try $0.createNote(id: id, folderID: folderID, title: title, content: content, kind: kind, createdAt: createdAt, callerConversationID: callerConversationID, requestID: requestID) }
+  }
+
+  @discardableResult
+  public func updateNote(
+    id: String,
+    title: String,
+    content: String,
+    updatedAt: Date = Date(),
+    expectedRevision: String? = nil
+  ) async throws -> Bool {
+    try await write { try $0.updateNote(id: id, title: title, content: content, updatedAt: updatedAt, expectedRevision: expectedRevision) }
+  }
+
+  @discardableResult
+  public func persistNoteDraft(
+    id: String,
+    title: String,
+    content: String,
+    folderID: String? = nil,
+    createdAt: String? = nil,
+    updatedAt: Date = Date(),
+    expectedRevision: String? = nil, baseContent: String? = nil, baseTitle: String? = nil, operationID: String? = nil
+  ) async throws -> Bool {
+    try await write { try $0.persistNoteDraft(id: id, title: title, content: content, folderID: folderID, createdAt: createdAt, updatedAt: updatedAt, expectedRevision: expectedRevision, baseContent: baseContent, baseTitle: baseTitle, operationID: operationID) }
+  }
+
+  public func readNoteForEditing(id: String, callerConversationID: String? = nil) async throws -> NoteEditingResponse {
+    try await read { try $0.readNoteForEditing(id: id, callerConversationID: callerConversationID) }
+  }
+
+  public func applyNoteEdits(_ request: NoteEditingRequest, callerConversationID: String? = nil,
+                             requestID: String? = nil) async throws -> NoteEditingResponse {
+    try await write { try $0.applyNoteEdits(request, callerConversationID: callerConversationID, requestID: requestID) }
   }
 }

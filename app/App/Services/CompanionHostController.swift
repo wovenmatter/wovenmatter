@@ -73,11 +73,13 @@ final class CompanionHostController {
     }
 
     func restoreIfEnabled() async {
+        if model?.isBackendFrontend == true { await forward(.status); return }
         do { try await loadAuthentication() } catch { errorMessage = error.localizedDescription }
         if isEnabled { await start() }
     }
 
     func start() async {
+        if model?.isBackendFrontend == true { await forward(.start); return }
         guard !isStarting, endpoint == nil, model?.dashboardStore != nil else { return }
         isStarting = true; errorMessage = nil; status = "Starting sharing…"
         generation = UUID()
@@ -115,7 +117,7 @@ final class CompanionHostController {
             let exposure = makeExposure()
             attemptExposure = exposure
             serve = exposure
-            let portKey = "companion.https.port." + (try database.companionWorkspaceID())
+            let portKey = "companion.https.port." + (try await database.companionWorkspaceID())
             let savedPort = defaults.object(forKey: portKey) as? Int
             let address = try await exposure.start(loopbackPort: localPort, preferredHTTPSPort: savedPort)
             guard generation == expectedGeneration, !Task.isCancelled else { throw CancellationError() }
@@ -162,9 +164,13 @@ final class CompanionHostController {
         awakeActivity = nil
         if let authentication { Task { await authentication.cancelOffer() } }
     }
-    func stopSharing() { isEnabled = false; defaults.set(false, forKey: Self.enabledKey); stop() }
+    func stopSharing() {
+        if model?.isBackendFrontend == true { Task { await forward(.stop) }; return }
+        isEnabled = false; defaults.set(false, forKey: Self.enabledKey); stop()
+    }
 
     func createPairingCode() async {
+        if model?.isBackendFrontend == true { await forward(.createCode); return }
         guard let endpoint, let authentication else { return }
         do {
             let offer = try await authentication.createOffer(endpoint: endpoint)
@@ -172,12 +178,33 @@ final class CompanionHostController {
         } catch { errorMessage = error.localizedDescription }
     }
     func revoke(_ deviceID: String) async {
+        if model?.isBackendFrontend == true { await forward(.revoke(deviceID)); return }
         do {
             try await authentication?.revoke(deviceID: deviceID)
             pairedDevices = await authentication?.devices() ?? []
             pairingPayload = nil; pairingExpiresAt = nil; lastSeenAt = nil; errorMessage = nil
         } catch { errorMessage = error.localizedDescription }
     }
+    var snapshot: CompanionHostSnapshot {
+        .init(isEnabled: isEnabled, isStarting: isStarting, endpoint: endpoint, status: status,
+              errorMessage: errorMessage, pairingPayload: pairingPayload, pairingExpiresAt: pairingExpiresAt,
+              pairedDevices: pairedDevices, lastSeenAt: lastSeenAt)
+    }
+
+    func refreshStatus() async {
+        if model?.isBackendFrontend == true { await forward(.status) }
+    }
+
+    private func forward(_ action: CompanionHostAction) async {
+        guard let model else { return }
+        do {
+            guard let value = try await model.sendBackendCommand(.companion(action)).companion else { return }
+            isEnabled = value.isEnabled; isStarting = value.isStarting; endpoint = value.endpoint
+            status = value.status; errorMessage = value.errorMessage; pairingPayload = value.pairingPayload
+            pairingExpiresAt = value.pairingExpiresAt; pairedDevices = value.pairedDevices; lastSeenAt = value.lastSeenAt
+        } catch { errorMessage = error.localizedDescription }
+    }
+
     private func loadAuthentication() async throws {
         if authentication == nil {
             let file = try (supportDirectory ?? ApplicationModel.dashboardSupportDirectory()).appendingPathComponent("companion-devices.json")
@@ -190,4 +217,23 @@ final class CompanionHostController {
         pairedDevices = await authentication?.devices() ?? []
         pairingPayload = nil; pairingExpiresAt = nil
     }
+}
+
+// Settings is a projection. Only the background execution owner opens the HTTP
+// listener, holds pairing secrets, and owns the Tailscale Serve child.
+enum CompanionHostAction: Codable, Sendable {
+    case status, start, stop, createCode
+    case revoke(String)
+}
+
+struct CompanionHostSnapshot: Codable, Sendable {
+    let isEnabled: Bool
+    let isStarting: Bool
+    let endpoint: URL?
+    let status: String
+    let errorMessage: String?
+    let pairingPayload: CompanionPairingPayload?
+    let pairingExpiresAt: Date?
+    let pairedDevices: [CompanionPairedDevice]
+    let lastSeenAt: Date?
 }

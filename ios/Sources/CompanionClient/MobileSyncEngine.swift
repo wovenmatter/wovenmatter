@@ -94,6 +94,10 @@ public actor MobileSyncEngine {
     }
     return value
   }
+  public func readWorkspace(_ request: CompanionWorkspaceRead) async throws -> CompanionWorkspaceResult {
+    try await verifyRemoteWorkspace()
+    return try await transport.readWorkspace(request)
+  }
   public func providers() async throws -> [CompanionProvider] { try await transport.providers() }
   public func pending() async throws -> [CompanionPendingInteraction] { try await transport.pending() }
   public func earlierTranscript(_ id: String, before: String) async throws -> CompanionTranscript { try await transport.transcript(id, before: before) }

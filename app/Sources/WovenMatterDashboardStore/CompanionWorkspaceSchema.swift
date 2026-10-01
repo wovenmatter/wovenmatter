@@ -2,7 +2,7 @@ import Foundation
 import SQLite3
 import WovenMatterCore
 
-extension WorkspaceDatabase {
+extension WorkspaceDatabaseConnection {
   func createCompanionSchemaUnlocked() throws {
     try executeUnlocked("""
       CREATE INDEX IF NOT EXISTS desktop_cache_runs_active_conversation
@@ -64,13 +64,19 @@ extension WorkspaceDatabase {
         let row = operation == "DELETE" ? "OLD" : "NEW"
         // Removing one message/run changes its transcript, not the conversation's existence.
         let deleted = operation == "DELETE" ? (["folder", "note", "conversation"].contains(kind) ? "1" : "0") : deletion
+        // Pinning affects presentation, not the note's edit revision. Replace the
+        // legacy trigger when upgrading an earlier companion database.
+        let increment = table == "notes" && operation == "UPDATE"
+          ? "CASE WHEN NEW.title IS NOT OLD.title OR NEW.content IS NOT OLD.content OR NEW.folder_id IS NOT OLD.folder_id OR NEW.deleted_at IS NOT OLD.deleted_at OR NEW.updated_at IS NOT OLD.updated_at THEN 1 ELSE 0 END"
+          : "1"
+        if table == "notes", operation == "UPDATE" { try executeUnlocked("DROP TRIGGER IF EXISTS companion_notes_update") }
         try executeUnlocked("""
           CREATE TRIGGER IF NOT EXISTS companion_\(table)_\(operation.lowercased())
           AFTER \(operation) ON \(table)
           BEGIN
             INSERT INTO companion_versions(kind, resource_id, revision, deleted)
             VALUES ('\(kind)', \(row).\(identifier), 1, \(deleted))
-            ON CONFLICT(kind, resource_id) DO UPDATE SET revision = revision + 1, deleted = excluded.deleted;
+            ON CONFLICT(kind, resource_id) DO UPDATE SET revision = revision + \(increment), deleted = excluded.deleted;
             INSERT INTO companion_changes(kind, resource_id, revision, deleted)
             SELECT kind, resource_id, revision, deleted FROM companion_versions
             WHERE kind = '\(kind)' AND resource_id = \(row).\(identifier);

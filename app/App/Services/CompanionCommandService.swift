@@ -99,11 +99,11 @@ final class CompanionCommandService: CompanionCommandServing {
 
     /// Reads already negotiated state; never starts a provider just to display controls.
     func sessionCapabilities(conversationID: String) async throws -> CompanionProvider {
-        let conversation = try conversation(conversationID)
+        let conversation = try await conversation(conversationID)
         guard let runtime = conversation.localRuntimeKind else { throw CommandError.unknownProvider }
         let routeID: String
         if model.isOpenClawGatewayConversation(conversationID),
-           let session = try? model.dashboardStore?.database.openClawGatewaySession(conversationID: conversationID) {
+           let session = try? await model.dashboardStore?.database.openClawGatewaySession(conversationID: conversationID) {
             routeID = "gateway:\(session.agentID.uuidString.lowercased())"
         } else if let workspaceID = conversation.remoteWorkspaceID {
             routeID = "remote:\(workspaceID.uuidString.lowercased()):\(runtime.rawValue)"
@@ -115,7 +115,7 @@ final class CompanionCommandService: CompanionCommandServing {
             routeID = "local:\(runtime.rawValue)"
         }
         guard var capability = providers().first(where: { $0.id == routeID }) else { throw CommandError.unknownProvider }
-        let active = model.canonicalActiveRunID(conversationID: conversationID) != nil
+        let active = await model.canonicalActiveRunID(conversationID: conversationID) != nil
         if runtime == .opencode {
             capability.activeInputMode = "unsupported"
             capability.canSteer = false
@@ -130,7 +130,7 @@ final class CompanionCommandService: CompanionCommandServing {
         return capability
     }
 
-    func pendingInteractions() -> [CompanionPendingInteraction] {
+    func pendingInteractions() async -> [CompanionPendingInteraction] {
         var result = model.pendingLocalACPPermissions.map { pending in
             CompanionPendingInteraction(
                 id: pending.id.uuidString.lowercased(), conversationID: pending.conversationID,
@@ -166,7 +166,7 @@ final class CompanionCommandService: CompanionCommandServing {
                 )
             }
         }
-        return result + pendingNativeInteractions()
+        return result + (await pendingNativeInteractions())
     }
 
     func execute(_ command: CompanionCommand, deviceID: String) async throws -> CompanionCommandReceipt {
@@ -189,9 +189,9 @@ final class CompanionCommandService: CompanionCommandServing {
         }
     }
 
-    func receipt(commandID: String, deviceID: String) throws -> CompanionCommandReceipt? {
+    func receipt(commandID: String, deviceID: String) async throws -> CompanionCommandReceipt? {
         guard let store = model.dashboardStore else { throw CommandError.unavailable }
-        return try dispatcher(for: store).receipt(commandID: commandID, deviceID: deviceID)
+        return try await dispatcher(for: store).receipt(commandID: commandID, deviceID: deviceID)
     }
 
     private func dispatcher(for store: DashboardStore) -> CompanionCommandDispatcher {
@@ -203,6 +203,9 @@ final class CompanionCommandService: CompanionCommandServing {
 
     private func dispatch(_ command: CompanionCommand, receipt: inout CompanionCommandReceipt) async throws {
         switch command.kind {
+        case .workspace:
+            guard let action = command.workspaceAction else { throw CommandError.invalidCommand }
+            try await performWorkspaceAction(action)
         case .createSession:
             guard command.text == nil, command.noteID == nil, command.noteRevision == nil else {
                 throw CommandError.invalidCommand
@@ -233,14 +236,14 @@ final class CompanionCommandService: CompanionCommandServing {
                   !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw CommandError.invalidCommand }
             if command.kind == .steer && command.runID == nil { throw CommandError.invalidCommand }
             if command.kind == .send && command.runID != nil { throw CommandError.invalidCommand }
-            let conversation = try conversation(id)
+            let conversation = try await conversation(id)
             let note: WorkspaceNoteRecord?
             let input: AgentMessageInput
             if let noteID = command.noteID {
-                guard let revision = command.noteRevision, model.flushNoteDrafts(),
-                      let raw = try model.dashboardStore?.database.companionNote(id: noteID),
+                guard let revision = command.noteRevision, await model.flushNoteDrafts(),
+                      let raw = try await model.dashboardStore?.database.companionNote(id: noteID),
                       raw.revision == revision,
-                      let canonical = try model.dashboardStore?.database.workspaceOverview().notes.first(where: { $0.id == noteID })
+                      let canonical = try await model.dashboardStore?.database.workspaceOverview().notes.first(where: { $0.id == noteID })
                 else { throw CommandError.noteRevisionChanged }
                 let reference = AgentMessageReferenceDraft(
                     kind: .note, resourceID: noteID, titleSnapshot: raw.title,
@@ -322,15 +325,15 @@ final class CompanionCommandService: CompanionCommandServing {
         guard model.resolveLocalACPInteraction(id: id, response: resolution) else { throw CommandError.interactionResolved }
     }
 
-    private func conversation(_ id: String) throws -> WorkspaceConversationRecord {
+    func conversation(_ id: String) async throws -> WorkspaceConversationRecord {
         guard let store = model.dashboardStore,
-              let record = try store.database.workspaceOverview().conversations.first(where: { $0.id == id })
+              let record = try await store.database.workspaceOverview().conversations.first(where: { $0.id == id })
         else { throw CommandError.unknownConversation }
         return record
     }
 
     func transcript(conversationID: String, before: String? = nil) async throws -> CompanionTranscript {
-        _ = try conversation(conversationID)
+        _ = try await conversation(conversationID)
         guard let store = model.dashboardStore else { throw CommandError.unavailable }
         let cursor: WorkspaceConversationHistoryCursor?
         if let before {
@@ -350,7 +353,7 @@ final class CompanionCommandService: CompanionCommandServing {
             activities: page.activities.map { .init(id: $0.id, runID: $0.runID,
                 title: $0.activity.title ?? $0.activity.kind.rawValue,
                 detail: $0.activity.detail ?? $0.activity.content, status: $0.activity.status ?? "") },
-            activeRunID: model.canonicalActiveRunID(conversationID: conversationID), olderCursor: olderCursor
+            activeRunID: await model.canonicalActiveRunID(conversationID: conversationID), olderCursor: olderCursor
         )
     }
 }

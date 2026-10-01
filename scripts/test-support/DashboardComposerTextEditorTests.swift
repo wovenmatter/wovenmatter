@@ -72,6 +72,7 @@ private func expect(
 @MainActor
 struct DashboardComposerTextEditorTests {
     static func main() {
+        testAttachmentPasteLeavesTextUntouched()
         testShiftReturnReplacesSelectionWithoutSubmitting()
         testPlainReturnSubmitsWithoutEditing()
         testKeyRoutingPreservesMarkedTextAndStandardBindings()
@@ -84,9 +85,54 @@ struct DashboardComposerTextEditorTests {
         testCaretReportsUseTheLatestNativeSelection()
         testSelectionAndPasteboardServicesRemainNative()
         testMultilineOverflowAndScrollRouting()
+        testUnboundedMeasurementsPreserveNativeGeometry()
+        testFiniteMeasurementsWrapAndRespectTheLineCap()
+        testTrailingNewlineMeasurementMatchesNativeLayout()
         testNativeFocusUpdatesTheBindingImmediately()
         testStaleBlurDoesNotCancelManualRefocus()
         print("Dashboard composer native text behavior passed.")
+    }
+
+    private static func testAttachmentPasteLeavesTextUntouched() {
+        let textView = DashboardComposerNativeTextView()
+        textView.string = "Keep this draft"
+        let board = NSPasteboard.withUniqueName()
+        defer { board.releaseGlobally() }
+        let file = URL(fileURLWithPath: "/tmp/attachment fixture.pdf")
+        board.writeObjects([file as NSURL])
+        var attached: [URL] = []
+        textView.onAttachFiles = { attached = $0; return true }
+        expect(textView.attach(from: board), "File paste should use attachment callback")
+        expect(attached == [file], "File URL should preserve spaces")
+        expect(textView.string == "Keep this draft", "File paste must not replace the draft")
+        board.clearContents()
+        let image = NSImage(size: NSSize(width: 4, height: 4))
+        image.lockFocus(); NSColor.green.setFill(); NSRect(x: 0, y: 0, width: 4, height: 4).fill(); image.unlockFocus()
+        board.writeObjects([image])
+        expect(textView.attach(from: board), "Screenshot paste should create an attachment")
+        expect(attached.first?.pathExtension == "png", "Screenshot must be a real PNG")
+        if let url = attached.first {
+            expect(NSImage(contentsOf: url) != nil, "Staged screenshot should decode")
+            DashboardComposerNativeTextView.releaseTemporaryAttachments([url])
+            expect(!FileManager.default.fileExists(atPath: url.deletingLastPathComponent().path), "Owned paste staging must be cleaned after attachment staging")
+        }
+        let unrelatedFolder = FileManager.default.temporaryDirectory.appending(path: "wovenmatter-paste-user-" + UUID().uuidString)
+        let unrelatedFile = unrelatedFolder.appending(path: "report.txt")
+        do {
+            try FileManager.default.createDirectory(at: unrelatedFolder, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: unrelatedFolder) }
+            try Data("Keep this user file".utf8).write(to: unrelatedFile)
+            DashboardComposerNativeTextView.releaseTemporaryAttachments([unrelatedFile])
+            expect(FileManager.default.fileExists(atPath: unrelatedFile.path), "A matching folder name does not grant ownership of user files")
+        } catch { fatalError("Could not prepare attachment cleanup fixture: \(error)") }
+        var rejectedFile: URL?
+        textView.onAttachFiles = { rejectedFile = $0.first; return false }
+        expect(!textView.attach(from: board), "A rejected screenshot attachment must remain rejected")
+        if let rejectedFile {
+            expect(!FileManager.default.fileExists(atPath: rejectedFile.path), "Rejected paste staging must be cleaned immediately")
+        } else { fatalError("Screenshot rejection must reach the attachment callback") }
+        board.clearContents(); board.setString("ordinary text", forType: .string)
+        expect(!textView.attach(from: board), "Text paste should remain native")
     }
 
     private static func testShiftReturnReplacesSelectionWithoutSubmitting() {
@@ -451,6 +497,77 @@ struct DashboardComposerTextEditorTests {
         expect(!scrollView.hasVerticalOverflow, "short content must not claim vertical scrolling")
         scrollView.scrollWheel(with: scrollEvent(deltaY: -12))
         expect(spy.eventCount == 1, "a non-scrolling composer must pass wheel events to its responder chain")
+    }
+
+    private static func testUnboundedMeasurementsPreserveNativeGeometry() {
+        let scrollView = DashboardComposerScrollView(frame: NSRect(x: 0, y: 0, width: 240, height: 80))
+        let textView = scrollView.composerTextView
+        textView.string = "A draft that stays in the native editor while SwiftUI measures it."
+        textView.setSelectedRange(NSRange(location: 2, length: 5))
+        scrollView.updateDocumentLayout()
+        let frame = scrollView.frame
+        let documentFrame = textView.frame
+        let containerSize = textView.textContainer!.containerSize
+        let selection = textView.selectedRange()
+        let draft = textView.string
+        let probes: [CGFloat?] = [nil, .infinity, .greatestFiniteMagnitude, 35_184_372_088_832, .nan, 0, -1]
+        for width in probes {
+            let size = scrollView.fittingSize(for: ProposedViewSize(width: width, height: .infinity))
+            expect(size.width == 240 && size.height.isFinite, "unbounded probes must use the existing finite width")
+            expect(scrollView.frame == frame && textView.frame == documentFrame, "measurement must not resize native views")
+            expect(textView.textContainer!.containerSize == containerSize, "measurement must not reflow the native text container")
+            expect(textView.selectedRange() == selection && textView.string == draft, "measurement must preserve the draft and selection")
+        }
+        let unattached = DashboardComposerScrollView(frame: .zero)
+        let initial = unattached.fittingSize(for: ProposedViewSize(width: .greatestFiniteMagnitude, height: nil))
+        expect(initial.width.isFinite && initial.width > 0, "an unattached editor must return a finite initial width")
+        expect(unattached.frame == .zero, "initial measurement must leave native geometry to the layout system")
+    }
+
+    private static func testFiniteMeasurementsWrapAndRespectTheLineCap() {
+        let scrollView = DashboardComposerScrollView(frame: NSRect(x: 0, y: 0, width: 480, height: 80))
+        let textView = scrollView.composerTextView
+        textView.string = String(repeating: "Words that wrap at the requested width. ", count: 5)
+        scrollView.updateDocumentLayout()
+        let frame = scrollView.frame
+        let documentFrame = textView.frame
+        let wide = scrollView.fittingSize(for: ProposedViewSize(width: 480, height: nil))
+        let narrow = scrollView.fittingSize(for: ProposedViewSize(width: 120, height: nil))
+        expect(wide.width == 480 && narrow.width == 120, "finite proposals must keep their requested widths")
+        expect(narrow.height > wide.height, "narrow measurement must wrap without resizing the mounted editor")
+        scrollView.maximumVisibleLines = 3
+        let compact = scrollView.fittingSize(for: ProposedViewSize(width: 120, height: nil))
+        expect(compact.height < narrow.height, "the three-line composer must retain its smaller height cap")
+        expect(scrollView.fittingSize(for: ProposedViewSize(width: 120, height: nil)) == compact, "repeated measurement must stay stable")
+        expect(scrollView.frame == frame && textView.frame == documentFrame, "all layout probes must preserve installed native geometry")
+
+        scrollView.frame.size = compact
+        scrollView.updateDocumentLayout()
+        expect(abs(scrollView.preferredHeight - compact.height) < 0.5, "measured wrapping and the installed editor must agree")
+        expect(scrollView.hasVerticalOverflow, "content beyond the line cap must still scroll natively")
+        textView.string = "short"
+        let short = scrollView.fittingSize(for: ProposedViewSize(width: 120, height: nil))
+        expect(short.height < compact.height && short.height >= DashboardComposerScrollView.minimumHeight, "changed text must invalidate cached measurement")
+        scrollView.updateDocumentLayout()
+        expect(abs(scrollView.preferredHeight - short.height) < 0.5, "single-line measurement must match native text metrics")
+    }
+
+    private static func testTrailingNewlineMeasurementMatchesNativeLayout() {
+        let scrollView = DashboardComposerScrollView(frame: NSRect(x: 0, y: 0, width: 240, height: 80))
+        let drafts = ["", "one", "one\n", "one\n\n", "\n", "\n\n"]
+        var singleLineHeight: CGFloat = 0
+        for draft in drafts {
+            scrollView.composerTextView.string = draft
+            let size = scrollView.fittingSize(for: ProposedViewSize(width: 240, height: nil))
+            scrollView.frame.size = size
+            scrollView.updateDocumentLayout()
+            expect(abs(scrollView.preferredHeight - size.height) < 0.5, "empty and trailing lines must measure like the native editor")
+            expect(!scrollView.hasVerticalOverflow, "short trailing blank lines must fit without unnecessary scrolling")
+            if draft == "one" { singleLineHeight = size.height }
+            if draft == "one\n" {
+                expect(size.height > singleLineHeight, "a trailing newline must include room for the empty caret line")
+            }
+        }
     }
 
     private static func testStaleBlurDoesNotCancelManualRefocus() {

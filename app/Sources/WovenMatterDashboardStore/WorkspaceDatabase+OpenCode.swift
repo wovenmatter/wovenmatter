@@ -4,7 +4,7 @@ import WovenMatterClient
 import WovenMatterCore
 
 // Canonical OpenCode projections; legacy ACP rows are never migrated.
-extension WorkspaceDatabase {
+extension WorkspaceDatabaseConnection {
   public func knownOpenCodeSessionIDs(connectionID: String) throws -> Set<String> {
     try knownSessionIDs(sql: "SELECT session_id FROM desktop_opencode_sessions WHERE connection_id = ?", scope: connectionID)
   }
@@ -83,6 +83,16 @@ extension WorkspaceDatabase {
         try bind(visibleText, at: 5, to: insert)
         try bind(status, at: 6, to: insert); try bind(created, at: 7, to: insert); try bind(now, at: 8, to: insert)
         try bind(conversationID, at: 9, to: insert); try stepDone(insert)
+        let hasStoredInputFiles = !(try historyRowsUnlocked("SELECT 1 FROM dashboard_message_attachments WHERE message_id=? LIMIT 1", values: [id])).isEmpty
+        if status != "streaming", assistant || !hasStoredInputFiles {
+          for file in message["files"].array + message["content"].array.filter({ $0["type"].text == "file" }) {
+            let source = file["uri"].string ?? file["source"]["uri"].text
+            let mime = file["mime"].string ?? file["mimeType"].string
+            let title = file["name"].string ?? URL(string: source)?.lastPathComponent ?? "Attachment"
+            try captureNativeLibraryFileUnlocked(source: source, title: title, mime: mime, base64: file["data"].string,
+              messageID: id, conversationID: conversationID)
+          }
+        }
         if let deliveryID = inputContext?["delivery_id"]?.stringValue {
           try toolsExecuteUnlocked("UPDATE workspace_session_deliveries SET message_id=?,status='accepted' WHERE id=? AND target_id=? AND (message_id IS NULL OR message_id=?)", [id, deliveryID, conversationID, id])
         }
@@ -121,7 +131,7 @@ extension WorkspaceDatabase {
           try bind(runStatus, at: 1, to: finish); try bind(runID, at: 2, to: finish); try stepDone(finish)
         }
       }
-      let update = try prepareUnlocked("UPDATE dashboard_conversations SET title=?, last_message_preview=?, last_message_at=MAX(?, COALESCE((SELECT imported_at FROM desktop_session_imports WHERE conversation_id=dashboard_conversations.id), '')), updated_at=? WHERE id=?")
+      let update = try prepareUnlocked("UPDATE dashboard_conversations SET title=COALESCE((SELECT title FROM desktop_conversation_titles WHERE conversation_id=dashboard_conversations.id), ?), last_message_preview=?, last_message_at=MAX(?, COALESCE((SELECT imported_at FROM desktop_session_imports WHERE conversation_id=dashboard_conversations.id), '')), updated_at=? WHERE id=?")
       defer { sqlite3_finalize(update) }
       try bind(snapshot.info["title"].string ?? fallbackTitle, at: 1, to: update)
       let lastID = snapshot.messages.last?["id"].text ?? ""
@@ -131,8 +141,12 @@ extension WorkspaceDatabase {
       try bind(now, at: 4, to: update); try bind(conversationID, at: 5, to: update); try stepDone(update)
   }
 
-  public func saveOpenCodeSubmission(conversationID: String, id: String, payload: OpenCodeValue, status: String, visibleText: String? = nil, deliveryID: String? = nil) throws {
+  public func saveOpenCodeSubmission(conversationID: String, id: String, payload: OpenCodeValue, status: String, visibleText: String? = nil, deliveryID: String? = nil, input: AgentMessageInput? = nil) throws {
     try transaction {
+      // Fence new admission against Trash in the same writer transaction. Terminal
+      // receipts must still settle after caller cancellation or a later visibility change.
+      if status == "sending" { _ = try localACPSession(conversationID: conversationID) }
+      let deliveryID = try deliveryID.map(canonicalDeliveryID)
       if let deliveryID { try markToolDeliveryTransportStartedUnlocked(id: deliveryID) }
       let statement = try prepareUnlocked("""
         INSERT INTO desktop_opencode_submissions(id, conversation_id, payload_json, status) VALUES (?, ?, ?, ?)
@@ -141,6 +155,16 @@ extension WorkspaceDatabase {
       defer { sqlite3_finalize(statement) }
       try bind(id, at: 1, to: statement); try bind(conversationID, at: 2, to: statement)
       try bind(payload.json, at: 3, to: statement); try bind(status, at: 4, to: statement); try stepDone(statement)
+      if let input, !input.attachments.isEmpty,
+         let row = try historyRowsUnlocked("SELECT user_id,agent_id,authority_device_id FROM dashboard_conversations WHERE id=?", values: [conversationID]).first?.objectValue,
+         let device = row["authority_device_id"]?.stringValue.flatMap(UUID.init(uuidString:)) {
+        let messageID = "opencode:\(conversationID):\(id)"
+        if (try historyRowsUnlocked("SELECT 1 FROM dashboard_message_attachments WHERE message_id=? UNION ALL SELECT 1 FROM dashboard_message_references WHERE message_id=?", values: [messageID, messageID])).isEmpty {
+          try insertMessageAttachmentsUnlocked(input.attachments, conversationID: conversationID, messageID: messageID,
+            userID: row["user_id"]?.stringValue ?? "", agentID: row["agent_id"]?.stringValue ?? "",
+            ownerDeviceID: device, governingPlane: .wovenmatterMacOS, createdAt: Date())
+        }
+      }
       if let visibleText {
         if let deliveryID {
           guard !(try historyRowsUnlocked("SELECT 1 FROM workspace_session_deliveries WHERE id=? AND target_id=? AND status='sending'", values: [deliveryID, conversationID])).isEmpty else {
@@ -188,4 +212,44 @@ extension WorkspaceDatabase {
     }
   }
 
+}
+
+// MARK: - Async worker boundary
+
+extension WorkspaceDatabase {
+  public func knownOpenCodeSessionIDs(connectionID: String) async throws -> Set<String> {
+    try await read { try $0.knownOpenCodeSessionIDs(connectionID: connectionID) }
+  }
+
+  public func openCodeLinks() async throws -> [OpenCodeSessionLink] {
+    try await read { try $0.openCodeLinks() }
+  }
+
+  public func attachOpenCodeSession(_ link: OpenCodeSessionLink) async throws {
+    try await write { try $0.attachOpenCodeSession(link) }
+  }
+
+  public func openCodeSnapshot(conversationID: String) async throws -> OpenCodeSessionSnapshot? {
+    try await read { try $0.openCodeSnapshot(conversationID: conversationID) }
+  }
+
+  public func saveOpenCodeSnapshot(_ snapshot: OpenCodeSessionSnapshot, conversationID: String) async throws {
+    try await write { try $0.saveOpenCodeSnapshot(snapshot, conversationID: conversationID) }
+  }
+
+  public func saveOpenCodeSubmission(conversationID: String, id: String, payload: OpenCodeValue, status: String, visibleText: String? = nil, deliveryID: String? = nil, input: AgentMessageInput? = nil) async throws {
+    let operation: @Sendable (WorkspaceDatabaseConnection) throws -> Void = {
+      try $0.saveOpenCodeSubmission(conversationID: conversationID, id: id, payload: payload, status: status, visibleText: visibleText, deliveryID: deliveryID, input: input)
+    }
+    if status == "sending" { try await write(operation) }
+    else { try await finishWrite(operation) }
+  }
+
+  public func openCodeUncertainSubmissions(conversationID: String) async throws -> [OpenCodeValue] {
+    try await read { try $0.openCodeUncertainSubmissions(conversationID: conversationID) }
+  }
+
+  public func openCodeDisplaySnapshot(_ snapshot: OpenCodeSessionSnapshot, conversationID: String) async throws -> OpenCodeSessionSnapshot {
+    try await read { try $0.openCodeDisplaySnapshot(snapshot, conversationID: conversationID) }
+  }
 }

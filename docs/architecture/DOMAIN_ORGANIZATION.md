@@ -1,8 +1,8 @@
 # Application and persistence ownership
 
-This change starts from `main` at `51b592a61e99a10575516263bdd31dfb29646991`.
-It re-evaluates PR54 (`a157a8c`) and PR56 (`f9a2f59`) as references, without
-adopting their behavior changes or basing this branch on either PR.
+The persistence and usage boundaries below were established in PR #63.
+The move map records that refactor; later features add methods within the same
+owners.
 
 ## Ownership and contracts
 
@@ -36,7 +36,7 @@ They keep public APIs and domain-specific private helpers together.
 - SQL, schema/index definitions, migration order, row decoding, public types and
   their constructors are preserved. Nothing moves to another package/module.
 
-## Decisions from the prior PRs
+## Historical refactor decisions
 
 | Prior idea | Decision and reason |
 | --- | --- |
@@ -55,46 +55,20 @@ They keep public APIs and domain-specific private helpers together.
 | PR54: Bash empty-array build fix | Operational fix, independent of code organization; leave to the manager/performance work if needed. |
 | PR54: new conversation-state/shell helper tests | Do not carry tests for behavior/helpers not adopted here. Existing persistence/provider suites exercise the moved implementations; the new application usage probe covers the observable state boundary. |
 
-## Integration with the active feature work
+## Agent tools integration
 
-PR61 was inspected at `3429cc260256645ee54b83ed2a83756e6d2cb5a9`.
-Its ApplicationModel agent-tools operations stay independent of usage. Its
-`WorkspaceDatabase+AgentTools`, `+History`, `+Timers`, `+ToolAssets`,
-`+SessionCreation`, `+Deliveries`, `+CoordinationAccess`, `+CoordinationEvents`
-and `+ToolQueries` filenames do not collide with this map.
+Agent tools share the existing database connection and transaction primitives.
+Session insertion records reserved provenance only after the local/remote ACP
+session row exists. Tool history, deliveries, timers, and access policies live
+in their own `WorkspaceDatabase` domain extensions.
 
-During integration, keep PR61's feature additions, then place edits to existing
-methods using the map below. The shared contract is a private lock/connection
-accessed through `withLock` and `changedRowCountUnlocked`. PR61 is adopting that
-same contract; keep one implementation of each primitive when combining the
-branches. Any calls from older revisions to `lock.withLock` or
-`sqlite3_changes(connection)` must use those entry points. Helpers that PR61
-newly needs must be internal at the owning domain, rather than copied. Its
-schema additions belong in `+Schema`. Verify these adaptations against the final
-PR61 head when integrating; the inspected revision above is a source reference,
-not a pinned dependency.
-In particular, keep PR61's `adoptReservedSessionOriginUnlocked` call **after** the
-local/remote ACP session-row insertion when resolving those method edits.
+Usage queries enter through
+`ApplicationModel.recordedUsageSamples(from:to:limit:offset:)`, then delegate to
+`ApplicationUsageModel` and its existing `LocalUsageService`. This reads the
+recorded index without refreshing providers or inspecting credentials.
 
-PR61's `handleAgentUsage` also reads the recorded usage index. Keep its parsing,
-range/pagination validation and tool response in `ApplicationModel+AgentTools`.
-Use the narrow application method
-`recordedUsageSamples(from:to:limit:offset:) async throws -> [UsageSample]` instead
-of exposing `localUsageService` to the extension. In the combined implementation,
-that method forwards to the same method on the private `ApplicationUsageModel`,
-which calls its existing `LocalUsageService.recordedSamples(from:to:limit:offset:)`.
-This reads the index only: preserve the service's validation and thrown errors,
-without adding refreshes, credential access or another service instance. The
-entry point belongs to PR61; this organization-only PR does not implement it
-before the feature exists on main.
-
-For the performance PR, apply changes to conversation read/projection methods
-in `+Conversations` and indexes in `+Schema`. ApplicationModel's conversation
-refresh/cache paths retain their names and bodies. This PR carries no rendering,
-refresh policy, indexing, provider or transport optimizations.
-
-Validation commands, results and the real ApplicationModel observation probe
-are recorded in [DOMAIN_ORGANIZATION_VALIDATION.md](DOMAIN_ORGANIZATION_VALIDATION.md).
+Historical refactor validation is recorded in
+[DOMAIN_ORGANIZATION_VALIDATION.md](DOMAIN_ORGANIZATION_VALIDATION.md).
 
 ## Exact symbol move map
 

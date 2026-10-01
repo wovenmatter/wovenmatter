@@ -99,7 +99,20 @@ final class WovenSocketService<Request: Decodable & Sendable, Response: WovenSoc
             let client = Darwin.accept(listener, nil, nil)
             guard client >= 0 else { return }
             guard connections.count < maximumConnections else {
-                Darwin.close(client)
+                let response = Response.socketError(WovenNoteSocketError.busy)
+                defer { Darwin.close(client) }
+                guard (try? configureSocket(client)) != nil,
+                      let data = try? JSONEncoder().encode(response) else { return }
+                // Keep overload handling independent of Swift's cooperative executor,
+                // which may itself be saturated by the work we are rejecting. The
+                // reply is small and the nonblocking write has a strict deadline, so
+                // an unresponsive caller cannot occupy the listener indefinitely.
+                let deadline = ProcessInfo.processInfo.systemUptime + min(ioTimeout, 0.25)
+                try? writeMessage(data, to: client, timeout: deadline - ProcessInfo.processInfo.systemUptime)
+                _ = Darwin.shutdown(client, SHUT_WR)
+                // The CLI writes its request before reading. Drain within the same
+                // deadline so closing unread input does not replace busy with EPIPE.
+                _ = try? readMessage(from: client, timeout: deadline - ProcessInfo.processInfo.systemUptime)
                 return
             }
             do { try configureSocket(client) }
@@ -221,7 +234,7 @@ enum WovenNoteCommandLine {
       unlink [--table-id ID] --revision REVISION
       apply --json OPERATIONS_JSON | --file PATH --revision REVISION
 
-    Set WOVEN_NOTE_ID and WOVEN_NOTE_SOCKET, or pass --note-id explicitly.
+    Set WOVENMATTER_NOTE_ID and WOVEN_NOTE_SOCKET, or pass --note-id explicitly.
     Read the note first; modifying commands require its current --revision to prevent overwriting concurrent edits.
     Paragraph styles: paragraph, heading1...heading6, bulletedList, numberedList.
     """ + "\n"
@@ -232,7 +245,9 @@ enum WovenNoteCommandLine {
     ) throws -> NoteEditingRequest {
         var parser = WovenNoteArguments(arguments)
         let command = try parser.next("command")
-        let noteID = parser.value(for: "--note-id") ?? environment["WOVEN_NOTE_ID"]
+        let noteID = parser.value(for: "--note-id")
+            ?? environment["WOVENMATTER_NOTE_ID"]
+            ?? environment["WOVEN_NOTE_ID"]
         guard let noteID, !noteID.isEmpty else { throw WovenNoteCLIError.missingNoteID }
         let revision = parser.value(for: "--revision")
 
@@ -260,10 +275,8 @@ enum WovenNoteCommandLine {
             )
         case "replace-block":
             let id = try parser.requiredValue(for: "--id")
-            let block = try JSONDecoder().decode(
-                NoteBlock.self,
-                from: Data(try parser.requiredValue(for: "--json").utf8)
-            )
+            let block = try decodeJSON(NoteBlock.self,
+                from: Data(try parser.requiredValue(for: "--json").utf8), label: "block")
             return .applying(noteID: noteID, revision: revision, .replaceBlock(id: id, block: block))
         case "delete-block":
             return .applying(
@@ -330,11 +343,17 @@ enum WovenNoteCommandLine {
                 command: .apply,
                 noteID: noteID,
                 expectedRevision: revision,
-                operations: try JSONDecoder().decode([NoteEditOperation].self, from: data)
+                operations: try decodeJSON([NoteEditOperation].self, from: data, label: "operations")
             )
         default:
             throw WovenNoteCLIError.unknownCommand(command)
         }
+    }
+
+    private static func decodeJSON<Value: Decodable>(_ type: Value.Type, from data: Data,
+                                                       label: String) throws -> Value {
+        do { return try JSONDecoder().decode(type, from: data) }
+        catch { throw WovenNoteCLIError.invalidJSON(label, error.localizedDescription) }
     }
 
     private static func tableRequest(
@@ -505,15 +524,17 @@ enum WovenNoteCLIError: LocalizedError {
     case missingArgument(String)
     case invalidInteger(String)
     case invalidStyle(String)
+    case invalidJSON(String, String)
     case unknownCommand(String)
 
     var errorDescription: String? {
         switch self {
-        case .missingNoteID: "No note is attached. Set WOVEN_NOTE_ID or pass --note-id."
+        case .missingNoteID: "No note is attached. Set WOVENMATTER_NOTE_ID or pass --note-id."
         case .missingEnvironment(let key): "Missing environment variable: \(key)"
         case .missingArgument(let value): "Missing argument: \(value)"
         case .invalidInteger(let flag): "Expected an integer after \(flag)."
         case .invalidStyle(let style): "Unknown paragraph style: \(style)"
+        case .invalidJSON(let label, let reason): "Invalid \(label) JSON: \(reason)"
         case .unknownCommand(let command): "Unknown command: \(command)"
         }
     }
@@ -522,6 +543,7 @@ enum WovenNoteCLIError: LocalizedError {
 enum WovenNoteSocketError: LocalizedError {
     case pathTooLong
     case requestTooLarge
+    case busy
     case timedOut
     case system(Int32)
 
@@ -529,6 +551,7 @@ enum WovenNoteSocketError: LocalizedError {
         switch self {
         case .pathTooLong: "The Woven Matter note socket path is too long."
         case .requestTooLarge: "The Woven Matter note request exceeded 4 MB."
+        case .busy: "The Woven Matter tool endpoint is busy. Retry this request."
         case .timedOut: "The Woven Matter note connection timed out."
         case .system(let code): String(cString: strerror(code))
         }

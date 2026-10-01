@@ -60,13 +60,11 @@ struct RuntimeDiscoveryAndWorkspaceTests {
       try Data("preserve".utf8).write(to: directory.appending(path: "existing"))
     }
     func configure(_ external: URL?) throws {
-      _ = try LocalACPWorkspaceProvisioner.ensureWorkspace(
-        at: root,
-        repositoriesURL: databases ? nil : external,
-        databasesURL: databases ? external : nil
+      _ = try LocalACPWorkspaceProvisioner.configureDirectory(
+        databases ? .databases : .repositories, at: root, externalURL: external
       )
     }
-    let link = root.appending(path: databases ? "Databases" : "REPOS")
+    let link = root.appending(path: databases ? "Databases" : "Repos")
     try configure(nil)
     let marker = link.appending(path: "keep")
     try Data("keep".utf8).write(to: marker)
@@ -85,11 +83,9 @@ struct RuntimeDiscoveryAndWorkspaceTests {
     #expect(link.resolvingSymlinksInPath() == second.resolvingSymlinksInPath())
     #expect(try Data(contentsOf: first.appending(path: "existing")) == Data("preserve".utf8))
     try FileManager.default.removeItem(at: second)
-    // The shared initializer rejects a dangling directory before reconciliation.
-    #expect(throws: LocalACPWorkspaceError.self) { try configure(first) }
-    #expect(try FileManager.default.destinationOfSymbolicLink(atPath: link.path) == second.path)
-    try FileManager.default.createDirectory(at: second, withIntermediateDirectories: true)
+    // An unavailable old destination must not prevent relinking to a valid one.
     try configure(first)
+    #expect(link.resolvingSymlinksInPath() == first.resolvingSymlinksInPath())
     try configure(nil)
     #expect(try link.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink != true)
     #expect(try Data(contentsOf: first.appending(path: "existing")) == Data("preserve".utf8))

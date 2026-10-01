@@ -1,7 +1,11 @@
 import Foundation
 import Observation
+import WovenMatterClient
 import WovenMatterCore
 import WovenMatterDashboardStore
+
+// This isolated model probe does not compile the app lifecycle delegate.
+enum LocalExecutionRole { case standalone, frontend; static let current = Self.standalone }
 
 // This probe exercises only preferences and rejected actions. It never refreshes
 // provider data, accesses credentials or starts a provider CLI.
@@ -52,17 +56,51 @@ struct ApplicationUsageModelTests {
         } onChange: {
             errorChanges.record()
         }
-        model.signInUsageProvider(.claude)
+        model.signInUsageProvider(.cursor)
         precondition(errorChanges.count == 1)
-        precondition(model.localUsageError == "Enable Claude usage tracking before signing in.")
+        precondition(model.localUsageError == "Enable Cursor usage tracking before signing in.")
         precondition(model.signingInUsageProviders.isEmpty)
         precondition(model.enabledUsageProviders == [.codex])
+
+        let connectionRequests = ChangeRecorder()
+        let observer = NotificationCenter.default.addObserver(forName: .init("wovenmatter.open-connections"), object: nil, queue: nil) { _ in
+            connectionRequests.record()
+        }
+        model.signInUsageProvider(.claude)
+        NotificationCenter.default.removeObserver(observer)
+        precondition(connectionRequests.count == 1)
+        precondition(model.signingInUsageProviders.isEmpty)
 
         // An unlisted workspace must not alter the saved selection or start work.
         await model.selectCodexUsageWorkspace("unlisted-workspace", range: .last30Days)
         precondition(model.selectedCodexUsageWorkspaceID == "saved-workspace")
         precondition(CodexUsageWorkspacePreferences(defaults: defaults).selectedWorkspaceID == "saved-workspace")
         precondition(model.localUsage == nil && !model.isRefreshingLocalUsage)
+        let projection = ApplicationUsageModel(applicationDefaults: defaults)
+        projection.isBackendProjection = true
+        var requests: [String] = []
+        let snapshot = model.backendSnapshot()
+        projection.backendRequest = { method, data in
+            requests.append(method)
+            if method == "usage.command" {
+                let command = try JSONDecoder().decode(BackendUsageCommand.self, from: data)
+                guard case .refresh(.last30Days, true, .manual, false, nil) = command else {
+                    preconditionFailure("Unexpected usage proxy command")
+                }
+            }
+            return try JSONEncoder().encode(snapshot)
+        }
+        await projection.refreshLocalUsage(range: .last30Days, refreshLimits: true)
+        precondition(requests == ["usage.command"])
+        precondition(projection.enabledUsageProviders == model.enabledUsageProviders)
+        precondition(projection.selectedCodexUsageWorkspaceID == "saved-workspace")
+        projection.backendRequest = nil
+        await projection.refreshLocalUsage(range: .last30Days)
+        precondition(projection.localUsageError == BackendRPCError.unavailable.localizedDescription)
+        // Backend snapshots serialize all provider selections without credentials.
+        let bytes = try await model.handleBackendRequest(BackendRPCRequest(method: "usage.snapshot"))
+        let decoded = try JSONDecoder().decode(BackendUsageSnapshot.self, from: bytes)
+        precondition(decoded.selectedCodexUsageWorkspaceID == "saved-workspace")
         print("Application usage: preference restoration, observable consent/error changes, idempotent consent and rejected-action guards passed.")
     }
 }

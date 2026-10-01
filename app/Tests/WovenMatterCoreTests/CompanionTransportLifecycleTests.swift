@@ -207,7 +207,7 @@ private final class ServeLifecycleFixture {
         return child
       })
   }
-  func probe(_ arguments: [String]) throws -> Data {
+  func probe(_ arguments: [String]) async throws -> Data {
     probeArguments.append(arguments)
     probedWhileStopping = probedWhileStopping || children.contains { $0.isRunning && $0.terminationCalls > 0 }
     if arguments == ["status", "--json"] {

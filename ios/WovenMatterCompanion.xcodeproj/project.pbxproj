@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		1BF5DCB1E14AEA6ED7753754 /* WorkspacePanes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10ECD3B19147875A089A7AD5 /* WorkspacePanes.swift */; };
 		28CEC0B02F6E6ABE6CC30610 /* NotePane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 19598AFD98C07A606D32DCE5 /* NotePane.swift */; };
 		40CCA8C001A3B732C2B4EA04 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 3062C2AC81E66D9AA5C104B0 /* Assets.xcassets */; };
 		5108E8C5DC06B371EB89E9B3 /* CompanionApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2BECCF4178C31915A34A8608 /* CompanionApp.swift */; };
@@ -17,6 +18,7 @@
 		8DB14441037CE005DF2F7E34 /* CompanionClient in Frameworks */ = {isa = PBXBuildFile; productRef = 2D737224ECEC31DBAA4CA755 /* CompanionClient */; };
 		A92AB2463209562B4E3AA5CC /* CompanionModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9850315B032C364C200D69F /* CompanionModel.swift */; };
 		E38FE017B57846FB27355028 /* CompanionModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C64A0A0DD03AB9848BC4949 /* CompanionModelTests.swift */; };
+		E7ACEC6B06676529B54BBF6B /* CalendarPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC28D534612C52815564EA74 /* CalendarPane.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -39,6 +41,7 @@
 /* Begin PBXFileReference section */
 		032EBB6F955F52445FFDB1FC /* PairingPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingPane.swift; sourceTree = "<group>"; };
 		04F804868260C34CA79C726F /* shared */ = {isa = PBXFileReference; lastKnownFileType = folder; name = shared; path = ../shared; sourceTree = SOURCE_ROOT; };
+		10ECD3B19147875A089A7AD5 /* WorkspacePanes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspacePanes.swift; sourceTree = "<group>"; };
 		19598AFD98C07A606D32DCE5 /* NotePane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotePane.swift; sourceTree = "<group>"; };
 		2BECCF4178C31915A34A8608 /* CompanionApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionApp.swift; sourceTree = "<group>"; };
 		2C64A0A0DD03AB9848BC4949 /* CompanionModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionModelTests.swift; sourceTree = "<group>"; };
@@ -49,6 +52,7 @@
 		B9850315B032C364C200D69F /* CompanionModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionModel.swift; sourceTree = "<group>"; };
 		BE44D7693BB336BD0FF48531 /* CompanionUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = CompanionUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		C870EFC1CA4DE485EE0A00BE /* WovenMatterCompanion.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = WovenMatterCompanion.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		DC28D534612C52815564EA74 /* CalendarPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarPane.swift; sourceTree = "<group>"; };
 		E0939E5DD09A9196994A6E24 /* ios */ = {isa = PBXFileReference; lastKnownFileType = folder; name = ios; path = .; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
@@ -69,11 +73,13 @@
 			isa = PBXGroup;
 			children = (
 				3062C2AC81E66D9AA5C104B0 /* Assets.xcassets */,
+				DC28D534612C52815564EA74 /* CalendarPane.swift */,
 				9629C131A94C4EEA152D5629 /* ChatPane.swift */,
 				2BECCF4178C31915A34A8608 /* CompanionApp.swift */,
 				B9850315B032C364C200D69F /* CompanionModel.swift */,
 				19598AFD98C07A606D32DCE5 /* NotePane.swift */,
 				032EBB6F955F52445FFDB1FC /* PairingPane.swift */,
+				10ECD3B19147875A089A7AD5 /* WorkspacePanes.swift */,
 			);
 			name = CompanionApp;
 			path = Sources/CompanionApp;
@@ -265,11 +271,13 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				E7ACEC6B06676529B54BBF6B /* CalendarPane.swift in Sources */,
 				5A447C4E2D85DF75ACBD335C /* ChatPane.swift in Sources */,
 				5108E8C5DC06B371EB89E9B3 /* CompanionApp.swift in Sources */,
 				A92AB2463209562B4E3AA5CC /* CompanionModel.swift in Sources */,
 				28CEC0B02F6E6ABE6CC30610 /* NotePane.swift in Sources */,
 				54B08E7CECB6333E45109680 /* PairingPane.swift in Sources */,
+				1BF5DCB1E14AEA6ED7753754 /* WorkspacePanes.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -288,11 +296,11 @@
 		};
 		8B34D8412EB141465EBBC070 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
-			productRef = "TEMP_BA2F887A-D0CE-490C-90D0-07B032A1597D" /* WovenMatterCompanion */;
+			productRef = "TEMP_6C5781B7-D14E-4822-9561-B3C67364D9E4" /* WovenMatterCompanion */;
 		};
 		970CA8BDC681306F33B0361C /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
-			productRef = "TEMP_E331B64E-A0DD-43E8-AD0D-FCDE74164EBC" /* CompanionClient */;
+			productRef = "TEMP_479DDE7F-5EA0-4EA2-BB94-80CFCEC0473D" /* CompanionClient */;
 		};
 /* End PBXTargetDependency section */
 
@@ -315,7 +323,7 @@
 				PRODUCT_MODULE_NAME = WovenMatterMobileApp;
 				PRODUCT_NAME = WovenMatterCompanion;
 				SDKROOT = iphoneos;
-				TARGETED_DEVICE_FAMILY = 1;
+				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Release;
 		};
@@ -418,7 +426,7 @@
 				PRODUCT_MODULE_NAME = WovenMatterMobileApp;
 				PRODUCT_NAME = WovenMatterCompanion;
 				SDKROOT = iphoneos;
-				TARGETED_DEVICE_FAMILY = 1;
+				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Debug;
 		};
@@ -591,13 +599,13 @@
 			isa = XCSwiftPackageProductDependency;
 			productName = WovenMatterCompanion;
 		};
-		"TEMP_BA2F887A-D0CE-490C-90D0-07B032A1597D" /* WovenMatterCompanion */ = {
-			isa = XCSwiftPackageProductDependency;
-			productName = WovenMatterCompanion;
-		};
-		"TEMP_E331B64E-A0DD-43E8-AD0D-FCDE74164EBC" /* CompanionClient */ = {
+		"TEMP_479DDE7F-5EA0-4EA2-BB94-80CFCEC0473D" /* CompanionClient */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = CompanionClient;
+		};
+		"TEMP_6C5781B7-D14E-4822-9561-B3C67364D9E4" /* WovenMatterCompanion */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = WovenMatterCompanion;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

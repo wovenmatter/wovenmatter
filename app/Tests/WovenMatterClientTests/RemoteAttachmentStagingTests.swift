@@ -1,4 +1,5 @@
 import CryptoKit
+import Darwin
 import Foundation
 import Testing
 import WovenMatterCore
@@ -121,15 +122,60 @@ struct RemoteAttachmentStagingTests {
     #expect(ProcessInfo.processInfo.systemUptime - start < 5)
   }
 
-  @Test("cancelling an attachment subprocess terminates it promptly")
+  @Test("cancelling a running attachment subprocess terminates it")
   func transferCancellation() async throws {
+    let cancellation = SpawnCancellation()
     let task = Task.detached {
-      try RemoteWorkspaceProcess.run(executable: "/bin/sleep", arguments: ["30"], timeLimit: 60)
+      try RemoteWorkspaceProcess.run(executable: "/bin/sleep",
+        arguments: ["30"], timeLimit: 60, onProcessStarted: cancellation.processStarted)
     }
-    task.cancel()
-    let start = ProcessInfo.processInfo.systemUptime
+    defer { task.cancel() }
+    // Either handle installation or child launch may win. Cancellation is
+    // requested only once both have happened, directly from those events.
+    cancellation.install(task)
     await #expect(throws: CancellationError.self) { try await task.value }
-    #expect(ProcessInfo.processInfo.systemUptime - start < 5)
+    let pid = try #require(cancellation.processID)
+    #expect(pid > 0)
+    let status = kill(pid, 0)
+    let error = errno
+    #expect(status == -1)
+    #expect(error == ESRCH)
+  }
+
+  @Test("a cancelled attachment task never launches its subprocess")
+  func cancellationBeforeLaunch() async throws {
+    let observation = SpawnCancellation()
+    let task = Task.detached {
+      withUnsafeCurrentTask { $0?.cancel() }
+      return try RemoteWorkspaceProcess.run(executable: "/bin/sleep",
+        arguments: ["30"], timeLimit: 60, onProcessStarted: observation.processStarted)
+    }
+    await #expect(throws: CancellationError.self) { try await task.value }
+    #expect(observation.processID == nil)
+  }
+
+  private final class SpawnCancellation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var task: Task<RemoteWorkspaceProcess.Result, any Error>?
+    private var startedPID: pid_t?
+
+    var processID: pid_t? { lock.withLock { startedPID } }
+
+    func install(_ task: Task<RemoteWorkspaceProcess.Result, any Error>) {
+      let hasStarted = lock.withLock {
+        self.task = task
+        return startedPID != nil
+      }
+      if hasStarted { task.cancel() }
+    }
+
+    func processStarted(_ pid: pid_t) {
+      let task = lock.withLock {
+        startedPID = pid
+        return self.task
+      }
+      task?.cancel()
+    }
   }
 
   @Test("changed local bytes are rejected before SSH")

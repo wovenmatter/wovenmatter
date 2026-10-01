@@ -5,9 +5,11 @@ import WovenMatterCore
 struct DashboardCronSurface: View {
   @Bindable var model: ApplicationModel
   let onOpenConversation: (String) -> Void
-  @State private var provider = "Hermes"
+  @State private var provider = "Scheduled Tasks"
   var body: some View {
-    if provider == "Hermes" {
+    if provider == "Scheduled Tasks" || provider == "Calendar Tasks" {
+      DashboardScheduledTasksSurface(model: model, provider: $provider, onOpenSession: onOpenConversation)
+    } else if provider == "Hermes" {
       HermesCronSurface(
         model: model,
         provider: $provider,
@@ -31,17 +33,19 @@ struct HermesCronSurface: View {
   var body: some View {
     VStack(spacing: 0) {
       VStack(alignment: .leading, spacing: 12) {
-        HStack(spacing: 12) {
-          DashboardLucideIcon(glyph: .calendarClockControl, size: 18)
-            .foregroundStyle(DashboardPalette.primary)
-            .frame(width: 36, height: 36)
-            .background(DashboardPalette.muted)
-            .clipShape(RoundedRectangle(
-              cornerRadius: DashboardMetrics.controlRadius,
-              style: .continuous
-            ))
-          Text("Cron Jobs").font(.system(size: 22, weight: .semibold))
-          Spacer(minLength: 16)
+        VStack(alignment: .leading, spacing: 12) {
+          HStack(spacing: 12) {
+            DashboardLucideIcon(glyph: .calendarClockControl, size: 18)
+              .foregroundStyle(DashboardPalette.primary)
+              .frame(width: 36, height: 36)
+              .background(DashboardPalette.muted)
+              .clipShape(RoundedRectangle(
+                cornerRadius: DashboardMetrics.controlRadius,
+                style: .continuous
+              ))
+            Text("Scheduled Tasks").font(.system(size: 22, weight: .semibold))
+            Spacer(minLength: 0)
+          }
           cronProviderSelector
         }
         HStack(spacing: 8) {
@@ -121,15 +125,19 @@ struct HermesCronSurface: View {
       }
       .scrollIndicators(.never)
     }
+    .transaction { transaction in
+      transaction.animation = nil
+      transaction.disablesAnimations = true
+    }
     .task { await model.refreshHermesCron() }
   }
 
   private var cronProviderSelector: some View {
     DashboardSegmentedSelector(
-      options: ["Hermes", "OpenClaw"],
+      options: ["Scheduled Tasks", "Calendar Tasks", "Hermes", "OpenClaw"],
       selection: $provider
     ) { $0 }
-    .frame(width: 220)
+    .frame(maxWidth: 440)
   }
 
   private func jobCard(agent: WorkspaceAgent, job: HermesValue) -> some View {
@@ -160,7 +168,7 @@ struct HermesCronSurface: View {
           }
         )
       ) {
-        Text("Cron Jobs only").tag("")
+        Text("Scheduled Tasks only").tag("")
         Text("New chat for each result").tag("new")
         ForEach(
           (model.workspaceOverview?.conversations ?? []).filter {
@@ -192,13 +200,16 @@ private struct HermesCronJobForm: View {
   var body: some View {
     DisclosureGroup("New scheduled job") {
       VStack(alignment: .leading, spacing: 10) {
-        TextField("Name", text: $name)
-          .frame(maxWidth: 640)
-        TextField("Schedule, e.g. every 1h", text: $schedule)
-          .frame(maxWidth: 640)
-        TextField("Instructions", text: $prompt, axis: .vertical)
-          .lineLimit(3...8)
-          .frame(maxWidth: 640)
+        DashboardCalendarField("Name") {
+          TextField("Name", text: $name).modifier(DashboardCalendarInputStyle())
+        }
+        DashboardCalendarField("Schedule") {
+          TextField("Every 1h", text: $schedule).modifier(DashboardCalendarInputStyle())
+        }
+        DashboardCalendarField("Prompt") {
+          TextField("Instructions", text: $prompt, axis: .vertical)
+            .lineLimit(3...8).modifier(DashboardCalendarInputStyle())
+        }
         Button("Create paused job") {
           creating = true
           Task {
@@ -211,16 +222,15 @@ private struct HermesCronJobForm: View {
             }
             creating = false
           }
-        }.disabled(
+        }.buttonStyle(DashboardPrimaryButtonStyle()).disabled(
           creating || schedule.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             || prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         Text("Choose where to send results, then resume the job.").font(
           .caption)
       }
-      .textFieldStyle(.roundedBorder)
       .controlSize(.regular)
       .frame(maxWidth: 640, alignment: .leading)
-      .padding(.horizontal, 4)
+      .padding(.leading, 12)
       .padding(.top, 10)
       .padding(.bottom, 4)
       .frame(maxWidth: .infinity, alignment: .leading)

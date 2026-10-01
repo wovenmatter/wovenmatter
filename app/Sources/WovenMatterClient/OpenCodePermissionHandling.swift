@@ -4,6 +4,14 @@ import WovenMatterCore
 /// Per-conversation replies to native OpenCode permission requests. These are
 /// client approval choices, not smart evaluation or replacements for server rules.
 public enum OpenCodePermissionHandling {
+    /// Denial and dismissal may still settle native requests after Stop. All
+    /// other permission/form answers can authorize work and require a live turn.
+    public static func requiresActiveTurn(method: String, suffix: String, body: OpenCodeValue?) -> Bool {
+        guard method == "POST", suffix.hasSuffix("/reply") else { return false }
+        if suffix.hasPrefix("/permission/") { return body?["reply"].string != "reject" }
+        return suffix.hasPrefix("/form/")
+    }
+
     public static let options = ["normal", "acceptEdits", "full"]
     public static let metadata: [String: SessionOptionMetadata] = [
         "normal": .init(name: "Ask for approval", description: "Show requests that OpenCode asks you to approve."),

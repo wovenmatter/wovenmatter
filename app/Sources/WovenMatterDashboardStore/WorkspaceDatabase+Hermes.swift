@@ -4,7 +4,7 @@ import WovenMatterClient
 import WovenMatterCore
 
 // Hermes session discovery and scheduled-result delivery.
-extension WorkspaceDatabase {
+extension WorkspaceDatabaseConnection {
   public func hermesResultConversation(agentID: UUID, jobID: String, runID: String) throws -> String? {
     try withLock {
       let query=try prepareUnlocked("SELECT r.conversation_id FROM desktop_scheduled_result_receipts r JOIN dashboard_conversations c ON c.id=r.conversation_id WHERE r.provider='hermes' AND r.agent_id=? AND r.job_id=? AND r.run_id=? AND c.deleted_at IS NULL AND c.is_archived=0")
@@ -111,5 +111,31 @@ extension WorkspaceDatabase {
       }
       return result
     }
+  }
+}
+
+// MARK: - Async worker boundary
+
+extension WorkspaceDatabase {
+  public func hermesResultConversation(agentID: UUID, jobID: String, runID: String) async throws -> String? {
+    try await read { try $0.hermesResultConversation(agentID: agentID, jobID: jobID, runID: runID) }
+  }
+
+  public func hermesResultRoutes(agentID: UUID) async throws -> [String: String] {
+    try await read { try $0.hermesResultRoutes(agentID: agentID) }
+  }
+
+  public func setHermesResultRoute(agentID: UUID, jobID: String, destination: String) async throws {
+    try await write { try $0.setHermesResultRoute(agentID: agentID, jobID: jobID, destination: destination) }
+  }
+
+  @discardableResult
+  public func collectHermesResult(agentID: UUID, jobID: String, runID: String, title: String, output: String,
+                                 ownerDeviceID: UUID, remoteWorkspaceID: UUID? = nil, remoteWorkspaceName: String = "") async throws -> String? {
+    try await write { try $0.collectHermesResult(agentID: agentID, jobID: jobID, runID: runID, title: title, output: output, ownerDeviceID: ownerDeviceID, remoteWorkspaceID: remoteWorkspaceID, remoteWorkspaceName: remoteWorkspaceName) }
+  }
+
+  public func knownHermesSessionIDs(home: String) async throws -> Set<String> {
+    try await read { try $0.knownHermesSessionIDs(home: home) }
   }
 }

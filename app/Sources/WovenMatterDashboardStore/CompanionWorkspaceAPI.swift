@@ -3,12 +3,19 @@ import WovenMatterCore
 
 @MainActor
 public protocol CompanionCommandServing: AnyObject {
+    func readWorkspace(_ request: CompanionWorkspaceRead) async throws -> CompanionWorkspaceResult
     func providers() -> [CompanionProvider]
-    func pendingInteractions() -> [CompanionPendingInteraction]
+    func pendingInteractions() async -> [CompanionPendingInteraction]
     func sessionCapabilities(conversationID: String) async throws -> CompanionProvider
     func transcript(conversationID: String, before: String?) async throws -> CompanionTranscript
-    func receipt(commandID: String, deviceID: String) throws -> CompanionCommandReceipt?
+    func receipt(commandID: String, deviceID: String) async throws -> CompanionCommandReceipt?
     func execute(_ command: CompanionCommand, deviceID: String) async throws -> CompanionCommandReceipt
+}
+
+public extension CompanionCommandServing {
+    func readWorkspace(_ request: CompanionWorkspaceRead) async throws -> CompanionWorkspaceResult {
+        throw CompanionAPIError(code: "unsupported", message: "Update your Mac to use this feature.")
+    }
 }
 
 /// One authenticated, workspace-bound API per serving attempt. The activity
@@ -46,7 +53,7 @@ public final class CompanionWorkspaceAPI {
             }
             var path = target.path
             if path.hasPrefix("/wovenmatter/") { path = String(path.dropFirst("/wovenmatter".count)) }
-            let workspaceID = try database.companionWorkspaceID()
+            let workspaceID = try await database.companionWorkspaceID()
             if request.method == "POST", path == "/v1/pair" {
                 let command = try JSONDecoder().decode(CompanionPairRequest.self, from: request.body)
                 let result = try await authentication.pair(command, workspaceID: workspaceID)
@@ -72,8 +79,8 @@ public final class CompanionWorkspaceAPI {
                 case "/v1/hello":
                     return try .json(CompanionHello(workspaceID: workspaceID,
                         hostName: Host.current().localizedName ?? "Woven Matter Mac",
-                        capabilities: ["notes.conditional.v1", "folders.flat.v1", "changes.replay.v1", "commands.receipts.v1", "interactions.first-response.v1", "transcripts.paged.v1", "assets.linked-data.v1"]))
-                case "/v1/snapshot": return try .json(database.companionSnapshot())
+                        capabilities: ["notes.conditional.v1", "folders.flat.v1", "changes.replay.v1", "commands.receipts.v1", "interactions.first-response.v1", "transcripts.paged.v1", "assets.linked-data.v1", "workspace.library.v1", "workspace.calendar.v1", "workspace.management.v1"]))
+                case "/v1/snapshot": return try .json(try await database.companionSnapshot())
                 case "/v1/changes":
                     guard let after = Int64(query("after") ?? query("cursor") ?? "0"), after >= 0 else {
                         return .error("invalid_cursor", "The change cursor is invalid.", status: 400)
@@ -81,20 +88,20 @@ public final class CompanionWorkspaceAPI {
                     let limit = max(1, min(200, Int(query("limit") ?? "200") ?? 200))
                     let wait = max(0, min(25, Double(query("wait") ?? "0") ?? 0))
                     let deadline = Date().addingTimeInterval(wait)
-                    var page = try database.companionChanges(after: after, limit: limit)
+                    var page = try await database.companionChanges(after: after, limit: limit)
                     while page.changes.isEmpty && !page.resetRequired && Date() < deadline && isActive() {
                         try await Task.sleep(for: .milliseconds(250))
                         _ = try await authentication.authenticate(bearer: bearer)
-                        page = try database.companionChanges(after: after, limit: limit)
+                        page = try await database.companionChanges(after: after, limit: limit)
                     }
                     return try .json(page)
                 case "/v1/providers": return try .json(commands.providers())
-                case "/v1/pending": return try .json(commands.pendingInteractions())
+                case "/v1/pending": return try .json(await commands.pendingInteractions())
                 default: break
                 }
                 let components = path.split(separator: "/").map(String.init)
                 if components.count == 4, components[0] == "v1", components[1] == "assets", components[3] == "linked-data" {
-                    guard let note = try database.companionNote(id: components[2]),
+                    guard let note = try await database.companionNote(id: components[2]),
                           let document = try? NoteDocument.editableDocument(from: note.content) else {
                         return .error("not_found", "This document cannot be previewed by this version of the Mac app.", status: 404)
                     }
@@ -123,7 +130,7 @@ public final class CompanionWorkspaceAPI {
                     return response
                 }
                 if components.count == 3, components[0] == "v1", components[1] == "command-receipts" {
-                    guard let receipt = try commands.receipt(commandID: components[2], deviceID: device.id) else {
+                    guard let receipt = try await commands.receipt(commandID: components[2], deviceID: device.id) else {
                         return .error("not_found", "The Mac has no receipt for this command. Retry explicitly using the same command ID.", status: 404)
                     }
                     return try .json(receipt)
@@ -137,16 +144,23 @@ public final class CompanionWorkspaceAPI {
                     }
                 }
                 if components.count == 3, components[0] == "v1", ["assets", "notes"].contains(components[1]) {
-                    guard let note = try database.companionNote(id: components[2]) else {
+                    guard let note = try await database.companionNote(id: components[2]) else {
                         return .error("not_found", "This document is no longer available.", status: 404)
                     }
                     return try .json(note)
                 }
             } else if request.method == "POST" {
+                if path == "/v1/workspace-read" {
+                    let read = try JSONDecoder().decode(CompanionWorkspaceRead.self, from: request.body)
+                    let value = try await commands.readWorkspace(read)
+                    guard isActive() else { return .error("unavailable", "Companion sharing is stopped.", status: 503) }
+                    _ = try await authentication.authenticate(bearer: bearer)
+                    return try .json(value)
+                }
                 if path == "/v1/mutations" {
                     let mutation = try JSONDecoder().decode(CompanionMutation.self, from: request.body)
                     guard mutation.deviceID == device.id else { return .error("wrong_device", "Mutation belongs to another device.", status: 403) }
-                    let result = try database.applyCompanionMutation(mutation)
+                    let result = try await database.applyCompanionMutation(mutation)
                     onMutation()
                     return try .json(result)
                 }

@@ -2,8 +2,8 @@ import Foundation
 
 /// Only the paired Mac owns execution. A disconnected client never queues agent commands.
 public enum CompanionProtocol {
-  // Version 2 permits native pending interactions before a canonical run exists.
-  public static let version = 2
+  // Version 3 adds workspace management, Library, Calendar and session settings.
+  public static let version = 3
   public static let maximumNoteBytes = 4 * 1_024 * 1_024
   public static let maximumChangePage = 200
   public static let maximumReplayChanges = 10_000
@@ -29,8 +29,10 @@ public struct CompanionNote: Codable, Equatable, Identifiable, Sendable {
   public var contentByteCount: Int
   public var kind: NoteArtifactKind?
   public var revision: Int64
+  public var isPinned: Bool?
   public var updatedAt: String
-  public init(id: String, folderID: String? = nil, title: String, content: String, revision: Int64 = 1, updatedAt: String = "", contentIncluded: Bool = true, contentByteCount: Int? = nil, kind: NoteArtifactKind? = nil) {
+  public init(id: String, folderID: String? = nil, title: String, content: String, revision: Int64 = 1, updatedAt: String = "", contentIncluded: Bool = true, contentByteCount: Int? = nil, kind: NoteArtifactKind? = nil, isPinned: Bool? = nil) {
+    self.isPinned = isPinned
     self.id = id; self.folderID = folderID; self.title = title; self.content = content
     self.revision = revision; self.updatedAt = updatedAt
     self.contentIncluded = contentIncluded; self.contentByteCount = contentByteCount ?? content.utf8.count
@@ -47,8 +49,10 @@ public struct CompanionConversation: Codable, Equatable, Identifiable, Sendable 
   public var runtimeKind: String?
   public var activeRunID: String?
   public var preview: String
+  public var isPinned: Bool?
   public var updatedAt: String
-  public init(id: String, title: String, folderID: String? = nil, providerID: String? = nil, routeID: String? = nil, runtimeKind: String? = nil, activeRunID: String? = nil, preview: String = "", updatedAt: String = "") {
+  public init(id: String, title: String, folderID: String? = nil, providerID: String? = nil, routeID: String? = nil, runtimeKind: String? = nil, activeRunID: String? = nil, preview: String = "", updatedAt: String = "", isPinned: Bool? = nil) {
+    self.isPinned = isPinned
     self.id = id; self.title = title; self.folderID = folderID; self.providerID = providerID; self.routeID = routeID
     self.runtimeKind = runtimeKind; self.activeRunID = activeRunID; self.preview = preview; self.updatedAt = updatedAt
   }
@@ -219,7 +223,7 @@ public struct CompanionChangePage: Codable, Equatable, Sendable {
   }
 }
 public struct CompanionCommand: Codable, Equatable, Sendable {
-  public enum Kind: String, Codable, Sendable { case createSession, send, steer, stop, respond }
+  public enum Kind: String, Codable, Sendable { case createSession, send, steer, stop, respond, workspace }
   public var commandID: String
   public var deviceID: String
   public var kind: Kind
@@ -233,11 +237,12 @@ public struct CompanionCommand: Codable, Equatable, Sendable {
   public var noteID: String?
   public var noteRevision: Int64?
   public var interactionID: String?
+  public var workspaceAction: CompanionWorkspaceAction?
   public var response: CompanionInteractionResponse?
-  public init(commandID: String = UUID().uuidString.lowercased(), deviceID: String, kind: Kind, conversationID: String? = nil, runID: String? = nil, providerID: String? = nil, routeID: String? = nil, runtimeKind: String? = nil, folderID: String? = nil, text: String? = nil, noteID: String? = nil, noteRevision: Int64? = nil, interactionID: String? = nil, response: CompanionInteractionResponse? = nil) {
+  public init(commandID: String = UUID().uuidString.lowercased(), deviceID: String, kind: Kind, conversationID: String? = nil, runID: String? = nil, providerID: String? = nil, routeID: String? = nil, runtimeKind: String? = nil, folderID: String? = nil, text: String? = nil, noteID: String? = nil, noteRevision: Int64? = nil, interactionID: String? = nil, response: CompanionInteractionResponse? = nil, workspaceAction: CompanionWorkspaceAction? = nil) {
     self.commandID = commandID; self.deviceID = deviceID; self.kind = kind; self.conversationID = conversationID
     self.runID = runID; self.providerID = providerID; self.routeID = routeID; self.runtimeKind = runtimeKind; self.folderID = folderID
-    self.text = text; self.noteID = noteID; self.noteRevision = noteRevision; self.interactionID = interactionID; self.response = response
+    self.text = text; self.noteID = noteID; self.noteRevision = noteRevision; self.interactionID = interactionID; self.response = response; self.workspaceAction = workspaceAction
   }
 }
 public struct CompanionCommandReceipt: Codable, Equatable, Sendable {

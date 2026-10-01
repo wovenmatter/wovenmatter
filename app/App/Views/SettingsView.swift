@@ -19,6 +19,8 @@ private enum HarnessSettingsOrigin: Equatable {
 private enum SettingsSection: Equatable {
     case landing
     case general
+    case connections(String)
+    case defaultAgent(String, HarnessSettingsOrigin)
     case harness(AgentRuntimeKind, UUID?, HarnessSettingsOrigin)
     case companion
     case openClaw
@@ -59,12 +61,17 @@ struct SettingsView: View {
                 SettingsCompanionView(model: model, host: model.companionHost,
                     reservesRailControlSpace: reservesRailControlSpace,
                     onBack: { section = .landing })
+            case .defaultAgent(let scope, let origin):
+                SettingsDefaultAgentView(model: model, initialScope: scope, reservesRailControlSpace: reservesRailControlSpace, onBack: { section = origin.section })
             case .general:
                 SettingsGeneralView(
                     model: model,
                     reservesRailControlSpace: reservesRailControlSpace,
                     onBack: { section = .landing }
                 )
+            case .connections(let scope):
+                SettingsConnectionsView(model: model, initialScope: scope,
+                    reservesRailControlSpace: reservesRailControlSpace, onBack: { section = .landing })
             case .harness(let runtimeKind, let workspaceID, let origin):
                 SettingsHarnessView(
                     model: model,
@@ -169,8 +176,23 @@ struct SettingsView: View {
         .task {
             model.refreshLocalACPRuntimesNow()
         }
-        .onAppear { openPendingHermesSettings() }
+        .onAppear { openPendingHermesSettings(); openPendingDefaultAgentSettings(); openPendingConnections() }
+        .onChange(of: model.pendingConnectionsScope) { _, _ in openPendingConnections() }
+        .onReceive(NotificationCenter.default.publisher(for: .init("wovenmatter.open-connections"))) { event in
+            section = .connections(event.object as? String ?? "global")
+        }
+        .onChange(of: model.pendingDefaultAgentSettingsScope) { _, _ in openPendingDefaultAgentSettings() }
         .onChange(of: model.pendingHermesSettingsAgentID) { _, _ in openPendingHermesSettings() }
+    }
+
+    private func openPendingDefaultAgentSettings() {
+        guard let scope = model.pendingDefaultAgentSettingsScope else { return }
+        section = .defaultAgent(scope, .landing)
+        model.pendingDefaultAgentSettingsScope = nil
+    }
+    private func openPendingConnections() {
+        guard let scope = model.pendingConnectionsScope else { return }
+        section = .connections(scope); model.pendingConnectionsScope = nil
     }
 
     private func openPendingHermesSettings() {
@@ -193,10 +215,25 @@ struct SettingsView: View {
                     action: { section = .general }
                 )
                 SettingsDestinationRow(
-                    title: "iPhone companion",
-                    detail: "Pair your iPhone and share this Mac's workspace over Tailscale.",
+                    title: "iPhone & iPad",
+                    detail: "Pair your iPhone or iPad and share this Mac's workspace over Tailscale.",
                     icon: { Image(systemName: "iphone").font(.system(size: 15)) },
                     action: { section = .companion }
+                )
+                SettingsDestinationRow(
+                    title: "Connections",
+                    detail: "Shared accounts, API keys, and local model servers.",
+                    icon: {
+                        DashboardLucideIcon(glyph: .plug, size: 15)
+                            .rotationEffect(.degrees(45))
+                    },
+                    action: { section = .connections("global") }
+                )
+                SettingsDestinationRow(
+                    title: "Built-in Agent",
+                    detail: "Providers, search, and models across your workspaces.",
+                    icon: { DashboardLucideIcon(glyph: .bot, size: 15) },
+                    action: { section = .defaultAgent("global", .landing) }
                 )
                 SettingsDestinationRow(
                     title: "Local agent workspace",
@@ -280,6 +317,7 @@ struct SettingsView: View {
         origin: HarnessSettingsOrigin
     ) -> SettingsSection {
         switch runtimeKind {
+        case .defaultAgent: .defaultAgent(workspaceID?.uuidString.lowercased() ?? "local", origin)
         case .openclaw: .openClawWorkspace(workspaceID)
         case .hermes: .hermesWorkspace(workspaceID)
         case .opencode: .openCodeWorkspace(workspaceID)

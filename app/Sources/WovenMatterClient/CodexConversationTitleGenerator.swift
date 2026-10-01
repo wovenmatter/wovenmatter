@@ -11,7 +11,7 @@ private actor CodexTitleResponseAccumulator {
     func result() -> String { value }
 }
 
-public struct CodexTitleGenerationCapabilities: Equatable, Sendable {
+public struct CodexTitleGenerationCapabilities: Codable, Equatable, Sendable {
     public let currentModel: String?
     public let currentThinking: String?
     public let models: [String]

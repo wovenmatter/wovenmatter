@@ -21,6 +21,7 @@ struct DashboardNotePane: View {
     let onClose: () -> Void
     @FocusState private var titleFocused: Bool
     @State private var editorController = DashboardNoteEditorController()
+    @State private var dictationEditor = DictationEditor()
     @State private var documentCache = DashboardNoteDocumentCache()
     @State private var showsFormatting = false
     @State private var showsVersionHistory = false
@@ -44,7 +45,7 @@ struct DashboardNotePane: View {
         Binding(
             get: { documentCache.value(noteID: note.id, source: model.noteDraft(for: note).content) },
             set: { updated in
-                guard documentIsEditable, let content = try? documentCache.encode(updated, noteID: note.id) else { return }
+                guard !model.noteEditingSuspended, documentIsEditable, let content = try? documentCache.encode(updated, noteID: note.id) else { return }
                 model.updateNoteDraft(note: note, content: content)
             }
         )
@@ -85,8 +86,10 @@ struct DashboardNotePane: View {
             HStack(spacing: 8) {
                 if showBack {
                     Button {
-                        model.flushNoteDrafts()
-                        onBack()
+                        Task {
+                            _ = await model.flushNoteDrafts()
+                            onBack()
+                        }
                     } label: {
                         DashboardLucideIcon(glyph: .arrowLeft, size: 16).frame(width: 32, height: 32)
                     }
@@ -106,6 +109,7 @@ struct DashboardNotePane: View {
                     .accessibilityLabel("Note title")
                     .layoutPriority(1)
                 Spacer()
+                if currentDocument.kind == .note { DictationMicrophone(editor: dictationEditor) }
                 DashboardDatabaseLinkControl(
                     document: document,
                     snapshot: model.databasesSnapshot
@@ -157,8 +161,10 @@ struct DashboardNotePane: View {
                     .help(isFocused ? "Restore chat and note" : "Focus note")
                 }
                 Button {
-                    model.flushNoteDrafts()
-                    onClose()
+                    Task {
+                        _ = await model.flushNoteDrafts()
+                        onClose()
+                    }
                 } label: {
                     DashboardLucideIcon(glyph: noteOnLeft ? .panelLeftClose : .panelRightClose, size: 16)
                         .frame(width: 32, height: 32)
@@ -194,7 +200,8 @@ struct DashboardNotePane: View {
                     } else {
                         switch currentDocument.kind {
                         case .note:
-                            DashboardNoteEditor(document: document, controller: editorController)
+                            DashboardNoteEditor(document: document, controller: editorController,
+                                dictationEditor: dictationEditor, dictationIdentity: note.id)
                                 .accessibilityLabel("Note body")
                         case .spreadsheet:
                             DashboardSpreadsheetEditor(document: document)
@@ -249,7 +256,9 @@ struct DashboardNotePane: View {
             .padding(.horizontal, 32)
             .padding(.bottom, 24)
         }
+        .disabled(model.noteActionIDs.contains(note.id))
         .background(theme.palette.workspace)
+        .disabled(model.noteEditingSuspended)
         .sheet(isPresented: $showsVersionHistory) { WorkspaceNoteRecovery(model: model, noteID: note.id) }
         .onAppear {
             model.prepareNoteDraft(note)
@@ -267,7 +276,7 @@ struct DashboardNotePane: View {
             }
             await refreshLinkedData()
         }
-        .onDisappear { model.flushNoteDrafts() }
+        .onDisappear { Task { _ = await model.flushNoteDrafts() } }
     }
 
     private func refreshLinkedData() async {

@@ -16,7 +16,31 @@ test "$(/usr/libexec/PlistBuddy -c 'Print :LSMultipleInstancesProhibited' "$info
 test ! -e "${app}/Contents/Library/LaunchAgents"
 test ! -e "${app}/Contents/MacOS/WovenMatterLocalService"
 
+power_helper="${app}/Contents/Library/LaunchServices/WovenMatterPowerHelper"
+power_daemon="${app}/Contents/Library/LaunchDaemons/wovenmatter.desktop.power-helper.plist"
+test -x "$power_helper"
+codesign --verify --strict "$power_helper"
+test "$(/usr/libexec/PlistBuddy -c 'Print :BundleProgram' "$power_daemon")" = Contents/Library/LaunchServices/WovenMatterPowerHelper
+test "$(/usr/libexec/PlistBuddy -c 'Print :UserName' "$power_daemon")" = root
+test "$(/usr/libexec/PlistBuddy -c 'Print :KeepAlive' "$power_daemon")" = true
+
 resources="${app}/Contents/Resources"
+test -x "${resources}/default-agent/bin/node"
+test -f "${resources}/default-agent/src/main.mjs"
+test -f "${resources}/default-agent/node_modules/@earendil-works/pi-coding-agent/package.json"
+test -f "${resources}/default-agent/node_modules/@earendil-works/pi-tui/dist/index.js"
+test ! -e "${resources}/default-agent/node_modules/@earendil-works/pi-tui/native"
+test -f "${resources}/default-agent/node_modules/@earendil-works/chord/package.json"
+test ! -e "${resources}/default-agent/node_modules/esbuild"
+test ! -e "${resources}/default-agent/node_modules/@esbuild"
+test ! -e "${resources}/default-agent/node_modules/.bin/esbuild"
+test ! -L "${resources}/default-agent/node_modules/.bin/esbuild"
+test -f "${resources}/default-agent/node_modules/@anthropic-ai/claude-agent-sdk/package.json"
+claude_arch="$(uname -m)"
+if [ "$claude_arch" = x86_64 ]; then claude_arch=x64; fi
+claude_binary="${resources}/default-agent/node_modules/@anthropic-ai/claude-agent-sdk-darwin-$claude_arch/claude"
+test -x "$claude_binary"
+codesign --verify --strict "$claude_binary"
 test -f "${resources}/harnesses/catalog.json"
 test -x "${resources}/harnesses/initialize-workspace.sh"
 test -f "${resources}/remote/Dockerfile"

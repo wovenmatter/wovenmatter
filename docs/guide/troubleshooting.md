@@ -4,8 +4,8 @@
 | --- | --- |
 | No agent in New chat | Check the correct workspace's runtime row; install, enable, and show the agent, then complete sign-in or connection setup. |
 | Installed but not ready | Installation, transport readiness, and authentication are separate; inspect the agent's Settings. |
-| Local workspace setup fails | Read the workspace error and use Retry setup; check that configured folders still exist. |
-| Cannot change REPOS or Databases | The app will not replace a nonempty default folder with a symlink; resolve the existing contents first. |
+| Local workspace setup fails | Use Open workspace to inspect the files, choose a reachable repositories or databases folder, or use the default folder. Retry setup after restoring an unavailable destination. |
+| Changing a populated Repos or Databases folder | Choose Copy files and relink or Keep backup only in the confirmation. Existing destination items are never overwritten; review any conflicts with Open backup. |
 | Remote workspace unavailable | Confirm the host is reachable with your existing SSH configuration, then inspect its container and service status. |
 | Runtime update blocked | Finish active conversations or stop the relevant service before retrying. |
 | OpenCode cannot connect | Check the supported v2 installation and service status; a different OpenCode version may be incompatible. |

@@ -5,6 +5,8 @@ import WovenMatterCompanion
 struct ChatPane: View {
   @Bindable var model: CompanionModel
   @State private var referencesPresented = false
+  @State private var detailsPresented = false
+  @State private var settingsPresented = false
   var body: some View {
     VStack(spacing: 0) {
       HStack {
@@ -14,6 +16,10 @@ struct ChatPane: View {
         }
         Spacer()
         Menu {
+          if model.selectedConversationID != nil {
+            Button("Details and export") { detailsPresented = true }
+            Button("Session settings and tools") { settingsPresented = true }.disabled(!model.online)
+          }
           Button("New chat", systemImage: "square.and.pencil") { model.newChat() }
           if model.activeRunID != nil { Button("Stop this run", systemImage: "stop.fill", role: .destructive) { Task { await model.stop() } }.disabled(!model.online || model.activeProvider?.canStop != true) }
           Button("Refresh", systemImage: "arrow.clockwise") { Task { await model.refresh() } }.disabled(!model.online)
@@ -59,6 +65,12 @@ struct ChatPane: View {
         }
       }
       composer
+    }
+    .sheet(isPresented: $detailsPresented) {
+      if let item = model.selectedConversation { ItemManagementSheet(model: model, id: item.id, isNote: false, title: item.title, folderID: item.folderID ?? "") }
+    }
+    .sheet(isPresented: $settingsPresented) {
+      if let id = model.selectedConversationID { SessionSettingsSheet(model: model, id: id) }
     }
     .sheet(isPresented: $referencesPresented) {
       NavigationStack {

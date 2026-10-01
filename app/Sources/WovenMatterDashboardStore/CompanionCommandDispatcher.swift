@@ -15,7 +15,7 @@ public final class CompanionCommandDispatcher {
         perform: @escaping @MainActor (CompanionCommandReceipt) async throws -> CompanionCommandReceipt
     ) async throws -> CompanionCommandReceipt {
         let key = "\(command.deviceID):\(command.commandID)"
-        let reservation = try database.reserveCompanionCommand(command)
+        let reservation = try await database.reserveCompanionCommand(command)
         // A different payload must be rejected before joining an in-flight task.
         guard reservation.receipt.status != .rejected else { return reservation.receipt }
         if let task = commands[key] { return try await task.value }
@@ -30,7 +30,7 @@ public final class CompanionCommandDispatcher {
                 receipt.message = error.localizedDescription
             }
             // On write failure the acceptance remains on disk. No retry may reexecute it.
-            try database.finishCompanionCommand(receipt)
+            try await database.finishCompanionCommand(receipt)
             return receipt
         }
         commands[key] = work
@@ -38,8 +38,8 @@ public final class CompanionCommandDispatcher {
         return try await work.value
     }
 
-    public func receipt(commandID: String, deviceID: String) throws -> CompanionCommandReceipt? {
-        guard var receipt = try database.companionCommandReceipt(deviceID: deviceID, commandID: commandID) else { return nil }
+    public func receipt(commandID: String, deviceID: String) async throws -> CompanionCommandReceipt? {
+        guard var receipt = try await database.companionCommandReceipt(deviceID: deviceID, commandID: commandID) else { return nil }
         if receipt.status == .accepted && commands["\(deviceID):\(commandID)"] == nil {
             receipt.status = .outcomeUnknown
             receipt.message = "The Mac accepted this command but its result was not recorded. Check the conversation before issuing another command; this command will not run again."

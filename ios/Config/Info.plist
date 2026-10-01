@@ -9,8 +9,11 @@
   <key>CFBundleShortVersionString</key><string>$(MARKETING_VERSION)</string>
   <key>CFBundleVersion</key><string>$(CURRENT_PROJECT_VERSION)</string>
   <key>LSRequiresIPhoneOS</key><true/>
+  <key>UIApplicationSceneManifest</key><dict><key>UIApplicationSupportsMultipleScenes</key><false/><key>UISceneConfigurations</key><dict/></dict>
+  <key>UIApplicationSupportsIndirectInputEvents</key><true/>
   <key>UILaunchScreen</key><dict/>
   <key>UISupportedInterfaceOrientations</key><array><string>UIInterfaceOrientationPortrait</string><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array>
+  <key>UISupportedInterfaceOrientations~ipad</key><array><string>UIInterfaceOrientationPortrait</string><string>UIInterfaceOrientationPortraitUpsideDown</string><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array>
   <key>NSCameraUsageDescription</key><string>Scan the pairing code displayed by Woven Matter on your Mac.</string>
   <key>CFBundleURLTypes</key><array><dict><key>CFBundleURLName</key><string>com.wovenmatter.pair</string><key>CFBundleURLSchemes</key><array><string>wovenmatter</string></array></dict></array>
 </dict></plist>

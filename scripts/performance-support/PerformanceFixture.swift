@@ -8,22 +8,22 @@ extension ApplicationModel {
         guard let store = dashboardStore else { return }
         do {
             let device = try await store.dashboardDeviceID()
-            let conversation = try store.database.createLocalACPSession(runtimeKind: .codex,
+            let conversation = try await store.database.createLocalACPSession(runtimeKind: .codex,
                 title: "00 Streaming fixture", ownerDeviceID: device)
-            let run = try store.database.beginLocalACPRun(conversationID: conversation,
+            let run = try await store.database.beginLocalACPRun(conversationID: conversation,
                 content: "Stream a synthetic report while I use the workspace.")
             localRunningConversationIDs.insert(conversation)
             await refreshWorkspace()
             for index in 0..<300 {
                 try await Task.sleep(for: .milliseconds(50))
                 try await Task.detached {
-                    try store.database.appendLocalACPAssistantChunk(runID: run.runID,
+                    try await store.database.appendLocalACPAssistantChunk(runID: run.runID,
                         chunk: index.isMultiple(of: 10)
                             ? "\n\n### Update \(index / 10)\n\n"
                             : "Synthetic **streaming** content \(index). ")
                     if index.isMultiple(of: 10) {
-                        try store.database.recordAssistantStreamBoundary(runID: run.runID)
-                        try store.database.upsertDeviceOwnedRunActivity(runID: run.runID,
+                        try await store.database.recordAssistantStreamBoundary(runID: run.runID)
+                        try await store.database.upsertDeviceOwnedRunActivity(runID: run.runID,
                             activity: AgentRunActivity(id: "stream-tool-\(index)", kind: .tool,
                                 phase: "result", title: "Check \(index)", status: "completed",
                                 toolName: "read_file", content: "Synthetic result"))
@@ -31,7 +31,7 @@ extension ApplicationModel {
                 }.value
                 enqueueConversationChange(.init(conversationID: conversation, runID: run.runID, phase: .content))
             }
-            try store.database.completeLocalACPRun(runID: run.runID)
+            try await store.database.completeLocalACPRun(runID: run.runID)
             localRunningConversationIDs.remove(conversation)
             // Content refresh exercises the production coalescing/refresh path.
             // Deliberately omit terminal follow-up: it restores real provider
@@ -48,7 +48,7 @@ extension ApplicationModel {
         do {
             let root = FileManager.default.temporaryDirectory
                 .appending(path: "wovenmatter-performance-fixture-" + UUID().uuidString)
-            let store = try DashboardStore(supportDirectory: root)
+            let store = try await DashboardStore(supportDirectory: root)
             dashboardStore = store
             lastOpenClawCronRefresh = .distantFuture
             lastHermesCronRefresh = .distantFuture
@@ -66,17 +66,17 @@ extension ApplicationModel {
                 let long = (0..<60).map { "## Section \($0)\n\nA paragraph with **emphasis**, `code`, and several lines of readable text.\n\n```swift\nlet value = \($0)\n```" }.joined(separator: "\n\n")
                 for index in 0..<(heavy ? 1000 : 12) {
                     let title = index == 0 ? "01 Short conversation" : index == 1 ? "02 Long conversation" : index == 2 ? "03 Activity conversation" : String(format: "Chat %04d", index)
-                    let conversation = try database.createLocalACPSession(runtimeKind: .codex, title: title,
+                    let conversation = try await database.createLocalACPSession(runtimeKind: .codex, title: title,
                         ownerDeviceID: deviceID, createdAt: origin.addingTimeInterval(Double(-index * 1000)))
                     for turn in 0..<(index == 1 ? 120 : 2) {
                         let date = origin.addingTimeInterval(Double(-index * 1000 + turn * 3))
-                        let run = try database.beginLocalACPRun(conversationID: conversation,
+                        let run = try await database.beginLocalACPRun(conversationID: conversation,
                             content: "Please summarize item \(turn).", createdAt: date)
-                        try database.appendLocalACPAssistantChunk(runID: run.runID,
+                        try await database.appendLocalACPAssistantChunk(runID: run.runID,
                             chunk: index == 1 && turn == 119 ? long : short, updatedAt: date.addingTimeInterval(1))
                         if index == 2 {
                             for activity in 0..<(heavy ? 200 : 8) {
-                                try database.upsertDeviceOwnedRunActivity(runID: run.runID,
+                                try await database.upsertDeviceOwnedRunActivity(runID: run.runID,
                                     activity: AgentRunActivity(id: "tool-\(activity)", kind: .tool,
                                         phase: "result", title: "Read source \(activity)", status: "completed",
                                         toolName: "read_file", content: "Synthetic output \(activity)",
@@ -84,7 +84,7 @@ extension ApplicationModel {
                                     updatedAt: date.addingTimeInterval(1))
                             }
                         }
-                        try database.completeLocalACPRun(runID: run.runID, completedAt: date.addingTimeInterval(2))
+                        try await database.completeLocalACPRun(runID: run.runID, completedAt: date.addingTimeInterval(2))
                     }
                 }
                 let documents: [(String, NoteDocument)] = [
@@ -97,7 +97,7 @@ extension ApplicationModel {
                 ]
                 for index in 0..<(heavy ? 120 : 8) {
                     let entry = documents[index % documents.count]
-                    _ = try database.createNote(folderID: nil,
+                    _ = try await database.createNote(folderID: nil,
                         title: index < 4 ? entry.0 : "Note \(index)", content: try entry.1.encoded(),
                         createdAt: origin.addingTimeInterval(Double(-index)))
                 }

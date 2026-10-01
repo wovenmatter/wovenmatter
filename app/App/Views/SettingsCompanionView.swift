@@ -10,15 +10,15 @@ struct SettingsCompanionView: View {
     var onBack: () -> Void
 
     var body: some View {
-        SettingsPage(title: "iPhone companion",
+        SettingsPage(title: "iPhone & iPad",
             detail: "Capture ideas anywhere. Work with the same folders, notes, and agents on your Mac.",
             reservesRailControlSpace: reservesRailControlSpace, onBack: onBack) {
-            SettingsCard(title: "Share this workspace", detail: "Connect this Mac and your iPhone to the same Tailscale network.") {
+            SettingsCard(title: "Share this workspace", detail: "Connect this Mac and your iPhone or iPad to the same Tailscale network.") {
                 HStack(alignment: .top, spacing: 16) {
                     VStack(alignment: .leading, spacing: 6) {
                         Label(host.status, systemImage: host.endpoint == nil ? "iphone.slash" : "iphone.radiowaves.left.and.right")
                             .font(.system(size: 13, weight: .medium))
-                        Text("Sharing prevents idle sleep. Keep this Mac powered on and awake. Closing its window keeps access available; quitting Woven Matter or stopping sharing ends access.")
+                        Text("Sharing prevents idle sleep. Keep this Mac powered on and awake. Closing its window keeps access available; sharing continues while the background service runs. Stopping sharing or the background service ends access.")
                             .font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
                             .fixedSize(horizontal: false, vertical: true)
                         if let endpoint = host.endpoint {
@@ -60,7 +60,7 @@ struct SettingsCompanionView: View {
                     .textSelection(.enabled).accessibilityIdentifier("companion.error")
             }
             if !host.pairedDevices.isEmpty {
-                SettingsCard(title: "Paired iPhone", detail: "Revoking access keeps the iPhone's locally saved writing on that device.") {
+                SettingsCard(title: "Paired devices", detail: "Revoking access keeps that device's locally saved writing on that device.") {
                     ForEach(host.pairedDevices) { device in
                         HStack(spacing: 12) {
                             Image(systemName: "iphone").font(.system(size: 22))
@@ -81,8 +81,9 @@ struct SettingsCompanionView: View {
                         }
                     }
                 }
-            } else if host.endpoint != nil {
-                SettingsCard(title: "Pair your iPhone", detail: "Open Woven Matter on your iPhone and scan this code. It expires in five minutes and can be used once.") {
+            }
+            if host.endpoint != nil {
+                SettingsCard(title: "Pair your iPhone or iPad", detail: "Open Woven Matter on your iPhone or iPad and scan this code. It expires in five minutes and can be used once.") {
                     if let payload = host.pairingPayload {
                         HStack(alignment: .center, spacing: 24) {
                             if let qr = qrImage(payload.encodedURL.absoluteString) {
@@ -109,6 +110,12 @@ struct SettingsCompanionView: View {
                             .accessibilityIdentifier("companion.create-code")
                     }
                 }
+            }
+        }
+        .task {
+            while !Task.isCancelled {
+                await host.refreshStatus()
+                try? await Task.sleep(for: .seconds(2))
             }
         }
     }

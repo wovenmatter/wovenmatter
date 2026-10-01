@@ -53,16 +53,16 @@ enum CompanionNativeInteractionProjection {
 }
 
 extension CompanionCommandService {
-    func pendingNativeInteractions() -> [CompanionPendingInteraction] {
-        model.openCodeInstances.flatMap { native in
-            native.links.values.sorted { $0.conversationID < $1.conversationID }.flatMap { link in
-                guard native.isLocalSession(link.conversationID), let snapshot = native.snapshots[link.conversationID] else {
-                    return [CompanionPendingInteraction]()
-                }
-                return CompanionNativeInteractionProjection.pending(link: link, snapshot: snapshot,
-                    runID: model.canonicalActiveRunID(conversationID: link.conversationID))
+    func pendingNativeInteractions() async -> [CompanionPendingInteraction] {
+        var result: [CompanionPendingInteraction] = []
+        for native in model.openCodeInstances {
+            for link in native.links.values.sorted(by: { $0.conversationID < $1.conversationID }) {
+                let runID = await model.canonicalActiveRunID(conversationID: link.conversationID)
+                guard native.isLocalSession(link.conversationID), let snapshot = native.snapshots[link.conversationID] else { continue }
+                result += CompanionNativeInteractionProjection.pending(link: link, snapshot: snapshot, runID: runID)
             }
         }
+        return result
     }
 
     func nativeInteractionResponseIsSafeToJournal(_ command: CompanionCommand) -> Bool {

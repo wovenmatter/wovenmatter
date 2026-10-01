@@ -49,6 +49,12 @@ public struct WorkspaceSessionTools: Codable, Equatable, Sendable {
     self.enabled = enabled
   }
 
+  private enum CodingKeys: String, CodingKey { case enabled }
+  public func encode(to encoder: any Encoder) throws {
+    var container = encoder.container(keyedBy: CodingKeys.self)
+    try container.encode(enabled.sorted { $0.rawValue < $1.rawValue }, forKey: .enabled)
+  }
+
   public init(identifiers: [String]) throws {
     let groups = identifiers.compactMap(WorkspaceToolGroup.init(rawValue:))
     guard groups.count == identifiers.count else {
@@ -90,13 +96,35 @@ public struct WorkspaceSessionRelationship: Codable, Equatable, Sendable {
   public var coordinatorID: String?
   public var purpose: String?
   public var notificationsEnabled: Bool
+  public var coordinationEpoch: String?
+  public var coordinationSince: String?
   public init(sessionID: String, createdBy: String? = nil, coordinatorID: String? = nil,
-              purpose: String? = nil, notificationsEnabled: Bool = true) {
+              purpose: String? = nil, notificationsEnabled: Bool = true,
+              coordinationEpoch: String? = nil, coordinationSince: String? = nil) {
     self.sessionID = sessionID
     self.createdBy = createdBy
     self.coordinatorID = coordinatorID
     self.purpose = purpose
     self.notificationsEnabled = notificationsEnabled
+    self.coordinationEpoch = coordinationEpoch
+    self.coordinationSince = coordinationSince
+  }
+}
+
+public struct WorkspaceCoordinationMutationReceipt: Codable, Equatable, Sendable {
+  public let sessionID: String
+  public let coordinationEpoch: String
+  public let action: String
+  public let notificationsEnabled: Bool?
+  public var replayed: Bool
+
+  public init(sessionID: String, coordinationEpoch: String, action: String,
+              notificationsEnabled: Bool? = nil, replayed: Bool = false) {
+    self.sessionID = sessionID
+    self.coordinationEpoch = coordinationEpoch
+    self.action = action
+    self.notificationsEnabled = notificationsEnabled
+    self.replayed = replayed
   }
 }
 
@@ -112,11 +140,14 @@ public struct WorkspaceCoordinationAccessRequest: Codable, Identifiable, Equatab
   public let notifications: Bool
   public let state: String
   public let error: String?
+  public let coordinationEpoch: String?
   public init(id: String, sourceID: String, targetID: String, sourceTitle: String, targetTitle: String,
-              purpose: String, notifications: Bool, state: String, error: String?) {
+              purpose: String, notifications: Bool, state: String, error: String?,
+              coordinationEpoch: String? = nil) {
     self.id = id; self.sourceID = sourceID; self.targetID = targetID
     self.sourceTitle = sourceTitle; self.targetTitle = targetTitle; self.purpose = purpose
     self.notifications = notifications; self.state = state; self.error = error
+    self.coordinationEpoch = coordinationEpoch
   }
 }
 
@@ -182,6 +213,10 @@ public enum WorkspaceToolError: Error, LocalizedError, Equatable, Sendable {
   case accessRequired(String)
   case coordinationConflict(String)
   case managedLimit(Int)
+  case atCapacity(Int)
+  case notFound(String)
+  case revisionRequired(String)
+  case revisionConflict(String)
   case timerPauseConfirmation
   case invalid(String)
 
@@ -191,6 +226,10 @@ public enum WorkspaceToolError: Error, LocalizedError, Equatable, Sendable {
     case .accessRequired(let id): "Attach session \(id) or approve access in Woven Matter."
     case .coordinationConflict(let id): "This session is already coordinated by session \(id)."
     case .managedLimit(let limit): "This coordinator already manages the maximum of \(limit) sessions."
+    case .atCapacity(let limit): "The maximum of \(limit) sessions are already running."
+    case .notFound(let message): message
+    case .revisionRequired(let message): message
+    case .revisionConflict(let message): message
     case .timerPauseConfirmation: "Disabling timers will pause this session’s active timers."
     case .invalid(let message): message
     }
@@ -198,7 +237,7 @@ public enum WorkspaceToolError: Error, LocalizedError, Equatable, Sendable {
 }
 
 public enum WorkspaceSessionDeliveryKind: String, Codable, Sendable {
-  case message, created, timer, notification
+  case message, created, timer, notification, calendar
 }
 
 public struct WorkspaceSessionDelivery: Codable, Identifiable, Equatable, Sendable {
@@ -218,16 +257,21 @@ public struct WorkspaceSessionDelivery: Codable, Identifiable, Equatable, Sendab
   public let createdAt: String
   public let sequence: Int64?
   public let nativeCommand: String?
+  public let failureCode: String?
+  public let failureReason: String?
   public init(id: String, sourceID: String, targetID: String, text: String,
               kind: WorkspaceSessionDeliveryKind, status: String, messageID: String?,
               sourceTitle: String, sourceHarness: String, targetTitle: String, targetHarness: String,
-              targetModel: String?, purpose: String?, createdAt: String, sequence: Int64? = nil, nativeCommand: String? = nil) {
+              targetModel: String?, purpose: String?, createdAt: String, sequence: Int64? = nil,
+              nativeCommand: String? = nil, failureCode: String? = nil, failureReason: String? = nil) {
     self.id = id; self.sourceID = sourceID; self.targetID = targetID; self.text = text
     self.kind = kind; self.status = status; self.messageID = messageID
     self.sourceTitle = sourceTitle; self.sourceHarness = sourceHarness
     self.targetTitle = targetTitle; self.targetHarness = targetHarness
     self.targetModel = targetModel; self.purpose = purpose; self.createdAt = createdAt; self.sequence = sequence
     self.nativeCommand = nativeCommand
+    self.failureCode = failureCode
+    self.failureReason = failureReason
   }
 }
 

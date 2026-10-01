@@ -7,6 +7,19 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		DA2090000000000000000012 /* SettingsDefaultAgentSDKView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA2090000000000000000011 /* SettingsDefaultAgentSDKView.swift */; };
+		DA2090000000000000000002 /* DefaultAgentSDKSettingsModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA2090000000000000000001 /* DefaultAgentSDKSettingsModel.swift */; };
+		F2F8DB61A6E248D0FCD77382 /* BackendOpenCodeService.swift in Sources */ = {isa = PBXBuildFile; fileRef = F178B05B2AE0D773B0C59957 /* BackendOpenCodeService.swift */; };
+		A71B00000000000000000101 /* LibraryModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A71B00000000000000000102 /* LibraryModel.swift */; };
+		A71B00000000000000000001 /* DashboardLibraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A71B00000000000000000002 /* DashboardLibraryView.swift */; };
+		0890236A7DEEC4A26AB512AB /* DictationModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E4AE75EDB3C1EE9E7043F59 /* DictationModel.swift */; };
+		E95F4392C674DA52368A05A6 /* DictationAudioCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = 851DA88EE3B3AF907B5AB390 /* DictationAudioCapture.swift */; };
+		B93AB31EDDA3C1A9D35A791B /* DictationEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = FCBB65211C7015A6B8158E80 /* DictationEditor.swift */; };
+		C0DBB095B3E36A01B19862F1 /* LocalModelServerConnections.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA61B1265D88D38A1D708C78 /* LocalModelServerConnections.swift */; };
+		5C2F6DF3B2A02B37BECD38D0 /* SettingsConnectionsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D25E89AA1F9ECDB61C4EDEF /* SettingsConnectionsView.swift */; };
+		8BD4FF831500CD09DE10FC28 /* DictationControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8A44EB04E09581B6A85026F /* DictationControls.swift */; };
+		DA2000000000000000000004 /* SettingsDefaultAgentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA2000000000000000000003 /* SettingsDefaultAgentView.swift */; };
+		DA2000000000000000000002 /* DefaultAgentSettingsModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA2000000000000000000001 /* DefaultAgentSettingsModel.swift */; };
 		D472AB9160464F1FAB826C52 /* WorkspaceNoteRecovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = D472AB9160464F1FAB826C51 /* WorkspaceNoteRecovery.swift */; };
 		D472AB9160464F1FAB826C42 /* WorkspaceSessionManagement.swift in Sources */ = {isa = PBXBuildFile; fileRef = D472AB9160464F1FAB826C41 /* WorkspaceSessionManagement.swift */; };
 		D472AB9160464F1FAB826C32 /* WorkspaceSessionActivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = D472AB9160464F1FAB826C31 /* WorkspaceSessionActivity.swift */; };
@@ -76,9 +89,43 @@
 		B7937C7349692E25EE127696 /* CompanionHostController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0083907CDB98FA31255BD2C1 /* CompanionHostController.swift */; };
 		3D87BAA73934F3BC92DC78F1 /* SettingsCompanionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F0B68181C793F898EC7A4DE /* SettingsCompanionView.swift */; };
 		D8ADD27CBC40434BB0183702 /* CompanionNativeInteractions.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2737F707B9A5E3A2A5A5AD8 /* CompanionNativeInteractions.swift */; };
+		77A348D5C0634041BD69B746 /* CompanionWorkspaceFeatures.swift in Sources */ = {isa = PBXBuildFile; fileRef = 853617F2A39F477E947E59DA /* CompanionWorkspaceFeatures.swift */; };
+		A13EC094A3DEA4F302868640 /* ApplicationModel+Calendar.swift in Sources */ = {isa = PBXBuildFile; fileRef = B88F25850147F01B163EDF7E /* ApplicationModel+Calendar.swift */; };
+		E9A58E7B05C5C2726FA4EE82 /* WorkspaceAgentToolsModel+Calendar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C678F616FB535F772A00598 /* WorkspaceAgentToolsModel+Calendar.swift */; };
+		F4743517D41721ACB550EE94 /* DashboardCalendarEventSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8AA41DB8B4A4AF41CCC355A1 /* DashboardCalendarEventSheet.swift */; };
+		22101ADAF84DA8CEE85A4AB8 /* DashboardCalendarTaskFields.swift in Sources */ = {isa = PBXBuildFile; fileRef = D6DCB1F7BFAF35416DF437EE /* DashboardCalendarTaskFields.swift */; };
+		C47EAA780000000000000001 /* DashboardCalendarFormControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = C47EAA780000000000000002 /* DashboardCalendarFormControls.swift */; };
+		C47EAA780000000000000003 /* DashboardCalendarColors.swift in Sources */ = {isa = PBXBuildFile; fileRef = C47EAA780000000000000004 /* DashboardCalendarColors.swift */; };
+		CE19449AB0FFF6A1E12E4D48 /* BackendApplicationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1A63205C0811CE6DBAD590C /* BackendApplicationService.swift */; };
+		B6231CA12C591F524524199B /* BackendWorkspaceMutations.swift in Sources */ = {isa = PBXBuildFile; fileRef = 35A700A1F4344E51450A9C54 /* BackendWorkspaceMutations.swift */; };
+		A7DC09137B7808A179245C1D /* BackendToolsService.swift in Sources */ = {isa = PBXBuildFile; fileRef = D84D7A0E10812D5E772A19B5 /* BackendToolsService.swift */; };
+		B2F8DB61A6E248D0FCD77382 /* BackendRuntimeService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A176B05B2AE0D773B0C59957 /* BackendRuntimeService.swift */; };
+		C83FDB61A6E248D0FCD77382 /* BackendCronService.swift in Sources */ = {isa = PBXBuildFile; fileRef = C976B05B2AE0D773B0C59957 /* BackendCronService.swift */; };
+		D83FDB61A6E248D0FCD77382 /* BackendWorkspaceServices.swift in Sources */ = {isa = PBXBuildFile; fileRef = D976B05B2AE0D773B0C59957 /* BackendWorkspaceServices.swift */; };
+		418BBA8DFF633653485A4615 /* BackendRemoteWorkspaceService.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD21F9E9ECE4C0B47F05B64B /* BackendRemoteWorkspaceService.swift */; };
+		4ECDD63540C793A047BDD9CC /* BackendConnectionsService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 296D14690B191EF43D51603C /* BackendConnectionsService.swift */; };
+		CBCBD600AB92468988000001 /* BackendSpeechService.swift in Sources */ = {isa = PBXBuildFile; fileRef = CBCBD600AB92468988000002 /* BackendSpeechService.swift */; };
+		281F6DF22C3AE19CCE3FC99D /* BackendLibraryService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 753DF034EE6D727B6091929D /* BackendLibraryService.swift */; };
+		C131C0A00000000000000002 /* ApplicationModel+ConversationActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = C131C0A00000000000000001 /* ApplicationModel+ConversationActions.swift */; };
+		C131C0B00000000000000002 /* ApplicationModel+NoteActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = C131C0B00000000000000001 /* ApplicationModel+NoteActions.swift */; };
+		C131C0A00000000000000004 /* DashboardConversationActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = C131C0A00000000000000003 /* DashboardConversationActions.swift */; };
+		C131C0B00000000000000004 /* DashboardNoteActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = C131C0B00000000000000003 /* DashboardNoteActions.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		DA2090000000000000000011 /* SettingsDefaultAgentSDKView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsDefaultAgentSDKView.swift; sourceTree = "<group>"; };
+		DA2090000000000000000001 /* DefaultAgentSDKSettingsModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DefaultAgentSDKSettingsModel.swift; sourceTree = "<group>"; };
+		F178B05B2AE0D773B0C59957 /* BackendOpenCodeService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BackendOpenCodeService.swift"; sourceTree = "<group>"; };
+		A71B00000000000000000102 /* LibraryModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryModel.swift; sourceTree = "<group>"; };
+		A71B00000000000000000002 /* DashboardLibraryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardLibraryView.swift; sourceTree = "<group>"; };
+		7E4AE75EDB3C1EE9E7043F59 /* DictationModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictationModel.swift; sourceTree = "<group>"; };
+		851DA88EE3B3AF907B5AB390 /* DictationAudioCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictationAudioCapture.swift; sourceTree = "<group>"; };
+		FCBB65211C7015A6B8158E80 /* DictationEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictationEditor.swift; sourceTree = "<group>"; };
+		BA61B1265D88D38A1D708C78 /* LocalModelServerConnections.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalModelServerConnections.swift; sourceTree = "<group>"; };
+		4D25E89AA1F9ECDB61C4EDEF /* SettingsConnectionsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsConnectionsView.swift; sourceTree = "<group>"; };
+		E8A44EB04E09581B6A85026F /* DictationControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictationControls.swift; sourceTree = "<group>"; };
+		DA2000000000000000000003 /* SettingsDefaultAgentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsDefaultAgentView.swift; sourceTree = "<group>"; };
+		DA2000000000000000000001 /* DefaultAgentSettingsModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DefaultAgentSettingsModel.swift; sourceTree = "<group>"; };
 		D472AB9160464F1FAB826C51 /* WorkspaceNoteRecovery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WorkspaceNoteRecovery.swift"; sourceTree = "<group>"; };
 		D472AB9160464F1FAB826C41 /* WorkspaceSessionManagement.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WorkspaceSessionManagement.swift"; sourceTree = "<group>"; };
 		D472AB9160464F1FAB826C31 /* WorkspaceSessionActivity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WorkspaceSessionActivity.swift"; sourceTree = "<group>"; };
@@ -149,6 +196,27 @@
 		0083907CDB98FA31255BD2C1 /* CompanionHostController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionHostController.swift; sourceTree = "<group>"; };
 		8F0B68181C793F898EC7A4DE /* SettingsCompanionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsCompanionView.swift; sourceTree = "<group>"; };
 		A2737F707B9A5E3A2A5A5AD8 /* CompanionNativeInteractions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionNativeInteractions.swift; sourceTree = "<group>"; };
+		853617F2A39F477E947E59DA /* CompanionWorkspaceFeatures.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionWorkspaceFeatures.swift; sourceTree = "<group>"; };
+		B88F25850147F01B163EDF7E /* ApplicationModel+Calendar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ApplicationModel+Calendar.swift"; sourceTree = "<group>"; };
+		7C678F616FB535F772A00598 /* WorkspaceAgentToolsModel+Calendar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WorkspaceAgentToolsModel+Calendar.swift"; sourceTree = "<group>"; };
+		8AA41DB8B4A4AF41CCC355A1 /* DashboardCalendarEventSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DashboardCalendarEventSheet.swift"; sourceTree = "<group>"; };
+		D6DCB1F7BFAF35416DF437EE /* DashboardCalendarTaskFields.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DashboardCalendarTaskFields.swift"; sourceTree = "<group>"; };
+		C47EAA780000000000000002 /* DashboardCalendarFormControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DashboardCalendarFormControls.swift"; sourceTree = "<group>"; };
+		C47EAA780000000000000004 /* DashboardCalendarColors.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DashboardCalendarColors.swift"; sourceTree = "<group>"; };
+		E1A63205C0811CE6DBAD590C /* BackendApplicationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BackendApplicationService.swift"; sourceTree = "<group>"; };
+		35A700A1F4344E51450A9C54 /* BackendWorkspaceMutations.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BackendWorkspaceMutations.swift"; sourceTree = "<group>"; };
+		D84D7A0E10812D5E772A19B5 /* BackendToolsService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BackendToolsService.swift"; sourceTree = "<group>"; };
+		A176B05B2AE0D773B0C59957 /* BackendRuntimeService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BackendRuntimeService.swift"; sourceTree = "<group>"; };
+		C976B05B2AE0D773B0C59957 /* BackendCronService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BackendCronService.swift"; sourceTree = "<group>"; };
+		D976B05B2AE0D773B0C59957 /* BackendWorkspaceServices.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BackendWorkspaceServices.swift"; sourceTree = "<group>"; };
+		DD21F9E9ECE4C0B47F05B64B /* BackendRemoteWorkspaceService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BackendRemoteWorkspaceService.swift"; sourceTree = "<group>"; };
+		296D14690B191EF43D51603C /* BackendConnectionsService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BackendConnectionsService.swift"; sourceTree = "<group>"; };
+		CBCBD600AB92468988000002 /* BackendSpeechService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BackendSpeechService.swift"; sourceTree = "<group>"; };
+		753DF034EE6D727B6091929D /* BackendLibraryService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BackendLibraryService.swift"; sourceTree = "<group>"; };
+		C131C0A00000000000000001 /* ApplicationModel+ConversationActions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ApplicationModel+ConversationActions.swift"; sourceTree = "<group>"; };
+		C131C0B00000000000000001 /* ApplicationModel+NoteActions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ApplicationModel+NoteActions.swift"; sourceTree = "<group>"; };
+		C131C0A00000000000000003 /* DashboardConversationActions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DashboardConversationActions.swift"; sourceTree = "<group>"; };
+		C131C0B00000000000000003 /* DashboardNoteActions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DashboardNoteActions.swift"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -208,10 +276,29 @@
 		D49100000000000000000004 /* Models */ = {
 			isa = PBXGroup;
 			children = (
+				7E4AE75EDB3C1EE9E7043F59 /* DictationModel.swift */,
+				DA2000000000000000000001 /* DefaultAgentSettingsModel.swift */,
+				DA2090000000000000000001 /* DefaultAgentSDKSettingsModel.swift */,
 				A14000000000000000000002 /* ApplicationModel+SessionSelections.swift */,
 				3CE258FB55B3D55A39972D5B /* OpenCodeModel.swift */,
 				D472AB9160464F1FAB826C11 /* ApplicationModel+AgentTools.swift */,
+				E1A63205C0811CE6DBAD590C /* BackendApplicationService.swift */,
+				35A700A1F4344E51450A9C54 /* BackendWorkspaceMutations.swift */,
+				D84D7A0E10812D5E772A19B5 /* BackendToolsService.swift */,
+				F178B05B2AE0D773B0C59957 /* BackendOpenCodeService.swift */,
+				A176B05B2AE0D773B0C59957 /* BackendRuntimeService.swift */,
+				C976B05B2AE0D773B0C59957 /* BackendCronService.swift */,
+				D976B05B2AE0D773B0C59957 /* BackendWorkspaceServices.swift */,
+				DD21F9E9ECE4C0B47F05B64B /* BackendRemoteWorkspaceService.swift */,
+				296D14690B191EF43D51603C /* BackendConnectionsService.swift */,
+				CBCBD600AB92468988000002 /* BackendSpeechService.swift */,
+				753DF034EE6D727B6091929D /* BackendLibraryService.swift */,
+				C131C0A00000000000000001 /* ApplicationModel+ConversationActions.swift */,
+				C131C0B00000000000000001 /* ApplicationModel+NoteActions.swift */,
+				B88F25850147F01B163EDF7E /* ApplicationModel+Calendar.swift */,
 				20E807F893654CD4A1F24D40 /* WorkspaceAgentToolsModel.swift */,
+				7C678F616FB535F772A00598 /* WorkspaceAgentToolsModel+Calendar.swift */,
+				A71B00000000000000000102 /* LibraryModel.swift */,
 				87BA82494C4524C032235AAF /* DashboardConversationReferencePreview.swift */,
 				C06300000000000000000002 /* ApplicationUsageModel.swift */,
 				FC6A850ACFC17DE4433439A7 /* DashboardConversationState.swift */,
@@ -226,6 +313,11 @@
 		D0E0A91C0032120E4CDF1388 /* Views */ = {
 			isa = PBXGroup;
 			children = (
+				BA61B1265D88D38A1D708C78 /* LocalModelServerConnections.swift */,
+				4D25E89AA1F9ECDB61C4EDEF /* SettingsConnectionsView.swift */,
+				E8A44EB04E09581B6A85026F /* DictationControls.swift */,
+				DA2000000000000000000003 /* SettingsDefaultAgentView.swift */,
+				DA2090000000000000000011 /* SettingsDefaultAgentSDKView.swift */,
 				6F6AFCDD4A429E11B0945492 /* OpenCodeSessionView.swift */,
 				17AF06D69A7DE73E3F94E40A /* OpenCodeInteractionView.swift */,
 				97160C827D94B74AFAB2961A /* OpenCodeSettingsView.swift */,
@@ -233,6 +325,8 @@
 				E45100000000000000000002 /* DashboardHermesCron.swift */,
 				502EF864DA314DFBB322C973 /* DashboardLocalSecretCard.swift */,
 				8F0B68181C793F898EC7A4DE /* SettingsCompanionView.swift */,
+				C131C0A00000000000000003 /* DashboardConversationActions.swift */,
+				C131C0B00000000000000003 /* DashboardNoteActions.swift */,
 				40D1B5DEF1B0023CB8C52B6D /* DashboardSharedViews.swift */,
 				C04200000000000000000002 /* DashboardConversationPopover.swift */,
 				3AB89D5EB3D93F04C3A5CB5E /* DashboardOpenClawCron.swift */,
@@ -247,6 +341,11 @@
 				D49000000000000000000003 /* ConversationMarkdown.swift */,
 				D49200000000000000000003 /* ConversationWorkTranscript.swift */,
 				D45300000000000000000002 /* DashboardCalendarView.swift */,
+				D6DCB1F7BFAF35416DF437EE /* DashboardCalendarTaskFields.swift */,
+				C47EAA780000000000000002 /* DashboardCalendarFormControls.swift */,
+				C47EAA780000000000000004 /* DashboardCalendarColors.swift */,
+				8AA41DB8B4A4AF41CCC355A1 /* DashboardCalendarEventSheet.swift */,
+				A71B00000000000000000002 /* DashboardLibraryView.swift */,
 				D45400000000000000000002 /* DashboardUsageView.swift */,
 				D45100000000000000000002 /* DashboardDesign.swift */,
 				A11C00000000000000000004 /* WorkspaceView.swift */,
@@ -286,7 +385,10 @@
 			children = (
 				0083907CDB98FA31255BD2C1 /* CompanionHostController.swift */,
 				A2737F707B9A5E3A2A5A5AD8 /* CompanionNativeInteractions.swift */,
+				853617F2A39F477E947E59DA /* CompanionWorkspaceFeatures.swift */,
 				FF3D48D1E7B9587A3DF2F895 /* CompanionCommandService.swift */,
+				851DA88EE3B3AF907B5AB390 /* DictationAudioCapture.swift */,
+				FCBB65211C7015A6B8158E80 /* DictationEditor.swift */,
 				879D531AEA3583A537B8BE1B /* DashboardNoteDrafts.swift */,
 				F19000000000000000000002 /* DashboardNoteDocumentCache.swift */,
 				E10100000000000000000002 /* WovenNoteService.swift */,
@@ -394,7 +496,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "set -eu\n/usr/bin/xattr -cr \"${TARGET_BUILD_DIR}/${WRAPPER_NAME}\"\n/bin/rm -rf \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/remote/test\"\n/bin/rm -f \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/remote/.env.example\" \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/remote/compose.yaml\"\ntouch \"${DERIVED_FILE_DIR}/bundle-metadata-cleaned.stamp\"\n";
+			shellScript = "set -eu\n\"${SRCROOT}/../scripts/prepare-default-agent.sh\" \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/default-agent\"\n\"${SRCROOT}/../scripts/build-power-helper.sh\" \"${TARGET_BUILD_DIR}/${WRAPPER_NAME}\"\n/usr/bin/xattr -cr \"${TARGET_BUILD_DIR}/${WRAPPER_NAME}\"\n/bin/rm -rf \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/remote/test\"\n/bin/rm -f \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/remote/.env.example\" \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/remote/compose.yaml\"\ntouch \"${DERIVED_FILE_DIR}/bundle-metadata-cleaned.stamp\"\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -403,6 +505,16 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				0890236A7DEEC4A26AB512AB /* DictationModel.swift in Sources */,
+				E95F4392C674DA52368A05A6 /* DictationAudioCapture.swift in Sources */,
+				B93AB31EDDA3C1A9D35A791B /* DictationEditor.swift in Sources */,
+				C0DBB095B3E36A01B19862F1 /* LocalModelServerConnections.swift in Sources */,
+				5C2F6DF3B2A02B37BECD38D0 /* SettingsConnectionsView.swift in Sources */,
+				8BD4FF831500CD09DE10FC28 /* DictationControls.swift in Sources */,
+				DA2000000000000000000004 /* SettingsDefaultAgentView.swift in Sources */,
+				DA2090000000000000000012 /* SettingsDefaultAgentSDKView.swift in Sources */,
+				DA2090000000000000000002 /* DefaultAgentSDKSettingsModel.swift in Sources */,
+				DA2000000000000000000002 /* DefaultAgentSettingsModel.swift in Sources */,
 				46E81C4CE9571D1C715098CA /* OpenCodeSessionView.swift in Sources */,
 				8B47C81B917AA853D87FB56A /* OpenCodeInteractionView.swift in Sources */,
 				E86083BC811D526E0900522B /* OpenCodeSettingsView.swift in Sources */,
@@ -414,7 +526,10 @@
 				3D87BAA73934F3BC92DC78F1 /* SettingsCompanionView.swift in Sources */,
 				B7937C7349692E25EE127696 /* CompanionHostController.swift in Sources */,
 				D8ADD27CBC40434BB0183702 /* CompanionNativeInteractions.swift in Sources */,
+				77A348D5C0634041BD69B746 /* CompanionWorkspaceFeatures.swift in Sources */,
 				E678564F286E71B5FA588A5A /* CompanionCommandService.swift in Sources */,
+				C131C0A00000000000000004 /* DashboardConversationActions.swift in Sources */,
+				C131C0B00000000000000004 /* DashboardNoteActions.swift in Sources */,
 				923D138C1F54FC887AA90493 /* DashboardSharedViews.swift in Sources */,
 				C04200000000000000000001 /* DashboardConversationPopover.swift in Sources */,
 				BAAE9A1BC06C8AC78E67AA1B /* DashboardOpenClawCron.swift in Sources */,
@@ -434,7 +549,23 @@
 				F10100000000000000000001 /* ArtifactEditor.swift in Sources */,
 				F10200000000000000000001 /* DashboardDatabasesView.swift in Sources */,
 				D472AB9160464F1FAB826C12 /* ApplicationModel+AgentTools.swift in Sources */,
+				CE19449AB0FFF6A1E12E4D48 /* BackendApplicationService.swift in Sources */,
+				B6231CA12C591F524524199B /* BackendWorkspaceMutations.swift in Sources */,
+				A7DC09137B7808A179245C1D /* BackendToolsService.swift in Sources */,
+				F2F8DB61A6E248D0FCD77382 /* BackendOpenCodeService.swift in Sources */,
+				B2F8DB61A6E248D0FCD77382 /* BackendRuntimeService.swift in Sources */,
+				C83FDB61A6E248D0FCD77382 /* BackendCronService.swift in Sources */,
+				D83FDB61A6E248D0FCD77382 /* BackendWorkspaceServices.swift in Sources */,
+				418BBA8DFF633653485A4615 /* BackendRemoteWorkspaceService.swift in Sources */,
+				4ECDD63540C793A047BDD9CC /* BackendConnectionsService.swift in Sources */,
+				CBCBD600AB92468988000001 /* BackendSpeechService.swift in Sources */,
+				281F6DF22C3AE19CCE3FC99D /* BackendLibraryService.swift in Sources */,
+				C131C0A00000000000000002 /* ApplicationModel+ConversationActions.swift in Sources */,
+				C131C0B00000000000000002 /* ApplicationModel+NoteActions.swift in Sources */,
+				A13EC094A3DEA4F302868640 /* ApplicationModel+Calendar.swift in Sources */,
 				5C84BF439B9047118002DD70 /* WorkspaceAgentToolsModel.swift in Sources */,
+				E9A58E7B05C5C2726FA4EE82 /* WorkspaceAgentToolsModel+Calendar.swift in Sources */,
+				A71B00000000000000000101 /* LibraryModel.swift in Sources */,
 				E10100000000000000000001 /* WovenNoteService.swift in Sources */,
 				0D0C4EE8248E4F63A87CF7B4 /* WovenMatterRemoteToolBridge.swift in Sources */,
 				A76B232332644C4E91ECB1DC /* WovenMatterToolService.swift in Sources */,
@@ -445,6 +576,11 @@
 				D49300000000000000000001 /* ConversationMessageLayout.swift in Sources */,
 				D49200000000000000000001 /* ConversationWorkTranscript.swift in Sources */,
 				D45300000000000000000001 /* DashboardCalendarView.swift in Sources */,
+				22101ADAF84DA8CEE85A4AB8 /* DashboardCalendarTaskFields.swift in Sources */,
+				C47EAA780000000000000001 /* DashboardCalendarFormControls.swift in Sources */,
+				C47EAA780000000000000003 /* DashboardCalendarColors.swift in Sources */,
+				F4743517D41721ACB550EE94 /* DashboardCalendarEventSheet.swift in Sources */,
+				A71B00000000000000000001 /* DashboardLibraryView.swift in Sources */,
 				D45400000000000000000001 /* DashboardUsageView.swift in Sources */,
 				D45100000000000000000001 /* DashboardDesign.swift in Sources */,
 				A11C00000000000000000003 /* WorkspaceView.swift in Sources */,
@@ -474,6 +610,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = App/WovenMatter.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
 				DEFINES_MODULE = YES;
@@ -502,6 +639,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIconDev;
+				CODE_SIGN_ENTITLEMENTS = App/WovenMatter.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
 				DEFINES_MODULE = YES;

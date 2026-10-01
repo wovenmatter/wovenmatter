@@ -76,7 +76,7 @@ struct AgentInteractionBrokerTests {
         let negotiated = LocalACPClient.activeInputRoute(runtimeKind: runtime, steeringSupported: true)
         let unadvertised = LocalACPClient.activeInputRoute(runtimeKind: runtime, steeringSupported: false)
         switch runtime {
-        case .codex, .claudeCode:
+        case .codex, .claudeCode, .defaultAgent:
             #expect(negotiated == .acpSteering); #expect(unadvertised == .unsupported)
         case .grokBuild:
             #expect(negotiated == .grokInterjection); #expect(unadvertised == .grokInterjection)

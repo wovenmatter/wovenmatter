@@ -1,8 +1,8 @@
 # Native iOS companion
 
-The iPhone uses the running Mac's canonical workspace. Provider execution,
+The iPhone and iPad use the running Mac's canonical workspace. Provider execution,
 credentials, SSH routes and concurrency remain on the Mac. PR #37 is integrated
-with monorepo main `2033ae6850b094d9902a64a9b1ae48a1b4052ffd`.
+with monorepo main `224f299b99fe754e8e9bab4e00aa92aa1a48b2c0`.
 
 ## Implemented behavior
 
@@ -17,7 +17,7 @@ with monorepo main `2033ae6850b094d9902a64a9b1ae48a1b4052ffd`.
   writing; recovery creates a separate identity instead of resurrecting a deletion.
 - Desktop autosave, mobile mutations and agent edits share the same revision rules.
   Desktop journal recovery retains unresolved writing and exact committed versions.
-- Online chat uses the Mac's canonical provider/session service. All eight local
+- Online chat uses the Mac's canonical provider/session service. All configured local
   and remote runtime selections, linked workspaces and configured OpenClaw Gateways
   use the current desktop routing and readiness checks. OpenCode uses its native
   server and Hermes uses its native Gateway; neither is simulated as an ACP agent. A note-bound send
@@ -36,6 +36,12 @@ with monorepo main `2033ae6850b094d9902a64a9b1ae48a1b4052ffd`.
   full bodies. Linked spreadsheet and HTML previews use the same registered data
   reader as the Mac, with explicit unavailable states and no preview writes.
 
+## Current main integration
+
+SQLite work uses the current async worker facade. Mac autosave, agent note edits and mobile writes retain one revision model, with pinning treated as presentation. Recovery copies route through the execution owner, and completion readers preserve newer local writing.
+
+The background service owns the HTTP listener, pairing store, Tailscale child and run control. Desktop Settings reads and controls that owner over local RPC. Standalone mode uses the same host controller in the application process. Library, Calendar/recurring scheduled tasks, session settings/tool policy, note/conversation management and native file/export previews are available on both phone and tablet. iPad uses an adaptive sidebar and supports every orientation. Calendar edits carry the series revision and original start; deleting an occurrence does not delete its series. Local and remote scheduled tasks inherit the Mac's saved configuration. Workspace retries retain their original command identity after a lost reply. Mobile Stop invalidates earlier preparation and joins the same native cancellation barrier as desktop Stop, while rejecting stale run identities.
+
 ## Components
 
 `shared/` contains the Foundation-only document model and versioned wire contracts.
@@ -48,22 +54,21 @@ provider execution and controlled network failures.
 
 ## Pairing and transport
 
-Settings → iPhone companion starts an IPv4 loopback listener and a dedicated
+Settings → iPhone & iPad starts an IPv4 loopback listener and a dedicated
 foreground Tailscale Serve HTTPS route at `/wovenmatter`. Unrelated routes are
-preserved. The selected HTTPS port is retained for the workspace. Quit/crash ends
+preserved. The selected HTTPS port is retained for the workspace. Execution-owner quit/crash ends
 only the companion's owned Serve process; restart drains prior owned processes
 before reusing the port. Sharing prevents idle sleep, but the Mac must remain
-powered on, awake and running. Closing its window keeps access available.
+powered on, awake and running. Closing its window keeps access available; with background execution enabled, quitting the frontend also leaves the service and sharing running.
 
-The QR/deep link is `wovenmatter://pair?endpoint=...&token=...&version=2`. Its random
-256-bit token expires after five minutes and is consumed once. One iPhone may be
-paired; revoke it before replacing it. Only token hashes are persisted on the Mac;
+The QR/deep link is `wovenmatter://pair?endpoint=...&token=...&version=3`. Its random
+256-bit token expires after five minutes and is consumed once. Up to 16 iPhones/iPads may be
+paired, with independent revocation. Only token hashes are persisted on the Mac;
 the phone credential is stored in Keychain. Requests require matching protocol and
 workspace headers as well as the credential. The client rejects redirects and the
 server rejects browser origins, cookies, ambiguous framing and oversized requests.
 
-Protocol 2 supports native pending interactions before the Mac has projected a
-canonical run ID. Version-1 clients receive a version-mismatch response before
+Protocol 3 adds Library, Calendar, workspace management and session settings while retaining native pending interactions before a canonical run ID. Older clients receive a version-mismatch response before
 sync or command dispatch, so update both apps together. The existing credential
 and local-note storage formats are unchanged; upgrading does not require clearing
 the phone's writing or revoking its pairing. Route paths remain `/v1`; the protocol
@@ -73,7 +78,7 @@ Routes are relative to the paired HTTPS endpoint:
 
 - `POST /v1/pair`
 - `GET /v1/hello`, `/v1/snapshot`, `/v1/changes?after=...&limit=...&wait=...`
-- `POST /v1/mutations`, `/v1/commands`
+- `POST /v1/mutations`, `/v1/commands`, `/v1/workspace-read`
 - `GET /v1/command-receipts/{id}`, `/v1/providers`, `/v1/pending`
 - `GET /v1/sessions/{id}/transcript?before=...`, `/v1/sessions/{id}/capabilities`
 - `GET /v1/notes/{id}`, `/v1/assets/{id}`
@@ -88,7 +93,7 @@ network-isolated WebKit view and the desktop `window.wovenMatterData` contract.
 ## Validation and private test builds
 
 Run `scripts/test-changes.sh --all` for cross-component validation, including the
-native simulator app and fixture tests. CI companion changes run unsigned simulator
+native iPhone/iPad simulator apps and fixture tests. CI companion changes run unsigned simulator
 model tests and package/integration checks. Tests use isolated stores/simulators and
 fake provider adapters; they must not consume provider services.
 

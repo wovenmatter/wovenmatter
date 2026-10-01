@@ -452,6 +452,7 @@ build_container_args() {
   container_args=(
     "$operation" --name "$name" --restart unless-stopped
     --read-only --cap-drop ALL --security-opt no-new-privileges:true
+    --ulimit core=0
     --tmpfs /tmp:rw,noexec,nosuid,size=256m
     --tmpfs /run:rw,noexec,nosuid,size=16m
     --publish "127.0.0.1:${port}:7337"

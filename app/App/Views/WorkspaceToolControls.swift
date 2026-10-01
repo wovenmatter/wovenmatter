@@ -8,7 +8,7 @@ struct WorkspaceToolDefaultsCard: View {
         Binding(get: { tools.settings[keyPath: key] }, set: { value in
             var settings = tools.settings
             settings[keyPath: key] = value
-            tools.saveSettings(settings)
+            tools.saveSettingsFromUI(settings)
         })
     }
 
@@ -20,7 +20,7 @@ struct WorkspaceToolDefaultsCard: View {
                         Toggle(group.title, isOn: Binding(get: { tools.settings.enabledByDefault.contains(group) }, set: { enabled in
                             var settings = tools.settings
                             if enabled { settings.enabledByDefault.insert(group) } else { settings.enabledByDefault.remove(group) }
-                            tools.saveSettings(settings)
+                            tools.saveSettingsFromUI(settings)
                         }))
                         Spacer(minLength: 8)
                         if group == .calendar {
@@ -64,11 +64,13 @@ struct WorkspaceSessionToolsMenu: View {
     @State private var error: String?
 
     private func set(_ group: WorkspaceToolGroup, enabled: Bool, confirmed: Bool = false) {
-        do {
-            try tools.setEnabled(group, enabled: enabled, sessionID: sessionID, confirmedPausingTimers: confirmed)
-            error = nil
-        } catch WorkspaceToolError.timerPauseConfirmation { confirmsTimerPause = true }
-        catch { self.error = error.localizedDescription }
+        Task {
+            do {
+                try await tools.setEnabledFromUI(group, enabled: enabled, sessionID: sessionID, confirmedPausingTimers: confirmed)
+                error = nil
+            } catch WorkspaceToolError.timerPauseConfirmation { confirmsTimerPause = true }
+            catch { self.error = error.localizedDescription }
+        }
     }
 
     var body: some View {

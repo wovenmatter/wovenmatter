@@ -1,0 +1,242 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { execFile, spawn } from 'node:child_process';
+import { promisify } from 'node:util';
+import { createRequire } from 'node:module';
+import { chmod, mkdir, lstat, readdir, statfs } from 'node:fs/promises';
+import { join, dirname } from 'node:path';
+import { createHash } from 'node:crypto';
+import { createInterface } from 'node:readline';
+import { DefaultAgentError, readJSON, writePrivateJSON } from './config.mjs';
+
+const execute = promisify(execFile);
+const require = createRequire(import.meta.url);
+export const claudeProviders = ['claude-subscription', 'anthropic'];
+export const isClaude = reference => claudeProviders.includes(reference?.split('/')[0]);
+export const defaultClaudeModels = [
+  { value: 'sonnet', displayName: 'Claude Sonnet', supportedEffortLevels: ['low', 'medium', 'high'] },
+  { value: 'opus', displayName: 'Claude Opus', supportedEffortLevels: ['low', 'medium', 'high'] },
+  { value: 'haiku', displayName: 'Claude Haiku', supportedEffortLevels: [] },
+];
+
+export function claudeExecutable(platform = process.platform, arch = process.arch) {
+  return join(dirname(require.resolve(`@anthropic-ai/claude-agent-sdk-${platform}-${arch}/package.json`)), 'claude');
+}
+
+// Claude owns the contents of these directories. Never read, export, encrypt,
+// refresh, or synchronize its subscription credentials from Woven Matter.
+export async function claudeDirectories(directory, { platform = process.platform, memoryRoot = '/dev/shm' } = {}) {
+  if (platform === 'linux') {
+    if ((await statfs(memoryRoot)).type !== 0x01021994) throw new DefaultAgentError('Claude subscription sign-in requires a memory-backed workspace directory.');
+    const suffix = createHash('sha256').update(directory).digest('hex').slice(0, 16);
+    const config = join(memoryRoot, `woven-claude-${process.getuid()}-${suffix}`);
+    await privateDirectory(config);
+    return { config, storage: config };
+  }
+  if (platform !== 'darwin') throw new DefaultAgentError('The bundled Claude runtime is not supported on this platform.');
+  const config = join(directory, 'claude-runtime');
+  const storage = join(directory, 'claude-keychain');
+  await privateDirectory(config);
+  // Keep this path stable: Claude derives its native Keychain identity from it.
+  // Its Keychain writer also needs a .storage-write.lock directory here. Deny
+  // regular-file creation before allowing lock directories, so both direct and
+  // temporary-file plaintext fallback writes fail before writing credentials.
+  await mkdir(storage, { recursive: true, mode: 0o500 });
+  await requirePrivateDirectory(storage);
+  try { await execute('/bin/chmod', ['+a', 'everyone deny add_file', storage]); }
+  catch { throw new DefaultAgentError('Claude credential storage could not be protected. Sign-in was stopped.'); }
+  const entries = await readdir(storage, { withFileTypes: true });
+  if (entries.some(entry => !entry.isDirectory())) {
+    throw new DefaultAgentError('Claude credential storage contains an unexpected file. Sign-in was stopped to avoid using plaintext credentials.');
+  }
+  await chmod(storage, 0o700);
+  return { config, storage };
+}
+
+async function privateDirectory(path, mode = 0o700) {
+  await mkdir(path, { recursive: true, mode });
+  await requirePrivateDirectory(path);
+  await chmod(path, mode);
+}
+
+async function requirePrivateDirectory(path) {
+  const info = await lstat(path);
+  if (!info.isDirectory() || info.isSymbolicLink() || info.uid !== process.getuid()) throw new DefaultAgentError('The Claude runtime directory is not private to this user.');
+}
+
+export function claudeEnvironment(paths, apiKey, source = process.env) {
+  const env = Object.fromEntries(Object.entries(source).filter(([key]) => !/^(ANTHROPIC_|CLAUDE_|CLAUDECODE$)/.test(key)));
+  return { ...env, CLAUDE_CONFIG_DIR: paths.config, CLAUDE_SECURESTORAGE_CONFIG_DIR: paths.storage,
+    CLAUDE_AGENT_SDK_CLIENT_APP: 'wovenmatter/0.1.0', ...(apiKey ? { ANTHROPIC_API_KEY: apiKey } : {}) };
+}
+
+export class ClaudeRuntime {
+  constructor(directory, { executeCommand = execute, query, directories = claudeDirectories } = {}) {
+    this.directory = directory; this.executeCommand = executeCommand; this.query = query; this.directories = directories;
+    this.models = defaultClaudeModels;
+    this.profileContext = new AsyncLocalStorage();
+  }
+  withProfile(profile, operation) { return this.profileContext.run(profile, operation); }
+  profileDirectory(profile = this.profileContext.getStore()) {
+    if (!profile || profile === 'legacy') return this.directory;
+    if (!/^[a-zA-Z0-9-]{1,64}$/.test(profile)) throw new DefaultAgentError('Invalid Claude account profile.');
+    return join(this.directory, 'claude-accounts', profile);
+  }
+  async environment(key, profile) { return claudeEnvironment(await this.directories(this.profileDirectory(profile)), key); }
+  async sdkVersion() {
+    return (await readJSON(new URL('../node_modules/@anthropic-ai/claude-agent-sdk/package.json', import.meta.url))).version;
+  }
+  async loadModels() {
+    const saved = await readJSON(join(this.directory, 'claude-models.json'), {});
+    const version = await this.sdkVersion();
+    // Legacy unversioned catalogs can resolve aliases to an older Claude model.
+    // Keep safe aliases until the user explicitly refreshes connection metadata.
+    if (saved.runtimeVersion === version && Array.isArray(saved.models) && saved.models.length && saved.models.every(m => typeof m.value === 'string' && typeof m.displayName === 'string')) this.models = saved.models;
+  }
+  async status(profile, { signal } = {}) {
+    signal?.throwIfAborted();
+    let stdout;
+    try {
+      ({ stdout } = await this.executeCommand(claudeExecutable(), ['auth', 'status', '--json'], {
+        env: await this.environment(undefined, profile), timeout: 10000, maxBuffer: 65536, killSignal: 'SIGKILL', signal,
+      }));
+    } catch (error) {
+      signal?.throwIfAborted();
+      if (error.code !== 1 || !error.stdout) return { connected: false, state: 'check_failed', detail: 'Could not check the native Claude sign-in. Refresh connections to retry.' };
+      stdout = error.stdout;
+    }
+    try {
+      const value = JSON.parse(stdout);
+      const connected = value.loggedIn === true && value.authMethod === 'claude.ai' && value.apiProvider === 'firstParty';
+      return { connected, state: connected ? 'credentials_present' : 'sign_in_required',
+        account: connected && typeof value.email === 'string' ? value.email : undefined,
+        detail: connected ? 'Claude reports a subscription sign-in. Available usage has not been checked.' : 'Sign in using the bundled Claude runtime.' };
+    } catch { return { connected: false, state: 'check_failed', detail: 'The native Claude sign-in status could not be read.' }; }
+  }
+  async sdkQuery(options) {
+    const query = this.query ?? (await import('@anthropic-ai/claude-agent-sdk')).query;
+    return query(options);
+  }
+  async discover(key, { signal } = {}) {
+    signal?.throwIfAborted();
+    const controller = new AbortController();
+    const abort = () => controller.abort(signal?.reason);
+    signal?.addEventListener('abort', abort, { once: true });
+    const timer = setTimeout(() => controller.abort(), 15000);
+    let session;
+    try {
+      // An empty streaming input initializes the runtime without submitting a
+      // model prompt. Model discovery must never consume inference services.
+      async function* input() { if (!controller.signal.aborted) await new Promise(resolve => controller.signal.addEventListener('abort', resolve, { once: true })); }
+      session = await this.sdkQuery({ prompt: input(), options: {
+        cwd: this.directory, pathToClaudeCodeExecutable: claudeExecutable(),
+        env: { ...await this.environment(key), CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+          DISABLE_TELEMETRY: '1', DISABLE_ERROR_REPORTING: '1' },
+        tools: [], skills: [], settingSources: [], strictMcpConfig: true, mcpServers: {},
+        extraArgs: { 'disable-slash-commands': null },
+        persistSession: false, abortController: controller } });
+      signal?.throwIfAborted();
+      const models = await session.supportedModels();
+      signal?.throwIfAborted();
+      if (models.length) {
+        this.models = models;
+        await writePrivateJSON(join(this.directory, 'claude-models.json'), { runtimeVersion: await this.sdkVersion(), models });
+      }
+    } finally {
+      signal?.removeEventListener('abort', abort);
+      clearTimeout(timer); controller.abort(); session?.close();
+    }
+    return this.models;
+  }
+  async signOut(profile) {
+    await this.executeCommand(claudeExecutable(), ['auth', 'logout'], { env: await this.environment(undefined, profile), timeout: 15000, maxBuffer: 65536 });
+  }
+}
+
+// The UI forwards the user's authorization code to Claude. The native runtime
+// owns token exchange and storage; Woven Matter never receives those tokens.
+export async function inlineClaudeLogin(runtime, profile, { signal, notify, prompt, spawnCommand = spawn } = {}) {
+  const env = await runtime.environment(undefined, profile);
+  if (signal?.aborted) throw new DefaultAgentError('Sign-in cancelled.');
+  const child = spawnCommand(claudeExecutable(), ['auth', 'login', '--claudeai'], {
+    env: { ...env, BROWSER: '/usr/bin/true' },
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  return new Promise((resolve, reject) => {
+    const inputController = new AbortController();
+    const seen = new Set();
+    const readers = [];
+    let killTimer, finished = false, stopping = false, requestedCode = false;
+    const abort = () => {
+      if (finished || stopping) return;
+      stopping = true;
+      inputController.abort();
+      child.kill('SIGTERM');
+      killTimer = setTimeout(() => child.kill('SIGKILL'), 1500);
+      killTimer.unref?.();
+    };
+    const finish = error => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(killTimer);
+      signal?.removeEventListener('abort', abort);
+      inputController.abort();
+      for (const reader of readers) reader.close();
+      if (error) reject(error);
+      else Promise.resolve().then(async () => {
+        const status = await runtime.status(profile);
+        if (status.connected) return status;
+        return { ...status, detail: status.state === 'check_failed'
+          ? 'Claude returned from sign-in, but its saved connection could not be verified. Refresh connections to retry.'
+          : 'Claude did not save the subscription connection. Try signing in again.' };
+      }).then(resolve, reject);
+    };
+    const requestCode = async () => {
+      if (!prompt || requestedCode) return;
+      requestedCode = true;
+      let message = 'Paste the full code from the Claude sign-in page.';
+      try {
+        while (!inputController.signal.aborted) {
+          const answer = await prompt({ message, signal: inputController.signal });
+          if (inputController.signal.aborted || signal?.aborted) return;
+          const code = typeof answer === 'string' ? answer.trim() : '';
+          if (code.length > 8192 || !/^[^#\s]+#[^#\s]+$/.test(code)) {
+            message = 'Copy the full code from the Claude sign-in page, including the part after #.';
+            continue;
+          }
+          child.stdin.write(code + '\n');
+          return;
+        }
+      } catch {
+        if (!inputController.signal.aborted) abort();
+      }
+    };
+    signal?.addEventListener('abort', abort, { once: true });
+    if (signal?.aborted) abort();
+    const consume = line => {
+      if (finished || stopping || signal?.aborted) return;
+      for (const match of line.matchAll(/https:\/\/[^\s<>"\x00-\x1f\x7f]+/g)) {
+        try {
+          const url = new URL(match[0]);
+          if (['claude.ai', 'claude.com', 'console.anthropic.com', 'platform.claude.com'].includes(url.hostname)
+              && ['/oauth/authorize', '/cai/oauth/authorize'].includes(url.pathname) && !seen.has(url.href)) {
+            seen.add(url.href);
+            notify?.({ url: url.href, message: 'Open this link to complete Claude sign-in. Claude manages the account securely.' });
+            void requestCode();
+          }
+        } catch {}
+      }
+    };
+    for (const stream of [child.stdout, child.stderr]) {
+      if (!stream) continue;
+      const reader = createInterface({ input: stream, crlfDelay: Infinity });
+      reader.on('line', consume);
+      readers.push(reader);
+    }
+    child.stdin?.on('error', abort);
+    child.once('error', error => finish(error));
+    child.once('close', code => {
+      if (signal?.aborted) return finish(new DefaultAgentError('Sign-in cancelled.'));
+      finish(code === 0 && !stopping ? null : new DefaultAgentError('Claude sign-in did not complete. Try again.'));
+    });
+  });
+}

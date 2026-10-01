@@ -38,7 +38,7 @@ struct DashboardUnavailableUtility: View {
     private var emptyTitle: String {
         switch title {
         case "Calendar": "No calendar items yet"
-        case "Cron Jobs": "No scheduled jobs"
+        case "Scheduled Tasks": "No scheduled jobs"
         default: "Library is not available yet."
         }
     }
@@ -381,7 +381,7 @@ struct DashboardConversationRow: View {
     @Binding var detailCardState: DashboardConversationDetailCardState
     let folders: [WorkspaceFolderRecord]
     let onMoveConversation: (String, String?) -> Void
-    let onUnavailableMutation: (String) -> Void
+    let onConversationAction: (WorkspaceConversationRecord, DashboardConversationMenuAction) -> Void
     let action: () -> Void
 
     var body: some View {
@@ -484,21 +484,13 @@ struct DashboardConversationRow: View {
                 DashboardConversationHoverCard(presentation: presentation)
             }
         }
-        .contextMenu {
-            Button(conversation.isPinned ? "Unpin" : "Pin") { onUnavailableMutation("Conversation pinning") }
-            Button("Rename") { onUnavailableMutation("Conversation renaming") }
-            Menu("Move to Folder") {
-                moveTargetRow(title: "Workspace", folderID: nil, conversation: conversation)
-                ForEach(folders) { folder in
-                    moveTargetRow(title: folder.name, folderID: folder.id, conversation: conversation)
-                }
-            }
-            Divider()
-            Button("Export messages") { onUnavailableMutation("Conversation export") }
-            Button("Export full run") { onUnavailableMutation("Conversation export") }
-            Divider()
-            Button("Move to Trash", role: .destructive) { onUnavailableMutation("Conversation trash management") }
-        }
+        .modifier(DashboardConversationContextMenu(
+            conversation: conversation,
+            folders: folders,
+            isRunning: isRunning,
+            onMove: onMoveConversation,
+            onAction: onConversationAction
+        ))
         .onDisappear {
             hoverCardTask?.cancel()
             detailCardState.remove(conversationID: conversation.id)
@@ -536,24 +528,6 @@ struct DashboardConversationRow: View {
                 }
             }
         )
-    }
-
-    private func moveTargetRow(
-        title: String,
-        folderID: String?,
-        conversation: WorkspaceConversationRecord
-    ) -> some View {
-        let isCurrent = conversation.folderID == folderID
-        return Button {
-            onMoveConversation(conversation.id, folderID)
-        } label: {
-            if isCurrent {
-                Label(title, systemImage: "checkmark")
-            } else {
-                Text(title)
-            }
-        }
-        .disabled(isCurrent)
     }
 }
 
@@ -638,7 +612,8 @@ struct DashboardNoteRow: View {
     @State private var hovered = false
     let presentation: DashboardNoteRowPresentation
     let selected: Bool
-    let onUnavailableMutation: (String) -> Void
+    let folders: [WorkspaceFolderRecord]
+    let onNoteAction: (WorkspaceNoteRecord, DashboardNoteMenuAction) -> Void
     let action: () -> Void
 
     var body: some View {
@@ -681,14 +656,7 @@ struct DashboardNoteRow: View {
         }
         .buttonStyle(DashboardRailButtonStyle())
         .dashboardScrollAwareHover($hovered, token: "note:\(note.id)")
-        .contextMenu {
-            Button(note.isPinned ? "Unpin" : "Pin") { onUnavailableMutation("Note pinning") }
-            Button("Rename") { onUnavailableMutation("Note renaming") }
-            Button("Move to folder…") { onUnavailableMutation("Note moving") }
-            Divider()
-            Button("Export note") { onUnavailableMutation("Note export") }
-            Button("Move to Trash", role: .destructive) { onUnavailableMutation("Note trash management") }
-        }
+        .modifier(DashboardNoteContextMenu(note: note, folders: folders, onAction: onNoteAction))
     }
 }
 
@@ -773,7 +741,7 @@ struct DashboardPillButtonStyle: ButtonStyle {
 
 func dashboardAgentPresentation(_ agent: WorkspaceAgent) -> DashboardAgentPresentation {
     DashboardAgentPresentation(
-        displayName: agent.displayName,
+        displayName: agent.runtimeKind == .defaultAgent ? "Built-in" : agent.displayName,
         iconKey: agent.iconKey
     )
 }

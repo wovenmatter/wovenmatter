@@ -5,6 +5,137 @@ import WovenMatterCore
 @testable import WovenMatterClient
 
 struct PiRPCSettlementTests {
+  @Test(.timeLimit(.minutes(1)))
+  func stopDuringSteeringPreflightRetiresTheTransport() async throws {
+    let fixture = PiPipeFixture(durable: true)
+    let ready = AsyncStream<Void>.makeStream()
+    let preflight = PiPromptGate()
+    let server = Task { try await fixture.serveSteering(ready: ready.continuation, rejected: false, pending: preflight) }
+    try await fixture.initialize()
+    await fixture.client.setRunID("same-run")
+    let original = Task { try await fixture.client.prompt("start") }
+    for await _ in ready.stream { break }
+    let input = Task { try await fixture.client.beginActiveInput(.init(text: "correction")) }
+    await preflight.waitForPrompt()
+    await fixture.client.cancel()
+    await #expect(throws: CancellationError.self) { try await input.value }
+    await #expect(throws: CancellationError.self) { try await original.value }
+    await preflight.release()
+    try await server.value
+    await fixture.client.shutdown()
+  }
+  @Test(.timeLimit(.minutes(1)), arguments: ["accepted", "rejected", "uncertain"])
+  func steeringOwnsSettlementAfterNativePreflight(outcome: String) async throws {
+    let rejected = outcome != "accepted"
+    let fixture = PiPipeFixture(durable: true)
+    let ready = AsyncStream<Void>.makeStream()
+    let server = Task { try await fixture.serveSteering(ready: ready.continuation, rejected: rejected, uncertain: outcome == "uncertain") }
+    try await fixture.initialize()
+    await fixture.client.setRunID("same-run")
+    let collector = PiEventCollector()
+    let original = Task { try await fixture.client.prompt("start", onEvent: { await collector.record($0) }) }
+    for await _ in ready.stream { break }
+    if rejected {
+      do { _ = try await fixture.client.beginActiveInput(.init(text: "correction")); Issue.record("Expected admission error") }
+      catch let error as PiRPCClientError {
+        if case .deliveryUncertain = error { #expect(outcome == "uncertain") }
+        else { #expect(outcome == "rejected") }
+      }
+    } else {
+      let receipt = try await fixture.client.beginActiveInput(.init(text: "correction"))
+      #expect(try await receipt.completion.value == .endTurn)
+      #expect(await collector.values().contains(.assistantChunk("continued")))
+    }
+    #expect(try await original.value == .endTurn)
+    await fixture.client.finishRun()
+    await fixture.client.shutdown()
+    try await server.value
+  }
+
+  @Test(.timeLimit(.minutes(1)))
+  func stopDuringApprovalHistoryNeverSendsTheSelectedApproval() async throws {
+    let history = PiPromptGate()
+    let fixture = PiPipeFixture(recorder: { direction, data in
+      if direction == "out",
+         let payload = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+         payload["type"] as? String == "extension_ui_response",
+         payload["confirmed"] as? Bool == true {
+        await history.pause()
+      }
+    })
+    let server = Task { try await fixture.serveApprovalStop() }
+    try await fixture.initialize()
+    let fence = AgentDispatchFence()
+    let prompt = Task {
+      try await fixture.client.prompt("fixture", onPermission: { _ in "allow" }, dispatchFence: fence)
+    }
+    await history.waitForPrompt()
+    let stop = Task { await fixture.client.cancel() }
+    while !fence.isCancelled { await Task.yield() }
+    await history.release()
+    await stop.value
+    #expect(try await prompt.value == .cancelled)
+    await fixture.client.shutdown()
+    try await server.value
+  }
+
+  @Test(.timeLimit(.minutes(1)))
+  @MainActor
+  func nativeAbortFailureKeepsStopBarrierClosedUntilExplicitRetry() async throws {
+    let history = PiPromptGate()
+    let fixture = PiPipeFixture(recorder: { direction, data in
+      if direction == "in",
+         let payload = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+         payload["type"] as? String == "agent_start" { await history.pause() }
+    })
+    let server = Task { try await fixture.serveApprovalStop(rejectFirstAbort: true) }
+    try await fixture.initialize()
+    let prompt = Task { try await fixture.client.prompt("fixture", onPermission: { _ in nil }) }
+    await history.waitForPrompt()
+    await history.release()
+    let barriers = AgentStopCoordinator()
+    let first = barriers.begin(conversationID: "fixture") { try await fixture.client.stop() }
+    do { try await first.value; Issue.record("Native abort rejection was ignored") }
+    catch PiRPCClientError.commandFailed { }
+    do { try await barriers.wait(conversationID: "fixture"); Issue.record("New input escaped a failed Stop") }
+    catch PiRPCClientError.commandFailed { }
+    let retry = barriers.begin(conversationID: "fixture") { try await fixture.client.stop() }
+    try await retry.value
+    try await barriers.wait(conversationID: "fixture")
+    #expect(try await prompt.value == .cancelled)
+    await fixture.client.shutdown()
+    try await server.value
+  }
+
+  @Test(arguments: [false, true])
+  func onlyDurableReconnectsRouteApprovalsBeforeTheNextPrompt(durable: Bool) async throws {
+    let fixture = PiPipeFixture(durable: durable)
+    await fixture.client.setResumePermissionHandler { request in
+      #expect(durable)
+      #expect(request.title == "Resume approval")
+      return "allow"
+    }
+    let server = Task { try await fixture.serve(settles: true, resumeApproval: durable) }
+    try await fixture.initialize()
+    await fixture.client.shutdown()
+    try await server.value
+  }
+
+  @Test func durableRelayCarriesStableRunAndReturnsRecovery() async throws {
+    let capture = PiWireCapture()
+    let fixture = PiPipeFixture(recorder: { capture.append($0,$1) }, durable: true)
+    let server = Task { try await fixture.serve(settles: true, recovery: true) }
+    let initialized = try await fixture.client.initializeSession(workingDirectory: URL(filePath:"/private/tmp"),
+      existingSessionID:"fixture-session",title:nil,systemPrompt:nil)
+    #expect(initialized.recoveredDefaultAgentRuns.first?.runID == "prior-run")
+    #expect(initialized.recoveredDefaultAgentRuns.first?.content == "saved result")
+    await fixture.client.setRunID("current-run")
+    #expect(try await fixture.client.prompt("fixture") == .endTurn)
+    try await server.value
+    await fixture.client.shutdown()
+    #expect(capture.values.contains { $0.0 == "out" && $0.1.contains("wovenRunID") && $0.1.contains("current-run") })
+  }
+
   @Test func capturesUnknownNativeEventsAndOutboundPromptsBeforeProjection() async throws {
     let capture=PiWireCapture()
     let fixture=PiPipeFixture(recorder:{ direction,data in capture.append(direction,data) })
@@ -153,9 +284,10 @@ private struct PiPipeFixture: Sendable {
   let commands = Pipe()
   let events = Pipe()
   let client: PiRPCClient
-  init(recorder: WorkspaceWireRecorder? = nil) {
+  init(recorder: WorkspaceWireRecorder? = nil, durable: Bool = false) {
     var launch=LocalACPRuntimeLaunchConfiguration(runtimeKind:.pi,
-      executableURL:URL(filePath:"/nonexistent-test-pi"),arguments:[])
+      executableURL:URL(filePath:"/nonexistent-test-pi"),arguments:[],
+      environment: durable ? ["WOVEN_DURABLE_REMOTE_ACP":"1"] : [:])
     launch.historyRecorder=recorder
     client = PiRPCClient(launch: launch,
       workingDirectory: URL(filePath: "/private/tmp"), input: commands.fileHandleForWriting,
@@ -165,16 +297,117 @@ private struct PiPipeFixture: Sendable {
     _ = try await client.initializeSession(workingDirectory: URL(filePath: "/private/tmp"),
       existingSessionID: nil, title: nil, systemPrompt: nil)
   }
+  func serveSteering(ready: AsyncStream<Void>.Continuation, rejected: Bool, pending: PiPromptGate? = nil, uncertain: Bool = false) async throws {
+    defer { try? events.fileHandleForWriting.close() }
+    let cursor = FixtureCommandReader(handle: commands.fileHandleForReading)
+    func emit(_ object: [String: Any]) throws {
+      var data = try JSONSerialization.data(withJSONObject: object); data.append(10)
+      try events.fileHandleForWriting.write(contentsOf: data)
+    }
+    var started = false
+    var steered = false
+    var pendingPreflight: Task<Void, Never>?
+    while let line = try await cursor.next() {
+      let command = try #require(JSONSerialization.jsonObject(with: line) as? [String: Any])
+      let type = command["type"] as? String
+      var response: [String: Any] = ["type": "response", "id": command["id"]!, "success": true, "data": [:]]
+      if type == "abort", let pendingPreflight {
+        #expect((command["_meta"] as? [String: Bool])?["wovenStopPreflight"] == true)
+        try emit(response)
+        await pendingPreflight.value
+        return
+      }
+      if type == "get_state" {
+        response["data"] = ["sessionId": "fixture-session", "isStreaming": started && !steered,
+                            "isCompacting": false, "pendingMessageCount": 0]
+      }
+      if type == "prompt", !started {
+        #expect((command["_meta"] as? [String: String])?["wovenRunID"] == "same-run")
+        started = true
+        try emit(response)
+        try emit(["type": "agent_start"])
+        ready.yield(())
+        continue
+      }
+      if type == "prompt" {
+        #expect(command["streamingBehavior"] as? String == "steer")
+        #expect((command["_meta"] as? [String: String])?["wovenRunID"] == "same-run")
+        steered = true
+        if let pending { pendingPreflight = Task { await pending.pause() }; continue }
+        // The old loop ends while the native extension input hook is running.
+        try emit(["type": "agent_settled"])
+        if rejected { response["success"] = false; response["error"] = "rejected correction" }
+        if uncertain { response["_meta"] = ["deliveryUncertain": true] }
+        try emit(response)
+        if !rejected {
+          try emit(["type": "agent_start"])
+          try emit(["type": "message_update", "assistantMessageEvent": ["type": "text_delta", "delta": "continued"]])
+          try emit(["type": "agent_settled"])
+        }
+        continue
+      }
+      try emit(response)
+    }
+  }
+
+  func serveApprovalStop(rejectFirstAbort: Bool = false) async throws {
+    defer { try? events.fileHandleForWriting.close() }
+    let cursor = FixtureCommandReader(handle: commands.fileHandleForReading)
+    func emit(_ object: [String: Any]) throws {
+      var data = try JSONSerialization.data(withJSONObject: object); data.append(10)
+      try events.fileHandleForWriting.write(contentsOf: data)
+    }
+    var started = false
+    var receivedCancellation = false
+    var rejectedAbort = false
+    while let line = try await cursor.next() {
+      let command = try #require(JSONSerialization.jsonObject(with: line) as? [String: Any])
+      let type = command["type"] as? String
+      if type == "extension_ui_response" {
+        #expect(command["confirmed"] as? Bool == false)
+        #expect(command["cancelled"] as? Bool == true)
+        receivedCancellation = true
+        continue
+      }
+      if type == "prompt" { started = true }
+      if type == "abort", rejectFirstAbort, !rejectedAbort {
+        rejectedAbort = true
+        try emit(["type": "response", "id": command["id"]!, "success": false, "error": "fixture abort rejection"])
+        continue
+      }
+      let data: [String: Any] = type == "get_state"
+        ? ["sessionId": "fixture-session", "isStreaming": started] : [:]
+      try emit(["type": "response", "id": command["id"]!, "success": true, "data": data])
+      if type == "get_state", started {
+        try emit(["type": "agent_start"])
+        try emit(["type": "extension_ui_request", "id": "approval", "method": "confirm", "title": "Allow tool?"])
+      }
+      if type == "abort" {
+        #expect(receivedCancellation)
+        try emit(["type": "agent_settled"])
+      }
+    }
+  }
+
   func serve(settles: Bool, accepts: Bool = true, hold: PiPromptGate? = nil,
-             streamLines: [String] = [], advertisesConfiguration: Bool = false) async throws {
+             streamLines: [String] = [], advertisesConfiguration: Bool = false, recovery: Bool = false, resumeApproval: Bool? = nil) async throws {
     defer { try? events.fileHandleForWriting.close() }
     let cursor = FixtureCommandReader(handle: commands.fileHandleForReading)
     while let line = try await cursor.next() {
       let command = try JSONSerialization.jsonObject(with: line) as! [String: Any]
       let type = command["type"] as! String
-      let data: [String: Any]
+      var data: [String: Any]
       switch type {
       case "get_state":
+        if let resumeApproval {
+          try events.fileHandleForWriting.write(contentsOf: Data(
+            #"{"type":"extension_ui_request","id":"pending-approval","method":"confirm","title":"Resume approval"}"#.utf8) + Data([10]))
+          let reply = try #require(try await cursor.next())
+          let value = try JSONSerialization.jsonObject(with: reply) as! [String: Any]
+          #expect(value["type"] as? String == "extension_ui_response")
+          #expect(value["id"] as? String == "pending-approval")
+          #expect(value["confirmed"] as? Bool == resumeApproval)
+        }
         data = advertisesConfiguration ? [
           "sessionId": "fixture-session",
           "model": ["provider": "anthropic", "id": "shared-model"],
@@ -207,6 +440,9 @@ private struct PiPipeFixture: Sendable {
         data = ["levels": ["off", "high", "max"]]
       default:
         data = [:]
+      }
+      if recovery, type == "get_state" {
+        data["_meta"] = ["recoveredRuns": [["runID":"prior-run","content":"saved result"]]]
       }
       var response: [String: Any] = ["type": "response", "id": command["id"]!, "success": true, "data": data]
       if type == "prompt", !accepts { response["success"] = false; response["error"] = "fixture rejection" }
@@ -263,7 +499,10 @@ private struct FixtureCommandReader: Sendable {
 
   private func readLine() throws -> Data? {
     let clock = ContinuousClock()
-    let deadline = clock.now.advanced(by: .seconds(5))
+    // The full suite runs hundreds of tests concurrently on CI. This is the
+    // fake peer's idle budget, not a product timeout; do not close the pipe
+    // while the resumed client is merely waiting for executor time.
+    let deadline = clock.now.advanced(by: .seconds(30))
     var line = Data()
     while clock.now < deadline {
       var descriptor = pollfd(fd: handle.fileDescriptor, events: Int16(POLLIN), revents: 0)

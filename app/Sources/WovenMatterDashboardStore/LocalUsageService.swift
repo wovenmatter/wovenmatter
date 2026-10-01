@@ -4,7 +4,7 @@ import SQLite3
 import WovenMatterClient
 import WovenMatterCore
 
-public enum UsageRefreshReason: Equatable, Sendable {
+public enum UsageRefreshReason: String, Codable, Equatable, Sendable {
   case startup
   case viewAppeared
   case rangeChanged
@@ -32,7 +32,7 @@ public enum UsageKeychainInteraction: String, Equatable, Sendable {
   var allowsInteraction: Bool { self == .oneShotExplicit }
 }
 
-public struct CodexUsageWorkspace: Equatable, Identifiable, Sendable {
+public struct CodexUsageWorkspace: Codable, Equatable, Identifiable, Sendable {
   public let id: String
   public let name: String
   public let email: String
@@ -64,27 +64,60 @@ public struct CodexUsageWorkspacePreferences {
   }
 }
 
+/// A display selection for Usage; it never changes inference account preferences.
+public struct UsageConnectionChoice: Codable, Equatable, Identifiable, Sendable {
+  public let provider: ProviderKind
+  public let connectionID: String
+  public let accountID: String
+  public let label: String
+  public let preferred: Bool
+  public var id: String { connectionID + ":" + accountID }
+
+  public static func connectionTypes(for provider: ProviderKind) -> [(String, String)] {
+    switch provider {
+    case .codex: [("openai-codex", "ChatGPT"), ("openai", "API key")]
+    case .claude: [("claude-subscription", "Claude"), ("anthropic", "API key")]
+    case .grok: [("xai", "Grok"), ("xai-api", "API key")]
+    case .openRouter: [("openrouter", "API key")]
+    case .openCodeGo: [("opencode-go", "API key")]
+    case .cursor: [("cursor", "Cursor")]
+    case .unknown: []
+    }
+  }
+
+  public static func resolve(_ choices: [Self], selectedID: String?) -> Self? {
+    choices.first { $0.id == selectedID } ?? choices.first { $0.preferred } ?? choices.first
+  }
+}
+
 public struct LocalUsageLimitsSnapshot: Equatable, Sendable {
   public let accounts: [UsageLimitAccount]
   public let hasOpenRouterCredential: Bool
   public let codexWorkspaces: [CodexUsageWorkspace]
   public let selectedCodexWorkspaceID: String?
+  public let connectionChoices: [UsageConnectionChoice]
+  public let selectedConnections: [String: String]
 
   public init(
     accounts: [UsageLimitAccount],
     hasOpenRouterCredential: Bool,
     codexWorkspaces: [CodexUsageWorkspace] = [],
-    selectedCodexWorkspaceID: String? = nil
+    selectedCodexWorkspaceID: String? = nil,
+    connectionChoices: [UsageConnectionChoice] = [],
+    selectedConnections: [String: String] = [:]
   ) {
     self.accounts = accounts
     self.hasOpenRouterCredential = hasOpenRouterCredential
     self.codexWorkspaces = codexWorkspaces
     self.selectedCodexWorkspaceID = selectedCodexWorkspaceID
+    self.connectionChoices = connectionChoices
+    self.selectedConnections = selectedConnections
   }
 }
 
 struct UsageLimitsRequest: Sendable {
   let homeDirectory: URL
+  let allowCredentialAccess: Bool
   let openRouterAPIKey: String?
   let enabledProviders: Set<ProviderKind>
   let keychainInteraction: UsageKeychainInteraction
@@ -92,8 +125,10 @@ struct UsageLimitsRequest: Sendable {
   let codexWorkspaceSource: CodexWorkspaceSource?
   let codexWorkspaceCount: Int
   let now: Date
+  var selectedConnections: [ProviderKind: UsageConnectionChoice] = [:]
 
-  func collect() async -> [UsageLimitAccount] {
+  func collect(sharedCredentials: [String: DefaultAgentCredential]? = nil,
+               claudeStatus: BuiltInClaudeSignIn.Status? = nil) async -> [UsageLimitAccount] {
     await ProviderLimitCollector.collect(
       homeDirectory: homeDirectory,
       openRouterAPIKey: openRouterAPIKey,
@@ -102,17 +137,16 @@ struct UsageLimitsRequest: Sendable {
       interactiveProvider: interactiveProvider,
       codexWorkspaceSource: codexWorkspaceSource,
       codexWorkspaceCount: codexWorkspaceCount,
+      sharedCredentials: sharedCredentials,
+      selectedConnections: selectedConnections,
+      claudeStatus: claudeStatus,
       now: now
     )
   }
 }
 
 public actor LocalUsageService {
-  private struct ImportOutcome: Sendable {
-    let failures: Int
-
-    static let empty = ImportOutcome(failures: 0)
-  }
+  private typealias ImportOutcome = UsageTranscriptImporter.Outcome
 
   private static let parserVersion = "usage-index-v3"
   private static let retention: TimeInterval = 120 * 24 * 60 * 60
@@ -124,22 +158,33 @@ public actor LocalUsageService {
   private let fileManager: FileManager
   private let credentialStore: any UsageCredentialStoring
   private let databaseURL: URL
+  private let usesSharedConnections: Bool
+  private let importPreparationWorker: DatabaseWorker?
+  private let sharedConnectionRevision: @Sendable () -> UInt64
   private let limitCollector: @Sendable (UsageLimitsRequest) async -> [UsageLimitAccount]
   private let openRouterActivityFetcher: @Sendable (String) async throws -> OpenRouterActivityResult
-  private var limitsGeneration = UUID()
-  private var analyticsGeneration = UUID()
-  private var usageStore: UsageStore?
+  private var limitsGeneration = UsageRefreshOwnership() { didSet { oldValue.invalidate() } }
+  private var analyticsGeneration = UsageRefreshOwnership() { didSet { oldValue.invalidate() } }
+  private var usageStore: AsyncUsageStore?
+  private struct StoreOpening {
+    let id = UUID()
+    let task: Task<AsyncUsageStore, any Error>
+  }
+  private var usageStoreOpening: StoreOpening?
   private var usageStoreFailure: String?
   private var cachedLimits: (
     date: Date,
     providers: Set<ProviderKind>,
     codexWorkspaceID: String?,
+    connectionRevision: UInt64,
+    selectedConnections: [String: String],
     accounts: [UsageLimitAccount]
   )?
   private var importOutcomes: [String: ImportOutcome] = [:]
   // A successful read or explicit save authorizes this app session. Do not ask
   // Keychain again during the refresh triggered by a one-time Allow response.
   private var openRouterAPIKey: String?
+  private var openRouterCredentialRevision: UInt64
   private var openRouterStatus: UsageSourceStatus = .unavailable
   private var openRouterDetail = "Add an OpenRouter management key to import official account activity."
   private var cursorAccountStatus: UsageSourceStatus = .unavailable
@@ -154,7 +199,25 @@ public actor LocalUsageService {
     self.homeDirectory = homeDirectory
     self.fileManager = fileManager
     credentialStore = UsageCredentialStore(service: credentialService)
-    limitCollector = { await $0.collect() }
+    usesSharedConnections = true
+    importPreparationWorker = nil
+    sharedConnectionRevision = { DefaultAgentSupport.revision }
+    openRouterCredentialRevision = DefaultAgentSupport.revision
+    limitCollector = { request in
+      var credentials = request.allowCredentialAccess ? ((try? await ProviderAccountCoordinator.shared.appCredentials()) ?? [:]) : [:]
+      if request.allowCredentialAccess {
+        for choice in request.selectedConnections.values {
+          if let credential = try? ProviderConnectionAccounts.credential(choice.accountID, provider: choice.connectionID, scope: "global") {
+            credentials[choice.connectionID] = credential.borrowing()
+          } else {
+            credentials.removeValue(forKey: choice.connectionID)
+          }
+        }
+      }
+      let claudeStatus = request.allowCredentialAccess && request.enabledProviders.contains(.claude)
+        ? try? await BuiltInClaudeSignIn.status(profile: credentials["claude-subscription"]?.accountId) : nil
+      return await request.collect(sharedCredentials: credentials, claudeStatus: claudeStatus)
+    }
     openRouterActivityFetcher = { try await OpenRouterActivityClient.fetch(apiKey: $0) }
     databaseURL = usageDatabaseURL ?? homeDirectory.appending(
       path: "Library/Application Support/Woven Matter/workspace.sqlite"
@@ -166,6 +229,9 @@ public actor LocalUsageService {
     fileManager: FileManager,
     credentialStore: any UsageCredentialStoring,
     usageDatabaseURL: URL,
+    usesSharedConnections: Bool = false,
+    sharedConnectionRevision: @escaping @Sendable () -> UInt64 = { DefaultAgentSupport.revision },
+    importPreparationWorker: DatabaseWorker? = nil,
     limitCollector: @escaping @Sendable (UsageLimitsRequest) async -> [UsageLimitAccount] = {
       await $0.collect()
     },
@@ -176,6 +242,10 @@ public actor LocalUsageService {
     self.homeDirectory = homeDirectory
     self.fileManager = fileManager
     self.credentialStore = credentialStore
+    self.usesSharedConnections = usesSharedConnections
+    self.importPreparationWorker = importPreparationWorker
+    self.sharedConnectionRevision = sharedConnectionRevision
+    openRouterCredentialRevision = sharedConnectionRevision()
     self.limitCollector = limitCollector
     self.openRouterActivityFetcher = openRouterActivityFetcher
     databaseURL = usageDatabaseURL
@@ -237,12 +307,31 @@ public actor LocalUsageService {
     keychainInteraction: UsageKeychainInteraction = .noninteractive,
     interactiveProvider: ProviderKind? = nil,
     selectedCodexWorkspaceID: String? = nil,
+    selectedConnections: [String: String] = [:],
     now: Date = Date()
   ) async throws -> LocalUsageLimitsSnapshot {
     try Task.checkCancellation()
-    let generation = UUID()
+    var connectionChoices: [UsageConnectionChoice] = []
+    if usesSharedConnections && allowCredentialAccess {
+      for provider in ProviderKind.supportedAccounts where enabledProviders.contains(provider) {
+        for (type, title) in UsageConnectionChoice.connectionTypes(for: provider) {
+          for account in (try? ProviderConnectionAccounts.list(provider: type, scope: "global")) ?? [] {
+            connectionChoices.append(UsageConnectionChoice(provider: provider, connectionID: type,
+              accountID: account.id, label: "\(title) · \(account.label)", preferred: account.isSelected))
+          }
+        }
+      }
+    }
+    var resolvedConnections: [ProviderKind: UsageConnectionChoice] = [:]
+    for provider in enabledProviders {
+      resolvedConnections[provider] = UsageConnectionChoice.resolve(
+        connectionChoices.filter { $0.provider == provider }, selectedID: selectedConnections[provider.rawValue])
+    }
+    let selectionIDs = Dictionary(uniqueKeysWithValues: resolvedConnections.map { ($0.key.rawValue, $0.value.id) })
+    let connectionRevision = sharedConnectionRevision()
+    let generation = makeRefreshOwnership()
     limitsGeneration = generation
-    let codexSources = enabledProviders.contains(.codex)
+    let codexSources = !usesSharedConnections && enabledProviders.contains(.codex)
       ? ProviderLimitCollector.codexWorkspaceSources(homeDirectory: homeDirectory)
       : []
     let selectedCodexSource = ProviderLimitCollector.resolveCodexWorkspaceSource(
@@ -255,15 +344,24 @@ public actor LocalUsageService {
       && refreshReason != .credentialChanged
     if let cachedLimits,
        cachedLimits.providers == enabledProviders,
+       cachedLimits.selectedConnections == selectionIDs,
+       (!usesSharedConnections || cachedLimits.connectionRevision == connectionRevision),
        cachedLimits.codexWorkspaceID == resolvedCodexWorkspaceID,
        (!refresh || (mayReuseFreshLimits
          && now.timeIntervalSince(cachedLimits.date) < 60)) {
       accounts = cachedLimits.accounts
     } else {
-      let persistent = (try? openUsageStore()?.usageLimitAccounts(
-        providers: enabledProviders,
+      // Shared account switches must never inherit a previous account or harness
+      // snapshot. Their live limits are cheap to re-fetch; keep only this session
+      // cache, fenced by the shared connection revision.
+      let sharedProviders: Set<ProviderKind> = usesSharedConnections ? Set(ProviderKind.supportedAccounts) : []
+      let store = await openUsageStore()
+      try checkCurrentLimits(generation, connectionRevision: connectionRevision)
+      let persistent = (try? await store?.usageLimitAccounts(
+        providers: enabledProviders.subtracting(sharedProviders),
         accountScopes: resolvedCodexWorkspaceID.map { [.codex: $0] } ?? [:]
       )) ?? []
+      try checkCurrentLimits(generation, connectionRevision: connectionRevision)
       let persistentByProvider = Dictionary(
         uniqueKeysWithValues: persistent.map { ($0.provider, $0) }
       )
@@ -279,17 +377,17 @@ public actor LocalUsageService {
         }
         let refreshed = await limitCollector(UsageLimitsRequest(
           homeDirectory: homeDirectory,
+          allowCredentialAccess: allowCredentialAccess,
           openRouterAPIKey: openRouterAPIKey,
           enabledProviders: enabledProviders,
           keychainInteraction: keychainInteraction,
           interactiveProvider: interactiveProvider,
           codexWorkspaceSource: selectedCodexSource,
           codexWorkspaceCount: codexSources.count,
-          now: now
+          now: now,
+          selectedConnections: resolvedConnections
         ))
-        guard limitsGeneration == generation, !Task.isCancelled else {
-          throw CancellationError()
-        }
+        try checkCurrentLimits(generation, connectionRevision: connectionRevision)
         accounts = refreshed.map { refreshedAccount in
           let account: UsageLimitAccount
           if refreshedAccount.provider == .openRouter, let credentialError {
@@ -309,8 +407,9 @@ public actor LocalUsageService {
           else { return account }
           return prior.retainingLastGood(after: account)
         }
-        try? openUsageStore()?.saveUsageLimitAccounts(accounts, storedAt: now)
-        cachedLimits = (now, enabledProviders, resolvedCodexWorkspaceID, accounts)
+        try? await store?.saveUsageLimitAccounts(accounts, storedAt: now, validating: { try generation.check() })
+        try checkCurrentLimits(generation, connectionRevision: connectionRevision)
+        cachedLimits = (now, enabledProviders, resolvedCodexWorkspaceID, connectionRevision, selectionIDs, accounts)
       } else {
         let placeholders = ProviderLimitCollector.placeholderAccounts(
           enabledProviders: enabledProviders,
@@ -322,14 +421,25 @@ public actor LocalUsageService {
         }
       }
     }
+    try checkCurrentLimits(generation, connectionRevision: connectionRevision)
     return LocalUsageLimitsSnapshot(
       accounts: accounts,
       hasOpenRouterCredential: allowCredentialAccess
         && enabledProviders.contains(.openRouter)
         && (openRouterAPIKey != nil || (try? credentialStore.hasOpenRouterAPIKey()) == true),
       codexWorkspaces: codexSources.map(\.workspace),
-      selectedCodexWorkspaceID: resolvedCodexWorkspaceID
+      selectedCodexWorkspaceID: resolvedCodexWorkspaceID,
+      connectionChoices: connectionChoices,
+      selectedConnections: selectionIDs
     )
+  }
+
+  private func checkCurrentLimits(_ generation: UsageRefreshOwnership, connectionRevision: UInt64) throws {
+    try generation.check()
+    guard limitsGeneration === generation, !Task.isCancelled,
+          !usesSharedConnections || connectionRevision == sharedConnectionRevision() else {
+      throw CancellationError()
+    }
   }
 
   public func analyticsSnapshot(
@@ -340,10 +450,11 @@ public actor LocalUsageService {
     now: Date = Date()
   ) async throws -> UsageAnalyticsSnapshot {
     try Task.checkCancellation()
-    let generation = UUID()
+    let generation = makeRefreshOwnership()
     analyticsGeneration = generation
     let interval = range.interval(relativeTo: now)
-    guard let store = openUsageStore() else {
+    guard let store = await openUsageStore() else {
+      guard isCurrentAnalytics(generation) else { throw CancellationError() }
       return UsageAnalyticsSnapshot(
         range: range,
         generatedAt: now,
@@ -361,40 +472,51 @@ public actor LocalUsageService {
       )
     }
 
+    guard isCurrentAnalytics(generation) else { throw CancellationError() }
     let requestedImportCutoff = max(
       now.addingTimeInterval(-Self.retention),
       interval.start.addingTimeInterval(-36 * 60 * 60)
     )
-    if shouldImportLocal(
+    if await shouldImportLocal(
       store: store,
       reason: refreshReason,
       requestedCutoff: requestedImportCutoff,
       now: now
     ) {
-      if importLocalSources(
+      guard isCurrentAnalytics(generation) else { throw CancellationError() }
+      if await importLocalSources(
         store: store,
         cutoff: requestedImportCutoff,
         enabledProviders: enabledProviders,
+        generation: generation,
         now: now
       ) {
-        try? store.setMetadataDate(now, for: "usage.local-import-at")
-        let previousCutoff = try? store.metadataDate("usage.local-indexed-after")
-        try? store.setMetadataDate(
-          min(previousCutoff ?? requestedImportCutoff, requestedImportCutoff),
-          for: "usage.local-indexed-after"
-        )
-        try? store.prune(before: now.addingTimeInterval(-Self.retention))
+        guard isCurrentAnalytics(generation) else { throw CancellationError() }
+        try? await store.write(validating: { try generation.check() }) { connection in
+          try connection.performTransaction {
+            let previousCutoff = try connection.metadataDate("usage.local-indexed-after")
+            try connection.setMetadataDate(now, for: "usage.local-import-at")
+            try connection.setMetadataDate(min(previousCutoff ?? requestedImportCutoff, requestedImportCutoff),
+              for: "usage.local-indexed-after")
+            try connection.prune(before: now.addingTimeInterval(-Self.retention))
+          }
+        }
       }
     }
+    guard isCurrentAnalytics(generation) else { throw CancellationError() }
     if enabledProviders.contains(.openRouter),
        allowCredentialAccess,
-       shouldImportOpenRouter(store: store, reason: refreshReason, now: now) {
+       await shouldImportOpenRouter(store: store, reason: refreshReason, now: now) {
+      guard isCurrentAnalytics(generation) else { throw CancellationError() }
       await importOpenRouterActivity(store: store, generation: generation, now: now)
       guard isCurrentAnalytics(generation) else { throw CancellationError() }
-      try? store.setMetadataDate(now, for: "usage.openrouter-attempt-at")
+      try? await store.write(validating: { try generation.check() }) {
+        try $0.setMetadataDate(now, for: "usage.openrouter-attempt-at")
+      }
     }
     if enabledProviders.contains(.cursor),
-       shouldImportCursorAccount(store: store, reason: refreshReason, now: now) {
+       await shouldImportCursorAccount(store: store, reason: refreshReason, now: now) {
+      guard isCurrentAnalytics(generation) else { throw CancellationError() }
       await importCursorAccountActivity(
         store: store,
         cutoff: now.addingTimeInterval(-Self.retention),
@@ -402,9 +524,12 @@ public actor LocalUsageService {
         now: now
       )
       guard isCurrentAnalytics(generation) else { throw CancellationError() }
-      try? store.setMetadataDate(now, for: "usage.cursor-attempt-at")
+      try? await store.write(validating: { try generation.check() }) {
+        try $0.setMetadataDate(now, for: "usage.cursor-attempt-at")
+      }
     }
-    let storedSamples = ((try? store.samples(in: interval)) ?? []).filter {
+    guard isCurrentAnalytics(generation) else { throw CancellationError() }
+    let storedSamples = ((try? await store.samples(in: interval)) ?? []).filter {
       enabledProviders.contains($0.provider)
     }
     let samples = Self.reconcileOpenRouter(
@@ -412,17 +537,15 @@ public actor LocalUsageService {
     ).sorted { lhs, rhs in
       lhs.timestamp == rhs.timestamp ? lhs.id < rhs.id : lhs.timestamp < rhs.timestamp
     }
-    return UsageAnalyticsSnapshot(
-      range: range,
-      generatedAt: now,
-      samples: samples,
-      sources: coverage(
-        store: store,
-        interval: interval,
-        enabledProviders: enabledProviders,
-        allowCredentialAccess: allowCredentialAccess
-      )
+    guard isCurrentAnalytics(generation) else { throw CancellationError() }
+    let sources = await coverage(
+      store: store,
+      interval: interval,
+      enabledProviders: enabledProviders,
+      allowCredentialAccess: allowCredentialAccess
     )
+    guard isCurrentAnalytics(generation) else { throw CancellationError() }
+    return UsageAnalyticsSnapshot(range: range, generatedAt: now, samples: samples, sources: sources)
   }
 
   public func saveOpenRouterAPIKey(_ value: String) throws {
@@ -430,8 +553,9 @@ public actor LocalUsageService {
     guard !key.isEmpty else { throw LocalUsageServiceError.emptyCredential }
     try credentialStore.saveOpenRouterAPIKey(key)
     openRouterAPIKey = key
-    limitsGeneration = UUID()
-    analyticsGeneration = UUID()
+    openRouterCredentialRevision = sharedConnectionRevision()
+    limitsGeneration = UsageRefreshOwnership()
+    analyticsGeneration = UsageRefreshOwnership()
     cachedLimits = nil
     openRouterStatus = .unavailable
     openRouterDetail = "The new credential has not been checked yet."
@@ -439,20 +563,20 @@ public actor LocalUsageService {
 
   /// Agent reads use only the existing index. They never refresh a provider,
   /// inspect credentials, ingest transcripts or change usage preferences.
-  public func recordedSamples(from start: Date, to end: Date, limit: Int = 101, offset: Int = 0) throws -> [UsageSample] {
+  public func recordedSamples(from start: Date, to end: Date, limit: Int = 101, offset: Int = 0) async throws -> [UsageSample] {
     guard start <= end, start.timeIntervalSince1970.isFinite, end.timeIntervalSince1970.isFinite,
           (1...201).contains(limit), offset >= 0 else { throw WorkspaceToolError.invalid("Invalid usage range or pagination.") }
-    guard let store = openUsageStore() else {
+    guard let store = await openUsageStore() else {
       throw WorkspaceToolError.invalid(usageStoreFailure ?? "The recorded usage index is unavailable.")
     }
-    return try store.samples(in: DateInterval(start: start, end: end), limit: limit, offset: offset)
+    return try await store.samples(in: DateInterval(start: start, end: end), limit: limit, offset: offset)
   }
 
   public func deleteOpenRouterAPIKey() throws {
     try credentialStore.deleteOpenRouterAPIKey()
     openRouterAPIKey = nil
-    limitsGeneration = UUID()
-    analyticsGeneration = UUID()
+    limitsGeneration = UsageRefreshOwnership()
+    analyticsGeneration = UsageRefreshOwnership()
     cachedLimits = nil
     openRouterStatus = .unavailable
     openRouterDetail = "Add an OpenRouter management key to import official account activity."
@@ -469,49 +593,64 @@ public actor LocalUsageService {
   public func authorizeOpenRouterCredentialAccess() throws {
     guard let key = try credentialStore.authorizeOpenRouterAPIKey() else {
       openRouterAPIKey = nil
-      limitsGeneration = UUID()
-      analyticsGeneration = UUID()
+      limitsGeneration = UsageRefreshOwnership()
+      analyticsGeneration = UsageRefreshOwnership()
       cachedLimits = nil
       throw LocalUsageServiceError.missingCredential
     }
     openRouterAPIKey = key
-    limitsGeneration = UUID()
-    analyticsGeneration = UUID()
+    openRouterCredentialRevision = sharedConnectionRevision()
+    limitsGeneration = UsageRefreshOwnership()
+    analyticsGeneration = UsageRefreshOwnership()
     cachedLimits = nil
   }
 
   private func loadOpenRouterAPIKey() throws -> String? {
+    let revision = sharedConnectionRevision()
+    if usesSharedConnections && revision != openRouterCredentialRevision {
+      openRouterAPIKey = nil; openRouterCredentialRevision = revision
+    }
     if let openRouterAPIKey { return openRouterAPIKey }
     let key = try credentialStore.loadOpenRouterAPIKey()
     openRouterAPIKey = key
     return key
   }
 
-  private func openUsageStore() -> UsageStore? {
+  private func openUsageStore() async -> AsyncUsageStore? {
     if let usageStore { return usageStore }
     if usageStoreFailure != nil { return nil }
+    let opening: StoreOpening
+    if let pending = usageStoreOpening { opening = pending }
+    else {
+      let url = databaseURL
+      opening = StoreOpening(task: Task { try await AsyncUsageStore(databaseURL: url) })
+      usageStoreOpening = opening
+    }
     do {
-      try fileManager.createDirectory(
-        at: databaseURL.deletingLastPathComponent(),
-        withIntermediateDirectories: true
-      )
-      let store = try UsageStore(databaseURL: databaseURL)
+      let store = try await opening.task.value
       usageStore = store
+      if usageStoreOpening?.id == opening.id { usageStoreOpening = nil }
       return store
     } catch {
-      usageStoreFailure = error.localizedDescription
+      // Multiple waiters can resume after another caller already started a retry.
+      guard usageStoreOpening?.id == opening.id else { return usageStore }
+      usageStoreOpening = nil
+      // Queue pressure and cancellation are retryable, not a corrupt index.
+      if !(error is CancellationError), !(error is DatabaseWorkerError) {
+        usageStoreFailure = error.localizedDescription
+      }
       return nil
     }
   }
 
   private func shouldImportLocal(
-    store: UsageStore,
+    store: AsyncUsageStore,
     reason: UsageRefreshReason,
     requestedCutoff: Date,
     now: Date
-  ) -> Bool {
-    let lastImport = try? store.metadataDate("usage.local-import-at")
-    let indexedAfter = try? store.metadataDate("usage.local-indexed-after")
+  ) async -> Bool {
+    let lastImport = try? await store.metadataDate("usage.local-import-at")
+    let indexedAfter = try? await store.metadataDate("usage.local-indexed-after")
     if indexedAfter == nil || (indexedAfter ?? .distantFuture) > requestedCutoff {
       return true
     }
@@ -528,11 +667,11 @@ public actor LocalUsageService {
   }
 
   private func shouldImportOpenRouter(
-    store: UsageStore,
+    store: AsyncUsageStore,
     reason: UsageRefreshReason,
     now: Date
-  ) -> Bool {
-    let lastAttempt = try? store.metadataDate("usage.openrouter-attempt-at")
+  ) async -> Bool {
+    let lastAttempt = try? await store.metadataDate("usage.openrouter-attempt-at")
     switch reason {
     case .rangeChanged, .runCompleted:
       return false
@@ -544,11 +683,11 @@ public actor LocalUsageService {
   }
 
   private func shouldImportCursorAccount(
-    store: UsageStore,
+    store: AsyncUsageStore,
     reason: UsageRefreshReason,
     now: Date
-  ) -> Bool {
-    let lastAttempt = try? store.metadataDate("usage.cursor-attempt-at")
+  ) async -> Bool {
+    let lastAttempt = try? await store.metadataDate("usage.cursor-attempt-at")
     switch reason {
     case .rangeChanged, .runCompleted:
       return false
@@ -560,9 +699,9 @@ public actor LocalUsageService {
   }
 
   private func importCursorAccountActivity(
-    store: UsageStore,
+    store: AsyncUsageStore,
     cutoff: Date,
-    generation: UUID,
+    generation: UsageRefreshOwnership,
     now: Date
   ) async {
     do {
@@ -573,14 +712,15 @@ public actor LocalUsageService {
         start: now.addingTimeInterval(-Self.retention),
         end: now
       )
-      let retained = (try? store.samples(in: retainedInterval, sourceID: "cursor:account")) ?? []
+      let retained = (try? await store.samples(in: retainedInterval, sourceID: "cursor:account")) ?? []
+      guard isCurrentAnalytics(generation) else { return }
       var samplesByEvent = Dictionary(
         uniqueKeysWithValues: retained.map { ($0.sourceEventID, $0) }
       )
       for sample in activity.samples {
         samplesByEvent[sample.sourceEventID] = sample
       }
-      try store.replace(
+      try await store.replace(
         sourceID: "cursor:account",
         sourceName: "Cursor account activity",
         location: "Cursor Usage API",
@@ -588,8 +728,10 @@ public actor LocalUsageService {
         harness: "Cursor",
         fingerprint: "cursor-account:\(now.timeIntervalSince1970)",
         samples: Array(samplesByEvent.values),
-        importedAt: now
+        importedAt: now,
+        validating: { try generation.check() }
       )
+      guard isCurrentAnalytics(generation) else { return }
       cursorAccountStatus = .available
       cursorAccountDetail = "Account-wide usage from Cursor's dashboard API, authenticated by Cursor.app's local sign-in."
     } catch CursorAccountClientError.notSignedIn {
@@ -603,374 +745,36 @@ public actor LocalUsageService {
     }
   }
 
-  private func importLocalSources(
-    store: UsageStore,
-    cutoff: Date,
-    enabledProviders: Set<ProviderKind>,
-    now: Date
-  ) -> Bool {
+  private func importLocalSources(store: AsyncUsageStore, cutoff: Date,
+    enabledProviders: Set<ProviderKind>, generation: UsageRefreshOwnership, now: Date) async -> Bool {
+    let home = homeDirectory
+    let outcomes = importOutcomes
     do {
-      try store.performTransaction {
-        importLocalSourcesWithinTransaction(
-          store: store,
-          cutoff: cutoff,
-          enabledProviders: enabledProviders,
-          now: now
-        )
-      }
-      importOutcomes.removeValue(forKey: "wovenmatter:index")
-      return true
+      let importer = UsageTranscriptImporter(homeDirectory: home, outcomes: outcomes, ownership: generation,
+        preparationWorker: importPreparationWorker)
+      let complete = try await importer.run(store: store, cutoff: cutoff, enabledProviders: enabledProviders, now: now)
+      let updatedOutcomes = await importer.importOutcomes
+      guard isCurrentAnalytics(generation) else { return false }
+      importOutcomes = updatedOutcomes
+      return complete
     } catch {
-      importOutcomes["wovenmatter:index"] = ImportOutcome(
-        failures: 1
-      )
+      guard isCurrentAnalytics(generation) else { return false }
+      importOutcomes["wovenmatter:index"] = .init(failures: 1)
       return false
     }
   }
 
-  private func importLocalSourcesWithinTransaction(
-    store: UsageStore,
-    cutoff retentionCutoff: Date,
-    enabledProviders: Set<ProviderKind>,
-    now: Date
-  ) {
-    let providerFilterSignature = enabledProviders
-      .map(\.rawValue)
-      .sorted()
-      .joined(separator: ",")
-
-    if enabledProviders.contains(.codex) {
-      let codexRoot = homeDirectory.appending(path: ".codex/sessions", directoryHint: .isDirectory)
-      importOutcomes["codex:file:"] = importTranscriptFiles(
-        root: codexRoot,
-        prefix: "codex:file:",
-        sourceName: "Codex rollout",
-        provider: .codex,
-        harness: "Codex",
-        providerFilterSignature: providerFilterSignature,
-        store: store,
-        cutoff: retentionCutoff,
-        now: now
-      ) { url in
-        var state = CodexUsageScanState()
-        var records: [UsageSample] = []
-        let usageMarker = Data("\"token_count\"".utf8)
-        let contextMarker = Data("\"turn_context\"".utf8)
-        let metadataMarker = Data("\"session_meta\"".utf8)
-        try self.forEachLineData(in: url) { data, lineNumber in
-          guard data.range(of: usageMarker) != nil
-                  || data.range(of: contextMarker) != nil
-                  || data.range(of: metadataMarker) != nil else { return }
-          if let sample = LocalUsageTranscriptParser.parseCodex(
-            line: String(decoding: data, as: UTF8.self),
-            lineNumber: lineNumber,
-            state: &state
-          ) {
-            records.append(sample)
-          }
-        }
-        return records
-      }
-    }
-
-    if enabledProviders.contains(.claude) {
-      let claudeRoot = homeDirectory.appending(path: ".claude/projects", directoryHint: .isDirectory)
-      importOutcomes["claude:file:"] = importTranscriptFiles(
-        root: claudeRoot,
-        prefix: "claude:file:",
-        sourceName: "Claude transcript",
-        provider: .claude,
-        harness: "Claude Code",
-        providerFilterSignature: providerFilterSignature,
-        store: store,
-        cutoff: retentionCutoff,
-        now: now
-      ) { url in
-        var records: [UsageSample] = []
-        let usageMarker = Data("\"usage\"".utf8)
-        try self.forEachLineData(in: url) { data, lineNumber in
-          guard data.range(of: usageMarker) != nil else { return }
-          if let parsed = LocalUsageTranscriptParser.parseClaude(
-            line: String(decoding: data, as: UTF8.self),
-            lineNumber: lineNumber
-          ) {
-            records.append(parsed)
-          }
-        }
-        return records
-      }
-    }
-
-    if !enabledProviders.isEmpty {
-      let piRoot = homeDirectory.appending(path: ".pi/agent/sessions", directoryHint: .isDirectory)
-      importOutcomes["pi:file:"] = importHarnessFiles(
-        root: piRoot,
-        prefix: "pi:file:",
-        harness: "Pi",
-        enabledProviders: enabledProviders,
-        providerFilterSignature: providerFilterSignature,
-        store: store,
-        cutoff: retentionCutoff,
-        now: now
-      )
-
-      let openClawRoot = homeDirectory.appending(
-        path: ".openclaw/agents",
-        directoryHint: .isDirectory
-      )
-      importOutcomes["openclaw:file:"] = importHarnessFiles(
-        root: openClawRoot,
-        prefix: "openclaw:file:",
-        harness: "OpenClaw",
-        enabledProviders: enabledProviders,
-        providerFilterSignature: providerFilterSignature,
-        store: store,
-        cutoff: retentionCutoff,
-        now: now
-      ) { url in
-        url.path.contains("/sessions/")
-          && url.lastPathComponent.hasSuffix(".jsonl")
-          && !url.lastPathComponent.hasSuffix(".trajectory.jsonl")
-      }
-
-      let hermesDatabase = homeDirectory.appending(path: ".hermes/state.db")
-      importOutcomes["hermes:database"] = importDatabase(
-        databaseURL: hermesDatabase,
-        sourceID: "hermes:database",
-        sourceName: "Hermes usage ledger",
-        provider: .unknown,
-        harness: "Hermes",
-        providerFilterSignature: providerFilterSignature,
-        store: store,
-        cutoff: retentionCutoff,
-        now: now
-      ) { indexedAfter in
-        try HermesUsageDatabase(databaseURL: hermesDatabase)
-          .samples(cutoff: indexedAfter, now: now)
-          .filter { enabledProviders.contains($0.provider) }
-      }
-    }
-
-    if enabledProviders.contains(.grok) {
-      let grokRoot = homeDirectory.appending(path: ".grok/sessions", directoryHint: .isDirectory)
-      importOutcomes["grok:file:"] = importGrok(
-        root: grokRoot,
-        providerFilterSignature: providerFilterSignature,
-        store: store,
-        cutoff: retentionCutoff,
-        now: now
-      )
-    }
-
-    if enabledProviders.contains(.openCodeGo) {
-      let openCodeDatabase = homeDirectory.appending(path: ".local/share/opencode/opencode.db")
-      importOutcomes["opencode:database"] = importDatabase(
-        databaseURL: openCodeDatabase,
-        sourceID: "opencode:database",
-        sourceName: "OpenCode history",
-        provider: .openCodeGo,
-        harness: "OpenCode",
-        providerFilterSignature: providerFilterSignature,
-        store: store,
-        cutoff: retentionCutoff,
-        now: now
-      ) { indexedAfter in
-        try OpenCodeUsageDatabase(databaseURL: openCodeDatabase)
-          .samples(cutoff: indexedAfter, now: now)
-          .filter { $0.provider == .openCodeGo }
-      }
-    }
+  private func makeRefreshOwnership() -> UsageRefreshOwnership {
+    UsageRefreshOwnership(connectionRevision: usesSharedConnections ? sharedConnectionRevision() : nil,
+      currentRevision: sharedConnectionRevision)
   }
 
-  private func importTranscriptFiles(
-    root: URL,
-    prefix: String,
-    sourceName: String,
-    provider: ProviderKind,
-    harness: String,
-    providerFilterSignature: String,
-    store: UsageStore,
-    cutoff: Date,
-    now: Date,
-    predicate: (URL) -> Bool = { $0.pathExtension == "jsonl" },
-    fingerprint: ((URL) throws -> String)? = nil,
-    parser: (URL) throws -> [UsageSample]
-  ) -> ImportOutcome {
-    guard fileManager.fileExists(atPath: root.path) else { return .empty }
-    let files = files(root: root, cutoff: cutoff, predicate: predicate)
-    var failures = 0
-    for file in files {
-      do {
-        let currentFingerprint: String
-        if let fingerprint {
-          currentFingerprint = try fingerprint(file) + ":" + providerFilterSignature
-        } else {
-          currentFingerprint = try fileFingerprint(file) + ":" + providerFilterSignature
-        }
-        let sourceID = prefix + file.path
-        let stored = try store.source(sourceID)
-        let indexedAfter = min(stored?.indexedAfter ?? cutoff, cutoff)
-        guard stored?.fingerprint != currentFingerprint
-                || stored?.indexedAfter == nil
-                || (stored?.indexedAfter ?? .distantFuture) > cutoff else { continue }
-        let samples = try parser(file).filter {
-          $0.timestamp >= indexedAfter && $0.timestamp <= now
-        }
-        try store.replace(
-          sourceID: sourceID,
-          sourceName: sourceName,
-          location: abbreviated(file),
-          provider: provider,
-          harness: harness,
-          fingerprint: currentFingerprint,
-          samples: uniqueSourceEvents(samples),
-          importedAt: now,
-          indexedAfter: indexedAfter,
-          transactional: false
-        )
-      } catch {
-        failures += 1
-      }
-    }
-    return ImportOutcome(failures: failures)
+  private func isCurrentAnalytics(_ generation: UsageRefreshOwnership) -> Bool {
+    guard analyticsGeneration === generation, !Task.isCancelled else { return false }
+    do { try generation.check(); return true } catch { return false }
   }
 
-  private func importHarnessFiles(
-    root: URL,
-    prefix: String,
-    harness: String,
-    enabledProviders: Set<ProviderKind>,
-    providerFilterSignature: String,
-    store: UsageStore,
-    cutoff: Date,
-    now: Date,
-    predicate: (URL) -> Bool = { $0.pathExtension == "jsonl" }
-  ) -> ImportOutcome {
-    importTranscriptFiles(
-      root: root,
-      prefix: prefix,
-      sourceName: "\(harness) session",
-      provider: .unknown,
-      harness: harness,
-      providerFilterSignature: providerFilterSignature,
-      store: store,
-      cutoff: cutoff,
-      now: now,
-      predicate: predicate
-    ) { url in
-      var state = HarnessUsageScanState()
-      var records: [UsageSample] = []
-      let usageMarker = Data("\"usage\"".utf8)
-      let modelMarker = Data("\"model_change\"".utf8)
-      let thinkingMarker = Data("\"thinking_level_change\"".utf8)
-      let sessionMarker = Data("\"session\"".utf8)
-      try self.forEachLineData(in: url) { data, lineNumber in
-        guard data.range(of: usageMarker) != nil
-                || data.range(of: modelMarker) != nil
-                || data.range(of: thinkingMarker) != nil
-                || data.range(of: sessionMarker) != nil else { return }
-        if let parsed = LocalUsageTranscriptParser.parseHarness(
-          line: String(decoding: data, as: UTF8.self),
-          lineNumber: lineNumber,
-          harness: harness,
-          state: &state
-        ) {
-          records.append(parsed)
-        }
-      }
-      return records.filter { enabledProviders.contains($0.provider) }
-    }
-  }
-
-  private func importGrok(
-    root: URL,
-    providerFilterSignature: String,
-    store: UsageStore,
-    cutoff: Date,
-    now: Date
-  ) -> ImportOutcome {
-    importTranscriptFiles(
-      root: root,
-      prefix: "grok:file:",
-      sourceName: "Grok session",
-      provider: .grok,
-      harness: "Grok Build",
-      providerFilterSignature: providerFilterSignature,
-      store: store,
-      cutoff: cutoff,
-      now: now,
-      predicate: { $0.lastPathComponent == "updates.jsonl" },
-      fingerprint: { try self.grokFingerprint($0) }
-    ) { url in
-      let summaryURL = url.deletingLastPathComponent().appending(path: "summary.json")
-      let summary: [String: Any]
-      if let data = try? Data(contentsOf: summaryURL),
-         let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-        summary = object
-      } else {
-        summary = [:]
-      }
-      var records: [UsageSample] = []
-      let usageMarker = Data("\"usage\"".utf8)
-      try self.forEachLineData(in: url) { data, lineNumber in
-        guard data.range(of: usageMarker) != nil else { return }
-        records += LocalUsageTranscriptParser.parseGrok(
-          line: String(decoding: data, as: UTF8.self),
-          lineNumber: lineNumber,
-          summary: summary
-        )
-      }
-      return records
-    }
-  }
-
-  private func importDatabase(
-    databaseURL: URL,
-    sourceID: String,
-    sourceName: String,
-    provider: ProviderKind,
-    harness: String,
-    providerFilterSignature: String,
-    store: UsageStore,
-    cutoff: Date,
-    now: Date,
-    reader: (Date) throws -> [UsageSample]
-  ) -> ImportOutcome {
-    guard fileManager.fileExists(atPath: databaseURL.path) else { return .empty }
-    do {
-      let fingerprint = try databaseFingerprint(databaseURL) + ":" + providerFilterSignature
-      let stored = try store.source(sourceID)
-      let indexedAfter = min(stored?.indexedAfter ?? cutoff, cutoff)
-      if stored?.fingerprint != fingerprint
-          || stored?.indexedAfter == nil
-          || (stored?.indexedAfter ?? .distantFuture) > cutoff {
-        let samples = try reader(indexedAfter).filter {
-          $0.timestamp >= indexedAfter && $0.timestamp <= now
-        }
-        try store.replace(
-          sourceID: sourceID,
-          sourceName: sourceName,
-          location: abbreviated(databaseURL),
-          provider: provider,
-          harness: harness,
-          fingerprint: fingerprint,
-          samples: uniqueSourceEvents(samples),
-          importedAt: now,
-          indexedAfter: indexedAfter,
-          transactional: false
-        )
-      }
-      return ImportOutcome(failures: 0)
-    } catch {
-      return ImportOutcome(failures: 1)
-    }
-  }
-
-  private func isCurrentAnalytics(_ generation: UUID) -> Bool {
-    analyticsGeneration == generation && !Task.isCancelled
-  }
-
-  private func importOpenRouterActivity(store: UsageStore, generation: UUID, now: Date) async {
+  private func importOpenRouterActivity(store: AsyncUsageStore, generation: UsageRefreshOwnership, now: Date) async {
     do {
       guard let key = try loadOpenRouterAPIKey() else {
         openRouterStatus = .unavailable
@@ -980,7 +784,8 @@ public actor LocalUsageService {
       let activity = try await openRouterActivityFetcher(key)
       guard isCurrentAnalytics(generation) else { return }
       for (date, samples) in activity.samplesByUTCDate {
-        try store.replace(
+        guard isCurrentAnalytics(generation) else { return }
+        try await store.replace(
           sourceID: "openrouter:activity:\(date)",
           sourceName: "OpenRouter activity",
           location: "OpenRouter Activity API",
@@ -988,9 +793,11 @@ public actor LocalUsageService {
           harness: nil,
           fingerprint: "\(Self.parserVersion):\(now.timeIntervalSince1970)",
           samples: uniqueSourceEvents(samples),
-          importedAt: now
+          importedAt: now,
+          validating: { try generation.check() }
         )
       }
+      guard isCurrentAnalytics(generation) else { return }
       openRouterStatus = .available
       openRouterDetail = activity.detail
     } catch {
@@ -1001,13 +808,13 @@ public actor LocalUsageService {
   }
 
   private func coverage(
-    store: UsageStore,
+    store: AsyncUsageStore,
     interval: DateInterval,
     enabledProviders: Set<ProviderKind>,
     allowCredentialAccess: Bool
-  ) -> [UsageSourceCoverage] {
+  ) async -> [UsageSourceCoverage] {
     var sources: [UsageSourceCoverage] = []
-    if enabledProviders.contains(.codex) { sources.append(sourceCoverage(
+    if enabledProviders.contains(.codex) { await sources.append(sourceCoverage(
       id: "codex",
       prefix: "codex:file:",
       sourceName: "Codex",
@@ -1018,7 +825,7 @@ public actor LocalUsageService {
       interval: interval,
       detail: "Exact rollout token deltas with model and reasoning metadata; fork-copy and repeated-delta suppression is applied."
     )) }
-    if enabledProviders.contains(.claude) { sources.append(sourceCoverage(
+    if enabledProviders.contains(.claude) { await sources.append(sourceCoverage(
       id: "claude",
       prefix: "claude:file:",
       sourceName: "Claude Code",
@@ -1029,7 +836,7 @@ public actor LocalUsageService {
       interval: interval,
       detail: "Exact assistant-message token usage, globally deduplicated across resumed transcript copies."
     )) }
-    if enabledProviders.contains(.grok) { sources.append(sourceCoverage(
+    if enabledProviders.contains(.grok) { await sources.append(sourceCoverage(
       id: "grok",
       prefix: "grok:file:",
       sourceName: "Grok CLI",
@@ -1040,7 +847,7 @@ public actor LocalUsageService {
       interval: interval,
       detail: "Per-turn, per-model token usage from Grok session updates."
     )) }
-    if enabledProviders.contains(.openCodeGo) { sources.append(sourceCoverage(
+    if enabledProviders.contains(.openCodeGo) { await sources.append(sourceCoverage(
       id: "opencode",
       prefix: "opencode:database",
       sourceName: "OpenCode",
@@ -1051,7 +858,7 @@ public actor LocalUsageService {
       interval: interval,
       detail: "Exact step-finish usage from OpenCode SQLite, including OpenCode Go and other identifiable billing routes."
     )) }
-    if !enabledProviders.isEmpty { sources.append(sourceCoverage(
+    if !enabledProviders.isEmpty { await sources.append(sourceCoverage(
       id: "pi",
       prefix: "pi:file:",
       sourceName: "Pi",
@@ -1062,7 +869,7 @@ public actor LocalUsageService {
       interval: interval,
       detail: "Exact assistant-call tokens with model, provider route, cache, reasoning, and thinking-level metadata."
     ))
-    sources.append(sourceCoverage(
+    await sources.append(sourceCoverage(
       id: "openclaw",
       prefix: "openclaw:file:",
       sourceName: "OpenClaw",
@@ -1073,7 +880,7 @@ public actor LocalUsageService {
       interval: interval,
       detail: "Exact assistant-call tokens from active local OpenClaw session histories; trajectory and reset copies are excluded."
     ))
-    var hermes = sourceCoverage(
+    var hermes = await sourceCoverage(
       id: "hermes",
       prefix: "hermes:database",
       sourceName: "Hermes",
@@ -1099,11 +906,11 @@ public actor LocalUsageService {
     }
     sources.append(hermes) }
     if enabledProviders.contains(.cursor) {
-      sources.append(cursorCoverage(store: store, interval: interval))
+      await sources.append(cursorCoverage(store: store, interval: interval))
     }
 
     if enabledProviders.contains(.openRouter) {
-      let openRouterStats = try? store.statistics(
+      let openRouterStats = try? await store.statistics(
         sourceIDPrefix: "openrouter:activity:",
         in: interval
       )
@@ -1159,12 +966,12 @@ public actor LocalUsageService {
     provider: ProviderKind,
     harness: String,
     location: URL,
-    store: UsageStore,
+    store: AsyncUsageStore,
     interval: DateInterval,
     detail: String
-  ) -> UsageSourceCoverage {
+  ) async -> UsageSourceCoverage {
     let outcome = importOutcomes[prefix] ?? .empty
-    let stats = try? store.statistics(sourceIDPrefix: prefix, in: interval)
+    let stats = try? await store.statistics(sourceIDPrefix: prefix, in: interval)
     let exists = fileManager.fileExists(atPath: location.path)
     let status: UsageSourceStatus
     if outcome.failures > 0 {
@@ -1198,9 +1005,9 @@ public actor LocalUsageService {
   }
 
   private func cursorCoverage(
-    store: UsageStore,
+    store: AsyncUsageStore,
     interval: DateInterval
-  ) -> UsageSourceCoverage {
+  ) async -> UsageSourceCoverage {
     let acpRoot = homeDirectory.appending(path: ".cursor/acp-sessions")
     let transcriptRoot = homeDirectory.appending(path: ".cursor/projects")
     let acpSessions = files(
@@ -1213,7 +1020,7 @@ public actor LocalUsageService {
       cutoff: interval.start,
       predicate: { $0.pathExtension == "jsonl" && $0.path.contains("/agent-transcripts/") }
     ).count
-    let stats = try? store.statistics(sourceID: "cursor:account", in: interval)
+    let stats = try? await store.statistics(sourceID: "cursor:account", in: interval)
     let discovered = max(max(acpSessions, transcripts), stats?.sessions ?? 0)
     let found = fileManager.fileExists(atPath: acpRoot.path)
       || fileManager.fileExists(atPath: transcriptRoot.path)
@@ -1396,35 +1203,6 @@ public actor LocalUsageService {
     return samples.filter { seen.insert($0.sourceEventID).inserted }
   }
 
-  private func fileFingerprint(_ url: URL) throws -> String {
-    let values = try url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
-    return [
-      Self.parserVersion,
-      String(values.fileSize ?? 0),
-      String(values.contentModificationDate?.timeIntervalSince1970 ?? 0),
-    ].joined(separator: ":")
-  }
-
-  private func databaseFingerprint(_ url: URL) throws -> String {
-    var values = [try fileFingerprint(url)]
-    for suffix in ["-wal", "-shm"] {
-      let sidecar = URL(fileURLWithPath: url.path + suffix)
-      if fileManager.fileExists(atPath: sidecar.path) {
-        values.append(try fileFingerprint(sidecar))
-      }
-    }
-    return values.joined(separator: "|")
-  }
-
-  private func grokFingerprint(_ updatesURL: URL) throws -> String {
-    var values = [try fileFingerprint(updatesURL)]
-    let summaryURL = updatesURL.deletingLastPathComponent().appending(path: "summary.json")
-    if fileManager.fileExists(atPath: summaryURL.path) {
-      values.append(try fileFingerprint(summaryURL))
-    }
-    return values.joined(separator: "|")
-  }
-
   private func files(
     root: URL,
     cutoff: Date,
@@ -1447,32 +1225,6 @@ public actor LocalUsageService {
     return result.sorted { $0.path < $1.path }
   }
 
-  private func forEachLineData(
-    in url: URL,
-    body: (Data.SubSequence, Int) throws -> Void
-  ) throws {
-    let data = try Data(contentsOf: url, options: [.mappedIfSafe, .uncached])
-    try data.withUnsafeBytes { rawBuffer in
-      guard let base = rawBuffer.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return }
-      var start = 0
-      var lineNumber = 0
-      while start < rawBuffer.count {
-        let remaining = rawBuffer.count - start
-        let newlinePointer = Darwin.memchr(base.advanced(by: start), 0x0A, remaining)
-        let end: Int
-        if let newlinePointer {
-          end = base.distance(to: newlinePointer.assumingMemoryBound(to: UInt8.self))
-        } else {
-          end = rawBuffer.count
-        }
-        lineNumber += 1
-        try body(data[start..<end], lineNumber)
-        guard end < rawBuffer.count else { return }
-        start = end + 1
-      }
-    }
-  }
-
   private func abbreviated(_ url: URL) -> String {
     let home = homeDirectory.path
     return url.path.hasPrefix(home) ? "~" + url.path.dropFirst(home.count) : url.path
@@ -1491,10 +1243,12 @@ public enum LocalUsageServiceError: LocalizedError {
   }
 }
 
-private struct OpenCodeUsageDatabase {
+struct OpenCodeUsageDatabase {
   let databaseURL: URL
 
-  func samples(cutoff: Date, now: Date) throws -> [UsageSample] {
+  func samples(cutoff: Date, now: Date,
+    check: @escaping @Sendable () throws -> Void = {}) throws -> [UsageSample] {
+    try check()
     var database: OpaquePointer?
     let status = sqlite3_open_v2(databaseURL.path, &database, SQLITE_OPEN_READONLY, nil)
     guard status == SQLITE_OK, let database else {
@@ -1503,6 +1257,9 @@ private struct OpenCodeUsageDatabase {
     }
     defer { sqlite3_close(database) }
     sqlite3_busy_timeout(database, 500)
+    let cancellation = UsageSourceQueryCancellation(check)
+    cancellation.install(on: database)
+    defer { cancellation.remove(from: database) }
 
     let sql = """
       SELECT p.id, p.session_id, m.data, p.data, s.directory
@@ -1528,6 +1285,7 @@ private struct OpenCodeUsageDatabase {
     var samples: [UsageSample] = []
     while true {
       let status = sqlite3_step(statement)
+      try check()
       if status == SQLITE_DONE { return samples }
       guard status == SQLITE_ROW else { throw OpenCodeUsageDatabaseError.queryFailed }
       guard let partID = text(statement, column: 0),

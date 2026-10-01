@@ -27,8 +27,8 @@ struct CompanionFlowTests {
     table.databaseLink = tableLink
     let document = NoteDocument(kind: .spreadsheet, blocks: [.table(table)], databaseLink: link)
     let raw = try document.encoded()
-    let id = try fixture.database.createNote(folderID: nil, content: raw)
-    let before = try #require(try fixture.database.companionNote(id: id))
+    let id = try await fixture.database.createNote(folderID: nil, content: raw)
+    let before = try #require(try await fixture.database.companionNote(id: id))
     func get(_ path: String) async throws -> (Data, Int) {
       var request = URLRequest(url: URL(string: fixture.http.endpoint.absoluteString + path)!)
       request.setValue("Bearer " + fixture.credential.token, forHTTPHeaderField: "Authorization")
@@ -46,10 +46,10 @@ struct CompanionFlowTests {
     #expect(tableStatus == 200 && readLinks == [link, tableLink])
     let (_, missingStatus) = try await get("/v1/assets/\(id)/linked-data?tableID=unknown")
     #expect(missingStatus == 404 && readLinks.count == 2)
-    #expect(try fixture.database.companionNote(id: id) == before)
+    #expect(try await fixture.database.companionNote(id: id) == before)
     var remote = document
     remote.databaseLink?.sourceID = "unavailable-remote"
-    let remoteID = try fixture.database.createNote(folderID: nil, content: remote.encoded())
+    let remoteID = try await fixture.database.createNote(folderID: nil, content: remote.encoded())
     let (errorBytes, remoteStatus) = try await get("/v1/assets/\(remoteID)/linked-data")
     #expect(remoteStatus == 400)
     #expect(try JSONDecoder().decode(CompanionAPIError.self, from: errorBytes).code == "linked_data_unavailable")
@@ -67,11 +67,11 @@ struct CompanionFlowTests {
     let engine = MobileSyncEngine(store: restarted, transport: fixture.transport)
     do { try await engine.synchronize(); Issue.record("Expected a lost acknowledgement") }
     catch MobileConnectionError.offline {}
-    #expect(try fixture.database.companionNote(id: note.id)?.content == content)
+    #expect(try await fixture.database.companionNote(id: note.id)?.content == content)
     #expect(await restarted.snapshot().outbox.count == 1)
     let secondRestart = try MobileStore(file: fixture.mobileURL)
     try await MobileSyncEngine(store: secondRestart, transport: fixture.transport).synchronize()
-    let canonical = try fixture.database.companionSnapshot()
+    let canonical = try await fixture.database.companionSnapshot()
     #expect(canonical.notes.count == 1 && canonical.folders.count == 1)
     #expect(canonical.notes[0].id == note.id && canonical.notes[0].content == content)
     #expect(await secondRestart.snapshot().outbox.isEmpty)
@@ -92,24 +92,24 @@ struct CompanionFlowTests {
     let localContent = try richDocument("Phone writing")
     try await fixture.mobile.editNote(id: note.id, title: "Phone", content: localContent, folderID: nil, base: displayed)
     let remoteContent = try richDocument("Mac writing")
-    _ = try fixture.database.persistNoteDraft(id: note.id, title: "Mac", content: remoteContent, expectedRevision: String(displayed.revision))
+    _ = try await fixture.database.persistNoteDraft(id: note.id, title: "Mac", content: remoteContent, expectedRevision: String(displayed.revision))
     try await engine.synchronize()
     let conflict = try #require(await fixture.mobile.snapshot().conflicts[note.id])
     #expect(conflict.base?.content == baseContent)
     #expect(conflict.local.content == localContent && conflict.remote?.content == remoteContent)
-    #expect(try fixture.database.companionNote(id: note.id)?.content == remoteContent)
+    #expect(try await fixture.database.companionNote(id: note.id)?.content == remoteContent)
     let recovered = try await fixture.mobile.preserveConflictAsCopy(id: note.id)
     #expect(recovered.id != note.id && recovered.content == localContent)
     try await engine.synchronize()
     let copied = try #require(await fixture.mobile.snapshot().notes[recovered.id])
     try await fixture.mobile.editNote(id: copied.id, title: "Last offline writing", content: richDocument("Keep after deletion"), folderID: copied.folderID, base: copied)
-    _ = try fixture.database.applyCompanionMutation(CompanionMutation(deviceID: fixture.credential.deviceID, kind: .deleteNote, resourceID: copied.id, expectedRevision: copied.revision))
+    _ = try await fixture.database.applyCompanionMutation(CompanionMutation(deviceID: fixture.credential.deviceID, kind: .deleteNote, resourceID: copied.id, expectedRevision: copied.revision))
     try await engine.synchronize()
-    #expect(try fixture.database.companionNote(id: copied.id) == nil)
+    #expect(try await fixture.database.companionNote(id: copied.id) == nil)
     let deletedConflict = try #require(await fixture.mobile.snapshot().conflicts[copied.id])
     #expect(try NoteDocument.editableDocument(from: deletedConflict.local.content).plainText.contains("Keep after deletion"))
     #expect(deletedConflict.remote == nil)
-    #expect(try fixture.database.companionSnapshot().notes.count == 1)
+    #expect(try await fixture.database.companionSnapshot().notes.count == 1)
   }
 
   @Test("large conflict keeps the fetched remote body when the feed repeats metadata-only invalidation")
@@ -122,7 +122,7 @@ struct CompanionFlowTests {
     let local = try richDocument(String(repeating: "phone ", count: 70_000))
     try await fixture.mobile.editNote(id: note.id, title: "Large phone", content: local, folderID: nil, base: displayed)
     let remote = try richDocument(String(repeating: "mac ", count: 90_000))
-    _ = try fixture.database.persistNoteDraft(id: note.id, title: "Large Mac", content: remote, expectedRevision: String(displayed.revision))
+    _ = try await fixture.database.persistNoteDraft(id: note.id, title: "Large Mac", content: remote, expectedRevision: String(displayed.revision))
     try await engine.synchronize()
     let conflict = try #require(await fixture.mobile.snapshot().conflicts[note.id])
     #expect(conflict.local.content == local)
@@ -146,7 +146,7 @@ struct CompanionFlowTests {
     let engine = MobileSyncEngine(store: fixture.mobile, transport: fixture.transport)
     try await engine.synchronize()
     _ = try await fixture.mobile.createNote(folderID: nil, title: "Retain offline", content: richDocument("Private writing"))
-    let wrongDB = try WorkspaceDatabase(url: fixture.directory.appending(path: "other-workspace.sqlite"))
+    let wrongDB = try await WorkspaceDatabase(url: fixture.directory.appending(path: "other-workspace.sqlite"))
     let wrongCommands = FakeCommands(database: wrongDB)
     let wrongAPI = CompanionWorkspaceAPI(database: wrongDB, authentication: fixture.authentication, commands: wrongCommands, isActive: { true })
     let wrongServer = try await FlowHTTPServer(api: wrongAPI)
@@ -155,7 +155,7 @@ struct CompanionFlowTests {
     do { try await MobileSyncEngine(store: fixture.mobile, transport: wrongTransport).synchronize(); Issue.record("Expected workspace mismatch") }
     catch MobileConnectionError.http(409, _) {}
     #expect(await wrongTransport.count("POST /v1/mutations") == 0)
-    #expect(try wrongDB.companionSnapshot().notes.isEmpty)
+    #expect(try await wrongDB.companionSnapshot().notes.isEmpty)
     #expect(await fixture.mobile.snapshot().outbox.count == 1)
     for version in [1, 99] {
       let incompatible = APITransport(serverURL: fixture.http.endpoint, credential: fixture.credential, protocolVersion: version)
@@ -185,15 +185,15 @@ struct CompanionFlowTests {
       initialSend: CompanionCommand(deviceID: fixture.credential.deviceID, kind: .send,
           conversationID: conversationID, text: "Use this selected note for the first prompt", noteID: note.id)
     )
-    #expect(try fixture.database.companionSnapshot().conversations.isEmpty)
+    #expect(try await fixture.database.companionSnapshot().conversations.isEmpty)
     await fixture.transport.dropNextCommandAcknowledgement(commandID: launch.create.commandID)
     do { _ = try await MobileSyncEngine(store: fixture.mobile, transport: fixture.transport).startConversation(launch); Issue.record("Expected create-phase ACK loss") }
     catch MobileConnectionError.offline {}
-    let afterCreate = try fixture.database.companionSnapshot()
+    let afterCreate = try await fixture.database.companionSnapshot()
     #expect(afterCreate.conversations.count == 1 && afterCreate.conversations.first?.id == conversationID)
     #expect(afterCreate.conversations.first?.folderID == folder.id)
     #expect(afterCreate.notes.count == 1 && afterCreate.folders.count == 1)
-    #expect(try fixture.database.conversationContent(id: conversationID).runs.isEmpty)
+    #expect(try await fixture.database.conversationContent(id: conversationID).runs.isEmpty)
     let restarted = try MobileStore(file: fixture.mobileURL)
     let nextEngine = MobileSyncEngine(store: restarted, transport: fixture.transport)
     try await nextEngine.recoverCommandReceipts()
@@ -209,7 +209,7 @@ struct CompanionFlowTests {
     await fixture.transport.dropNextCommandAcknowledgement(commandID: launch.initialSend.commandID)
     do { _ = try await nextEngine.startConversation(launch); Issue.record("Expected first-prompt ACK loss") }
     catch MobileConnectionError.offline {}
-    let canonical = try #require(try fixture.database.companionNote(id: note.id))
+    let canonical = try #require(try await fixture.database.companionNote(id: note.id))
     #expect(canonical.revision == displayed.revision + 1 && canonical.content == latestBody)
     #expect(fixture.commands.received.map(\.kind) == [.createSession, .send])
     #expect(fixture.commands.received.last?.noteRevision == canonical.revision)
@@ -223,10 +223,10 @@ struct CompanionFlowTests {
     let explicitRepeat = try await finalEngine.startConversation(launch)
     #expect(explicitRepeat.accepted)
     #expect(await fixture.transport.count("POST /v1/commands") == 2)
-    let content = try fixture.database.conversationContent(id: conversationID)
+    let content = try await fixture.database.conversationContent(id: conversationID)
     #expect(content.runs.count == 1)
     #expect(content.messages.filter { $0.role == "user" }.map(\.content) == [launch.initialSend.text!])
-    #expect(try fixture.database.companionSnapshot().conversations.count == 1)
+    #expect(try await fixture.database.companionSnapshot().conversations.count == 1)
     let requests = await fixture.http.observations.requests()
     #expect(requests.contains("POST /wovenmatter/v1/pair"))
     #expect(requests.contains("GET /wovenmatter/v1/command-receipts/" + launch.create.commandID))
@@ -238,7 +238,7 @@ struct CompanionFlowTests {
   func freshNoteAndCommandReceipt() async throws {
     let fixture = try await FlowFixture(); defer { fixture.remove() }
     let note = try await fixture.mobile.createNote(folderID: nil, title: "Plan", content: richDocument("Use this idea"))
-    let conversationID = try fixture.database.createLocalACPSession(runtimeKind: .codex, title: "Fixture session", ownerDeviceID: UUID())
+    let conversationID = try await fixture.database.createLocalACPSession(runtimeKind: .codex, title: "Fixture session", ownerDeviceID: UUID())
     let engine = MobileSyncEngine(store: fixture.mobile, transport: fixture.transport)
     let command = CompanionCommand(deviceID: fixture.credential.deviceID, kind: .send, conversationID: conversationID, text: "Work from my note", noteID: note.id)
     await fixture.transport.dropNextCommandAcknowledgement()
@@ -246,7 +246,7 @@ struct CompanionFlowTests {
     catch MobileConnectionError.offline {}
     #expect(fixture.commands.received.count == 1)
     let accepted = try #require(fixture.commands.received.first)
-    let canonical = try #require(try fixture.database.companionNote(id: note.id))
+    let canonical = try #require(try await fixture.database.companionNote(id: note.id))
     #expect(accepted.noteRevision == canonical.revision)
     #expect(fixture.commands.boundNoteContents == [canonical.content])
     let restarted = try MobileStore(file: fixture.mobileURL)
@@ -260,29 +260,29 @@ struct CompanionFlowTests {
   @Test("disconnect and host stop reject new writes while an accepted Mac-owned run completes")
   func stoppedHostKeepsAcceptedWork() async throws {
     let fixture = try await FlowFixture(); defer { fixture.remove() }
-    let conversationID = try fixture.database.createLocalACPSession(runtimeKind: .codex, title: "Long fake run", ownerDeviceID: UUID())
+    let conversationID = try await fixture.database.createLocalACPSession(runtimeKind: .codex, title: "Long fake run", ownerDeviceID: UUID())
     fixture.commands.holdCommands = true
     let engine = MobileSyncEngine(store: fixture.mobile, transport: fixture.transport)
     let command = CompanionCommand(deviceID: fixture.credential.deviceID, kind: .send, conversationID: conversationID, text: "Continue on Mac")
     let sending = Task { try await engine.submit(command) }
     await fixture.commands.waitUntilStarted()
-    #expect(try fixture.database.activeDeviceOwnedConversationIDs().contains(conversationID))
+    #expect(try await fixture.database.activeDeviceOwnedConversationIDs().contains(conversationID))
     sending.cancel() // The HTTP client's task does not own the retained dispatcher work.
     fixture.activity.active = false
     let pending = try await fixture.mobile.createNote(folderID: nil, title: "Offline while stopped", content: richDocument("Saved locally"))
     do { try await engine.synchronize(); Issue.record("Expected stopped host") }
     catch MobileConnectionError.http(503, _) {}
-    #expect(try fixture.database.companionNote(id: pending.id) == nil)
+    #expect(try await fixture.database.companionNote(id: pending.id) == nil)
     #expect(await fixture.mobile.snapshot().notes[pending.id]?.title == "Offline while stopped")
     fixture.http.stop()
     fixture.commands.release()
     await fixture.commands.waitUntilCompleted()
     do { _ = try await sending.value; Issue.record("Cancelled HTTP delivery should not return a receipt") }
     catch let error as URLError { #expect(error.code == .cancelled || error.code == .networkConnectionLost) }
-    let receipt = try #require(try fixture.database.companionCommandReceipt(deviceID: command.deviceID, commandID: command.commandID))
+    let receipt = try #require(try await fixture.database.companionCommandReceipt(deviceID: command.deviceID, commandID: command.commandID))
     #expect(receipt.status == .completed)
     #expect(fixture.commands.received.count == 1)
-    #expect(try fixture.database.activeDeviceOwnedConversationIDs().isEmpty)
+    #expect(try await fixture.database.activeDeviceOwnedConversationIDs().isEmpty)
   }
 
   private func richDocument(_ text: String) throws -> String {
@@ -314,7 +314,7 @@ private final class FlowFixture {
   }) async throws {
     directory = FileManager.default.temporaryDirectory.appending(path: "woven-companion-flow-\(UUID())")
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    database = try WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+    database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
     mobileURL = directory.appending(path: "phone/store.json")
     mobile = try MobileStore(file: mobileURL)
     authentication = try CompanionAuthentication(fileURL: directory.appending(path: "devices.json"))
@@ -450,12 +450,12 @@ private final class FakeCommands: CompanionCommandServing {
   func pendingInteractions() -> [CompanionPendingInteraction] { [] }
   func sessionCapabilities(conversationID: String) async throws -> CompanionProvider { providers()[0] }
   func transcript(conversationID: String, before: String?) async throws -> CompanionTranscript {
-    let content = try database.conversationContent(id: conversationID)
+    let content = try await database.conversationContent(id: conversationID)
     return CompanionTranscript(conversationID: conversationID, messages: content.messages.map {
       .init(id: $0.id, conversationID: $0.conversationID, runID: $0.runID, role: $0.role, content: $0.content, status: $0.status, createdAt: $0.createdAt)
     })
   }
-  func receipt(commandID: String, deviceID: String) throws -> CompanionCommandReceipt? { try dispatcher.receipt(commandID: commandID, deviceID: deviceID) }
+  func receipt(commandID: String, deviceID: String) async throws -> CompanionCommandReceipt? { try await dispatcher.receipt(commandID: commandID, deviceID: deviceID) }
   func execute(_ command: CompanionCommand, deviceID: String) async throws -> CompanionCommandReceipt {
     let result = try await dispatcher.execute(command) { [self] accepted in
       received.append(command)
@@ -465,23 +465,23 @@ private final class FakeCommands: CompanionCommandServing {
       case .createSession:
         guard command.providerID == "local:codex" else { throw MobileConnectionError.invalidResponse }
         let requestedID = try #require(UUID(uuidString: conversationID))
-        _ = try database.createLocalACPSession(runtimeKind: .codex,
+        _ = try await database.createLocalACPSession(runtimeKind: .codex,
             title: command.text ?? "Fixture mobile conversation", ownerDeviceID: UUID(),
             requestedConversationID: requestedID, folderID: command.folderID)
         receipt.conversationID = conversationID
         return receipt
       case .send:
         if let noteID = command.noteID {
-          guard let note = try database.companionNote(id: noteID), note.revision == command.noteRevision else { throw MobileStore.Failure.conflictingNote }
+          guard let note = try await database.companionNote(id: noteID), note.revision == command.noteRevision else { throw MobileStore.Failure.conflictingNote }
           boundNoteContents.append(note.content)
         }
-        let run = try database.beginLocalACPRun(conversationID: conversationID, content: command.text ?? "")
+        let run = try await database.beginLocalACPRun(conversationID: conversationID, content: command.text ?? "")
         started = true; startedWaiter?.resume(); startedWaiter = nil
         if holdCommands { await withCheckedContinuation { releaseWaiter = $0 } }
-        try database.completeLocalACPRun(runID: run.runID)
+        try await database.completeLocalACPRun(runID: run.runID)
         receipt.conversationID = conversationID; receipt.runID = run.runID
         return receipt
-      case .steer, .stop, .respond:
+      case .steer, .stop, .respond, .workspace:
         throw CompanionAPIError(code: "fixture_unsupported", message: "This fake only implements createSession and send.")
       }
     }

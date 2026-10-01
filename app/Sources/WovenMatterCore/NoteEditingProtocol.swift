@@ -38,6 +38,10 @@ public struct RemoteNoteEditEnvelope: Codable, Equatable, Sendable {
   public static let currentVersion = 1
   public static let maximumEnvelopeBytes = 1 * 1_024 * 1_024
   public static let maximumOperationCount = 128
+  public static let maximumBlockCount = 10_000
+  public static let maximumTableRows = 1_000
+  public static let maximumTableColumns = 128
+  public static let maximumTableCells = 100_000
 
   public var version: Int
   public var nonce: String
@@ -103,20 +107,31 @@ public struct RemoteNoteEditEnvelope: Codable, Equatable, Sendable {
           envelope.operations.count <= maximumOperationCount else {
       throw RemoteNoteEditError.invalidEnvelope
     }
-    try envelope.validateOperations(noteKind: noteKind)
+    try Self.validate(operations: envelope.operations, noteKind: noteKind)
     return envelope
   }
 
   public func validateApplying(to document: NoteDocument) throws {
-    guard version == Self.currentVersion,
-          !operations.isEmpty,
-          operations.count <= Self.maximumOperationCount else {
+    guard version == Self.currentVersion else { throw RemoteNoteEditError.invalidEnvelope }
+    try Self.validate(operations: operations, applyingTo: document)
+  }
+
+  /// Local sockets and remote envelopes share the same resource limits. Validate
+  /// cheap per-operation bounds before applying anything that could allocate.
+  public static func validate(operations: [NoteEditOperation], applyingTo document: NoteDocument) throws {
+    guard !operations.isEmpty, operations.count <= Self.maximumOperationCount else {
       throw RemoteNoteEditError.invalidEnvelope
     }
-    try validateOperations(noteKind: document.kind)
+    try validate(operations: operations, noteKind: document.kind)
     var result = document
-    _ = try result.apply(operations)
-    guard result.blocks.count <= 10_000,
+    for operation in operations {
+      _ = try result.apply([operation], normalizingResult: false)
+      try validateResult(result)
+    }
+  }
+
+  private static func validateResult(_ result: NoteDocument) throws {
+    guard result.blocks.count <= Self.maximumBlockCount,
           result.html.utf8.count <= Self.maximumEnvelopeBytes,
           (try result.encoded()).utf8.count <= Self.maximumEnvelopeBytes else {
       throw RemoteNoteEditError.operationTooLarge
@@ -128,7 +143,12 @@ public struct RemoteNoteEditEnvelope: Codable, Equatable, Sendable {
       switch block {
       case .richText(let richText):
         let (nextRuns, runOverflow) = totalRuns.addingReportingOverflow(richText.runs.count)
-        let blockBytes = richText.runs.reduce(into: 0) { $0 += $1.text.utf8.count }
+        var blockBytes = 0
+        for run in richText.runs {
+          let (next, overflow) = blockBytes.addingReportingOverflow(run.text.utf8.count)
+          guard !overflow else { throw RemoteNoteEditError.operationTooLarge }
+          blockBytes = next
+        }
         let (nextBytes, byteOverflow) = totalTextBytes.addingReportingOverflow(blockBytes)
         guard !runOverflow, !byteOverflow, nextRuns <= 100_000,
               nextBytes <= Self.maximumEnvelopeBytes else {
@@ -142,13 +162,25 @@ public struct RemoteNoteEditEnvelope: Codable, Equatable, Sendable {
         )
         let (nextTotal, totalOverflow) = totalCells.addingReportingOverflow(cells)
         guard !cellOverflow, !totalOverflow,
-              table.rows.count <= 1_000,
-              table.columns.count <= 128,
-              cells <= 100_000,
-              nextTotal <= 100_000 else {
+              table.rows.count <= Self.maximumTableRows,
+              table.columns.count <= Self.maximumTableColumns,
+              cells <= Self.maximumTableCells,
+              nextTotal <= Self.maximumTableCells else {
           throw RemoteNoteEditError.operationNotAllowed
         }
         totalCells = nextTotal
+      }
+    }
+  }
+
+  public static func requiresRevision(_ operations: [NoteEditOperation]) -> Bool {
+    operations.contains { operation in
+      switch operation {
+      case .appendText, .insertText, .createTable: false
+      case .addTableRow(_, let after), .addTableColumn(_, let after): after != nil
+      case .setTitle, .replaceBlock, .deleteBlock, .setParagraphStyle, .setTableCell,
+           .removeTableRow, .removeTableColumn, .setHTML, .setArtifactDatabaseLink,
+           .setTableDatabaseLink: true
       }
     }
   }
@@ -179,7 +211,7 @@ public struct RemoteNoteEditEnvelope: Codable, Equatable, Sendable {
     return result.trimmingCharacters(in: .whitespacesAndNewlines)
   }
 
-  private func validateOperations(noteKind: NoteArtifactKind) throws {
+  public static func validate(operations: [NoteEditOperation], noteKind: NoteArtifactKind) throws {
     for operation in operations {
       let encoded = try JSONEncoder().encode(operation)
       guard encoded.count <= Self.maximumEnvelopeBytes else {
@@ -195,13 +227,32 @@ public struct RemoteNoteEditEnvelope: Codable, Equatable, Sendable {
           throw RemoteNoteEditError.operationTooLarge
         }
       case .createTable(_, let rows, let columns, _):
-        guard (1...1_000).contains(rows), (1...128).contains(columns),
-              rows * columns <= 100_000 else {
+        let (cells, overflow) = rows.multipliedReportingOverflow(by: columns)
+        guard (1...Self.maximumTableRows).contains(rows),
+              (1...Self.maximumTableColumns).contains(columns), !overflow,
+              cells <= Self.maximumTableCells else {
           throw RemoteNoteEditError.operationNotAllowed
         }
       case .setTableCell(_, let row, let column, let runs):
-        guard row >= 0, column >= 0, row < 1_000, column < 128,
+        guard row >= 0, column >= 0, row < Self.maximumTableRows,
+              column < Self.maximumTableColumns,
               runs.count <= 4_096 else {
+          throw RemoteNoteEditError.operationNotAllowed
+        }
+      case .addTableRow(_, let after):
+        guard after.map({ (-1..<Self.maximumTableRows).contains($0) }) ?? true else {
+          throw RemoteNoteEditError.operationNotAllowed
+        }
+      case .removeTableRow(_, let row):
+        guard (0..<Self.maximumTableRows).contains(row) else {
+          throw RemoteNoteEditError.operationNotAllowed
+        }
+      case .addTableColumn(_, let after):
+        guard after.map({ (-1..<Self.maximumTableColumns).contains($0) }) ?? true else {
+          throw RemoteNoteEditError.operationNotAllowed
+        }
+      case .removeTableColumn(_, let column):
+        guard (0..<Self.maximumTableColumns).contains(column) else {
           throw RemoteNoteEditError.operationNotAllowed
         }
       case .setHTML(let html):
@@ -212,8 +263,24 @@ public struct RemoteNoteEditEnvelope: Codable, Equatable, Sendable {
         try Self.validate(link)
       case .setTableDatabaseLink(_, let link):
         try Self.validate(link)
-      case .replaceBlock, .deleteBlock, .setParagraphStyle,
-           .addTableRow, .removeTableRow, .addTableColumn, .removeTableColumn:
+      case .replaceBlock(_, let block):
+        // Validate the raw block before apply/normalization can allocate a large
+        // rectangle or a later operation indexes a malformed cell array.
+        switch block {
+        case .richText(let text):
+          guard text.runs.count <= 4_096 else { throw RemoteNoteEditError.operationTooLarge }
+        case .table(let table):
+          let (cells, overflow) = table.rows.count.multipliedReportingOverflow(by: table.columns.count)
+          guard (1...Self.maximumTableRows).contains(table.rows.count),
+                (1...Self.maximumTableColumns).contains(table.columns.count),
+                !overflow, cells <= Self.maximumTableCells,
+                table.rows.allSatisfy({ $0.cells.count == table.columns.count &&
+                  $0.cells.allSatisfy({ $0.runs.count <= 4_096 }) }) else {
+            throw RemoteNoteEditError.operationNotAllowed
+          }
+          try Self.validate(table.databaseLink)
+        }
+      case .deleteBlock, .setParagraphStyle:
         break
       }
     }
@@ -475,6 +542,10 @@ public enum NoteEditOperation: Codable, Equatable, Sendable {
 
 public extension NoteDocument {
   mutating func apply(_ operations: [NoteEditOperation]) throws -> String? {
+    try apply(operations, normalizingResult: true)
+  }
+
+  fileprivate mutating func apply(_ operations: [NoteEditOperation], normalizingResult: Bool) throws -> String? {
     guard operations.count <= 128,
           try JSONEncoder().encode(operations).count <= CompanionProtocol.maximumNoteBytes else {
       throw NoteDocumentSafetyError.tooLarge
@@ -524,7 +595,10 @@ public extension NoteDocument {
         }
       case .addTableRow(let tableID, let after):
         try mutateTable(id: tableID) { table in
-          let index = min(max(0, (after ?? table.rows.count - 1) + 1), table.rows.count)
+          let base = after ?? table.rows.count - 1
+          let (candidate, overflow) = base.addingReportingOverflow(1)
+          guard !overflow else { throw NoteEditError.tableCoordinateOutOfRange }
+          let index = min(max(0, candidate), table.rows.count)
           table.rows.insert(NoteTableRow(cellCount: table.columns.count), at: index)
         }
       case .removeTableRow(let tableID, let row):
@@ -537,7 +611,10 @@ public extension NoteDocument {
         }
       case .addTableColumn(let tableID, let after):
         try mutateTable(id: tableID) { table in
-          let index = min(max(0, (after ?? table.columns.count - 1) + 1), table.columns.count)
+          let base = after ?? table.columns.count - 1
+          let (candidate, overflow) = base.addingReportingOverflow(1)
+          guard !overflow else { throw NoteEditError.tableCoordinateOutOfRange }
+          let index = min(max(0, candidate), table.columns.count)
           table.columns.insert(NoteTableColumn(), at: index)
           for row in table.rows.indices {
             table.rows[row].cells.insert(NoteTableCell(), at: index)
@@ -561,7 +638,7 @@ public extension NoteDocument {
       }
       try validateEditableShape()
     }
-    self = normalized()
+    if normalizingResult { self = normalized() }
     return title
   }
 

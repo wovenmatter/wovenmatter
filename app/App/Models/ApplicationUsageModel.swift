@@ -16,6 +16,47 @@ private struct UsageLimitsRefreshKey: Hashable, Sendable {
     let keychainInteraction: String
     let interactiveProvider: String?
     let selectedCodexWorkspaceID: String?
+    let selectedConnections: [String: String]
+}
+
+struct BackendUsageSnapshot: Codable, Sendable {
+    var localUsage: LocalUsageSnapshot?
+    var localUsageError: String?
+    var isRefreshingUsageAnalytics: Bool
+    var isRefreshingUsageLimits: Bool
+    var isAuthorizingUsageCredential: Bool
+    var isOpenRouterCredentialConfigured: Bool
+    var signingInUsageProviders: Set<ProviderKind>
+    var hasAcknowledgedCredentialAccessDisclosure: Bool
+    var enabledUsageProviders: Set<ProviderKind>
+    var usageConnectionChoices: [UsageConnectionChoice]
+    var selectedUsageConnections: [String: String]
+    var codexUsageWorkspaces: [CodexUsageWorkspace]
+    var selectedCodexUsageWorkspaceID: String?
+}
+
+enum BackendUsageCommand: Codable, Sendable {
+    case refresh(range: UsageTimeRange, limits: Bool, reason: UsageRefreshReason, explicit: Bool, provider: ProviderKind?)
+    case analyticsSelected(UsageTimeRange)
+    case sharedConnectionsChanged
+    case saveOpenRouterKey(String, UsageTimeRange)
+    case deleteOpenRouterKey(UsageTimeRange)
+    case acknowledgeDisclosure
+    case authorizeSavedCredentials
+    case enable(ProviderKind, UsageTimeRange)
+    case retry(ProviderKind, UsageTimeRange)
+    case selectConnection(String, ProviderKind, UsageTimeRange)
+    case selectWorkspace(String, UsageTimeRange)
+    case disable(ProviderKind, UsageTimeRange)
+    case signIn(ProviderKind)
+    case reconnectWorkspace
+}
+
+private struct BackendUsageSamplesRequest: Codable {
+    let start: Date
+    let end: Date
+    let limit: Int
+    let offset: Int
 }
 
 /// Owns usage presentation, refresh lifetimes and preferences independently of workspace runs.
@@ -35,10 +76,18 @@ final class ApplicationUsageModel {
     private(set) var signingInUsageProviders: Set<ProviderKind> = []
     private(set) var hasAcknowledgedCredentialAccessDisclosure = false
     private(set) var enabledUsageProviders: Set<ProviderKind> = []
+    private(set) var usageConnectionChoices: [UsageConnectionChoice] = []
+    private(set) var selectedUsageConnections: [String: String] = [:]
     private(set) var codexUsageWorkspaces: [CodexUsageWorkspace] = []
     private(set) var selectedCodexUsageWorkspaceID: String?
     @ObservationIgnored
     private let localUsageService: LocalUsageService
+    @ObservationIgnored
+    var backendRequest: (@MainActor (String, Data) async throws -> Data)?
+    @ObservationIgnored
+    private var backendGeneration = UUID()
+    @ObservationIgnored
+    var isBackendProjection = LocalExecutionRole.current == .frontend
     @ObservationIgnored
     private var usageAnalyticsRequestID: UUID?
     @ObservationIgnored
@@ -62,12 +111,90 @@ final class ApplicationUsageModel {
 
     /// Reads retained samples without refreshing providers or credentials.
     func recordedUsageSamples(from start: Date, to end: Date, limit: Int, offset: Int) async throws -> [UsageSample] {
-        try await localUsageService.recordedSamples(from: start, to: end, limit: limit, offset: offset)
+        if isBackendProjection {
+            guard let backendRequest else { throw BackendRPCError.unavailable }
+            let payload = try JSONEncoder().encode(BackendUsageSamplesRequest(start: start, end: end, limit: limit, offset: offset))
+            return try JSONDecoder().decode([UsageSample].self, from: await backendRequest("usage.samples", payload))
+        }
+        return try await localUsageService.recordedSamples(from: start, to: end, limit: limit, offset: offset)
+    }
+
+    func backendSnapshot() -> BackendUsageSnapshot {
+        BackendUsageSnapshot(localUsage: localUsage, localUsageError: localUsageError,
+            isRefreshingUsageAnalytics: isRefreshingUsageAnalytics, isRefreshingUsageLimits: isRefreshingUsageLimits,
+            isAuthorizingUsageCredential: isAuthorizingUsageCredential, isOpenRouterCredentialConfigured: isOpenRouterCredentialConfigured,
+            signingInUsageProviders: signingInUsageProviders, hasAcknowledgedCredentialAccessDisclosure: hasAcknowledgedCredentialAccessDisclosure,
+            enabledUsageProviders: enabledUsageProviders, usageConnectionChoices: usageConnectionChoices,
+            selectedUsageConnections: selectedUsageConnections, codexUsageWorkspaces: codexUsageWorkspaces,
+            selectedCodexUsageWorkspaceID: selectedCodexUsageWorkspaceID)
+    }
+
+    func applyBackendSnapshot(_ value: BackendUsageSnapshot) {
+        localUsage = value.localUsage; localUsageError = value.localUsageError
+        isRefreshingUsageAnalytics = value.isRefreshingUsageAnalytics; isRefreshingUsageLimits = value.isRefreshingUsageLimits
+        isAuthorizingUsageCredential = value.isAuthorizingUsageCredential; isOpenRouterCredentialConfigured = value.isOpenRouterCredentialConfigured
+        signingInUsageProviders = value.signingInUsageProviders; hasAcknowledgedCredentialAccessDisclosure = value.hasAcknowledgedCredentialAccessDisclosure
+        enabledUsageProviders = value.enabledUsageProviders; usageConnectionChoices = value.usageConnectionChoices
+        selectedUsageConnections = value.selectedUsageConnections; codexUsageWorkspaces = value.codexUsageWorkspaces
+        selectedCodexUsageWorkspaceID = value.selectedCodexUsageWorkspaceID
+    }
+
+    func refreshBackendSnapshot() async {
+        guard isBackendProjection else { return }
+        let generation = backendGeneration
+        do {
+            guard let backendRequest else { throw BackendRPCError.unavailable }
+            let data = try await backendRequest("usage.snapshot", Data())
+            guard generation == backendGeneration else { return }
+            applyBackendSnapshot(try JSONDecoder().decode(BackendUsageSnapshot.self, from: data))
+        } catch { if generation == backendGeneration { localUsageError = error.localizedDescription } }
+    }
+
+    private func forward(_ command: BackendUsageCommand) async {
+        do { try await forwardThrowing(command) }
+        catch { localUsageError = error.localizedDescription }
+    }
+
+    private func forwardThrowing(_ command: BackendUsageCommand) async throws {
+        guard let backendRequest else { throw BackendRPCError.unavailable }
+        let generation = UUID(); backendGeneration = generation
+        let data = try await backendRequest("usage.command", JSONEncoder().encode(command))
+        guard generation == backendGeneration else { return }
+        applyBackendSnapshot(try JSONDecoder().decode(BackendUsageSnapshot.self, from: data))
+    }
+
+    func handleBackendRequest(_ request: BackendRPCRequest) async throws -> Data {
+        guard !isBackendProjection else { throw BackendRPCError.unavailable }
+        if request.method == "usage.samples" {
+            let value = try JSONDecoder().decode(BackendUsageSamplesRequest.self, from: request.payload)
+            return try JSONEncoder().encode(await recordedUsageSamples(from: value.start, to: value.end, limit: value.limit, offset: value.offset))
+        }
+        if request.method == "usage.command" {
+            switch try JSONDecoder().decode(BackendUsageCommand.self, from: request.payload) {
+            case let .refresh(range, limits, reason, explicit, provider):
+                await refreshLocalUsage(range: range, refreshLimits: limits, reason: reason, explicitCredentialAccess: explicit, interactiveProvider: provider)
+            case let .analyticsSelected(range): await usageAnalyticsSelected(range: range)
+            case .sharedConnectionsChanged: await sharedConnectionsChanged()
+            case let .saveOpenRouterKey(value, range): await saveOpenRouterAPIKey(value, range: range)
+            case let .deleteOpenRouterKey(range): await deleteOpenRouterAPIKey(range: range)
+            case .acknowledgeDisclosure: acknowledgeCredentialAccessDisclosure()
+            case .authorizeSavedCredentials: try await authorizeSavedCredentials()
+            case let .enable(provider, range): await enableUsageProvider(provider, range: range)
+            case let .retry(provider, range): await retryUsageProviderCredentialAccess(provider, range: range)
+            case let .selectConnection(id, provider, range): await selectUsageConnection(id, provider: provider, range: range)
+            case let .selectWorkspace(id, range): await selectCodexUsageWorkspace(id, range: range)
+            case let .disable(provider, range): await disableUsageProvider(provider, range: range)
+            case let .signIn(provider): signInUsageProvider(provider)
+            case .reconnectWorkspace: reconnectSelectedCodexUsageWorkspace()
+            }
+        } else if request.method != "usage.snapshot" { throw BackendRPCError.invalidFrame }
+        return try JSONEncoder().encode(backendSnapshot())
     }
 
     init(applicationDefaults: UserDefaults, localUsageService: LocalUsageService = LocalUsageService()) {
         self.localUsageService = localUsageService
         self.applicationDefaults = applicationDefaults
+        selectedUsageConnections = applicationDefaults.dictionary(forKey: "wovenmatter.usage.selected-connections") as? [String: String] ?? [:]
         isOpenRouterCredentialConfigured = applicationDefaults.bool(
             forKey: Self.openRouterCredentialConfiguredDefaultsKey
         )
@@ -89,6 +216,10 @@ final class ApplicationUsageModel {
         explicitCredentialAccess: Bool = false,
         interactiveProvider: ProviderKind? = nil
     ) async {
+        if isBackendProjection {
+            await forward(.refresh(range: range, limits: refreshLimits, reason: reason, explicit: explicitCredentialAccess, provider: interactiveProvider))
+            return
+        }
         localUsageError = nil
         prepareUsageSnapshot(range: range)
         let policy: UsageRefreshCoordinator<
@@ -128,14 +259,30 @@ final class ApplicationUsageModel {
     }
 
     func usageDestinationAppeared(range: UsageTimeRange) async {
+        await updateSharedConnectionPresence()
         await refreshLocalUsage(
             range: range,
             refreshLimits: true,
             reason: .viewAppeared
         )
     }
+    func sharedConnectionsChanged() async {
+        if isBackendProjection { await forward(.sharedConnectionsChanged); return }
+        await updateSharedConnectionPresence()
+        await refreshLocalUsage(range: currentUsageRange, refreshLimits: true, reason: .credentialChanged)
+    }
+    private func updateSharedConnectionPresence() async {
+        guard !isBackendProjection else { return }
+        guard let configured = try? await ProviderConnectionStore.shared.perform(invalidatesAccounts: false, {
+            try DefaultAgentSupport.hasKey("openrouter")
+        }) else { return }
+        guard !Task.isCancelled else { return }
+        isOpenRouterCredentialConfigured = configured
+        applicationDefaults.set(configured, forKey: Self.openRouterCredentialConfiguredDefaultsKey)
+    }
 
     func usageAnalyticsSelected(range: UsageTimeRange) async {
+        if isBackendProjection { await forward(.analyticsSelected(range)); return }
         await refreshUsageAnalytics(
             range: range,
             reason: .viewAppeared,
@@ -207,16 +354,16 @@ final class ApplicationUsageModel {
         interactiveProvider: ProviderKind?
     ) async {
         let enabledProviders = enabledUsageProviders
-        let allowsCredentialAccess = isOpenRouterCredentialConfigured
-            && hasAcknowledgedCredentialAccessDisclosure
-            && enabledProviders.contains(.openRouter)
+        let allowsCredentialAccess = hasAcknowledgedCredentialAccessDisclosure
+        let requestedConnections = selectedUsageConnections
         let requestedCodexWorkspaceID = selectedCodexUsageWorkspaceID
         let key = UsageLimitsRefreshKey(
             enabledProviders: enabledProviders.map(\.rawValue).sorted(),
             allowsCredentialAccess: allowsCredentialAccess,
             keychainInteraction: keychainInteraction.rawValue,
             interactiveProvider: interactiveProvider?.rawValue,
-            selectedCodexWorkspaceID: requestedCodexWorkspaceID
+            selectedCodexWorkspaceID: requestedCodexWorkspaceID,
+            selectedConnections: requestedConnections
         )
         let requestID = UUID()
         usageLimitsRequestID = requestID
@@ -233,13 +380,17 @@ final class ApplicationUsageModel {
                     allowCredentialAccess: allowsCredentialAccess,
                     keychainInteraction: keychainInteraction,
                     interactiveProvider: interactiveProvider,
-                    selectedCodexWorkspaceID: requestedCodexWorkspaceID
+                    selectedCodexWorkspaceID: requestedCodexWorkspaceID,
+                    selectedConnections: requestedConnections
                 )
             }
             guard usageLimitsRequestID == requestID,
                   enabledUsageProviders == enabledProviders,
+                  selectedUsageConnections == requestedConnections,
                   selectedCodexUsageWorkspaceID == requestedCodexWorkspaceID else { return }
             try Task.checkCancellation()
+            usageConnectionChoices = limits.connectionChoices
+            selectedUsageConnections.merge(limits.selectedConnections) { _, new in new }
             codexUsageWorkspaces = limits.codexWorkspaces
             selectedCodexUsageWorkspaceID = limits.selectedCodexWorkspaceID
             let existing = localUsage
@@ -292,6 +443,7 @@ final class ApplicationUsageModel {
     }
 
     func saveOpenRouterAPIKey(_ value: String, range: UsageTimeRange) async {
+        if isBackendProjection { await forward(.saveOpenRouterKey(value, range)); return }
         guard !isAuthorizingUsageCredential else { return }
         isAuthorizingUsageCredential = true
         defer { isAuthorizingUsageCredential = false }
@@ -315,6 +467,7 @@ final class ApplicationUsageModel {
     }
 
     func deleteOpenRouterAPIKey(range: UsageTimeRange) async {
+        if isBackendProjection { await forward(.deleteOpenRouterKey(range)); return }
         guard !isAuthorizingUsageCredential else { return }
         isAuthorizingUsageCredential = true
         defer { isAuthorizingUsageCredential = false }
@@ -337,6 +490,11 @@ final class ApplicationUsageModel {
     }
 
     func acknowledgeCredentialAccessDisclosure() {
+        if isBackendProjection {
+            hasAcknowledgedCredentialAccessDisclosure = true
+            Task { await forward(.acknowledgeDisclosure) }
+            return
+        }
         guard !hasAcknowledgedCredentialAccessDisclosure else { return }
         hasAcknowledgedCredentialAccessDisclosure = true
         applicationDefaults.set(
@@ -359,6 +517,7 @@ final class ApplicationUsageModel {
     }
 
     func authorizeSavedCredentials() async throws {
+        if isBackendProjection { try await forwardThrowing(.authorizeSavedCredentials); return }
         if isOpenRouterCredentialConfigured, enabledUsageProviders.contains(.openRouter) {
             try await localUsageService.authorizeOpenRouterCredentialAccess()
         }
@@ -375,6 +534,7 @@ final class ApplicationUsageModel {
         _ provider: ProviderKind,
         range: UsageTimeRange
     ) async {
+        if isBackendProjection { await forward(.enable(provider, range)); return }
         guard !isAuthorizingUsageCredential else { return }
         isAuthorizingUsageCredential = true
         defer { isAuthorizingUsageCredential = false }
@@ -393,6 +553,7 @@ final class ApplicationUsageModel {
         _ provider: ProviderKind,
         range: UsageTimeRange
     ) async {
+        if isBackendProjection { await forward(.retry(provider, range)); return }
         guard enabledUsageProviders.contains(provider),
               !isAuthorizingUsageCredential else { return }
         isAuthorizingUsageCredential = true
@@ -415,10 +576,29 @@ final class ApplicationUsageModel {
         )
     }
 
+    func selectUsageConnection(_ id: String, provider: ProviderKind, range: UsageTimeRange) async {
+        if isBackendProjection { await forward(.selectConnection(id, provider, range)); return }
+        guard enabledUsageProviders.contains(provider),
+              usageConnectionChoices.contains(where: { $0.provider == provider && $0.id == id }),
+              selectedUsageConnections[provider.rawValue] != id else { return }
+        selectedUsageConnections[provider.rawValue] = id
+        applicationDefaults.set(selectedUsageConnections, forKey: "wovenmatter.usage.selected-connections")
+        // Remove the old account's numbers immediately, before any asynchronous
+        // request can leave them displayed under the newly selected identity.
+        if let current = localUsage {
+            localUsage = LocalUsageSnapshot(analytics: current.analytics,
+                limits: current.limits.filter { $0.provider != provider },
+                hasOpenRouterCredential: current.hasOpenRouterCredential)
+        }
+        await refreshUsageLimits(reason: .credentialChanged, force: true,
+            keychainInteraction: .noninteractive, interactiveProvider: nil)
+    }
+
     func selectCodexUsageWorkspace(
         _ workspaceID: String,
         range: UsageTimeRange
     ) async {
+        if isBackendProjection { await forward(.selectWorkspace(workspaceID, range)); return }
         guard enabledUsageProviders.contains(.codex),
               hasAcknowledgedCredentialAccessDisclosure,
               codexUsageWorkspaces.contains(where: { $0.id == workspaceID }),
@@ -438,6 +618,7 @@ final class ApplicationUsageModel {
         _ provider: ProviderKind,
         range: UsageTimeRange
     ) async {
+        if isBackendProjection { await forward(.disable(provider, range)); return }
         disableUsageProviderPreference(provider)
         await refreshLocalUsage(
             range: range,
@@ -463,6 +644,16 @@ final class ApplicationUsageModel {
     }
 
     func signInUsageProvider(_ provider: ProviderKind) {
+        if isBackendProjection {
+            if [.codex, .claude, .grok, .openRouter, .openCodeGo].contains(provider) {
+                NotificationCenter.default.post(name: .init("wovenmatter.open-connections"), object: "global")
+            } else { Task { await forward(.signIn(provider)) } }
+            return
+        }
+        if [.codex, .claude, .grok, .openRouter, .openCodeGo].contains(provider) {
+            NotificationCenter.default.post(name: .init("wovenmatter.open-connections"), object: "global")
+            return
+        }
         guard !signingInUsageProviders.contains(provider) else { return }
         guard enabledUsageProviders.contains(provider) else {
             localUsageError = "Enable \(provider.displayName) usage tracking before signing in."
@@ -506,6 +697,7 @@ final class ApplicationUsageModel {
     }
 
     func reconnectSelectedCodexUsageWorkspace() {
+        if isBackendProjection { Task { await forward(.reconnectWorkspace) }; return }
         guard !signingInUsageProviders.contains(.codex),
               enabledUsageProviders.contains(.codex),
               hasAcknowledgedCredentialAccessDisclosure,

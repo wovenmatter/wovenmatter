@@ -2,7 +2,7 @@ import Foundation
 import SQLite3
 import WovenMatterCore
 
-extension WorkspaceDatabase {
+extension WorkspaceDatabaseConnection {
   public func companionWorkspaceID() throws -> String {
     try withLock { try companionWorkspaceIDUnlocked() }
   }
@@ -133,7 +133,7 @@ extension WorkspaceDatabase {
   }
 
   func companionNoteUnlocked(id: String) throws -> CompanionNote? {
-    let statement = try prepareUnlocked("SELECT id, folder_id, title, content, updated_at FROM notes WHERE id = ? AND user_id = ? AND deleted_at IS NULL")
+    let statement = try prepareUnlocked("SELECT id, folder_id, title, content, updated_at, is_pinned FROM notes WHERE id = ? AND user_id = ? AND deleted_at IS NULL")
     defer { sqlite3_finalize(statement) }
     try bind(id, at: 1, to: statement); try bind(localMutationOperatorIDUnlocked(), at: 2, to: statement)
     let code = sqlite3_step(statement)
@@ -142,7 +142,7 @@ extension WorkspaceDatabase {
     return try CompanionNote(id: text(statement, column: 0), folderID: optionalText(statement, column: 1),
                              title: text(statement, column: 2), content: text(statement, column: 3),
                              revision: companionVersionUnlocked(kind: "note", id: id)?.revision ?? 1,
-                             updatedAt: text(statement, column: 4), kind: companionNoteKind(content: text(statement, column: 3)))
+                             updatedAt: text(statement, column: 4), kind: companionNoteKind(content: text(statement, column: 3)), isPinned: sqlite3_column_int(statement, 5) != 0)
   }
 
   func companionBudgetedNote(_ note: CompanionNote, remainingBytes: inout Int) -> CompanionNote {
@@ -176,7 +176,7 @@ extension WorkspaceDatabase {
         COALESCE(s.runtime_kind, CASE WHEN g.agent_id IS NOT NULL THEN 'openclaw' ELSE NULL END),
         c.last_message_preview, c.updated_at,
         (SELECT id FROM dashboard_runs WHERE conversation_id = c.id AND status = 'running' ORDER BY created_at DESC LIMIT 1),
-        s.remote_workspace_id
+        s.remote_workspace_id, c.is_pinned
       FROM dashboard_conversations c LEFT JOIN desktop_local_acp_sessions s ON s.conversation_id = c.id
       LEFT JOIN desktop_openclaw_gateway_sessions g ON g.conversation_id = c.id
       LEFT JOIN desktop_buzz_agent_enrollments enrollment
@@ -191,6 +191,21 @@ extension WorkspaceDatabase {
     return try CompanionConversation(id: text(statement, column: 0), title: text(statement, column: 1),
       folderID: optionalText(statement, column: 2), providerID: optionalText(statement, column: 3),
       routeID: optionalText(statement, column: 3), runtimeKind: optionalText(statement, column: 4),
-      activeRunID: optionalText(statement, column: 7), preview: optionalText(statement, column: 5) ?? "", updatedAt: text(statement, column: 6))
+      activeRunID: optionalText(statement, column: 7), preview: optionalText(statement, column: 5) ?? "", updatedAt: text(statement, column: 6), isPinned: sqlite3_column_int(statement, 9) != 0)
+  }
+}
+
+extension WorkspaceDatabase {
+  public func companionWorkspaceID() async throws -> String {
+    try await read { try $0.companionWorkspaceID() }
+  }
+  public func companionSnapshot(bodyByteBudget: Int = 1_024 * 1_024) async throws -> CompanionSnapshot {
+    try await read { try $0.companionSnapshot(bodyByteBudget: bodyByteBudget) }
+  }
+  public func companionNote(id: String) async throws -> CompanionNote? {
+    try await read { try $0.companionNote(id: id) }
+  }
+  public func companionChanges(after cursor: Int64, limit: Int = 200) async throws -> CompanionChangePage {
+    try await read { try $0.companionChanges(after: cursor, limit: limit) }
   }
 }

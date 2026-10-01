@@ -30,6 +30,30 @@ final class CompanionTransportTests: XCTestCase {
     catch { XCTAssertEqual((error as? CompanionAPIError)?.code, "unauthorized") }
   }
 
+  func testPhoneAndTabletsRemainPairedAndRevocationIsIndependent() async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let file = directory.appendingPathComponent("credentials.json")
+    let auth = try CompanionAuthentication(fileURL: file)
+    let endpoint = try XCTUnwrap(URL(string: "https://fixture.test.ts.net/wovenmatter"))
+    var paired: [CompanionPairResponse] = []
+    for name in ["iPhone", "iPad", "Second iPad"] {
+      let offer = try await auth.createOffer(endpoint: endpoint)
+      paired.append(try await auth.pair(.init(token: offer.payload.token, deviceID: UUID().uuidString.lowercased(), deviceName: name), workspaceID: "fixture"))
+    }
+    let reopened = try CompanionAuthentication(fileURL: file)
+    for device in paired { let verified = try await reopened.authenticate(bearer: device.credential); XCTAssertEqual(verified.id, device.deviceID) }
+    try await reopened.revoke(deviceID: paired[1].deviceID)
+    do { _ = try await reopened.authenticate(bearer: paired[1].credential); XCTFail("Revoked tablet remained paired") }
+    catch { XCTAssertEqual((error as? CompanionAPIError)?.code, "unauthorized") }
+    for device in [paired[0], paired[2]] { let verified = try await reopened.authenticate(bearer: device.credential); XCTAssertEqual(verified.id, device.deviceID) }
+    let offer = try await reopened.createOffer(endpoint: endpoint)
+    do {
+      _ = try await reopened.pair(.init(token: offer.payload.token, deviceID: paired[0].deviceID.uppercased(), deviceName: "Duplicate"), workspaceID: "fixture")
+      XCTFail("Active device identity was reused")
+    } catch { XCTAssertEqual((error as? CompanionAPIError)?.code, "invalid_device") }
+  }
+
   func testExpiredPairingAndVersionMismatchNeverCreateDevice() async throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: directory) }
@@ -47,7 +71,7 @@ final class CompanionTransportTests: XCTestCase {
     XCTAssertTrue(devices.isEmpty)
   }
 
-  func testHTTPReaderHandlesSplitUTF8AndRejectsSmugglingAndBrowserOrigins() throws {
+  func testHTTPReaderHandlesSplitUTF8AndRejectsSmugglingAndBrowserOrigins() async throws {
     let body = Data("{\"title\":\"Idea 🌿\"}".utf8)
     var wire = Data("POST /v1/mutations HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: \(body.count)\r\n\r\n".utf8)
     wire.append(body)
@@ -118,7 +142,7 @@ final class CompanionTransportTests: XCTestCase {
     XCTAssertFalse(child.isRunning)
   }
 
-  @MainActor func testServeInspectionIncludesAllForegroundAndPersistentPorts() throws {
+  @MainActor func testServeInspectionIncludesAllForegroundAndPersistentPorts() async throws {
     let data = Data(#"{"TCP":{"443":{"HTTPS":true}},"Foreground":{"existing":{"TCP":{"8443":{"HTTPS":true}},"Web":{}}}}"#.utf8)
     XCTAssertEqual(try CompanionTailscaleServe.occupiedPorts(in: data), Set([443, 8443]))
   }

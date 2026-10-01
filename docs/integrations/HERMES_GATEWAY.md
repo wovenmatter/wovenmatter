@@ -48,7 +48,7 @@ remote workspace before any resume request.
   write prevents submission and a lost acknowledgement cannot orphan accepted work.
   Create, resume and image requests use their distinct native parameter schemas.
 - `session.cwd.set` applies the existing local workspace root only to Woven
-  Matter-created sessions, including legacy local ACP sessions. Its REPOS and
+  Matter-created sessions, including legacy local ACP sessions. Its Repos and
   Databases links retain their configured external targets. Imported sessions
   retain the cwd recorded by Hermes. Global `terminal.cwd` is never changed.
 - Agent-definition context retains Woven Matter's existing ACP v1 compatibility:

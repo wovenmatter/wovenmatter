@@ -40,16 +40,16 @@ struct DashboardNoteDraftTests {
                                       expectedRevision: expected, baseContent: "base", baseTitle: "Title")
         }
         let first = entry("first", revision: 1)
-        writer.submit(first); try writer.flush()
+        writer.submit(first); try await writer.flush()
         try require(store.receipt(first) == "2", "Exact accepted receipt must be retained")
         // The UI's main-actor completion can still be queued when another edit
         // arrives. Only this writer's acknowledged predecessor permits rebasing.
-        writer.submit(entry("second", revision: 2)); try writer.flush()
+        writer.submit(entry("second", revision: 2)); try await writer.flush()
         try require(store.snapshot().0 == 3 && store.snapshot().1 == "second", "Own queued edits must advance")
         try require(store.snapshot().2 == ["1", "2"], "Own-chain CAS must use exact predecessor")
         store.externalWrite("phone")
         writer.submit(entry("third local writing", revision: 3))
-        do { try writer.flush(); throw DraftTestFailure.assertion("Expected conflict") }
+        do { try await writer.flush(); throw DraftTestFailure.assertion("Expected conflict") }
         catch DraftTestFailure.conflict {}
         try require(store.snapshot().1 == "phone", "External writing must survive a delayed local completion")
         let retained = try writer.recoverableEntries()

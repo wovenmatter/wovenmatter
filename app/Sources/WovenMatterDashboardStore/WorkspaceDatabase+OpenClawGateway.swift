@@ -5,7 +5,7 @@ import WovenMatterClient
 import WovenMatterCore
 
 // Gateway identity, imported history and scheduled-result persistence.
-extension WorkspaceDatabase {
+extension WorkspaceDatabaseConnection {
   public func saveOpenClawGatewayLink(_ link: OpenClawGatewayLink) throws {
     try withLock {
       let statement = try prepareUnlocked("""
@@ -738,6 +738,9 @@ extension WorkspaceDatabase {
         try bind(value, at: Int32(index + 1), to: row)
       }
       try stepDone(row)
+      if let payload = try? JSONDecoder().decode(GatewayJSONValue.self, from: message.raw) {
+        try captureGatewayLibraryFilesUnlocked(payload, messageID: id, conversationID: conversationID)
+      }
     }
     try reconcileOpenClawActivitiesUnlocked(conversationID: conversationID, changed: history.messages, liveRunIDs: liveRunIDs)
     let touch = try prepareUnlocked("""
@@ -1166,23 +1169,26 @@ extension WorkspaceDatabase {
     }
   }
 
-  public func openClawCronRuns(agentID: UUID? = nil) throws -> [OpenClawCronRun] {
+  /// Result collection retains the unbounded default; presentation requests an
+  /// explicit per-job window that can expand when older history is requested.
+  public func openClawCronRuns(agentID: UUID? = nil, jobID: String? = nil, limit: Int? = nil) throws -> [OpenClawCronRun] {
     try withLock {
-      let statement = try prepareUnlocked(agentID == nil ? """
+      var predicates: [String] = []
+      var values: [String] = []
+      if let agentID { predicates.append("agent_id = ?"); values.append(agentID.uuidString.lowercased()) }
+      if let jobID { predicates.append("remote_job_id = ?"); values.append(jobID) }
+      let filter = predicates.isEmpty ? "" : " WHERE " + predicates.joined(separator: " AND ")
+      let bound = limit.map { " LIMIT \(max(1, $0))" } ?? ""
+      let statement = try prepareUnlocked("""
         SELECT remote_run_id, remote_job_id, agent_id, status, output,
           native_session_id, native_session_key, started_at, completed_at,
           remote_payload
-        FROM desktop_openclaw_cron_runs
+        FROM desktop_openclaw_cron_runs\(filter)
         ORDER BY COALESCE(started_at, completed_at) DESC, remote_run_id DESC
-        """ : """
-        SELECT remote_run_id, remote_job_id, agent_id, status, output,
-          native_session_id, native_session_key, started_at, completed_at,
-          remote_payload
-        FROM desktop_openclaw_cron_runs WHERE agent_id = ?
-        ORDER BY COALESCE(started_at, completed_at) DESC, remote_run_id DESC
+        \(bound)
         """)
       defer { sqlite3_finalize(statement) }
-      if let agentID { try bind(agentID.uuidString.lowercased(), at: 1, to: statement) }
+      for (index, value) in values.enumerated() { try bind(value, at: Int32(index + 1), to: statement) }
       var runs: [OpenClawCronRun] = []
       while true {
         let code = sqlite3_step(statement)
@@ -1228,5 +1234,138 @@ extension WorkspaceDatabase {
         )
         """)
     }
+  }
+}
+
+// MARK: - Async worker boundary
+
+extension WorkspaceDatabase {
+  public func saveOpenClawGatewayLink(_ link: OpenClawGatewayLink) async throws {
+    try await write { try $0.saveOpenClawGatewayLink(link) }
+  }
+
+  public func openClawGatewayLinks() async throws -> [OpenClawGatewayLink] {
+    try await read { try $0.openClawGatewayLinks() }
+  }
+
+  public func removeOpenClawGatewayLink(agentID: UUID) async throws {
+    try await write { try $0.removeOpenClawGatewayLink(agentID: agentID) }
+  }
+
+  public func attachOpenClawGatewaySession(
+    conversationID: String,
+    agentID: UUID,
+    sessionKey: String,
+    createdAt: Date = Date()
+  ) async throws {
+    try await write { try $0.attachOpenClawGatewaySession(conversationID: conversationID, agentID: agentID, sessionKey: sessionKey, createdAt: createdAt) }
+  }
+
+  public func openClawGatewayConversationIDs() async throws -> Set<String> {
+    try await read { try $0.openClawGatewayConversationIDs() }
+  }
+
+  public func openClawGatewaySessions(agentID: UUID) async throws -> [(conversationID: String, sessionKey: String)] {
+    try await read { try $0.openClawGatewaySessions(agentID: agentID) }
+  }
+
+  public func importOpenClawGatewaySession(agentID: UUID, session: OpenClawGatewaySession) async throws -> String {
+    try await write { try $0.importOpenClawGatewaySession(agentID: agentID, session: session) }
+  }
+
+  public func knownOpenClawSessionKeys(agentID: UUID) async throws -> Set<String> {
+    try await read { try $0.knownOpenClawSessionKeys(agentID: agentID) }
+  }
+
+  public func openClawToolActivityIDs(runID: String) async throws -> Set<String> {
+    try await read { try $0.openClawToolActivityIDs(runID: runID) }
+  }
+
+  public func reconcileOpenClawAuditTool(runID: String, activity: AgentRunActivity) async throws {
+    try await write { try $0.reconcileOpenClawAuditTool(runID: runID, activity: activity) }
+  }
+
+  public func synchronizeOpenClawHistory(
+    conversationID: String, history: OpenClawGatewayHistory,
+    liveRunIDs: Set<String> = []
+  ) async throws {
+    try await write { try $0.synchronizeOpenClawHistory(conversationID: conversationID, history: history, liveRunIDs: liveRunIDs) }
+  }
+
+  public func interruptedOpenClawRuns(conversationID: String) async throws -> [LocalACPRunIdentifiers] {
+    try await read { try $0.interruptedOpenClawRuns(conversationID: conversationID) }
+  }
+
+  public func openClawRunAssistantIDs(runID: String) async throws -> [String: String] {
+    try await read { try $0.openClawRunAssistantIDs(runID: runID) }
+  }
+
+  public func openClawGatewaySession(
+    conversationID: String
+  ) async throws -> (agentID: UUID, sessionKey: String, preferences: OpenClawSessionPreferences) {
+    try await read { try $0.openClawGatewaySession(conversationID: conversationID) }
+  }
+
+  public func updateOpenClawGatewaySessionPreferences(
+    conversationID: String,
+    preferences: OpenClawSessionPreferences,
+    updatedAt: Date = Date()
+  ) async throws {
+    try await write { try $0.updateOpenClawGatewaySessionPreferences(conversationID: conversationID, preferences: preferences, updatedAt: updatedAt) }
+  }
+
+  public func openClawResultRoutes(agentID: UUID) async throws -> [String: String] {
+    try await read { try $0.openClawResultRoutes(agentID: agentID) }
+  }
+
+  public func setOpenClawResultRoute(agentID: UUID, jobID: String, destination: String) async throws {
+    try await write { try $0.setOpenClawResultRoute(agentID: agentID, jobID: jobID, destination: destination) }
+  }
+
+  public func collectedOpenClawResultIDs(agentID: UUID, jobID: String) async throws -> Set<String> {
+    try await read { try $0.collectedOpenClawResultIDs(agentID: agentID, jobID: jobID) }
+  }
+
+  @discardableResult
+  public func collectOpenClawResult(_ run: OpenClawCronRun, title: String, output: String,
+                                   destination: String, collectedAt: Date = Date()) async throws -> String? {
+    try await write { try $0.collectOpenClawResult(run, title: title, output: output, destination: destination, collectedAt: collectedAt) }
+  }
+
+  public func replaceOpenClawCronSnapshot(
+    agentID: UUID,
+    jobs: [OpenClawCronJob],
+    runs: [OpenClawCronRun],
+    updatedAt: Date = Date()
+  ) async throws {
+    try await write { try $0.replaceOpenClawCronSnapshot(agentID: agentID, jobs: jobs, runs: runs, updatedAt: updatedAt) }
+  }
+
+  public func retainedOpenClawResult(agentID: UUID, runID: String) async throws -> String? {
+    try await read { try $0.retainedOpenClawResult(agentID: agentID, runID: runID) }
+  }
+
+  public func retainOpenClawResult(_ run: OpenClawCronRun, title: String, output: String) async throws {
+    try await write { try $0.retainOpenClawResult(run, title: title, output: output) }
+  }
+
+  public func openClawCronJobs(agentID: UUID? = nil) async throws -> [OpenClawCronJob] {
+    try await read { try $0.openClawCronJobs(agentID: agentID) }
+  }
+
+  public func openClawCronRuns(agentID: UUID? = nil, jobID: String? = nil, limit: Int? = nil) async throws -> [OpenClawCronRun] {
+    try await read { try $0.openClawCronRuns(agentID: agentID, jobID: jobID, limit: limit) }
+  }
+
+  public func emptyOpenClawCronTrash(agentID: UUID? = nil) async throws {
+    try await write { try $0.emptyOpenClawCronTrash(agentID: agentID) }
+  }
+}
+
+extension WorkspaceDatabase {
+  func importOpenClawGatewaySession(agentID: UUID, session: OpenClawGatewaySession,
+    historyPages: [URL], liveRunIDs: Set<String>) async throws -> String {
+    try await write { try $0.importOpenClawGatewaySession(agentID: agentID, session: session,
+      historyPages: historyPages, liveRunIDs: liveRunIDs) }
   }
 }

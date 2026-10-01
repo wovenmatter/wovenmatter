@@ -23,8 +23,10 @@ rechecks one pull request.
 
 ## Builds and releases
 
-`scripts/build_and_run.sh` builds and launches the unsigned development app.
-Production releases are signed, notarized Apple Silicon builds from an exact
+`scripts/build_and_run.sh` builds and launches the development app, using an
+existing Apple Development identity when available. See [credential access](KEYCHAIN_ACCESS.md#development-builds)
+for identity selection and the ad-hoc fallback. Deterministic validation builds
+remain unsigned. Production releases are signed, notarized Apple Silicon builds from an exact
 accepted commit. Release, installation, deployment, and publication require an
 explicit request; they are separate from deterministic validation.
 
@@ -39,9 +41,9 @@ still fails, stop and report it. Never initiate login, device authorization,
 browser authentication, account switching, or credential recovery. Publication
 authorization does not authorize those actions.
 
-A supplied or confirmed version authorizes completion through publication unless
-the request explicitly limits the work to a private draft. A tag push only
-stages a draft. For version `X.Y.Z`, the identities are:
+A supplied or confirmed version authorizes building and verifying a private
+draft. Publication requires Trey's explicit manual approval of the exact release
+description for that release. A tag push only stages a draft. For version `X.Y.Z`, the identities are:
 
 - Tag: `vX.Y.Z`
 - Title: `Woven Matter vX.Y.Z`
@@ -50,7 +52,47 @@ stages a draft. For version `X.Y.Z`, the identities are:
 The draft contains the disk image, its checksum file, and `latest-mac.json`.
 `scripts/publish-release.sh` independently verifies the exact commit, workflow,
 asset set, checksums, manifest, signature, notarization, and Gatekeeper before
-publishing. Use its `--verify-only` mode for an explicitly requested draft.
+publishing. The default invocation and `--verify-only` both leave the draft private.
+
+After the build and verification, the release agent writes a user-facing
+description of the material changes since the previous public release. Use this
+structure for every release:
+
+1. A short opening explanation of the release and its biggest changes.
+2. The README-style download badge directly below the opening paragraph.
+3. **New capabilities**, with bullet points for major new features.
+4. **Improvements and fixes**, with bullet points for noticeable improvements
+   and meaningful fixes.
+5. A **Full changelog** comparison link.
+6. **How to update** as the final section, with the exact text:
+   "Go to Settings > General to check for and install the update."
+
+Use the same badge image, label, and Apple logo as the README, but link directly
+to this release's DMG, never `/releases/latest`. For version `X.Y.Z`:
+
+```markdown
+[![Download Woven Matter for Apple silicon](https://img.shields.io/badge/Download-Woven_Matter_for_Apple_silicon-000000?logo=apple&logoColor=white)](https://github.com/wovenmatter/wovenmatter/releases/download/vX.Y.Z/WovenMatter_X.Y.Z_arm64.dmg)
+```
+
+Verify the link matches an asset on the release. Include the badge in the full
+description presented for approval. An explicitly requested description edit to
+an already-published release can use `gh release edit --notes-file`; it does not
+require rebuilding or changing the tag or assets.
+
+Use plain, natural language that explains what users can now do or what works
+better. Omit implementation details unless they materially affect users. Put any
+required upgrade action in the relevant feature or improvement bullet, keeping
+the final update instructions consistent. Describe agent tools and conversation
+permissions separately; do not blur them with an ambiguous "Full access" label.
+Save the exact text in a Markdown file, update the private draft, and present the
+complete description to Trey. Pause for edits or explicit approval; changed
+descriptions or release commits need new approval.
+
+Only after that approval, run
+`scripts/publish-release.sh --approved-notes /absolute/path/to/notes.md vX.Y.Z EXPECTED_COMMIT_SHA`.
+The flag attests to manual approval and publishes that file's text after repeating
+verification. The script cannot establish conversational consent; the release
+operator must enforce it and must not bypass it with direct publication commands.
 GitHub Releases is the canonical binary distribution channel.
 
 The production app uses `latest-mac.json` to discover updates and can install a

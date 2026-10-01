@@ -3,16 +3,25 @@ import XCTest
 final class CompanionUITests: XCTestCase {
   @MainActor func launch(tab: String = "Folders") -> XCUIApplication {
     let app = XCUIApplication()
+    app.launchEnvironment["WOVENMATTER_UI_FIXTURE_NAMESPACE"] = UUID().uuidString
     app.launchEnvironment["WOVENMATTER_UI_FIXTURE"] = "1"
     app.launchEnvironment["WOVENMATTER_UI_TAB"] = tab
     app.launch()
     XCTAssertTrue(app.buttons["tab-folders"].waitForExistence(timeout: 10))
+    if app.buttons["tab-library"].exists {
+      // Settle the iPad window transform before the first pointer event. On the
+      // iOS 27 simulator, a fresh window can otherwise synthesize its first tap
+      // at half the reported accessibility coordinates.
+      XCUIDevice.shared.orientation = .landscapeLeft
+      XCUIDevice.shared.orientation = .portrait
+    }
     return app
   }
   @MainActor func testFiveNativeTabsAndFocusedSurfaces() {
     let app = launch()
     XCTAssertTrue(app.staticTexts["Folders"].exists)
     app.buttons["tab-home"].tap()
+    XCTAssertTrue(app.staticTexts["pane-heading-woven matter"].waitForExistence(timeout: 5))
     XCTAssertTrue(app.buttons["action-new-note"].waitForExistence(timeout: 5))
     app.buttons["tab-content"].tap()
     XCTAssertTrue(app.textFields["Search notes and conversations"].exists)
@@ -62,4 +71,24 @@ final class CompanionUITests: XCTestCase {
     app.alerts.buttons["Create"].tap()
     XCTAssertTrue(app.buttons.containing(.staticText, identifier: name).firstMatch.waitForExistence(timeout: 5))
   }
+  @MainActor func testWorkspaceSurfacesAndRotation() {
+    let app = launch(tab: "Home")
+    for name in ["library", "calendar", "trash"] {
+      let sidebar = app.buttons["tab-" + name]
+      if sidebar.exists { sidebar.tap() }
+      else { app.buttons["tab-home"].tap(); app.buttons["open-" + name].tap() }
+      let attachment = XCTAttachment(screenshot: app.screenshot()); attachment.name = "Workspace " + name; attachment.lifetime = .keepAlways
+      add(attachment)
+      XCTAssertTrue(app.staticTexts["pane-heading-" + name].waitForExistence(timeout: 5))
+      XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Connect to your Mac'")).firstMatch.waitForExistence(timeout: 5))
+    }
+    XCUIDevice.shared.orientation = .landscapeLeft
+    app.buttons["tab-note"].tap()
+    XCTAssertTrue(app.descendants(matching: .any)["note-title"].firstMatch.waitForExistence(timeout: 5))
+    XCUIDevice.shared.orientation = .portrait
+    app.buttons["tab-home"].tap()
+    XCTAssertTrue(app.staticTexts["pane-heading-woven matter"].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.buttons["action-new-note"].waitForExistence(timeout: 5))
+  }
+
 }

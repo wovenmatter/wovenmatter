@@ -5,7 +5,7 @@ import WovenMatterCore
 import WovenMatterDashboardStore
 
 final class CompanionLinkedDataTests: XCTestCase {
-  func testSQLitePreviewBoundsWorkCellsAndTotalResult() throws {
+  func testSQLitePreviewBoundsWorkCellsAndTotalResult() async throws {
     let path = FileManager.default.temporaryDirectory.appendingPathComponent("preview-\(UUID()).sqlite")
     defer { try? FileManager.default.removeItem(at: path) }
     var connection: OpaquePointer?

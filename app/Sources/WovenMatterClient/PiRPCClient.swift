@@ -45,6 +45,7 @@ public enum PiRPCSupport: Sendable {
 }
 
 public enum PiRPCClientError: LocalizedError, Sendable {
+    case deliveryUncertain(String)
     case processExited(String? = nil)
     case invalidResponse(String)
     case commandFailed(String)
@@ -53,6 +54,7 @@ public enum PiRPCClientError: LocalizedError, Sendable {
 
     public var errorDescription: String? {
         switch self {
+        case .deliveryUncertain(let message): message
         case .processExited(let detail):
             if let detail {
                 "The Pi RPC process exited unexpectedly: \(detail)"
@@ -80,10 +82,18 @@ public actor PiRPCClient {
     private var nextID = 0
     private var closed = false
     private var sessionID: String?
+    private var runID: String?
+    private var recoveredRuns: [DefaultAgentRunSnapshot] = []
+    private var confirmedRemoteIdleSessionID: String?
     private var configuration = LocalACPSessionConfiguration.empty
     private var pendingResponses: [String: CheckedContinuation<[String: Any], any Error>] = [:]
     private var promptEvents: LocalACPClient.EventHandler?
     private var promptPermission: LocalACPClient.PermissionHandler?
+    private var resumePermissionHandler: LocalACPClient.PermissionHandler?
+
+    public func setResumePermissionHandler(_ handler: @escaping LocalACPClient.PermissionHandler) {
+        resumePermissionHandler = handler
+    }
     private var promptGeneration: UUID?
     private var reasoningPhaseSequence = 0
     private var activeReasoningPhaseID: String?
@@ -95,11 +105,14 @@ public actor PiRPCClient {
     private var promptAcknowledged = false
     private var sawAgentStart = false
     private var hasQueuedSettlement = false
+    private var steeringRequestID: String?
+    private var settlementGeneration = 0
     private var settlement: Result<Void, any Error>?
     private var transportError: (any Error)?
     private var settledWaiters: [CheckedContinuation<Void, any Error>] = []
     private var cancelled = false
-    private var abortTask: Task<Void, Never>?
+    private var pendingDispatches: [ObjectIdentifier: AgentDispatchFence] = [:]
+    private var abortTask: Task<Void, any Error>?
     private var readerTask: Task<Void, Never>?
     private var eventTask: Task<Void, Never>?
     private struct ExtensionUIRequest: Sendable {
@@ -193,9 +206,13 @@ public actor PiRPCClient {
         return LocalACPInitializedSession(
             sessionID: sessionID,
             loadedExistingSession: existingSessionID != nil,
-            configuration: configuration
+            configuration: configuration,
+            recoveredDefaultAgentRuns: recoveredRuns,
+            confirmedRemoteIdleSessionID: confirmedRemoteIdleSessionID
         )
     }
+
+    public func setRunID(_ value: String) { runID = value }
 
     public func sessionConfiguration() -> LocalACPSessionConfiguration {
         configuration
@@ -235,12 +252,52 @@ public actor PiRPCClient {
         return configuration
     }
 
+    public func prompt(_ input: AgentMessageInput, onEvent: LocalACPClient.EventHandler? = nil,
+                       onPermission: LocalACPClient.PermissionHandler? = nil,
+                       dispatchFence: AgentDispatchFence? = nil) async throws -> LocalACPStopReason {
+        try dispatchFence?.check()
+        let payload = try Self.attachmentPayload(input)
+        return try await prompt(payload.text, images: payload.images, onEvent: onEvent,
+            onPermission: onPermission, dispatchFence: dispatchFence)
+    }
+
+    public func steer(_ input: AgentMessageInput, dispatchFence: AgentDispatchFence? = nil) async throws {
+        _ = try await beginActiveInput(input, dispatchFence: dispatchFence)
+    }
+
+    public func beginActiveInput(_ input: AgentMessageInput, dispatchFence: AgentDispatchFence? = nil) async throws -> LocalACPActiveInputReceipt {
+        try dispatchFence?.check()
+        let payload = try Self.attachmentPayload(input)
+        return try await beginActiveInput(payload.text, images: payload.images, dispatchFence: dispatchFence)
+    }
+
+    static func attachmentPayload(_ input: AgentMessageInput) throws -> (text: String, images: [[String: String]]) {
+        var text = input.transportText(), images: [[String: String]] = []
+        for file in input.files {
+            if file.kind == .image {
+                let bytes = try Data(contentsOf: file.localURL)
+                guard bytes.count <= AgentMessageAttachmentLimits.maximumFileBytes else {
+                    throw AgentMessageAttachmentError.fileTooLarge(name: file.fileName, maximumBytes: AgentMessageAttachmentLimits.maximumFileBytes)
+                }
+                images.append(["type": "image", "data": bytes.base64EncodedString(), "mimeType": file.mimeType])
+            } else {
+                text += "\nAttached file: " + file.fileName + "\n" + (file.remotePath ?? file.localURL.path) + "\n"
+            }
+        }
+        return (text, images)
+    }
+
     public func prompt(
         _ text: String,
+        images: [[String: String]] = [],
         onEvent: LocalACPClient.EventHandler? = nil,
-        onPermission: LocalACPClient.PermissionHandler? = nil
+        onPermission: LocalACPClient.PermissionHandler? = nil,
+        dispatchFence: AgentDispatchFence? = nil
     ) async throws -> LocalACPStopReason {
-        try Task.checkCancellation()
+        let fence = dispatchFence ?? AgentDispatchFence()
+        try fence.check()
+        pendingDispatches[ObjectIdentifier(fence)] = fence
+        defer { pendingDispatches[ObjectIdentifier(fence)] = nil }
         let generation = UUID()
         promptGeneration = generation
         hasQueuedSettlement = false
@@ -260,16 +317,20 @@ public actor PiRPCClient {
         promptPermission = onPermission
         defer {
             promptGeneration = nil
-            promptEvents = nil
-            promptPermission = nil
         }
         return try await withTaskCancellationHandler {
             do {
-                let response = try await sendCommand([
-                    "type": "prompt",
-                    "message": text,
-                ])
+                var command: [String: Any] = [
+                    "type": "prompt", "message": text, "images": images,
+                ]
+                if launch.environment["WOVEN_DURABLE_REMOTE_ACP"] == "1" {
+                    command["_meta"] = ["wovenRunID": runID ?? UUID().uuidString.lowercased()]
+                }
+                let response = try await sendCommand(command, dispatchFence: fence)
                 if response["success"] as? Bool != true {
+                    if dictionary(response["_meta"])?["deliveryUncertain"] as? Bool == true {
+                        throw PiRPCClientError.deliveryUncertain(string(response["error"]) ?? "The remote prompt receipt was lost.")
+                    }
                     throw PiRPCClientError.commandFailed(
                         string(response["error"]) ?? "Pi rejected the prompt."
                     )
@@ -278,7 +339,7 @@ public actor PiRPCClient {
                 try Task.checkCancellation()
                 try await settleHandledInputIfIdle()
                 try await waitUntilSettled()
-                await abortTask?.value
+                try await abortTask?.value
                 if let latestTerminalError {
                     throw PiRPCClientError.commandFailed(latestTerminalError)
                 }
@@ -292,55 +353,111 @@ public actor PiRPCClient {
         }
     }
 
-    public func steer(_ text: String) async throws {
-        let response = try await sendCommand([
-            "type": "steer",
-            "message": text,
-        ])
-        guard response["success"] as? Bool == true else {
-            throw PiRPCClientError.commandFailed(
-                string(response["error"])
-                    ?? "Pi could not steer the active turn."
-            )
+    public func steer(_ text: String, images: [[String: String]] = [], dispatchFence: AgentDispatchFence? = nil) async throws {
+        _ = try await beginActiveInput(text, images: images, dispatchFence: dispatchFence)
+    }
+
+    private func beginActiveInput(_ text: String, images: [[String: String]], dispatchFence: AgentDispatchFence? = nil) async throws -> LocalACPActiveInputReceipt {
+        let fence = dispatchFence ?? AgentDispatchFence()
+        try fence.check()
+        guard !cancelled else { throw CancellationError() }
+        pendingDispatches[ObjectIdentifier(fence)] = fence
+        defer { pendingDispatches[ObjectIdentifier(fence)] = nil }
+        settlementGeneration += 1
+        settlement = nil
+        sawAgentStart = false
+        hasQueuedSettlement = false
+        var command: [String: Any] = ["type": "prompt", "streamingBehavior": "steer", "message": text, "images": images]
+        if launch.environment["WOVEN_DURABLE_REMOTE_ACP"] == "1" {
+            command["_meta"] = ["wovenRunID": runID ?? UUID().uuidString.lowercased()]
         }
+        do {
+            // Native prompt preflight atomically steers a running loop or starts
+            // an idle one. `steer` alone can strand a late message in Pi's queue.
+            let response = try await sendCommand(command, dispatchFence: fence)
+            guard response["success"] as? Bool == true else {
+                if dictionary(response["_meta"])?["deliveryUncertain"] as? Bool == true {
+                    throw PiRPCClientError.deliveryUncertain(string(response["error"]) ?? "The remote steering receipt was lost.")
+                }
+                throw PiRPCClientError.commandFailed(string(response["error"]) ?? "Pi rejected the steering input.")
+            }
+        } catch {
+            steeringRequestID = nil
+            Task { try? await self.settleHandledInputIfIdle(forceStateCheck: true) }
+            throw error
+        }
+        return LocalACPActiveInputReceipt(completion: Task {
+            try await self.settleHandledInputIfIdle(forceStateCheck: true)
+            try await self.waitUntilSettled()
+            try await self.abortTask?.value
+            if let error = self.latestTerminalError { throw PiRPCClientError.commandFailed(error) }
+            return self.cancelled ? .cancelled : (self.latestStopReason ?? .endTurn)
+        })
+    }
+
+    public func finishRun() {
+        promptEvents = nil
+        promptPermission = nil
     }
 
     public func cancel() async {
+        try? await stop()
+    }
+
+    /// Return native abort failure to admission owners. They must not release
+    /// newer input merely because the best-effort cancellation task finished.
+    public func stop() async throws {
+        pendingDispatches.values.forEach { $0.cancel() }
         cancelled = true
-        guard promptAcknowledged else {
+        guard promptAcknowledged, steeringRequestID == nil else {
             // Abort only stops native agent work, not an extension command that
-            // is still awaiting a UI decision. Retire that transport so its late
+            // is still awaiting a UI decision, including steering preflight.
+            // Retire that transport so its late
             // ACK/output cannot leak into a subsequent run. The coordinator
             // recreates the same durable session after this cancellation error.
+            if launch.environment["WOVEN_DURABLE_REMOTE_ACP"] == "1" {
+                // The workspace owns the native process. Closing this SSH
+                // attachment alone cannot fence a late preflight there.
+                _ = try? await sendCommand(["type": "abort", "_meta": ["wovenStopPreflight": true]])
+            }
             failPending(CancellationError())
             await shutdown()
             return
         }
         if let abortTask {
-            await abortTask.value
+            try await abortTask.value
             return
         }
+        let generation = promptGeneration
         let task = Task {
             do {
-                _ = try await self.sendCommand(["type": "abort"])
+                let response = try await self.sendCommand(["type": "abort"])
+                guard response["success"] as? Bool == true else {
+                    throw PiRPCClientError.commandFailed(string(response["error"]) ?? "Pi could not stop the active turn.")
+                }
                 // Drain prior output before the session can accept another run.
                 await self.eventTask?.value
                 if !self.sawAgentStart { self.finishSettledWaiters() }
             } catch {
-                self.failPending(error)
+                // A rejected abort does not prove the active turn ended or the
+                // pipe failed. Keep its ownership so an explicit Stop can retry.
+                throw error
             }
         }
         abortTask = task
-        await task.value
+        defer { if promptGeneration == generation { abortTask = nil } }
+        try await task.value
     }
 
     private func cancelPromptTask(generation: UUID) async {
         guard promptGeneration == generation else { return }
+        pendingDispatches.values.forEach { $0.cancel() }
         failPending(CancellationError())
         await shutdown()
     }
 
     public func shutdown() async {
+        pendingDispatches.values.forEach { $0.cancel() }
         if let shutdownTask {
             await shutdownTask.value
             return
@@ -381,20 +498,29 @@ public actor PiRPCClient {
         await task.value
     }
 
+    static func sessionLaunchArguments(_ launch: LocalACPRuntimeLaunchConfiguration, sessionID: String?) -> [String] {
+        var arguments = launch.arguments
+        guard let sessionID, !sessionID.isEmpty else { return arguments }
+        if let wrapped = launch.wrappedCommand {
+            let command = wrapped.command + ["--session", sessionID]
+            arguments[wrapped.argumentIndex] = command.map {
+                "'" + $0.replacingOccurrences(of: "'", with: "'\"'\"'") + "'"
+            }.joined(separator: " ")
+        } else { arguments += ["--session", sessionID] }
+        return arguments
+    }
+
     private func spawn(sessionID: String?) throws {
         guard !closed else { throw PiRPCClientError.processExited() }
         guard process == nil, input == nil else { return }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/sh")
-        var arguments = [
+        let arguments = [
             "-c",
             #"set -m; exec "$@""#,
             "wovenmatter-local-pi",
             launch.executableURL.path,
-        ] + launch.arguments
-        if let sessionID, !sessionID.isEmpty {
-            arguments += ["--session", sessionID]
-        }
+        ] + Self.sessionLaunchArguments(launch, sessionID: sessionID)
         process.arguments = arguments
         process.currentDirectoryURL = launch.processWorkingDirectoryURL
             ?? workingDirectory
@@ -467,13 +593,14 @@ public actor PiRPCClient {
     }
 
     private func handleLine(_ line: Data) async throws {
-        try launch.historyRecorder?("in", line)
+        try await launch.historyRecorder?("in", line)
         guard let object = try JSONSerialization.jsonObject(with: line) as? [String: Any] else {
             throw PiRPCClientError.invalidResponse("expected JSON object")
         }
         let type = string(object["type"])
         if type == "response" {
             let id = string(object["id"]) ?? ""
+            if steeringRequestID == id { steeringRequestID = nil }
             if let waiter = pendingResponses.removeValue(forKey: id) {
                 waiter.resume(returning: object)
             }
@@ -486,7 +613,11 @@ public actor PiRPCClient {
         guard extensionRequest != nil
                 || type == "agent_settled"
                 || !events.isEmpty else { return }
+        // A previous loop may settle while the native prompt preflight is
+        // admitting its continuation. Only post-ack settlement owns this input.
+        if type == "agent_settled", steeringRequestID != nil { return }
         if type == "agent_settled" { hasQueuedSettlement = true }
+        let generation = settlementGeneration
         let previous = eventTask
         eventTask = Task { [weak self] in
             await previous?.value
@@ -499,7 +630,7 @@ public actor PiRPCClient {
                         try await self.promptEvents?(event)
                     }
                     if type == "agent_settled" {
-                        await self.finishSettledWaiters()
+                        await self.finishSettledWaiters(generation: generation)
                     }
                 }
             } catch {
@@ -514,6 +645,16 @@ public actor PiRPCClient {
         let thinking = try await sendCommand(["type": "get_available_thinking_levels"])
         let commands = try await sendCommand(["type": "get_commands"])
         let data = dictionary(state["data"])
+        if launch.environment["WOVEN_DURABLE_REMOTE_ACP"] == "1" {
+            let metadata = dictionary(data?["_meta"])
+            confirmedRemoteIdleSessionID = metadata?["recoveryComplete"] as? Bool == true
+                ? string(metadata?["recoverySessionID"]) : nil
+        }
+        if launch.environment["WOVEN_DURABLE_REMOTE_ACP"] == "1",
+           let recovery = dictionary(data?["_meta"])?["recoveredRuns"] {
+            recoveredRuns = try JSONDecoder().decode([DefaultAgentRunSnapshot].self,
+                from: JSONSerialization.data(withJSONObject: recovery))
+        }
         sessionID = string(data?["sessionId"]) ?? string(data?["session_id"]) ?? sessionID
         let model = dictionary(data?["model"]).flatMap { model in
             guard let id = string(model["id"]) else { return nil as String? }
@@ -584,23 +725,48 @@ public actor PiRPCClient {
         }
     }
 
-    private func sendCommand(_ payload: [String: Any]) async throws -> [String: Any] {
+    private var outgoingBusy = false
+    private var outgoingWaiters: [CheckedContinuation<Void, Never>] = []
+
+    private func acquireOutgoing() async {
+        if outgoingBusy {
+            await withCheckedContinuation { outgoingWaiters.append($0) }
+        } else { outgoingBusy = true }
+    }
+
+    private func releaseOutgoing() {
+        if outgoingWaiters.isEmpty { outgoingBusy = false }
+        else { outgoingWaiters.removeFirst().resume() }
+    }
+
+    private func sendCommand(_ payload: [String: Any], dispatchFence: AgentDispatchFence? = nil) async throws -> [String: Any] {
         try Task.checkCancellation()
+        try dispatchFence?.check()
         if let transportError { throw transportError }
         guard !closed, let input else {
             throw PiRPCClientError.sessionNotInitialized
         }
         nextID += 1
         let id = "wm-\(nextID)"
+        if payload["streamingBehavior"] as? String == "steer" { steeringRequestID = id }
         var body = payload
         body["id"] = id
         let data = try JSONSerialization.data(withJSONObject: body)
-        try launch.historyRecorder?("out", data)
+        await acquireOutgoing()
+        do {
+            try await launch.historyRecorder?("out", data)
+            try Task.checkCancellation()
+            if let transportError { throw transportError }
+            guard !closed else { throw PiRPCClientError.sessionNotInitialized }
+        } catch { releaseOutgoing(); throw error }
         var line = data
         line.append(0x0A)
         return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<[String: Any], any Error>) in
+            defer { releaseOutgoing() }
             pendingResponses[id] = continuation
             do {
+                // Stop can run while outbound history is being persisted.
+                try dispatchFence?.claimDispatch()
                 try input.write(contentsOf: line)
             } catch {
                 pendingResponses.removeValue(forKey: id)
@@ -609,8 +775,9 @@ public actor PiRPCClient {
         }
     }
 
-    private func settleHandledInputIfIdle() async throws {
-        guard !sawAgentStart, !hasQueuedSettlement, settlement == nil else { return }
+    private func settleHandledInputIfIdle(forceStateCheck: Bool = false) async throws {
+        guard (!sawAgentStart || forceStateCheck), !hasQueuedSettlement, settlement == nil else { return }
+        let generation = settlementGeneration
         // Pi acknowledges extension commands and handled input without an agent
         // turn. Ask native state after the ACK; an ACK alone is not completion.
         // Native prompt() sets _isAgentRunActive synchronously after preflight
@@ -634,8 +801,9 @@ public actor PiRPCClient {
               state["isCompacting"] as? Bool == false,
               Self.integer(state["pendingMessageCount"]) == 0 else { return }
         await eventTask?.value
-        guard !sawAgentStart, !hasQueuedSettlement else { return }
-        finishSettledWaiters()
+        guard (!sawAgentStart || forceStateCheck), !hasQueuedSettlement,
+              steeringRequestID == nil, generation == settlementGeneration else { return }
+        finishSettledWaiters(generation: generation)
     }
 
     private func waitUntilSettled() async throws {
@@ -645,7 +813,8 @@ public actor PiRPCClient {
         }
     }
 
-    private func finishSettledWaiters() {
+    private func finishSettledWaiters(generation: Int? = nil) {
+        if let generation, generation != settlementGeneration { return }
         guard settlement == nil else { return }
         settlement = .success(())
         let waiters = settledWaiters
@@ -717,29 +886,49 @@ public actor PiRPCClient {
     private func handleExtensionUI(
         _ request: ExtensionUIRequest
     ) async throws {
-        let selected = await promptPermission?(
-            LocalACPPermissionRequest(
-                title: request.title,
-                options: request.options
-            )
-        )
-        var payload: [String: Any] = [
-            "type": "extension_ui_response",
-            "id": request.id,
-        ]
-        if selected == nil || selected == "reject" {
-            payload["cancelled"] = true
-            if request.method == "confirm" {
-                payload["confirmed"] = false
-            }
-        } else if request.method == "confirm" {
-            payload["confirmed"] = true
+        let generation = promptGeneration
+        let selected: String?
+        if cancelled || Task.isCancelled {
+            selected = nil
         } else {
-            payload["value"] = selected
+            let handler = promptPermission ?? (launch.environment["WOVEN_DURABLE_REMOTE_ACP"] == "1" ? resumePermissionHandler : nil)
+            selected = await handler?(
+                LocalACPPermissionRequest(
+                    title: request.title,
+                    options: request.options
+                )
+            )
         }
-        guard let input else { return }
-        var data = try JSONSerialization.data(withJSONObject: payload)
-        try launch.historyRecorder?("out", data)
+        func response(cancelled: Bool) throws -> Data {
+            var payload: [String: Any] = [
+                "type": "extension_ui_response",
+                "id": request.id,
+            ]
+            if cancelled {
+                payload["cancelled"] = true
+                if request.method == "confirm" { payload["confirmed"] = false }
+            } else if request.method == "confirm" {
+                payload["confirmed"] = true
+            } else {
+                payload["value"] = selected
+            }
+            return try JSONSerialization.data(withJSONObject: payload)
+        }
+        await acquireOutgoing()
+        defer { releaseOutgoing() }
+        guard !closed, let input else { return }
+        let rejected = selected == nil || selected == "reject" || cancelled
+            || Task.isCancelled || promptGeneration != generation
+        var data = try response(cancelled: rejected)
+        try await launch.historyRecorder?("out", data)
+        guard !closed else { return }
+        // Stop can arrive while the chosen response waits for its journal write.
+        // Release the native UI request with a cancellation, never a late approval.
+        if !rejected && (cancelled || Task.isCancelled || promptGeneration != generation) {
+            data = try response(cancelled: true)
+            try await launch.historyRecorder?("out", data)
+            guard !closed else { return }
+        }
         data.append(0x0A)
         try input.write(contentsOf: data)
     }

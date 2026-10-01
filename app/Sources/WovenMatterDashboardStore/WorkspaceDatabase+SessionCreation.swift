@@ -2,13 +2,13 @@ import Foundation
 import WovenMatterCore
 import WovenMatterClient
 
-extension WorkspaceDatabase {
+extension WorkspaceDatabaseConnection {
   /// App launch routing reads the original resolved location, including after a
   /// restart or failed final coordination. It never derives a path from a title.
   public func toolSessionCreationConfiguration(targetID: String) throws -> WorkspaceSessionCreationConfiguration? {
     try withLock {
-      guard let json = try historyRowsUnlocked("SELECT configuration_json FROM workspace_session_creations WHERE target_id=?",
-        values: [targetID]).first?.objectValue?["configuration_json"]?.stringValue else { return nil }
+      guard let json = try historyRowsUnlocked("SELECT configuration_json FROM workspace_session_creations WHERE target_id=? UNION ALL SELECT configuration_json FROM workspace_calendar_sessions WHERE id=? LIMIT 1",
+        values: [targetID, targetID]).first?.objectValue?["configuration_json"]?.stringValue else { return nil }
       return try JSONDecoder().decode(WorkspaceSessionCreationConfiguration.self, from: Data(json.utf8))
     }
   }
@@ -16,8 +16,13 @@ extension WorkspaceDatabase {
   public func reserveToolSessionCreation(sourceID: String, requestID: String, arguments: [String], purpose: String, managed: Bool) throws -> GatewayJSONValue {
     try transaction {
       try requireToolUnlocked(.sessions, sessionID: sourceID)
-      guard UUID(uuidString: requestID) != nil else { throw WorkspaceToolError.invalid("A creation request needs a UUID.") }
+      let requestID = try persistedToolRequestID(requestID, in: .creations)
       let encoded = try toolsJSON(arguments)
+      guard !purpose.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+            purpose.utf8.count <= 65_536,
+            encoded.utf8.count <= 262_144 else {
+        throw WorkspaceToolError.invalid("A session creation request has invalid or oversized arguments.")
+      }
       if let value = try historyRowsUnlocked("SELECT * FROM workspace_session_creations WHERE id=?", values: [requestID]).first,
          let row = value.objectValue {
         guard row["source_id"]?.stringValue == sourceID, row["arguments_json"]?.stringValue == encoded else {
@@ -49,6 +54,7 @@ extension WorkspaceDatabase {
       configuration: WorkspaceSessionCreationConfiguration) throws -> WorkspaceSessionCreationConfiguration {
     try transaction {
       try requireToolUnlocked(.sessions, sessionID: sourceID)
+      let requestID = try persistedToolRequestID(requestID, in: .creations)
       guard let row = try historyRowsUnlocked("SELECT configuration_json,status FROM workspace_session_creations WHERE id=? AND source_id=?",
         values: [requestID, sourceID]).first?.objectValue else { throw WorkspaceToolError.invalid("Creation reservation not found.") }
       if let json = row["configuration_json"]?.stringValue {
@@ -76,6 +82,7 @@ extension WorkspaceDatabase {
   public func markToolSessionCreationConfigured(requestID: String, sourceID: String) throws {
     try transaction {
       try requireToolUnlocked(.sessions, sessionID: sourceID)
+      let requestID = try persistedToolRequestID(requestID, in: .creations)
       guard let target = try historyRowsUnlocked("SELECT target_id FROM workspace_session_creations WHERE id=? AND source_id=? AND status='planned'",
         values: [requestID, sourceID]).first?.objectValue?["target_id"]?.stringValue else {
         throw WorkspaceToolError.invalid("This creation request is not being prepared.")
@@ -90,6 +97,7 @@ extension WorkspaceDatabase {
   /// later failure to deliver its first message.
   public func failToolSessionCreation(requestID: String) throws {
     try transaction {
+      let requestID = try persistedToolRequestID(requestID, in: .creations)
       try toolsExecuteUnlocked("UPDATE workspace_session_creations SET status='failed' WHERE id=? AND status='planned'", [requestID])
     }
   }
@@ -101,6 +109,7 @@ extension WorkspaceDatabase {
   public func completeToolSessionCreation(requestID: String, sourceID: String) throws {
     try transaction {
       try requireToolUnlocked(.sessions, sessionID: sourceID)
+      let requestID = try persistedToolRequestID(requestID, in: .creations)
       guard let row = try historyRowsUnlocked("SELECT * FROM workspace_session_creations WHERE id=? AND source_id=?", values: [requestID, sourceID]).first?.objectValue,
             let target = row["target_id"]?.stringValue else { throw WorkspaceToolError.invalid("Creation reservation not found.") }
       if row["status"]?.stringValue == "ready" { return }
@@ -115,7 +124,8 @@ extension WorkspaceDatabase {
 
   /// Session insertion and creation provenance commit together, so an interrupted
   /// remote setup cannot leave an apparently user-created conversation behind.
-  func adoptReservedSessionOriginUnlocked(_ targetID: String) throws {
+  func adoptReservedSessionOriginUnlocked(_ targetID: String, allowMissingCalendarFolder: Bool = false) throws {
+    try adoptCalendarSessionUnlocked(targetID, allowMissingFolder: allowMissingCalendarFolder)
     guard let row = try historyRowsUnlocked("SELECT source_id,purpose,configuration_json FROM workspace_session_creations WHERE target_id=?", values: [targetID]).first?.objectValue,
           let source = row["source_id"]?.stringValue else { return }
     try requireToolUnlocked(.sessions, sessionID: source)
@@ -132,5 +142,39 @@ extension WorkspaceDatabase {
       // Reservations from older builds retain the existing inheritance behavior.
       try toolsExecuteUnlocked("UPDATE workspace_session_tools SET enabled_json=(SELECT enabled_json FROM workspace_session_tools WHERE session_id=?),defaults_applied=1 WHERE session_id=?", [source, targetID])
     }
+  }
+}
+
+// MARK: - Async worker boundary
+
+extension WorkspaceDatabase {
+  public func toolSessionCreationConfiguration(targetID: String) async throws -> WorkspaceSessionCreationConfiguration? {
+    try await read { try $0.toolSessionCreationConfiguration(targetID: targetID) }
+  }
+
+  public func reserveToolSessionCreation(sourceID: String, requestID: String, arguments: [String], purpose: String, managed: Bool) async throws -> GatewayJSONValue {
+    try await write { try $0.reserveToolSessionCreation(sourceID: sourceID, requestID: requestID, arguments: arguments, purpose: purpose, managed: managed) }
+  }
+
+  public func saveToolSessionCreationConfiguration(requestID: String, sourceID: String,
+      configuration: WorkspaceSessionCreationConfiguration) async throws -> WorkspaceSessionCreationConfiguration {
+    try await write { try $0.saveToolSessionCreationConfiguration(requestID: requestID, sourceID: sourceID, configuration: configuration) }
+  }
+
+  public func markToolSessionCreationConfigured(requestID: String, sourceID: String) async throws {
+    try await write { try $0.markToolSessionCreationConfigured(requestID: requestID, sourceID: sourceID) }
+  }
+
+  public func failToolSessionCreation(requestID: String) async throws {
+    // Release the durable fanout reservation even when setup's owner is cancelled.
+    try await finishWrite { try $0.failToolSessionCreation(requestID: requestID) }
+  }
+
+  public func recoverToolSessionCreations() async throws {
+    try await write { try $0.recoverToolSessionCreations() }
+  }
+
+  public func completeToolSessionCreation(requestID: String, sourceID: String) async throws {
+    try await write { try $0.completeToolSessionCreation(requestID: requestID, sourceID: sourceID) }
   }
 }

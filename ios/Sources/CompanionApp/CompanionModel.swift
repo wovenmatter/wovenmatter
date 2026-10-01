@@ -4,8 +4,8 @@ import CompanionClient
 import WovenMatterCompanion
 
 @MainActor @Observable final class CompanionModel {
-  enum Tab: String, CaseIterable { case home = "Home", folders = "Folders", content = "Content", chat = "Chat", note = "Note"
-    var icon: String { switch self { case .home: "house"; case .folders: "folder"; case .content: "rectangle.stack"; case .chat: "bubble.left"; case .note: "doc.text" } }
+  enum Tab: String, CaseIterable { case home = "Home", folders = "Folders", content = "Content", chat = "Chat", note = "Note", library = "Library", calendar = "Calendar", trash = "Trash"
+    var icon: String { switch self { case .home: "house"; case .folders: "folder"; case .content: "rectangle.stack"; case .chat: "bubble.left"; case .note: "doc.text"; case .library: "books.vertical"; case .calendar: "calendar"; case .trash: "trash" } }
   }
   var tab: Tab = .home
   var state = MobileStoreState()
@@ -47,7 +47,9 @@ import WovenMatterCompanion
   private var saveTask: Task<Void, Never>?
   private var saveGenerations: [String: Int] = [:]
   private var refreshInProgress = false
+  private var workspaceActionInProgress = false
   private var booted = false
+  var initialized = false
   private var frame = 0
   let fixture: Bool
   let isolatedTestHost: Bool
@@ -82,8 +84,8 @@ import WovenMatterCompanion
   }
   func flushLocalWrites() async { await saveTask?.value; await chatDraftTask?.value }
   var folders: [CompanionFolder] { state.folders.values.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending } }
-  var notes: [CompanionNote] { state.notes.values.sorted { $0.updatedAt > $1.updatedAt } }
-  var conversations: [CompanionConversation] { state.conversations.values.sorted { $0.updatedAt > $1.updatedAt } }
+  var notes: [CompanionNote] { state.notes.values.sorted { ($0.isPinned == true) != ($1.isPinned == true) ? $0.isPinned == true : $0.updatedAt > $1.updatedAt } }
+  var conversations: [CompanionConversation] { state.conversations.values.sorted { ($0.isPinned == true) != ($1.isPinned == true) ? $0.isPinned == true : $0.updatedAt > $1.updatedAt } }
   var selectedNote: CompanionNote? { selectedNoteID.flatMap { state.notes[$0] } }
   var selectedConversation: CompanionConversation? { selectedConversationID.flatMap { state.conversations[$0] } }
   var transcript: CompanionTranscript? { selectedConversationID.flatMap { historyPages[$0] ?? state.transcripts[$0] } }
@@ -96,6 +98,7 @@ import WovenMatterCompanion
     guard !isolatedTestHost else { return }
     if !booted {
       booted = true
+      defer { initialized = true }
       await reload()
       if fixture { await seedFixture(); connectionLabel = "Preview · saved on iPhone" }
       else {
@@ -333,6 +336,50 @@ import WovenMatterCompanion
   func respond(_ interaction: CompanionPendingInteraction, response: CompanionInteractionResponse) async {
     await submit(.init(deviceID: state.deviceID, kind: .respond, conversationID: interaction.conversationID,
       runID: interaction.runID, interactionID: interaction.id, response: response))
+  }
+  func workspace(_ request: CompanionWorkspaceRead) async throws -> CompanionWorkspaceResult {
+    guard online, let engine else { throw MobileConnectionError.offline }
+    return try await engine.readWorkspace(request)
+  }
+  @discardableResult
+  func perform(_ action: CompanionWorkspaceAction) async -> Bool {
+    guard online, let engine else { errorMessage = MobileConnectionError.offline.localizedDescription; return false }
+    guard !workspaceActionInProgress else { return false }
+    workspaceActionInProgress = true; defer { workspaceActionInProgress = false }
+    await reload()
+    let pending = state.commands.first { $0.command.kind == .workspace && ($0.receipt == nil || $0.receipt?.status == .accepted || $0.receipt?.status == .outcomeUnknown) }
+    if let pending, pending.command.workspaceAction != action {
+      errorMessage = "An earlier workspace change still needs acknowledgement. Review it on Home before making another change."
+      return false
+    }
+    errorMessage = nil
+    do {
+      let command = pending?.command ?? .init(deviceID: state.deviceID, kind: .workspace, workspaceAction: action)
+      let result = try await engine.submit(command)
+      await reload()
+      guard result.status == .completed else {
+        errorMessage = result.message ?? "The Mac has not confirmed this change. Check its acknowledgement before retrying."
+        return false
+      }
+      await refresh()
+      return true
+    } catch { errorMessage = error.localizedDescription; await reload(); return false }
+  }
+  func canonicalNoteForAction(_ id: String) async throws -> CompanionNote {
+    guard online, let engine, let store else { throw MobileConnectionError.offline }
+    await flushLocalWrites()
+    try await engine.synchronize()
+    await reload()
+    return try await store.canonicalNote(id: id)
+  }
+  func exportFile(_ request: CompanionWorkspaceRead) async throws -> URL {
+    guard case .file(let file) = try await workspace(request) else { throw MobileConnectionError.invalidResponse }
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent("CompanionExport-" + UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let name = URL(fileURLWithPath: file.name).lastPathComponent
+    let url = directory.appendingPathComponent(name.isEmpty || name == "." || name == ".." ? "Export" : name)
+    try file.data.write(to: url, options: [.atomic, .completeFileProtection])
+    return url
   }
   func retry(_ record: MobileCommandRecord) async { await submit(record.command) }
   private func submit(_ command: CompanionCommand) async {

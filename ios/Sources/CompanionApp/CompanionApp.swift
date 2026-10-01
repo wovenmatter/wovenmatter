@@ -2,11 +2,13 @@ import SwiftUI
 
 @main struct WovenMatterCompanionApp: App {
   @State private var model = CompanionModel()
-  @Environment(\.scenePhase) private var scenePhase
   var body: some Scene {
     WindowGroup {
-      CompanionShell(model: model)
-        .task(id: scenePhase) { if scenePhase == .active { await model.run() } }
+      ZStack {
+        if model.initialized { CompanionShell(model: model) }
+        else { ProgressView("Opening your library…") }
+      }
+        .task { await model.run() }
         .onOpenURL { url in Task { await model.pair(url: url) } }
     }
   }
@@ -22,33 +24,39 @@ enum MobileTheme {
 struct CompanionShell: View {
   @Bindable var model: CompanionModel
   @State private var keyboardVisible = false
+  @Environment(\.horizontalSizeClass) private var sizeClass
   var body: some View {
-    VStack(spacing: 0) {
-      Group {
-        switch model.tab {
-        case .home: HomePane(model: model)
-        case .folders: FoldersPane(model: model)
-        case .content: ContentPane(model: model)
-        case .chat: ChatPane(model: model)
-        case .note:
-          if let note = model.selectedNote { NotePane(model: model, note: note).id(note.id) }
-          else { EmptyNotePane(model: model) }
-        }
-      }.frame(maxWidth: .infinity, maxHeight: .infinity)
-      if !keyboardVisible {
-        HStack(spacing: 0) {
+    HStack(spacing: 0) {
+      if sizeClass == .regular {
+        ScrollView {
+          VStack(alignment: .leading, spacing: 8) {
+          Text("Woven Matter").font(.title2.bold()).padding(.vertical, 16)
           ForEach(CompanionModel.Tab.allCases, id: \.self) { tab in
-            Button { model.tab = tab } label: {
-              VStack(spacing: 5) {
-                Image(systemName: tab.icon + (model.tab == tab && tab != .content ? ".fill" : ""))
-                  .font(.system(size: 23, weight: .regular)).frame(height: 26)
-                Text(tab.rawValue).font(.caption2)
-              }.frame(maxWidth: .infinity).padding(.vertical, 11)
-                .foregroundStyle(model.tab == tab ? MobileTheme.green : MobileTheme.muted)
-            }.accessibilityIdentifier("tab-\(tab.rawValue.lowercased())")
-              .accessibilityAddTraits(model.tab == tab ? .isSelected : [])
+            WorkspaceRow(icon: tab.icon, title: tab.rawValue, selected: model.tab == tab) { model.tab = tab }
+              .accessibilityIdentifier("tab-\(tab.rawValue.lowercased())")
           }
-        }.background(MobileTheme.surface)
+          Spacer()
+          Text(model.connectionLabel).font(.caption).foregroundStyle(.secondary)
+          }.padding(16)
+        }.frame(width: 245).frame(maxHeight: .infinity, alignment: .top).background(MobileTheme.surface)
+        Divider()
+      }
+      VStack(spacing: 0) {
+        pane.frame(maxWidth: .infinity, maxHeight: .infinity)
+        if sizeClass != .regular && !keyboardVisible {
+          HStack(spacing: 0) {
+            ForEach(Array(CompanionModel.Tab.allCases.prefix(5)), id: \.self) { tab in
+              Button { model.tab = tab } label: {
+                VStack(spacing: 5) {
+                  Image(systemName: tab.icon).font(.system(size: 23)).frame(height: 26)
+                  Text(tab.rawValue).font(.caption2)
+                }.frame(maxWidth: .infinity).padding(.vertical, 11)
+                  .foregroundStyle(model.tab == tab ? MobileTheme.ink : MobileTheme.muted)
+              }.accessibilityIdentifier("tab-\(tab.rawValue.lowercased())")
+                .accessibilityAddTraits(model.tab == tab ? .isSelected : [])
+            }
+          }.background(MobileTheme.surface)
+        }
       }
     }
     .foregroundStyle(MobileTheme.ink).tint(MobileTheme.green)
@@ -60,12 +68,27 @@ struct CompanionShell: View {
     .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in keyboardVisible = true }
     .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in keyboardVisible = false }
   }
+  @ViewBuilder private var pane: some View {
+    switch model.tab {
+    case .home: HomePane(model: model)
+    case .folders: FoldersPane(model: model)
+    case .content: ContentPane(model: model)
+    case .chat: ChatPane(model: model)
+    case .note:
+      if let note = model.selectedNote { NotePane(model: model, note: note).id(note.id) }
+      else { EmptyNotePane(model: model) }
+    case .library: LibraryPane(model: model)
+    case .calendar: CalendarPane(model: model)
+    case .trash: TrashPane(model: model)
+    }
+  }
+
 }
 
 struct PaneHeader<Trailing: View>: View {
   let title: String
   @ViewBuilder var trailing: Trailing
-  var body: some View { HStack(alignment: .center) { Text(title).font(.largeTitle.bold()); Spacer(); trailing }.padding(.horizontal, 20).padding(.top, 16).padding(.bottom, 14) }
+  var body: some View { HStack(alignment: .center) { Text(title).font(.largeTitle.bold()).accessibilityIdentifier("pane-heading-" + title.lowercased()); Spacer(); trailing }.padding(.horizontal, 20).padding(.top, 16).padding(.bottom, 14) }
 }
 struct WorkspaceRow: View {
   var icon: String
@@ -108,6 +131,10 @@ struct HomePane: View {
           }.padding(18).frame(maxWidth: .infinity, alignment: .leading).background(MobileTheme.surface, in: RoundedRectangle(cornerRadius: 16))
           WorkspaceRow(icon: "square.and.pencil", title: "New chat") { model.newChat() }
           WorkspaceRow(icon: "doc.badge.plus", title: "New note", detail: "Works offline") { Task { await model.newNote() } }.accessibilityIdentifier("action-new-note")
+          ForEach([CompanionModel.Tab.library, .calendar, .trash], id: \.self) { tab in
+            WorkspaceRow(icon: tab.icon, title: tab.rawValue, detail: "On your Mac") { model.tab = tab }
+              .accessibilityIdentifier("open-\(tab.rawValue.lowercased())")
+          }
           if !model.pending.isEmpty {
             GroupLabel(text: "Needs your attention")
             ForEach(model.pending) { request in WorkspaceRow(icon: "hand.raised", title: request.title, detail: "Respond") { Task { await model.selectConversation(request.conversationID) } } }

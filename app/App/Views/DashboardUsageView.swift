@@ -793,7 +793,7 @@ struct DashboardUsageView: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Connect only the accounts you choose")
                         .font(.system(size: 12.5, weight: .semibold))
-                    Text("Enable an account to allow credential checks. Cursor uses its local account session; OpenRouter uses your saved key. Other accounts use their CLI sign-in.")
+                    Text("Manage accounts and API keys in Connections. Enable a provider here to check usage, then choose the account whose limits you want to view.")
                         .font(.system(size: 11.5))
                         .foregroundStyle(DashboardPalette.mutedForeground)
                         .fixedSize(horizontal: false, vertical: true)
@@ -811,7 +811,7 @@ struct DashboardUsageView: View {
                 accountLabel: provider.displayName,
                 status: .needsCredential,
                 source: "Disabled",
-                detail: "Enable this account to allow local credential discovery and usage checks.",
+                detail: model.isUsageProviderEnabled(provider) ? "Checking selected account…" : "Enable this provider to check usage.",
                 dashboardURL: provider.usageDashboardURL
             )
         }
@@ -855,7 +855,7 @@ struct DashboardUsageView: View {
                     ProviderDot(provider: account.provider)
                         .padding(.top, 4)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(account.provider.displayName)
+                        Text(account.provider == .codex ? "OpenAI" : account.provider == .claude ? "Anthropic" : account.provider.displayName)
                             .font(.system(size: 13.5, weight: .semibold))
                         Text(account.accountLabel)
                             .font(.system(size: 11))
@@ -863,13 +863,23 @@ struct DashboardUsageView: View {
                             .lineLimit(1)
                     }
                     Spacer()
-                    UsageStatusPill(
-                        text: account.isStale ? "Stale" : account.status.title,
-                        color: account.status.color
-                    )
+                    ConnectionsLink(title: account.isStale ? "Stale" : account.status.title)
+                }
+
+                let choices = model.usageConnectionChoices.filter { $0.provider == account.provider }
+                if !choices.isEmpty {
+                    Picker("Account", selection: Binding(
+                        get: { model.selectedUsageConnections[account.provider.rawValue] ?? choices.first!.id },
+                        set: { id in Task { await model.selectUsageConnection(id, provider: account.provider, range: range) } }
+                    )) {
+                        ForEach(choices) { choice in Text(choice.label).tag(choice.id) }
+                    }
+                    .disabled(!model.isUsageProviderEnabled(account.provider))
+                    .help("Choose whose usage to view. Preferred accounts and fallback order are managed in Connections.")
                 }
 
                 if account.provider == .codex,
+                   account.accountScopeID?.hasPrefix("wovenmatter.shared.") != true,
                    model.codexUsageWorkspaces.count > 1 {
                     codexWorkspaceSelector
                 }
@@ -949,11 +959,6 @@ struct DashboardUsageView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
-                if account.provider == .openRouter,
-                   model.isUsageProviderEnabled(.openRouter) {
-                    openRouterCredentialControls
-                }
-
                 if pinsFooter { Spacer(minLength: 12) }
                 Divider().overlay(theme.palette.border)
                 HStack {
@@ -980,39 +985,8 @@ struct DashboardUsageView: View {
                         .buttonStyle(DashboardIconButtonStyle())
                         .font(.system(size: 10.5, weight: .medium))
                         .disabled(model.isRefreshingLocalUsage)
-                    } else if account.provider == .codex,
-                              model.codexUsageWorkspaces.count > 1,
-                              account.status != .available,
-                              account.status != .signedIn {
-                        Button(
-                            model.signingInUsageProviders.contains(.codex)
-                                ? "Reconnecting…"
-                                : "Reconnect"
-                        ) {
-                            model.reconnectSelectedCodexUsageWorkspace()
-                        }
-                        .buttonStyle(DashboardIconButtonStyle())
-                        .font(.system(size: 10.5, weight: .medium))
-                        .disabled(
-                            model.signingInUsageProviders.contains(.codex)
-                                || model.isRefreshingLocalUsage
-                        )
-                    } else if account.provider != .openRouter,
-                              account.status != .available,
-                              account.status != .signedIn {
-                        Button(
-                            model.signingInUsageProviders.contains(account.provider)
-                                ? "Signing in…"
-                                : "Sign in"
-                        ) {
-                            model.signInUsageProvider(account.provider)
-                        }
-                        .buttonStyle(DashboardIconButtonStyle())
-                        .font(.system(size: 10.5, weight: .medium))
-                        .disabled(
-                            model.signingInUsageProviders.contains(account.provider)
-                                || model.isRefreshingLocalUsage
-                        )
+                    } else {
+                        ConnectionsLink(title: "Manage connection")
                     }
                     if model.isUsageProviderEnabled(account.provider) {
                         Button("Disable") {

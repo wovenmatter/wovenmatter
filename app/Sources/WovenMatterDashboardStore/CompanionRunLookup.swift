@@ -1,7 +1,7 @@
 import Foundation
 import SQLite3
 
-extension WorkspaceDatabase {
+extension WorkspaceDatabaseConnection {
   /// A control lookup must not materialize transcript bodies or attachment payloads.
   public func activeRunID(conversationID: String) throws -> String? {
     try withLock {
@@ -18,5 +18,11 @@ extension WorkspaceDatabase {
       guard code == SQLITE_ROW else { throw stepError() }
       return try text(statement, column: 0)
     }
+  }
+}
+
+extension WorkspaceDatabase {
+  public func activeRunID(conversationID: String) async throws -> String? {
+    try await read { try $0.activeRunID(conversationID: conversationID) }
   }
 }

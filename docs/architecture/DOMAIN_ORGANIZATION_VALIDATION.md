@@ -1,5 +1,8 @@
 # Domain organization validation
 
+Historical validation for PR #63. These results describe the refactor candidate,
+not the current release candidate.
+
 Product and test implementation: `be09947f52278a5afe2671fd36f8807695d3f5c1`.
 Base: `51b592a61e99a10575516263bdd31dfb29646991` (`main`).
 

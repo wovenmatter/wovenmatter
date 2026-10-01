@@ -9,6 +9,8 @@ private actor ModelMac: CompanionTransport {
   var gate: CheckedContinuation<Void, Never>?
   var shouldGate = true
   var waiting = false
+  var dropNextCommand = false
+  func loseNextReply() { dropNextCommand = true }
   func workspaceIdentity() async throws -> String {
     if shouldGate { waiting = true; await withCheckedContinuation { gate = $0 } }
     return "workspace"
@@ -23,6 +25,7 @@ private actor ModelMac: CompanionTransport {
   func transcript(_ id: String) async throws -> CompanionTranscript { .init(conversationID: id) }
   func command(_ command: CompanionCommand) async throws -> CompanionCommandReceipt {
     commands.append(command)
+    if dropNextCommand { dropNextCommand = false; throw MobileConnectionError.offline }
     return .init(commandID: command.commandID, deviceID: command.deviceID, status: .completed, conversationID: command.conversationID)
   }
   func receipt(_ id: String) async throws -> CompanionCommandReceipt? { nil }
@@ -71,6 +74,25 @@ final class CompanionModelTests: XCTestCase {
     XCTAssertEqual(drafts["A"]?.text, "")
     XCTAssertEqual(drafts["B"]?.text, "Draft for B")
   }
+  @MainActor func testWorkspaceRetryRetainsCommandIdentityAfterLostAcknowledgement() async throws {
+    let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent("store.json")
+    let store = try MobileStore(file: file)
+    try await store.apply(.init(workspaceID: "workspace", cursor: 1))
+    let mac = ModelMac(); await mac.release(); await mac.loseNextReply()
+    let model = CompanionModel(store: store, transport: mac)
+    let action = CompanionWorkspaceAction.saveCalendar(id: UUID().uuidString.lowercased(), revision: nil,
+      draft: .init(title: "One event", startsAt: Date().addingTimeInterval(3600)))
+    let first = await model.perform(action); XCTAssertFalse(first)
+    let different = await model.perform(.retryLibrary(id: "unrelated")); XCTAssertFalse(different)
+    let second = await model.perform(action); XCTAssertTrue(second)
+    let commands = await mac.commands
+    XCTAssertEqual(commands.count, 2)
+    XCTAssertEqual(commands.first, commands.last)
+    let snapshot = await store.snapshot()
+    XCTAssertEqual(snapshot.commands.count, 1)
+    XCTAssertEqual(snapshot.commands.first?.receipt?.status, .completed)
+  }
+
   @MainActor func testRemoteTitleAndBodyAdoptionDoesNotCreateSyntheticEdit() async throws {
     let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent("store.json")
     let store = try MobileStore(file: file)

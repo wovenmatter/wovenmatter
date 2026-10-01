@@ -66,8 +66,8 @@ public enum HarnessCatalog {
     guard document.schemaVersion == 4 else {
       throw HarnessCatalogError.unsupportedSchema(document.schemaVersion)
     }
-    guard document.harnesses.count == AgentRuntimeKind.allCases.count,
-          Set(document.harnesses.map(\.id)) == Set(AgentRuntimeKind.allCases)
+    guard document.harnesses.count == AgentRuntimeKind.allCases.filter({ $0 != .defaultAgent }).count,
+          Set(document.harnesses.map(\.id)) == Set(AgentRuntimeKind.allCases.filter { $0 != .defaultAgent })
     else {
       throw HarnessCatalogError.incompleteCatalog
     }

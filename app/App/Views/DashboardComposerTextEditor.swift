@@ -14,6 +14,9 @@ struct DashboardComposerTextEditor: NSViewRepresentable {
     var onEscape: () -> Bool = { false }
     var completionRequest: Binding<Int> = .constant(0)
     var onCaretAtEndChange: (Bool) -> Void = { _ in }
+    var onAttachFiles: ([URL]) -> Bool = { _ in false }
+    var dictationEditor: DictationEditor? = nil
+    var dictationIdentity = ""
 
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
@@ -24,6 +27,7 @@ struct DashboardComposerTextEditor: NSViewRepresentable {
         scrollView.maximumVisibleLines = maximumVisibleLines
         let textView = scrollView.composerTextView
         textView.delegate = context.coordinator
+        textView.registerForDraggedTypes([.fileURL, .png, .tiff])
         textView.onPrepareInput = { [weak coordinator = context.coordinator, weak textView] in
             guard let coordinator, let textView else { return }
             coordinator.reconcilePendingCompletion(for: textView)
@@ -31,6 +35,7 @@ struct DashboardComposerTextEditor: NSViewRepresentable {
         textView.placeholderString = placeholder
         textView.setAccessibilityLabel(placeholder)
         textView.string = text
+        dictationEditor?.bind(textView, identity: dictationIdentity)
         textView.onSubmit = { [weak coordinator = context.coordinator] in
             coordinator?.parent.onSubmit()
         }
@@ -46,6 +51,9 @@ struct DashboardComposerTextEditor: NSViewRepresentable {
         textView.onEscape = { [weak coordinator = context.coordinator] in
             coordinator?.parent.onEscape() ?? false
         }
+        textView.onAttachFiles = { [weak coordinator = context.coordinator] urls in
+            coordinator?.parent.onAttachFiles(urls) ?? false
+        }
         textView.onBecomeFirstResponder = { [weak coordinator = context.coordinator] in
             coordinator?.parent.isFocused = true
         }
@@ -57,6 +65,7 @@ struct DashboardComposerTextEditor: NSViewRepresentable {
         context.coordinator.parent = self
         scrollView.maximumVisibleLines = maximumVisibleLines
         let textView = scrollView.composerTextView
+        dictationEditor?.bind(textView, identity: dictationIdentity)
         textView.placeholderString = placeholder
         textView.setAccessibilityLabel(placeholder)
 
@@ -72,12 +81,7 @@ struct DashboardComposerTextEditor: NSViewRepresentable {
         nsView: DashboardComposerScrollView,
         context: Context
     ) -> CGSize? {
-        let width = proposal.width ?? nsView.frame.width
-        guard width > 0 else { return nil }
-        nsView.frame.size.width = width
-        nsView.layoutSubtreeIfNeeded()
-        nsView.updateDocumentLayout()
-        return CGSize(width: width, height: nsView.preferredHeight)
+        nsView.fittingSize(for: proposal)
     }
 
     @MainActor
@@ -183,6 +187,7 @@ struct DashboardComposerTextEditor: NSViewRepresentable {
 
         func textDidBeginEditing(_ notification: Notification) {
             parent.isFocused = true
+            if let editor = parent.dictationEditor { DictationModel.shared.activeEditor = editor }
         }
 
         func textDidEndEditing(_ notification: Notification) {
@@ -206,6 +211,17 @@ final class DashboardComposerScrollView: NSScrollView {
 
     let composerTextView = DashboardComposerNativeTextView()
 
+    // SwiftUI also probes with infinity and huge finite sentinels. Such values
+    // cannot describe a real text viewport and must never reach NSView geometry.
+    private static let maximumMeasurementWidth: CGFloat = 1_000_000
+    private static let initialMeasurementWidth: CGFloat = 320
+    private let measurementStorage = NSTextStorage()
+    private let measurementLayoutManager = NSLayoutManager()
+    private let measurementContainer = NSTextContainer(
+        containerSize: NSSize(width: 1, height: CGFloat.greatestFiniteMagnitude)
+    )
+    private var isUpdatingDocumentLayout = false
+
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         configure()
@@ -218,6 +234,39 @@ final class DashboardComposerScrollView: NSScrollView {
 
     var preferredHeight: CGFloat {
         min(max(naturalDocumentHeight, Self.minimumHeight), maximumHeight)
+    }
+
+    func fittingSize(for proposal: ProposedViewSize) -> CGSize {
+        let width = Self.measurementWidth(proposal.width)
+            ?? Self.measurementWidth(bounds.width)
+            ?? Self.initialMeasurementWidth
+        guard let storage = composerTextView.textStorage else {
+            return CGSize(width: width, height: Self.minimumHeight)
+        }
+        // Measurement has its own reusable TextKit objects. Probing a different
+        // width must not resize the mounted editor, move its selection, or force
+        // another native layout pass while SwiftUI is choosing a size.
+        if !measurementStorage.isEqual(to: storage) {
+            measurementStorage.setAttributedString(storage)
+        }
+        let padding = composerTextView.textContainer?.lineFragmentPadding ?? 0
+        if measurementContainer.lineFragmentPadding != padding {
+            measurementContainer.lineFragmentPadding = padding
+        }
+        let size = NSSize(
+            width: max(1, width - composerTextView.textContainerInset.width * 2),
+            height: CGFloat.greatestFiniteMagnitude
+        )
+        if measurementContainer.containerSize != size {
+            measurementContainer.containerSize = size
+        }
+        let naturalHeight = documentHeight(using: measurementLayoutManager, in: measurementContainer)
+        return CGSize(width: width, height: min(max(naturalHeight, Self.minimumHeight), maximumHeight))
+    }
+
+    private static func measurementWidth(_ width: CGFloat?) -> CGFloat? {
+        guard let width, width.isFinite, width > 0, width <= maximumMeasurementWidth else { return nil }
+        return width
     }
 
     var hasVerticalOverflow: Bool {
@@ -244,25 +293,36 @@ final class DashboardComposerScrollView: NSScrollView {
     }
 
     func updateDocumentLayout() {
+        guard !isUpdatingDocumentLayout else { return }
         let viewport = contentSize
+        guard viewport.width.isFinite, viewport.width >= 0,
+              viewport.width <= Self.maximumMeasurementWidth,
+              viewport.height.isFinite, viewport.height >= 0 else { return }
+        isUpdatingDocumentLayout = true
+        defer { isUpdatingDocumentLayout = false }
         let width = max(viewport.width, 1)
+        var geometryChanged = false
         if composerTextView.frame.width != width {
             composerTextView.frame.size.width = width
+            geometryChanged = true
         }
-        composerTextView.textContainer?.containerSize = NSSize(
-            width: width,
-            height: CGFloat.greatestFiniteMagnitude
-        )
-        if let textContainer = composerTextView.textContainer {
-            composerTextView.layoutManager?.ensureLayout(for: textContainer)
+        let containerSize = NSSize(width: width, height: CGFloat.greatestFiniteMagnitude)
+        if let textContainer = composerTextView.textContainer,
+           textContainer.containerSize != containerSize {
+            textContainer.containerSize = containerSize
+            geometryChanged = true
         }
-        composerTextView.frame = NSRect(
+        let frame = NSRect(
             x: 0,
             y: 0,
             width: width,
             height: max(viewport.height, naturalDocumentHeight)
         )
-        reflectScrolledClipView(contentView)
+        if composerTextView.frame != frame {
+            composerTextView.frame = frame
+            geometryChanged = true
+        }
+        if geometryChanged { reflectScrolledClipView(contentView) }
     }
 
     private var naturalDocumentHeight: CGFloat {
@@ -270,11 +330,18 @@ final class DashboardComposerScrollView: NSScrollView {
               let textContainer = composerTextView.textContainer else {
             return Self.minimumHeight
         }
+        return documentHeight(using: layoutManager, in: textContainer)
+    }
+
+    private func documentHeight(using layoutManager: NSLayoutManager, in textContainer: NSTextContainer) -> CGFloat {
         layoutManager.ensureLayout(for: textContainer)
-        return ceil(
-            layoutManager.usedRect(for: textContainer).height
-                + composerTextView.textContainerInset.height * 2
-        )
+        var height = layoutManager.usedRect(for: textContainer).maxY
+        // A trailing newline has an empty caret line with no glyphs of its own.
+        // Include it identically in speculative measurement and native layout.
+        if layoutManager.extraLineFragmentTextContainer === textContainer {
+            height = max(height, layoutManager.extraLineFragmentRect.maxY)
+        }
+        return ceil(height + composerTextView.textContainerInset.height * 2)
     }
 
     private var maximumHeight: CGFloat {
@@ -290,6 +357,8 @@ final class DashboardComposerScrollView: NSScrollView {
     }
 
     private func configure() {
+        measurementStorage.addLayoutManager(measurementLayoutManager)
+        measurementLayoutManager.addTextContainer(measurementContainer)
         drawsBackground = false
         borderType = .noBorder
         hasVerticalScroller = false
@@ -305,6 +374,7 @@ final class DashboardComposerNativeTextView: NSTextView {
     static let composerFont = NSFont.systemFont(ofSize: 15)
     static let lineSpacing: CGFloat = 4
 
+    var onAttachFiles: (([URL]) -> Bool)?
     var onSubmit: (() -> Void)?
     var onTab: (() -> Bool)?
     var onPrepareInput: (() -> Void)?
@@ -384,6 +454,53 @@ final class DashboardComposerNativeTextView: NSTextView {
         case .standard:
             super.keyDown(with: event)
         }
+    }
+
+    override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
+        if sender.draggingPasteboard.canReadObject(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) { return .copy }
+        return super.draggingEntered(sender)
+    }
+
+    override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+        if attach(from: sender.draggingPasteboard) { return true }
+        return super.performDragOperation(sender)
+    }
+
+    override func paste(_ sender: Any?) {
+        if attach(from: .general) { return }
+        super.paste(sender)
+    }
+
+    private static var temporaryAttachmentFolders: Set<URL> = []
+
+    static func releaseTemporaryAttachments(_ urls: [URL]) {
+        for url in urls {
+            let folder = url.deletingLastPathComponent()
+            guard temporaryAttachmentFolders.remove(folder) != nil else { continue }
+            try? FileManager.default.removeItem(at: folder)
+        }
+    }
+
+    @discardableResult
+    func attach(from pasteboard: NSPasteboard) -> Bool {
+        let urls = (pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL]) ?? []
+        if !urls.isEmpty { return onAttachFiles?(urls) ?? false }
+        guard let image = NSImage(pasteboard: pasteboard), let tiff = image.tiffRepresentation,
+              let bitmap = NSBitmapImageRep(data: tiff), let png = bitmap.representation(using: .png, properties: [:]),
+              png.count <= 25 * 1024 * 1024 else { return false }
+        let folder = FileManager.default.temporaryDirectory.appending(path: "wovenmatter-paste-" + UUID().uuidString, directoryHint: .isDirectory)
+        let file = folder.appending(path: "Screenshot.png")
+        do {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+            try png.write(to: file, options: .atomic)
+            Self.temporaryAttachmentFolders.insert(folder)
+            if onAttachFiles?([file]) == true { return true }
+        } catch {
+            try? FileManager.default.removeItem(at: folder)
+            return false
+        }
+        Self.releaseTemporaryAttachments([file])
+        return false
     }
 
     override func didChangeText() {

@@ -17,22 +17,8 @@ public enum WorkspaceFolderMutationError: LocalizedError, Equatable, Sendable {
   }
 }
 
-public enum WorkspaceCalendarMutationError: LocalizedError, Equatable, Sendable {
-  case emptyTitle
-  case invalidDateRange
-
-  public var errorDescription: String? {
-    switch self {
-    case .emptyTitle:
-      "Enter a title for the event."
-    case .invalidDateRange:
-      "The event must end after it starts."
-    }
-  }
-}
-
 // Workspace ownership, surface preferences, folders, overview and calendar.
-extension WorkspaceDatabase {
+extension WorkspaceDatabaseConnection {
   public func bindDeviceOwnership(
     ownerDeviceID: UUID,
     boundAt: Date = Date()
@@ -489,77 +475,23 @@ extension WorkspaceDatabase {
         conversations: count("dashboard_conversations", where: activeConversationScoped),
         messages: count("dashboard_messages", where: conversationChildScope),
         runs: count("dashboard_runs", where: conversationChildScope),
-        calendarItems: count("dashboard_calendar_items", where: scoped)
+        calendarItems: count("dashboard_calendar_items", where: activeScoped)
       )
     }
   }
 
   public func calendarItems() throws -> [WorkspaceCalendarItemRecord] {
-    try withLock {
-      guard let operatorID = try canonicalWorkspaceOperatorIDUnlocked() else { return [] }
-      return try decodeCanonicalRowsUnlocked(
-        """
-        SELECT json_object(
-          'id', id, 'user_id', user_id, 'kind', kind, 'title', title,
-          'description', description, 'starts_at', starts_at,
-          'ends_at', ends_at, 'all_day', all_day, 'status', status,
-          'source', source, 'created_at', created_at, 'updated_at', updated_at
-        )
-        FROM dashboard_calendar_items
-        WHERE user_id = ?
-        ORDER BY starts_at, id
-        """,
-        operatorID: operatorID,
-        as: WorkspaceCalendarItemRecord.self
-      )
-    }
+    try withLock { try calendarItemsUnlocked() }
   }
 
   @discardableResult
   public func createCalendarItem(
-    id: UUID = UUID(),
-    title: String,
-    details: String? = nil,
-    startsAt: Date,
-    endsAt: Date?,
-    allDay: Bool,
-    createdAt: Date = Date()
+    id: UUID = UUID(), title: String, details: String? = nil, startsAt: Date,
+    endsAt: Date?, allDay: Bool, createdAt: Date = Date()
   ) throws -> String {
-    let normalizedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !normalizedTitle.isEmpty else {
-      throw WorkspaceCalendarMutationError.emptyTitle
-    }
-    if let endsAt, endsAt <= startsAt {
-      throw WorkspaceCalendarMutationError.invalidDateRange
-    }
-    let normalizedDetails = details?.trimmingCharacters(in: .whitespacesAndNewlines)
-
-    return try transaction {
-      let itemID = id.uuidString.lowercased()
-      let operatorID = try localMutationOperatorIDUnlocked()
-      let timestamp = Self.timestamp(createdAt)
-      let insert = try prepareUnlocked("""
-        INSERT INTO dashboard_calendar_items (
-          id, user_id, kind, title, description, starts_at, ends_at, all_day,
-          status, source, created_at, updated_at
-        ) VALUES (?, ?, 'event', ?, ?, ?, ?, ?, 'scheduled', 'user', ?, ?)
-        """)
-      defer { sqlite3_finalize(insert) }
-      try bind(itemID, at: 1, to: insert)
-      try bind(operatorID, at: 2, to: insert)
-      try bind(normalizedTitle, at: 3, to: insert)
-      try bindNullable(normalizedDetails?.isEmpty == true ? nil : normalizedDetails, at: 4, to: insert)
-      try bind(Self.timestamp(startsAt), at: 5, to: insert)
-      try bindNullable(endsAt.map(Self.timestamp), at: 6, to: insert)
-      guard sqlite3_bind_int(insert, 7, allDay ? 1 : 0) == SQLITE_OK else {
-        throw bindError()
-      }
-      try bind(timestamp, at: 8, to: insert)
-      try bind(timestamp, at: 9, to: insert)
-      try stepDone(insert)
-
-      return itemID
-    }
+    try saveCalendarEvent(id: id.uuidString.lowercased(),
+      draft: .init(title: title, details: details ?? "", startsAt: startsAt, endsAt: endsAt, allDay: allDay),
+      creating: true, now: createdAt)
   }
 
   public func workspaceOverview() throws -> WorkspaceSnapshot {
@@ -728,5 +660,101 @@ extension WorkspaceDatabase {
       return []
     }
     return identifiers.compactMap(UUID.init(uuidString:))
+  }
+}
+
+// MARK: - Async worker boundary
+
+extension WorkspaceDatabase {
+  public func bindDeviceOwnership(
+    ownerDeviceID: UUID,
+    boundAt: Date = Date()
+  ) async throws {
+    try await write { try $0.bindDeviceOwnership(ownerDeviceID: ownerDeviceID, boundAt: boundAt) }
+  }
+
+  public func macSurfaceProfile(
+    ownerDeviceID: UUID,
+    bootstrap: SurfaceProfile,
+    createdAt: Date = Date()
+  ) async throws -> SurfaceProfile {
+    try await write { try $0.macSurfaceProfile(ownerDeviceID: ownerDeviceID, bootstrap: bootstrap, createdAt: createdAt) }
+  }
+
+  public func updateMacSurfaceProfile(
+    _ profile: SurfaceProfile,
+    ownerDeviceID: UUID,
+    updatedAt: Date = Date()
+  ) async throws -> SurfaceProfile {
+    try await write { try $0.updateMacSurfaceProfile(profile, ownerDeviceID: ownerDeviceID, updatedAt: updatedAt) }
+  }
+
+  @discardableResult
+  public func createFolder(
+    id: UUID = UUID(),
+    name: String,
+    createdAt: Date = Date()
+  ) async throws -> String {
+    try await write { try $0.createFolder(id: id, name: name, createdAt: createdAt) }
+  }
+
+  @discardableResult
+  public func renameFolder(
+    id: String,
+    name: String,
+    updatedAt: Date = Date()
+  ) async throws -> Bool {
+    try await write { try $0.renameFolder(id: id, name: name, updatedAt: updatedAt) }
+  }
+
+  @discardableResult
+  public func setFolderPinned(
+    id: String,
+    isPinned: Bool,
+    updatedAt: Date = Date()
+  ) async throws -> Bool {
+    try await write { try $0.setFolderPinned(id: id, isPinned: isPinned, updatedAt: updatedAt) }
+  }
+
+  @discardableResult
+  public func moveFolder(
+    id: String,
+    direction: WorkspaceFolderMoveDirection,
+    updatedAt: Date = Date()
+  ) async throws -> Bool {
+    try await write { try $0.moveFolder(id: id, direction: direction, updatedAt: updatedAt) }
+  }
+
+  @discardableResult
+  public func deleteFolder(
+    id: String
+  ) async throws -> Bool {
+    try await write { try $0.deleteFolder(id: id) }
+  }
+
+  public func dashboardRecordCounts() async throws -> DashboardRecordCounts {
+    try await read { try $0.dashboardRecordCounts() }
+  }
+
+  public func calendarItems() async throws -> [WorkspaceCalendarItemRecord] {
+    try await read { try $0.calendarItems() }
+  }
+
+  @discardableResult
+  public func createCalendarItem(
+    id: UUID = UUID(), title: String, details: String? = nil, startsAt: Date,
+    endsAt: Date?, allDay: Bool, createdAt: Date = Date()
+  ) async throws -> String {
+    try await write { try $0.createCalendarItem(id: id, title: title, details: details, startsAt: startsAt, endsAt: endsAt, allDay: allDay, createdAt: createdAt) }
+  }
+
+  public func workspaceOverview() async throws -> WorkspaceSnapshot {
+    try await read { try $0.workspaceOverview() }
+  }
+}
+
+extension WorkspaceDatabase {
+  public func validateSessionFolder(_ folderID: String?) async throws {
+    try await read { try $0.validateSessionFolder(folderID) }
   }
 }

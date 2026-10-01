@@ -33,7 +33,7 @@ public struct WorkspaceHistoryEvent: Sendable {
 }
 
 public typealias WorkspaceWireRecorder =
-  @Sendable (_ direction: String, _ data: Data) throws -> Void
+  @Sendable (_ direction: String, _ data: Data) async throws -> Void
 
 public struct WorkspaceHTTPObservation: Codable, Sendable {
   public let method: String
@@ -50,9 +50,11 @@ public enum WorkspaceHistoryPrivacy {
   /// Tool endpoint paths are bearer capabilities. Keep them out of searchable
   /// protocol history, including JSON-escaped prompt strings.
   public static func redactingToolEndpoints(_ text: String) -> String {
-    let slash = #"(?:/|\\/)"#
-    let local = slash + "private" + slash + "tmp" + slash + "wmtools-[a-f0-9]{32}" + slash + "[a-f0-9]{32}\\.sock"
-    let remote = slash + "home" + slash + "\\.wmt" + slash + "[a-f0-9]{32}" + slash + "[a-f0-9]{32}" + slash + "(?:wovenmatter|rpc\\.sock)"
+    // HTTP observations can contain JSON inside JSON, adding another layer
+    // of escaped backslashes. Match every serialization depth.
+    let slash = #"\\*/"#
+    let local = slash + "private" + slash + "tmp" + slash + "wmtools-[A-Fa-f0-9]{32}" + slash + "[A-Fa-f0-9]{32}\\.sock"
+    let remote = slash + "home" + slash + "\\.wmt" + slash + "[A-Fa-f0-9]{32}" + slash + "[A-Fa-f0-9]{32}" + slash + "(?:wovenmatter|rpc\\.sock)"
     return [local, remote].reduce(text) { value, pattern in
       value.replacingOccurrences(of: pattern, with: "[Woven Matter session tool endpoint]", options: .regularExpression)
     }
@@ -76,12 +78,13 @@ public struct WorkspaceHistoryQuery: Codable, Sendable {
   public var limit: Int = 50
   public var offset: Int = 0
   public var characters: Int = 65536
+  public var sort: String = "oldest"
   public var callerConversationID: String?
   public var message: String?
   public var requestID: String?
   enum CodingKeys: String, CodingKey {
     case schemaVersion, command, id, search, conversationID, runID, harness, folderID, kind, since, until
-    case after, limit, offset, characters, callerConversationID, message, requestID
+    case after, limit, offset, characters, sort, callerConversationID, message, requestID
   }
   public init(from decoder: any Decoder) throws {
     let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -100,6 +103,7 @@ public struct WorkspaceHistoryQuery: Codable, Sendable {
     limit = try c.decodeIfPresent(Int.self, forKey: .limit) ?? 50
     offset = try c.decodeIfPresent(Int.self, forKey: .offset) ?? 0
     characters = try c.decodeIfPresent(Int.self, forKey: .characters) ?? 65536
+    sort = try c.decodeIfPresent(String.self, forKey: .sort) ?? "oldest"
     callerConversationID = try c.decodeIfPresent(String.self, forKey: .callerConversationID)
     message = try c.decodeIfPresent(String.self, forKey: .message)
     requestID = try c.decodeIfPresent(String.self, forKey: .requestID)

@@ -196,6 +196,7 @@ public struct WorkspaceCalendarItemRecord: Codable, Equatable, Identifiable, Sen
   public let source: String
   public let createdAt: String
   public let updatedAt: String
+  public let calendar: WorkspaceCalendarDetails
 
   public var startDate: Date? { dashboardDate(from: startsAt) }
   public var endDate: Date? { endsAt.flatMap(dashboardDate(from:)) }
@@ -209,6 +210,7 @@ public struct WorkspaceCalendarItemRecord: Codable, Equatable, Identifiable, Sen
     case allDay = "all_day"
     case createdAt = "created_at"
     case updatedAt = "updated_at"
+    case calendar
   }
 
   public init(
@@ -223,7 +225,8 @@ public struct WorkspaceCalendarItemRecord: Codable, Equatable, Identifiable, Sen
     status: String,
     source: String,
     createdAt: String,
-    updatedAt: String
+    updatedAt: String,
+    calendar: WorkspaceCalendarDetails = .init()
   ) {
     self.id = id
     self.userID = userID
@@ -237,6 +240,7 @@ public struct WorkspaceCalendarItemRecord: Codable, Equatable, Identifiable, Sen
     self.source = source
     self.createdAt = createdAt
     self.updatedAt = updatedAt
+    self.calendar = calendar
   }
 
   public init(from decoder: any Decoder) throws {
@@ -253,6 +257,8 @@ public struct WorkspaceCalendarItemRecord: Codable, Equatable, Identifiable, Sen
     source = try values.decode(String.self, forKey: .source)
     createdAt = try values.decode(String.self, forKey: .createdAt)
     updatedAt = try values.decode(String.self, forKey: .updatedAt)
+    calendar = try values.decodeIfPresent(WorkspaceCalendarDetails.self, forKey: .calendar)
+      ?? .init(createdBy: .init(sessionID: source.hasPrefix("session:") ? String(source.dropFirst(8)) : nil))
   }
 }
 

@@ -14,6 +14,9 @@ mkdir -p "$test_root" "${cache_root}/ModuleCache"
 xcrun swiftc \
   -parse-as-library \
   -module-cache-path "${cache_root}/ModuleCache" \
+  "${repo_root}/app/Sources/WovenMatterCore/DictationInsertion.swift" \
+  "${repo_root}/app/App/Services/DictationEditor.swift" \
+  "${repo_root}/scripts/test-support/DictationFocusFixture.swift" \
   "${repo_root}/app/App/Views/DashboardComposerTextEditor.swift" \
   "${repo_root}/scripts/test-support/DashboardComposerTextEditorTests.swift" \
   -o "${test_root}/DashboardComposerTextEditorTests"

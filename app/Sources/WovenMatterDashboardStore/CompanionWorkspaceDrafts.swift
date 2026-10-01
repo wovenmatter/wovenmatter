@@ -2,7 +2,7 @@ import CryptoKit
 import Foundation
 import SQLite3
 
-extension WorkspaceDatabase {
+extension WorkspaceDatabaseConnection {
   static func companionContentFingerprint(_ content: String) -> String {
     SHA256.hash(data: Data(content.utf8)).map { String(format: "%02x", $0) }.joined()
   }
@@ -24,5 +24,11 @@ extension WorkspaceDatabase {
   func saveCompanionDraftReceiptUnlocked(operationID: String?, id: String, title: String, content: String, revision: String) throws {
     guard let operationID else { return }
     try companionExecuteUnlocked("INSERT INTO companion_draft_receipts(operation_id, note_id, title, content, revision) VALUES (?, ?, ?, ?, ?)", values: [operationID, id, title, Self.companionContentFingerprint(content), revision])
+  }
+}
+
+extension WorkspaceDatabase {
+  public func companionDraftRevision(operationID: String) async throws -> String? {
+    try await read { try $0.companionDraftRevision(operationID: operationID) }
   }
 }

@@ -1,13 +1,42 @@
 import Foundation
 import Testing
+import WovenMatterClient
 import WovenMatterCore
 import WovenMatterDashboardStore
 @testable import WovenMatterAppFacade
 
 @MainActor @Suite(.serialized)
 struct CompanionHostLifecycleTests {
+    @Test func backendRPCControlsTheSameHostAndReplaysPairingReceipt() async throws {
+        let fixture = try await HostFixture(); defer { fixture.remove() }
+        try await fixture.model.configureCompanionFixture(directory: fixture.directory)
+        fixture.model.companionHost = fixture.host
+        let backend = BackendApplicationService(model: fixture.model)
+        func request(_ action: CompanionHostAction) throws -> BackendRPCRequest {
+            .init(method: "application.command", payload: try JSONEncoder().encode(BackendApplicationCommand.companion(action)))
+        }
+        let start = await backend.handle(try request(.start))
+        #expect(start.error == nil)
+        let started = try JSONDecoder().decode(BackendApplicationResult.self, from: try #require(start.result))
+        #expect(started.companion?.endpoint == fixture.host.endpoint)
+        #expect(started.companion?.isEnabled == true)
+        let codeRequest = try request(.createCode)
+        let code = await backend.handle(codeRequest)
+        #expect(code.error == nil)
+        let offered = try JSONDecoder().decode(BackendApplicationResult.self, from: try #require(code.result))
+        #expect(offered.companion?.pairingPayload != nil)
+        #expect(await backend.handle(codeRequest).result == code.result)
+        #expect(fixture.exposureCount == 1)
+        let stop = await backend.handle(try request(.stop))
+        #expect(stop.error == nil)
+        let stopped = try JSONDecoder().decode(BackendApplicationResult.self, from: try #require(stop.result))
+        #expect(stopped.companion?.endpoint == nil)
+        #expect(stopped.companion?.isEnabled == false)
+        #expect(fixture.host.endpoint == nil)
+    }
+
     @Test func realHostWaitsForOwnedCleanupBeforeCreatingReplacementExposure() async throws {
-        let fixture = try HostFixture()
+        let fixture = try await HostFixture()
         defer { fixture.remove() }
         await fixture.host.start()
         let address = try #require(fixture.host.endpoint)
@@ -24,7 +53,7 @@ struct CompanionHostLifecycleTests {
     }
 
     @Test func staleHostStartupCannotStopReplacementExposure() async throws {
-        let fixture = try HostFixture()
+        let fixture = try await HostFixture()
         defer { fixture.remove() }
         fixture.holdFirstStatus = true
         let old = Task { await fixture.host.start() }
@@ -67,11 +96,11 @@ private enum HostFixtureError: Error { case timeout }
     var firstStatusArrived = false
     private var firstStatusWaiter: CheckedContinuation<Void, Never>?
 
-    init() throws {
+    init() async throws {
         directory = FileManager.default.temporaryDirectory.appending(path: "companion-host-\(UUID())")
         suite = "companion.host.\(UUID())"
         defaults = UserDefaults(suiteName: suite)!
-        let store = try DashboardStore(supportDirectory: directory)
+        let store = try await DashboardStore(supportDirectory: directory)
         model = ApplicationModel(applicationDefaults: defaults, dashboardStore: store, startsAutomatically: false)
     }
     func makeExposure() -> CompanionTailscaleServe {

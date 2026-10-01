@@ -5,82 +5,82 @@ import WovenMatterCore
 
 @Suite("Session management access requests")
 struct WorkspaceCoordinationAccessTests {
-  private func fixture() throws -> (WorkspaceDatabase, URL, String, String) {
+  private func fixture() async throws -> (WorkspaceDatabase, URL, String, String) {
     let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    let database = try WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
-    let source = try database.createLocalACPSession(runtimeKind: .codex, title: "Coordinator", ownerDeviceID: UUID())
-    let target = try database.createLocalACPSession(runtimeKind: .pi, title: "Worker", ownerDeviceID: UUID())
-    try database.setSessionTools(.init(enabled: [.sessions]), sessionID: source)
+    let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+    let source = try await database.createLocalACPSession(runtimeKind: .codex, title: "Coordinator", ownerDeviceID: UUID())
+    let target = try await database.createLocalACPSession(runtimeKind: .pi, title: "Worker", ownerDeviceID: UUID())
+    try await database.setSessionTools(.init(enabled: [.sessions]), sessionID: source)
     return (database, directory, source, target)
   }
 
   @Test func concurrentRetriesShareOneSheetAndApprovalDoesNotDependOnCLIConnection() async throws {
-    let (db, directory, source, target) = try fixture()
+    let (db, directory, source, target) = try await fixture()
     defer { try? FileManager.default.removeItem(at: directory) }
     let id = UUID().uuidString
     try await withThrowingTaskGroup(of: WorkspaceCoordinationAccessRequest.self) { group in
       for _ in 0..<4 {
-        group.addTask { try db.requestCoordinationAccess(sourceID: source, targetID: target, purpose: "Monitor", requestID: id) }
+        group.addTask { try await db.requestCoordinationAccess(sourceID: source, targetID: target, purpose: "Monitor", requestID: id) }
       }
       for try await result in group { #expect(result.state == "pending") }
     }
-    #expect(try db.pendingCoordinationAccessRequests().count == 1)
-    #expect(throws: WorkspaceToolError.accessRequired(target)) { try db.requireTranscriptAccess(sourceID: source, targetID: target) }
-    let reopened = try WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
-    #expect(try reopened.resolveCoordinationAccess(requestID: id, allowed: true).state == "accepted")
-    #expect(try reopened.sessionRelationship(target).coordinatorID == source)
-    try reopened.requireTranscriptAccess(sourceID: source, targetID: target)
-    try reopened.endCoordination(targetID: target)
-    #expect(try reopened.requestCoordinationAccess(sourceID: source, targetID: target, purpose: "Monitor", requestID: id).state == "accepted")
-    #expect(try reopened.sessionRelationship(target).coordinatorID == nil)
-    #expect(throws: WorkspaceToolError.accessRequired(target)) { try reopened.requireTranscriptAccess(sourceID: source, targetID: target) }
-    #expect(throws: (any Error).self) {
-      _ = try reopened.requestCoordinationAccess(sourceID: source, targetID: target, purpose: "Changed intent", requestID: id)
+    #expect(try await db.pendingCoordinationAccessRequests().count == 1)
+    await #expect(throws: WorkspaceToolError.accessRequired(target)) { try await db.requireTranscriptAccess(sourceID: source, targetID: target) }
+    let reopened = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+    #expect(try await reopened.resolveCoordinationAccess(requestID: id, allowed: true).state == "accepted")
+    #expect(try await reopened.sessionRelationship(target).coordinatorID == source)
+    try await reopened.requireTranscriptAccess(sourceID: source, targetID: target)
+    try await reopened.endCoordination(targetID: target)
+    #expect(try await reopened.requestCoordinationAccess(sourceID: source, targetID: target, purpose: "Monitor", requestID: id).state == "accepted")
+    #expect(try await reopened.sessionRelationship(target).coordinatorID == nil)
+    await #expect(throws: WorkspaceToolError.accessRequired(target)) { try await reopened.requireTranscriptAccess(sourceID: source, targetID: target) }
+    await #expect(throws: (any Error).self) {
+      _ = try await reopened.requestCoordinationAccess(sourceID: source, targetID: target, purpose: "Changed intent", requestID: id)
     }
   }
 
-  @Test func cancellationAndShutdownCannotLaterGrantAccess() throws {
-    let (db, directory, source, target) = try fixture()
+  @Test func cancellationAndShutdownCannotLaterGrantAccess() async throws {
+    let (db, directory, source, target) = try await fixture()
     defer { try? FileManager.default.removeItem(at: directory) }
-    let denied = try db.requestCoordinationAccess(sourceID: source, targetID: target, purpose: "Monitor", requestID: UUID().uuidString)
-    #expect(try db.resolveCoordinationAccess(requestID: denied.id, allowed: false).state == "rejected")
-    #expect(try db.resolveCoordinationAccess(requestID: denied.id, allowed: true).state == "rejected")
-    let pending = try db.requestCoordinationAccess(sourceID: source, targetID: target, purpose: "Monitor", requestID: UUID().uuidString)
-    try db.cancelPendingCoordinationAccess()
-    #expect(try db.resolveCoordinationAccess(requestID: pending.id, allowed: true).state == "cancelled")
-    #expect(try db.pendingCoordinationAccessRequests().isEmpty)
-    #expect(try db.sessionRelationship(target).coordinatorID == nil)
+    let denied = try await db.requestCoordinationAccess(sourceID: source, targetID: target, purpose: "Monitor", requestID: UUID().uuidString)
+    #expect(try await db.resolveCoordinationAccess(requestID: denied.id, allowed: false).state == "rejected")
+    #expect(try await db.resolveCoordinationAccess(requestID: denied.id, allowed: true).state == "rejected")
+    let pending = try await db.requestCoordinationAccess(sourceID: source, targetID: target, purpose: "Monitor", requestID: UUID().uuidString)
+    try await db.cancelPendingCoordinationAccess()
+    #expect(try await db.resolveCoordinationAccess(requestID: pending.id, allowed: true).state == "cancelled")
+    #expect(try await db.pendingCoordinationAccessRequests().isEmpty)
+    #expect(try await db.sessionRelationship(target).coordinatorID == nil)
   }
 
-  @Test func approvalRechecksCompetingCoordinatorAndRevokedCapability() throws {
-    let (db, directory, source, target) = try fixture()
+  @Test func approvalRechecksCompetingCoordinatorAndRevokedCapability() async throws {
+    let (db, directory, source, target) = try await fixture()
     defer { try? FileManager.default.removeItem(at: directory) }
-    let pending = try db.requestCoordinationAccess(sourceID: source, targetID: target, purpose: "Monitor", requestID: UUID().uuidString)
-    let other = try db.createLocalACPSession(runtimeKind: .claudeCode, title: "Other", ownerDeviceID: UUID())
-    try db.beginCoordination(sourceID: other, targetID: target, purpose: "Already managing")
-    let conflict = try db.resolveCoordinationAccess(requestID: pending.id, allowed: true)
+    let pending = try await db.requestCoordinationAccess(sourceID: source, targetID: target, purpose: "Monitor", requestID: UUID().uuidString)
+    let other = try await db.createLocalACPSession(runtimeKind: .claudeCode, title: "Other", ownerDeviceID: UUID())
+    try await db.beginCoordination(sourceID: other, targetID: target, purpose: "Already managing")
+    let conflict = try await db.resolveCoordinationAccess(requestID: pending.id, allowed: true)
     #expect(conflict.state == "failed")
     #expect(conflict.error?.contains(other) == true)
-    #expect(try db.sessionRelationship(target).coordinatorID == other)
-    try db.endCoordination(targetID: target)
-    let revoked = try db.requestCoordinationAccess(sourceID: source, targetID: target, purpose: "Monitor", requestID: UUID().uuidString)
-    try db.setSessionTools(.init(enabled: []), sessionID: source)
-    #expect(try db.resolveCoordinationAccess(requestID: revoked.id, allowed: true).state == "failed")
-    #expect(try db.sessionRelationship(target).coordinatorID == nil)
+    #expect(try await db.sessionRelationship(target).coordinatorID == other)
+    try await db.endCoordination(targetID: target)
+    let revoked = try await db.requestCoordinationAccess(sourceID: source, targetID: target, purpose: "Monitor", requestID: UUID().uuidString)
+    try await db.setSessionTools(.init(enabled: []), sessionID: source)
+    #expect(try await db.resolveCoordinationAccess(requestID: revoked.id, allowed: true).state == "failed")
+    #expect(try await db.sessionRelationship(target).coordinatorID == nil)
   }
 
-  @Test func historyAndAttachmentsStartWithoutAnApprovalSheet() throws {
-    let (db, directory, source, target) = try fixture()
+  @Test func historyAndAttachmentsStartWithoutAnApprovalSheet() async throws {
+    let (db, directory, source, target) = try await fixture()
     defer { try? FileManager.default.removeItem(at: directory) }
-    try db.attachConversationReference(sourceID: source, targetID: target)
-    let first = try db.requestCoordinationAccess(sourceID: source, targetID: target, purpose: "Attached", requestID: UUID().uuidString)
+    try await db.attachConversationReference(sourceID: source, targetID: target)
+    let first = try await db.requestCoordinationAccess(sourceID: source, targetID: target, purpose: "Attached", requestID: UUID().uuidString)
     #expect(first.state == "accepted")
-    #expect(try db.pendingCoordinationAccessRequests().isEmpty)
-    try db.endCoordination(targetID: target)
-    try db.removeConversationReference(sourceID: source, targetID: target)
-    try db.setSessionTools(.init(enabled: [.sessions, .history]), sessionID: source)
-    #expect(try db.requestCoordinationAccess(sourceID: source, targetID: target, purpose: "History", requestID: UUID().uuidString).state == "accepted")
-    #expect(try db.pendingCoordinationAccessRequests().isEmpty)
+    #expect(try await db.pendingCoordinationAccessRequests().isEmpty)
+    try await db.endCoordination(targetID: target)
+    try await db.removeConversationReference(sourceID: source, targetID: target)
+    try await db.setSessionTools(.init(enabled: [.sessions, .history]), sessionID: source)
+    #expect(try await db.requestCoordinationAccess(sourceID: source, targetID: target, purpose: "History", requestID: UUID().uuidString).state == "accepted")
+    #expect(try await db.pendingCoordinationAccessRequests().isEmpty)
   }
 }

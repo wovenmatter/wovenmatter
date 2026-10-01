@@ -32,7 +32,7 @@ private final class GatewayHistoryRequestCorrelation: @unchecked Sendable {
 }
 
 // MARK: - User-owned history (same workspace.sqlite; independent of UI projections)
-extension WorkspaceDatabase {
+extension WorkspaceDatabaseConnection {
   func migrateWorkspaceHistory() throws {
     try transaction {
       try executeUnlocked(
@@ -87,9 +87,12 @@ extension WorkspaceDatabase {
         END;
         """)
       // Import only surviving projections once. Never imply that old raw traces existed.
-      let version = try prepareUnlocked("SELECT 1 FROM workspace_history_schema WHERE version=1")
-      defer { sqlite3_finalize(version) }
-      if sqlite3_step(version) != SQLITE_ROW {
+      let hasVersion1: Bool = try {
+        let version = try prepareUnlocked("SELECT 1 FROM workspace_history_schema WHERE version=1")
+        defer { sqlite3_finalize(version) }
+        return sqlite3_step(version) == SQLITE_ROW
+      }()
+      if !hasVersion1 {
         try executeUnlocked(
           """
           INSERT OR IGNORE INTO workspace_history_events(id,conversation_id,run_id,harness,kind,payload,completeness)
@@ -112,22 +115,16 @@ extension WorkspaceDatabase {
       // status even when an adapter fails before it emits a transport frame.
       for operation in ["INSERT", "UPDATE"] {
         let suffix = operation.lowercased()
-        let content =
-          operation == "INSERT"
-          ? "new.content"
-          : "CASE WHEN substr(new.content,1,length(old.content))=old.content THEN substr(new.content,length(old.content)+1) ELSE new.content END"
-        let contentMode =
-          operation == "INSERT"
-          ? "'snapshot'"
-          : "CASE WHEN substr(new.content,1,length(old.content))=old.content THEN 'append' ELSE 'replace' END"
+        if operation == "UPDATE" { try executeUnlocked("DROP TRIGGER IF EXISTS history_message_update") }
+        let messageWhen = operation == "UPDATE" ? "WHEN new.status != 'streaming'" : ""
         try executeUnlocked(
           """
-          CREATE TRIGGER IF NOT EXISTS history_message_\(suffix) AFTER \(operation) ON dashboard_messages
+          CREATE TRIGGER IF NOT EXISTS history_message_\(suffix) AFTER \(operation) ON dashboard_messages \(messageWhen)
           BEGIN
             INSERT INTO workspace_history_events(id,conversation_id,run_id,harness,kind,payload)
             VALUES(lower(hex(randomblob(16))),new.conversation_id,new.run_id,
               coalesce((SELECT runtime_kind FROM desktop_local_acp_sessions WHERE conversation_id=new.conversation_id),'unknown'),
-              'message.\(suffix)',json_object('id',new.id,'role',new.role,'content',\(content),'contentMode',\(contentMode),'status',new.status));
+              'message.\(suffix)',json_object('id',new.id,'role',new.role,'content',new.content,'contentMode','snapshot','status',new.status));
           END;
           CREATE TRIGGER IF NOT EXISTS history_run_\(suffix) AFTER \(operation) ON dashboard_runs
           BEGIN
@@ -136,6 +133,71 @@ extension WorkspaceDatabase {
               coalesce((SELECT runtime_kind FROM desktop_local_acp_sessions WHERE conversation_id=new.conversation_id),'unknown'),
               'run.\(suffix)',json_object('id',new.id,'status',new.status,'error',new.error,'nativeSession',new.openclaw_session_key));
           END;
+          """)
+      }
+      if try historyRowsUnlocked("SELECT 1 FROM workspace_history_schema WHERE version=2", values: []).isEmpty {
+        // Previous CLI journals embedded request and response bodies. Remove those
+        // bodies before rebuilding search so a history-only session cannot recover
+        // note, calendar, or message content through the audit trail.
+        try executeUnlocked("""
+          UPDATE workspace_history_events SET payload='{"legacyRedacted":true}'
+            WHERE kind IN ('cli.request','cli.response','cli.error','cli.query');
+          INSERT OR IGNORE INTO workspace_history_events(id,conversation_id,run_id,harness,kind,payload,completeness)
+            SELECT 'terminal-message:'||m.id,m.conversation_id,m.run_id,
+              coalesce(s.runtime_kind,'unknown'),'message.snapshot',
+              json_object('id',m.id,'role',m.role,'content',m.content,'contentMode','snapshot','status',m.status),
+              'legacy-partial'
+            FROM dashboard_messages m LEFT JOIN desktop_local_acp_sessions s ON s.conversation_id=m.conversation_id
+            WHERE m.status!='streaming';
+          DELETE FROM workspace_history_events
+            WHERE kind='message.update' AND json_valid(payload)
+              AND json_extract(payload,'$.status')='streaming'
+              AND json_extract(payload,'$.id') IN (SELECT id FROM dashboard_messages WHERE status!='streaming');
+          DELETE FROM workspace_history_events WHERE kind LIKE 'cli.%' AND sequence NOT IN (
+            SELECT sequence FROM workspace_history_events WHERE kind LIKE 'cli.%'
+              ORDER BY sequence DESC LIMIT 10000
+          );
+          """)
+        var redactionCursor = 0
+        while true {
+          // Keep only page identities alive: legacy wire payloads can each be
+          // large, so retaining 500 full bodies here creates a startup memory spike.
+          let identities = try historyRowsUnlocked("""
+            SELECT sequence FROM workspace_history_events
+            WHERE sequence>? AND (instr(lower(payload),'wmtools-')>0 OR instr(lower(payload),'.wmt')>0)
+            ORDER BY sequence LIMIT 500
+            """, values: [String(redactionCursor)])
+          guard !identities.isEmpty else { break }
+          for row in identities {
+            guard let sequence = row.objectValue?["sequence"]?.intValue else { continue }
+            redactionCursor = max(redactionCursor, sequence)
+            guard let payload = try historyRowsUnlocked(
+              "SELECT payload FROM workspace_history_events WHERE sequence=?", values: [String(sequence)])
+                .first?.objectValue?["payload"]?.stringValue else { continue }
+            let redacted = WorkspaceHistoryPrivacy.redactingToolEndpoints(payload)
+            if redacted != payload {
+              try toolsExecuteUnlocked("UPDATE workspace_history_events SET payload=? WHERE sequence=?",
+                [redacted, String(sequence)])
+            }
+          }
+        }
+        try executeUnlocked("""
+          DROP TRIGGER IF EXISTS history_search_insert;
+          DROP TRIGGER IF EXISTS history_search_delete;
+          DROP TABLE IF EXISTS workspace_history_search;
+          CREATE VIRTUAL TABLE workspace_history_search USING fts5(payload,content='');
+          INSERT INTO workspace_history_search(rowid,payload)
+            SELECT sequence,payload FROM workspace_history_events WHERE kind NOT LIKE 'cli.%';
+          CREATE TRIGGER history_search_insert AFTER INSERT ON workspace_history_events
+            WHEN new.kind NOT LIKE 'cli.%' BEGIN
+            INSERT INTO workspace_history_search(rowid,payload) VALUES(new.sequence,new.payload);
+          END;
+          CREATE TRIGGER history_search_delete AFTER DELETE ON workspace_history_events
+            WHEN old.kind NOT LIKE 'cli.%' BEGIN
+            INSERT INTO workspace_history_search(workspace_history_search,rowid,payload)
+              VALUES('delete',old.sequence,old.payload);
+          END;
+          INSERT INTO workspace_history_schema(version) VALUES(2);
           """)
       }
     }
@@ -205,39 +267,30 @@ extension WorkspaceDatabase {
       try bindNullable(value, at: Int32(index + 1), to: statement)
     }
     try stepDone(statement)
-  }
-
-  public func historyWireRecorder(
-    conversationID: String? = nil, agentID: String? = nil,
-    harness: String
-  ) -> WorkspaceWireRecorder {
-    let correlation = GatewayHistoryRequestCorrelation()
-    return { [self] direction, data in
-      let key = harness == "openclaw" ? correlation.sessionKey(direction: direction, data: data) : nil
-      try recordHistory(
-        WorkspaceHistoryEvent(
-          conversationID: conversationID, agentID: agentID,
-          harness: harness, kind: "wire.\(direction)",
-          payload: String(decoding: data, as: UTF8.self), nativeSessionID: key))
+    if event.kind.hasPrefix("cli.") {
+      try executeUnlocked("""
+        DELETE FROM workspace_history_events WHERE kind LIKE 'cli.%' AND sequence NOT IN (
+          SELECT sequence FROM workspace_history_events WHERE kind LIKE 'cli.%'
+            ORDER BY sequence DESC LIMIT 10000
+        )
+        """)
     }
   }
 
-  public func openCodeHistoryRecorder(connectionID: String) -> WorkspaceWireRecorder {
-    { [self] direction, data in
-      let frame = try JSONDecoder().decode(WorkspaceHTTPObservation.self, from: data)
-      let parts = frame.path.split(separator: "/").map(String.init)
-      let nativeID = parts.firstIndex(of: "session").flatMap { index in
-        index + 1 < parts.count ? parts[index + 1].removingPercentEncoding : nil
-      }
-      try transaction {
-        let conversationID: String?
-        if let nativeID {
-          conversationID = try historyRowsUnlocked("SELECT conversation_id FROM desktop_opencode_sessions WHERE connection_id=? AND session_id=?", values: [connectionID, nativeID]).first?.objectValue?["conversation_id"]?.stringValue
-        } else { conversationID = nil }
-        try recordHistoryUnlocked(.init(conversationID: conversationID, harness: "opencode",
-          kind: "wire.\(direction)", payload: String(decoding: data, as: UTF8.self),
-          nativeSessionID: nativeID, sourceConnectionID: connectionID))
-      }
+  func recordOpenCodeObservation(connectionID: String, direction: String, data: Data) throws {
+    let frame = try JSONDecoder().decode(WorkspaceHTTPObservation.self, from: data)
+    let parts = frame.path.split(separator: "/").map(String.init)
+    let nativeID = parts.firstIndex(of: "session").flatMap { index in
+      index + 1 < parts.count ? parts[index + 1].removingPercentEncoding : nil
+    }
+    try transaction {
+      let conversationID: String?
+      if let nativeID {
+        conversationID = try historyRowsUnlocked("SELECT conversation_id FROM desktop_opencode_sessions WHERE connection_id=? AND session_id=?", values: [connectionID, nativeID]).first?.objectValue?["conversation_id"]?.stringValue
+      } else { conversationID = nil }
+      try recordHistoryUnlocked(.init(conversationID: conversationID, harness: "opencode",
+        kind: "wire.\(direction)", payload: String(decoding: data, as: UTF8.self),
+        nativeSessionID: nativeID, sourceConnectionID: connectionID))
     }
   }
 
@@ -249,11 +302,16 @@ extension WorkspaceDatabase {
       WorkspaceHistoryEvent(
         id: queryID, conversationID: query.callerConversationID,
         harness: "woven-history", kind: "cli.query",
-        payload: String(decoding: try JSONEncoder().encode(query), as: UTF8.self)))
+        payload: String(decoding: try JSONEncoder().encode([
+          "command": query.command,
+          "hasSearch": query.search == nil ? "false" : "true",
+          "scoped": query.conversationID == nil && query.folderID == nil ? "false" : "true"
+        ]), as: UTF8.self)))
     do {
       return try transaction {
         guard query.schemaVersion == 1, (1...200).contains(query.limit), query.after >= 0,
-          query.offset >= 0, query.offset < Int.max, (1...65536).contains(query.characters)
+          query.offset >= 0, query.offset < Int.max, (1...65536).contains(query.characters),
+          ["oldest", "newest"].contains(query.sort)
         else {
           throw WorkspaceDatabaseError.open("Unsupported history schema or invalid pagination")
         }
@@ -286,6 +344,11 @@ extension WorkspaceDatabase {
   }
 
   func queryHistoryUnlocked(_ query: WorkspaceHistoryQuery) throws -> GatewayJSONValue {
+    if let since = query.since, let until = query.until {
+      guard let start = Self.date(since), let end = Self.date(until), end >= start else {
+        throw WorkspaceToolError.invalid("--until must be at or after --since.")
+      }
+    }
     var values: [String?] = []
     var sql: String
     switch query.command {
@@ -313,37 +376,49 @@ extension WorkspaceDatabase {
       }
       if let since = query.since {
         filters.append("e.recorded_at >= ?")
-        values.append(since)
+        guard let date = Self.date(since) else { throw WorkspaceToolError.invalid("--since requires an ISO 8601 date with a time zone.") }
+        values.append(Self.timestamp(date))
       }
       if let until = query.until {
         filters.append("e.recorded_at <= ?")
-        values.append(until)
+        guard let date = Self.date(until) else { throw WorkspaceToolError.invalid("--until requires an ISO 8601 date with a time zone.") }
+        values.append(Self.timestamp(date))
       }
       if let folderID = query.folderID {
         filters.append("e.conversation_id IN (SELECT id FROM dashboard_conversations WHERE folder_id=?)")
         values.append(folderID)
       }
       if let search = query.search, !search.isEmpty {
-        filters.append(
-          "e.sequence IN (SELECT rowid FROM workspace_history_search WHERE workspace_history_search MATCH ?)"
-        )
-        // Literal text search, not a user-supplied FTS expression.
-        values.append("\"" + search.replacingOccurrences(of: "\"", with: "\"\"") + "\"")
+        if query.kind?.hasPrefix("cli.") == true {
+          // CLI audit events are intentionally absent from FTS so a search does
+          // not find its own journal. Explicit audit searches use a literal scan.
+          filters.append("instr(lower(e.payload),lower(?))>0")
+          values.append(search)
+        } else {
+          filters.append(
+            "e.sequence IN (SELECT rowid FROM workspace_history_search WHERE workspace_history_search MATCH ?)"
+          )
+          // Literal text search, not a user-supplied FTS expression.
+          values.append("\"" + search.replacingOccurrences(of: "\"", with: "\"\"") + "\"")
+        }
       }
       sql = """
         SELECT e.sequence,e.id,e.conversation_id,e.run_id,e.agent_id,e.harness,e.kind,
-          e.completeness,e.recorded_at,length(e.payload) AS payload_characters,
-          CASE WHEN length(e.payload)<=65536 THEN e.payload ELSE NULL END AS payload
+          e.completeness,e.recorded_at,woven_text_length(e.payload) AS payload_characters,
+          CASE WHEN woven_text_length(e.payload)<=8192 THEN e.payload ELSE NULL END AS payload
         FROM workspace_history_events e WHERE
         """ + " " + filters.joined(separator: " AND ") + " ORDER BY e.sequence"
     case "event":
       guard let id = query.id else { throw WorkspaceDatabaseError.open("event requires an ID") }
       sql = """
-        SELECT sequence,id,length(payload) AS payload_characters,
-          substr(payload,?,?) AS payload FROM workspace_history_events WHERE id=? ORDER BY sequence
+        SELECT sequence,id,woven_text_length(payload) AS payload_characters,? AS payload_offset,
+          CASE WHEN woven_text_length(payload)>?+? THEN 1 ELSE 0 END AS payload_has_more,
+          woven_text_substr(payload,?,?) AS payload FROM workspace_history_events WHERE id=? ORDER BY sequence
         """
-      values = [String(query.offset + 1), String(query.characters), id]
+      values = [String(query.offset), String(query.offset), String(query.characters),
+        String(query.offset + 1), String(query.characters), id]
     case "conversations":
+      let newest = query.sort == "newest"
       sql = """
         SELECT c.rowid AS sequence,c.id,c.title,c.agent_codename,c.folder_id,c.created_at,c.updated_at,c.deleted_at,
           coalesce(s.runtime_kind,CASE WHEN o.session_id IS NOT NULL THEN 'opencode' END,'openclaw') AS harness,
@@ -351,7 +426,7 @@ extension WorkspaceDatabase {
           (SELECT status FROM dashboard_runs WHERE conversation_id=c.id ORDER BY rowid DESC LIMIT 1) AS status
         FROM dashboard_conversations c LEFT JOIN desktop_local_acp_sessions s ON s.conversation_id=c.id
         LEFT JOIN desktop_opencode_sessions o ON o.conversation_id=c.id
-        WHERE c.rowid > ? AND c.deleted_at IS NULL
+        WHERE c.rowid \(newest ? "<" : ">") ? AND c.deleted_at IS NULL
         """
       values = [String(query.after)]
       if let id = query.id { sql += " AND c.id=?"; values.append(id) }
@@ -359,18 +434,20 @@ extension WorkspaceDatabase {
       if let search = query.search {
         sql += " AND instr(lower(c.title),lower(?))>0"; values.append(search)
       }
-      sql += " ORDER BY c.rowid"
+      sql += " ORDER BY c.rowid " + (newest ? "DESC" : "ASC")
     case "conversation":
       guard let id = query.id else {
         throw WorkspaceDatabaseError.open("conversation requires an ID")
       }
       sql =
-        "SELECT m.rowid AS sequence,m.id,m.conversation_id,m.run_id,m.role,substr(m.content,1,16384) AS content,length(m.content) AS content_characters,m.status,m.created_at, d.source_id AS sender_session_id,d.source_agent AS sender_agent,d.source_title AS sender_session_title FROM dashboard_messages m LEFT JOIN workspace_session_deliveries d ON d.message_id=m.id WHERE m.conversation_id=? AND m.rowid>? ORDER BY m.rowid"
-      values = [id, String(query.after)]
+        "SELECT m.rowid AS sequence,m.id,m.conversation_id,m.run_id,m.role,woven_text_substr(m.content,?,?) AS content,woven_text_length(m.content) AS content_characters,? AS content_offset,CASE WHEN woven_text_length(m.content)>?+? THEN 1 ELSE 0 END AS content_has_more,m.status,m.created_at, d.source_id AS sender_session_id,d.source_agent AS sender_agent,d.source_title AS sender_session_title FROM dashboard_messages m LEFT JOIN workspace_session_deliveries d ON d.message_id=m.id WHERE m.conversation_id=? AND m.rowid>? ORDER BY m.rowid"
+      values = [String(query.offset + 1), String(query.characters), String(query.offset),
+        String(query.offset), String(query.characters), id, String(query.after)]
     case "message":
       guard let id = query.id else { throw WorkspaceDatabaseError.open("message requires an ID") }
-      sql = "SELECT rowid AS sequence,id,conversation_id,length(content) AS content_characters,substr(content,?,?) AS content FROM dashboard_messages WHERE id=? ORDER BY rowid"
-      values = [String(query.offset + 1), String(query.characters), id]
+      sql = "SELECT rowid AS sequence,id,conversation_id,woven_text_length(content) AS content_characters,? AS content_offset,CASE WHEN woven_text_length(content)>?+? THEN 1 ELSE 0 END AS content_has_more,woven_text_substr(content,?,?) AS content FROM dashboard_messages WHERE id=? ORDER BY rowid"
+      values = [String(query.offset), String(query.offset), String(query.characters),
+        String(query.offset + 1), String(query.characters), id]
     case "runs":
       sql =
         "SELECT rowid AS sequence,id,conversation_id,agent_codename,status,error,started_at,completed_at FROM dashboard_runs WHERE rowid>?"
@@ -391,8 +468,9 @@ extension WorkspaceDatabase {
       guard let id = query.id else {
         throw WorkspaceDatabaseError.open("version requires a version ID")
       }
-      sql = "SELECT sequence,id,note_id,title,revision,source,bytes,created_at,length(content) AS content_characters,substr(content,?,?) AS content FROM note_asset_versions WHERE id=? ORDER BY sequence"
-      values = [String(query.offset + 1), String(query.characters), id]
+      sql = "SELECT sequence,id,note_id,title,revision,source,bytes,created_at,woven_text_length(content) AS content_characters,? AS content_offset,CASE WHEN woven_text_length(content)>?+? THEN 1 ELSE 0 END AS content_has_more,woven_text_substr(content,?,?) AS content FROM note_asset_versions WHERE id=? ORDER BY sequence"
+      values = [String(query.offset), String(query.offset), String(query.characters),
+        String(query.offset + 1), String(query.characters), id]
     default: throw WorkspaceDatabaseError.open("Unknown read-only history command")
     }
     sql += " LIMIT ?"
@@ -553,13 +631,13 @@ extension WorkspaceDatabase {
   }
 }
 
-extension WorkspaceDatabase {
+extension WorkspaceDatabaseConnection {
   public func checkpointNote(id: String) throws {
     try transaction { try checkpointNoteUnlocked(id: id, source: "editor-checkpoint", force: true) }
   }
 }
 
-extension WorkspaceDatabase {
+extension WorkspaceDatabaseConnection {
   // Preserve chronological metadata even for writes within one millisecond.
   // Optimistic revision tokens come from companion_versions, never this timestamp.
   func nextNoteUpdatedAtUnlocked(id: String, now: Date = Date()) throws -> String {
@@ -573,8 +651,9 @@ extension WorkspaceDatabase {
   }
 }
 
-extension WorkspaceDatabase {
+extension WorkspaceDatabaseConnection {
   func attachSessionMessageUnlocked(requestID: String, messageID: String) throws {
+    let requestID = try canonicalDeliveryID(requestID)
     try validateClaimedToolDeliveryUnlocked(id: requestID)
     let statement = try prepareUnlocked(
       """
@@ -589,6 +668,47 @@ extension WorkspaceDatabase {
     try stepDone(statement)
     guard changedRowCountUnlocked == 1 else {
       throw WorkspaceDatabaseError.open("Unable to attach session attribution")
+    }
+  }
+}
+
+// MARK: - Async worker boundary
+
+extension WorkspaceDatabase {
+  public func recordHistory(_ event: WorkspaceHistoryEvent) async throws {
+    try await write { try $0.recordHistory(event) }
+  }
+
+  public func queryHistory(_ query: WorkspaceHistoryQuery) async throws -> GatewayJSONValue {
+    try await write { try $0.queryHistory(query) }
+  }
+
+  public func noteAssetVersions(id: String) async throws -> [NoteAssetVersion] {
+    try await read { try $0.noteAssetVersions(id: id) }
+  }
+
+  public func restoreNoteAssetVersion(noteID: String, versionID: String, expectedRevision: String, callerConversationID: String? = nil,
+                                      requestID: String? = nil) async throws -> NoteEditingResponse {
+    try await write { try $0.restoreNoteAssetVersion(noteID: noteID, versionID: versionID, expectedRevision: expectedRevision, callerConversationID: callerConversationID, requestID: requestID) }
+  }
+
+  public func checkpointNote(id: String) async throws {
+    try await write { try $0.checkpointNote(id: id) }
+  }
+
+  public func historyWireRecorder(conversationID: String? = nil, agentID: String? = nil,
+    harness: String) -> WorkspaceWireRecorder {
+    let correlation = GatewayHistoryRequestCorrelation()
+    return { [self] direction, data in
+      let key = harness == "openclaw" ? correlation.sessionKey(direction: direction, data: data) : nil
+      try await recordHistory(.init(conversationID: conversationID, agentID: agentID,
+        harness: harness, kind: "wire.\(direction)", payload: String(decoding: data, as: UTF8.self), nativeSessionID: key))
+    }
+  }
+
+  public func openCodeHistoryRecorder(connectionID: String) -> WorkspaceWireRecorder {
+    { [self] direction, data in
+      try await write { try $0.recordOpenCodeObservation(connectionID: connectionID, direction: direction, data: data) }
     }
   }
 }

@@ -25,6 +25,7 @@ struct NotePane: View {
   @State private var documentGeneration = 0
   @State private var selectedBlockID: String?
   @State private var conflictsPresented = false
+  @State private var detailsPresented = false
   init(model: CompanionModel, note: CompanionNote) {
     self.model = model; self.note = note
     _title = State(initialValue: model.draftTitles[note.id] ?? note.title)
@@ -50,6 +51,7 @@ struct NotePane: View {
           Button("Add paragraph", systemImage: "plus") { change { try RichDocumentEditing.appendingParagraph(to: content) } }
         } label: { Text("Aa").font(.title3.weight(.medium)).frame(width: 36, height: 44) }.disabled(!editable).accessibilityLabel("Note formatting")
         Menu {
+          Button("Details, move and export") { detailsPresented = true }.disabled(!model.online)
           Button("Reference in new chat", systemImage: "bubble.left") { model.newChat(); model.referencedNoteID = note.id }.disabled(!editable)
           if model.state.conflicts[note.id] != nil { Button("Review saved conflict", systemImage: "doc.on.doc") { conflictsPresented = true } }
           ShareLink(item: content) { Label("Export original document", systemImage: "square.and.arrow.up") }
@@ -124,6 +126,9 @@ struct NotePane: View {
         if content != new.content { documentGeneration += 1 }
         content = new.content; title = new.title; editorBase = new
       }
+    }
+    .sheet(isPresented: $detailsPresented) {
+      ItemManagementSheet(model: model, id: note.id, isNote: true, title: title, folderID: note.folderID ?? "")
     }
     .sheet(isPresented: $conflictsPresented) {
       if let conflict = model.state.conflicts[note.id] { ConflictPane(model: model, id: note.id, conflict: conflict) }

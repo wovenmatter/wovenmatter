@@ -167,7 +167,7 @@ final class WorkspaceProcessLease {
                 directoryHint: .isDirectory
             )
         return supportDirectory.appending(
-            path: WovenMatterWorkspacePaths.folderName + "/workspace-owner.lock",
+            path: WovenMatterWorkspacePaths.folderName + "/" + LocalExecutionRole.current.leaseFileName,
             directoryHint: .notDirectory
         )
     }
@@ -311,7 +311,11 @@ final class WorkspaceProcessLease {
                 bundlePath: bundlePath
             ),
             isTerminated: { application.isTerminated },
-            activate: { application.activate(options: [.activateAllWindows]) }
+            activate: {
+                // A login launch must not surface an already-running interface.
+                CommandLine.arguments.contains("--backend")
+                    || application.activate(options: [.activateAllWindows])
+            }
         )
     }
 
@@ -371,6 +375,28 @@ struct WovenMatterApp: App {
         workspaceProcessLease = isRunningUnitTests
             ? nil
             : WorkspaceProcessLease.acquireOrExit()
+        if !isRunningUnitTests && LocalExecutionRole.current == .backend {
+            do {
+                try WovenMatterBackendProcess.removeStaleSocketAfterAcquiringLease(
+                    LocalExecutionRole.backendSocketURL(workspaceDirectory:
+                        WorkspaceProcessLease.defaultFileURL().deletingLastPathComponent()))
+            } catch {
+                NSLog("Woven Matter backend endpoint recovery failed: %@", error.localizedDescription)
+                Darwin.exit(EXIT_FAILURE)
+            }
+            let backendModel = ApplicationModel()
+            let backendDelegate = WovenMatterLifecycleDelegate()
+            backendDelegate.model = backendModel
+            do {
+                try WovenMatterBackendProcess.run(delegate: backendDelegate) {
+                    Task { await backendModel.startBackendService() }
+                }
+            } catch {
+                NSLog("Woven Matter backend startup failed: %@", error.localizedDescription)
+            }
+            withExtendedLifetime((backendModel, workspaceProcessLease)) { }
+            Darwin.exit(EXIT_SUCCESS)
+        }
         _applicationModel = State(initialValue: ApplicationModel())
         if !isRunningUnitTests {
             Self.markUpdateReadyIfRequested()
@@ -400,7 +426,12 @@ struct WovenMatterApp: App {
     var body: some Scene {
         WindowGroup {
             RootView(model: applicationModel)
-                .onAppear { lifecycleDelegate.model = applicationModel }
+                .onAppear {
+                    lifecycleDelegate.model = applicationModel
+                    LocalBackgroundExecution.shared.transitionHandler = { enabled in
+                        try await applicationModel.changeLocalBackgroundExecution(enabled: enabled)
+                    }
+                }
                 .frame(minWidth: 760, minHeight: 640)
                 .scrollIndicators(.never)
                 .onReceive(
@@ -408,8 +439,9 @@ struct WovenMatterApp: App {
                         for: NSApplication.didResignActiveNotification
                     )
                 ) { _ in
-                    applicationModel.flushNoteDrafts()
+                    Task { await applicationModel.flushNoteDrafts() }
                 }
+
         }
         .defaultSize(width: 1320, height: 860)
         .windowStyle(.hiddenTitleBar)

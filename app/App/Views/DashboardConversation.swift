@@ -43,6 +43,11 @@ struct DashboardConversationScrollState: Equatable {
     mutating func setNearBottom(_ isNearBottom: Bool) {
         self.isNearBottom = isNearBottom
     }
+
+    mutating func sourceMessagePositioned(in conversationID: String) {
+        positionedConversationID = conversationID
+        isNearBottom = false
+    }
 }
 
 private struct DashboardConversationMessageRow: Identifiable {
@@ -72,6 +77,7 @@ private enum DashboardConversationDisplayRow: Identifiable {
 
 struct DashboardCloudConversation: View {
     @Environment(\.dashboardTheme) private var theme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Bindable var model: ApplicationModel
     let agent: WorkspaceAgent?
     let conversation: WorkspaceConversationRecord?
@@ -110,9 +116,12 @@ struct DashboardCloudConversation: View {
     @State private var pendingBottomConversationID: String?
     @State private var bottomPositionRevision = 0
     @State private var scrollPositionID: String?
+    @State private var composerCollapseOverride: Bool?
     @State private var bottomStackHeight: CGFloat = 0
     @State private var scrollInteractionRevision = 0
     @State private var isUserScrolling = false
+    @State private var libraryHighlightID: String?
+    @State private var librarySourceMessageID: String?
 
     var body: some View {
         let runsByAssistantMessageID = self.runsByAssistantMessageID
@@ -121,7 +130,7 @@ struct DashboardCloudConversation: View {
         let referencesByMessageID = Dictionary(grouping: messageReferences, by: \.messageID)
         let visibleMessages = messages.filter { record in
             DashboardRunDisplayPolicy.presentsMessage(record, run: runsByAssistantMessageID[record.id])
-                && (conversation?.localRuntimeKind != .opencode || workspaceOpenCode?.links[record.conversationID] == nil
+                && (record.id == librarySourceMessageID || conversation?.localRuntimeKind != .opencode || workspaceOpenCode?.links[record.conversationID] == nil
                     || workspaceOpenCode?.snapshots[record.conversationID]?.messages.contains(where: { $0["id"].text == record.clientMessageID && OpenCodeSessionSnapshot.presentsMessage($0) }) == true)
         }
         let openCodeOrder = Dictionary((conversation.flatMap { workspaceOpenCode?.snapshots[$0.id]?.messages } ?? []).enumerated().map { ($0.element["id"].text, $0.offset) }, uniquingKeysWith: { first, _ in first })
@@ -195,7 +204,7 @@ struct DashboardCloudConversation: View {
                             }
                             if let sessionID = conversation?.id, model.agentTools?.hasOlderReceipts.contains(sessionID) == true {
                                 Button("Load earlier session activity") {
-                                    model.agentTools?.loadOlderReceipts(sessionID: sessionID)
+                                    Task { await model.agentTools?.loadOlderReceipts(sessionID: sessionID) }
                                 }
                                 .buttonStyle(SettingsQuietButtonStyle())
                                 .padding(.bottom, 32)
@@ -233,6 +242,7 @@ struct DashboardCloudConversation: View {
                                     }
                                 }
                                 .id(row.id)
+                                .background(row.id == libraryHighlightID ? theme.palette.themeWhisper : Color.clear)
                                 .padding(.top, row.id == rows.first?.id ? 0 : row.spacingBefore)
                             }
                         }
@@ -248,7 +258,10 @@ struct DashboardCloudConversation: View {
                     .scrollTargetLayout()
                 }
                 .scrollIndicators(.never)
-                .onDisappear { model.agentTools?.observeSession(nil, token: toolObservationToken) }
+                .task(id: [model.libraryMessageTarget?.id, conversation?.id]) {
+                    await scrollToLibraryMessage(using: proxy)
+                }
+                .onDisappear { model.agentTools?.observeSessionFromUI(nil, token: toolObservationToken) }
                 .environment(\.conversationTranscriptInteraction) {
                     transcriptOwnsScroll = true
                     scrollInteractionRevision += 1
@@ -277,6 +290,7 @@ struct DashboardCloudConversation: View {
                 } action: { oldGeometry, newGeometry in
                     let followedBottomBeforeGrowth = oldGeometry.contentHeight != newGeometry.contentHeight
                         && scrollState.isNearBottom && !isUserScrolling && !isPrependingHistory
+                        && model.libraryMessageTarget?.conversationID != conversation?.id
                     let isPositioningConversation = pendingBottomConversationID == conversation?.id
                         && newestPresentedMessageIdentity != nil
                     scrollState.setNearBottom(newGeometry.isNearBottom && !transcriptOwnsScroll)
@@ -304,22 +318,23 @@ struct DashboardCloudConversation: View {
                 }
                 .onChange(of: conversation.flatMap { model.pendingComposerPrefills[$0.id] }, initial: true) { _, text in
                     guard let text, let conversationID = conversation?.id else { return }
-                    model.pendingComposerPrefills.removeValue(forKey: conversationID)
+                    model.consumeComposerPrefill(conversationID: conversationID, expected: text)
                     guard !text.isEmpty else { return }
                     draft = draft.isEmpty ? text : draft + "\n" + text
                 }
                 .onChange(of: conversation?.id, initial: true) { _, conversationID in
-                    model.agentTools?.observeSession(conversationID, token: toolObservationToken)
+                    model.agentTools?.observeSessionFromUI(conversationID, token: toolObservationToken)
                     isUserScrolling = false
-                    transcriptOwnsScroll = false
+                    transcriptOwnsScroll = model.libraryMessageTarget?.conversationID == conversationID
                     scrollInteractionRevision += 1
                     scrollState.conversationChanged(to: conversationID)
-                    pendingBottomConversationID = conversationID
+                    if transcriptOwnsScroll { scrollState.setNearBottom(false) }
+                    pendingBottomConversationID = model.libraryMessageTarget?.conversationID == conversationID ? nil : conversationID
                     bottomPositionRevision += 1
                     scrollPositionID = nil
                 }
                 .onChange(of: newestPresentedMessageIdentity, initial: true) { _, identity in
-                    guard identity != nil else { return }
+                    guard identity != nil, model.libraryMessageTarget?.conversationID != conversation?.id else { return }
                     let action = scrollState.contentChanged(
                         conversationID: conversation?.id,
                         hasMessages: !visibleMessages.isEmpty,
@@ -434,6 +449,14 @@ struct DashboardCloudConversation: View {
                             help: "Remove panel",
                             action: onClosePanel
                         )
+                    } else if let conversation, conversation.localRuntimeKind == .defaultAgent {
+                        DashboardPanelControlButton(
+                            glyph: .settings,
+                            accessibilityLabel: "Built-in Agent settings",
+                            help: "Built-in Agent settings"
+                        ) {
+                            model.pendingDefaultAgentSettingsScope = conversation.remoteWorkspaceID?.uuidString.lowercased() ?? "local"
+                        }
                     } else if showsAddPanel {
                         Color.clear
                             .frame(width: DashboardPanelControlButton.size, height: DashboardPanelControlButton.size)
@@ -497,6 +520,7 @@ struct DashboardCloudConversation: View {
                                 || model.updatingLocalACPSessionIDs.contains($0.id)
                         } ?? false),
                         startsCollapsed: startsComposerCollapsed,
+                        collapseOverride: $composerCollapseOverride,
                         focusRequestGeneration: focusRequestGeneration,
                         onActivate: onActivatePanel,
                         onSelectModel: { selection in
@@ -511,10 +535,9 @@ struct DashboardCloudConversation: View {
                                 return
                             }
                             if conversation.localRuntimeKind != nil {
-                                model.updateLocalACPSession(
-                                    conversation: conversation,
-                                    model: selection
-                                )
+                                Task { await model.updateLocalACPSession(
+                                    conversation: conversation, model: selection
+                                ) }
                                 return
                             }
                         },
@@ -530,10 +553,9 @@ struct DashboardCloudConversation: View {
                                 return
                             }
                             if conversation.localRuntimeKind != nil {
-                                model.updateLocalACPSession(
-                                    conversation: conversation,
-                                    thinking: selection
-                                )
+                                Task { await model.updateLocalACPSession(
+                                    conversation: conversation, thinking: selection
+                                ) }
                                 return
                             }
                         },
@@ -553,7 +575,7 @@ struct DashboardCloudConversation: View {
                                 return
                             }
                             if let runtimeKind = conversation.localRuntimeKind, runtimeKind != .pi {
-                                model.updateLocalACPSession(conversation: conversation, permission: selection)
+                                Task { await model.updateLocalACPSession(conversation: conversation, permission: selection) }
                             }
                         },
                         onAttachmentAction: onAttachmentAction,
@@ -577,8 +599,14 @@ struct DashboardCloudConversation: View {
                             .accessibilityHidden(true)
                     }
                 }
+                // Animate the whole row so the outside buttons follow the
+                // composer height in the same layout transaction.
+                .animation(
+                    reduceMotion ? nil : .easeOut(duration: 0.15),
+                    value: composerCollapseOverride ?? startsComposerCollapsed
+                )
             }
-            .frame(maxWidth: 768)
+            .frame(maxWidth: .infinity)
             .padding(.horizontal, usesCompactPanelSpacing ? 12 : 32)
             .padding(.top, 8)
             .onGeometryChange(for: CGFloat.self) { geometry in
@@ -601,17 +629,14 @@ struct DashboardCloudConversation: View {
         }
     }
 
-    private var sessionIdentity: String? {
+    private var sessionIdentity: LocalACPSessionMetadataTaskIdentity? {
         guard let conversation else { return nil }
-        if let runtimeKind = conversation.localRuntimeKind {
-            // A restored chat can appear before CLI discovery finishes. Retry
-            // its metadata task when the launch context becomes available.
-            if [.codex, .claudeCode, .grokBuild, .cursor].contains(runtimeKind) {
-                return "local:\(conversation.id):\(model.isLocalACPSessionLaunchAvailable(conversation))"
-            }
-            return "local:\(conversation.id)"
-        }
-        return nil
+        return LocalACPSessionMetadataTaskIdentity(
+            conversationID: conversation.id,
+            runtimeKind: conversation.localRuntimeKind,
+            usesOpenClawGateway: model.isOpenClawGatewayConversation(conversation.id),
+            launchAvailable: model.isLocalACPSessionLaunchAvailable(conversation)
+        )
     }
 
     private var conversationState: DashboardConversationState? {
@@ -684,6 +709,47 @@ struct DashboardCloudConversation: View {
     }
 
     @MainActor
+    private func scrollToLibraryMessage(using proxy: ScrollViewProxy) async {
+        guard let item = model.libraryMessageTarget, item.conversationID == conversation?.id else { return }
+        pendingBottomConversationID = nil
+        bottomPositionRevision += 1
+        scrollInteractionRevision += 1
+        transcriptOwnsScroll = true
+        scrollState.setNearBottom(false)
+        // A Library source can outlive the live OpenCode snapshot's message window.
+        librarySourceMessageID = item.messageID
+        await model.refreshConversation(id: item.conversationID)
+        while !Task.isCancelled,
+              model.conversationState(for: item.conversationID)?.content?.messages.contains(where: { $0.id == item.messageID }) != true {
+            if model.conversationState(for: item.conversationID)?.isLoadingOlderMessages == true {
+                try? await Task.sleep(for: .milliseconds(25))
+                continue
+            }
+            guard await model.loadOlderConversationMessages(id: item.conversationID) else { break }
+        }
+        guard !Task.isCancelled, conversation?.id == item.conversationID else { return }
+        await Task.yield()
+        try? await Task.sleep(for: .milliseconds(100))
+        guard !Task.isCancelled, model.libraryMessageTarget?.id == item.id,
+              conversation?.id == item.conversationID else { return }
+        guard model.conversationState(for: item.conversationID)?.content?.messages.contains(where: { $0.id == item.messageID }) == true else {
+            model.conversationState(for: item.conversationID)?.setError("This source message is no longer available.")
+            model.libraryMessageTarget = nil
+            return
+        }
+        libraryHighlightID = item.messageID
+        scrollState.sourceMessagePositioned(in: item.conversationID)
+        scrollPositionID = nil
+        scrollWithoutAnimation(proxy, to: item.messageID, anchor: .top)
+        pendingBottomConversationID = nil
+        try? await Task.sleep(for: .seconds(2))
+        if libraryHighlightID == item.messageID { libraryHighlightID = nil }
+        if !Task.isCancelled, model.libraryMessageTarget?.id == item.id {
+            model.libraryMessageTarget = nil
+        }
+    }
+
+    @MainActor
     private func prependOlderMessages(
         keeping anchorMessageID: String,
         using proxy: ScrollViewProxy
@@ -694,7 +760,7 @@ struct DashboardCloudConversation: View {
            let openCode = workspaceOpenCode, openCode.isLocalSession(conversation.id),
            let link = openCode.links[conversation.id], openCode.snapshots[conversation.id]?.olderCursor != nil {
             do {
-                try await openCode.coordinator.loadOlder(link)
+                try await openCode.loadOlder(link)
                 await model.refreshConversation(id: conversation.id)
             } catch { openCode.error = error.localizedDescription }
         }
@@ -1036,9 +1102,9 @@ struct DashboardMessageRow: View {
             HStack {
                 ConversationChangedFilesCard(records: activities, topSpacing: {
                     if showsAssistantBody { return 18 }
-                    guard run != nil else { return 0 }
-                    return ConversationWorkTranscript.hasVisibleActivities(
-                        in: activities, commentaryIDs: Set(transcript.commentary.map(\.id))
+                    guard let run else { return 0 }
+                    return ConversationWorkTranscript.hasVisibleContent(
+                        run: run, in: activities, commentaryIDs: Set(transcript.commentary.map(\.id))
                     ) ? 18 : 0
                 })
                 .frame(maxWidth: .infinity, alignment: .leading)

@@ -462,6 +462,7 @@ struct DashboardLucideGlyph: Hashable, Sendable {
     static let database = Self("database")
     static let barChart = Self("bar-chart-3")
     static let settings = Self("settings")
+    static let plug = Self("plug")
     static let plus = Self("plus")
     static let folderOpen = Self("folder-open")
     static let folder = Self("folder")
@@ -533,6 +534,7 @@ struct DashboardLucideIcon: View {
 }
 
 enum DashboardHarnessLogo: String, CaseIterable, Sendable {
+    case defaultAgent
     case codex
     case claude
     case grok
@@ -553,6 +555,7 @@ enum DashboardHarnessLogo: String, CaseIterable, Sendable {
         case .grokBuild: self = .grok
         case .openclaw: self = .openClaw
         case .hermes: self = .hermes
+        case .defaultAgent: self = .defaultAgent
         case .pi: self = .pi
         case .cursor: self = .cursor
         case .opencode: self = .openCode
@@ -570,6 +573,7 @@ enum DashboardHarnessLogo: String, CaseIterable, Sendable {
             .lowercased()
             .filter { $0.isLetter || $0.isNumber }
         return switch identity {
+        case "defaultagent", "wovendefaultagent": .defaultAgent
         case "codex", "codexcli", "openaicodex": .codex
         case "claude", "claudecode", "claudeai": .claude
         case "grok", "grokbuild": .grok
@@ -589,6 +593,7 @@ enum DashboardHarnessLogo: String, CaseIterable, Sendable {
         case .grok: "harness-grok"
         case .openClaw: "harness-openclaw"
         case .hermes: "harness-hermes"
+        case .defaultAgent: "lucide-bot-s15"
         case .pi: "harness-pi"
         case .cursor: "harness-cursor"
         case .openCode: "harness-opencode"
@@ -602,6 +607,7 @@ enum DashboardHarnessLogo: String, CaseIterable, Sendable {
         case .grok: "Grok Build"
         case .openClaw: "OpenClaw"
         case .hermes: "Hermes"
+        case .defaultAgent: "Built-in"
         case .pi: "Pi"
         case .cursor: "Cursor"
         case .openCode: "OpenCode"
@@ -813,6 +819,10 @@ struct DashboardSidebarNavigationState: Equatable, Sendable {
 }
 
 struct DashboardPalette {
+    static let calendarEvent = DashboardPalette.primary
+    static let calendarTask = Color.hex(0x4169E1)
+    static let calendarRecurringEvent = Color.hex(0x7462A6)
+    static let calendarRecurringTask = DashboardTheme.cognac.palette.themeAccent
     static let foreground = Color.hex(0x0A1F16)
     static let mutedForeground = Color.hex(0x5C6F64)
     static let primary = Color.hex(0x004225)

@@ -187,13 +187,14 @@ final class WovenMatterRelayForwarder: @unchecked Sendable {
                     response = try WovenMatterCommandLine.forward(request, to: localSocket,
                         timeout: timeout, cancellation: cancellation)
                 } catch {
-                    let requestID = (try? JSONDecoder().decode(WovenMatterToolRequest.self, from: request))?.requestID
+                    let requestID = (try? JSONDecoder().decode(WovenMatterToolRequest.self, from: request))
+                        .flatMap { UUID(uuidString: $0.requestID)?.uuidString.lowercased() }
                     response = try JSONEncoder().encode(WovenMatterToolResponse(success: false,
-                        error: error.localizedDescription, requestID: requestID))
+                        error: error.localizedDescription, code: "transport_error", requestID: requestID).bounded())
                 }
                 var packet = try JSONEncoder().encode(["id": id, "payload": response.base64EncodedString()])
                 packet.append(10)
-                try writeLock.withLock {
+                writeLock.withLock {
                     // Complete ownership before another writer takes over; the
                     // outer cleanup also handles errors before this boundary.
                     defer { finished(id: id); ownershipFinished = true }
@@ -207,9 +208,16 @@ final class WovenMatterRelayForwarder: @unchecked Sendable {
                         return true
                     }
                     guard canWrite else { return }
-                    try write(packet)
+                    do {
+                        try write(packet)
+                    } catch {
+                        // Retire the failed writer before notifying observers or
+                        // releasing idle waiters; neither may admit more work.
+                        stop()
+                        onFailure(error)
+                    }
                 }
-            } catch { onFailure(error); stop() }
+            } catch { stop(); onFailure(error) }
         }
     }
 

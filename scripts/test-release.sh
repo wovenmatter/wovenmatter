@@ -85,4 +85,7 @@ for mode, expected in (("ok", 0), ("unavailable", 77), ("auth-required", 77),
         assert recorded[2:] == expected_tail, recorded
 print("Release access checks passed: existing access, unavailable credentials/network, auth required, wrong account, wrong remote.")
 PYTEST
+python3 scripts/test-support/test_release_approval.py
+python3 scripts/test-support/test_release_notarization.py
+python3 scripts/test-support/test_release_code.py
 printf '%s\n' 'Release contract validation passed.'

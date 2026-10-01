@@ -67,22 +67,40 @@ xcodebuild -quiet \
 scripts/validate-native-app.sh "$app"
 codesign --verify --deep --strict --verbose=2 "$app"
 codesign -dvv "$app" 2>&1 | grep -F 'Authority=Developer ID Application:' >/dev/null
+python3 scripts/validate-release-code.py "$app"
 
 notarize() {
   local artifact="$1"
+  local response
+  response="$(mktemp "${release_root}/notary-response.XXXXXX")"
+  local credentials=()
   if [ -n "${WOVENMATTER_NOTARY_KEYCHAIN_PROFILE:-}" ]; then
-    xcrun notarytool submit "$artifact" \
-      --keychain-profile "$WOVENMATTER_NOTARY_KEYCHAIN_PROFILE" --wait
+    credentials=(--keychain-profile "$WOVENMATTER_NOTARY_KEYCHAIN_PROFILE")
   else
     : "${WOVENMATTER_NOTARY_KEY:?WOVENMATTER_NOTARY_KEY is required}"
     : "${WOVENMATTER_NOTARY_KEY_ID:?WOVENMATTER_NOTARY_KEY_ID is required}"
     : "${WOVENMATTER_NOTARY_ISSUER_ID:?WOVENMATTER_NOTARY_ISSUER_ID is required}"
-    xcrun notarytool submit "$artifact" \
-      --key "$WOVENMATTER_NOTARY_KEY" \
-      --key-id "$WOVENMATTER_NOTARY_KEY_ID" \
-      --issuer "$WOVENMATTER_NOTARY_ISSUER_ID" \
-      --wait
+    credentials=(--key "$WOVENMATTER_NOTARY_KEY"
+      --key-id "$WOVENMATTER_NOTARY_KEY_ID"
+      --issuer "$WOVENMATTER_NOTARY_ISSUER_ID")
   fi
+  if ! xcrun notarytool submit "$artifact" "${credentials[@]}" --wait --output-format json > "$response"; then
+    cat "$response"
+    rm -f "$response"
+    return 1
+  fi
+  cat "$response"
+  if ! jq -e '.status == "Accepted"' "$response" >/dev/null; then
+    local submission_id
+    submission_id="$(jq -r '.id // empty' "$response")"
+    if [ -n "$submission_id" ]; then
+      xcrun notarytool log "$submission_id" "${credentials[@]}" || true
+    fi
+    rm -f "$response"
+    printf 'Notarization did not accept %s; refusing to staple or package.\n' "$artifact" >&2
+    return 65
+  fi
+  rm -f "$response"
 }
 
 ditto -c -k --keepParent "$app" "$notary_app_zip"

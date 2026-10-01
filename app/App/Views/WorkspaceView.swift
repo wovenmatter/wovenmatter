@@ -97,6 +97,9 @@ struct DashboardRunDisplayPolicy {
 
 struct WorkspaceView: View {
     @Bindable var model: ApplicationModel
+    @State private var conversationToRename: WorkspaceConversationRecord?
+    @State private var noteToRename: WorkspaceNoteRecord?
+    @State private var showsWorkspaceTrash = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @AppStorage(DashboardTheme.storageKey) private var themeRawValue = DashboardTheme.green.rawValue
@@ -123,8 +126,9 @@ struct WorkspaceView: View {
     @State private var attachmentDraftsByConversation: [String: [AgentMessageAttachmentDraft]] = [:]
     @State private var submittingConversationIDs: Set<String> = []
     @State private var showsAttachmentImporter = false
+    @State private var archivedLibrarySource: WorkspaceLibraryItem?
     @State private var attachmentPicker: DashboardAttachmentPickerKind?
-    @State private var attachmentTargetPanelID: DashboardChatPanelID?
+    @State private var attachmentTargetConversationID: String?
     @State private var notice: String?
     @State private var noticeTask: Task<Void, Never>?
     @State private var showsNewChatChooser = false
@@ -174,6 +178,45 @@ struct WorkspaceView: View {
     }
 
     var body: some View {
+        workspaceWithAttachments
+        .onChange(of: model.pendingDefaultAgentSettingsScope) { _, scope in
+            if scope != nil { openUtility(.settings) }
+        }
+        .onChange(of: model.pendingConnectionsScope) { _, scope in
+            if scope != nil { openUtility(.settings) }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .init("wovenmatter.open-connections"))) { event in
+            model.pendingConnectionsScope = event.object as? String ?? "global"
+            openUtility(.settings)
+        }
+        .onChange(of: model.pendingHermesSettingsAgentID) { _, agentID in
+            if agentID != nil {
+                closeNewChatChooser()
+                openUtility(.settings)
+            }
+        }
+        .confirmationDialog(
+            "Connect the OpenClaw Gateway?",
+            isPresented: Binding(
+                get: { model.pendingOpenClawGatewayAgentID != nil },
+                set: { if !$0 { model.dismissPendingOpenClawGatewayLink() } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Connect Gateway") {
+                model.confirmPendingOpenClawGatewayLink()
+            }
+            Button("Use ACP for now", role: .cancel) {
+                model.dismissPendingOpenClawGatewayLink()
+            }
+        } message: {
+            Text("You can chat now with ACP. Connect the Gateway to also use shared sessions and scheduled jobs.")
+        }
+    }
+
+    // Keep presentation and routing as separate opaque expressions so the
+    // supported Xcode toolchains do not solve one enormous modifier chain.
+    private var workspaceSurface: some View {
         GeometryReader { geometry in
             let layout = DashboardLayoutState.resolve(
                 width: geometry.size.width,
@@ -193,6 +236,9 @@ struct WorkspaceView: View {
                     }
                 }
                 .background(theme.palette.workspace)
+                .alert("Built-in switched models", isPresented: Binding(get: { model.defaultAgentFallbackNotice != nil }, set: { if !$0 { model.defaultAgentFallbackNotice = nil } })) {
+                    Button("OK") { model.defaultAgentFallbackNotice = nil }
+                } message: { Text(model.defaultAgentFallbackNotice ?? "") }
 
                 if showsNewChatChooser || showsNewNoteChooser {
                     Color.black.opacity(0.20)
@@ -245,8 +291,16 @@ struct WorkspaceView: View {
         .onAppear {
             selectDefaults()
         }
+        .overlay(alignment: .top) { DictationFeedback().padding(.top, 12) }
+        .onChange(of: destination) { _, value in
+            if value != .workspace { DictationModel.shared.leaveWorkspace() }
+        }
         .onChange(of: allAgents.map(\.id)) { _, _ in selectDefaults() }
-        .onChange(of: model.workspaceOverview?.conversations.map(\.id) ?? []) { _, ids in
+        .onChange(of: model.workspaceOverview?.conversations.map(\.id) ?? []) { oldIDs, ids in
+            let removed = Set(oldIDs).subtracting(ids)
+            for panel in chatPanels.panels where panel.conversationID.map(removed.contains) == true {
+                _ = chatPanels.setConversation(nil, in: panel.id)
+            }
             selectDefaults()
         }
         .onChange(of: selectedConversationID) { _, conversationID in
@@ -276,6 +330,22 @@ struct WorkspaceView: View {
             model.persistMacSurfaceProfileFromUserDefaults()
         }
         .onDisappear { noticeTask?.cancel() }
+        .sheet(item: $conversationToRename) { conversation in
+            DashboardRenameConversationSheet(conversation: conversation, model: model)
+        }
+        .sheet(item: $noteToRename) { note in
+            DashboardRenameNoteSheet(note: note, model: model)
+        }
+        .sheet(isPresented: $showsWorkspaceTrash) {
+            DashboardWorkspaceTrashSheet(model: model)
+        }
+        .sheet(item: $archivedLibrarySource) { item in
+            DashboardLibrarySourceSheet(item: item, model: model)
+        }
+    }
+
+    private var workspaceWithAttachments: some View {
+        workspaceSurface
         .fileImporter(
             isPresented: $showsAttachmentImporter,
             allowedContentTypes: [.data],
@@ -283,12 +353,12 @@ struct WorkspaceView: View {
         ) { result in
             switch result {
             case .success(let urls):
-                if let panelID = attachmentTargetPanelID {
-                    _ = attachFiles(urls, to: panelID)
+                if let conversationID = attachmentTargetConversationID {
+                    _ = attachFiles(urls, conversationID: conversationID)
                 }
-                attachmentTargetPanelID = nil
+                attachmentTargetConversationID = nil
             case .failure(let error):
-                attachmentTargetPanelID = nil
+                attachmentTargetConversationID = nil
                 showNotice(error.localizedDescription)
             }
         }
@@ -297,57 +367,30 @@ struct WorkspaceView: View {
                 kind: kind,
                 notes: model.workspaceOverview?.notes ?? [],
                 conversations: (model.workspaceOverview?.conversations ?? []).filter {
-                    $0.id != attachmentTargetPanelID.flatMap {
-                        chatPanels.panel(id: $0)?.conversationID
-                    }
+                    $0.id != attachmentTargetConversationID
                 },
                 onSelectNote: { note in
-                    if let panelID = attachmentTargetPanelID {
-                        appendAttachment(model.noteAttachmentDraft(note), to: panelID)
+                    if let conversationID = attachmentTargetConversationID {
+                        appendAttachment(model.noteAttachmentDraft(note), conversationID: conversationID)
                     }
                     attachmentPicker = nil
-                    attachmentTargetPanelID = nil
+                    attachmentTargetConversationID = nil
                 },
                 onSelectConversation: { conversation in
+                    let targetConversationID = attachmentTargetConversationID
+                    attachmentTargetConversationID = nil
                     attachmentPicker = nil
                     Task { @MainActor in
                         do {
-                            if let panelID = attachmentTargetPanelID {
-                                appendAttachment(
-                                    try await model.conversationAttachmentDraft(conversation),
-                                    to: panelID
-                                )
+                            if let conversationID = targetConversationID {
+                                appendAttachment(try await model.conversationAttachmentDraft(conversation), conversationID: conversationID)
                             }
                         } catch {
                             showNotice(error.localizedDescription)
                         }
-                        attachmentTargetPanelID = nil
                     }
                 }
             )
-        }
-        .onChange(of: model.pendingHermesSettingsAgentID) { _, agentID in
-            if agentID != nil {
-                closeNewChatChooser()
-                openUtility(.settings)
-            }
-        }
-        .confirmationDialog(
-            "Connect the OpenClaw Gateway?",
-            isPresented: Binding(
-                get: { model.pendingOpenClawGatewayAgentID != nil },
-                set: { if !$0 { model.dismissPendingOpenClawGatewayLink() } }
-            ),
-            titleVisibility: .visible
-        ) {
-            Button("Connect Gateway") {
-                model.confirmPendingOpenClawGatewayLink()
-            }
-            Button("Use ACP for now", role: .cancel) {
-                model.dismissPendingOpenClawGatewayLink()
-            }
-        } message: {
-            Text("You can chat now with ACP. Connect the Gateway to also use shared sessions and scheduled jobs.")
         }
     }
 
@@ -551,6 +594,9 @@ struct WorkspaceView: View {
                 onSetFolderPinned: setFolderPinned,
                 onMoveFolder: moveFolder,
                 onDeleteFolder: deleteFolder,
+                onShowTrash: { showsWorkspaceTrash = true },
+                onConversationAction: handleConversationAction,
+                onNoteAction: handleNoteAction,
                 onMoveConversation: moveConversation,
                 onUnavailableMutation: showUnavailableMutation
             ),
@@ -644,7 +690,10 @@ struct WorkspaceView: View {
                         onUnavailableComposerAction: showUnavailableMutation
                     )
                 case .calendar:
-                    DashboardCalendarSurface(model: model)
+                    DashboardCalendarSurface(model: model, onOpenSession: { id in
+                        destination = .workspace
+                        selectConversation(id)
+                    })
                 case .cronJobs:
                     DashboardCronSurface(
                         model: model,
@@ -654,10 +703,17 @@ struct WorkspaceView: View {
                         }
                     )
                 case .library:
-                    DashboardUnavailableUtility(
-                        icon: .libraryBigControl,
-                        title: "Library"
-                    )
+                    DashboardLibrarySurface(library: model.library, configuredWorkspaces: model.remoteWorkspaces.workspaces.map {
+                        (id: $0.id.uuidString.lowercased(), name: $0.name)
+                    }) { item in
+                        if model.workspaceOverview?.conversations.contains(where: { $0.id == item.conversationID }) == true {
+                            model.libraryMessageTarget = item
+                            destination = .workspace
+                            selectConversation(item.conversationID)
+                        } else {
+                            archivedLibrarySource = item
+                        }
+                    }
                 case .databases:
                     DashboardDatabasesView(model: model)
                 case .usage:
@@ -857,6 +913,69 @@ struct WorkspaceView: View {
             }
             if selectedFolderID == id {
                 selectFolder(nil)
+            }
+        }
+    }
+
+    private func handleConversationAction(_ conversation: WorkspaceConversationRecord, action: DashboardConversationMenuAction) {
+        if case .rename = action {
+            conversationToRename = conversation
+            return
+        }
+        Task {
+            do {
+                switch action {
+                case .rename: break
+                case .setPinned(let pinned):
+                    try await model.mutateConversation(id: conversation.id, mutation: .setPinned(pinned))
+                case .moveToTrash:
+                    try await model.mutateConversation(id: conversation.id, mutation: .moveToTrash)
+                    for panel in chatPanels.panels where panel.conversationID == conversation.id {
+                        _ = chatPanels.setConversation(nil, in: panel.id)
+                    }
+                    selectDefaults()
+                    showNotice("Chat moved to Trash.")
+                case .export(let format):
+                    let url = try await model.exportConversation(id: conversation.id, format: format)
+                    if try await DashboardConversationExport.save(url: url, title: conversation.title, format: format) {
+                        showNotice("Chat exported.")
+                    }
+                }
+            } catch {
+                showNotice(error.localizedDescription)
+            }
+        }
+    }
+
+    private func handleNoteAction(_ note: WorkspaceNoteRecord, action: DashboardNoteMenuAction) {
+        if case .rename = action {
+            noteToRename = note
+            return
+        }
+        Task {
+            do {
+                switch action {
+                case .rename: break
+                case .setPinned(let pinned):
+                    try await model.mutateNote(id: note.id, mutation: .setPinned(pinned))
+                case .moveToFolder(let folderID):
+                    try await model.mutateNote(id: note.id, mutation: .moveToFolder(folderID))
+                case .moveToTrash:
+                    try await model.mutateNote(id: note.id, mutation: .moveToTrash)
+                    if selectedNoteID == note.id {
+                        selectedNoteID = nil
+                        noteFocusMode = false
+                        compactWorkspacePane = .chat
+                    }
+                    showNotice("Note moved to Trash.")
+                case .export(let format):
+                    let export = try await model.exportNote(id: note.id, format: format)
+                    if try await DashboardNoteExport.save(export) {
+                        showNotice("Note exported.")
+                    }
+                }
+            } catch {
+                showNotice(error.localizedDescription)
             }
         }
     }
@@ -1072,7 +1191,7 @@ struct WorkspaceView: View {
             return
         }
         activatePanel(panelID)
-        attachmentTargetPanelID = panelID
+        attachmentTargetConversationID = chatPanels.panel(id: panelID)?.conversationID
         switch action {
         case .upload: showsAttachmentImporter = true
         case .note: attachmentPicker = .note
@@ -1085,17 +1204,25 @@ struct WorkspaceView: View {
         _ urls: [URL],
         to panelID: DashboardChatPanelID
     ) -> Bool {
-        guard chatPanels.panel(id: panelID)?.conversationID != nil else { return false }
+        guard let conversationID = chatPanels.panel(id: panelID)?.conversationID else { return false }
+        return attachFiles(urls, conversationID: conversationID)
+    }
+
+    @discardableResult
+    private func attachFiles(_ urls: [URL], conversationID: String) -> Bool {
         Task { @MainActor in
             let scoped = urls.filter { $0.startAccessingSecurityScopedResource() }
-            defer { scoped.forEach { $0.stopAccessingSecurityScopedResource() } }
+            defer {
+                scoped.forEach { $0.stopAccessingSecurityScopedResource() }
+                DashboardComposerNativeTextView.releaseTemporaryAttachments(urls)
+            }
             do {
                 let files = urls.map { url in
                     let type = UTType(filenameExtension: url.pathExtension)
                     return (url: url, mimeType: type?.preferredMIMEType ?? "application/octet-stream")
                 }
                 for attachment in try await model.stageMessageAttachments(files) {
-                    appendAttachment(attachment, to: panelID)
+                    appendAttachment(attachment, conversationID: conversationID)
                 }
             } catch {
                 showNotice(error.localizedDescription)
@@ -1106,9 +1233,8 @@ struct WorkspaceView: View {
 
     private func appendAttachment(
         _ attachment: AgentMessageAttachmentDraft,
-        to panelID: DashboardChatPanelID
+        conversationID: String
     ) {
-        guard let conversationID = chatPanels.panel(id: panelID)?.conversationID else { return }
         var current = attachmentDraftsByConversation[conversationID] ?? []
         let duplicate = current.contains { existing in
             switch (existing, attachment) {
@@ -1357,7 +1483,7 @@ struct DashboardWorkspaceSurface: View {
             }
         }
         .task(id: conversation?.id) {
-            guard let conversation else { return }
+            guard let conversation, model.libraryMessageTarget?.conversationID != conversation.id else { return }
             await model.refreshConversation(id: conversation.id)
         }
     }

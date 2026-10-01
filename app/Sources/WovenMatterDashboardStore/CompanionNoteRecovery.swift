@@ -2,7 +2,7 @@ import CryptoKit
 import Foundation
 import SQLite3
 
-extension WorkspaceDatabase {
+extension WorkspaceDatabaseConnection {
     /// A recovery copy has a new stable identity, allowing acknowledgement-loss
     /// retries without duplicating writing or reviving the original deleted note.
     public static func recoveryCopyID(sourceID: String, title: String, content: String) -> String {
@@ -41,4 +41,11 @@ extension WorkspaceDatabase {
             return id
         }
     }
+}
+
+extension WorkspaceDatabase {
+  public static func recoveryCopyID(sourceID: String, title: String, content: String) -> String { WorkspaceDatabaseConnection.recoveryCopyID(sourceID: sourceID, title: title, content: content) }
+  public func preserveRecoveryCopy(sourceID: String, title: String, content: String, folderID: String?) async throws -> String {
+    try await write { try $0.preserveRecoveryCopy(sourceID: sourceID, title: title, content: content, folderID: folderID) }
+  }
 }
