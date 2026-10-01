@@ -252,7 +252,6 @@ export class DefaultAgentEngine {
     const controller = new AbortController();
     record.promptController = controller;
     record.requestPermission = requestPermission;
-    const beforeMessages = [...record.session.messages];
     const beforeLeaf = record.manager.getLeafId();
     let visible = false;
     let steered = false;
@@ -317,12 +316,14 @@ export class DefaultAgentEngine {
             let accepted = false;
             const task = withAccount(() => record.session.prompt(input, {
               streamingBehavior: 'steer',
-              preflightResult: ok => {
-                if (ok) {
+              preflightResult: disposition => {
+                if (disposition === 'started' || disposition === 'queued') {
                   // Stop can arrive while extension preflight is suspended.
                   // Prevent its late completion from starting a fresh loop.
                   if (controller.signal.aborted) { record.session.clearQueue(); controller.signal.throwIfAborted(); }
                   accepted = true; steered = true; resolve({ outcome: 'injected' });
+                } else {
+                  reject(new DefaultAgentError('The input was handled without entering the model conversation.'));
                 }
               },
             }));
@@ -337,8 +338,9 @@ export class DefaultAgentEngine {
           try {
             let initialError;
             try {
-              await record.session.prompt(text, { preflightResult: ok => {
-                if (ok) { controller.signal.throwIfAborted(); record.acceptSteer = acceptSteer; ready(); }
+              await record.session.prompt(text, { preflightResult: disposition => {
+                if (disposition === 'started' || disposition === 'queued') { controller.signal.throwIfAborted(); record.acceptSteer = acceptSteer; ready(); }
+                else { throw new DefaultAgentError('The input was handled without entering the model conversation.'); }
               } });
             } catch (error) { initialError = error; }
             let continuationError;
@@ -360,7 +362,7 @@ export class DefaultAgentEngine {
           reason = record.httpAccessFailure !== undefined ? record.httpAccessFailure : (error.accessReason ?? accessFailure(error));
           if (!reason || visible || steered) throw new DefaultAgentError(reason ?? (error instanceof DefaultAgentError ? error.message : 'The model request failed. Retry or check Settings → Connections.'));
           if (beforeLeaf) record.manager.branch(beforeLeaf); else record.manager.resetLeaf();
-          record.session.agent.state.messages = beforeMessages;
+          record.session.refreshContext();
         }
       }
       throw new DefaultAgentError('No configured connection has access. Open Settings → Connections to sign in or update an API key.');

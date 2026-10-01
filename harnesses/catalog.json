@@ -293,9 +293,9 @@
       "install": {
         "kind": "npm-global",
         "source": "https://www.npmjs.com/package/@earendil-works/pi-coding-agent",
-        "command": "npm install --global --prefix \"$HOME/.local\" @earendil-works/pi-coding-agent@0.84.3",
+        "command": "npm install --global --prefix \"$HOME/.local\" @earendil-works/pi-coding-agent@1.0.0",
         "arguments": [],
-        "package": "@earendil-works/pi-coding-agent@0.84.3"
+        "package": "@earendil-works/pi-coding-agent@1.0.0"
       },
       "authentication": {
         "statusCommands": [

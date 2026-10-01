@@ -28,13 +28,29 @@ resources="${app}/Contents/Resources"
 test -x "${resources}/default-agent/bin/node"
 test -f "${resources}/default-agent/src/main.mjs"
 test -f "${resources}/default-agent/node_modules/@earendil-works/pi-coding-agent/package.json"
-test -f "${resources}/default-agent/node_modules/@earendil-works/pi-tui/dist/index.js"
-test ! -e "${resources}/default-agent/node_modules/@earendil-works/pi-tui/native"
-test -f "${resources}/default-agent/node_modules/@earendil-works/chord/package.json"
-test ! -e "${resources}/default-agent/node_modules/esbuild"
-test ! -e "${resources}/default-agent/node_modules/@esbuild"
-test ! -e "${resources}/default-agent/node_modules/.bin/esbuild"
-test ! -L "${resources}/default-agent/node_modules/.bin/esbuild"
+pi_dependency_root() {
+  "${resources}/default-agent/bin/node" --input-type=module --eval \
+    'import { createRequire } from "node:module"; import { dirname } from "node:path";
+     const require = createRequire(process.argv[1]);
+     console.log(dirname(require.resolve(process.argv[2] + "/package.json")));' \
+    "${resources}/default-agent/node_modules/@earendil-works/pi-coding-agent/package.json" "$1"
+}
+tui_root="$(pi_dependency_root @earendil-works/pi-tui)"
+chord_root="$(pi_dependency_root @earendil-works/chord)"
+test -f "$tui_root/dist/index.js"
+test ! -e "$tui_root/native"
+test -f "$chord_root/package.json"
+for modules in "${resources}/default-agent/node_modules" "${resources}/default-agent/node_modules/@earendil-works/pi-coding-agent/node_modules"; do
+  test ! -e "$modules/esbuild"
+  test ! -e "$modules/@esbuild"
+  test ! -e "$modules/.bin/esbuild"
+  test ! -L "$modules/.bin/esbuild"
+done
+# Import the actual trimmed integration, not just package manifests. No account
+# checks, model discovery, credentials, or provider requests occur here.
+"${resources}/default-agent/bin/node" --input-type=module --eval \
+  'import { pathToFileURL } from "node:url"; await import(pathToFileURL(process.argv[1]));' \
+  "${resources}/default-agent/src/engine.mjs"
 test -f "${resources}/default-agent/node_modules/@anthropic-ai/claude-agent-sdk/package.json"
 claude_arch="$(uname -m)"
 if [ "$claude_arch" = x86_64 ]; then claude_arch=x64; fi

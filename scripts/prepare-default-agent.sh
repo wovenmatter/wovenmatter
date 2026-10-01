@@ -44,16 +44,16 @@ fi
 mkdir -p "$output/node_modules"
 rsync -a --delete "$dependency_root/node_modules/" "$output/node_modules/"
 
-# The SDK imports pi-tui's JavaScript, but this headless integration never uses
-# its optional terminal clipboard/modifier helpers. Do not ship native binaries
-# for unused macOS, Linux, or Windows terminal interfaces.
-rm -rf "$output/node_modules/@earendil-works/pi-tui/native"
-
-# Chord's optional plugin compiler uses esbuild, but the Built-in agent disables
-# Pi extensions and uses only Chord's runtime APIs. Keep Chord and omit the
-# unused compiler, its platform executables, and its CLI link from the app.
-rm -rf "$output/node_modules/esbuild" "$output/node_modules/@esbuild"
-rm -f "$output/node_modules/.bin/esbuild"
+# Pi 1.0's shrinkwrap nests dependencies under pi-coding-agent. Cover that
+# layout and hoisted dependencies without changing either SDK's locked tree.
+for modules in "$output/node_modules" "$output/node_modules/@earendil-works/pi-coding-agent/node_modules"; do
+  # Keep pi-tui's JavaScript, but omit unused terminal clipboard/modifier helpers.
+  rm -rf "$modules/@earendil-works/pi-tui/native"
+  # Built-in disables extensions and uses only Chord's runtime APIs. Its optional
+  # plugin compiler, platform executables, and CLI link are not used in the app.
+  rm -rf "$modules/esbuild" "$modules/@esbuild"
+  rm -f "$modules/.bin/esbuild"
+done
 
 claude_binary="$output/node_modules/@anthropic-ai/claude-agent-sdk-darwin-$node_arch/claude"
 test -x "$claude_binary"

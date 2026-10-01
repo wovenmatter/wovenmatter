@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, readFile, stat } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, readFile, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { accessFailure, DefaultAgentError, operationErrorMessage, validateConfig, writePrivateJSON } from '../src/config.mjs';
 import { searchTools } from '../src/search.mjs';
@@ -48,19 +48,35 @@ test('configuration preserves provider identities, model order, and explicit fal
 });
 test('real SDK loads the complete selected tool set and resumes an empty draft without a Pi install', async t => {
   const directory = await temporary(t);
+  // A user's global/workspace Pi extensions must never execute in Built-in,
+  // even when they register tools or mutate the tool loadout.
+  const marker = join(directory, 'extension-loaded');
+  const extension = `import { writeFileSync } from 'node:fs';
+    export default pi => {
+      writeFileSync(${JSON.stringify(marker)}, 'loaded');
+      pi.registerTool({ name: 'unexpected_extension_tool' });
+    };`;
+  for (const extensions of [join(directory, 'extensions'), join(directory, '.pi/extensions')]) {
+    await mkdir(extensions, { recursive: true });
+    await writeFile(join(extensions, 'unexpected.mjs'), extension);
+  }
   const engine = await new DefaultAgentEngine({ cwd: directory, directory, config: { providers: ['openai'] } }).initialize();
   const record = await engine.create();
   assert.deepEqual(new Set(record.session.getActiveToolNames()), new Set(['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls', 'web_search', 'web_read']));
+  assert.deepEqual(new Set(record.session.getAllTools().map(tool => tool.name)), new Set(record.session.getActiveToolNames()));
+  await assert.rejects(readFile(marker), { code: 'ENOENT' });
   const second = await new DefaultAgentEngine({ cwd: directory, directory, config: { providers: ['openai'] } }).initialize();
   const resumed = await second.create(record.session.sessionId);
   assert.equal(resumed.session.sessionId, record.session.sessionId);
+  await assert.rejects(readFile(marker), { code: 'ENOENT' });
+  t.after(() => { record.session.dispose(); resumed.session.dispose(); });
   await assert.rejects(engine.prompt(record, 'No provider should be consumed', () => {}), /No configured connection/);
 });
 function fixtureEngine({ errors = [], connected = ['openai-codex', 'openrouter'], visible = false, streamEvents = [] } = {}) {
   const engine = new DefaultAgentEngine({ cwd: '/tmp', directory: '/tmp', config: { defaultModel: 'openai-codex/primary', models: ['openrouter/fallback'], fallbackModels: ['openrouter/fallback'] } });
   const selected = [];
   let listener;
-  const record = { selected: 'openai-codex/primary', busy: false, manager: { getLeafId: () => 'before', branch: () => {}, appendCustomEntry: () => {} }, session: { messages: [], agent: { state: { messages: [] } }, subscribe(fn) { listener = fn; return () => {}; }, async setModel(m) { selected.push(m.provider); }, async prompt() { for (const event of streamEvents) listener(event); if (visible) listener({ type: 'tool_execution_start', toolCallId: 't', toolName: 'bash', args: {} }); if (errors.length) throw new Error(errors.shift()); } } };
+  const record = { selected: 'openai-codex/primary', busy: false, manager: { getLeafId: () => 'before', branch: () => {}, appendCustomEntry: () => {} }, session: { messages: [], refreshContext() {}, agent: { state: { messages: [] } }, subscribe(fn) { listener = fn; return () => {}; }, async setModel(m) { selected.push(m.provider); }, async prompt() { for (const event of streamEvents) listener(event); if (visible) listener({ type: 'tool_execution_start', toolCallId: 't', toolName: 'bash', args: {} }); if (errors.length) throw new Error(errors.shift()); } } };
   engine.resolveModel = ref => { const [provider, id] = ref.split('/'); return { provider, id, name: id }; };
   engine.credentials = new Credentials(Object.fromEntries(connected.map(p => [p, { type: 'api_key', key: 'fixture' }])));
   engine.runtime = { getAuth: async () => ({}), getModels: () => [{ provider: 'openai-codex', id: 'primary', name: 'Primary' }, { provider: 'openrouter', id: 'fallback', name: 'Fallback' }] };
