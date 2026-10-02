@@ -11,6 +11,9 @@ when an intentional design change is accepted.
 - **Typography:** use the macOS system font and the existing size/weight
   hierarchy. Use monospaced text for code and monospaced digits for aligned
   numeric displays.
+- **Text links:** use `DashboardPalette.success` (`#0D8F5A`) for conversation
+  Markdown links and SwiftUI external-link labels so they stand out against the
+  dark body text.
 - **Composer selectors:** use title-case popout headings, such as `Thinking Level`,
   without all-caps styling or expanded letter spacing. Keep saved-default actions
   out of the conversation selector popouts. Composer model buttons show only the

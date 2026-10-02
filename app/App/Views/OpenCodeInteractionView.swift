@@ -75,6 +75,7 @@ struct OpenCodeFormView: View {
         case "external":
             if let url = URL(string: field["url"].text), ["https", "http"].contains(url.scheme) {
                 Link("Open " + (field["title"].string ?? "verification"), destination: url)
+                    .foregroundStyle(DashboardPalette.success)
             }
             Toggle("I’ve completed this step", isOn: Binding(
                 get: { answers[key]?.bool ?? false }, set: { answers[key] = .bool($0) }

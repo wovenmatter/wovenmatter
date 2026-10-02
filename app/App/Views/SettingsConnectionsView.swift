@@ -170,6 +170,7 @@ struct SettingsConnectionsView: View {
             if let url = agent.signInURL {
                 HStack {
                     Link("Open sign-in page", destination: url)
+                        .foregroundStyle(DashboardPalette.success)
                     Button("Copy link") {
                         NSPasteboard.general.clearContents()
                         NSPasteboard.general.setString(url.absoluteString, forType: .string)
@@ -178,6 +179,7 @@ struct SettingsConnectionsView: View {
                 Link(destination: url) {
                     Text(url.absoluteString).font(.caption).multilineTextAlignment(.leading)
                 }
+                .foregroundStyle(DashboardPalette.success)
                 if let code = agent.signInCode {
                     HStack {
                         Text(code).font(.system(.title3, design: .monospaced)).textSelection(.enabled)

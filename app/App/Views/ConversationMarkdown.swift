@@ -130,6 +130,7 @@ private struct ConversationMarkdownInline: View {
 
     var body: some View {
         Text(styled)
+            .tint(DashboardPalette.success)
             .lineSpacing(5)
             .lineLimit(nil)
             .fixedSize(horizontal: false, vertical: true)
