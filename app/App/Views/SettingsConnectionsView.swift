@@ -38,13 +38,11 @@ struct SettingsConnectionsView: View {
                 Text("Dictation and app-wide Usage use the shared accounts. Workspace overrides apply to Built-in.").font(.callout).foregroundStyle(.secondary)
             }
             connectionsSection
-                .disclosureGroupStyle(SettingsDisclosureGroupStyle())
                 .transaction { transaction in
                     transaction.animation = nil
                     transaction.disablesAnimations = true
                 }
             searchSection
-                .disclosureGroupStyle(SettingsDisclosureGroupStyle())
                 .transaction { transaction in
                     transaction.animation = nil
                     transaction.disablesAnimations = true
@@ -62,6 +60,7 @@ struct SettingsConnectionsView: View {
             LocalModelServerConnections(agent: agent)
             if let tools = model.agentTools { ExecutorConnectionsCard(model: model, tools: tools) }
         }
+        .disclosureGroupStyle(SettingsDisclosureGroupStyle())
         .task { agent.changeScope(initialScope); agent.loadAccounts() }
         .onDisappear { agent.cancel() }
         .confirmationDialog("Reset Built-in credentials in this workspace?", isPresented: $confirmingCredentialReset) {

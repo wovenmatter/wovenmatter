@@ -30,9 +30,10 @@ when an intentional design change is accepted.
   All workspaces lists the local location and configured remote workspaces; an
   individual scope shows only that location. Keep progress and errors with their
   workspace and preserve operation state when a remote row is collapsed.
-- **Settings disclosures:** use `SettingsDisclosureGroupStyle` on Connections
-  sections so the chevron, label, and remaining header width all toggle expansion.
-  Apply the same style to nested provider, credential, and account disclosures.
+- **Settings disclosures:** use `SettingsDisclosureGroupStyle` on the Connections
+  page so the chevron, label, and remaining header width all toggle expansion.
+  The style propagates to nested provider, credential, account, and Executor
+  defaults disclosures.
 - **Icons:** use the existing `DashboardLucideIcon` glyphs and bundled harness
   logos, matching nearby icon sizes and stroke weights.
 - **Calendar:** keep the four-item legend below the selected-day list. Use the
