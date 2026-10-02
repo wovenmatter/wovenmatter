@@ -26,7 +26,8 @@ export function validateConfiguration(config) {
 export class ExecutorBroker {
   constructor(directory, { fetcher = fetch, connect } = {}) {
     this.directory = directory; this.fetch = fetcher; this.connectOverride = connect;
-    this.jobs = new Map(); this.clients = new Map(); this.state = { servers: {}, scopes: {}, jobs: {} }; this.child = null; this.saveTail = Promise.resolve();
+    this.jobs = new Map(); this.clients = new Map(); this.connectingClients = new Map(); this.clientGeneration = 0;
+    this.state = { servers: {}, scopes: {}, jobs: {} }; this.child = null; this.saveTail = Promise.resolve();
   }
   async load() {
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
@@ -49,9 +50,9 @@ export class ExecutorBroker {
     this.saveTail = operation.catch(() => {});
     await operation;
   }
-  async request(path, { method = 'GET', value, headers = {}, admin = true } = {}) {
-    const response = await this.fetch(`${this.origin}${path}`, { method,
-      headers: { ...(admin ? { authorization: `Bearer ${this.server.apiKey}` } : {}), ...(value === undefined ? {} : { 'content-type': 'application/json' }), ...headers },
+  async request(path, { method = 'GET', value, headers = {}, admin = true } = {}, context = this) {
+    const response = await this.fetch(`${context.origin}${path}`, { method,
+      headers: { ...(admin ? { authorization: `Bearer ${context.server.apiKey}` } : {}), ...(value === undefined ? {} : { 'content-type': 'application/json' }), ...headers },
       body: value === undefined ? undefined : JSON.stringify(value), signal: AbortSignal.timeout(30000), redirect: 'error' });
     if (!response.ok) throw new Error(`Executor rejected ${method} ${path.split('?')[0]} (HTTP ${response.status}).`);
     return { body: await response.json(), headers: response.headers };
@@ -96,7 +97,7 @@ export class ExecutorBroker {
     });
   }
   async startLocal(install) {
-    if (this.child?.exitCode === null) return;
+    if (this.child?.exitCode === null && this.child.signalCode === null) return;
     const root = join(this.directory, 'runtime');
     if (install) {
       await mkdir(root, { recursive: true, mode: 0o700 });
@@ -114,7 +115,7 @@ export class ExecutorBroker {
     const until = Date.now() + 90000;
     while (Date.now() < until) {
       try { await this.request('/v1/apps'); return; } catch { }
-      if (this.child.exitCode !== null) break;
+      if (this.child.exitCode !== null || this.child.signalCode !== null) break;
       await pause(400);
     }
     throw new Error('Executor did not become ready. A different service may already own port 4312.');
@@ -127,13 +128,13 @@ export class ExecutorBroker {
     const command = `set -eu\numask 077\nwm_payload=$(mktemp)\ntrap 'rm -f "$wm_payload"' EXIT\ncat > "$wm_payload" <<'WOVEN_EXECUTOR_SETUP_JSON'\n${payload}\nWOVEN_EXECUTOR_SETUP_JSON\n${script}\n`;
     await this.run('/usr/bin/ssh', ['-T', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', '-o', 'RequestTTY=no', this.config.user ? `${this.config.user}@${this.config.host}` : this.config.host, 'bash -s'], command);
   }
-  async pair() {
-    return (await this.request('/auth/pair', { method: 'POST' })).body.url;
+  async pair(context = this) {
+    return (await this.request('/auth/pair', { method: 'POST' }, context)).body.url;
   }
-  async operatorCookie() {
-    const token = new URLSearchParams(new URL(await this.pair()).hash.slice(1)).get('pair');
+  async operatorCookie(context = this) {
+    const token = new URLSearchParams(new URL(await this.pair(context)).hash.slice(1)).get('pair');
     if (!token) throw new Error('Executor pairing response was incompatible.');
-    const exchanged = await this.request('/auth/exchange', { method: 'POST', admin: false, value: { token }, headers: { origin: this.origin } });
+    const exchanged = await this.request('/auth/exchange', { method: 'POST', admin: false, value: { token }, headers: { origin: context.origin } }, context);
     const cookie = exchanged.headers.get('set-cookie')?.split(';')[0];
     if (!cookie) throw new Error('Executor control session was unavailable.');
     return cookie;
@@ -158,26 +159,26 @@ export class ExecutorBroker {
     }
     return result;
   }
-  async authorize(connection) {
-    const resource = `${this.origin}/mcp?connection=${connection}`;
+  async authorize(connection, context = { origin: this.origin, server: this.server }) {
+    const resource = `${context.origin}/mcp?connection=${connection}`;
     const redirect = 'http://127.0.0.1:9/woven-executor-callback';
     const { body: registration } = await this.request('/api/auth/oauth2/register', { admin: false, method: 'POST', value: {
       client_name: 'Woven Matter conversation', redirect_uris: [redirect], token_endpoint_auth_method: 'none', grant_types: ['authorization_code', 'refresh_token'], response_types: ['code'],
-    } });
-    const cookie = await this.operatorCookie();
+    } }, context);
+    const cookie = await this.operatorCookie(context);
     const verifier = randomBytes(32).toString('base64url');
     const query = new URLSearchParams({ response_type: 'code', client_id: registration.client_id, redirect_uri: redirect, code_challenge: createHash('sha256').update(verifier).digest('base64url'), code_challenge_method: 'S256', scope: 'mcp offline_access', resource, state: randomUUID() });
-    const { body: opened } = await this.request(`/api/auth/oauth2/authorize?${query}`, { admin: false, headers: { cookie, origin: this.origin, accept: 'application/json' } });
-    const next = new URL(opened.url, this.origin);
-    if (next.origin !== this.origin) throw new Error('Unexpected Executor control redirect.');
-    const { body: consent } = await this.request('/api/auth/oauth2/consent', { admin: false, method: 'POST', headers: { cookie, origin: this.origin }, value: { accept: true, oauth_query: next.search.slice(1) } });
+    const { body: opened } = await this.request(`/api/auth/oauth2/authorize?${query}`, { admin: false, headers: { cookie, origin: context.origin, accept: 'application/json' } }, context);
+    const next = new URL(opened.url, context.origin);
+    if (next.origin !== context.origin) throw new Error('Unexpected Executor control redirect.');
+    const { body: consent } = await this.request('/api/auth/oauth2/consent', { admin: false, method: 'POST', headers: { cookie, origin: context.origin }, value: { accept: true, oauth_query: next.search.slice(1) } }, context);
     const returned = new URL(consent.url);
     if (returned.origin + returned.pathname !== redirect || returned.searchParams.get('state') !== query.get('state')) throw new Error('Unexpected Executor grant response.');
-    const token = await this.token(new URLSearchParams({ grant_type: 'authorization_code', client_id: registration.client_id, code: returned.searchParams.get('code'), code_verifier: verifier, redirect_uri: redirect, resource }));
+    const token = await this.token(new URLSearchParams({ grant_type: 'authorization_code', client_id: registration.client_id, code: returned.searchParams.get('code'), code_verifier: verifier, redirect_uri: redirect, resource }), context.origin);
     return { resource, clientId: registration.client_id, ...token };
   }
-  async token(body) {
-    const response = await this.fetch(`${this.origin}/api/auth/oauth2/token`, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body, redirect: 'error', signal: AbortSignal.timeout(30000) });
+  async token(body, origin = this.origin) {
+    const response = await this.fetch(`${origin}/api/auth/oauth2/token`, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body, redirect: 'error', signal: AbortSignal.timeout(30000) });
     if (!response.ok) throw new Error('Executor scoped grant expired. Reconnect this conversation.');
     const token = await response.json();
     return { token: token.access_token, refresh: token.refresh_token, expires: Date.now() + (token.expires_in ?? 3600) * 1000 };
@@ -210,20 +211,40 @@ export class ExecutorBroker {
     return scope;
   }
   async client(scope) {
-    if (!scope.grant) { scope.grant = await this.authorize(scope.id); await this.save(); }
+    // Several programs in one conversation can need the same single-use refresh
+    // token. Share grant creation/refresh and transport connection as one flight.
+    let pending = this.connectingClients.get(scope.id);
+    if (!pending) {
+      pending = this.connectClient(scope, this.clientGeneration, { origin: this.origin, server: this.server });
+      this.connectingClients.set(scope.id, pending);
+    }
+    try { return await pending; }
+    finally { if (this.connectingClients.get(scope.id) === pending) this.connectingClients.delete(scope.id); }
+  }
+  async connectClient(scope, generation, context) {
+    const check = () => { if (generation !== this.clientGeneration) throw new Error('Executor connection changed before dispatch.'); };
+    if (!scope.grant) {
+      const grant = await this.authorize(scope.id, context);
+      check(); scope.grant = grant; await this.save(); check();
+    }
     if (scope.grant.expires < Date.now() + 60000) {
-      scope.grant = { ...scope.grant, ...await this.token(new URLSearchParams({ grant_type: 'refresh_token', client_id: scope.grant.clientId, refresh_token: scope.grant.refresh, resource: scope.grant.resource })) };
-      await this.save();
-      await this.clients.get(scope.id)?.close(); this.clients.delete(scope.id);
+      const grant = await this.token(new URLSearchParams({ grant_type: 'refresh_token', client_id: scope.grant.clientId, refresh_token: scope.grant.refresh, resource: scope.grant.resource }), context.origin);
+      check(); scope.grant = { ...scope.grant, ...grant }; await this.save(); check();
+      const previous = this.clients.get(scope.id); this.clients.delete(scope.id);
+      await previous?.close(); check();
     }
     if (!this.clients.has(scope.id)) {
-      if (this.connectOverride) this.clients.set(scope.id, await this.connectOverride(scope));
+      let client;
+      if (this.connectOverride) client = await this.connectOverride(scope);
       else {
-        const client = new Client({ name: 'wovenmatter', version: '1' }, { capabilities: {} });
-        await client.connect(new StreamableHTTPClientTransport(new URL(scope.grant.resource), { requestInit: { headers: { authorization: `Bearer ${scope.grant.token}` } } }));
-        this.clients.set(scope.id, client);
+        client = new Client({ name: 'wovenmatter', version: '1' }, { capabilities: {} });
+        try { await client.connect(new StreamableHTTPClientTransport(new URL(scope.grant.resource), { requestInit: { headers: { authorization: `Bearer ${scope.grant.token}` } } })); }
+        catch (error) { await client.close().catch(() => {}); throw error; }
       }
+      if (generation !== this.clientGeneration) { await client.close().catch(() => {}); check(); }
+      this.clients.set(scope.id, client);
     }
+    check();
     return this.clients.get(scope.id);
   }
   publicJob(job) {
@@ -306,7 +327,12 @@ export class ExecutorBroker {
   async cancelSession(session) {
     for (const job of this.jobs.values()) if (job.session === session && !['completed', 'cancelled', 'interrupted'].includes(job.status)) await this.cancel(job);
   }
-  async shutdownClients() { for (const client of this.clients.values()) await client.close().catch(() => {}); this.clients.clear(); }
+  async shutdownClients() {
+    this.clientGeneration++;
+    this.connectingClients.clear();
+    const clients = [...this.clients.values()]; this.clients.clear();
+    for (const client of clients) await client.close().catch(() => {});
+  }
   async stop() { await this.shutdownClients(); this.child?.kill('SIGTERM'); }
   async handle(message) {
     switch (message.operation) {

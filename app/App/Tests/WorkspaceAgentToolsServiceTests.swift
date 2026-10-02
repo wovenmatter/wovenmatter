@@ -901,6 +901,40 @@ private final class ToolSettingsSaveGate {
 
 
 extension WorkspaceAgentToolsServiceTests {
+    @Test func executorConnectionChangeFencesAdmissionsBeforeTheirJobExists() async throws {
+        let runtime = ExecutorRuntime()
+        let original = runtime.fence("admitting")
+        #expect(runtime.sessions.isEmpty)
+        runtime.cancelAll()
+        #expect(throws: CancellationError.self) { try runtime.check("admitting", fence: original) }
+        try runtime.check("admitting", fence: runtime.fence("admitting"))
+        _ = try? await runtime.scopeEdits["admitting"]?.value
+    }
+
+    @Test func executorStopFencesQueuedAdmissionAndCancelsExistingDriver() async throws {
+        let runtime = ExecutorRuntime()
+        let gate = ToolSettingsSaveGate()
+        defer { gate.finishAll() }
+        let fence = runtime.fence("session")
+        let first = runtime.serialized("session") { try await gate.pause() }
+        var admitted = false
+        let queued = runtime.serialized("session") {
+            try runtime.check("session", fence: fence)
+            admitted = true
+        }
+        let driver = Task<Void, Never> {}
+        runtime.jobs["job"] = driver; runtime.sessions["job"] = "session"
+        await gate.waitForStarts(1)
+        runtime.cancel("session")
+        #expect(driver.isCancelled)
+        gate.finishAll()
+        _ = try? await first.value
+        do { try await queued.value; Issue.record("Stopped admission unexpectedly ran") }
+        catch is CancellationError { }
+        #expect(!admitted)
+        _ = try? await runtime.scopeEdits["session"]?.value
+    }
+
     @Test(arguments: AgentRuntimeKind.allCases)
     func executorUsesBoundCLIIdentityAndChecksMasterSwitch(runtime: AgentRuntimeKind) async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)

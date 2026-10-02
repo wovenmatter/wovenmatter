@@ -78,7 +78,7 @@ let package = Package(
         "Models/DashboardConversationState.swift", "Models/OpenCodeModel.swift", "Models/RemoteWorkspacesModel.swift"
       ],
       sources: [
-        "Models/WorkspaceAgentToolsModel.swift", "Models/WorkspaceAgentToolsModel+Calendar.swift", "Services/WovenMatterToolService.swift",
+        "Models/ExecutorRuntime.swift", "Models/WorkspaceAgentToolsModel.swift", "Models/WorkspaceAgentToolsModel+Calendar.swift", "Services/WovenMatterToolService.swift",
         "Services/WovenNoteService.swift", "Services/WovenMatterRemoteToolBridge.swift",
         "Tests/WorkspaceAgentToolsServiceTests.swift",
         "Services/DashboardNoteDrafts.swift", "Tests/DashboardNoteWriteBehindTests.swift",

@@ -1033,7 +1033,8 @@ extension WorkspaceAgentToolTests {
     let reservation = try await db.reserveToolSessionCreation(sourceID: source, requestID: requestID,
       arguments: args, purpose: "Implement", managed: true)
     let target = try #require(reservation.objectValue?["target_id"]?.stringValue)
-    let resolvedTools = WorkspaceSessionTools(enabled: emptyTools ? [] : [.history, .calendar])
+    let resolvedTools = WorkspaceSessionTools(enabled: emptyTools ? [] : [.history, .calendar, .executor],
+      executorProfiles: emptyTools ? [] : ["saved:profile"])
     let proposed = WorkspaceSessionCreationConfiguration(runtimeKind: .codex, workspaceID: remote ? UUID() : nil,
       folderID: folder, title: "Planned title", model: "original-model", thinking: "high", permission: "native-permission",
       selectionWorkspace: remote ? "remote:fixture" : "local:/workspace/original",
@@ -1044,6 +1045,10 @@ extension WorkspaceAgentToolTests {
       try await db.saveToolSessionCreationConfiguration(requestID: requestID, sourceID: other, configuration: proposed)
     }
     try await db.failToolSessionCreation(requestID: requestID)
+    var laterDefaults = try await db.toolSettings()
+    var executor = ExecutorConfiguration(); executor.defaultProfiles = ["later:profile"]
+    laterDefaults.executor = executor
+    try await db.saveToolSettings(laterDefaults)
     try await db.setSessionTools(.init(enabled: [.sessions, .calendar]), sessionID: source)
     let reopened = try await WorkspaceDatabase(url: dir.appending(path: "workspace.sqlite"))
     let retry = try await reopened.reserveToolSessionCreation(sourceID: source, requestID: requestID,

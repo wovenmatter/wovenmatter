@@ -327,6 +327,7 @@ extension WorkspaceDatabaseConnection {
         """, [targetID, sourceID, purpose])
       let inherited = try sessionToolsUnlocked(sourceID)
       try toolsExecuteUnlocked("UPDATE workspace_session_tools SET enabled_json=?,defaults_applied=1 WHERE session_id=?", [try toolsJSON(inherited.enabled), targetID])
+      try toolsExecuteUnlocked("UPDATE workspace_executor_sessions SET profiles_json=? WHERE session_id=?", [try toolsJSON(inherited.executorProfiles ?? []), targetID])
       if managed { try beginCoordinationUnlocked(sourceID: sourceID, targetID: targetID, purpose: purpose, notifications: true) }
     }
   }
@@ -597,6 +598,15 @@ public struct WorkspaceToolStateSnapshot: Sendable {
 }
 
 extension WorkspaceDatabase {
+  public func setSessionExecutorProfiles(_ profiles: Set<String>, sessionID: String) async throws {
+    try await write { connection in
+      // Scope synchronization awaits network IO. Apply only its edited field to
+      // the latest policy so another tool's concurrent revocation stays revoked.
+      var policy = try connection.sessionTools(sessionID)
+      policy.executorProfiles = profiles
+      try connection.setSessionTools(policy, sessionID: sessionID)
+    }
+  }
   public func saveToolSettings(_ settings: WorkspaceToolSettings, from base: WorkspaceToolSettings) async throws {
     try await write { connection in
       let current = try connection.toolSettings()

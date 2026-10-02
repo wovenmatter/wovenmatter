@@ -416,12 +416,11 @@ extension ApplicationModel {
             ?? "local:" + URL(fileURLWithPath: directory).standardizedFileURL.path
         let explicit = SessionSelections(model: command.options["model"], thinking: command.options["thinking"])
         let resolved = explicit.overlaying(sessionSelectionPreferences.defaults(harness: runtime.rawValue, workspace: scope))
-        let tools: WorkspaceSessionTools
+        let settings = try await store.database.toolSettings()
+        var tools: WorkspaceSessionTools
         if let identifiers = resolved.tools { tools = try WorkspaceSessionTools(identifiers: identifiers) }
-        else {
-            let settings = try await store.database.toolSettings()
-            tools = WorkspaceSessionTools(enabled: settings.enabledByDefault, executorProfiles: settings.executor?.defaultProfiles ?? [])
-        }
+        else { tools = WorkspaceSessionTools(enabled: settings.enabledByDefault) }
+        tools.executorProfiles = settings.executor?.defaultProfiles ?? []
         return .init(runtimeKind: runtime, workspaceID: workspaceID, folderID: command.options["folder"] ?? source.folderID,
             title: title, model: resolved.model, thinking: resolved.thinking,
             permission: runtime == .pi ? nil : resolved.permission, selectionWorkspace: scope,

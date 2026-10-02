@@ -2,39 +2,6 @@ import Foundation
 import WovenMatterCore
 import WovenMatterClient
 
-@MainActor
-final class ExecutorRuntime {
-    var setupTask: Task<Void, Never>?
-    var setupStarting = false
-    var isSettingUp: Bool { setupStarting || setupTask != nil }
-    private var fences: [String: UUID] = [:]
-    func fence(_ session: String) -> UUID {
-        if let value = fences[session] { return value }
-        let value = UUID(); fences[session] = value; return value
-    }
-    func check(_ session: String, fence: UUID) throws {
-        guard fences[session] == fence else { throw CancellationError() }
-        try Task.checkCancellation()
-    }
-    var client: ExecutorBrokerClient?
-    var configured: ExecutorConfiguration?
-    var jobs: [String: Task<Void, Never>] = [:]
-    var sessions: [String: String] = [:]
-    var scopeEdits: [String: Task<Void, any Error>] = [:]
-    func serialized<Value: Sendable>(_ session: String, operation: @escaping @MainActor () async throws -> Value) -> Task<Value, any Error> {
-        let previous = scopeEdits[session]
-        let work = Task { _ = try? await previous?.value; return try await operation() }
-        scopeEdits[session] = Task { _ = try await work.value }
-        return work
-    }
-    func cancel(_ session: String) {
-        fences[session] = UUID()
-        for (id, owner) in sessions where owner == session { jobs[id]?.cancel(); jobs[id] = nil }
-        let manager = client
-        _ = serialized(session) { _ = try? await manager?.call(.object(["operation": .string("cancelSession"), "session": .string(session)])) }
-    }
-}
-
 extension ApplicationModel {
     func executorClient(install: Bool = false, config proposed: ExecutorConfiguration? = nil, prepareHost: Bool = false) async throws -> ExecutorBrokerClient {
         guard !isBackendFrontend, let database = dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
@@ -82,7 +49,7 @@ extension ApplicationModel {
             executorRuntime.setupStarting = true
             defer { executorRuntime.setupStarting = false }
             if config.id != executorRuntime.configured?.id {
-                for session in Set(executorRuntime.sessions.values) { executorRuntime.cancel(session) }
+                executorRuntime.cancelAll()
             }
             try await database.updateExecutor(setup: .init(configuration: config, running: true))
             executorRuntime.setupTask = Task { [self] in
@@ -117,7 +84,7 @@ extension ApplicationModel {
                 var policy = try await database.sessionTools(session)
                 policy.executorProfiles = profiles
                 try await synchronizeExecutorScope(session, policy: policy)
-                try await database.setSessionTools(policy, sessionID: session)
+                try await database.setSessionExecutorProfiles(profiles, sessionID: session)
             }
             try await task.value
             return nil
@@ -186,7 +153,9 @@ extension ApplicationModel {
         let policy = try await database.sessionTools(session)
         let client = try await executorClient()
         if command.action == "status" || command.action == "cancel" {
-            let result = try await client.call(.object(["operation": .string(command.action), "id": .string(try command.required("id", allowPositional: true)), "session": .string(session)]))
+            let id = try command.required("id", allowPositional: true)
+            let result = try await client.call(.object(["operation": .string(command.action), "id": .string(id), "session": .string(session)]))
+            if command.action == "cancel" { executorRuntime.jobs[id]?.cancel() }
             return .init(result: result)
         }
         let config = try await database.toolSettings().executor

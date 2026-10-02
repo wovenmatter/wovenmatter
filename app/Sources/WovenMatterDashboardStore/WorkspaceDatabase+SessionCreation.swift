@@ -138,9 +138,11 @@ extension WorkspaceDatabaseConnection {
         [configuration.title, configuration.folderID, targetID])
       try toolsExecuteUnlocked("UPDATE desktop_local_acp_sessions SET title=? WHERE conversation_id=?", [configuration.title, targetID])
       try toolsExecuteUnlocked("UPDATE workspace_session_tools SET enabled_json=?,defaults_applied=1 WHERE session_id=?", [try toolsJSON(configuration.tools.enabled), targetID])
+      try toolsExecuteUnlocked("UPDATE workspace_executor_sessions SET profiles_json=? WHERE session_id=?", [try toolsJSON(configuration.tools.executorProfiles ?? []), targetID])
     } else {
       // Reservations from older builds retain the existing inheritance behavior.
       try toolsExecuteUnlocked("UPDATE workspace_session_tools SET enabled_json=(SELECT enabled_json FROM workspace_session_tools WHERE session_id=?),defaults_applied=1 WHERE session_id=?", [source, targetID])
+      try toolsExecuteUnlocked("UPDATE workspace_executor_sessions SET profiles_json=(SELECT profiles_json FROM workspace_executor_sessions WHERE session_id=?) WHERE session_id=?", [source, targetID])
     }
   }
 }

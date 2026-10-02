@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		E7E000000000000000000005 /* ExecutorRuntime.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7E000000000000000000006; };
 		E7E000000000000000000003 /* ExecutorControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7E000000000000000000004; };
 		E7E000000000000000000001 /* ApplicationModel+Executor.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7E000000000000000000002; };
 		DA2090000000000000000012 /* SettingsDefaultAgentSDKView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA2090000000000000000011 /* SettingsDefaultAgentSDKView.swift */; };
@@ -110,6 +111,7 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		E7E000000000000000000006 /* ExecutorRuntime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ExecutorRuntime.swift"; sourceTree = "<group>"; };
 		E7E000000000000000000004 /* ExecutorControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ExecutorControls.swift"; sourceTree = "<group>"; };
 		E7E000000000000000000002 /* ApplicationModel+Executor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ApplicationModel+Executor.swift"; sourceTree = "<group>"; };
 		DA2090000000000000000011 /* SettingsDefaultAgentSDKView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsDefaultAgentSDKView.swift; sourceTree = "<group>"; };
@@ -278,6 +280,7 @@
 				D472AB9160464F1FAB826C11 /* ApplicationModel+AgentTools.swift */,
 				E1A63205C0811CE6DBAD590C /* BackendApplicationService.swift */,
 				35A700A1F4344E51450A9C54 /* BackendWorkspaceMutations.swift */,
+				E7E000000000000000000006 /* ExecutorRuntime.swift */,
 				E7E000000000000000000002 /* ApplicationModel+Executor.swift */,
 				D84D7A0E10812D5E772A19B5 /* BackendToolsService.swift */,
 				F178B05B2AE0D773B0C59957 /* BackendOpenCodeService.swift */,
@@ -537,6 +540,7 @@
 				D472AB9160464F1FAB826C12 /* ApplicationModel+AgentTools.swift in Sources */,
 				CE19449AB0FFF6A1E12E4D48 /* BackendApplicationService.swift in Sources */,
 				B6231CA12C591F524524199B /* BackendWorkspaceMutations.swift in Sources */,
+				E7E000000000000000000005 /* ExecutorRuntime.swift in Sources */,
 				E7E000000000000000000001 /* ApplicationModel+Executor.swift in Sources */,
 				A7DC09137B7808A179245C1D /* BackendToolsService.swift in Sources */,
 				F2F8DB61A6E248D0FCD77382 /* BackendOpenCodeService.swift in Sources */,
