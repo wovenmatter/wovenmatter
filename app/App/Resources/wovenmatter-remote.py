@@ -66,13 +66,14 @@ def build_request(arguments, environment):
     options = option_indices(args, positional)
     if "file" in options:
         index = options["file"]
-        if args[:2] not in (["notes", "apply"], ["notes", "set-html"]) or index + 1 >= len(args):
-            raise ValueError("--file is supported by notes apply and notes set-html.")
+        if args[:2] not in (["notes", "apply"], ["notes", "set-html"], ["executor", "execute"]) or index + 1 >= len(args):
+            raise ValueError("--file is supported by notes apply, notes set-html and executor execute.")
+        limit = 65536 if args[0] == "executor" else 3 * 1024 * 1024
         with open(args[index + 1], "rb") as source:
-            data = source.read(3 * 1024 * 1024 + 1)
-        if len(data) > 3 * 1024 * 1024:
-            raise ValueError("Input files must be at most 3 MiB.")
-        args[index:index + 2] = ["--html" if args[1] == "set-html" else "--json", data.decode("utf-8")]
+            data = source.read(limit + 1)
+        if len(data) > limit:
+            raise ValueError("Input file exceeds the command size limit.")
+        args[index:index + 2] = ["--code" if args[0] == "executor" else "--html" if args[1] == "set-html" else "--json", data.decode("utf-8")]
     if (len(args) > 1 and args[0] == "notes"
             and args[1] not in ("list", "folders", "create", "versions", "version", "restore", "help")
             and not (args[1] == "read" and positional)):

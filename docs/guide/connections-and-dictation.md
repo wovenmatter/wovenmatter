@@ -30,6 +30,13 @@ than subscription quota. External harnesses keep their separate sign-ins.
 Disabling a feature keeps its connection; removing a connection affects the
 features using it.
 
+## Executor
+
+Connections also manages one local or remote Linux Executor runtime, shared by
+every agent through Woven’s CLI. Configure apps in its dashboard, choose defaults,
+and select apps per conversation. See [Executor apps](executor.md) for setup,
+permissions and recovery.
+
 ## Dictation
 
 Enable **Dictation** in **Settings → General**, above Conversation titles.

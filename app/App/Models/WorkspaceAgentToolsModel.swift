@@ -4,8 +4,15 @@ import WovenMatterCore
 import WovenMatterClient
 import WovenMatterDashboardStore
 
+enum ExecutorControl: Codable, Sendable {
+    case setup(ExecutorConfiguration, prepareHost: Bool = false), refresh, dashboard
+    case selection(session: String, profiles: Set<String>)
+    case enabled(session: String, enabled: Bool)
+}
+
 enum BackendToolsMutation: Codable, Sendable {
-    case saveSettings(WorkspaceToolSettings)
+    case executor(ExecutorControl)
+    case saveSettings(WorkspaceToolSettings, base: WorkspaceToolSettings? = nil)
     case saveTimer(WorkspaceSessionTimer)
     case setEnabled(group: WorkspaceToolGroup, enabled: Bool, sessionID: String, confirmedPausingTimers: Bool)
     case endCoordination(sessionID: String)
@@ -21,6 +28,17 @@ final class WorkspaceAgentToolsModel {
     typealias NoteRestoreHandler = @MainActor (String, String, String, String, String) async throws -> NoteEditingResponse
     typealias UsageHandler = @MainActor (WovenMatterToolCommand) async throws -> WovenMatterToolResponse
     typealias CalendarTaskHandler = @MainActor (String, WovenMatterToolCommand, WorkspaceCalendarTask?) async throws -> WorkspaceCalendarTask
+    var executorControl: (@MainActor (ExecutorControl) async throws -> URL?)?
+    private let executorHandler: SessionHandler?
+    var executorDashboardURL: URL?
+    var executorBusy = false
+    func controlExecutor(_ control: ExecutorControl) async throws {
+        guard let executorControl else { throw WorkspaceToolError.invalid("Executor manager is unavailable.") }
+        executorBusy = true
+        defer { executorBusy = false }
+        executorDashboardURL = try await executorControl(control)
+        try await reload()
+    }
     var backendMutation: (@MainActor (BackendToolsMutation) async throws -> Void)?
     private let passiveProjection: Bool
     private var pendingSettingsWrites = 0
@@ -53,7 +71,9 @@ final class WorkspaceAgentToolsModel {
 
     init(database: WorkspaceDatabase, sessionHandler: @escaping SessionHandler,
          noteHandler: @escaping NoteHandler, noteRestoreHandler: @escaping NoteRestoreHandler, usageHandler: @escaping UsageHandler,
-         calendarTaskHandler: CalendarTaskHandler? = nil, passiveProjection: Bool = false, onMutation: @escaping @MainActor () async -> Void) async throws {
+         calendarTaskHandler: CalendarTaskHandler? = nil, executorHandler: SessionHandler? = nil, executorControl: (@MainActor (ExecutorControl) async throws -> URL?)? = nil, passiveProjection: Bool = false, onMutation: @escaping @MainActor () async -> Void) async throws {
+        self.executorHandler = executorHandler
+        self.executorControl = executorControl
         self.passiveProjection = passiveProjection
         self.calendarTaskHandler = calendarTaskHandler
         self.database = database
@@ -72,7 +92,7 @@ final class WorkspaceAgentToolsModel {
         try await reload()
     }
 
-    convenience init(projection database: WorkspaceDatabase,
+    convenience init(projection database: WorkspaceDatabase, executorControl: (@MainActor (ExecutorControl) async throws -> URL?)? = nil,
                      send: @escaping @MainActor (BackendToolsMutation) async throws -> Void) async throws {
         try await self.init(database: database,
             sessionHandler: { _, _, _ in throw CancellationError() },
@@ -80,6 +100,7 @@ final class WorkspaceAgentToolsModel {
             noteRestoreHandler: { _, _, _, _, _ in throw CancellationError() },
             usageHandler: { _ in throw CancellationError() }, passiveProjection: true, onMutation: {})
         backendMutation = send
+        self.executorControl = executorControl
     }
 
     private func enqueue(_ mutation: BackendToolsMutation) {
@@ -238,10 +259,13 @@ final class WorkspaceAgentToolsModel {
         let previous = mutationTask
         mutationTask = Task {
             await previous?.value
+            // Compare against the last completed write, so a queued toggle can
+            // undo its predecessor and a failed predecessor can be retried.
+            let base = committedSettings
             var failure: String?
             do {
-                if let backendMutation { try await backendMutation(.saveSettings(value)) }
-                else { try await database.saveToolSettings(value) }
+                if let backendMutation { try await backendMutation(.saveSettings(value, base: base)) }
+                else { try await database.saveToolSettings(value, from: base) }
                 committedSettings = value
             } catch { failure = error.localizedDescription }
             pendingSettingsWrites -= 1
@@ -277,6 +301,12 @@ final class WorkspaceAgentToolsModel {
 
     func setEnabled(_ group: WorkspaceToolGroup, enabled: Bool, sessionID: String, confirmedPausingTimers: Bool = false) async throws {
         guard !passiveProjection else { throw WorkspaceToolError.invalid("Use the background service to change session tools.") }
+        if group == .executor {
+            guard let executorControl else { throw WorkspaceToolError.invalid("Executor manager is unavailable.") }
+            _ = try await executorControl(.enabled(session: sessionID, enabled: enabled))
+            try await reload(policyIDs: [sessionID])
+            return
+        }
         let policy = try await database.setSessionToolEnabled(group, enabled: enabled, sessionID: sessionID,
             confirmedPausingTimers: confirmedPausingTimers)
         sessionPolicies[sessionID] = policy
@@ -422,6 +452,9 @@ final class WorkspaceAgentToolsModel {
             case .calendar: result = try await calendar(command, callerID: callerID, requestID: request.requestID)
             case .usage: result = try await usageHandler(command)
             case .library: result = try await library(command, callerID: callerID)
+            case .executor:
+                guard let executorHandler else { throw WorkspaceToolError.invalid("Executor manager is unavailable.") }
+                result = try await executorHandler(callerID, command, request)
             }
             if command.isMutation {
                 try await recordCLIMutation(command: command, callerID: callerID, requestID: request.requestID,

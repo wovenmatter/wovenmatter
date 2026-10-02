@@ -27,6 +27,7 @@ test "$(/usr/libexec/PlistBuddy -c 'Print :KeepAlive' "$power_daemon")" = true
 resources="${app}/Contents/Resources"
 test -x "${resources}/default-agent/bin/node"
 test -f "${resources}/default-agent/src/main.mjs"
+test -f "${resources}/default-agent/src/executor/broker.mjs"
 test -f "${resources}/default-agent/node_modules/@earendil-works/pi-coding-agent/package.json"
 pi_dependency_root() {
   "${resources}/default-agent/bin/node" --input-type=module --eval \
@@ -60,6 +61,8 @@ codesign --verify --strict "$claude_binary"
 test -f "${resources}/harnesses/catalog.json"
 test -x "${resources}/harnesses/initialize-workspace.sh"
 test -f "${resources}/remote/Dockerfile"
+test -f "${resources}/remote/Executor.Dockerfile"
+test -f "${resources}/remote/executor-deploy.sh"
 test -f "${resources}/remote/entrypoint.sh"
 test -f "${resources}/remote/package.json"
 test -f "${resources}/remote/src/server.mjs"

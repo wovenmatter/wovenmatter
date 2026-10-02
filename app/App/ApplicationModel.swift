@@ -57,6 +57,7 @@ final class ApplicationModel {
     private var backendBuzzDiscoveryEnabled = false
     private(set) var buzzWorkspaceAgents: [WorkspaceAgent] = []
     private(set) var remoteWorkspaceAgents: [WorkspaceAgent] = []
+    let executorRuntime = ExecutorRuntime()
     let remoteWorkspaces: RemoteWorkspacesModel
     private(set) var buzzWorkspaceSnapshot = BuzzWorkspaceSnapshot(
         links: [],
@@ -570,7 +571,14 @@ final class ApplicationModel {
                 }, calendarTaskHandler: { [weak self] caller, command, existing in
                     guard let self else { throw CancellationError() }
                     return try await self.resolveCalendarTask(callerID: caller, command: command, existing: existing)
+                }, executorHandler: { [weak self] caller, command, request in
+                    guard let self else { throw CancellationError() }
+                    return try await self.handleExecutorTool(caller, command: command, request: request)
+                }, executorControl: { [weak self] control in
+                    guard let self else { throw CancellationError() }
+                    return try await self.executeExecutorControl(control)
                 }, onMutation: { [weak self] in await self?.refreshWorkspace() })
+            try await recoverExecutorSetup()
             configureSessionToolSelectionAdapter()
             try await dashboardStore.database.recoverToolDeliveries()
             try await dashboardStore.database.recoverToolSessionCreations()
@@ -1067,7 +1075,7 @@ final class ApplicationModel {
         }
     }
 
-    private static func dashboardSupportDirectory() throws -> URL {
+    static func dashboardSupportDirectory() throws -> URL {
         let fileManager = FileManager.default
         guard let applicationSupport = fileManager.urls(
             for: .applicationSupportDirectory,
@@ -2142,6 +2150,7 @@ final class ApplicationModel {
     /// before every new user, tool, and scheduled input for this conversation.
     @discardableResult
     func beginAgentStop(conversationID: String, retainFailure: Bool = true) -> Task<Void, any Error> {
+        executorRuntime.cancel(conversationID)
         cancelPendingAgentDispatch(conversationID: conversationID)
         for permissionID in pendingLocalACPPermissions.filter({ $0.conversationID == conversationID }).map(\.id) {
             resolveLocalACPPermission(id: permissionID, optionID: nil)
@@ -3605,6 +3614,9 @@ final class ApplicationModel {
     }
 
     func shutdownLocalACPSessions() {
+        executorRuntime.setupTask?.cancel()
+        for session in Set(executorRuntime.sessions.values) { executorRuntime.cancel(session) }
+        Task { await executorRuntime.client?.shutdown() }
         activeWorkSleepPrevention.stop()
         closedLidProtection.stop()
         library.stop()
@@ -3629,7 +3641,7 @@ final class ApplicationModel {
         Task { for instance in openCodeInstances { await instance.shutdown() }; await dashboardStore?.shutdownLocalACPSessions() }
     }
 
-    private func requestLocalACPPermission(
+    func requestLocalACPPermission(
         conversationID: String,
         request: LocalACPPermissionRequest
     ) async -> String? {
@@ -3654,7 +3666,7 @@ final class ApplicationModel {
         }
     }
 
-    private func requestLocalACPInteraction(
+    func requestLocalACPInteraction(
         conversationID: String,
         request: LocalACPInteractionRequest
     ) async -> LocalACPInteractionResponse {
@@ -5179,7 +5191,7 @@ extension ApplicationModel {
         || !openClawGatewayOperationAgentIDs.isEmpty || !openClawHeartbeatSavingAgentIDs.isEmpty
         || openClawCronBusy || !updatingDatabasePreferenceIDs.isEmpty
         || !checkingBuzzWorkspaceLinkIDs.isEmpty || !mutatingBuzzWorkspaceEnrollmentIDs.isEmpty
-        || !updatingLocalACPSessionIDs.isEmpty || workspaceFolderChangeInProgress
+        || !updatingLocalACPSessionIDs.isEmpty || workspaceFolderChangeInProgress || !executorRuntime.jobs.isEmpty || executorRuntime.isSettingUp
     }
 
 
@@ -5410,7 +5422,10 @@ extension ApplicationModel {
             guard ready else { throw BackendRPCError.remote("The background service did not become ready. Try reopening Woven Matter.") }
             let store = try await DashboardStore(supportDirectory: support, readOnlyProjection: true)
             dashboardStore = store
-            agentTools = try await WorkspaceAgentToolsModel(projection: store.database) { [weak self] mutation in
+            agentTools = try await WorkspaceAgentToolsModel(projection: store.database, executorControl: { [weak self] control in
+                guard let self else { throw CancellationError() }
+                return try await self.sendBackendCommand(.toolsMutation(.executor(control))).exportURL
+            }) { [weak self] mutation in
                 guard let self else { throw CancellationError() }
                 let result = try await self.sendBackendCommand(.toolsMutation(mutation))
                 if result.requiresTimerPauseConfirmation { throw WorkspaceToolError.timerPauseConfirmation }

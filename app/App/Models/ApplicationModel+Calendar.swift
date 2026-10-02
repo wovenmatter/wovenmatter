@@ -97,8 +97,10 @@ extension ApplicationModel {
         let directory = try? defaultToolWorkingDirectory(workspaceID: workspaceID)
         let scope = workspaceID.map { "remote:" + $0.uuidString.lowercased() } ?? "local:" + (directory ?? "")
         let selections = sessionSelectionPreferences.defaults(harness: runtime.rawValue, workspace: scope)
-        let tools = selections.tools.flatMap { try? WorkspaceSessionTools(identifiers: $0) }
-            ?? WorkspaceSessionTools(enabled: agentTools?.settings.enabledByDefault ?? Set(WorkspaceToolGroup.allCases))
+        let settings = agentTools?.settings ?? WorkspaceToolSettings()
+        var tools = selections.tools.flatMap { try? WorkspaceSessionTools(identifiers: $0) }
+            ?? WorkspaceSessionTools(enabled: settings.enabledByDefault)
+        tools.executorProfiles = settings.executor?.defaultProfiles ?? []
         return .init(prompt: "", configuration: .init(runtimeKind: runtime, workspaceID: workspaceID, title: title,
             model: selections.model, thinking: selections.thinking, permission: runtime == .pi ? nil : selections.permission,
             selectionWorkspace: scope, nativeWorkingDirectory: directory, tools: tools))

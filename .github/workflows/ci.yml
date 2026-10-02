@@ -93,6 +93,26 @@ jobs:
       - name: Build the remote workspace image
         run: docker build --file remote/Dockerfile --tag wovenmatter-remote:ci .
 
+      - name: Build the standalone Executor runtime
+        run: docker build --file remote/Executor.Dockerfile --tag wovenmatter-executor:ci remote
+      - name: Verify Executor native helper prerequisites
+        run: |
+          docker run --rm --entrypoint bash wovenmatter-executor:ci -ec '
+            test -s /etc/ssl/certs/ca-certificates.crt
+            wm_helpers=0
+            while IFS= read -r -d "" wm_helper; do
+              "$wm_helper" --version
+              wm_helpers=$((wm_helpers+1))
+            done < <(find /opt/executor -type f \( -path "*/git/bin/git" -o -path "*/bin/workerd" \) -print0)
+            test "$wm_helpers" -ge 2
+          '
+      - name: Verify unchanged Executor scopes, approvals and cancellation in Linux
+        run: |
+          npm ci --prefix default-agent --omit=dev --ignore-scripts --no-audit --no-fund
+          docker run --rm --entrypoint node --volume "$PWD:/workspace:ro" \
+            wovenmatter-executor:ci /workspace/scripts/test-support/test-executor-runtime.mjs \
+            /opt/executor/node_modules/executor/bin.mjs
+
   gate:
     name: CI
     needs: [changes, macos, remote]

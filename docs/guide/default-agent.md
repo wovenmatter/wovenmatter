@@ -76,6 +76,14 @@ the Mac is offline. If borrowed access expires, it waits before the next model
 request until access is supplied again; it does not repeat completed tools.
 Starting a new turn can use your configured fallback instead.
 
+## Pi code mode and Executor
+
+**Pi code mode** in Built-in settings defaults to **On**, alongside ordinary
+tools. **Only** presents those tools through code mode; **Off** removes the code
+mode tool. Nested calls retain normal approval. User Pi extensions remain
+disabled. Executor Execute is independent and available when Executor is enabled
+in the conversation. See [Executor apps](executor.md).
+
 ## Credential storage
 
 App-managed Built-in credentials on the Mac, including OAuth refresh tokens, are

@@ -83,6 +83,7 @@ public struct WovenMatterToolCommand: Sendable {
     case .notes: return !["list", "folders", "read", "versions", "version"].contains(action)
     case .history, .usage, .library: return false
     case .sessions: return ["create", "send", "manage", "release", "notifications"].contains(action)
+    case .executor: return action == "execute" || action == "cancel"
     case .timers: return action != "list"
     case .calendar: return !["list", "read", "occurrences"].contains(action)
     case nil: return false
@@ -114,11 +115,12 @@ public struct WovenMatterToolCommand: Sendable {
       .history: ["search", "conversations", "conversation", "message", "runs", "trace", "events", "event"],
       .sessions: ["list", "status", "create", "send", "manage", "release", "notifications", "receipts", "folders", "harnesses"],
       .timers: ["list", "create", "update", "pause", "resume", "remove"],
+      .executor: ["execute", "search", "skills", "status", "cancel"],
       .usage: ["read"], .calendar: ["list", "read", "occurrences", "create", "update", "remove", "copy", "detach"], .library: ["list", "read"]
     ]
     guard allowedActions[group]?.contains(action) == true else { throw WorkspaceToolError.invalid("Unknown \(domain) command '\(action)'.") }
     let booleanFlags: Set<String> = ["all-workspace", "independent", "no-notify", "paused", "all-day", "timed", "no-repeat", "regular-event", "json", "header"]
-    let valueFlags: Set<String> = ["id", "session", "conversation", "note-id", "folder", "workspace", "directory", "harness", "model", "thinking", "title", "text", "purpose", "request-id", "search", "run", "kind", "sender", "since", "until", "after", "before", "limit", "offset", "characters", "sort", "epoch", "at", "every", "starts-at", "ends-at", "description", "prompt", "time-zone", "repeat-unit", "repeat-interval", "session-mode", "occurrence", "enabled", "revision", "version", "file", "html", "style", "block-id", "table-id", "row", "column", "rows", "columns", "source-id", "database-id", "path", "query"]
+    let valueFlags: Set<String> = ["id", "session", "conversation", "note-id", "folder", "workspace", "directory", "harness", "model", "thinking", "title", "text", "purpose", "request-id", "search", "run", "kind", "sender", "since", "until", "after", "before", "limit", "offset", "characters", "sort", "epoch", "at", "every", "starts-at", "ends-at", "description", "prompt", "time-zone", "repeat-unit", "repeat-interval", "session-mode", "occurrence", "enabled", "revision", "version", "file", "html", "style", "block-id", "table-id", "row", "column", "rows", "columns", "source-id", "database-id", "path", "query", "code"]
     var positional: [String] = [], options: [String: String] = [:]
     var indices: [String: Int] = [:], operationArguments = Array(arguments.prefix(2))
     var wantsHelp = false
@@ -163,6 +165,10 @@ public struct WovenMatterToolCommand: Sendable {
     let allowed: Set<String>
     let maximumPositionals: Int
     switch (group, action) {
+    case (.executor, "execute"): allowed = ["code", "file"] + request; maximumPositionals = 0
+    case (.executor, "search"): allowed = ["query", "limit"] + request; maximumPositionals = 0
+    case (.executor, "skills"): allowed = request; maximumPositionals = 0
+    case (.executor, "status"), (.executor, "cancel"): allowed = ["id"] + request; maximumPositionals = 1
     case (.notes, "list"): allowed = ["search", "folder", "sort"] + pagination; maximumPositionals = 0
     case (.notes, "folders"): allowed = pagination; maximumPositionals = 0
     case (.notes, "create"): allowed = ["title", "kind", "folder"] + request; maximumPositionals = 0
@@ -250,7 +256,7 @@ public struct WovenMatterToolCommand: Sendable {
          (.timers, "update"), (.timers, "pause"), (.timers, "resume"), (.timers, "remove"),
          (.calendar, "read"), (.calendar, "occurrences"), (.calendar, "update"),
          (.calendar, "remove"), (.calendar, "copy"), (.calendar, "detach"),
-         (.library, "read"):
+         (.library, "read"), (.executor, "status"), (.executor, "cancel"):
       positionalAliases = ["id"]
     default: positionalAliases = []
     }
@@ -260,6 +266,9 @@ public struct WovenMatterToolCommand: Sendable {
     if group == .notes, ["apply", "set-html"].contains(action),
        options["file"] != nil, options[action == "apply" ? "json" : "html"] != nil {
       throw WorkspaceToolError.invalid("Pass inline content or --file, not both.")
+    }
+    if group == .executor, action == "execute", options["file"] != nil, options["code"] != nil {
+      throw WorkspaceToolError.invalid("Pass --code or --file, not both.")
     }
     if group == .calendar {
       for pair in [("all-day", "timed"), ("no-repeat", "repeat-unit"), ("no-repeat", "repeat-interval"), ("regular-event", "prompt")] {
@@ -306,6 +315,7 @@ public struct WovenMatterToolCommand: Sendable {
       usage       Read recorded usage
       calendar    Read and maintain calendar events
       library     Inspect available retained Library items
+      executor    Search selected apps and execute scoped JavaScript programs
 
     Run wovenmatter GROUP help for details. Tools must be enabled for this session.
     Commands are scoped to the session that supplied WOVENMATTER_SOCKET.
@@ -389,6 +399,21 @@ public struct WovenMatterToolCommand: Sendable {
       Task prompts run only while Woven Matter is open. Read returns attribution, revision, and session links.
       Calendar access is set in General settings; read-only mode rejects mutations.
       Mutation retries accept --request-id UUID and preserve later edits or removal.
+      """
+    case .executor: """
+      search [--query TEXT --limit 1...100 --request-id UUID]
+      skills [--request-id UUID]
+      execute --code JAVASCRIPT | --file PATH [--request-id UUID]
+      status JOB_ID | cancel JOB_ID
+      Execute is available whenever Executor is enabled for this conversation.
+      Only selected app profiles are callable, including dynamic tool names.
+      Search returns exact paths and signatures. Use those paths in Execute.
+      Start returns a job ID immediately. Poll status until completed, cancelled or interrupted.
+      Completed means the program finished; inspect result.execution.ok for success.
+      Approvals and input appear in the conversation. Resume is managed by Woven Matter.
+      Reuse --request-id with identical code after a lost receipt. Never replay an interrupted
+      program automatically: earlier external effects may already have completed.
+      No imports, fetch, process or filesystem globals exist in Executor's sandbox.
       """
     case .library: "list [--search TEXT --workspace ID[,ID] --harness NAME[,NAME] --kind file|link|photo --sender me|agent --since ISO8601 --until ISO8601 --offset N --limit 1...200] | read ITEM_ID\nFiles, links, and photos from new exchanges. Results include source message IDs, original locations, and retention status. File contents are kept on disk; remote original paths belong to their source workspace."
     }

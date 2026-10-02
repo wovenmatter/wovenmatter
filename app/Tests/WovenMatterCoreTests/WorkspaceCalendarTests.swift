@@ -572,6 +572,22 @@ extension WorkspaceCalendarTests {
 }
 
 extension WorkspaceCalendarTests {
+  @Test(arguments: [Set<String>(), Set(["saved:profile"])])
+  func scheduledExecutorAppsKeepTheirSavedScope(profiles: Set<String>) async throws {
+    let (db, directory) = try await fixture(); defer { try? FileManager.default.removeItem(at: directory) }
+    let start = date("2026-09-01T13:00:00Z")
+    var scheduled = task()
+    scheduled.configuration.tools = .init(enabled: [.executor], executorProfiles: profiles)
+    _ = try await db.saveCalendarEvent(draft: .init(title: "Saved scope", startsAt: start, timeZoneID: "UTC", task: scheduled), creating: true, now: start)
+    var settings = try await db.toolSettings()
+    var executor = ExecutorConfiguration(); executor.defaultProfiles = ["later:profile"]
+    settings.executor = executor
+    try await db.saveToolSettings(settings)
+    let run = try await #require(db.dueCalendarRuns(now: start).first)
+    try await accept(run, in: db, now: start)
+    #expect(try await db.sessionTools(run.sessionID).executorProfiles == profiles)
+  }
+
   @Test func editingAnUncreatedRecurringSessionUpdatesItsInsertionSettings() async throws {
     let (db, directory) = try await fixture(); defer { try? FileManager.default.removeItem(at: directory) }
     let start = date("2026-09-01T13:00:00Z")

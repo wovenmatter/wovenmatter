@@ -20,6 +20,15 @@ struct SettingsDefaultAgentView: View {
             scopeSection
             SettingsDefaultAgentSDKView(connections: agent, remoteWorkspaces: model.remoteWorkspaces)
             connectionsSection
+            SettingsCard(title: "Pi code mode", detail: "Run JavaScript that calls the agent’s tools. Each call keeps its normal permissions.") {
+                Picker("Code mode", selection: Binding(get: { agent.configuration.resolvedCodeMode }, set: {
+                    var config = agent.configuration; config.codeMode = $0; agent.configuration = config
+                })) {
+                    ForEach(BuiltInCodeMode.allCases, id: \.self) { Text($0.title).tag($0) }
+                }.disabled(!editable)
+                Text("On adds code mode as a tool alongside the agent’s other tools. Only routes all tool calls through code mode. Off disables code mode and uses standard tool calls. Changes apply between turns.")
+                    .font(.callout).foregroundStyle(.secondary)
+            }
             searchSection
             if let notice = agent.notice { Text(notice).font(.callout).foregroundStyle(.secondary) }
             if let error = agent.error ?? syncError { Text(error).font(.callout).foregroundStyle(.red).textSelection(.enabled) }

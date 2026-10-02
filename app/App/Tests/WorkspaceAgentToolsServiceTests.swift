@@ -810,7 +810,7 @@ extension WorkspaceAgentToolsServiceTests {
         defer { fixture.stop() }
         let original = try await fixture.database.toolSettings()
         let projection = try await WorkspaceAgentToolsModel(projection: fixture.database) { mutation in
-            if replyLostAfterCommit, case let .saveSettings(value) = mutation {
+            if replyLostAfterCommit, case let .saveSettings(value, _) = mutation {
                 try await fixture.database.saveToolSettings(value)
             }
             throw ToolSettingsSaveFailure()
@@ -831,7 +831,7 @@ extension WorkspaceAgentToolsServiceTests {
         let gate = ToolSettingsSaveGate()
         let projection = try await WorkspaceAgentToolsModel(projection: fixture.database) { mutation in
             try await gate.pause()
-            if case let .saveSettings(value) = mutation { try await fixture.database.saveToolSettings(value) }
+            if case let .saveSettings(value, _) = mutation { try await fixture.database.saveToolSettings(value) }
         }
         defer { projection.stop(); gate.finishAll() }
         var first = projection.settings
@@ -896,5 +896,91 @@ private final class ToolSettingsSaveGate {
         let remaining = pending.values
         pending.removeAll()
         remaining.forEach { $0.resume(throwing: CancellationError()) }
+    }
+}
+
+
+extension WorkspaceAgentToolsServiceTests {
+    @Test func executorConnectionChangeFencesAdmissionsBeforeTheirJobExists() async throws {
+        let runtime = ExecutorRuntime()
+        let original = runtime.fence("admitting")
+        #expect(runtime.sessions.isEmpty)
+        runtime.cancelAll()
+        #expect(throws: CancellationError.self) { try runtime.check("admitting", fence: original) }
+        try runtime.check("admitting", fence: runtime.fence("admitting"))
+        _ = try? await runtime.scopeEdits["admitting"]?.value
+    }
+
+    @Test func executorStopFencesQueuedAdmissionAndCancelsExistingDriver() async throws {
+        let runtime = ExecutorRuntime()
+        let gate = ToolSettingsSaveGate()
+        defer { gate.finishAll() }
+        let fence = runtime.fence("session")
+        let first = runtime.serialized("session") { try await gate.pause() }
+        var admitted = false
+        let queued = runtime.serialized("session") {
+            try runtime.check("session", fence: fence)
+            admitted = true
+        }
+        let driver = Task<Void, Never> {}
+        runtime.jobs["job"] = driver; runtime.sessions["job"] = "session"
+        await gate.waitForStarts(1)
+        runtime.cancel("session")
+        #expect(driver.isCancelled)
+        gate.finishAll()
+        _ = try? await first.value
+        do { try await queued.value; Issue.record("Stopped admission unexpectedly ran") }
+        catch is CancellationError { }
+        #expect(!admitted)
+        _ = try? await runtime.scopeEdits["session"]?.value
+    }
+
+    @Test(arguments: AgentRuntimeKind.allCases)
+    func executorUsesBoundCLIIdentityAndChecksMasterSwitch(runtime: AgentRuntimeKind) async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let database = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
+        let caller = try await database.createLocalACPSession(runtimeKind: runtime, title: "Caller", ownerDeviceID: UUID())
+        var seen: [String] = []
+        let service = try await WorkspaceAgentToolsModel(database: database,
+            sessionHandler: { _, _, _ in throw CancellationError() }, noteHandler: { _, _, _ in throw CancellationError() },
+            noteRestoreHandler: { _, _, _, _, _ in throw CancellationError() }, usageHandler: { _ in throw CancellationError() },
+            executorHandler: { identity, command, _ in
+                seen.append(identity)
+                return .init(result: .object(["action": .string(command.action)]))
+            }, onMutation: {})
+        defer { service.stop() }
+        let endpoint = try await service.endpoint(for: caller)
+        func request(_ arguments: [String]) async throws -> WovenMatterToolResponse {
+            let data = try JSONEncoder().encode(WovenMatterToolRequest(arguments: arguments))
+            let result = try await runBlockingToolFixture { try WovenMatterCommandLine.forward(data, to: endpoint) }
+            return try JSONDecoder().decode(WovenMatterToolResponse.self, from: result)
+        }
+        #expect(try await !request(["executor", "search", "--query", "fixture"]).success)
+        #expect(seen.isEmpty)
+        _ = try await database.setSessionToolEnabled(.executor, enabled: true, sessionID: caller)
+        #expect(try await request(["executor", "search", "--query", "fixture"]).success)
+        #expect(seen == [caller])
+        #expect(try await !request(["executor", "execute", "--code", "return 1;", "--session", "other"]).success)
+        #expect(seen == [caller])
+        _ = try await database.setSessionToolEnabled(.executor, enabled: false, sessionID: caller)
+        #expect(try await !request(["executor", "execute", "--code", "return 1;"]).success)
+        #expect(seen == [caller])
+    }
+}
+
+
+extension WorkspaceAgentToolsServiceTests {
+    @Test func queuedSettingsToggleCanUndoItsPendingPredecessor() async throws {
+        let fixture = try await ToolSnapshotFixture()
+        defer { fixture.stop() }
+        let model = fixture.model
+        var enabled = model.settings; enabled.enabledByDefault.insert(.executor)
+        model.saveSettingsFromUI(enabled)
+        var disabled = enabled; disabled.enabledByDefault.remove(.executor)
+        await model.saveSettings(disabled)
+        #expect(!(try await fixture.database.toolSettings()).enabledByDefault.contains(.executor))
+        #expect(!model.settings.enabledByDefault.contains(.executor))
     }
 }

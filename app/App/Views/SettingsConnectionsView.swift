@@ -58,6 +58,7 @@ struct SettingsConnectionsView: View {
             }.buttonStyle(SettingsQuietButtonStyle())
             Text("Subscription sign-ins and API keys remain separate. Disconnecting a shared account affects every feature using it. Disabling dictation or usage tracking keeps the account connected.").font(.callout).foregroundStyle(.secondary)
             LocalModelServerConnections(agent: agent)
+            if let tools = model.agentTools { ExecutorConnectionsCard(model: model, tools: tools) }
         }
         .task { agent.changeScope(initialScope); agent.loadAccounts() }
         .onDisappear { agent.cancel() }
