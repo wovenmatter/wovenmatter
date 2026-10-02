@@ -62,7 +62,14 @@ struct ExecutorConnectionsCard: View {
         }
     }
     var body: some View {
-        SettingsCard(title: "Executor", detail: "One connection shared by every agent through the Woven Matter CLI. Each conversation chooses its apps.") {
+        SettingsCard(title: "Executor", detail: "One connection shared by every agent through the Woven Matter CLI, powered by Executor.\nSet app-access defaults globally and adjust access within each conversation between turns.") {
+            VStack(alignment: .leading, spacing: 4) {
+                Link("Learn more about Executor ↗", destination: URL(string: "https://executor.sh")!)
+                    .font(.system(size: 12.5))
+                Text("Copyright 2026 Rhys Sullivan.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(DashboardPalette.mutedForeground)
+            }
             if tools.settings.executor == nil || editing {
                 Picker("Run Executor", selection: $draft.location) {
                     Text("On this Mac").tag(ExecutorConfiguration.Location.local)

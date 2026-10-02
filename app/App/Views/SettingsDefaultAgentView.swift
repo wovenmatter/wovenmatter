@@ -26,7 +26,7 @@ struct SettingsDefaultAgentView: View {
                 })) {
                     ForEach(BuiltInCodeMode.allCases, id: \.self) { Text($0.title).tag($0) }
                 }.disabled(!editable)
-                Text("On exposes code mode alongside ordinary tools. Only presents code mode. Off hides it. Changes apply between turns.")
+                Text("On adds code mode as a tool alongside the agent’s other tools. Only routes all tool calls through code mode. Off disables code mode and uses standard tool calls. Changes apply between turns.")
                     .font(.callout).foregroundStyle(.secondary)
             }
             searchSection
