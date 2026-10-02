@@ -95,6 +95,13 @@ jobs:
 
       - name: Build the standalone Executor runtime
         run: docker build --file remote/Executor.Dockerfile --tag wovenmatter-executor:ci remote
+      - name: Verify Executor native helper prerequisites
+        run: |
+          docker run --rm --entrypoint bash wovenmatter-executor:ci -ec '
+            test -s /etc/ssl/certs/ca-certificates.crt
+            find /opt/executor -type f -path "*/git/bin/git" -exec {} --version \;
+            find /opt/executor -type f -path "*/workerd/bin/workerd" -exec {} --version \;
+          '
       - name: Verify unchanged Executor scopes, approvals and cancellation in Linux
         run: |
           npm ci --prefix default-agent --omit=dev --ignore-scripts --no-audit --no-fund
