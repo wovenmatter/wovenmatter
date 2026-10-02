@@ -34,6 +34,10 @@ when an intentional design change is accepted.
   page so the chevron, label, and remaining header width all toggle expansion.
   The style propagates to nested provider, credential, account, and Executor
   defaults disclosures.
+  OpenAI, Anthropic, and Grok retain separate subscription and API-key groups.
+  OpenRouter, OpenCode, and Exa show API-key controls directly when expanded.
+  Keep their content and Cursor's controls at the same indentation as the content
+  inside the nested credential groups.
 - **Icons:** use the existing `DashboardLucideIcon` glyphs and bundled harness
   logos, matching nearby icon sizes and stroke weights.
 - **Calendar:** keep the four-item legend below the selected-day list. Use the

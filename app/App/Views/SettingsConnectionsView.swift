@@ -83,8 +83,8 @@ struct SettingsConnectionsView: View {
                 connectionGroup("xai", title: "Grok subscriptions", subscription: true)
                 connectionGroup("xai-api", title: "xAI API keys")
             }
-            DisclosureGroup("OpenRouter") { connectionGroup("openrouter", title: "API keys") }
-            DisclosureGroup("OpenCode") { connectionGroup("opencode-go", title: "API keys") }
+            DisclosureGroup("OpenRouter") { connectionContent("openrouter").padding(.leading, 12) }
+            DisclosureGroup("OpenCode") { connectionContent("opencode-go").padding(.leading, 12) }
             DisclosureGroup("Cursor") {
                 VStack(alignment: .leading, spacing: 8) {
                 Text(agent.cursorAccountStatus).font(.callout).foregroundStyle(.secondary)
@@ -96,60 +96,63 @@ struct SettingsConnectionsView: View {
                     .disabled(agent.busy || remote != nil)
                 if agent.signInProvider == "cursor" { signInSection }
                 else { completedSignInSection(for: "cursor") }
-                }.frame(maxWidth: .infinity, alignment: .leading).padding(.leading, 12)
+                }.frame(maxWidth: .infinity, alignment: .leading).padding(.leading, 24)
             }
         }
     }
     private func connectionGroup(_ id: String, title: String, subscription: Bool = false) -> some View {
         DisclosureGroup(title) {
-            VStack(alignment: .leading, spacing: 10) {
-                let stored = agent.accounts[id] ?? []
-                let accounts = stored.filter(\.isSelected) + stored.filter { !$0.isSelected }
-                ForEach(Array(accounts.enumerated()), id: \.element.id) { index, account in
-                    DisclosureGroup {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text(account.createdAt.map { "Added " + $0.formatted(date: .abbreviated, time: .shortened) } ?? "Existing connection")
-                                .font(.caption).foregroundStyle(.secondary)
-                            HStack {
-                                Button("Use first") { Task { await agent.selectAccount(account.id, provider: id, remote: remote) } }.disabled(account.isSelected)
-                                Button("Move up") { Task { await agent.moveAccount(account.id, provider: id, offset: -1) } }.disabled(account.isSelected || index <= 1)
-                                Button("Move down") { Task { await agent.moveAccount(account.id, provider: id, offset: 1) } }.disabled(account.isSelected || index == accounts.count - 1)
-                                if subscription { Button("Reconnect") { Task { await agent.reconnectAccount(account.id, provider: id, remote: remote) } } }
-                                Spacer()
-                                Button("Remove") { Task { await agent.removeAccount(account.id, provider: id, remote: remote) } }
-                            }.buttonStyle(SettingsQuietButtonStyle()).disabled(!editable || agent.busy)
-                        }
-                    } label: {
+            connectionContent(id, subscription: subscription)
+        }.padding(.leading, 12)
+    }
+    private func connectionContent(_ id: String, subscription: Bool = false) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            let stored = agent.accounts[id] ?? []
+            let accounts = stored.filter(\.isSelected) + stored.filter { !$0.isSelected }
+            ForEach(Array(accounts.enumerated()), id: \.element.id) { index, account in
+                DisclosureGroup {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(account.createdAt.map { "Added " + $0.formatted(date: .abbreviated, time: .shortened) } ?? "Existing connection")
+                            .font(.caption).foregroundStyle(.secondary)
                         HStack {
-                            Text(account.label)
+                            Button("Use first") { Task { await agent.selectAccount(account.id, provider: id, remote: remote) } }.disabled(account.isSelected)
+                            Button("Move up") { Task { await agent.moveAccount(account.id, provider: id, offset: -1) } }.disabled(account.isSelected || index <= 1)
+                            Button("Move down") { Task { await agent.moveAccount(account.id, provider: id, offset: 1) } }.disabled(account.isSelected || index == accounts.count - 1)
+                            if subscription { Button("Reconnect") { Task { await agent.reconnectAccount(account.id, provider: id, remote: remote) } } }
                             Spacer()
-                            Text(account.isSelected ? "Preferred" : "Backup \(index)").font(.caption).foregroundStyle(.secondary)
-                            Text(account.isSelected && subscription ? agent.connectionLabel(id) : "Credential saved").font(.caption).foregroundStyle(.secondary)
-                        }
+                            Button("Remove") { Task { await agent.removeAccount(account.id, provider: id, remote: remote) } }
+                        }.buttonStyle(SettingsQuietButtonStyle()).disabled(!editable || agent.busy)
+                    }
+                } label: {
+                    HStack {
+                        Text(account.label)
+                        Spacer()
+                        Text(account.isSelected ? "Preferred" : "Backup \(index)").font(.caption).foregroundStyle(.secondary)
+                        Text(account.isSelected && subscription ? agent.connectionLabel(id) : "Credential saved").font(.caption).foregroundStyle(.secondary)
                     }
                 }
-                if id == "claude-subscription", accounts.count < 4 {
-                    Text(agent.connectionLabel(id)).font(.callout).foregroundStyle(.secondary)
-                    Button(accounts.isEmpty ? "Sign in with Claude" : "Add Claude account") { agent.signInClaude(remote: remote) }
+            }
+            if id == "claude-subscription", accounts.count < 4 {
+                Text(agent.connectionLabel(id)).font(.callout).foregroundStyle(.secondary)
+                Button(accounts.isEmpty ? "Sign in with Claude" : "Add Claude account") { agent.signInClaude(remote: remote) }
+                    .buttonStyle(SettingsQuietButtonStyle()).disabled(agent.busy || !editable)
+            } else if accounts.count < 4 {
+                if subscription {
+                    Button(accounts.isEmpty ? "Sign in" : "Add account") { agent.refresh(remote: remote, login: id) }
                         .buttonStyle(SettingsQuietButtonStyle()).disabled(agent.busy || !editable)
-                } else if accounts.count < 4 {
-                    if subscription {
-                        Button(accounts.isEmpty ? "Sign in" : "Add account") { agent.refresh(remote: remote, login: id) }
-                            .buttonStyle(SettingsQuietButtonStyle()).disabled(agent.busy || !editable)
-                    } else { keyEntry(id) }
-                } else {
-                    Text("Four connections maximum. Remove one to add another.").font(.caption).foregroundStyle(.secondary)
-                }
-                if remote != nil && ["openai-codex", "xai"].contains(id) {
-                    Text("This workspace can own one independent sign-in, tried before its shared accounts.")
-                        .font(.caption).foregroundStyle(.secondary)
-                    Button("Use shared sign-in") { Task { await agent.signOut(id, remote: remote) } }
-                        .buttonStyle(SettingsQuietButtonStyle()).disabled(agent.busy || !editable)
-                }
-                if agent.signInProvider == id { signInSection }
-                else { completedSignInSection(for: id) }
-            }.frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 8).padding(.leading, 12)
-        }.padding(.leading, 12)
+                } else { keyEntry(id) }
+            } else {
+                Text("Four connections maximum. Remove one to add another.").font(.caption).foregroundStyle(.secondary)
+            }
+            if remote != nil && ["openai-codex", "xai"].contains(id) {
+                Text("This workspace can own one independent sign-in, tried before its shared accounts.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Button("Use shared sign-in") { Task { await agent.signOut(id, remote: remote) } }
+                    .buttonStyle(SettingsQuietButtonStyle()).disabled(agent.busy || !editable)
+            }
+            if agent.signInProvider == id { signInSection }
+            else { completedSignInSection(for: id) }
+        }.frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 8).padding(.leading, 12)
     }
     private func keyEntry(_ id: String) -> some View {
         HStack {
@@ -210,7 +213,7 @@ struct SettingsConnectionsView: View {
     }
     private var searchSection: some View {
         SettingsCard(title: "Web search") {
-            DisclosureGroup("Exa") { connectionGroup("exa", title: "API keys") }
+            DisclosureGroup("Exa") { connectionContent("exa").padding(.leading, 12) }
         }
     }
 
