@@ -1004,6 +1004,7 @@ struct DashboardUsageView: View {
                     if let dashboardURL = account.dashboardURL {
                         Link("Open dashboard", destination: dashboardURL)
                             .font(.system(size: 10.5, weight: .medium))
+                            .foregroundStyle(DashboardPalette.success)
                     }
                 }
             }

@@ -130,6 +130,7 @@ struct ExecutorConnectionsCard: View {
             VStack(alignment: .leading, spacing: 4) {
                 Link("Learn more about Executor ↗", destination: URL(string: "https://executor.sh")!)
                     .font(.system(size: 12.5))
+                    .foregroundStyle(DashboardPalette.success)
                 Text("Copyright 2026 Rhys Sullivan.")
                     .font(.system(size: 12))
                     .foregroundStyle(DashboardPalette.mutedForeground)
