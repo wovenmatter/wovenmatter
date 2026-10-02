@@ -17,10 +17,14 @@ const port = listener.address().port; await new Promise(resolve => listener.clos
 const config = { id: randomUUID(), location: 'local' };
 const server = { location: 'local', apiKey: randomBytes(32).toString('hex'), encryptionKey: randomBytes(32).toString('hex'), port };
 await mkdir(join(root, 'data'));
-const child = spawn(process.execPath, [resolve(executable), 'serve'], { stdio: 'ignore', env: {
+const child = spawn(process.execPath, [resolve(executable), 'serve'], { stdio: ['ignore', 'pipe', 'pipe'], env: {
   ...process.env, PATH: process.env.PATH, EXECUTOR_DATA_DIR: join(root, 'data'), EXECUTOR_PORT: String(port),
   EXECUTOR_API_KEY: server.apiKey, EXECUTOR_ENCRYPTION_KEY: server.encryptionKey, EXECUTOR_NO_UPDATE_CHECK: '1',
 } });
+let diagnostics = '';
+for (const stream of [child.stdout, child.stderr]) stream.on('data', value => { diagnostics = (diagnostics + value.toString()).slice(-16000); });
+const runtimeFailure = error => new Error(`Fixture runtime failed to start (exit ${child.exitCode}, signal ${child.signalCode}): ${error.message}\n` + diagnostics
+  .replaceAll(server.apiKey, '[redacted]').replaceAll(server.encryptionKey, '[redacted]').replace(/#pair=[^\s]+/g, '#pair=[redacted]'));
 const broker = await new ExecutorBroker(join(root, 'manager')).load();
 broker.state.servers[config.id] = server; broker.child = child;
 let passed = 0;
@@ -29,7 +33,7 @@ try {
   const deadline = Date.now() + 90000;
   while (true) {
     try { await broker.configure(config); break; }
-    catch { if (child.exitCode !== null || Date.now() > deadline) throw new Error('Fixture runtime failed to start.'); await wait(500); }
+    catch (error) { if (child.exitCode !== null || child.signalCode !== null || Date.now() > deadline) throw runtimeFailure(error); await wait(500); }
   }
   check('Unchanged runtime starts with isolated state');
   const apps = [];
