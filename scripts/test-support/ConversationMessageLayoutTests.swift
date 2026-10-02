@@ -162,8 +162,9 @@ struct ConversationMessageLayoutTests {
                 let other = ConversationWorkTranscriptPresentation(
                     runStatus: status, runError: "Old error", hasVisibleActivities: hasActivities
                 )
-                try require(other.failureMessage == nil && other.isVisible == hasActivities,
-                    "A nonfailed run acquired a stale error or empty work transcript")
+                try require(other.failureMessage == nil
+                    && other.isVisible == (status == "running" || hasActivities),
+                    "The running timer was hidden or an inactive run acquired an empty work transcript")
             }
         }
 
