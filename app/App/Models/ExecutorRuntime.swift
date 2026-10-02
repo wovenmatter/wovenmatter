@@ -38,4 +38,3 @@ final class ExecutorRuntime {
         for session in Set(fences.keys).union(sessions.values) { cancel(session) }
     }
 }
-
