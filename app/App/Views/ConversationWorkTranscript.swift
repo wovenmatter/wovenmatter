@@ -106,12 +106,15 @@ struct ConversationWorkTranscript: View {
                     .buttonStyle(ConversationElapsedButtonStyle())
                     .foregroundStyle(DashboardPalette.mutedForeground)
                     .accessibilityValue(expanded ? "Expanded" : "Collapsed")
-                } else {
+                } else if content.failureMessage != nil {
                     HStack(spacing: 7) {
                         DashboardLucideIcon(glyph: .alertCircle, size: 13)
                         elapsedLabel
                     }
                     .foregroundStyle(DashboardPalette.danger)
+                } else {
+                    elapsedLabel
+                        .foregroundStyle(DashboardPalette.mutedForeground)
                 }
 
                 // Failure belongs to the run, not to its optional work history.
