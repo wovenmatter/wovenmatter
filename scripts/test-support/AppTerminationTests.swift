@@ -11,13 +11,14 @@ final class ApplicationModel {
     var flushCount = 0
     var cleanupCount = 0
     var cleanupFinished = false
+    var sessionShutdownCount = 0
     var remoteWorkspaces: ApplicationModel { self }
     func refreshRuntimeInventory() {}
     func refreshLocalACPRuntimesNow() {}
     func refreshRuntimeMaintenanceAtStartup() {}
     func flushNoteDrafts() async -> Bool { flushCount += 1; return true }
     func restoreOpenCodeInstances() async {}
-    func shutdownLocalACPSessions() {}
+    func shutdownLocalACPSessions() { sessionShutdownCount += 1 }
     func flushNotesBeforeBackendClientQuit() async -> Bool { flushCount += 1; return true }
     func prepareOpenCodeInstancesToQuit() async throws {
         cleanupCount += 1
@@ -39,8 +40,6 @@ private final class TerminationProbe: NSObject, NSApplicationDelegate {
         delegate.model = model
         NotificationCenter.default.addObserver(self, selector: #selector(start),
             name: NSApplication.didFinishLaunchingNotification, object: nil)
-        NotificationCenter.default.addObserver(self, selector: #selector(finished),
-            name: NSApplication.willTerminateNotification, object: nil)
     }
 
     @objc private func start(_ notification: Notification) {
@@ -49,6 +48,19 @@ private final class TerminationProbe: NSObject, NSApplicationDelegate {
             try! await AppTerminationTests.verifyExecutionLeaseWait()
             WovenMatterLifecycleDelegate.requestTerminationAfterUpdate()
         }
+    }
+
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        delegate.applicationShouldTerminateAfterLastWindowClosed(sender)
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        delegate.applicationWillTerminate(notification)
+        let passed = deferredTermination && model.flushCount == 1 && model.cleanupCount == 1
+            && model.cleanupFinished && model.sessionShutdownCount == 1
+            && !delegate.applicationShouldTerminateAfterLastWindowClosed(NSApplication.shared)
+        try! (passed ? "PASS\n" : "FAIL: termination cancelled, cleanup unfinished, or duplicate cleanup\n")
+            .write(to: resultURL, atomically: true, encoding: .utf8)
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {

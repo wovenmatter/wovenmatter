@@ -379,6 +379,7 @@ extension WorkspaceDatabaseConnection {
       try createWorkspaceCacheTablesUnlocked()
       try addCurrentColumnsUnlocked()
       try createDashboardRevisionTrackingUnlocked()
+      try createCompanionSchemaUnlocked()
     }
   }
 

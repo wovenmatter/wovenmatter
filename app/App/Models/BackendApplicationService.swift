@@ -11,6 +11,7 @@ struct BackendAttachmentSource: Codable, Sendable {
 }
 
 enum BackendApplicationCommand: Codable, Sendable {
+    case companion(CompanionHostAction)
     case setIdleSleepPolicy(WorkPowerPolicy)
     case setClosedLidPolicy(WorkPowerPolicy)
     case stageAttachments(files: [BackendAttachmentSource])
@@ -42,6 +43,7 @@ enum BackendApplicationCommand: Codable, Sendable {
 }
 
 struct BackendApplicationResult: Codable, Sendable {
+    var companion: CompanionHostSnapshot?
     var exportURL: URL?
     var trashedConversations: [WorkspaceTrashedConversation]?
     var trashedNotes: [WorkspaceTrashedNote]?
@@ -109,6 +111,11 @@ final class BackendApplicationService {
         return result
     }
 
+    func recordCompanionStop(conversationID: String) {
+        do { try dispatchAdmissions.prepareLegacyStop(conversationID: conversationID) }
+        catch { dispatchAdmissions.refuseFurtherSends(conversationID: conversationID) }
+    }
+
     private func perform(_ request: BackendRPCRequest) async -> BackendRPCResponse {
         do {
             switch request.method {
@@ -163,6 +170,16 @@ final class BackendApplicationService {
 
     private func execute(_ command: BackendApplicationCommand) async throws -> BackendApplicationResult {
         switch command {
+        case .companion(let action):
+            let host = model.companionHost
+            switch action {
+            case .status: break
+            case .start: await host.start()
+            case .stop: host.stopSharing()
+            case .createCode: await host.createPairingCode()
+            case .revoke(let id): await host.revoke(id)
+            }
+            return .init(companion: host.snapshot)
         case .setIdleSleepPolicy(let policy):
             model.activeWorkSleepPrevention.setPolicy(policy)
             return .init()

@@ -2,6 +2,7 @@ import AppKit
 import Darwin
 import Foundation
 import SwiftUI
+import WovenMatterDashboardStore
 import WovenMatterClient
 
 /// Optional development variants have their own database and process lease.
@@ -157,6 +158,9 @@ final class WorkspaceProcessLease {
             in: .userDomainMask
         ).first
     ) -> URL {
+        if let isolated = CompanionTestWorkspace.supportDirectory {
+            return isolated.appending(path: "workspace-owner.lock")
+        }
         let supportDirectory = applicationSupportDirectory
             ?? FileManager.default.homeDirectoryForCurrentUser.appending(
                 path: "Library/Application Support",
@@ -345,6 +349,7 @@ final class WorkspaceProcessLease {
     }
 }
 
+#if !COMPANION_FACADE_TESTS
 @main
 struct WovenMatterApp: App {
     @NSApplicationDelegateAdaptor(WovenMatterLifecycleDelegate.self) private var lifecycleDelegate
@@ -354,6 +359,9 @@ struct WovenMatterApp: App {
     @AppStorage(DashboardSidebarStyle.storageKey) private var sidebarStyleRawValue = DashboardSidebarStyle.defaultStyle.rawValue
 
     init() {
+        if let status = CompanionServeSupervisor.dispatch(arguments: CommandLine.arguments) {
+            Darwin.exit(status)
+        }
         if let commandIndex = CommandLine.arguments.firstIndex(of: "--wovenmatter-cli") {
             Darwin.exit(WovenMatterCommandLine.run(
                 arguments: Array(CommandLine.arguments.dropFirst(commandIndex + 1)),
@@ -433,16 +441,7 @@ struct WovenMatterApp: App {
                 ) { _ in
                     Task { await applicationModel.flushNoteDrafts() }
                 }
-                .onReceive(
-                    NotificationCenter.default.publisher(
-                        for: NSApplication.willTerminateNotification
-                    )
-                ) { _ in
-                    if LocalExecutionRole.current.ownsExecution {
-                        // Notes were flushed by the asynchronous termination barrier.
-                        applicationModel.shutdownLocalACPSessions()
-                    }
-                }
+
         }
         .defaultSize(width: 1320, height: 860)
         .windowStyle(.hiddenTitleBar)
@@ -475,3 +474,4 @@ struct WovenMatterApp: App {
         }
     }
 }
+#endif

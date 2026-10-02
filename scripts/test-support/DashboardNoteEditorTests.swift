@@ -115,7 +115,11 @@ struct DashboardNoteEditorTests {
 
     static func verifyDocumentBindingCache() throws {
         var decodes = 0
-        let cache = DashboardNoteDocumentCache { source in
+        var validations = 0
+        let cache = DashboardNoteDocumentCache(validateEditable: { source in
+            validations += 1
+            return (try? NoteDocument.editableDocument(from: source)) != nil
+        }) { source in
             decodes += 1
             return NoteDocument.decode(source)
         }
@@ -123,8 +127,11 @@ struct DashboardNoteEditorTests {
         for _ in 0..<100 {
             try require(cache.value(noteID: "first", source: "Legacy note") == first,
                 "Repeated reads must preserve legacy block identity")
+            try require(cache.isEditable(noteID: "first", source: "Legacy note"),
+                "Legacy note should remain editable")
         }
         try require(decodes == 1, "Unchanged binding reads decoded the document again")
+        try require(validations == 1, "Unchanged binding reads validated the document again")
 
         var table = NoteTableBlock(rows: 100, columns: 8, headerRow: true)
         table.rows[99].cells[7].runs = [NoteTextRun(text: "Last cell")]
@@ -132,7 +139,9 @@ struct DashboardNoteEditorTests {
         let saved = try cache.encode(edited, noteID: "first")
         try require(cache.value(noteID: "first", source: saved) == NoteDocument.decode(saved),
             "Local edits and persisted document differ")
+        try require(cache.isEditable(noteID: "first", source: saved), "A valid local edit became read-only")
         try require(decodes == 1, "A local edit was decoded immediately after encoding")
+        try require(validations == 1, "A typed local edit was re-decoded for validation")
 
         let external = try NoteDocument(kind: .html, html: "Fresh external update").encoded()
         try require(cache.value(noteID: "first", source: external).html == "Fresh external update",
@@ -142,7 +151,20 @@ struct DashboardNoteEditorTests {
             "Returning to a prior source did not refresh the single-entry cache")
         _ = cache.value(noteID: "second", source: saved)
         try require(decodes == 4, "Switching notes must not reuse the prior note's entry")
-        print("PASS: bounded document reuse preserves edits, fresh external source, note identity, and normalized persistence")
+        try require(validations == 4, "External sources and note switches must validate exactly once")
+
+        let unsupported = "{\"version\":999,\"blocks\":[]}"
+        for _ in 0..<100 {
+            _ = cache.value(noteID: "second", source: unsupported)
+            try require(!cache.isEditable(noteID: "second", source: unsupported),
+                "An unsupported document became editable")
+        }
+        try require(decodes == 4, "An unsupported document reached the forgiving decoder")
+        try require(validations == 5, "An unsupported source was validated repeatedly")
+        try require(cache.isEditable(noteID: "second", source: saved),
+            "A recovered supported version remained read-only")
+        try require(decodes == 5 && validations == 6, "Recovering a version must refresh once")
+        print("PASS: bounded document reuse preserves edits, external updates, note identity, normalized persistence, and read-only recovery")
     }
 
     static func verifyMetadata(_ document: NoteDocument, original: NoteDocument, label: String) throws {

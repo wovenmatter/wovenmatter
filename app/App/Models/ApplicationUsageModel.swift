@@ -81,7 +81,7 @@ final class ApplicationUsageModel {
     private(set) var codexUsageWorkspaces: [CodexUsageWorkspace] = []
     private(set) var selectedCodexUsageWorkspaceID: String?
     @ObservationIgnored
-    private lazy var localUsageService = LocalUsageService()
+    private let localUsageService: LocalUsageService
     @ObservationIgnored
     var backendRequest: (@MainActor (String, Data) async throws -> Data)?
     @ObservationIgnored
@@ -191,7 +191,8 @@ final class ApplicationUsageModel {
         return try JSONEncoder().encode(backendSnapshot())
     }
 
-    init(applicationDefaults: UserDefaults) {
+    init(applicationDefaults: UserDefaults, localUsageService: LocalUsageService = LocalUsageService()) {
+        self.localUsageService = localUsageService
         self.applicationDefaults = applicationDefaults
         selectedUsageConnections = applicationDefaults.dictionary(forKey: "wovenmatter.usage.selected-connections") as? [String: String] ?? [:]
         isOpenRouterCredentialConfigured = applicationDefaults.bool(

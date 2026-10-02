@@ -25,6 +25,7 @@ struct LocalACPSessionDriver: Sendable {
     let activeInput: (@Sendable (
         _ input: AgentMessageInput
     ) async throws -> LocalACPActiveInputReceipt)?
+    let activeInputCapability: @Sendable () async -> LocalACPActiveInputRoute
     let cancel: @Sendable () async throws -> Void
     let setRunID: (@Sendable (String) async throws -> Void)?
     let setResumePermissionHandler: (@Sendable (@escaping LocalACPClient.PermissionHandler) async -> Void)?
@@ -56,6 +57,7 @@ struct LocalACPSessionDriver: Sendable {
         activeInput: (@Sendable (
             _ input: AgentMessageInput
         ) async throws -> LocalACPActiveInputReceipt)? = nil,
+        activeInputCapability: @escaping @Sendable () async -> LocalACPActiveInputRoute = { .unsupported },
         cancel: @escaping @Sendable () async throws -> Void,
         shutdown: @escaping @Sendable () async -> Void,
         finishRun: (@Sendable () async -> Void)? = nil,
@@ -71,6 +73,7 @@ struct LocalACPSessionDriver: Sendable {
         self.setConfiguration = setConfiguration
         self.setPermission = setPermission
         self.activeInput = activeInput
+        self.activeInputCapability = activeInputCapability
         self.cancel = cancel
         self.setRunID = setRunID
         self.setResumePermissionHandler = setResumePermissionHandler
@@ -122,6 +125,7 @@ struct LocalACPSessionDriver: Sendable {
                     try await client.steer(input)
                     return LocalACPActiveInputReceipt(completion: Task { nil })
                 },
+                activeInputCapability: { .hermesGateway },
                 cancel: { try await client.cancel() },
                 shutdown: { await client.shutdown() },
                 fencedPrompt: { input, event, permission, interaction, fence in
@@ -167,6 +171,7 @@ struct LocalACPSessionDriver: Sendable {
                 activeInput: { input in
                     try await client.beginActiveInput(input)
                 },
+                activeInputCapability: { .piRPC },
                 cancel: {
                     try await client.stop()
                 },
@@ -226,6 +231,7 @@ struct LocalACPSessionDriver: Sendable {
                     throw LocalACPSessionDatabaseError.steeringUnsupported
                 }
             },
+            activeInputCapability: { await client.activeInputCapability() },
             cancel: {
                 try await client.cancel()
             },
@@ -524,7 +530,8 @@ public actor LocalACPSessionCoordinator {
             }
             let deliveryInput = AgentMessageInput(
                 text: deliveryContent ?? input.text,
-                attachments: input.attachments
+                attachments: input.attachments,
+                historyDeliveryID: input.historyDeliveryID
             )
             publishChange(
                 conversationID: conversationID,
@@ -976,6 +983,18 @@ public actor LocalACPSessionCoordinator {
         )
     }
 
+    public func activeInputCapability(conversationID: String) async -> LocalACPActiveInputRoute? {
+        guard let active = activeSessions[conversationID] else { return nil }
+        return await active.client.activeInputCapability()
+    }
+
+    public func cancel(conversationID: String, expectedRunID: String) async throws {
+        guard runIDsByConversation[conversationID] == expectedRunID else {
+            throw LocalACPSessionDatabaseError.runNotFound
+        }
+        try await stop(conversationID: conversationID)
+    }
+
     public func cancel(conversationID: String) async {
         try? await stop(conversationID: conversationID)
     }
@@ -1048,6 +1067,7 @@ public actor LocalACPSessionCoordinator {
         conversationID: String,
         input: AgentMessageInput,
         deliveryContent: String? = nil,
+        expectedRunID: String? = nil,
         dispatchFence: AgentDispatchFence? = nil
     ) async throws -> LocalACPSteeringIdentifiers {
         let operationFence = dispatchFence ?? AgentDispatchFence()
@@ -1066,6 +1086,9 @@ public actor LocalACPSessionCoordinator {
         }
         await acquireSteeringLock(conversationID: conversationID)
         defer { releaseSteeringLock(conversationID: conversationID) }
+        if let expectedRunID, runIDsByConversation[conversationID] != expectedRunID {
+            throw LocalACPSessionDatabaseError.runNotFound
+        }
         try Task.checkCancellation()
         try operationFence.check()
         guard let runID = runIDsByConversation[conversationID],

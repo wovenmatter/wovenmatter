@@ -5,6 +5,7 @@ import Testing
 import WovenMatterCore
 import WovenMatterClient
 import WovenMatterDashboardStore
+@testable import WovenMatterAppFacade
 
 @MainActor
 struct WorkspaceAgentToolsServiceTests {

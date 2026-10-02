@@ -25,6 +25,10 @@ final class WovenMatterLifecycleDelegate: NSObject, NSApplicationDelegate {
         return true
     }
 
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        false
+    }
+
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard let model else { return .terminateNow }
         // The explicit handoff already flushed notes and stopped the execution
@@ -72,7 +76,7 @@ final class WovenMatterLifecycleDelegate: NSObject, NSApplicationDelegate {
         return .terminateLater
     }
     func applicationWillTerminate(_ notification: Notification) {
-        if LocalExecutionRole.current == .backend {
+        if LocalExecutionRole.current.ownsExecution {
             // The asynchronous termination barrier already flushed note drafts.
             model?.shutdownLocalACPSessions()
         }

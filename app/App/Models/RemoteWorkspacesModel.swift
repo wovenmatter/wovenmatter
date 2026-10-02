@@ -152,6 +152,22 @@ final class RemoteWorkspacesModel {
         load()
     }
 
+    #if COMPANION_FACADE_TESTS
+    private var companionFixtureWorkspaceIDs: Set<UUID> = []
+    func configureCompanionFixture(_ configuration: RemoteWorkspaceConfiguration,
+                                   status: RemoteWorkspaceStatus, harnesses: [RemoteHarnessStatus],
+                                   maintenance: [RemoteRuntimeMaintenance]) {
+        // Captured readiness only: no credential authorization, clients or tunnels.
+        companionFixtureWorkspaceIDs.insert(configuration.id)
+        isCredentialAccessEnabled = true
+        workspaces = [configuration]
+        statuses = [configuration.id: status]
+        self.harnesses = [configuration.id: harnesses]
+        runtimeMaintenance = [configuration.id: maintenance]
+        workspaceRoots[configuration.id] = "/fixture/workspace"
+    }
+    #endif
+
     func enableCredentialAccess() {
         if forwardToBackend(.enableCredentialAccess) { return }
         guard !isCredentialAccessEnabled else { return }
@@ -1274,6 +1290,9 @@ final class RemoteWorkspacesModel {
         try await pending.task.value
     }
     func ensureDefaultAgent(_ configuration: RemoteWorkspaceConfiguration) async throws {
+        #if COMPANION_FACADE_TESTS
+        if companionFixtureWorkspaceIDs.contains(configuration.id) { return }
+        #endif
         let identity = try requestIdentity(configuration)
         let payload = try await ProviderAccountCoordinator.shared.prepare(configuration.id.uuidString.lowercased())
         try requireCurrent(identity)

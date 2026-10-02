@@ -194,7 +194,7 @@ struct WorkspaceAgentToolTests {
   @Test func editBatchesCannotExceedDocumentLimitsBetweenOperations() async throws {
     let document = NoteDocument(blocks: [.richText(.init(id: "left")), .richText(.init(id: "right"))])
     var left = NoteTableBlock(rows: 100, columns: 100); left.id = "left"
-    var right = left; right.id = "right"
+    var right = NoteTableBlock(rows: 100, columns: 100); right.id = "right"
     let operations: [NoteEditOperation] = [.replaceBlock(id: "left", block: .table(left)),
       .replaceBlock(id: "right", block: .table(right)), .deleteBlock(id: "right")]
     #expect(throws: RemoteNoteEditError.operationTooLarge) {

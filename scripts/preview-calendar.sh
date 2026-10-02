@@ -8,10 +8,10 @@ swift build --package-path "$repo_root/app" --scratch-path "$cache_root/SwiftPM"
 build_dir="$(swift build --package-path "$repo_root/app" --scratch-path "$cache_root/SwiftPM" --show-bin-path)"
 if [ -f "$build_dir/WovenMatterCore.o" ]; then
   module_dir="$build_dir"
-  objects=("$build_dir/WovenMatterCore.o" "$build_dir/WovenMatterClient.o" "$build_dir/WovenMatterDashboardStore.o")
+  objects=("$build_dir/WovenMatterCompanion.o" "$build_dir/WovenMatterCore.o" "$build_dir/WovenMatterClient.o" "$build_dir/WovenMatterDashboardStore.o")
 else
   module_dir="$build_dir/Modules"
-  objects=("$build_dir"/WovenMatterCore.build/*.swift.o "$build_dir"/WovenMatterClient.build/*.swift.o "$build_dir"/WovenMatterDashboardStore.build/*.swift.o)
+  objects=("$build_dir"/WovenMatterCompanion.build/*.swift.o "$build_dir"/WovenMatterCore.build/*.swift.o "$build_dir"/WovenMatterClient.build/*.swift.o "$build_dir"/WovenMatterDashboardStore.build/*.swift.o)
 fi
 app_path="$cache_root/CalendarPreview.app"
 mkdir -p "$app_path/Contents/MacOS" "$app_path/Contents/Resources/harnesses"
