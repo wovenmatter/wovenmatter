@@ -63,13 +63,6 @@ struct ExecutorConnectionsCard: View {
     }
     var body: some View {
         SettingsCard(title: "Executor", detail: "One connection shared by every agent through the Woven Matter CLI, powered by Executor.\nSet app-access defaults globally and adjust access within each conversation between turns.") {
-            VStack(alignment: .leading, spacing: 4) {
-                Link("Learn more about Executor ↗", destination: URL(string: "https://executor.sh")!)
-                    .font(.system(size: 12.5))
-                Text("Copyright 2026 Rhys Sullivan.")
-                    .font(.system(size: 12))
-                    .foregroundStyle(DashboardPalette.mutedForeground)
-            }
             if tools.settings.executor == nil || editing {
                 Picker("Run Executor", selection: $draft.location) {
                     Text("On this Mac").tag(ExecutorConfiguration.Location.local)
@@ -134,6 +127,13 @@ struct ExecutorConnectionsCard: View {
             }
             if preparing { HStack { ProgressView().controlSize(.small); Text("Preparing Executor…") }.font(.callout) }
             if let error = error ?? tools.settings.executorSetup?.error { SettingsError(error) }
+            VStack(alignment: .leading, spacing: 4) {
+                Link("Learn more about Executor ↗", destination: URL(string: "https://executor.sh")!)
+                    .font(.system(size: 12.5))
+                Text("Copyright 2026 Rhys Sullivan.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(DashboardPalette.mutedForeground)
+            }
         }
         .task { if let config = tools.settings.executorSetup?.configuration ?? tools.settings.executor { draft = config }; model.remoteWorkspaces.discoverMachines() }
         .confirmationDialog("Prepare this Linux host for Executor?", isPresented: Binding(get: { preparation != nil }, set: { if !$0 { preparation = nil } }), titleVisibility: .visible) {
