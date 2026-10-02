@@ -38,11 +38,13 @@ struct SettingsConnectionsView: View {
                 Text("Dictation and app-wide Usage use the shared accounts. Workspace overrides apply to Built-in.").font(.callout).foregroundStyle(.secondary)
             }
             connectionsSection
+                .disclosureGroupStyle(SettingsDisclosureGroupStyle())
                 .transaction { transaction in
                     transaction.animation = nil
                     transaction.disablesAnimations = true
                 }
             searchSection
+                .disclosureGroupStyle(SettingsDisclosureGroupStyle())
                 .transaction { transaction in
                     transaction.animation = nil
                     transaction.disablesAnimations = true

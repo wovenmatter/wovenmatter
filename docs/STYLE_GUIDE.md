@@ -24,11 +24,15 @@ when an intentional design change is accepted.
   [SettingsComponents.swift](../app/App/Views/SettingsComponents.swift).
   Preserve intentional differences such as borderless Usage sections.
 - **Built-in SDK settings:** place SDK management directly below the workspace
-  scope controls. Each workspace has a disclosure row, collapsed by default,
-  containing Pi SDK and Claude SDK versions and explicit check/update actions.
+  scope controls. The local workspace uses a fixed heading with Pi SDK and Claude
+  SDK versions and explicit check/update actions always visible. Remote workspaces
+  use full-width disclosure buttons, collapsed by default, for the same controls.
   All workspaces lists the local location and configured remote workspaces; an
   individual scope shows only that location. Keep progress and errors with their
-  workspace and preserve operation state when a row is collapsed.
+  workspace and preserve operation state when a remote row is collapsed.
+- **Settings disclosures:** use `SettingsDisclosureGroupStyle` on Connections
+  sections so the chevron, label, and remaining header width all toggle expansion.
+  Apply the same style to nested provider, credential, and account disclosures.
 - **Icons:** use the existing `DashboardLucideIcon` glyphs and bundled harness
   logos, matching nearby icon sizes and stroke weights.
 - **Calendar:** keep the four-item legend below the selected-day list. Use the
