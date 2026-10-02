@@ -74,13 +74,14 @@ struct ExecutorConnectionsCard: View {
                             ForEach(model.remoteWorkspaces.machineCandidates) { machine in
                                 Button(machine.displayName) {
                                     draft.host = machine.hostName
-                                    draft.origin = "https://\(machine.hostName):8443"
+                                    draft.origin = "https://\(machine.dnsName ?? machine.hostName):8443"
                                 }
                             }
                             ForEach(model.remoteWorkspaces.workspaces) { workspace in
                                 Button(workspace.name) {
                                     draft.host = workspace.hostName; draft.user = workspace.userName ?? ""
-                                    draft.origin = "https://\(workspace.hostName):8443"
+                                    let machine = model.remoteWorkspaces.machineCandidates.first { $0.hostName == workspace.hostName || $0.dnsName == workspace.hostName }
+                                    draft.origin = "https://\(machine?.dnsName ?? workspace.hostName):8443"
                                 }
                             }
                         }

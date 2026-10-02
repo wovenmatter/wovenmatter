@@ -25,13 +25,16 @@ public struct RemoteMachineCandidate: Codable, Equatable, Identifiable, Sendable
     public let hostName: String
     public let displayName: String
     public let online: Bool
+    /// Preserve the SSH alias separately from the DNS name required for HTTPS.
+    public let dnsName: String?
 
     public var id: String { hostName }
 
-    public init(hostName: String, displayName: String, online: Bool) {
+    public init(hostName: String, displayName: String, online: Bool, dnsName: String? = nil) {
         self.hostName = hostName
         self.displayName = displayName
         self.online = online
+        self.dnsName = dnsName
     }
 }
 
@@ -443,7 +446,8 @@ public enum RemoteMachineDiscovery {
             return RemoteMachineCandidate(
                 hostName: hostName,
                 displayName: preferredName ?? hostName,
-                online: peer["Online"] as? Bool ?? false
+                online: peer["Online"] as? Bool ?? false,
+                dnsName: dnsName
             )
         }.sorted {
             $0.displayName.localizedCaseInsensitiveCompare($1.displayName)

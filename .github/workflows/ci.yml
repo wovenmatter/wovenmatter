@@ -99,8 +99,12 @@ jobs:
         run: |
           docker run --rm --entrypoint bash wovenmatter-executor:ci -ec '
             test -s /etc/ssl/certs/ca-certificates.crt
-            find /opt/executor -type f -path "*/git/bin/git" -exec {} --version \;
-            find /opt/executor -type f -path "*/workerd/bin/workerd" -exec {} --version \;
+            wm_helpers=0
+            while IFS= read -r -d "" wm_helper; do
+              "$wm_helper" --version
+              wm_helpers=$((wm_helpers+1))
+            done < <(find /opt/executor -type f \( -path "*/git/bin/git" -o -path "*/bin/workerd" \) -print0)
+            test "$wm_helpers" -ge 2
           '
       - name: Verify unchanged Executor scopes, approvals and cancellation in Linux
         run: |
