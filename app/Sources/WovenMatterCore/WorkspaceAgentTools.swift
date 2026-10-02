@@ -1,7 +1,7 @@
 import Foundation
 
 public enum WorkspaceToolGroup: String, CaseIterable, Codable, Identifiable, Sendable {
-  case notes, history, sessions, timers, usage, calendar, library
+  case notes, history, sessions, timers, usage, calendar, library, executor
   public var id: String { rawValue }
   public var title: String {
     switch self {
@@ -12,6 +12,7 @@ public enum WorkspaceToolGroup: String, CaseIterable, Codable, Identifiable, Sen
     case .usage: "Usage data"
     case .calendar: "Calendar"
     case .library: "Library"
+    case .executor: "Executor"
     }
   }
 }
@@ -25,15 +26,34 @@ public struct WorkspaceToolSettings: Codable, Equatable, Sendable {
   public var enabledByDefault: Set<WorkspaceToolGroup>
   public var calendarAccess: WorkspaceCalendarAccess
   public var maximumManagedSessions: Int
+  public var executorSetup: ExecutorSetupState?
+  public var executor: ExecutorConfiguration?
   public var maximumRunningSessions: Int
 
-  public init(enabledByDefault: Set<WorkspaceToolGroup> = Set(WorkspaceToolGroup.allCases),
+  public init(enabledByDefault: Set<WorkspaceToolGroup> = Set(WorkspaceToolGroup.allCases.filter { $0 != .executor }),
               calendarAccess: WorkspaceCalendarAccess = .full,
               maximumManagedSessions: Int = 4, maximumRunningSessions: Int = 16) {
     self.enabledByDefault = enabledByDefault
     self.calendarAccess = calendarAccess
     self.maximumManagedSessions = maximumManagedSessions
     self.maximumRunningSessions = maximumRunningSessions
+  }
+
+  public func applyingChanges(from base: Self, to edited: Self) -> Self {
+    var result = self
+    result.enabledByDefault.formUnion(edited.enabledByDefault.subtracting(base.enabledByDefault))
+    result.enabledByDefault.subtract(base.enabledByDefault.subtracting(edited.enabledByDefault))
+    if base.calendarAccess != edited.calendarAccess { result.calendarAccess = edited.calendarAccess }
+    if base.maximumManagedSessions != edited.maximumManagedSessions { result.maximumManagedSessions = edited.maximumManagedSessions }
+    if base.maximumRunningSessions != edited.maximumRunningSessions { result.maximumRunningSessions = edited.maximumRunningSessions }
+    if let old = base.executor, let change = edited.executor, let current = executor,
+       old.id == change.id, change.id == current.id, old.defaultProfiles != change.defaultProfiles {
+      var selection = current.defaultProfiles.union(change.defaultProfiles.subtracting(old.defaultProfiles))
+      selection.subtract(old.defaultProfiles.subtracting(change.defaultProfiles))
+      result.executor?.defaultProfiles = selection.intersection(Set(current.apps.map(\.id)))
+    }
+    // Setup, inventory and connection identity belong to the manager.
+    return result
   }
 
   public func validate() throws {
@@ -44,21 +64,27 @@ public struct WorkspaceToolSettings: Codable, Equatable, Sendable {
 }
 
 public struct WorkspaceSessionTools: Codable, Equatable, Sendable {
+  public var executorProfiles: Set<String>?
   public var enabled: Set<WorkspaceToolGroup>
-  public init(enabled: Set<WorkspaceToolGroup> = Set(WorkspaceToolGroup.allCases)) {
+  public init(enabled: Set<WorkspaceToolGroup> = Set(WorkspaceToolGroup.allCases.filter { $0 != .executor }), executorProfiles: Set<String>? = nil) {
+    self.executorProfiles = executorProfiles
     self.enabled = enabled
   }
 
-  private enum CodingKeys: String, CodingKey { case enabled }
+  public static func == (lhs: Self, rhs: Self) -> Bool {
+    lhs.enabled == rhs.enabled && (lhs.executorProfiles ?? []) == (rhs.executorProfiles ?? [])
+  }
+  private enum CodingKeys: String, CodingKey { case enabled, executorProfiles }
   public func encode(to encoder: any Encoder) throws {
     var container = encoder.container(keyedBy: CodingKeys.self)
+    try container.encodeIfPresent(executorProfiles?.sorted(), forKey: .executorProfiles)
     try container.encode(enabled.sorted { $0.rawValue < $1.rawValue }, forKey: .enabled)
   }
 
   public init(identifiers: [String]) throws {
     let groups = identifiers.compactMap(WorkspaceToolGroup.init(rawValue:))
     guard groups.count == identifiers.count else {
-      throw WorkspaceToolError.invalid("Unknown tool group. Use notes, history, sessions, timers, usage, calendar, or library.")
+      throw WorkspaceToolError.invalid("Unknown tool group. Use notes, history, sessions, timers, usage, calendar, library, or executor.")
     }
     self.enabled = Set(groups)
   }

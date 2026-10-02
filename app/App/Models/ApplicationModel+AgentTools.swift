@@ -418,7 +418,10 @@ extension ApplicationModel {
         let resolved = explicit.overlaying(sessionSelectionPreferences.defaults(harness: runtime.rawValue, workspace: scope))
         let tools: WorkspaceSessionTools
         if let identifiers = resolved.tools { tools = try WorkspaceSessionTools(identifiers: identifiers) }
-        else { tools = try await WorkspaceSessionTools(enabled: store.database.toolSettings().enabledByDefault) }
+        else {
+            let settings = try await store.database.toolSettings()
+            tools = WorkspaceSessionTools(enabled: settings.enabledByDefault, executorProfiles: settings.executor?.defaultProfiles ?? [])
+        }
         return .init(runtimeKind: runtime, workspaceID: workspaceID, folderID: command.options["folder"] ?? source.folderID,
             title: title, model: resolved.model, thinking: resolved.thinking,
             permission: runtime == .pi ? nil : resolved.permission, selectionWorkspace: scope,

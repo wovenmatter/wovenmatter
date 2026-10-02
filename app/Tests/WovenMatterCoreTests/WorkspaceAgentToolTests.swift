@@ -410,13 +410,13 @@ struct WorkspaceAgentToolTests {
     defer { try? FileManager.default.removeItem(at: directory) }
     let store = try await DashboardStore(supportDirectory: directory)
     let session = try await store.database.createLocalACPSession(runtimeKind: .codex, title: "Fresh app", ownerDeviceID: UUID())
-    #expect(try await store.database.toolSettings().enabledByDefault == Set(WorkspaceToolGroup.allCases))
+    #expect(try await store.database.toolSettings().enabledByDefault == Set(WorkspaceToolGroup.allCases.filter { $0 != .executor }))
     let run = try await store.database.beginLocalACPRun(conversationID: session, content: "Retained input")
     try await store.database.completeLocalACPRun(runID: run.runID)
     await store.shutdownLocalACPSessions()
     let reopened = try await DashboardStore(supportDirectory: directory)
     #expect(try await reopened.database.conversationContent(id: session).messages.first?.content == "Retained input")
-    #expect(try await reopened.database.sessionTools(session).enabled == Set(WorkspaceToolGroup.allCases))
+    #expect(try await reopened.database.sessionTools(session).enabled == Set(WorkspaceToolGroup.allCases.filter { $0 != .executor }))
     await reopened.shutdownLocalACPSessions()
   }
 

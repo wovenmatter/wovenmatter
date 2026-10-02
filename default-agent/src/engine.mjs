@@ -1,6 +1,6 @@
 import { mkdir, readdir, realpath, stat, writeFile } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
-import { createAgentSession, createCodingTools, DefaultResourceLoader, ModelRuntime, SessionManager, SettingsManager } from '@earendil-works/pi-coding-agent';
+import { createAgentSession, createCodingTools, createCodemodeExtension, DefaultResourceLoader, ModelRuntime, SessionManager, SettingsManager } from '@earendil-works/pi-coding-agent';
 import { Credentials } from './credentials.mjs';
 import { accessFailure, DefaultAgentError, emptyConfig, modelRef, providerNames, providers, validateConfig } from './config.mjs';
 import { searchTools } from './search.mjs';
@@ -106,6 +106,10 @@ export class DefaultAgentEngine {
     return ids.flatMap(id => all.filter(m => m.id === id));
   }
   normalizeSelection(record) {
+    if (record.codeModeState) {
+      record.codeModeState.value = this.config.codeMode;
+      record.session.setActiveToolsByName([...record.ordinaryTools, ...(this.config.codeMode === 'off' ? [] : ['codemode'])]);
+    }
     const visible = this.modelOptions();
     if (!visible.some(m => m.id === record.selected)) {
       record.selected = visible[0]?.id;
@@ -191,20 +195,32 @@ export class DefaultAgentEngine {
     const visible = this.modelOptions();
     const selected = [options.selected, saved ? `${saved.provider}/${saved.modelId}` : null, this.config.defaultModel].find(id => visible.some(m => m.id === id)) ?? visible[0]?.id;
     const model = this.resolveModel(selected);
+    const codeModeState = { value: this.config.codeMode };
     const settingsManager = SettingsManager.inMemory({ retry: { enabled: false }, compaction: { enabled: true } });
     const loader = new DefaultResourceLoader({ cwd, agentDir: this.directory, settingsManager,
       noExtensions: true, noThemes: true,
+      extensionFactories: [pi => {
+        const mode = createCodemodeExtension({ models: false });
+        const register = pi.registerTool.bind(pi);
+        mode(new Proxy(pi, { get: (target, key) => key === 'registerTool' ? tool => register({ ...tool,
+          // The factory reads mode through getSettings on each presentation.
+          execute: (...args) => {
+            if (codeModeState.value === 'off') throw new Error('Code mode is disabled.');
+            return tool.execute(...args);
+          } }) : key === 'getSettings' ? () => ({ ...pi.getSettings(), codemode: { mode: codeModeState.value === 'only' ? 'only' : 'on' } }) : Reflect.get(target, key) }));
+      }],
       appendSystemPrompt: [builtInInstructions] });
     await loader.reload();
-    const record = { manager, cwd, selected, busy: false, permission: options.permission ?? 'normal' };
+    const record = { codeModeState, manager, cwd, selected, busy: false, permission: options.permission ?? 'normal', ordinaryTools: ['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls', 'web_search', 'web_read'] };
     const guardedTools = createCodingTools(cwd).map(tool => ({ ...tool, label: tool.label ?? tool.name,
       execute: async (id, input, signal, onUpdate) => {
         if (['bash', 'write', 'edit'].includes(tool.name) && !await this.approve(record, tool.name, input, signal, id)) throw new Error('The user declined this tool.');
         return tool.execute(id, input, signal, onUpdate);
       } }));
     const { session } = await createAgentSession({ cwd, agentDir: this.directory, modelRuntime: this.runtime, model, thinkingLevel: options.thinking, sessionManager: manager, settingsManager, resourceLoader: loader,
-      tools: ['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls', 'web_search', 'web_read'], customTools: [...guardedTools, ...searchTools(async () => (await this.credentials.read('exa'))?.key)] });
+      tools: [...record.ordinaryTools, ...(this.config.codeMode === 'off' ? [] : ['codemode'])], customTools: [...guardedTools, ...searchTools(async () => (await this.credentials.read('exa'))?.key)] });
     record.session = session;
+    this.normalizeSelection(record);
     record.selected = model ? modelRef(model) : selected;
     const stream = session.agent.streamFunction;
     session.agent.streamFunction = (model, context, options) => stream(model, context, {

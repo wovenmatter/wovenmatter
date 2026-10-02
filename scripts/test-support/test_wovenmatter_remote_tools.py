@@ -20,6 +20,16 @@ spec.loader.exec_module(tools)
 
 
 class RemoteToolTests(unittest.TestCase):
+    def test_executor_file_is_bounded_and_read_on_the_cli_host(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            file = Path(temporary) / "program.js"
+            file.write_text("return await tools.search({query:'fixture'});")
+            request = json.loads(tools.build_request(["executor", "execute", "--file", str(file)], {}))
+            self.assertEqual(request["arguments"][:3], ["executor", "execute", "--code"])
+            self.assertNotIn("session", request)
+            file.write_bytes(b"x" * 65537)
+            with self.assertRaises(ValueError): tools.build_request(["executor", "execute", "--file", str(file)], {})
+
     def test_transport_failure_retains_the_retry_identity(self):
         identity = "10000000-0000-4000-8000-000000000002"
         with tempfile.TemporaryDirectory(prefix="wmt-", dir="/tmp") as root:

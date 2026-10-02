@@ -60,6 +60,7 @@ struct WorkspaceToolDefaultsCard: View {
 struct WorkspaceSessionToolsMenu: View {
     @Bindable var tools: WorkspaceAgentToolsModel
     let sessionID: String
+    @State private var showsExecutorApps = false
     @State private var confirmsTimerPause = false
     @State private var error: String?
 
@@ -76,16 +77,23 @@ struct WorkspaceSessionToolsMenu: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 13) {
+                if showsExecutorApps {
+                    ExecutorConversationApps(tools: tools, sessionID: sessionID) { showsExecutorApps = false }
+                } else {
                 Text("Tools").font(.system(size: 13, weight: .semibold))
                 ForEach(WorkspaceToolGroup.allCases) { group in
                     HStack(spacing: 12) {
                         Toggle(group.title, isOn: Binding(get: { tools.policy(for: sessionID).enabled.contains(group) }, set: { set(group, enabled: $0) }))
                         Spacer(minLength: 0)
+                        if group == .executor {
+                            Button { showsExecutorApps = true } label: { Label("Apps", systemImage: "chevron.right").labelStyle(.titleAndIcon) }.buttonStyle(.plain)
+                        }
                         if group == .calendar || group == .usage {
                             Text(group == .usage ? "Read only" : tools.settings.calendarAccess.title)
                                 .font(.system(size: 10.5)).foregroundStyle(DashboardPalette.mutedForeground)
                         }
                     }
+                }
                 }
                 WorkspaceSessionManagementControls(tools: tools, sessionID: sessionID)
                 if let error = error ?? tools.error { Text(error).font(.system(size: 11.5)).foregroundStyle(DashboardPalette.mutedForeground) }

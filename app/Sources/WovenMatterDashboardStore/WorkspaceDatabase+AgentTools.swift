@@ -52,6 +52,8 @@ extension WorkspaceDatabaseConnection {
         CREATE TABLE IF NOT EXISTS workspace_session_tools(
           session_id TEXT PRIMARY KEY REFERENCES dashboard_conversations(id), enabled_json TEXT NOT NULL,
           defaults_applied INTEGER NOT NULL DEFAULT 0);
+        CREATE TABLE IF NOT EXISTS workspace_executor_sessions(
+          session_id TEXT PRIMARY KEY REFERENCES dashboard_conversations(id), profiles_json TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS workspace_session_grants(
           source_id TEXT NOT NULL REFERENCES dashboard_conversations(id),
           target_id TEXT NOT NULL REFERENCES dashboard_conversations(id),
@@ -140,10 +142,14 @@ extension WorkspaceDatabaseConnection {
         INSERT OR IGNORE INTO workspace_session_tools(session_id,enabled_json,defaults_applied)
           SELECT id,(SELECT json_extract(value,'$.enabledByDefault') FROM workspace_tool_settings WHERE id=1),1
           FROM dashboard_conversations;
+        INSERT OR IGNORE INTO workspace_executor_sessions(session_id,profiles_json)
+          SELECT id,'[]' FROM dashboard_conversations;
         DROP TRIGGER IF EXISTS workspace_session_tool_defaults;
         CREATE TRIGGER workspace_session_tool_defaults AFTER INSERT ON dashboard_conversations BEGIN
           INSERT OR IGNORE INTO workspace_session_tools(session_id,enabled_json,defaults_applied)
             VALUES(new.id,(SELECT json_extract(value,'$.enabledByDefault') FROM workspace_tool_settings WHERE id=1),0);
+          INSERT OR IGNORE INTO workspace_executor_sessions(session_id,profiles_json)
+            VALUES(new.id,COALESCE((SELECT json_extract(value,'$.executor.defaultProfiles') FROM workspace_tool_settings WHERE id=1),'[]'));
         END;
         """)
     }
@@ -178,7 +184,8 @@ extension WorkspaceDatabaseConnection {
     guard let json = rows.first?.objectValue?["enabled_json"]?.stringValue else {
       throw WorkspaceToolError.invalid("Session tool settings are unavailable.")
     }
-    return WorkspaceSessionTools(enabled: try JSONDecoder().decode(Set<WorkspaceToolGroup>.self, from: Data(json.utf8)))
+    let selection = try historyRowsUnlocked("SELECT profiles_json FROM workspace_executor_sessions WHERE session_id=?", values: [id]).first?.objectValue?["profiles_json"]?.stringValue ?? "[]"
+    return WorkspaceSessionTools(enabled: try JSONDecoder().decode(Set<WorkspaceToolGroup>.self, from: Data(json.utf8)), executorProfiles: try JSONDecoder().decode(Set<String>.self, from: Data(selection.utf8)))
   }
 
   /// Called by the user's controls, never exposed as an agent command.
@@ -212,6 +219,9 @@ extension WorkspaceDatabaseConnection {
       // Approved access lasts for a management assignment; attachments are independent.
       try toolsExecuteUnlocked("DELETE FROM workspace_session_grants WHERE source_id=? AND kind='approved'", [sessionID])
     }
+    if let profiles = tools.executorProfiles {
+      try toolsExecuteUnlocked("UPDATE workspace_executor_sessions SET profiles_json=? WHERE session_id=?", [try toolsJSON(profiles), sessionID])
+    }
     try toolsExecuteUnlocked("UPDATE workspace_session_tools SET enabled_json=?,defaults_applied=1 WHERE session_id=?", [try toolsJSON(tools.enabled), sessionID])
   }
 
@@ -222,6 +232,9 @@ extension WorkspaceDatabaseConnection {
       try requireToolSessionUnlocked(sessionID)
       let row = try historyRowsUnlocked("SELECT defaults_applied FROM workspace_session_tools WHERE session_id=?", values: [sessionID]).first
       guard row?.objectValue?["defaults_applied"]?.intValue == 0 else { return }
+      if let profiles = tools.executorProfiles {
+        try toolsExecuteUnlocked("UPDATE workspace_executor_sessions SET profiles_json=? WHERE session_id=?", [try toolsJSON(profiles), sessionID])
+      }
       try toolsExecuteUnlocked("UPDATE workspace_session_tools SET enabled_json=?,defaults_applied=1 WHERE session_id=?", [try toolsJSON(tools.enabled), sessionID])
     }
   }
@@ -581,6 +594,35 @@ public struct WorkspaceToolStateSnapshot: Sendable {
   public let timers: [WorkspaceSessionTimer]
   public let policies: [String: WorkspaceSessionTools]
   public let receipts: [String: [WorkspaceSessionDelivery]]
+}
+
+extension WorkspaceDatabase {
+  public func saveToolSettings(_ settings: WorkspaceToolSettings, from base: WorkspaceToolSettings) async throws {
+    try await write { connection in
+      let current = try connection.toolSettings()
+      try connection.saveToolSettings(current.applyingChanges(from: base, to: settings))
+    }
+  }
+  public func updateExecutor(configuration: ExecutorConfiguration? = nil, apps: [ExecutorAppProfile]? = nil,
+                             setup: ExecutorSetupState? = nil, clearSetup: Bool = false) async throws {
+    try await write { connection in
+      var value = try connection.toolSettings()
+      if var configuration {
+        if let current = value.executor, current.id == configuration.id {
+          configuration.defaultProfiles = current.defaultProfiles
+          configuration.apps = current.apps
+        }
+        value.executor = configuration
+      }
+      if let apps {
+        value.executor?.apps = apps
+        value.executor?.defaultProfiles.formIntersection(Set(apps.map(\.id)))
+      }
+      if let setup { value.executorSetup = setup }
+      if clearSetup { value.executorSetup = nil }
+      try connection.saveToolSettings(value)
+    }
+  }
 }
 
 extension WorkspaceDatabase {

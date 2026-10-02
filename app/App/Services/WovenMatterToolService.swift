@@ -28,17 +28,18 @@ enum WovenMatterCommandLine {
             // File paths belong to the CLI host. Never ask the app to open an
             // arbitrary caller-supplied path on the Mac (remote callers included).
             if let index = command.optionIndices["file"] {
-                guard command.group == .notes, ["apply", "set-html"].contains(command.action), index + 1 < args.count else {
-                    throw WorkspaceToolError.invalid("--file is supported by notes apply and notes set-html.")
+                guard ((command.group == .notes && ["apply", "set-html"].contains(command.action)) || (command.group == .executor && command.action == "execute")), index + 1 < args.count else {
+                    throw WorkspaceToolError.invalid("--file is supported by notes apply, notes set-html and executor execute.")
                 }
                 let url = URL(fileURLWithPath: args[index + 1])
                 let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
-                guard size <= 3 * 1_024 * 1_024 else { throw WovenNoteSocketError.requestTooLarge }
+                let limit = command.group == .executor ? 65_536 : 3 * 1_024 * 1_024
+                guard size <= limit else { throw WovenNoteSocketError.requestTooLarge }
                 let data = try Data(contentsOf: url)
-                guard data.count <= 3 * 1_024 * 1_024, let value = String(data: data, encoding: .utf8) else {
-                    throw WorkspaceToolError.invalid("The input file must be UTF-8 and at most 3 MiB.")
+                guard data.count <= limit, let value = String(data: data, encoding: .utf8) else {
+                    throw WorkspaceToolError.invalid("The input file must be UTF-8 and within the command size limit.")
                 }
-                args.replaceSubrange(index...index + 1, with: [command.action == "set-html" ? "--html" : "--json", value])
+                args.replaceSubrange(index...index + 1, with: [command.group == .executor ? "--code" : command.action == "set-html" ? "--html" : "--json", value])
             }
             if command.group == .notes, command.options["note-id"] == nil, let noteID = environment["WOVENMATTER_NOTE_ID"],
                !(command.action == "read" && !command.positional.isEmpty),

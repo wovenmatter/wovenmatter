@@ -4,7 +4,7 @@ import { localServers } from './local-servers.mjs';
 
 export const providers = ['openai-codex', 'openai', 'openrouter', 'opencode-go', 'xai', 'xai-api', 'claude-subscription', 'anthropic'];
 export const providerNames = { 'openai-codex': 'OpenAI · ChatGPT subscription', openai: 'OpenAI · API key', openrouter: 'OpenRouter', 'opencode-go': 'OpenCode Go', xai: 'Grok subscription', 'xai-api': 'xAI · API key', 'claude-subscription': 'Claude · Subscription', anthropic: 'Claude · API key' };
-export const emptyConfig = { providers, models: [], defaultModel: null, fallbackModels: [], searchProvider: 'exa' };
+export const emptyConfig = { providers, models: [], defaultModel: null, fallbackModels: [], searchProvider: 'exa', codeMode: 'on' };
 
 // Only app-authored messages may cross the helper boundary. SDK/provider
 // exceptions can include response bodies, URLs, or credentials.
@@ -37,7 +37,7 @@ export function validateConfig(input) {
   const supported = [...providers, ...customServers.map(s => s.id)];
   return { customServers, providers: uniqueStrings(input.providers ?? providers).filter(p => supported.includes(p)),
     models: uniqueStrings(input.models), defaultModel: typeof input.defaultModel === 'string' ? input.defaultModel : null,
-    fallbackModels: uniqueStrings(input.fallbackModels), searchProvider: 'exa' };
+    fallbackModels: uniqueStrings(input.fallbackModels), searchProvider: 'exa', codeMode: ['on', 'only', 'off'].includes(input.codeMode) ? input.codeMode : 'on' };
 }
 // Deliberately excludes generic 429s, transport failures and ambiguous permission errors.
 export function accessFailure(error) {

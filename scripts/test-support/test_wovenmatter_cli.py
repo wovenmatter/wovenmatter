@@ -63,7 +63,7 @@ class BundledCLITests(unittest.TestCase):
                 return result, captured[0]
 
     def test_help_for_all_groups_requires_no_endpoint(self):
-        for group in [None, "notes", "history", "sessions", "timers", "usage", "calendar", "library"]:
+        for group in [None, "notes", "history", "sessions", "timers", "usage", "calendar", "library", "executor"]:
             result = subprocess.run([str(CLI)] + ([group, "help"] if group else ["help"]),
                 env={**os.environ, "WOVENMATTER_SOCKET": "/nonexistent/wovenmatter-test.sock"},
                 capture_output=True, text=True, timeout=10)

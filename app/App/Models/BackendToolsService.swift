@@ -8,9 +8,16 @@ extension BackendApplicationService {
         }
         do {
             switch mutation {
+            case let .executor(control):
+                let url = try await model.executeExecutorControl(control)
+                try await tools.reload()
+                await invalidations.publish(scopes: [.settings])
+                return .init(exportURL: url)
             case let .saveTimer(timer):
                 _ = try await database.saveSessionTimer(timer, callerID: timer.sessionID)
-            case let .saveSettings(value): try await database.saveToolSettings(value)
+            case let .saveSettings(value, base):
+                if let base { try await database.saveToolSettings(value, from: base) }
+                else { try await database.saveToolSettings(value) }
             case let .setEnabled(group, enabled, id, confirmed):
                 try await tools.setEnabled(group, enabled: enabled, sessionID: id, confirmedPausingTimers: confirmed)
             case let .endCoordination(id): try await database.endCoordination(targetID: id)

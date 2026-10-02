@@ -16,7 +16,7 @@ mkdir -p "$swift_scratch" "$derived_data"
 
 run_static_checks() {
   local file
-  for file in harnesses/initialize-workspace.sh remote/entrypoint.sh scripts/*.sh; do
+  for file in harnesses/initialize-workspace.sh remote/entrypoint.sh remote/executor-deploy.sh scripts/*.sh; do
     bash -n "$file"
   done
   scripts/test-release.sh
@@ -26,6 +26,7 @@ run_static_checks() {
   scripts/test-conversation-layout.sh
   scripts/test-note-editor.sh
   scripts/test-note-socket.sh
+  python3 scripts/test-support/test_executor_deployment.py
   python3 scripts/test-support/test_wovenmatter_remote_tools.py
   scripts/test-remote-workspace.sh
   for file in remote/src/*.mjs remote/test/*.test.mjs; do
