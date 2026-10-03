@@ -24,24 +24,41 @@ struct SettingsDefaultAgentSDKView: View {
         SettingsCard(title: "Agent SDKs", detail: "Running turns finish with their current SDK. Updates apply to subsequent turns.") {
             ForEach(workspaces) { workspace in
                 let state = connections.sdks.state(for: workspace.id)
-                DisclosureGroup(isExpanded: Binding(get: { expanded.contains(workspace.id) }, set: { value in
-                    if value {
-                        expanded.insert(workspace.id)
+                if workspace.remoteID == nil {
+                    VStack(alignment: .leading, spacing: 10) {
+                        workspaceLabel(workspace, state: state)
+                        workspaceContent(workspace, state: state)
+                    }
+                    .padding(.vertical, 3)
+                    .task {
                         let state = connections.sdks.state(for: workspace.id)
                         if state.status == nil && !state.busy { perform(.status, in: workspace) }
-                    } else { expanded.remove(workspace.id) }
-                })) {
-                    if expanded.contains(workspace.id) {
-                        workspaceContent(workspace, state: state).padding(.top, 10).padding(.bottom, 4)
                     }
-                } label: {
-                    HStack {
-                        Text(workspace.name).font(.callout.weight(.medium))
-                        if state.busy { ProgressView().controlSize(.mini) }
+                } else {
+                    DisclosureGroup(isExpanded: Binding(get: { expanded.contains(workspace.id) }, set: { value in
+                        if value {
+                            expanded.insert(workspace.id)
+                            let state = connections.sdks.state(for: workspace.id)
+                            if state.status == nil && !state.busy { perform(.status, in: workspace) }
+                        } else { expanded.remove(workspace.id) }
+                    })) {
+                        if expanded.contains(workspace.id) {
+                            workspaceContent(workspace, state: state).padding(.top, 10).padding(.bottom, 4)
+                        }
+                    } label: {
+                        workspaceLabel(workspace, state: state)
                     }
+                    .disclosureGroupStyle(SettingsDisclosureGroupStyle())
+                    .padding(.vertical, 3)
                 }
-                .padding(.vertical, 3)
             }
+        }
+    }
+
+    private func workspaceLabel(_ workspace: Workspace, state: DefaultAgentSDKWorkspaceState) -> some View {
+        HStack {
+            Text(workspace.name).font(.callout.weight(.medium))
+            if state.busy { ProgressView().controlSize(.mini) }
         }
     }
 
