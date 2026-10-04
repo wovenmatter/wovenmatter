@@ -193,12 +193,12 @@ struct RuntimeMaintenanceTests {
         #expect(installed.count == 1)
     }
 
-    @Test func openCodeInventorySeparatesPinnedCLIFromRegisteredServiceWithoutCopyingCredentials() async throws {
+    @Test func openCodeInventorySeparatesV2CLIFromRegisteredServiceWithoutCopyingCredentials() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let cli = root.appending(path: "opencode2")
-        try Data("#!/bin/sh\necho \(OpenCodeConnection.supportedVersion)\n".utf8).write(to: cli)
+        try Data("#!/bin/sh\necho 2.0.22\n".utf8).write(to: cli)
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: cli.path)
         let registration = root.appending(path: "service.json")
         try JSONSerialization.data(withJSONObject: ["url": "http://127.0.0.1:12345", "pid": 12345, "password": "fixture-secret", "version": "0.0.0-beta-19000"]).write(to: registration)
@@ -206,7 +206,7 @@ struct RuntimeMaintenanceTests {
             resolver: LocalACPRuntimeResolver(executableSearchDirectories: [root.path]),
             selectedOpenCode: cli, openCodeRegistration: registration)
         #expect(inventory.isInstalled)
-        #expect(inventory.components[0].installed == OpenCodeConnection.supportedVersion)
+        #expect(inventory.components[0].installed == "2.0.22")
         #expect(inventory.components[1].installed == "0.0.0-beta-19000")
         #expect(!inventory.components[1].required)
         let prompt = RuntimeMaintenance.diagnostic(inventory: inventory, kind: .opencode, attempts: 2, failure: "Verification failed")

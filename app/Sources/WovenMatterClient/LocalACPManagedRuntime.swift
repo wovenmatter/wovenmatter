@@ -529,9 +529,15 @@ public actor LocalACPRuntimeInstaller {
     }
 
     public func prepareCLIInstall(
-        _ definition: LocalACPRuntimeDefinition
+        _ definition: LocalACPRuntimeDefinition,
+        fetch: @escaping RuntimeMaintenance.Fetch = RuntimeMaintenance.fetchMetadata
     ) async throws -> LocalACPInstallerPreview {
-        if let packageSpec = definition.cliNpmPackageSpec {
+        if var packageSpec = definition.cliNpmPackageSpec {
+            if definition.runtimeKind == .opencode, packageSpec == "@opencode/cli@latest" {
+                let version = try await RuntimeMaintenance.registryVersion("@opencode/cli", fetch: fetch)
+                guard OpenCodeConnection.supportsVersion(version) else { throw OpenCodeError.incompatible(version) }
+                packageSpec = "@opencode/cli@" + version
+            }
             guard Self.isExactPackageSpec(packageSpec) else {
                 throw LocalACPRuntimeInstallError.unpinnedPackage
             }
@@ -586,7 +592,14 @@ public actor LocalACPRuntimeInstaller {
         expectedSourceSHA256: String?,
         expectedPackageSpec: String?
     ) async throws -> URL {
-        if let packageSpec = definition.cliNpmPackageSpec {
+        if var packageSpec = definition.cliNpmPackageSpec {
+            if definition.runtimeKind == .opencode, packageSpec == "@opencode/cli@latest" {
+                guard let expectedPackageSpec, expectedPackageSpec.hasPrefix("@opencode/cli@"),
+                      OpenCodeConnection.supportsVersion(String(expectedPackageSpec.dropFirst("@opencode/cli@".count))) else {
+                    throw LocalACPRuntimeInstallError.confirmationRequired
+                }
+                packageSpec = expectedPackageSpec
+            }
             guard Self.isExactPackageSpec(packageSpec) else {
                 throw LocalACPRuntimeInstallError.unpinnedPackage
             }

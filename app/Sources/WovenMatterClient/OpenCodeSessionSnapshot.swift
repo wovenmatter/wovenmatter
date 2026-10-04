@@ -182,7 +182,7 @@ public enum OpenCodeFormAnswers {
         for field in activeFields(fields, answers: answers) {
             let key = field["key"].text
             let title = field["title"].string ?? key
-            var value = answers[key] ?? field["default"]
+            var value = field["hidden"].bool ? field["default"] : answers[key] ?? field["default"]
             if field["type"].text == "external" {
                 guard value == .bool(true) else { throw OpenCodeError.message("Complete and confirm \(title).") }
             } else if field["type"].text == "boolean", value.isNull {
@@ -220,7 +220,7 @@ public enum OpenCodeFormAnswers {
             }
             if visible {
                 let key = field["key"].text
-                var value = answers[key] ?? field["default"]
+                var value = field["hidden"].bool ? field["default"] : answers[key] ?? field["default"]
                 if value.isNull, field["type"].text == "boolean" { value = .bool(false) }
                 if ["number", "integer"].contains(field["type"].text), let text = value.string {
                     if let number = Double(text), number.isFinite { value = .number(number) }

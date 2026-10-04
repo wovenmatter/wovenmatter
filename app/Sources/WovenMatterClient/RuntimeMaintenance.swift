@@ -53,7 +53,7 @@ public enum RuntimeMaintenance {
         let definition = kind == .opencode ? OpenCodeServiceLauncher.installDefinition : LocalACPRuntimeCatalog.definition(for: kind)!
         let resolution = resolver.resolve(runtimeKind: kind)
         let executable = kind == .opencode
-            ? selectedOpenCode ?? resolver.executable(named: "opencode2")
+            ? selectedOpenCode ?? OpenCodeServiceLauncher.resolveExecutable(resolver: resolver, probe: probe)
             : resolution.availability.executablePath.map { URL(fileURLWithPath: $0) }
                 ?? definition.commandNames.compactMap { resolver.executable(named: $0) }.first
         var components: [RuntimeComponent] = []
@@ -64,7 +64,7 @@ public enum RuntimeMaintenance {
             installed.map { !version($0, precedes: minimum) } ?? false
         } ?? true
         components.append(RuntimeComponent(name: definition.commandName, executable: executable,
-            installed: installed, latest: latest, package: package, required: true, present: executable != nil, verified: installed != nil && minimumSatisfied && (kind != .opencode || installed == OpenCodeConnection.supportedVersion)))
+            installed: installed, latest: latest, package: package, required: true, present: executable != nil, verified: installed != nil && minimumSatisfied && (kind != .opencode || installed.map(OpenCodeConnection.supportsVersion) == true)))
         if kind == .opencode {
             // Registration is a declaration, not proof that a service is live.
             // Enable/connect still verifies authenticated health and process identity.
@@ -124,7 +124,7 @@ public enum RuntimeMaintenance {
         case .claudeCode: ProcessInfo.processInfo.environment["CLAUDE_CODE_EXECUTABLE"]?.isEmpty == false
             ? "Chat has an inherited Claude executable override; its version is reported separately."
             : "Chat uses the adapter’s bundled Claude SDK."
-        case .opencode: "Service compatibility is pinned to \(OpenCodeConnection.supportedVersion). Newer releases require app support; the running service is not restarted."
+        case .opencode: "OpenCode v2 releases can be updated independently. The running service is not restarted."
         case .openclaw: "Local CLI only. Linked gateways and their provider runtimes are managed on the gateway host."
         case .hermes: "Native Gateway; updates require idle Hermes services."
         default: nil
@@ -260,8 +260,7 @@ public enum RuntimeMaintenance {
 
     static func latestVersion(kind: AgentRuntimeKind, package: String?, fetch: Fetch) async -> String? {
         if kind == .opencode {
-            // `latest` is a reserved placeholder, not the v2 prerelease channel.
-            return try? await registryVersion("@opencode/cli", tag: OpenCodeConnection.supportedVersion, fetch: fetch)
+            return try? await registryVersion("@opencode/cli", fetch: fetch)
         }
         if let package { return try? await registryVersion(package, fetch: fetch) }
         do {

@@ -3,7 +3,7 @@ import { createInterface } from 'node:readline'
 import { readFile } from 'node:fs/promises'
 import { resolve, isAbsolute } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { supportedOpenCodeVersion } from './workspace-instances.mjs'
+import { supportsOpenCodeVersion } from './opencode-compatibility.mjs'
 
 const before = text => Object.assign(new Error(text), { beforePrompt: true })
 const approval = () => Object.assign(new Error('This task needs approval. Open its session to continue.'), { needsApproval: true })
@@ -177,8 +177,8 @@ async function runOpenCode({run,config,cwd,instances,read,fetchRequest,nativeSes
     if(origin.protocol!=='http:'||!['127.0.0.1','localhost','[::1]'].includes(origin.hostname)||origin.username||origin.password||origin.pathname!=='/'||origin.search||origin.hash||typeof registration.password!=='string'||!registration.password)throw before('OpenCode service registration is unavailable.')
     const headers={authorization:`Basic ${Buffer.from('opencode:'+registration.password).toString('base64')}`,'content-type':'application/json'}
     call=async(method,path,body,ignoreAbort=false)=>{const result=await fetchRequest(new URL(path,origin),{method,headers,body:body==null?undefined:JSON.stringify(body),redirect:'error',signal:ignoreAbort?AbortSignal.timeout(5000):AbortSignal.any([signal,AbortSignal.timeout(30000)])});if(!result.ok)throw new Error('OpenCode could not complete the task operation.');if(result.status===204)return {};return result.json()}
-    const health=await call('GET','/api/health')
-    if(health.pid!==registration.pid||health.version!==supportedOpenCodeVersion||health.healthy!==true)throw before('OpenCode service identity changed.')
+    const health=await call('GET','/api/info')
+    if(health.pid!==registration.pid||!supportsOpenCodeVersion(health.version)||(registration.version&&health.version!==registration.version))throw before('OpenCode service identity changed.')
     sessionID??='ses_'+randomUUID().replaceAll('-','')
     let session=(await call(nativeSessionID?'GET':'POST',nativeSessionID?`/api/session/${encodeURIComponent(sessionID)}`:'/api/session',nativeSessionID?undefined:{id:sessionID,title:run.title,location:{directory:cwd,...(config.nativeWorkspaceID?{workspaceID:config.nativeWorkspaceID}:{})},metadata:{wovenmatter:{origin:'created'}}})).data
     if(session?.id!==sessionID)throw before('OpenCode did not confirm the recurring session identity.')

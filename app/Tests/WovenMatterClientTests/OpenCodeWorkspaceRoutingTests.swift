@@ -10,7 +10,7 @@ struct OpenCodeWorkspaceRoutingTests {
         let second = try OpenCodeConnection(identity: "remote-workspace:" + secondID.uuidString.lowercased(),
             url: URL(string: "http://127.0.0.1:32102")!, password: "", servicePathPrefix: "/v1/workspace-instances/opencode", bearerToken: "second-fixture-token")
         let requestA = try OpenCodeHTTPClient(connection: first).request("POST", "/api/session/ses_a/prompt", body: ["text": "fixture"])
-        let requestB = try OpenCodeHTTPClient(connection: second).request("GET", "/api/health")
+        let requestB = try OpenCodeHTTPClient(connection: second).request("GET", "/api/info")
         #expect(requestA.url?.absoluteString == "http://127.0.0.1:32101/v1/workspace-instances/opencode/api/session/ses_a/prompt")
         #expect(requestB.url?.port == 32102)
         #expect(requestA.value(forHTTPHeaderField: "Authorization") == "Bearer first-fixture-token")

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import { PassThrough, Writable } from 'node:stream'
 import { createNativeTaskExecutor } from '../src/task-gateway-native.mjs'
-import { supportedOpenCodeVersion } from '../src/workspace-instances.mjs'
+const fixtureVersion = '2.0.22'
 
 const base = runtimeKind => ({run:{id:'run-1',title:'Fixture',task:{prompt:'fixture only',configuration:{runtimeKind,tools:{}}}},nativeSessionID:null,signal:new AbortController().signal,publish:()=>{},bindSession:()=>{}})
 const options = {workspaceRoot:'/workspace',environment:()=>({HOME:'/home'})}
@@ -35,7 +35,7 @@ test('OpenCode preserves existing session, checks selection and projects complet
   const fetchRequest=async(url,request)=>{
     calls.push([request.method,url.pathname]);assert.equal(request.headers.authorization,'Basic '+Buffer.from('opencode:fixture').toString('base64'))
     let data={}
-    if(url.pathname==='/api/health')data={healthy:true,pid:42,version:supportedOpenCodeVersion}
+    if(url.pathname==='/api/info')data={healthy:true,pid:42,version:fixtureVersion}
     else if(url.pathname==='/api/session/ses_fixture/model'){selected=JSON.parse(request.body).model}
     else if(url.pathname==='/api/session/ses_fixture')data={data:{id:'ses_fixture',model:selected}}
     else if(url.pathname.endsWith('/message'))data={data:submitted?[{id:'msg_answer',type:'assistant',content:[{type:'text',text:'result'}]}]:[]}
@@ -52,7 +52,7 @@ test('OpenCode preserves existing session, checks selection and projects complet
 
 test('OpenCode rejects identity mismatch before prompt',async()=>{
   const context=base('opencode');let prompts=0
-  await assert.rejects(createNativeTaskExecutor({...options,instances:{action:async()=>{},registrationPath:'fixture'},read:async()=>JSON.stringify({url:'http://127.0.0.1:4000',password:'fixture',pid:42}),fetchRequest:async(url)=>{if(url.pathname.endsWith('/prompt'))prompts++;return {ok:true,status:200,json:async()=>({healthy:true,pid:99,version:supportedOpenCodeVersion})}}})(context),error=>error.beforePrompt===true)
+  await assert.rejects(createNativeTaskExecutor({...options,instances:{action:async()=>{},registrationPath:'fixture'},read:async()=>JSON.stringify({url:'http://127.0.0.1:4000',password:'fixture',pid:42}),fetchRequest:async(url)=>{if(url.pathname.endsWith('/prompt'))prompts++;return {ok:true,status:200,json:async()=>({healthy:true,pid:99,version:fixtureVersion})}}})(context),error=>error.beforePrompt===true)
   assert.equal(prompts,0)
 })
 
@@ -73,7 +73,7 @@ test('OpenCode approval policy never auto-approves authentication and interrupts
   let interrupted=false,replied=false,submitted=false
   const fetchRequest=async(url,request)=>{
     let data={data:[]}
-    if(url.pathname==='/api/health')data={healthy:true,pid:42,version:supportedOpenCodeVersion}
+    if(url.pathname==='/api/info')data={healthy:true,pid:42,version:fixtureVersion}
     else if(url.pathname==='/api/session/ses_fixture')data={data:{id:'ses_fixture'}}
     else if(url.pathname==='/api/session/active')data={data:{}}
     else if(url.pathname.endsWith('/prompt')){submitted=true;data={data:{id:JSON.parse(request.body).id}}}

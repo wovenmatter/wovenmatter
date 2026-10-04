@@ -5,7 +5,7 @@ import { request as httpRequest } from 'node:http'
 import { resolve } from 'node:path'
 import { acquireHostLock } from './runtime-maintenance.mjs'
 
-export const supportedOpenCodeVersion = '0.0.0-beta-19278'
+import { supportsOpenCodeVersion, normalizeOpenCodeVersion, openCodeCommands } from './opencode-compatibility.mjs'
 const prefix = '/v1/workspace-instances/opencode'
 const fail = (statusCode, message) => Object.assign(new Error(message), { statusCode })
 const executeFile = promisify(execFile)
@@ -50,16 +50,20 @@ export function createWorkspaceInstances(options) {
         authorization: `Basic ${Buffer.from(`opencode:${info.password}`).toString('base64')}` }
     } catch { throw fail(503, 'opencode_registration_invalid') }
   }
-  async function health(info) {
-    const response = await fetchRequest(new URL('/api/health', info.url), {
+  async function health(info, forStop = false) {
+    const requestOptions = {
       headers: { authorization: info.authorization }, redirect: 'error', signal: AbortSignal.timeout(5000),
-    })
+    }
+    let response = await fetchRequest(new URL('/api/info', info.url), requestOptions)
+    const legacyBeta = forStop && response.status === 404
+    if (legacyBeta) response = await fetchRequest(new URL('/api/health', info.url), requestOptions)
     if (!response.ok) throw fail(503, 'opencode_health_unavailable')
     const result = await response.json()
-    if (result.version !== supportedOpenCodeVersion || (info.version && info.version !== result.version)) {
+    const validBeta = legacyBeta && result.healthy === true && /^0\.0\.0-beta-\d+$/.test(result.version)
+    if ((!supportsOpenCodeVersion(result.version) && !validBeta) || (info.version && info.version !== result.version)) {
       throw fail(409, 'opencode_version_incompatible')
     }
-    if (result.healthy !== true || result.pid !== info.pid) throw fail(503, 'opencode_identity_changed')
+    if (result.pid !== info.pid) throw fail(503, 'opencode_identity_changed')
     return result
   }
   async function status(kind) {
@@ -76,8 +80,8 @@ export function createWorkspaceInstances(options) {
       const info = await registration()
       if (!info || !alive(info.pid)) return base
       base.pid = info.pid
-      await health(info)
-      return { ...base, state: 'running', version: supportedOpenCodeVersion, lastError: null }
+      const current = await health(info)
+      return { ...base, state: 'running', version: current.version, lastError: null }
     } catch (error) { return { ...base, state: 'unavailable', lastError: publicError(error) } }
   }
   async function start() {
@@ -92,14 +96,17 @@ export function createWorkspaceInstances(options) {
     let released = false
     const unlock = () => { if (!released) { released = true; releaseLock() } }
     try {
-      let version
-      try {
-        const result = await (options.execFile ?? executeFile)('opencode2', ['--version'], { env: environment(), timeout: 10000, maxBuffer: 4096 })
-        version = result.stdout.trim().replace(/^opencode2 v/, '')
-      } catch { throw fail(503, 'opencode_executable_unavailable') }
-      if (version !== supportedOpenCodeVersion) throw fail(409, 'opencode_version_incompatible')
+      let command, found = false
+      for (const candidate of openCodeCommands) {
+        try {
+          const result = await (options.execFile ?? executeFile)(candidate, ['--version'], { env: environment(), timeout: 10000, maxBuffer: 4096 })
+          found = true
+          if (supportsOpenCodeVersion(normalizeOpenCodeVersion(result.stdout))) { command = candidate; break }
+        } catch { /* An absent primary command may have the npm alias installed. */ }
+      }
+      if (!command) throw fail(found ? 409 : 503, found ? 'opencode_version_incompatible' : 'opencode_executable_unavailable')
       await (options.mkdir ?? mkdir)(stateHome, { recursive: true, mode: 0o700 })
-      const child = launch('opencode2', ['serve', '--service', '--hostname', '127.0.0.1'], {
+      const child = launch(command, ['serve', '--service', '--hostname', '127.0.0.1'], {
         cwd: workspaceRoot, env: { ...environment(), XDG_STATE_HOME: stateHome }, stdio: 'ignore',
       })
       launched = child
@@ -126,7 +133,7 @@ export function createWorkspaceInstances(options) {
       return
     }
     if (!alive(info.pid)) return
-    await health(info)
+    await health(info, true)
     const current = await registration()
     if (!current || current.pid !== info.pid || current.authorization !== info.authorization
       || String(current.url) !== String(info.url)) throw fail(409, 'opencode_identity_changed')

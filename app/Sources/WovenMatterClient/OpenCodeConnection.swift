@@ -2,8 +2,11 @@ import Foundation
 import WovenMatterCore
 
 public struct OpenCodeConnection: Equatable, Sendable {
-    public static let supportedVersion = "0.0.0-beta-19278"
-    public static let upstreamCommit = "be41bc4e7de76637f4c7a94d6110637270bfff37"
+    /// Accept the v2 release family, including future minor and patch releases.
+    /// Process identity is still checked against the current registration.
+    public static func supportsVersion(_ version: String) -> Bool {
+        version.range(of: #"^2\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$"#, options: .regularExpression) != nil
+    }
     /// Stable identity follows the registration file or explicitly saved remote
     /// connection, never a port, process ID, or replaceable service instance ID.
     public let identity: String
@@ -167,11 +170,21 @@ public struct OpenCodeHTTPClient: Sendable {
         }
         return (data, http.mimeType ?? "application/octet-stream")
     }
-    public func health() async throws -> OpenCodeValue {
-        let health = try await call("GET", "/api/health")
+    public func health(allowLegacyBetaForStop: Bool = false) async throws -> OpenCodeValue {
+        let health: OpenCodeValue
+        var legacyBeta = false
+        do { health = try await call("GET", "/api/info") }
+        catch OpenCodeError.http(404) where allowLegacyBetaForStop {
+            // Only an explicit Stop may use the old v2 beta identity endpoint.
+            // This lets users stop the shared beta before upgrading to stable.
+            health = try await call("GET", "/api/health")
+            legacyBeta = true
+        }
         let version = health["version"].text
-        guard version == OpenCodeConnection.supportedVersion else { throw OpenCodeError.incompatible(version) }
-        guard health["healthy"].bool,
+        let validBeta = legacyBeta && health["healthy"].bool
+            && version.range(of: #"^0\.0\.0-beta-[0-9]+$"#, options: .regularExpression) != nil
+        guard OpenCodeConnection.supportsVersion(version) || validBeta else { throw OpenCodeError.incompatible(version) }
+        guard let pid = health["pid"].number, pid > 0, pid <= Double(Int32.max), pid.rounded() == pid,
               connection.pid == nil || health["pid"].number == Double(connection.pid!),
               connection.version == nil || connection.version == version else {
             throw OpenCodeError.message("OpenCode service identity changed. Discover the service again.")

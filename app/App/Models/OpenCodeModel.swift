@@ -198,7 +198,7 @@ final class OpenCodeModel {
         if !isInstalled { executable = nil }
         if executable != nil { return }
         if let resolved = await Task.detached(priority: .utility, operation: {
-            LocalACPRuntimeResolver.resolveExecutable(named: "opencode2")
+            OpenCodeServiceLauncher.resolveExecutable()
         }).value { executable = resolved }
     }
 

@@ -87,7 +87,7 @@ public enum LocalACPRuntimeCatalog {
                 commandName: harness.command,
                 alternativeCommandNames: harness.id == .claudeCode
                     ? ["claude-code-acp"]
-                    : [],
+                    : harness.id == .opencode ? ["opencode2"] : [],
                 arguments: harness.arguments,
                 environment: environment(for: harness.id),
                 underlyingCLIName: harness.adapterPackage == nil
