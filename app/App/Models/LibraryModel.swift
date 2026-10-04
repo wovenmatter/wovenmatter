@@ -119,8 +119,27 @@ final class LibraryModel {
                     url = try await service?.openURL(id: item.id)
                 }
                 guard let url else { return }
-                if !NSWorkspace.shared.open(url) { error = "No application could open this item." }
+                try openURL(url)
             } catch { self.error = error.localizedDescription }
+        }
+    }
+
+    func openAttachment(contentHash: String, fileName: String, mimeType: String) async throws {
+        let url: URL?
+        if let backendExecutor {
+            url = try await backendExecutor(.openAttachment(
+                contentHash: contentHash, fileName: fileName, mimeType: mimeType)).url
+        } else {
+            url = try await service?.openAttachmentURL(
+                contentHash: contentHash, fileName: fileName, mimeType: mimeType)
+        }
+        guard let url else { throw WorkspaceToolError.invalid("The workspace is unavailable.") }
+        try openURL(url)
+    }
+
+    private func openURL(_ url: URL) throws {
+        guard NSWorkspace.shared.open(url) else {
+            throw WorkspaceToolError.invalid("No application could open this item.")
         }
     }
 
