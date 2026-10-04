@@ -142,6 +142,64 @@ struct WorkspaceLibraryTests {
     #expect(try Data(contentsOf: opened) == Data([1, 2, 3]))
   }
 
+  @Test("draft attachments open through the Library file path before send or indexing")
+  func draftAttachmentOpening() async throws {
+    let f = try await Fixture()
+    defer { f.close() }
+    let source = f.root.appending(path: "Report.docx")
+    let bytes = Data("Attached document".utf8)
+    try bytes.write(to: source)
+    let draft = try MessageAttachmentStore(supportDirectory: f.root).stage(
+      fileURL: source, mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+    // Opening uses the staged bytes even if the source in Downloads changes or disappears.
+    try FileManager.default.removeItem(at: source)
+    let service = LibraryService(database: f.db)
+    let opened = try await service.openAttachmentURL(
+      contentHash: draft.contentHash, fileName: draft.fileName, mimeType: draft.mimeType)
+    #expect(opened.lastPathComponent == "Report.docx")
+    #expect(try Data(contentsOf: opened) == bytes)
+    #expect(opened != draft.localURL)
+    let permissions = try FileManager.default.attributesOfItem(atPath: opened.path)[.posixPermissions] as? NSNumber
+    #expect(permissions?.intValue == 0o400)
+    #expect(try await f.db.libraryItems().isEmpty)
+
+    let chat = try await f.session()
+    _ = try await f.db.beginLocalACPRun(conversationID: chat, input: .init(text: "", attachments: [.file(draft)]))
+    try await f.db.indexLibraryMessages()
+    let item = try await #require(f.db.libraryItems().first)
+    #expect(try await service.openURL(id: item.id) == opened)
+    #expect(try Data(contentsOf: draft.localURL) == bytes)
+  }
+
+  @Test("attachment opening validates content identities and preserves the backend write boundary")
+  func attachmentOpeningBoundary() async throws {
+    let f = try await Fixture()
+    defer { f.close() }
+    let service = LibraryService(database: f.db)
+    for hash in ["../../workspace.sqlite", String(repeating: "a", count: 63), String(repeating: "A", count: 64)] {
+      await #expect(throws: AgentMessageAttachmentError.self) {
+        try await service.openAttachmentURL(contentHash: hash, fileName: "file.txt", mimeType: "text/plain")
+      }
+    }
+    await #expect(throws: AgentMessageAttachmentError.self) {
+      try await service.openAttachmentURL(
+        contentHash: String(repeating: "a", count: 64), fileName: "missing.txt", mimeType: "text/plain")
+    }
+    let source = f.root.appending(path: "Screenshot.png")
+    try Data([1, 2, 3]).write(to: source)
+    let draft = try MessageAttachmentStore(supportDirectory: f.root).stage(fileURL: source, mimeType: "image/png")
+    let reader = try await WorkspaceDatabase(url: f.root.appending(path: "workspace.sqlite"), readOnlyProjection: true)
+    let projection = LibraryService(database: reader)
+    await #expect(throws: WorkspaceDatabaseError.readOnlyProjection) {
+      try await projection.openAttachmentURL(
+        contentHash: draft.contentHash, fileName: draft.fileName, mimeType: draft.mimeType)
+    }
+    let opened = try await service.openAttachmentURL(
+      contentHash: draft.contentHash, fileName: "../../Screenshot.png", mimeType: draft.mimeType)
+    #expect(opened.lastPathComponent == "....Screenshot.png")
+    #expect(opened.deletingLastPathComponent().lastPathComponent == draft.contentHash)
+  }
+
   @Test("archive preserves items, trash hides items and defeats a late transfer")
   func deletion() async throws {
     let f = try await Fixture()

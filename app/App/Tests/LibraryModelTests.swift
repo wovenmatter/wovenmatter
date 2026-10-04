@@ -52,6 +52,31 @@ struct LibraryModelTests {
         }
     }
 
+    @Test func backendOpensDraftAttachmentsWithoutCatalogingOrFollowingTheirSourceURL() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try await DashboardStore(supportDirectory: root)
+        let source = root.appending(path: "Screenshot.png")
+        let bytes = Data([1, 2, 3])
+        try bytes.write(to: source)
+        let attachment = try await store.stageMessageAttachment(fileURL: source, mimeType: "image/png")
+        guard case let .file(draft) = attachment else { Issue.record("Expected a staged file"); return }
+        try FileManager.default.removeItem(at: source)
+        let command = BackendLibraryCommand.openAttachment(
+            contentHash: draft.contentHash, fileName: draft.fileName, mimeType: draft.mimeType)
+        let decoded = try JSONDecoder().decode(BackendLibraryCommand.self, from: JSONEncoder().encode(command))
+        let backend = BackendLibraryService(service: store.library)
+        let opened = try await #require(backend.execute(decoded).url)
+        #expect(opened.lastPathComponent == "Screenshot.png")
+        #expect(try Data(contentsOf: opened) == bytes)
+        #expect(try await store.database.libraryPage(query: .init(), count: 1).items.isEmpty)
+        await #expect(throws: (any Error).self) {
+            try await backend.execute(.openAttachment(
+                contentHash: "../workspace.sqlite", fileName: "Screenshot.png", mimeType: "image/png"))
+        }
+    }
+
     @Test func loadMoreReconcilesNewItemsAndPreservesActionErrors() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

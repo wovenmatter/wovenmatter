@@ -1,10 +1,11 @@
 import Foundation
 import WovenMatterDashboardStore
 
-/// Only identities cross the boundary. The execution owner resolves retained files
-/// and creates opening copies; the UI continues reading the shared catalog directly.
+/// Content identities and display metadata cross the boundary. The execution owner
+/// resolves retained files and creates opening copies; the UI reads the shared catalog.
 enum BackendLibraryCommand: Codable, Sendable {
     case open(id: String)
+    case openAttachment(contentHash: String, fileName: String, mimeType: String)
     case retry(id: String)
 }
 
@@ -18,6 +19,9 @@ struct BackendLibraryService: Sendable {
     func execute(_ command: BackendLibraryCommand) async throws -> BackendLibraryResult {
         switch command {
         case let .open(id): return try await .init(url: service.openURL(id: id))
+        case let .openAttachment(contentHash, fileName, mimeType):
+            return try await .init(url: service.openAttachmentURL(
+                contentHash: contentHash, fileName: fileName, mimeType: mimeType))
         case let .retry(id):
             try await service.retry(id: id)
             return .init()

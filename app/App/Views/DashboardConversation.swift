@@ -122,6 +122,7 @@ struct DashboardCloudConversation: View {
     @State private var isUserScrolling = false
     @State private var libraryHighlightID: String?
     @State private var librarySourceMessageID: String?
+    @State private var attachmentOpenError: String?
 
     var body: some View {
         let runsByAssistantMessageID = self.runsByAssistantMessageID
@@ -235,6 +236,10 @@ struct DashboardCloudConversation: View {
                                                 },
                                                 runPresentation: run.flatMap { runPresentations[$0.id] },
                                                 activities: run.map { activitiesByRunID[$0.id] ?? [] } ?? [],
+                                                onOpenAttachment: { attachment in
+                                                    openAttachment(contentHash: attachment.contentHash,
+                                                        fileName: attachment.fileName, mimeType: attachment.mimeType)
+                                                },
                                                 layout: fragment.layout,
                                                 displayedBody: presentation?.displayedBody
                                             )
@@ -580,6 +585,10 @@ struct DashboardCloudConversation: View {
                         },
                         onAttachmentAction: onAttachmentAction,
                         onRemoveAttachment: onRemoveAttachment,
+                        onOpenAttachment: { file in
+                            openAttachment(contentHash: file.contentHash,
+                                fileName: file.fileName, mimeType: file.mimeType)
+                        },
                         onDropFiles: onDropFiles,
                         onUnavailableAction: onUnavailableComposerAction,
                         onCommandNavigation: onCommandNavigation,
@@ -617,6 +626,14 @@ struct DashboardCloudConversation: View {
             .padding(.bottom, ConversationBottomOverlayLayout.bottomOffset)
         }
         .background(theme.palette.workspace)
+        .alert("Could not open attachment", isPresented: Binding(
+            get: { attachmentOpenError != nil },
+            set: { if !$0 { attachmentOpenError = nil } }
+        )) {
+            Button("OK", role: .cancel) { attachmentOpenError = nil }
+        } message: {
+            Text(attachmentOpenError ?? "")
+        }
         .task(id: sessionIdentity) {
             guard let conversation else { return }
             if model.isOpenClawGatewayConversation(conversation.id) {
@@ -626,6 +643,19 @@ struct DashboardCloudConversation: View {
             if conversation.localRuntimeKind != nil {
                 await model.refreshLocalACPSession(conversation: conversation)
             }
+        }
+    }
+
+    private func openAttachment(contentHash: String?, fileName: String, mimeType: String) {
+        guard let contentHash else {
+            attachmentOpenError = "This attachment is not available on this Mac."
+            return
+        }
+        Task {
+            do {
+                try await model.library.openAttachment(
+                    contentHash: contentHash, fileName: fileName, mimeType: mimeType)
+            } catch { attachmentOpenError = error.localizedDescription }
         }
     }
 
@@ -1077,6 +1107,7 @@ struct DashboardMessageRow: View {
     let run: WorkspaceRunRecord?
     let runPresentation: DashboardRunPresentation?
     let activities: [WorkspaceRunActivityRecord]
+    let onOpenAttachment: (WorkspaceMessageAttachmentRecord) -> Void
     var layout: ConversationMessageLayout.Row? = nil
     var displayedBody: String? = nil
 
@@ -1130,7 +1161,8 @@ struct DashboardMessageRow: View {
                         ConversationUserMessage(
                             content: message.content,
                             attachments: attachments,
-                            references: references
+                            references: references,
+                            onOpenAttachment: onOpenAttachment
                         )
                     } else if showsAssistantBody {
                         if let renderedDocument {
@@ -1189,6 +1221,7 @@ struct ConversationUserMessage: View {
     let content: String
     let attachments: [WorkspaceMessageAttachmentRecord]
     let references: [WorkspaceMessageReferenceRecord]
+    var onOpenAttachment: ((WorkspaceMessageAttachmentRecord) -> Void)? = nil
     @State private var expanded = false
 
     var body: some View {
@@ -1208,14 +1241,22 @@ struct ConversationUserMessage: View {
                     spacing: 6
                 ) {
                     ForEach(attachments) { attachment in
-                        DashboardPersistedAttachmentChip(
-                            icon: attachment.kind == .image ? "photo" : "doc",
-                            title: attachment.fileName,
-                            detail: ByteCountFormatter.string(
-                                fromByteCount: attachment.sizeBytes,
-                                countStyle: .file
+                        Button { onOpenAttachment?(attachment) } label: {
+                            DashboardPersistedAttachmentChip(
+                                icon: attachment.kind == .image ? "photo" : "doc",
+                                title: attachment.fileName,
+                                detail: ByteCountFormatter.string(
+                                    fromByteCount: attachment.sizeBytes,
+                                    countStyle: .file
+                                )
                             )
-                        )
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(onOpenAttachment == nil)
+                        .accessibilityLabel("Open \(attachment.fileName)")
+                        .help("Open \(attachment.fileName)")
                     }
                     ForEach(references) { reference in
                         DashboardPersistedAttachmentChip(

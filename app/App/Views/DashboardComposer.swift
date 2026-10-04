@@ -46,6 +46,7 @@ struct DashboardComposer: View {
     let onSelectPermission: ((String) -> Void)?
     let onAttachmentAction: (DashboardComposerAttachmentAction) -> Void
     let onRemoveAttachment: (String) -> Void
+    let onOpenAttachment: (AgentFileAttachmentDraft) -> Void
     let onDropFiles: ([URL]) -> Bool
     let onUnavailableAction: (String) -> Void
     let onCommandNavigation: (DashboardComposerNavigationDirection) -> Bool
@@ -89,7 +90,10 @@ struct DashboardComposer: View {
                         ForEach(attachments) { attachment in
                             DashboardDraftAttachmentChip(
                                 attachment: attachment,
-                                onRemove: { onRemoveAttachment(attachment.id) }
+                                onRemove: { onRemoveAttachment(attachment.id) },
+                                onOpen: {
+                                    if case .file(let file) = attachment { onOpenAttachment(file) }
+                                }
                             )
                         }
                     }
@@ -823,13 +827,18 @@ enum DashboardAttachmentPickerKind: String, Identifiable {
 struct DashboardDraftAttachmentChip: View {
     let attachment: AgentMessageAttachmentDraft
     let onRemove: () -> Void
+    let onOpen: () -> Void
 
     var body: some View {
         HStack(spacing: 7) {
-            preview
-            Text(attachment.displayName)
-                .font(.system(size: 11.5, weight: .medium))
-                .lineLimit(1)
+            if case .file = attachment {
+                Button(action: onOpen) { attachmentLabel }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Open \(attachment.displayName)")
+                    .help("Open \(attachment.displayName)")
+            } else {
+                attachmentLabel
+            }
             Button(action: onRemove) {
                 Image(systemName: "xmark")
                     .font(.system(size: 9, weight: .bold))
@@ -843,6 +852,17 @@ struct DashboardDraftAttachmentChip: View {
         .frame(height: 34)
         .background(DashboardPalette.foreground.opacity(0.055))
         .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+    }
+
+    private var attachmentLabel: some View {
+        HStack(spacing: 7) {
+            preview
+            Text(attachment.displayName)
+                .font(.system(size: 11.5, weight: .medium))
+                .lineLimit(1)
+        }
+        .frame(height: 34)
+        .contentShape(Rectangle())
     }
 
     @ViewBuilder

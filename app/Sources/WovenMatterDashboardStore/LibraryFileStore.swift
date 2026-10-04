@@ -83,21 +83,36 @@ public struct LibraryFileStore: Sendable {
 
   public func url(for item: WorkspaceLibraryItem) throws -> URL {
     if item.storage == .link, item.isWebLink, let url = URL(string: item.source) { return url }
-    guard let hash = item.contentHash, hash.wholeMatch(of: /[0-9a-f]{64}/) != nil else {
-      throw AgentMessageAttachmentError.unsupportedForAgent(item.error ?? "This file has not been saved yet.")
+    return try openingURL(
+      contentHash: item.contentHash, title: item.title, mimeType: item.mimeType,
+      source: item.source, storage: item.storage, error: item.error)
+  }
+
+  public func attachmentURL(contentHash: String, fileName: String, mimeType: String) throws -> URL {
+    try openingURL(
+      contentHash: contentHash, title: fileName, mimeType: mimeType,
+      source: "", storage: .attachment, error: nil)
+  }
+
+  private func openingURL(
+    contentHash: String?, title: String, mimeType: String?, source reference: String,
+    storage: LibraryStorage, error: String?
+  ) throws -> URL {
+    guard let hash = contentHash, hash.wholeMatch(of: /[0-9a-f]{64}/) != nil else {
+      throw AgentMessageAttachmentError.unsupportedForAgent(error ?? "This file has not been saved yet.")
     }
     let source =
-      item.storage == .attachment
+      storage == .attachment
       ? supportDirectory.appending(path: "message-attachments/blobs/" + hash)
       : directory.appending(path: hash)
     guard FileManager.default.fileExists(atPath: source.path) else {
-      throw AgentMessageAttachmentError.unreadableFile(item.title)
+      throw AgentMessageAttachmentError.unreadableFile(title)
     }
     guard !readOnlyProjection else { throw WorkspaceDatabaseError.readOnlyProjection }
     let folder = openDirectory.appending(path: hash)
     try FileManager.default.createDirectory(
       at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-    let name = Self.openingFileName(for: item)
+    let name = Self.openingFileName(title: title, source: reference, mimeType: mimeType)
     let output = folder.appending(path: name)
     if !FileManager.default.fileExists(atPath: output.path) {
       // A separate read-only opening copy preserves the exchanged original.
@@ -107,14 +122,14 @@ public struct LibraryFileStore: Sendable {
     return output
   }
 
-  private static func openingFileName(for item: WorkspaceLibraryItem) -> String {
-    let allowed = item.title.unicodeScalars.filter {
+  private static func openingFileName(title: String, source: String, mimeType: String?) -> String {
+    let allowed = title.unicodeScalars.filter {
       !CharacterSet.controlCharacters.contains($0) && !"/:\\".unicodeScalars.contains($0)
     }
     var name = String(String.UnicodeScalarView(allowed)).trimmingCharacters(in: .whitespaces)
     if name.isEmpty || name == "." || name == ".." { name = "Attachment" }
-    let sourceExtension = URL(string: item.source)?.pathExtension ?? ""
-    let mimeExtension = item.mimeType.flatMap { UTType(mimeType: $0)?.preferredFilenameExtension } ?? ""
+    let sourceExtension = URL(string: source)?.pathExtension ?? ""
+    let mimeExtension = mimeType.flatMap { UTType(mimeType: $0)?.preferredFilenameExtension } ?? ""
     let ext = !sourceExtension.isEmpty ? sourceExtension : (name as NSString).pathExtension.isEmpty ? mimeExtension : ""
     if !ext.isEmpty, ext.utf8.count <= 32, (name as NSString).pathExtension.lowercased() != ext.lowercased() {
       name += "." + ext
