@@ -254,7 +254,7 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
     // without returning command lines (which can contain credentials) to the client.
     const result = await run('ps -eo pid=,args=')
     if (result.code !== 0) throw failure('active_conversation_check_unavailable')
-    const names = [h.command, h.cliCommand]
+    const names = h.id === 'opencode' ? openCodeCommands : [h.command, h.cliCommand]
     return result.output.split('\n').some(line => !/ps -eo|\/bin\/bash -c/.test(line) && names.some(name => line.split(/\s+/).some(arg => arg === name || arg.endsWith('/' + name) || arg.endsWith('/' + name + '.js'))))
   }
   async function start(h, action, body) {
@@ -326,7 +326,7 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
       const name = packageSpec.slice(0, packageSpec.lastIndexOf('@'))
       const version = await latest(name)
       if (!version) throw failure('latest_package_version_unavailable')
-      packageSpec = validatedPackageSpec(h, name + '@' + version)
+      packageSpec = name + '@' + version
     }
     packageSpec = validatedPackageSpec(h, packageSpec)
     return { harnessID: h.id, source: h.install.source, sha256: null, bytes: null,

@@ -69,7 +69,8 @@ struct OpenCodeStableCompatibilityTests {
         process.executableURL = executable
         process.arguments = ["serve", "--service", "--hostname", "127.0.0.1"]
         process.currentDirectoryURL = root
-        process.environment = ["PATH": "/usr/bin:/bin", "XDG_STATE_HOME": root.appending(path: "state").path,
+        process.environment = ["PATH": "/usr/bin:/bin", "OPENCODE_TEST_HOME": root.path, "TMPDIR": root.path,
+            "XDG_STATE_HOME": root.appending(path: "state").path,
             "XDG_CONFIG_HOME": root.appending(path: "config").path, "XDG_DATA_HOME": root.appending(path: "data").path,
             "XDG_CACHE_HOME": root.appending(path: "cache").path]
         process.standardInput = FileHandle.nullDevice

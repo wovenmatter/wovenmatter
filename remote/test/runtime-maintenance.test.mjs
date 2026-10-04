@@ -86,6 +86,26 @@ test('active host conversation or instance prevents mutation and two failures yi
   assert.match(value.diagnosticPrompt,/runtime_active/)
   assert.equal(sanitize('very-secret-token https://secret.example/?token=x Bearer abc123',{SECRET_TOKEN:'very-secret-token'}),'[redacted] [URL redacted] [redacted]')
 })
+test('OpenCode updates refuse active canonical and compatibility-alias processes', async t => {
+  const harness = { id: 'opencode', displayName: 'OpenCode', command: 'opencode', cliCommand: 'opencode', install: { kind: 'npm-global', package: '@opencode/cli@latest' } }
+  for (const process of ['opencode', 'opencode2', '/host/bin/opencode2', 'node /host/bin/opencode2.js']) {
+    let installs = 0
+    const f = await fixture(t, { catalog: new Map([['opencode', harness]]),
+      execute: async command => {
+        if (command === 'ps -eo pid=,args=') return { code: 0, output: `1234 ${process} serve --service` }
+        if (command.startsWith('command -v')) return { code: 0, output: '/host/bin/opencode' }
+        if (command.endsWith('--version')) return { code: 0, output: '2.0.22' }
+        if (command.startsWith('npm install')) { installs++; return { code: 0, output: '' } }
+        throw Error('Unexpected command: ' + command)
+      },
+    })
+    await f.service.start(harness, 'update', { confirmed: true, packageSpec: '@opencode/cli@2.1.7' })
+    const result = await finished(f.service)
+    assert.equal(result.operation.error, 'runtime_active_stop_conversations_or_server_first', process)
+    assert.equal(installs, 0, process)
+  }
+})
+
 test('successful exit without verifiable required runtime fails and supports retry',async t=>{
   const f=await fixture(t,{execute:async cmd=>cmd==='ps -eo pid=,args='?{code:0,output:''}:cmd.startsWith('npm install')?{code:0,output:'ok'}:{code:1,output:''}})
   await f.service.start(pi,'install',{confirmed:true});const value=await finished(f.service)
@@ -292,7 +312,6 @@ test('Hermes performs the official bounded update only on a clean idle checkout 
   assert.ok(calls.some(c => c.endsWith('acp --check')))
   assert.equal(calls.some(c => c.includes('--no-restart') || c.includes('--keep-stash') || c.includes('install.sh')), false)
 })
-
 
 test('OpenCode latest previews and updates accept newer v2 releases independently', async t => {
   const root = await mkdtemp(resolve(tmpdir(), 'wm-opencode-update-'))

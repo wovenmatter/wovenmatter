@@ -4,8 +4,8 @@ import { promisify } from 'node:util'
 import { request as httpRequest } from 'node:http'
 import { resolve } from 'node:path'
 import { acquireHostLock } from './runtime-maintenance.mjs'
-
 import { supportsOpenCodeVersion, normalizeOpenCodeVersion, openCodeCommands } from './opencode-compatibility.mjs'
+
 const prefix = '/v1/workspace-instances/opencode'
 const fail = (statusCode, message) => Object.assign(new Error(message), { statusCode })
 const executeFile = promisify(execFile)

@@ -39,8 +39,9 @@ See [PARITY.md](PARITY.md) for the implementation boundary and persistence contr
 
 Set `WOVENMATTER_OPENCODE_TEST_EXECUTABLE` to an official v2 binary and run
 `swift test --package-path app --filter OpenCodeStableCompatibilityTests`.
-The opt-in test uses temporary XDG state/config/data/cache directories and no
-provider environment credentials. It checks authenticated service discovery,
-reuse, session creation, pending-form recovery, cancellation, and shutdown
+The opt-in test uses a temporary OpenCode home, temporary files, and XDG
+state/config/data/cache directories, with no provider environment credentials.
+It checks authenticated service discovery, reuse, session creation, pending-form
+recovery, cancellation, and shutdown
 without submitting a model prompt. Fixture tests additionally accept future v2
 versions, reject v1, and resolve a new current release on each update preview.

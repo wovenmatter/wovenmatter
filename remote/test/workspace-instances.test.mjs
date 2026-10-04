@@ -131,7 +131,6 @@ test('streaming proxy uses host Basic auth, strips client bearer and cookies, pr
   } finally { await new Promise((done) => upstream.close(done)) }
 })
 
-
 test('future v2 service releases stay compatible while mismatched registration identity is refused', async () => {
   const future = { ...info, version: '2.99.1' }
   const instances = fixture({ readFile: async () => JSON.stringify(future),
@@ -155,7 +154,6 @@ test('startup falls back to supported v2 alias when canonical command is still v
   })
   await instances.action('opencode', 'start')
 })
-
 
 test('explicit stop authenticates legacy v2 beta identity without permitting session use', async () => {
   const beta = { ...info, version: '0.0.0-beta-19507' }

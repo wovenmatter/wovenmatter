@@ -259,9 +259,6 @@ public enum RuntimeMaintenance {
     }
 
     static func latestVersion(kind: AgentRuntimeKind, package: String?, fetch: Fetch) async -> String? {
-        if kind == .opencode {
-            return try? await registryVersion("@opencode/cli", fetch: fetch)
-        }
         if let package { return try? await registryVersion(package, fetch: fetch) }
         do {
             switch kind {
