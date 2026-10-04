@@ -34,7 +34,7 @@ struct OpenCodeWireCaptureTests {
     }
     #expect(!OpenCodePermissionHandling.requiresActiveTurn(method: "POST", suffix: "/permission/p/reply", body: ["reply": "reject"]))
     #expect(OpenCodePermissionHandling.requiresActiveTurn(method: "POST", suffix: "/form/f/reply", body: ["answer": "yes"]))
-    #expect(!OpenCodePermissionHandling.requiresActiveTurn(method: "POST", suffix: "/form/f/cancel", body: nil))
+    #expect(!OpenCodePermissionHandling.requiresActiveTurn(method: "DELETE", suffix: "/form/f", body: nil))
   }
 
   @Test func preservesUnknownHTTPAndSSEFieldsWithoutCredentials() async throws {

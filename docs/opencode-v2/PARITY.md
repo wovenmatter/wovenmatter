@@ -22,11 +22,18 @@ Other harness integrations keep their own transports.
 
 ## Local service contract
 
-The tested runtime is `@opencode/cli@0.0.0-beta-19278` (`opencode2`). Native API reference: [OpenCode source at be41bc4](https://github.com/anomalyco/opencode/tree/be41bc4e7de76637f4c7a94d6110637270bfff37). This source reference is not asserted to be npm's exact build commit.
+Woven Matter supports the OpenCode **2.x** release family, including future minor
+and patch updates, rather than one exact release. Install/update resolves the
+current `@opencode/cli` **latest** release for each operation. V1 remains
+unsupported. An explicit Stop can authenticate an older v2 beta through its legacy
+identity endpoint so users can stop it before upgrading; session connections and
+new starts require the stable v2 contract. The stable API contract was checked against `@opencode/client@2.0.22`
+and [upstream v2.0.22](https://github.com/anomalyco/opencode/tree/v2.0.22); this is
+validation evidence, not an installation or compatibility pin.
 
-Discovery uses `$XDG_STATE_HOME/opencode/service.json`, defaulting to `~/.local/state/opencode/service.json`, just as OpenCode does. The service registration supplies the dynamic loopback URL, PID, and Basic password. Health verifies the PID and exact supported version. Woven Matter does not choose a private data directory, fixed port, separate service password, or alternate workspace.
+Discovery uses `$XDG_STATE_HOME/opencode/service.json`, defaulting to `~/.local/state/opencode/service.json`, just as OpenCode does. The service registration supplies the dynamic loopback URL, PID, and Basic password. Authenticated `/api/info` verifies the PID, the 2.x release family, and the registration's current version. Woven Matter does not choose a private data directory, fixed port, separate service password, or alternate workspace.
 
-Startup runs the installed `opencode2 serve --service` with the normal environment. It accepts the official version banner and lets the service handle a registration whose process has exited. A live incompatible or unhealthy service is never killed or replaced. Disabling the runtime leaves the shared backend running. Quitting also leaves it running by default; the optional stop-on-quit preference changes that behavior. This does not install a login daemon; Woven Matter starts the service again when needed.
+Startup runs the installed `opencode serve --service` (`opencode2` remains a discovery fallback) with the normal environment. It accepts the official version banner and lets the service handle a registration whose process has exited. A live incompatible or unhealthy service is never killed or replaced. Disabling the runtime leaves the shared backend running. Quitting also leaves it running by default; the optional stop-on-quit preference changes that behavior. This does not install a login daemon; Woven Matter starts the service again when needed.
 
 Earlier custom/remote connections are no longer opened by this local flow. Their cached transcripts remain in SQLite; session identifiers are not transplanted into the standard service.
 
@@ -46,8 +53,8 @@ Human acceptance should exercise the same session through Woven Matter and a v2-
 
 ## Installation and server lifecycle
 
-- **Install** in the local workspace runtime row installs and verifies the exact
-  supported v2 package, then offers **Enable**. The server settings page can also
+- **Install** in the local workspace runtime row installs and verifies the
+  current v2 package, then offers **Enable**. The server settings page can also
   offer **Download** when the local CLI is missing. Installing does not enable
   or connect the runtime.
 - Stop server disconnects Woven Matter and terminates the authenticated local service. Automatic reconnect stays suspended until an explicit Connect/Restart/Enable action.

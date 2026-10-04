@@ -468,18 +468,18 @@ public actor OpenCodeSessionCoordinator {
         // Once the server's entire history has been read, it is authoritative.
         // Retaining a cached prefix here would resurrect removed first messages.
         let reachedHistoryStart = cursor == nil
-        // The beta returns a next cursor for every nonempty page, including
+        // The API returns a next cursor for every nonempty page, including
         // the final page. Keep a previously established end of history.
         if snapshot.olderCursor == nil, let oldestKnownID, incomingIDs.contains(oldestKnownID) { cursor = nil }
         let keepsOlderPrefix = !reachedHistoryStart && (snapshot.messages.firstIndex { incomingIDs.contains($0["id"].text) } ?? 0) > 0
         snapshot.mergeMessages(Array(descending.reversed()), replace: reachedHistoryStart)
         if !keepsOlderPrefix { snapshot.olderCursor = cursor }
         snapshot.permissions = responses.2["data"].array
-        // Session form list includes completed forms; query authoritative state.
+        // Fetch form details so completed/cancelled forms cannot remain pending.
         var pendingForms: [OpenCodeValue] = []
         for form in responses.3["data"].array {
-            let state = try await client.call("GET", path + "/form/" + OpenCodeHTTPClient.segment(form["id"].text) + "/state")
-            if state["data"]["status"].text == "pending" { pendingForms.append(form) }
+            let state = try await client.call("GET", path + "/form/" + OpenCodeHTTPClient.segment(form["id"].text))
+            if state["data"]["state"]["status"].text == "pending" { pendingForms.append(form) }
         }
         snapshot.forms = pendingForms
         snapshot.inbox = responses.4["data"].array

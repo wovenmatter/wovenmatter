@@ -155,7 +155,7 @@ struct OpenCodeIntegrationTests {
         await coordinator.shutdown()
     }
 
-    @Test func openCodeDownloadUsesPinnedPackageAndVerifiesExecutable() async throws {
+    @Test func openCodeDownloadResolvesLatestV2AndVerifiesExecutable() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -163,16 +163,19 @@ struct OpenCodeIntegrationTests {
         let script = """
         #!/bin/sh
         test "$1" = install && test "$2" = --global && test "$3" = --prefix || exit 1
-        test "$5" = '@opencode/cli@\(OpenCodeConnection.supportedVersion)' || exit 2
+        test "$5" = '@opencode/cli@2.0.22' || exit 2
         mkdir -p "$4/bin"
-        printf '#!/bin/sh\\necho "opencode2 v\(OpenCodeConnection.supportedVersion)"\\n' > "$4/bin/opencode2"
-        chmod +x "$4/bin/opencode2"
+        printf '#!/bin/sh\\necho "opencode v2.0.22"\\n' > "$4/bin/opencode"
+        chmod +x "$4/bin/opencode"
         """
         try script.write(to: npm, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: npm.path)
         let prefix = root.appending(path: "installed")
-        let result = try await OpenCodeServiceLauncher.install(using: LocalACPRuntimeInstaller(installPrefix: prefix, npmExecutableURL: npm))
-        #expect(result == prefix.appending(path: "bin/opencode2"))
+        let result = try await OpenCodeServiceLauncher.install(using: LocalACPRuntimeInstaller(installPrefix: prefix, npmExecutableURL: npm), fetch: { url in
+            #expect(url.absoluteString == "https://registry.npmjs.org/@opencode%2fcli/latest")
+            return Data(#"{"version":"2.0.22","bin":{"opencode":"bin/opencode"}}"#.utf8)
+        })
+        #expect(result == prefix.appending(path: "bin/opencode"))
         #expect(FileManager.default.isExecutableFile(atPath: result.path))
     }
 
@@ -309,9 +312,9 @@ struct OpenCodeIntegrationTests {
         let home = URL(fileURLWithPath: "/fixture-home")
         #expect(OpenCodeConnection.registrationURL(environment: [:], home: home).path == "/fixture-home/.local/state/opencode/service.json")
         #expect(OpenCodeConnection.registrationURL(environment: ["XDG_STATE_HOME": "/custom/state"], home: home).path == "/custom/state/opencode/service.json")
-        #expect(OpenCodeServiceLauncher.normalizedVersion("opencode2 v0.0.0-beta-19278\n") == OpenCodeConnection.supportedVersion)
-        #expect(OpenCodeServiceLauncher.normalizedVersion("0.0.0-beta-19278\n") == OpenCodeConnection.supportedVersion)
-        #expect(OpenCodeServiceLauncher.normalizedVersion("opencode2 v2.99.0") != OpenCodeConnection.supportedVersion)
+        #expect(OpenCodeServiceLauncher.normalizedVersion("opencode v2.0.22\n") == "2.0.22")
+        #expect(OpenCodeServiceLauncher.normalizedVersion("2.0.22\n") == "2.0.22")
+        #expect(OpenCodeServiceLauncher.normalizedVersion("opencode2 v2.99.0") == "2.99.0")
     }
 
     @Test func connectReusesExistingLocalServiceAndNeverReplacesLiveIncompatibleService() async throws {
@@ -326,8 +329,8 @@ struct OpenCodeIntegrationTests {
         let connection = try await OpenCodeServiceLauncher.ensure(executable: nil, registration: file, clientFactory: { OpenCodeHTTPClient(connection: $0, session: session) })
         #expect(connection.identity == "local:" + file.standardizedFileURL.path)
         #expect(try Data(contentsOf: file) == bytes)
-        fixture.version = "2.99.0"
-        await #expect(throws: OpenCodeError.incompatible("2.99.0")) {
+        fixture.version = "1.18.29"
+        await #expect(throws: OpenCodeError.incompatible("1.18.29")) {
             try await OpenCodeServiceLauncher.ensure(executable: URL(fileURLWithPath: "/never-run"), registration: file, clientFactory: { OpenCodeHTTPClient(connection: $0, session: session) })
         }
         #expect(try Data(contentsOf: file) == bytes)
@@ -395,7 +398,7 @@ struct OpenCodeIntegrationTests {
         try await Task.sleep(for: .milliseconds(125))
         #expect(fixture.historyRequests == baseline + 1)
 
-        fixture.heldPath = "/api/session/ses_fixture/form/form_pending/state"
+        fixture.heldPath = "/api/session/ses_fixture/form/form_pending"
         fixture.messages = [message("during-first")]
         await coordinator.receiveLogEvent(["type": "session.text.delta", "durable": ["seq": .number(6)]], link: link)
         await fixture.gate.waitForArrival()
@@ -427,11 +430,28 @@ struct OpenCodeIntegrationTests {
         #expect(request.value(forHTTPHeaderField: "Authorization") == "Basic b3BlbmNvZGU6Zml4dHVyZQ==")
     }
 
-    @Test func incompatibleServerCannotBecomeConnected() async throws {
+    @Test func futureV2ServerConnectsAndRegistrationVersionStillMustMatch() async throws {
         let fixture = OpenCodeFixture(); fixture.version = "2.99.0"
         FixtureProtocol.fixture = fixture
         let client = OpenCodeHTTPClient(connection: try connection(), session: fixtureSession())
-        await #expect(throws: OpenCodeError.incompatible("2.99.0")) { try await client.health() }
+        #expect(try await client.health()["version"].text == "2.99.0")
+        let stale = try OpenCodeConnection(identity: "fixture", url: URL(string: "http://127.0.0.1:43210")!, password: "fixture", version: "2.0.22")
+        await #expect(throws: OpenCodeError.self) { try await OpenCodeHTTPClient(connection: stale, session: fixtureSession()).health() }
+    }
+
+    @Test func oldV2BetaCanOnlyUseLegacyIdentityForExplicitStop() async throws {
+        let fixture = OpenCodeFixture(); fixture.version = "0.0.0-beta-19507"
+        FixtureProtocol.fixture = fixture
+        let client = OpenCodeHTTPClient(connection: try connection(), session: fixtureSession())
+        await #expect(throws: OpenCodeError.http(404)) { try await client.health() }
+        #expect(try await client.health(allowLegacyBetaForStop: true)["version"].text == fixture.version)
+    }
+
+    @Test func incompatibleServerCannotBecomeConnected() async throws {
+        let fixture = OpenCodeFixture(); fixture.version = "1.18.29"
+        FixtureProtocol.fixture = fixture
+        let client = OpenCodeHTTPClient(connection: try connection(), session: fixtureSession())
+        await #expect(throws: OpenCodeError.incompatible("1.18.29")) { try await client.health() }
     }
 
     @Test func ordinaryMessagesAndCommandsSteerEvenBeforeBusyStateRefreshes() async throws {
@@ -596,7 +616,7 @@ struct OpenCodeIntegrationTests {
         await coordinator.disconnect(connectionID: "fixture")
         fixture.gate.release()
         await #expect(throws: CancellationError.self) { try await connecting.value }
-        await #expect(throws: OpenCodeError.self) { try await coordinator.call(connectionID: "fixture", path: "/api/health") }
+        await #expect(throws: OpenCodeError.self) { try await coordinator.call(connectionID: "fixture", path: "/api/info") }
     }
 
     @Test func richProjectionAndRecoveryCursorSurviveDatabaseReopen() async throws {
@@ -740,7 +760,7 @@ struct OpenCodeIntegrationTests {
         let coordinator = OpenCodeSessionCoordinator(database: database, clientFactory: { OpenCodeHTTPClient(connection: $0, session: session) })
         try await coordinator.connect(connection())
         try await coordinator.refresh(link)
-        fixture.heldPath = "/api/session/ses_fixture/form/form_pending/state"
+        fixture.heldPath = "/api/session/ses_fixture/form/form_pending"
         let refresh = Task { try await coordinator.refresh(link) }
         await fixture.gate.waitForArrival()
         let older = Task { try await coordinator.loadOlder(link) }
@@ -947,7 +967,7 @@ private final class OpenCodeFixture: @unchecked Sendable {
     var selectedModel: OpenCodeValue = .null
     var acceptModelSelection = true
     var modelWriteCount = 0
-    var version = OpenCodeConnection.supportedVersion
+    var version = "2.0.22"
     var messages: [OpenCodeValue] = []
     var sessions: [OpenCodeValue] = []
     var listedCount = 0
@@ -987,7 +1007,8 @@ private final class OpenCodeFixture: @unchecked Sendable {
             let prefix = "/v1/workspace-instances/opencode"
             if path.hasPrefix(prefix) { path.removeFirst(prefix.count) }
             if path.hasSuffix("/log") { streamTimeout = request.timeoutInterval; return (200, [:]) }
-            if path == "/api/health" { return (200, ["healthy": .bool(true), "version": .string(version), "pid": .number(Double(ProcessInfo.processInfo.processIdentifier))]) }
+            if path == "/api/info", version.hasPrefix("0.0.0-beta-") { return (404, [:]) }
+            if path == "/api/info" || path == "/api/health" { return (200, ["healthy": .bool(true), "version": .string(version), "pid": .number(Double(ProcessInfo.processInfo.processIdentifier))]) }
             if path == "/api/session/active" { return (200, ["data": [:]]) }
             if path.hasSuffix("/interrupt") { interruptCount += 1; return (200, [:]) }
             if path.hasSuffix("/prompt") || path.hasSuffix("/command") {
@@ -1027,7 +1048,10 @@ private final class OpenCodeFixture: @unchecked Sendable {
             }
             if path.hasSuffix("/permission") { return (200, ["data": .array([["id": "perm_pending", "sessionID": "ses_fixture", "action": "shell", "resources": .array(["ls"]) ]])]) }
             if path.hasSuffix("/form") { return (200, ["data": .array([["id": "form_pending"], ["id": "form_done"]])]) }
-            if path.hasSuffix("/state") { return (200, ["data": ["status": path.contains("form_pending") ? "pending" : "answered"]]) }
+            if path.contains("/form/") {
+                if request.httpMethod == "DELETE" { return (204, .null) }
+                return (200, ["data": ["state": ["status": path.contains("form_pending") ? "pending" : "answered"]]])
+            }
             if path.hasSuffix("/inbox") { return (200, ["data": .array([])]) }
             if path == "/api/session", request.httpMethod == "GET" {
                 let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems ?? []
@@ -1061,7 +1085,7 @@ private final class FixtureProtocol: URLProtocol, @unchecked Sendable {
     override class func canInit(with request: URLRequest) -> Bool { ["fixture.invalid", "127.0.0.1"].contains(request.url?.host ?? "") }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
-        if (request.url?.path == "/api/health" && Self.fixture.holdHealth) || request.url?.path == Self.fixture.heldPath {
+        if (request.url?.path == "/api/info" && Self.fixture.holdHealth) || request.url?.path == Self.fixture.heldPath {
             let fixture = Self.fixture
             fixture.gate.arrive(self)
         } else { deliver() }

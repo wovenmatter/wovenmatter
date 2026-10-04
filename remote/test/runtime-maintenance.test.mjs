@@ -86,6 +86,26 @@ test('active host conversation or instance prevents mutation and two failures yi
   assert.match(value.diagnosticPrompt,/runtime_active/)
   assert.equal(sanitize('very-secret-token https://secret.example/?token=x Bearer abc123',{SECRET_TOKEN:'very-secret-token'}),'[redacted] [URL redacted] [redacted]')
 })
+test('OpenCode updates refuse active canonical and compatibility-alias processes', async t => {
+  const harness = { id: 'opencode', displayName: 'OpenCode', command: 'opencode', cliCommand: 'opencode', install: { kind: 'npm-global', package: '@opencode/cli@latest' } }
+  for (const process of ['opencode', 'opencode2', '/host/bin/opencode2', 'node /host/bin/opencode2.js']) {
+    let installs = 0
+    const f = await fixture(t, { catalog: new Map([['opencode', harness]]),
+      execute: async command => {
+        if (command === 'ps -eo pid=,args=') return { code: 0, output: `1234 ${process} serve --service` }
+        if (command.startsWith('command -v')) return { code: 0, output: '/host/bin/opencode' }
+        if (command.endsWith('--version')) return { code: 0, output: '2.0.22' }
+        if (command.startsWith('npm install')) { installs++; return { code: 0, output: '' } }
+        throw Error('Unexpected command: ' + command)
+      },
+    })
+    await f.service.start(harness, 'update', { confirmed: true, packageSpec: '@opencode/cli@2.1.7' })
+    const result = await finished(f.service)
+    assert.equal(result.operation.error, 'runtime_active_stop_conversations_or_server_first', process)
+    assert.equal(installs, 0, process)
+  }
+})
+
 test('successful exit without verifiable required runtime fails and supports retry',async t=>{
   const f=await fixture(t,{execute:async cmd=>cmd==='ps -eo pid=,args='?{code:0,output:''}:cmd.startsWith('npm install')?{code:0,output:'ok'}:{code:1,output:''}})
   await f.service.start(pi,'install',{confirmed:true});const value=await finished(f.service)
@@ -223,7 +243,7 @@ test('reviewed Pi preview pins execution even when registry latest changes', asy
   assert.equal(f.calls.some(c => c.includes('@latest') || c.includes('@0.85.0')), false)
 })
 
-test('npm action rejects foreign packages, tags and incompatible OpenCode pins; legacy Pi stays pinned', async t => {
+test('npm actions reject foreign packages, tags and OpenCode v1; reviewed releases stay fixed for each operation', async t => {
   const f = await fixture(t)
   for (const packageSpec of ['@foreign/package@0.84.4', '@earendil-works/pi-coding-agent@latest', '@earendil-works/pi-coding-agent@0.84.4;touch /tmp/unsafe']) {
     await f.service.start(pi, 'install', { confirmed: true, packageSpec })
@@ -235,12 +255,11 @@ test('npm action rejects foreign packages, tags and incompatible OpenCode pins; 
   await f.service.start(pi, 'install', { confirmed: true })
   await finished(f.service)
   assert.ok(f.calls.some(c => c.includes("'@earendil-works/pi-coding-agent@1.0.0'")))
-  const h = { id: 'opencode', displayName: 'OpenCode', command: 'opencode2', cliCommand: 'opencode2', install: { kind: 'npm-global', package: '@opencode/cli@0.0.0-beta-19278' } }
-  const other = await fixture(t, { catalog: new Map([['opencode', h]]) })
+  const h = { id: 'opencode', displayName: 'OpenCode', command: 'opencode2', cliCommand: 'opencode2', install: { kind: 'npm-global', package: '@opencode/cli@latest' } }
+  const other = await fixture(t, { catalog: new Map([['opencode', h]]), fetchImplementation: async () => ({ ok: true, json: async () => ({ version: '2.1.0' }) }) })
   const preview = await other.service.npmPreview(h)
-  assert.equal(preview.packageSpec, h.install.package)
-  assert.equal(other.requests, 0)
-  await other.service.start(h, 'install', { confirmed: true, packageSpec: '@opencode/cli@0.0.0-beta-99999' })
+  assert.equal(preview.packageSpec, '@opencode/cli@2.1.0')
+  await other.service.start(h, 'install', { confirmed: true, packageSpec: '@opencode/cli@1.18.29' })
   const failed = await finished(other.service)
   assert.equal(failed.operation.error, 'opencode_version_incompatible')
   assert.equal(other.executions, 0)
@@ -292,4 +311,31 @@ test('Hermes performs the official bounded update only on a clean idle checkout 
   assert.equal(final.components.find(c => c.id === 'transport').installedVersion, '0.21.2')
   assert.ok(calls.some(c => c.endsWith('acp --check')))
   assert.equal(calls.some(c => c.includes('--no-restart') || c.includes('--keep-stash') || c.includes('install.sh')), false)
+})
+
+test('OpenCode latest previews and updates accept newer v2 releases independently', async t => {
+  const root = await mkdtemp(resolve(tmpdir(), 'wm-opencode-update-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const harness = { id: 'opencode', displayName: 'OpenCode', command: 'opencode', cliCommand: 'opencode', install: { kind: 'npm-global', package: '@opencode/cli@latest' } }
+  let installed = '2.0.22', latest = '2.1.7'
+  const service = createRuntimeMaintenance({ catalog: new Map([['opencode', harness]]), workspaceRoot: root,
+    environment: () => ({ HOME: root }), acquireLock: async () => () => {},
+    fetchImplementation: async url => { assert.ok(url.endsWith('/latest')); return { ok: true, json: async () => ({ version: latest }) } },
+    execute: async command => {
+      if (command.startsWith('command -v')) return { code: 0, output: '/fixture/opencode' }
+      if (command.endsWith('--version')) return { code: 0, output: installed }
+      if (command.startsWith('npm install')) { assert.ok(command.includes('@opencode/cli@2.1.7')); installed = '2.1.7'; return { code: 0, output: '' } }
+      if (command === 'ps -eo pid=,args=') return { code: 0, output: '' }
+      throw Error('Unexpected command: ' + command)
+    },
+  })
+  assert.equal((await service.inventory(harness, true)).updateAvailable, true)
+  const preview = await service.npmPreview(harness)
+  assert.equal(preview.packageSpec, '@opencode/cli@2.1.7')
+  await service.start(harness, 'update', { confirmed: true, packageSpec: preview.packageSpec })
+  assert.equal((await finished(service)).operation.status, 'succeeded')
+  latest = '2.99.0'
+  assert.equal((await service.npmPreview(harness)).packageSpec, '@opencode/cli@2.99.0')
+  latest = '1.18.29'
+  await assert.rejects(service.npmPreview(harness), /version_incompatible/)
 })

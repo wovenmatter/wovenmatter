@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process'
 import { readFile, writeFile, mkdir, rename, realpath } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
+import { supportsOpenCodeVersion, openCodeCommands } from './opencode-compatibility.mjs'
 
 const quote = value => `'${String(value).replaceAll("'", "'\\''")}'`
 const failure = message => Object.assign(new Error(message), { statusCode: 409 })
@@ -25,7 +26,7 @@ export function validatedPackageSpec(harness, supplied) {
   if (typeof spec !== 'string' || !spec.startsWith(name + '@')) throw failure('invalid_package_spec')
   const version = spec.slice(name.length + 1)
   if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?(?:\+[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?$/.test(version)) throw failure('invalid_package_spec')
-  if (harness.id === 'opencode' && spec !== pinned) throw failure('opencode_version_incompatible')
+  if (harness.id === 'opencode' && !supportsOpenCodeVersion(version)) throw failure('opencode_version_incompatible')
   return spec
 }
 export function hermesCheck(output) {
@@ -151,9 +152,15 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
   }
   async function inventory(h, checkLatest = false) {
     const s = await state(h.id), previous = s.components ?? []
-    const main = await component('runtime', h.command, h.command)
+    let main = await component('runtime', h.command, h.command)
+    if (h.id === 'opencode' && !supportsOpenCodeVersion(main.installedVersion)) {
+      for (const command of openCodeCommands.filter(value => value !== h.command)) {
+        const alias = await component('runtime', command, command)
+        if (supportsOpenCodeVersion(alias.installedVersion)) { main = alias; break }
+      }
+    }
     if (h.minimumAdapterVersion && precedes(main.installedVersion, h.minimumAdapterVersion)) main.installed = false
-    if (h.id === 'opencode' && main.installedVersion !== h.install.package.split('@').at(-1)) main.installed = false
+    if (h.id === 'opencode' && !supportsOpenCodeVersion(main.installedVersion)) main.installed = false
     const components = [main]
     let adapterRoot = null, dependencyName = null, dependencyRange = null
     if (h.transportCheckCommand && !h.adapterPackage && !['opencode', 'hermes'].includes(h.id)) {
@@ -201,7 +208,7 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
         s.hermesNotice = available === null ? 'Latest unavailable.' : available ? 'Update available.' : 'Up to date.'
       }
       const packageName = h.adapterPackage ?? ({ pi: '@earendil-works/pi-coding-agent', openclaw: 'openclaw', opencode: '@opencode/cli' })[h.id]
-      if (packageName) main.latestVersion = await latest(packageName, h.id === 'opencode' ? h.install.package.split('@').at(-1) : 'latest')
+      if (packageName) main.latestVersion = await latest(packageName)
       else if (['grok_build', 'cursor'].includes(h.id)) {
         try {
           const response = await fetchImplementation(h.id === 'cursor' ? 'https://cursor.com/install' : 'https://x.ai/cli/stable', { signal: AbortSignal.timeout(10000) })
@@ -233,7 +240,7 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
       s.enabled = installed
       await persist()
     }
-    let notice = h.id === 'hermes' ? 'Native Hermes Gateway; updates require idle Hermes services.' : h.id === 'opencode' ? `OpenCode v2 compatibility is pinned to ${h.install.package.split('@').at(-1)}.` : h.adapterPackage ? 'Chat uses the adapter and bundled engine shown here; sign-in CLI updates do not update that engine.' : null
+    let notice = h.id === 'hermes' ? 'Native Hermes Gateway; updates require idle Hermes services.' : h.id === 'opencode' ? 'OpenCode v2 releases can be updated independently.' : h.adapterPackage ? 'Chat uses the adapter and bundled engine shown here; sign-in CLI updates do not update that engine.' : null
     if (h.id === 'hermes' && s.hermesNotice) notice += ' ' + s.hermesNotice
     const bundled = components.find(c => c.id === 'bundled')
     if (bundled?.latestVersion && bundled.latestVersion !== bundled.updateTargetVersion) notice += ' The newest bundled dependency may exceed the adapter’s declared compatibility; only compatible dependency updates are offered.'
@@ -247,7 +254,7 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
     // without returning command lines (which can contain credentials) to the client.
     const result = await run('ps -eo pid=,args=')
     if (result.code !== 0) throw failure('active_conversation_check_unavailable')
-    const names = [h.command, h.cliCommand]
+    const names = h.id === 'opencode' ? openCodeCommands : [h.command, h.cliCommand]
     return result.output.split('\n').some(line => !/ps -eo|\/bin\/bash -c/.test(line) && names.some(name => line.split(/\s+/).some(arg => arg === name || arg.endsWith('/' + name) || arg.endsWith('/' + name + '.js'))))
   }
   async function start(h, action, body) {
@@ -263,7 +270,7 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
         unlock = await acquireLock(resolve(environment().HOME, '.wovenmatter/runtime-operation.lock'), environment(), workspaceRoot)
         if (await busy(h)) throw failure('runtime_active_stop_conversations_or_server_first')
         let command
-        const pkg = h.install?.kind === 'npm-global' ? validatedPackageSpec(h, body.packageSpec) : null
+        const pkg = h.install?.kind === 'npm-global' ? validatedPackageSpec(h, body.packageSpec ?? (h.id === 'opencode' ? (await npmPreview(h)).packageSpec : undefined)) : null
         const adapter = h.adapterPackage ? ` && npm install --global --prefix "$HOME/.local" ${quote(h.adapterPackage + '@latest')}` : ''
         if (h.id === 'hermes' && action === 'update') {
           const executable = await component('runtime', h.command, h.command)
@@ -313,20 +320,22 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
     })()
     return op
   }
+  async function npmPreview(h) {
+    let packageSpec = h.install.package
+    if (h.id === 'pi' || h.id === 'opencode') {
+      const name = packageSpec.slice(0, packageSpec.lastIndexOf('@'))
+      const version = await latest(name)
+      if (!version) throw failure('latest_package_version_unavailable')
+      packageSpec = name + '@' + version
+    }
+    packageSpec = validatedPackageSpec(h, packageSpec)
+    return { harnessID: h.id, source: h.install.source, sha256: null, bytes: null,
+      packageSpec, command: `npm install --global --prefix "$HOME/.local" ${quote(packageSpec)}`,
+      verification: 'npm-registry-integrity' }
+  }
   return {
     inventory,
-    async npmPreview(h) {
-      let packageSpec = validatedPackageSpec(h)
-      if (h.id === 'pi') {
-        const name = packageSpec.slice(0, packageSpec.lastIndexOf('@'))
-        const version = await latest(name)
-        if (!version) throw failure('latest_package_version_unavailable')
-        packageSpec = validatedPackageSpec(h, name + '@' + version)
-      }
-      return { harnessID: h.id, source: h.install.source, sha256: null, bytes: null,
-        packageSpec, command: `npm install --global --prefix "$HOME/.local" ${quote(packageSpec)}`,
-        verification: 'npm-registry-integrity' }
-    },
+    npmPreview,
     async recordFailure(h, action, error) {
       const s = await state(h.id)
       if (operations.get(h.id) && !operations.get(h.id).finishedAt) return

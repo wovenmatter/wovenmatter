@@ -257,16 +257,16 @@
       "id": "opencode",
       "displayName": "OpenCode",
       "transport": "opencode-v2",
-      "command": "opencode2",
+      "command": "opencode",
       "arguments": [],
-      "cliCommand": "opencode2",
-      "transportCheckCommand": "opencode2 --version",
+      "cliCommand": "opencode",
+      "transportCheckCommand": "opencode --version",
       "install": {
         "kind": "npm-global",
-        "package": "@opencode/cli@0.0.0-beta-19278",
+        "package": "@opencode/cli@latest",
         "source": "https://registry.npmjs.org/@opencode/cli",
         "arguments": [],
-        "command": "npm install -g @opencode/cli@0.0.0-beta-19278"
+        "command": "npm install -g @opencode/cli@latest"
       },
       "authentication": {
         "statusCommands": [],

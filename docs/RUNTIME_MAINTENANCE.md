@@ -22,7 +22,7 @@ command output, account data, paths, or credentials.
 | Codex | `codex-acp`, bundled `@openai/codex`, standalone `codex` for sign-in; inherited `CODEX_PATH` overrides are reported | Official npm registry, exact adapter version; official Codex installer for outdated sign-in CLI. Adapter minimum is 1.11.0. No `CODEX_PATH` is set. |
 | Claude Code | `claude-agent-acp`, bundled `@anthropic-ai/claude-agent-sdk` and its platform-native Claude engine (legacy `cli.js` also supported), standalone `claude` sign-in CLI; inherited executable override is reported | Official npm adapter release; `claude update` for an outdated standalone CLI. |
 | Pi | `pi --mode rpc`, not ACP | Official `@earendil-works/pi-coding-agent` npm releases; exact managed package install. |
-| OpenCode | `opencode2` and separately running standard v2 service | Exact supported `@opencode/cli` prerelease; never use the reserved `latest` tag. Install/repair verifies the supported version. Arbitrary newer v2 releases require app compatibility work. Registered service version is shown separately and is not a live-health assertion. Existing service is not restarted. |
+| OpenCode | `opencode` (with `opencode2` fallback) and separately running standard v2 service | Current `@opencode/cli` release from `latest`; each install/update resolves a fresh release and verifies the 2.x family. Minor and patch updates are independently supported. Registered service version is shown separately and is not a live-health assertion. Existing service is not restarted. |
 | OpenClaw | Local `openclaw` CLI and separately linked gateways | Official npm `openclaw` release, managed CLI update. Does not update/restart gateways or install their provider runtimes. |
 | Cursor | Native `cursor-agent acp` | Version embedded in official Cursor installer; `cursor-agent update`. Same-date release hashes cannot be ordered and are not asserted to be newer. |
 | Grok Build | `grok … agent stdio` | Official stable release endpoint used by installer; `grok update`. |
@@ -97,8 +97,8 @@ and [remote maintenance](../remote/src/runtime-maintenance.mjs).
   [npm metadata](https://registry.npmjs.org/@agentclientprotocol%2fclaude-agent-acp/latest):
   0.76.0 declares SDK 0.3.257.
 - [Pi package](https://registry.npmjs.org/@earendil-works%2fpi-coding-agent/latest).
-- [OpenCode package](https://registry.npmjs.org/@opencode%2fcli/latest): reserved
-  placeholder; app's supported prerelease remains the compatibility authority.
+- [OpenCode package](https://registry.npmjs.org/@opencode%2fcli/latest): the current
+  stable v2 release; each install/update resolves this tag afresh.
 - [Cursor installation/update](https://docs.cursor.com/en/cli/installation) and
   [official installer](https://cursor.com/install).
 - [Grok CLI reference](https://docs.x.ai/build/cli/reference) and

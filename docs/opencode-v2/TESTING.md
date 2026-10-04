@@ -14,7 +14,7 @@ The app is `Woven Matter OpenCode Dev.app` under that cache's `DerivedData/Build
 ## Manual acceptance
 
 1. In **Settings → Local agent workspace**, a missing v2 CLI shows **Install**.
-   It installs `@opencode/cli@0.0.0-beta-19278` and changes to **Enable** without
+   It resolves the current `@opencode/cli` release and changes to **Enable** without
    enabling automatically. Check the runtime row's **Settings**, update, and
    **Hide/Show** controls. The server settings page may show **Download** when
    the local CLI is missing.
@@ -34,3 +34,14 @@ These steps include real model calls and belong to manual acceptance with the
 user's authorization. Automated tests must not consume provider services. The installed OpenCode desktop client must itself support v2 to validate shared v2 sessions; a v1 desktop is not a substitute.
 
 See [PARITY.md](PARITY.md) for the implementation boundary and persistence contract.
+
+## Provider-free stable contract check
+
+Set `WOVENMATTER_OPENCODE_TEST_EXECUTABLE` to an official v2 binary and run
+`swift test --package-path app --filter OpenCodeStableCompatibilityTests`.
+The opt-in test uses a temporary OpenCode home, temporary files, and XDG
+state/config/data/cache directories, with no provider environment credentials.
+It checks authenticated service discovery, reuse, session creation, pending-form
+recovery, cancellation, and shutdown
+without submitting a model prompt. Fixture tests additionally accept future v2
+versions, reject v1, and resolve a new current release on each update preview.

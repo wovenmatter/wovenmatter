@@ -278,7 +278,7 @@ private actor ApprovalHTTPFixture {
     }
     func response(_ request: URLRequest) async throws -> (Int, OpenCodeValue) {
         let path = request.url!.path
-        if path == "/api/health" { return (200, ["version": .string(OpenCodeConnection.supportedVersion), "healthy": .bool(true)]) }
+        if path == "/api/info" { return (200, ["version": .string("2.0.22"), "pid": .number(42)]) }
         if path == "/api/session/active" { return (200, ["data": [:]]) }
         let parts = path.split(separator: "/").map(String.init)
         let sessionID = parts.count >= 3 ? parts[2] : ""

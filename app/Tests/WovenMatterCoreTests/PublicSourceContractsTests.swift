@@ -437,6 +437,7 @@ struct PublicSourceContractsTests {
     #expect(document.harnesses.filter {
       $0.install.kind == "npm-global"
     }.allSatisfy {
+      if $0.id == .opencode { return $0.install.package == "@opencode/cli@latest" }
       guard let package = $0.install.package,
             let separator = package.lastIndex(of: "@"),
             separator != package.startIndex else { return false }
