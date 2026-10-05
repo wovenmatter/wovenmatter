@@ -10,7 +10,7 @@ const approval = () => Object.assign(new Error('This task needs approval. Open i
 const parseRegistration = bytes => { try { return JSON.parse(String(bytes)) } catch { throw before('The native service registration is invalid.') } }
 const pause = ms => new Promise(done => setTimeout(done, ms))
 const textUpdate = text => ({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } })
-const prompt = run => '[Woven Matter background task: use native workspace tools with the saved permissions. Mac notes, calendar, and other Woven Matter tools are unavailable while the Mac is disconnected.]\n\n' + run.task.prompt
+const prompt = run => run.task.prompt
 const deferred = () => { let resolve, reject; const promise = new Promise((a,b)=>{resolve=a;reject=b}); promise.catch(()=>{}); return {promise,resolve,reject} }
 
 export function createNativeTaskExecutor({workspaceRoot, environment, launch = spawn, hermes, instances, fetchRequest = fetch, WebSocketClass = WebSocket, read = readFile}) {

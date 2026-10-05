@@ -10,13 +10,11 @@ agents do not receive unrestricted SQL or credentials. Capability checks are
 enforced at the service, not only described in prompts. Help is available without
 loading unrelated history or tool documentation into the conversation.
 
-Built-in uses the Pi 1.x SDK with extensions disabled. Its model-visible tools
-are Pi's `read`, `bash`, `edit`, `write`, `grep`, `find`, and `ls`, plus Woven Matter's
-`web_search` and `web_read`. Mutating Pi tools retain Woven Matter approval checks.
-App capabilities are discovered through the session-bound CLI using `bash` and
-on-demand help; they are not a second independently maintained SDK tool catalog.
-Pi's MCP, code mode, tool search, and Durable runtime are not enabled by updating
-the SDK. Adding them requires a separate integration decision.
+Built-in uses the Pi SDK's system prompt and workspace instruction loading.
+Its coding tools retain Woven Matter approval checks. The native `web_search`
+and `web_read` tools keep their descriptions. Code mode follows the workspace's
+configured mode; it uses the same guarded tools. App capabilities use the
+session-bound CLI and on-demand help.
 
 ## Tools and access
 
@@ -28,7 +26,7 @@ The composer has a compact Tools dropdown with seven independent groups:
 | Conversation history | Search and selectively read conversations and full observed traces |
 | Session management | Discover session metadata, create sessions, message, inspect managed sessions and manage coordination |
 | Timers | Create, inspect, update, pause, resume and remove persistent session follow-ups |
-| Usage data | Read recorded usage; no mutation or credential access |
+| Usage data | Read recorded usage analytics and available cached account usage limits; no mutation or credential access |
 | Calendar | Read, create, edit, copy, detach and delete events and scheduled tasks, subject to the configured access mode |
 | Library | List and read exchanged-item metadata, original links, retention status, and source message IDs |
 
@@ -93,19 +91,21 @@ receipts with destination details and a link. Both directions remain inspectable
 Managed-session completion, failure and needs-input events notify the coordinator
 by default, with notification controls. A notification steers an active session
 or wakes an idle one. A finished turn is not automatically a completed assignment.
-Deliver notifications once, preserve attribution, and prevent notification-only
-reply loops. The user retains ownership of permission approvals.
+A delivered explicit reply replaces the completion fallback. Pending replies defer
+the fallback; failed replies still need one. Deliver notifications once, preserve
+attribution, and prevent notification-only reply loops. The user retains ownership of permission approvals.
 
 The conversation hover pop-out shows Created by only for agent-created sessions
 and Managed by only while coordination is active. Creation has no sidebar icon.
 Minimal sidebar indicators show active coordination and active timers only.
-All existing folder organization/moving behavior remains intact.
+Scheduled chats start with `Scheduled: <task title>`. Renames survive recurring
+runs, and `Scheduled Task` remains below the workspace information in the hover
+pop-out. All existing folder organization/moving behavior remains intact.
 
 ## Timers and concurrency
 
 Timers return to a session with a saved instruction, supporting one-time and
-recurring follow-ups. Definitions persist, but execute only while Woven Matter
-is running. Pausing, disabling or deleting removes active timer indicators.
+recurring follow-ups. Definitions persist and execute while the Woven Matter server is running. Pausing, disabling or deleting removes active timer indicators.
 Disabling the Timers group with active timers asks the user to confirm pausing
 them. Ordinary in-session timers remain distinct from provider Cron Jobs and
 Calendar tasks that create or reuse a configured session.

@@ -10,7 +10,8 @@ extension WorkspaceDatabaseConnection {
       try retireUnavailableCoordinationUnlocked()
       let rows = try historyRowsUnlocked("""
         SELECT r.id,r.conversation_id,r.status,r.error,r.user_message_id,r.started_at,
-          m.coordination_epoch FROM dashboard_runs r
+          coalesce(r.completed_at,r.updated_at,r.created_at) AS ended_at,
+          m.coordination_epoch,m.coordinator_id FROM dashboard_runs r
         JOIN workspace_session_relationships m ON m.session_id=r.conversation_id
         JOIN dashboard_conversations c ON c.id=r.conversation_id AND c.deleted_at IS NULL
         WHERE m.coordinator_id IS NOT NULL AND m.coordination_epoch IS NOT NULL
@@ -39,6 +40,16 @@ extension WorkspaceDatabaseConnection {
             """, values: [session, row["started_at"]?.stringValue])
         }
         let notificationOnly = !inputs.isEmpty && inputs.allSatisfy { $0.objectValue?["kind"]?.stringValue == "notification" }
+        // A queued reply can still arrive after the worker's turn ends. Wait
+        // for its receipt before deciding whether a fallback is needed.
+        let replies = try historyRowsUnlocked("""
+          SELECT status FROM workspace_session_deliveries
+          WHERE source_id=? AND target_id=? AND kind='message'
+            AND julianday(created_at)>=julianday(?) AND julianday(created_at)<=julianday(?)
+          """, values: [session, row["coordinator_id"]?.stringValue,
+            row["started_at"]?.stringValue, row["ended_at"]?.stringValue])
+        if replies.contains(where: { ["queued", "sending", "uncertain"].contains($0.objectValue?["status"]?.stringValue ?? "") }) { continue }
+        let replied = replies.contains { $0.objectValue?["status"]?.stringValue == "accepted" }
         let detail: String
         if status == "completed" {
           detail = "finished its turn."
@@ -47,7 +58,7 @@ extension WorkspaceDatabaseConnection {
           detail = "turn \(status == "failed" ? "failed" : "stopped").\(error)"
         }
         if let delivery = try recordCoordinationObservationUnlocked(sessionID: session, eventID: "run:" + id,
-            detail: detail + " Run: " + id + ".", suppress: notificationOnly) {
+            detail: detail + " Run: " + id + ".", suppress: notificationOnly || replied) {
           deliveries.append(delivery)
         }
       }

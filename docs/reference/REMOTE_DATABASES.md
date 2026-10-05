@@ -5,7 +5,7 @@ These limits apply to reads through the remote workspace service.
 
 ## Paths and access
 
-The catalog operates inside `Databases/<name>/` and records format guidance in
+The catalog operates inside `databases/<name>/` and records format guidance in
 `.wovenmatter/database.json`. External folder links and symlinks are not allowed.
 Linked reads use the authenticated workspace connection; a remote path is never
 treated as a Mac file. Older services need an explicit update in Settings.

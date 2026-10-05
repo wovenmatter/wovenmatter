@@ -172,7 +172,11 @@ extension ApplicationModel {
         let samples = try await recordedUsageSamples(from: start, to: end,
             limit: command.integer("limit", default: 100, range: 1...200),
             offset: command.integer("offset", default: 0, range: 0...(Int.max - 1)))
-        return try .value(samples)
+        struct UsageResult: Encodable {
+            let samples: [UsageSample]
+            let limits: [UsageLimitAccount]
+        }
+        return try .value(UsageResult(samples: samples, limits: localUsage?.limits ?? []))
     }
 
     private func toolConversation(_ id: String) async throws -> WorkspaceConversationRecord {

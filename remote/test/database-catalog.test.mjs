@@ -9,7 +9,7 @@ import { databaseOperation } from '../src/database-catalog.mjs'
 async function fixture(t) {
   const root = await mkdtemp(join(tmpdir(), 'remote-databases-'))
   t.after(() => rm(root, { recursive: true, force: true }))
-  await mkdir(join(root, 'Databases'))
+  await mkdir(join(root, 'databases'))
   return root
 }
 const create = (root, databaseID = 'Metrics', preference = 'none') => databaseOperation(root, { action: 'create', databaseID, preference })
@@ -18,14 +18,14 @@ const data = (root, relativePath, sqliteQuery) => databaseOperation(root, { acti
 test('catalog creation, agent-written discovery and preferences remain workspace scoped', async t => {
   const first = await fixture(t), second = await fixture(t)
   assert.deepEqual(await create(first, 'Metrics', 'sqlite'), { id: 'Metrics', name: 'Metrics', preference: 'sqlite' })
-  await mkdir(join(first, 'Databases', 'Agent data'))
+  await mkdir(join(first, 'databases', 'Agent data'))
   for (const folder of ['a'.repeat(129), 'agent\n scratch', 'agent\\scratch']) {
-    await mkdir(join(first, 'Databases', folder))
+    await mkdir(join(first, 'databases', folder))
   }
   assert.deepEqual((await databaseOperation(first, { action: 'list' })).databases.map(r => r.id), ['Agent data', 'Metrics'])
   assert.deepEqual(await databaseOperation(second, { action: 'list' }), { databases: [] })
   await databaseOperation(first, { action: 'preference', databaseID: 'Metrics', preference: 'json' })
-  assert.deepEqual(JSON.parse(await readFile(join(first, 'Databases/Metrics/.wovenmatter/database.json'))), { schema: 'wovenmatter.database.v1', preference: 'json' })
+  assert.deepEqual(JSON.parse(await readFile(join(first, 'databases/Metrics/.wovenmatter/database.json'))), { schema: 'wovenmatter.database.v1', preference: 'json' })
   await assert.rejects(create(first), /already exists/)
   for (const invalid of ['../escape', '.hidden', 'a/b', 'a\\b', '', 'a'.repeat(129)]) await assert.rejects(create(first, invalid), /Invalid database name/)
   await assert.rejects(create(first, 'Invalid', 'xml'), /Invalid data preference/)
@@ -34,13 +34,13 @@ test('catalog creation, agent-written discovery and preferences remain workspace
 test('JSON reads reject traversal, symlinks, special files and oversized content', async t => {
   const root = await fixture(t)
   await create(root, 'Metrics', 'json')
-  const db = join(root, 'Databases/Metrics')
+  const db = join(root, 'databases/Metrics')
   await writeFile(join(db, 'rows.json'), '[{"value":42}]')
   assert.equal(Buffer.from((await data(root, 'rows.json')).jsonBase64, 'base64').toString(), '[{"value":42}]')
   await writeFile(join(root, 'secret.json'), 'secret')
   await symlink(join(root, 'secret.json'), join(db, 'escape.json'))
   await symlink(root, join(db, 'outside'))
-  await symlink(db, join(root, 'Databases/Alias'))
+  await symlink(db, join(root, 'databases/Alias'))
   for (const path of ['../secret.json', '/secret.json', 'outside/secret.json', 'escape.json', '.wovenmatter/database.json', 'a//b']) {
     await assert.rejects(data(root, path))
   }
@@ -58,8 +58,8 @@ test('JSON reads reject traversal, symlinks, special files and oversized content
 
 test('root confinement refuses a linked Databases directory', async t => {
   const root = await fixture(t), outside = await fixture(t)
-  await rm(join(root, 'Databases'), { recursive: true })
-  await symlink(join(outside, 'Databases'), join(root, 'Databases'))
+  await rm(join(root, 'databases'), { recursive: true })
+  await symlink(join(outside, 'databases'), join(root, 'databases'))
   await assert.rejects(create(root))
   assert.deepEqual(await databaseOperation(outside, { action: 'list' }), { databases: [] })
 })
@@ -67,7 +67,7 @@ test('root confinement refuses a linked Databases directory', async t => {
 test('SQLite snapshot includes committed WAL and rejects writes, attachment and unsafe sidecars', async t => {
   const root = await fixture(t)
   await create(root, 'Metrics', 'sqlite')
-  const db = join(root, 'Databases/Metrics/events.sqlite')
+  const db = join(root, 'databases/Metrics/events.sqlite')
   // Keep the writer alive: closing the final connection would checkpoint the WAL.
   const writer = spawn('python3', ['-c', `import sqlite3,sys
 c=sqlite3.connect(sys.argv[1])
@@ -98,7 +98,7 @@ sys.stdin.read()
 test('oversized multi-column conversion is bounded before hex and JSON allocation', async t => {
   const root = await fixture(t)
   await create(root, 'Metrics', 'sqlite')
-  const db = join(root, 'Databases/Metrics/bounds.sqlite')
+  const db = join(root, 'databases/Metrics/bounds.sqlite')
   execFileSync('/usr/bin/python3', ['-c', 'import sqlite3,sys; sqlite3.connect(sys.argv[1]).close()', db])
   // Trace the real query/conversion path. Previously 16 MB of blobs expanded to
   // 112 MB of Python allocations before the response-size check rejected it.
@@ -115,7 +115,7 @@ except catalog.CatalogError as error:
     print(json.dumps({'error':str(error),'peak':tracemalloc.get_traced_memory()[1]}))
 finally:
     os.close(fd)
-`, join(import.meta.dirname, '../src/database-catalog.py'), join(root, 'Databases/Metrics')], { encoding: 'utf8' }))
+`, join(import.meta.dirname, '../src/database-catalog.py'), join(root, 'databases/Metrics')], { encoding: 'utf8' }))
   assert.match(measurement.error, /result is too large/)
   assert.ok(measurement.peak < 32 * 1024 * 1024, `conversion used ${measurement.peak} Python bytes`)
   for (const expression of ['zeroblob(1000000)', "printf('%1000000s','')", "replace(printf('%700000s',''),' ',char(1))"]) {
@@ -128,7 +128,7 @@ finally:
 test('bounded results retain 128 columns and nearly 4 MiB of text or hex output', async t => {
   const root = await fixture(t)
   await create(root, 'Metrics', 'sqlite')
-  const db = join(root, 'Databases/Metrics/bounds.sqlite')
+  const db = join(root, 'databases/Metrics/bounds.sqlite')
   execFileSync('/usr/bin/python3', ['-c', 'import sqlite3,sys; sqlite3.connect(sys.argv[1]).close()', db])
   for (const [expression, length] of [["printf('%32700s','')", 32700], ['zeroblob(16000)', 32000]]) {
     const query = 'SELECT ' + Array.from({ length: 128 }, (_, i) => `${expression} AS c${i}`).join(',')
@@ -145,7 +145,7 @@ test('Linux service bounds SQLite materialization and returns a controlled memor
   // fails closed unless hard_heap_limit is enforced. CI runs this on Linux.
   const root = await fixture(t)
   await create(root, 'Metrics', 'sqlite')
-  const db = join(root, 'Databases/Metrics/bounds.sqlite')
+  const db = join(root, 'databases/Metrics/bounds.sqlite')
   execFileSync('/usr/bin/python3', ['-c', 'import sqlite3,sys; sqlite3.connect(sys.argv[1]).close()', db])
   for (const expression of ["printf('%1000000s','')", 'zeroblob(1000000)']) {
     const query = 'SELECT ' + Array.from({ length: 128 }, (_, i) => `${expression} AS c${i}`).join(',')

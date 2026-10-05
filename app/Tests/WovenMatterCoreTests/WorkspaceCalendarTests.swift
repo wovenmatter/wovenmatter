@@ -100,12 +100,16 @@ struct WorkspaceCalendarTests {
     _ = try await insert(db, start: start, repeatRule: .init(unit: .day), mode: mode)
     let first = try await #require(db.dueCalendarRuns(now: start).first)
     try await accept(first, in: db, now: start)
+    #expect(try await db.workspaceOverview().conversations.first { $0.id == first.sessionID }?.isScheduledTask == true)
+    #expect(try await db.workspaceOverview().conversations.first { $0.id == first.sessionID }?.title == "Scheduled: Review")
+    try await db.mutateConversation(id: first.sessionID, mutation: .rename("My review"))
     let second = try await #require(db.dueCalendarRuns(now: start.addingTimeInterval(86_400)).first)
     #expect((first.sessionID == second.sessionID) == (mode == .same))
     #expect(first.id != second.id)
+    try await accept(second, in: db, now: start.addingTimeInterval(86_400))
     #expect(try await db.toolSessionCreationConfiguration(targetID: second.sessionID)?.model == "fixture-model")
     #expect(try await db.sessionTools(first.sessionID).enabled == [.notes, .calendar])
-    #expect(try await db.workspaceOverview().conversations.first { $0.id == first.sessionID }?.title == "Review")
+    #expect(try await db.workspaceOverview().conversations.first { $0.id == first.sessionID }?.title == "My review")
   }
 
   @Test func detachingRetainsSettingsAndSuppressesOnlyOriginalOccurrence() async throws {
@@ -603,7 +607,7 @@ extension WorkspaceCalendarTests {
     #expect(replacement.sessionID == original.sessionID && replacement.id != original.id)
     try await accept(replacement, in: db, now: start)
     let session = try await #require(db.workspaceOverview().conversations.first { $0.id == replacement.sessionID })
-    #expect(session.folderID == folder && session.title == "Updated task")
+    #expect(session.folderID == folder && session.title == "Scheduled: Updated task")
     #expect(try await db.sessionTools(session.id).enabled == [.notes])
   }
 }
@@ -723,7 +727,7 @@ extension WorkspaceCalendarTests {
     try await importTranscript(reopened)
     let session = try await #require(reopened.workspaceOverview().conversations.first { $0.id == run.sessionID })
     #expect(session.folderID == nil)
-    #expect(session.title == remoteTask.configuration.title)
+    #expect(session.title == "Scheduled: " + remoteTask.configuration.title)
     #expect(try await reopened.localACPSession(conversationID: run.sessionID).acpSessionID == "native-deleted-folder")
     #expect(try await reopened.calendarRuns().first?.task.configuration.folderID == folder)
     let savedConfiguration = try #require(await reopened.read { connection in

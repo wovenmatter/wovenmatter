@@ -173,5 +173,5 @@ async function runBuiltIn({run,nativeSessionID,signal,publish,bindSession,defaul
 }
 
 function backgroundPrompt(run) {
-  return '[Woven Matter background task: native workspace tools use this session’s saved permissions. Woven Matter notes, calendar, and other Mac workspace tools require the Mac app to be connected; do not claim access while it is disconnected.]\n\n' + run.task.prompt
+  return run.task.prompt
 }

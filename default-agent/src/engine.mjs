@@ -10,8 +10,6 @@ import { ClaudeRuntime, isClaude } from './claude-runtime.mjs';
 import { registerClaudeProviders } from './claude-provider.mjs';
 import { modelOption } from './model-presentation.mjs';
 
-const builtInInstructions = 'You are Built-in in Woven Matter. Work in the supplied agent workspace. Use the wovenmatter CLI and workspace instructions for notes and databases. Use web_search and web_read for current information and cite source URLs. If search is not configured, direct the user to Settings → Connections. Never claim a tool succeeded when it failed.';
-
 export class DefaultAgentEngine {
   constructor({ cwd, directory, config = {}, credentials = {}, credentialAccounts = {}, vault, requestCredentials, claude, requestPermission }) {
     this.cwd = cwd; this.directory = directory; this.config = validateConfig({ ...emptyConfig, ...config }); this.supplied = credentials; this.credentialAccounts = credentialAccounts; this.vault = vault; this.requestCredentials = requestCredentials; this.sessions = new Map();
@@ -208,8 +206,7 @@ export class DefaultAgentEngine {
             if (codeModeState.value === 'off') throw new Error('Code mode is disabled.');
             return tool.execute(...args);
           } }) : key === 'getSettings' ? () => ({ ...pi.getSettings(), codemode: { mode: codeModeState.value === 'only' ? 'only' : 'on' } }) : Reflect.get(target, key) }));
-      }],
-      appendSystemPrompt: [builtInInstructions] });
+      }] });
     await loader.reload();
     const record = { codeModeState, manager, cwd, selected, busy: false, permission: options.permission ?? 'normal', ordinaryTools: ['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls', 'web_search', 'web_read'] };
     const guardedTools = createCodingTools(cwd).map(tool => ({ ...tool, label: tool.label ?? tool.name,

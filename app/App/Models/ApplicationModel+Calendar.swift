@@ -213,10 +213,10 @@ extension ApplicationModel {
                     throw ApplicationModelError.remoteHarnessUnavailable
                 }
                 created = await createRemoteACPSession(target: target, requestedConversationID: id,
-                    nativeWorkingDirectory: directory, initialTitle: run.title, nativeWorkspaceID: config.nativeWorkspaceID)
+                    nativeWorkingDirectory: directory, initialTitle: "Scheduled: " + run.title, nativeWorkspaceID: config.nativeWorkspaceID)
             } else {
                 created = await createLocalACPSession(runtimeKind: config.runtimeKind, requestedConversationID: id,
-                    nativeWorkingDirectory: directory, initialTitle: run.title, nativeWorkspaceID: config.nativeWorkspaceID)
+                    nativeWorkingDirectory: directory, initialTitle: "Scheduled: " + run.title, nativeWorkspaceID: config.nativeWorkspaceID)
             }
             try dispatchFence.check()
             guard created == run.sessionID else { throw WorkspaceToolError.invalid(localRunError ?? "The scheduled session could not be created.") }

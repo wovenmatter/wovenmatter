@@ -2890,7 +2890,7 @@ final class ApplicationModel {
                 let root = inheritedRoot ?? workspaceRoot
                 return RemoteHarnessLaunchContext(launch: LocalACPRuntimeLaunchConfiguration(runtimeKind: .hermes,
                     executableURL: URL(fileURLWithPath: "/usr/bin/ssh"), arguments: [], environment: ["WOVENMATTER_HERMES_CONNECTION": encoded],
-                    processWorkingDirectoryURL: processDirectory), workspace: LocalACPWorkspaceLaunchConfiguration(rootURL: root, repositoriesURL: workspaceRoot.appending(path: "Repos"), databasesURL: workspaceRoot.appending(path: "Databases")))
+                    processWorkingDirectoryURL: processDirectory), workspace: LocalACPWorkspaceLaunchConfiguration(rootURL: root, repositoriesURL: workspaceRoot.appending(path: "repos"), databasesURL: workspaceRoot.appending(path: "databases")))
             }
             return try RemoteHarnessLaunchResolver.resolve(
                 configuration: configuration,

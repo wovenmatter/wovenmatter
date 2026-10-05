@@ -75,6 +75,29 @@ struct RuntimeBoundaryTests {
     ) == "AGENTS.md")
   }
 
+  @Test("workspace updates preserve personal instructions and colliding scratch files")
+  func workspaceUpgradePreservesContent() throws {
+    let fixture = try TemporaryDirectory(prefix: "wovenmatter-upgrade")
+    defer { fixture.remove() }
+    let root = fixture.url
+    for name in ["GUIDES", ".scratch", "scratch"] {
+      try FileManager.default.createDirectory(at: root.appending(path: name), withIntermediateDirectories: true)
+    }
+    try Data("legacy".utf8).write(to: root.appending(path: ".scratch/work.py"))
+    try Data("current".utf8).write(to: root.appending(path: "scratch/work.py"))
+    let personal = "Personal before\n<!-- BEGIN WOVEN MATTER MANAGED -->\nOld instructions\n<!-- END WOVEN MATTER MANAGED -->\nPersonal after\n"
+    try Data(personal.utf8).write(to: root.appending(path: "AGENTS.md"))
+    for _ in 0..<2 { _ = try LocalACPWorkspaceProvisioner.ensureWorkspace(at: root, repositoriesURL: nil) }
+    let names = try FileManager.default.contentsOfDirectory(atPath: root.path)
+    #expect(Set(["repos", "databases", "guides", "plans", "research", "work_logs", "outbox", "scratch", "skills"]).isSubset(of: Set(names)))
+    #expect(!names.contains(".scratch") && !names.contains("GUIDES"))
+    #expect(try String(contentsOf: root.appending(path: "scratch/work.py"), encoding: .utf8) == "current")
+    #expect(try String(contentsOf: root.appending(path: "scratch/work.py.migrated-1"), encoding: .utf8) == "legacy")
+    let instructions = try String(contentsOf: root.appending(path: "AGENTS.md"), encoding: .utf8)
+    #expect(instructions.hasPrefix("Personal before\n") && instructions.hasSuffix("Personal after\n"))
+    #expect(!instructions.contains("Old instructions"))
+  }
+
   @Test("local workspace folder preferences persist outside Keychain")
   func workspaceFolderPreferences() async throws {
     let fixture = try TemporaryDirectory(prefix: "wovenmatter-workspace-preferences")
@@ -222,8 +245,8 @@ struct RuntimeBoundaryTests {
         processWorkingDirectory: URL(fileURLWithPath: "/private/tmp"),
         workspaceRoot: URL(fileURLWithPath: "/home/shared"), workingDirectory: directory)
       #expect(inherited.workspace.rootURL == directory)
-      #expect(inherited.workspace.repositoriesURL.path == "/home/shared/Repos")
-      #expect(inherited.workspace.databasesURL.path == "/home/shared/Databases")
+      #expect(inherited.workspace.repositoriesURL.path == "/home/shared/repos")
+      #expect(inherited.workspace.databasesURL.path == "/home/shared/databases")
       #expect(inherited.launch.processWorkingDirectoryURL?.path == "/private/tmp")
       #expect(inherited.launch.arguments.last?.contains("'--workdir' '/home/projects/a quoted '\\'' directory'") == true)
     }
