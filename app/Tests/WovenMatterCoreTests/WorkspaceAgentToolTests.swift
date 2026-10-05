@@ -6,6 +6,27 @@ import WovenMatterClient
 
 @Suite("Agent tools access, coordination and timers")
 struct WorkspaceAgentToolTests {
+  @Test func inputCapturesAreImmutableSessionScopedAndPermissionChecked() async throws {
+    let (db, dir, caller, other) = try await fixture()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let first = try await db.captureInputContext(conversationID: caller, noteID: "note-a")
+    let later = try await db.captureInputContext(conversationID: caller, noteID: "note-b")
+    let empty = try await db.captureInputContext(conversationID: caller, noteID: nil)
+    #expect(try await db.inputContext(id: first, callerID: caller) == "note-a")
+    #expect(try await db.inputContext(id: later, callerID: caller) == "note-b")
+    #expect(try await db.inputContext(id: empty, callerID: caller) == nil)
+    for id in [first, nil, "missing"] {
+      await #expect(throws: (any Error).self) { try await db.inputContext(id: id, callerID: other) }
+    }
+    let reopened = try await WorkspaceDatabase(url: dir.appending(path: "workspace.sqlite"))
+    #expect(try await reopened.inputContext(id: first, callerID: caller) == "note-a")
+    try await db.setSessionTools(.init(enabled: []), sessionID: caller)
+    await #expect(throws: WorkspaceToolError.disabled(.notes)) { try await db.inputContext(id: first, callerID: caller) }
+    let disabled = try await db.captureInputContext(conversationID: caller, noteID: "not-captured")
+    try await db.setSessionTools(.init(enabled: [.notes]), sessionID: caller)
+    #expect(try await db.inputContext(id: disabled, callerID: caller) == nil)
+  }
+
   @Test func replacementTablesAreValidatedBeforeApplyingABatch() async throws {
     let malformed = NoteTableBlock(id: "table", columns: [NoteTableColumn()],
       rows: [NoteTableRow(cells: [])])

@@ -141,11 +141,16 @@ struct PiRPCSettlementTests {
     let fixture=PiPipeFixture(recorder:{ direction,data in capture.append(direction,data) })
     let server=Task { try await fixture.serve(settles:true) }
     try await fixture.initialize()
-    #expect(try await fixture.client.prompt("capture this prompt") == .endTurn)
+    let input = AgentMessageInput(text: "capture this prompt", cliContext: .init(executablePath: "/tmp/wovenmatter", socketPath: nil, captureID: "captured-input"))
+    #expect(try await fixture.client.prompt(input) == .endTurn)
     try await server.value
     await fixture.client.shutdown()
     #expect(capture.values.contains { $0.0 == "in" && $0.1.contains("future_native_event") })
     #expect(capture.values.contains { $0.0 == "out" && $0.1.contains("capture this prompt") })
+    let wire = try #require(capture.values.first { $0.0 == "out" && $0.1.contains("capture this prompt") })
+    let payload = try #require(JSONSerialization.jsonObject(with: Data(wire.1.utf8)) as? [String: Any])
+    #expect(payload["message"] as? String == input.text)
+    #expect(((payload["_meta"] as? [String: Any])?["wovenTools"] as? [String: Any])?["captureID"] as? String == "captured-input")
   }
 
   @Test func acknowledgedPromptThenEOFThrows() async throws {

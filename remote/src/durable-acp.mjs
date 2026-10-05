@@ -283,7 +283,9 @@ export function createDurableACP({ catalog, workspaceRoot, environment, isEnable
       channel.state = 'stopped'
       throw new Error('Background execution or harness is disabled')
     }
-    const child = spawnProcess(harness.command, args, {
+    const wrapped = ['codex', 'claude_code', 'cursor', 'grok_build', 'pi'].includes(selected);
+    const child = spawnProcess(wrapped ? process.execPath : harness.command, wrapped
+      ? [new URL('../../harnesses/cli/adapter.mjs', import.meta.url).pathname, selected, harness.command, ...args] : args, {
       cwd: workingDirectory, env: { ...environment(harness), ...(selected === 'pi' ? { WOVENMATTER_LOCAL_PI: '1' } : {}) }, stdio: ['pipe', 'pipe', 'pipe'],
     })
     channel.process = child
@@ -340,12 +342,19 @@ export function createDurableACP({ catalog, workspaceRoot, environment, isEnable
     const operation = path.slice('/v1/durable-acp/'.length)
     const result = await serialize(async () => {
       if (!await isEnabled()) throw new Error('Background execution is disabled')
-      if (!['attach', 'message', 'poll', 'recover'].includes(operation)) throw new Error('Unknown relay operation')
+      if (!['attach', 'message', 'poll', 'recover', 'cli'].includes(operation)) throw new Error('Unknown relay operation')
       const channel = await channelFor(body.channelID, body.harnessID, body.cwd, body.permission, body.nativeSessionID, operation === 'recover')
       if (['attach', 'recover'].includes(operation) && body.attachmentProtocol === 1) {
         // This shares the native admission queue: earlier requests are already
         // accounted for, while delayed requests from the old relay cannot admit.
         channel.attachmentToken = randomUUID()
+      }
+      if (operation === 'cli') {
+        if (!channel.attachmentToken || body.attachmentToken !== channel.attachmentToken) throw new Error('This session attachment was replaced')
+        if (!channel.process || channel.state !== 'running') throw new Error('Native process is unavailable')
+        if (!body.context || typeof body.context.executablePath !== 'string' || !body.context.executablePath.startsWith('/')) throw new Error('Invalid CLI connection')
+        channel.process.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'woven/cli', params: body.context }) + '\n')
+        return { ready: true }
       }
       if (operation === 'message') {
         if ((channel.attachmentToken || body.attachmentToken) && body.attachmentToken !== channel.attachmentToken) {
@@ -371,7 +380,10 @@ export function createDurableACP({ catalog, workspaceRoot, environment, isEnable
           && [...channel.snapshot.runs.values()].some(run => run.runID === body.message._meta.wovenRunID)
         if (channel.snapshot.busy && channel.harnessID === 'pi' && !samePiRunSteering && !['get_state', 'get_available_models', 'get_available_thinking_levels', 'get_commands', 'abort', 'steer', 'follow_up', 'extension_ui_response'].includes(body.message.type)) throw new Error('Remote task is still running; reconnect after it finishes')
         const outgoing = { ...body.message }
-        if (channel.harnessID === 'pi') delete outgoing._meta
+        if (channel.harnessID === 'pi' && outgoing._meta) {
+          if (outgoing._meta.wovenTools) outgoing._meta = { wovenTools: outgoing._meta.wovenTools };
+          else delete outgoing._meta
+        }
         const line = JSON.stringify(outgoing) + '\n'
         if (Buffer.byteLength(line) > 8 * 1024 * 1024) throw new Error('ACP message is too large')
         const accepted = { type: 'accepted', deliveryID: body.deliveryID, message: body.message }

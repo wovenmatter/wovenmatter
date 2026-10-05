@@ -107,7 +107,11 @@ if [ ! -e "$agents_file" ]; then
 elif ! grep -Fq "$managed_begin" "$agents_file"; then
   printf '\n' >> "$agents_file"
   cat "$managed_file" >> "$agents_file"
-else
+elif awk -v begin="$managed_begin" -v end="$managed_end" '
+  $0 == begin { starts++ }
+  $0 == end { ends++; if (!starts) invalid = 1 }
+  END { exit !(starts == 1 && ends == 1 && !invalid) }
+' "$agents_file"; then
   awk -v begin="$managed_begin" -v end="$managed_end" -v managed="$managed_file" '
     $0 == begin {
       while ((getline line < managed) > 0) print line

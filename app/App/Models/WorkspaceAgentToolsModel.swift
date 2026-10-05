@@ -342,10 +342,9 @@ final class WorkspaceAgentToolsModel {
         if !passiveProjection { try? FileManager.default.removeItem(at: endpointDirectory) }
     }
 
-    func discovery(sessionID: String, remote: RemoteWorkspaceConfiguration? = nil, noteID: String? = nil) async throws -> String {
+    func cliContext(sessionID: String, remote: RemoteWorkspaceConfiguration? = nil, captureID: String) async throws -> AgentCLIContext {
         let path = try await endpoint(for: sessionID)
         let cliPath: String
-        var exports: [String]
         if let remote {
             if let bridge = remoteBridges[sessionID], bridge.isRunning {
                 cliPath = bridge.remoteCLIPath
@@ -366,32 +365,14 @@ final class WorkspaceAgentToolsModel {
                 remoteBridges[sessionID] = bridge
                 cliPath = bridge.remoteCLIPath
             }
-            exports = ["unset WOVENMATTER_SOCKET"]
         } else {
             guard let resource = Bundle.main.resourceURL?.appending(path: "wovenmatter"), FileManager.default.isExecutableFile(atPath: resource.path) else {
                 throw WorkspaceToolError.invalid("The bundled Woven Matter CLI is missing.")
             }
             cliPath = resource.path
-            exports = ["export WOVENMATTER_SOCKET=" + Self.quote(path)]
         }
-        exports.append("export WOVENMATTER_CLI=" + Self.quote(cliPath))
-        if let noteID { exports.append("export WOVENMATTER_NOTE_ID=" + Self.quote(noteID)) }
-        else { exports.append("unset WOVENMATTER_NOTE_ID") }
-        let enabled = try await database.sessionTools(sessionID).enabled
-        let groups = WorkspaceToolGroup.allCases.filter { enabled.contains($0) }.map(\.rawValue).joined(separator: ", ")
-        return """
-        <wovenmatter-tools>
-        This is Woven Matter session \(sessionID). Its enabled app tools are: \(groups.isEmpty ? "none" : groups).
-        Use this session-bound CLI for app data and session actions. Read detailed help only when needed; do not open the app's SQLite files.
-        \(exports.joined(separator: "\n"))
-        "$WOVENMATTER_CLI" help
-        "$WOVENMATTER_CLI" GROUP help
-        Session messages are attributed to you. Read only relevant history. Managing a session is an ongoing assignment; release it when finished. Tool changes take effect immediately.
-        </wovenmatter-tools>
-        """
+        return AgentCLIContext(executablePath: cliPath, socketPath: remote == nil ? path : nil, captureID: captureID)
     }
-
-    private static func quote(_ value: String) -> String { "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'" }
 
     func handle(_ request: WovenMatterToolRequest, callerID: String) async -> WovenMatterToolResponse {
         await execute(request, callerID: callerID).bounded()
@@ -417,7 +398,11 @@ final class WorkspaceAgentToolsModel {
             if command.wantsHelp {
                 return .init(result: .object(["help": .string(WovenMatterToolCommand.help(for: command))]))
             }
-            guard let group = command.group else { throw WorkspaceToolError.invalid("Choose a tool group.") }
+            if command.action == "context" {
+                let id = try await database.inputContext(id: request.contextID, callerID: callerID)
+                return .init(result: id.map(GatewayJSONValue.string) ?? .null, requestID: request.requestID)
+            }
+            guard let group = command.group else { throw WorkspaceToolError.invalid("Choose a tool.") }
             // Scoped history reads have their own independent attachment/management
             // checks. All other commands require the group's current capability.
             if group != .history { try await database.requireTool(group, sessionID: callerID) }

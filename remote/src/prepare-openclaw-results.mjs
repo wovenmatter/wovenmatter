@@ -26,7 +26,7 @@ export async function prepareOpenClawResults({ executable = 'openclaw', environm
   }
   mkdirSync(destination, { recursive: true, mode: 0o700 })
   // The installed path survives app moves and container image replacement.
-  cpSync(source, destination, { recursive: true })
+  cpSync(source, destination, { recursive: true, dereference: true })
   const profile = environment.OPENCLAW_CONFIG_PATH ?? environment.OPENCLAW_STATE_DIR ?? environment.OPENCLAW_PROFILE ?? 'default'
   const scope = createHash('sha256').update(profile).digest('hex')
   const directory = resolve(environment.HOME, '.wovenmatter', 'scheduled-results', 'openclaw', scope)

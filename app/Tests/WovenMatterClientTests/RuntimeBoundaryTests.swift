@@ -96,6 +96,10 @@ struct RuntimeBoundaryTests {
     let instructions = try String(contentsOf: root.appending(path: "AGENTS.md"), encoding: .utf8)
     #expect(instructions.hasPrefix("Personal before\n") && instructions.hasSuffix("Personal after\n"))
     #expect(!instructions.contains("Old instructions"))
+    let incomplete = "Personal before\n<!-- BEGIN WOVEN MATTER MANAGED -->\nPersonal after\n"
+    try Data(incomplete.utf8).write(to: root.appending(path: "AGENTS.md"))
+    _ = try LocalACPWorkspaceProvisioner.ensureWorkspace(at: root, repositoriesURL: nil)
+    #expect(try String(contentsOf: root.appending(path: "AGENTS.md"), encoding: .utf8) == incomplete)
   }
 
   @Test("local workspace folder preferences persist outside Keychain")

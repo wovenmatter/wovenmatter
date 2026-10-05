@@ -46,7 +46,7 @@ class RemoteToolTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             file = Path(root) / "artifact.html"
             file.write_text("<h1>Remote body</h1>")
-            request = json.loads(tools.build_request(["notes", "set-html", "--file", str(file)], {"WOVENMATTER_NOTE_ID": "note-a"}))
+            request = json.loads(tools.build_request(["notes", "set-html", "--file", str(file), "--note-id", "note-a"], {"WOVENMATTER_NOTE_ID": "note-a"}))
             self.assertEqual(request["arguments"], ["notes", "set-html", "--html", "<h1>Remote body</h1>", "--note-id", "note-a"])
             self.assertNotIn("callerID", request)
             self.assertNotIn("sourceID", request)
@@ -61,7 +61,7 @@ class RemoteToolTests(unittest.TestCase):
         self.assertEqual(request["requestID"], request_id)
         args = ["notes", "append", "--text", "--note-id", "--request-id", request_id]
         request = json.loads(tools.build_request(args, {"WOVENMATTER_NOTE_ID": "note-a"}))
-        self.assertEqual(request["arguments"], args + ["--note-id", "note-a"])
+        self.assertEqual(request["arguments"], args)
         args = ["notes", "append", "--text", "--request-id"]
         self.assertEqual(json.loads(tools.build_request(args, {}))["arguments"], args)
 
@@ -72,9 +72,14 @@ class RemoteToolTests(unittest.TestCase):
             self.assertEqual(request["arguments"], args)
         args = ["notes", "read", "--offset", "10"]
         request = json.loads(tools.build_request(args, {"WOVENMATTER_NOTE_ID": "attached-note"}))
-        self.assertEqual(request["arguments"], args + ["--note-id", "attached-note"])
+        self.assertEqual(request["arguments"], args)
         with self.assertRaises(ValueError):
             tools.build_request(["notes", "list"] + [""] * 1023, {})
+
+    def test_context_binding_is_carried_outside_command_arguments(self):
+        request = json.loads(tools.build_request(["context"], {"WOVENMATTER_CONTEXT_ID": "captured-input"}))
+        self.assertEqual(request["arguments"], ["context"])
+        self.assertEqual(request["contextID"], "captured-input")
 
     def test_receive_deadline_cannot_be_extended_by_trickle_input(self):
         class TrickleConnection:

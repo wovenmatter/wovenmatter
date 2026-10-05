@@ -4,8 +4,9 @@ Woven Matter exposes app data and session actions through its bundled CLI.
 Conversations remain ordinary sessions in their existing folders.
 
 The bundled `wovenmatter` CLI replaces `woven-note`. Every supported harness,
-locally and in managed remote workspaces, receives a session-bound invocation
-and compact discovery instructions. Commands call the owning app's services;
+locally and in managed remote workspaces, receives its CLI connection through
+native hooks or session extensions. Ordinary messages keep their authored text;
+workspace AGENTS.md points agents to CLI help. Commands call the owning app's services;
 agents do not receive unrestricted SQL or credentials. Capability checks are
 enforced at the service, not only described in prompts. Help is available without
 loading unrelated history or tool documentation into the conversation.
@@ -15,6 +16,21 @@ Its coding tools retain Woven Matter approval checks. The native `web_search`
 and `web_read` tools keep their descriptions. Code mode follows the workspace's
 configured mode; it uses the same guarded tools. App capabilities use the
 session-bound CLI and on-demand help.
+
+## Open asset context
+
+`wovenmatter context` returns the asset ID captured when the human sent the
+message, or a null ID if no asset was open. Notes permission applies at capture
+and at query time. Automatic and agent-authored messages carry empty captures.
+Opening another asset or submitting a queued message cannot change an earlier
+input's capture. Native input consumption selects the binding; each shell call
+retains it even if another input is consumed while that call is running.
+
+The connection and capture travel as transport metadata, outside model messages.
+ACP hooks, Pi extensions, and the OpenCode, Hermes, and OpenClaw native plugins
+supply the CLI to shell tools. Reconnection updates the endpoint while retaining
+the originating capture. Independent remote schedules retain their existing
+execution model without a borrowed Mac CLI connection.
 
 ## Tools and access
 

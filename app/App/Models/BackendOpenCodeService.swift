@@ -12,7 +12,7 @@ enum BackendOpenCodeCommand: Codable, Sendable {
     case sessionCall(String, String, String, OpenCodeValue?)
     case settingsModels(String), calendarMetadata(String, String?), catalog(String)
     case selections(String, SessionSelections), updateSelection(String, String?, String?, String?)
-    case send(String, AgentMessageInput, String?)
+    case send(String, AgentMessageInput)
     case visible(String, Bool)
     case watch(String), older(String), refresh(String), file(String, String)
     case acknowledge(String, OpenCodeValue)

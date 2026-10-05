@@ -1,10 +1,12 @@
 import { createResultStore } from './store.mjs'
+import { registerCLI } from './cli.mjs'
 
 export default {
   id: 'wovenmatter-scheduled-results',
   name: 'Woven Matter scheduled results',
   register(api) {
     const store = createResultStore(api.pluginConfig.directory)
+    registerCLI(api, api.pluginConfig.directory)
     const capture = callback => (...args) => {
       try { callback(...args) }
       catch {

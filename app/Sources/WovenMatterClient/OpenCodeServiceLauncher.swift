@@ -6,6 +6,7 @@ public enum OpenCodeServiceLauncher {
     /// launch; a live incompatible/unhealthy service is never replaced.
     public static func ensure(executable: URL?, registration: URL = OpenCodeConnection.registrationURL(),
                               clientFactory: @Sendable (OpenCodeConnection) -> OpenCodeHTTPClient = { OpenCodeHTTPClient(connection: $0) }) async throws -> OpenCodeConnection {
+        try await NativeCLIAdapter.installOpenCode()
         if FileManager.default.fileExists(atPath: registration.path) {
             let existing = try OpenCodeConnection.discover(file: registration)
             do { _ = try await clientFactory(existing).health(); return existing }

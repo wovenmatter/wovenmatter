@@ -281,11 +281,23 @@ public actor DashboardStore {
         port: port
       )
     }
+    var environment = ProcessInfo.processInfo.environment
+    for key in resolved.launch.environmentKeysToRemove { environment.removeValue(forKey: key) }
+    for prefix in resolved.launch.environmentKeyPrefixesToRemove {
+      for key in environment.keys where key.hasPrefix(prefix) { environment.removeValue(forKey: key) }
+    }
+    environment.merge(resolved.launch.environment) { _, configured in configured }
+    try await prepareLocalOpenClawResults(executable: resolved.launch.executableURL, environment: environment)
     _ = try await localOpenClawGateways.ensure(
       agentID: enrollmentID, identity: identity,
       launch: resolved.launch, workingDirectory: resolved.workingDirectory
     )
     return OpenClawGatewayEndpointResolver.localAgentWorkspace(port: port)
+  }
+
+  public func setCLIConnectionProvider(_ provider: @escaping @Sendable (String) async throws -> AgentCLIContext?) async throws {
+    try await openClawGateway.setCLIConnectionProvider(provider)
+    try await localSessions.setCLIConnectionProvider(provider)
   }
 
   private func prepareLocalOpenClawResults(executable: URL, environment: [String: String]) async throws {

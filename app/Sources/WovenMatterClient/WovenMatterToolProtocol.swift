@@ -12,11 +12,14 @@ public struct WovenMatterToolRequest: Codable, Sendable {
   public var requestID: String
   public var arguments: [String]
   public var noteEdit: NoteEditingRequest?
-  public init(arguments: [String], requestID: String = UUID().uuidString.lowercased(), noteEdit: NoteEditingRequest? = nil) {
+  /// Immutable input binding supplied by the native tool integration.
+  public var contextID: String?
+  public init(arguments: [String], requestID: String = UUID().uuidString.lowercased(), noteEdit: NoteEditingRequest? = nil, contextID: String? = nil) {
     self.schemaVersion = 1
     self.requestID = UUID(uuidString: requestID)?.uuidString.lowercased() ?? requestID
     self.arguments = arguments
     self.noteEdit = noteEdit
+    self.contextID = contextID
   }
   /// The transport's request ID is not part of the operation's arguments. A
   /// retry may add the returned ID without changing the original operation.
@@ -101,6 +104,14 @@ public struct WovenMatterToolCommand: Sendable {
       return
     }
     let domain = args.removeFirst()
+    if domain == "context" {
+      guard args.isEmpty || [["help"], ["--help"], ["-h"]].contains(Array(args)) else {
+        throw WorkspaceToolError.invalid("Usage: wovenmatter context")
+      }
+      self.group = nil; self.action = "context"; self.positional = []; self.options = [:]
+      self.optionIndices = [:]; self.operationArguments = arguments; self.wantsHelp = !args.isEmpty
+      return
+    }
     guard let group = WorkspaceToolGroup(rawValue: domain) else {
       throw WorkspaceToolError.invalid("Unknown tool group '\(domain)'. Run wovenmatter help.")
     }
@@ -308,6 +319,7 @@ public struct WovenMatterToolCommand: Sendable {
   public static let usage = """
     Use the WovenMatter CLI to access the tools below and get the most out of WovenMatter.
 
+      context     Read the open asset ID captured for the message being processed
       notes       Discover, read and edit notes, spreadsheets and HTML; recover versions
       history     Search conversations and read observed transcripts and traces
       sessions    Create, message and coordinate ordinary Woven Matter sessions
@@ -429,7 +441,19 @@ public struct WovenMatterToolCommand: Sendable {
     return "Usage: wovenmatter \(group.rawValue) COMMAND [OPTIONS]\n\n" + body + "\n"
   }
 
+  public static let contextHelp = """
+    Usage: wovenmatter context
+
+    Read the ID of the note, spreadsheet or HTML asset that was open when the user
+    sent the message being processed. Each user message has its own captured ID.
+    Switching assets afterward does not change that message's capture.
+    No asset is returned if none was open, or if another session or a schedule sent the message.
+    Only the ID is returned. Use wovenmatter notes read --note-id ID to read its contents.
+    Requires Notes access for this session.
+    """ + "\n"
+
   public static func help(for command: WovenMatterToolCommand) -> String {
+    if command.action == "context" { return contextHelp }
     guard let group = command.group, command.action != "help" else {
       return command.group.map(help) ?? usage
     }
