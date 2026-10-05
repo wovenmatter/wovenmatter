@@ -41,10 +41,10 @@ extension WorkspaceDatabaseConnection {
         let notificationOnly = !inputs.isEmpty && inputs.allSatisfy { $0.objectValue?["kind"]?.stringValue == "notification" }
         let detail: String
         if status == "completed" {
-          detail = "Finished a turn. The assignment remains managed; review its result before deciding whether to send more work or release coordination."
+          detail = "finished its turn."
         } else {
           let error = row["error"]?.stringValue.map { " " + String(WorkspaceHistoryPrivacy.redactingToolEndpoints($0).prefix(2_000)) } ?? ""
-          detail = "The turn \(status == "failed" ? "failed" : "stopped").\(error)"
+          detail = "turn \(status == "failed" ? "failed" : "stopped").\(error)"
         }
         if let delivery = try recordCoordinationObservationUnlocked(sessionID: session, eventID: "run:" + id,
             detail: detail + " Run: " + id + ".", suppress: notificationOnly) {
@@ -62,8 +62,8 @@ extension WorkspaceDatabaseConnection {
       try retireUnavailableCoordinationUnlocked(sessionID: sessionID)
       return try recordCoordinationObservationUnlocked(sessionID: sessionID, eventID: "input:" + requestID,
         detail: requiresUserApproval
-          ? "Needs user approval. The user must answer the permission request in Woven Matter; do not approve it on their behalf."
-          : "Needs input. Inspect the session and help with the work if appropriate. User-facing questions remain available in Woven Matter.",
+          ? "needs user approval."
+          : "needs input.",
         suppress: false)
     }
   }
@@ -78,7 +78,7 @@ extension WorkspaceDatabaseConnection {
           try sessionToolsUnlocked(target).enabled.contains(.sessions) else { return nil }
     let title = try historyRowsUnlocked("SELECT title FROM dashboard_conversations WHERE id=? AND deleted_at IS NULL", values: [sessionID]).first?.objectValue?["title"]?.stringValue ?? "Session"
     return try reserveToolDeliveryUnlocked(sourceID: sessionID, targetID: target,
-      text: "Woven Matter update from “\(title)” (\(sessionID)).\n\(detail)",
+      text: "Session “\(title)” (\(sessionID)): \(detail)",
       requestID: UUID().uuidString.lowercased(), kind: .notification,
       eventKey: "coordination:" + epoch + ":" + eventID)
   }

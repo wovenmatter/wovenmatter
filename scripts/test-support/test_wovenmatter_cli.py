@@ -68,7 +68,7 @@ class BundledCLITests(unittest.TestCase):
                 env={**os.environ, "WOVENMATTER_SOCKET": "/nonexistent/wovenmatter-test.sock"},
                 capture_output=True, text=True, timeout=10)
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn("wovenmatter", result.stdout)
+            self.assertIn("wovenmatter", result.stdout.lower())
 
     def test_literal_flag_value_and_request_id_reach_bound_endpoint(self):
         identity = "10000000-0000-4000-8000-000000000001"

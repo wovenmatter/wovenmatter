@@ -91,7 +91,7 @@ export function createTaskExecutor({ catalog,workspaceRoot,environment,defaultAg
           const allow=config.runtimeKind==='cursor' && config.permission==='auto' && message.params?.options?.find(o=>o.kind==='allow_once')
           send({jsonrpc:'2.0',id:message.id,result:{outcome:allow?{outcome:'selected',optionId:allow.optionId}:{outcome:'cancelled'}}})
           if (!allow) { needsApproval=true; publish({sessionUpdate:'agent_message_chunk',content:{type:'text',text:'\nThis task needs approval. Open its session to continue.\n'}}) }
-        } else send({jsonrpc:'2.0',id:message.id,error:{code:-32601,message:'This background task cannot access interactive client tools.'}})
+        } else send({jsonrpc:'2.0',id:message.id,error:{code:-32601,message:'Interactive client tools are unavailable for this session.'}})
       } else if (message.method==='session/update' && message.params?.update) publish(message.params.update)
       else if (message.id!=null && pending.has(message.id)) {
         const entry=pending.get(message.id);pending.delete(message.id);clearTimeout(entry.timer)
