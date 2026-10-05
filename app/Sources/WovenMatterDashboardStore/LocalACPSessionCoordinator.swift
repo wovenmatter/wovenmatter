@@ -524,7 +524,8 @@ public actor LocalACPSessionCoordinator {
             }
             let deliveryInput = AgentMessageInput(
                 text: deliveryContent ?? input.text,
-                attachments: input.attachments
+                attachments: input.attachments,
+                visibleWorkspace: input.visibleWorkspace
             )
             publishChange(
                 conversationID: conversationID,
@@ -1103,7 +1104,7 @@ public actor LocalACPSessionCoordinator {
             try checkActiveInputAdmission(conversationID: conversationID, runID: runID,
                 sessionID: active.configurationObservationID, dispatchFence: operationFence)
             dispatchStarted = true
-            let deliveryInput = AgentMessageInput(text: deliveryContent ?? input.text, attachments: input.attachments)
+            let deliveryInput = AgentMessageInput(text: deliveryContent ?? input.text, attachments: input.attachments, visibleWorkspace: input.visibleWorkspace)
             let receipt: LocalACPActiveInputReceipt
             if let fencedInput = active.client.fencedActiveInput {
                 receipt = try await fencedInput(deliveryInput, operationFence)

@@ -108,6 +108,9 @@
 		C131C0B00000000000000002 /* ApplicationModel+NoteActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = C131C0B00000000000000001 /* ApplicationModel+NoteActions.swift */; };
 		C131C0A00000000000000004 /* DashboardConversationActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = C131C0A00000000000000003 /* DashboardConversationActions.swift */; };
 		C131C0B00000000000000004 /* DashboardNoteActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = C131C0B00000000000000003 /* DashboardNoteActions.swift */; };
+		4D3A7F0D3149F78FD676C837 /* WorkspaceAssetSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4ADD1E1DF23A9E7BEF7AD7B6 /* WorkspaceAssetSession.swift */; };
+		46B913B8FF73487BF0D219C8 /* DashboardAssetPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E7844C3713B055E9CEE07D7 /* DashboardAssetPane.swift */; };
+		00165EE7943E7F7E19A3D2AD /* DashboardBrowserPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = D04B4DB93AFAF496F21185E6 /* DashboardBrowserPane.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -213,6 +216,9 @@
 		C131C0B00000000000000001 /* ApplicationModel+NoteActions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ApplicationModel+NoteActions.swift"; sourceTree = "<group>"; };
 		C131C0A00000000000000003 /* DashboardConversationActions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DashboardConversationActions.swift"; sourceTree = "<group>"; };
 		C131C0B00000000000000003 /* DashboardNoteActions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DashboardNoteActions.swift"; sourceTree = "<group>"; };
+		4ADD1E1DF23A9E7BEF7AD7B6 /* WorkspaceAssetSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Models/WorkspaceAssetSession.swift"; sourceTree = SOURCE_ROOT; };
+		1E7844C3713B055E9CEE07D7 /* DashboardAssetPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Views/DashboardAssetPane.swift"; sourceTree = SOURCE_ROOT; };
+		D04B4DB93AFAF496F21185E6 /* DashboardBrowserPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Views/DashboardBrowserPane.swift"; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -239,6 +245,9 @@
 		614FCD38F579029AF08B9221 = {
 			isa = PBXGroup;
 			children = (
+				4ADD1E1DF23A9E7BEF7AD7B6 /* WorkspaceAssetSession.swift */,
+				1E7844C3713B055E9CEE07D7 /* DashboardAssetPane.swift */,
+				D04B4DB93AFAF496F21185E6 /* DashboardBrowserPane.swift */,
 				C67C8CBF1B7E40CA0F37A274 /* App */,
 				21F401DAE658C232D88E944F /* Packages */,
 				9959D7D4FDC4FD024F490589 /* Products */,
@@ -399,6 +408,7 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = DCA24CAEC4959697918945B6 /* Build configuration list for PBXNativeTarget "WovenMatter" */;
 			buildPhases = (
+				BCEF00000000000000000001 /* Prepare Chromium */,
 				6214AC3EA07FDB2A111C07EA /* Sources */,
 				19757368FADFAA1B53E2802A /* Resources */,
 				239FD586A9CC30792201F9E9 /* Frameworks */,
@@ -492,6 +502,18 @@
 			shellPath = /bin/sh;
 			shellScript = "set -eu\n\"${SRCROOT}/../scripts/prepare-default-agent.sh\" \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/default-agent\"\n\"${SRCROOT}/../scripts/build-power-helper.sh\" \"${TARGET_BUILD_DIR}/${WRAPPER_NAME}\"\n/usr/bin/xattr -cr \"${TARGET_BUILD_DIR}/${WRAPPER_NAME}\"\n/bin/rm -rf \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/remote/test\"\n/bin/rm -f \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/remote/.env.example\" \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/remote/compose.yaml\"\ntouch \"${DERIVED_FILE_DIR}/bundle-metadata-cleaned.stamp\"\n";
 		};
+		BCEF00000000000000000001 /* Prepare Chromium */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = ();
+			inputPaths = ();
+			name = "Prepare Chromium";
+			outputPaths = ("$(BUILT_PRODUCTS_DIR)/libWovenBrowser.a", "$(BUILT_PRODUCTS_DIR)/libcef_dll_wrapper.a");
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/bash;
+			shellScript = "set -eu\n\"${SRCROOT}/../scripts/prepare-browser.sh\"\n";
+		};
 /* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -499,6 +521,9 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				4D3A7F0D3149F78FD676C837 /* WorkspaceAssetSession.swift in Sources */,
+				46B913B8FF73487BF0D219C8 /* DashboardAssetPane.swift in Sources */,
+				00165EE7943E7F7E19A3D2AD /* DashboardBrowserPane.swift in Sources */,
 				0890236A7DEEC4A26AB512AB /* DictationModel.swift in Sources */,
 				E95F4392C674DA52368A05A6 /* DictationAudioCapture.swift in Sources */,
 				B93AB31EDDA3C1A9D35A791B /* DictationEditor.swift in Sources */,
@@ -612,7 +637,9 @@
 				INFOPLIST_KEY_CFBundleDisplayName = "Woven Matter";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright Woven Matter";
-				INFOPLIST_KEY_NSPrincipalClass = NSApplication;
+				INFOPLIST_KEY_NSPrincipalClass = WMBrowserApplication;
+				SWIFT_OBJC_BRIDGING_HEADER = Browser/WMBrowserBridge.h;
+				OTHER_LDFLAGS = ("$(inherited)", "-ObjC", "-lc++", "$(BUILT_PRODUCTS_DIR)/libWovenBrowser.a", "$(BUILT_PRODUCTS_DIR)/libcef_dll_wrapper.a");
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -642,7 +669,9 @@
 				INFOPLIST_KEY_CFBundleDisplayName = "Woven Matter Dev";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright Woven Matter";
-				INFOPLIST_KEY_NSPrincipalClass = NSApplication;
+				INFOPLIST_KEY_NSPrincipalClass = WMBrowserApplication;
+				SWIFT_OBJC_BRIDGING_HEADER = Browser/WMBrowserBridge.h;
+				OTHER_LDFLAGS = ("$(inherited)", "-ObjC", "-lc++", "$(BUILT_PRODUCTS_DIR)/libWovenBrowser.a", "$(BUILT_PRODUCTS_DIR)/libcef_dll_wrapper.a");
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",

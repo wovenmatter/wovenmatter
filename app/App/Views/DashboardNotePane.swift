@@ -8,6 +8,7 @@ struct DashboardNotePane: View {
     @Environment(\.dashboardTheme) private var theme
     @Bindable var model: ApplicationModel
     let note: WorkspaceNoteRecord
+    var embeddedInTabs = false
     let showBack: Bool
     let noteOnLeft: Bool
     let isFocused: Bool
@@ -140,33 +141,35 @@ struct DashboardNotePane: View {
                     .buttonStyle(DashboardIconButtonStyle())
                     .help("Format note")
                 }
-                if !showBack {
-                    Button(action: onMove) {
-                        DashboardLucideIcon(glyph: noteOnLeft ? .arrowRight : .arrowLeft, size: 16)
+                if !embeddedInTabs {
+                    if !showBack {
+                        Button(action: onMove) {
+                            DashboardLucideIcon(glyph: noteOnLeft ? .arrowRight : .arrowLeft, size: 16)
+                                .frame(width: 32, height: 32)
+                        }
+                        .buttonStyle(DashboardIconButtonStyle())
+                        .help(noteOnLeft ? "Move note right" : "Move note left")
+                        Button(action: onToggleFocus) {
+                            Image(systemName: isFocused
+                                  ? "arrow.down.right.and.arrow.up.left"
+                                  : "arrow.up.left.and.arrow.down.right")
+                                .font(.system(size: 14, weight: .medium))
+                                .frame(width: 32, height: 32)
+                        }
+                        .buttonStyle(DashboardIconButtonStyle())
+                        .help(isFocused ? "Restore chat and note" : "Focus note")
+                    }
+                    Button {
+                        Task {
+                            _ = await model.flushNoteDrafts()
+                            onClose()
+                        }
+                    } label: {
+                        DashboardLucideIcon(glyph: noteOnLeft ? .panelLeftClose : .panelRightClose, size: 16)
                             .frame(width: 32, height: 32)
                     }
                     .buttonStyle(DashboardIconButtonStyle())
-                    .help(noteOnLeft ? "Move note right" : "Move note left")
-                    Button(action: onToggleFocus) {
-                        Image(systemName: isFocused
-                              ? "arrow.down.right.and.arrow.up.left"
-                              : "arrow.up.left.and.arrow.down.right")
-                            .font(.system(size: 14, weight: .medium))
-                            .frame(width: 32, height: 32)
-                    }
-                    .buttonStyle(DashboardIconButtonStyle())
-                    .help(isFocused ? "Restore chat and note" : "Focus note")
                 }
-                Button {
-                    Task {
-                        _ = await model.flushNoteDrafts()
-                        onClose()
-                    }
-                } label: {
-                    DashboardLucideIcon(glyph: noteOnLeft ? .panelLeftClose : .panelRightClose, size: 16)
-                        .frame(width: 32, height: 32)
-                }
-                .buttonStyle(DashboardIconButtonStyle())
             }
             .padding(.leading, reservesLeadingRailControlSpace ? 56 : 12)
             .padding(.trailing, reservesTrailingRailControlSpace ? 56 : 12)

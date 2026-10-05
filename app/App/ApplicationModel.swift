@@ -2253,7 +2253,7 @@ final class ApplicationModel {
             throw WorkspaceToolError.invalid("Wait for runtime installation or update to finish before sending a message.")
         }
         let normalized = AgentMessageInput(text: input.text.trimmingCharacters(in: .whitespacesAndNewlines),
-            attachments: input.attachments, historyDeliveryID: input.historyDeliveryID)
+            attachments: input.attachments, historyDeliveryID: input.historyDeliveryID, visibleWorkspace: input.visibleWorkspace)
         guard normalized.hasContent else { throw WorkspaceToolError.invalid("A message is required.") }
         for reference in normalized.references where reference.kind == .conversation {
             try await dashboardStore.database.attachConversationReference(sourceID: conversation.id, targetID: reference.resourceID)

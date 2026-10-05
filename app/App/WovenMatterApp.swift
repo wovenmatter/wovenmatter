@@ -346,6 +346,17 @@ final class WorkspaceProcessLease {
 }
 
 @main
+enum WovenMatterEntryPoint {
+    @MainActor static func main() {
+        // SwiftUI's delegate adaptor can initialize NSApplication before App.init.
+        // Install CEF's required AppKit subclass first, without loading Chromium.
+        if !CommandLine.arguments.contains("--wovenmatter-cli"), LocalExecutionRole.current != .backend {
+            WMBrowserRuntime.prepareApplication()
+        }
+        WovenMatterApp.main()
+    }
+}
+
 struct WovenMatterApp: App {
     @NSApplicationDelegateAdaptor(WovenMatterLifecycleDelegate.self) private var lifecycleDelegate
     private let workspaceProcessLease: WorkspaceProcessLease?
@@ -420,6 +431,7 @@ struct WovenMatterApp: App {
             RootView(model: applicationModel)
                 .onAppear {
                     lifecycleDelegate.model = applicationModel
+                    lifecycleDelegate.prepareBrowserTermination = { await WorkspaceAssetSession.shutdown() }
                     LocalBackgroundExecution.shared.transitionHandler = { enabled in
                         try await applicationModel.changeLocalBackgroundExecution(enabled: enabled)
                     }

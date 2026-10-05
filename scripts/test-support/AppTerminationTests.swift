@@ -11,6 +11,8 @@ final class ApplicationModel {
     var flushCount = 0
     var cleanupCount = 0
     var cleanupFinished = false
+    var browserCleanupCount = 0
+    var browserCleanupFinished = false
     var remoteWorkspaces: ApplicationModel { self }
     func refreshRuntimeInventory() {}
     func refreshLocalACPRuntimesNow() {}
@@ -37,6 +39,12 @@ private final class TerminationProbe: NSObject, NSApplicationDelegate {
         self.resultURL = resultURL
         super.init()
         delegate.model = model
+        delegate.prepareBrowserTermination = { [model] in
+            model.browserCleanupCount += 1
+            try? await Task.sleep(for: .milliseconds(30))
+            model.browserCleanupFinished = true
+            return true
+        }
         NotificationCenter.default.addObserver(self, selector: #selector(start),
             name: NSApplication.didFinishLaunchingNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(finished),
@@ -61,7 +69,7 @@ private final class TerminationProbe: NSObject, NSApplicationDelegate {
     }
 
     @objc private func finished(_ notification: Notification) {
-        let passed = deferredTermination && model.noteEditingSuspended && model.flushCount == 1 && model.cleanupCount == 1 && model.cleanupFinished
+        let passed = deferredTermination && model.noteEditingSuspended && model.flushCount == 1 && model.cleanupCount == 1 && model.cleanupFinished && model.browserCleanupCount == 1 && model.browserCleanupFinished
         try! (passed ? "PASS\n" : "FAIL: termination cancelled, cleanup unfinished, or duplicate cleanup\n")
             .write(to: resultURL, atomically: true, encoding: .utf8)
     }

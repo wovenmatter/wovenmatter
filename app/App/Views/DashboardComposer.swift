@@ -76,13 +76,13 @@ struct DashboardComposer: View {
                     Image(systemName: "doc.text")
                     Text(attachedNoteTitle)
                         .lineLimit(1)
-                    Text("available to agent")
+                    Text("shared on send")
                         .foregroundStyle(DashboardPalette.mutedForeground)
                     Spacer(minLength: 0)
                 }
                 .font(.system(size: 11.5, weight: .medium))
                 .foregroundStyle(DashboardPalette.foreground)
-                .accessibilityLabel("Open note \(attachedNoteTitle) is available to the agent")
+                .accessibilityLabel("\(attachedNoteTitle) shared with the agent when you send")
             }
             if !attachments.isEmpty {
                 ScrollView(.horizontal) {

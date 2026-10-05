@@ -9,7 +9,7 @@ main_executable="${app}/Contents/MacOS/${executable_name}"
 bundle_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$info_plist")"
 test -x "$main_executable"
 case "$bundle_id" in
-  wovenmatter.desktop|wovenmatter.desktop.dev) ;;
+  wovenmatter.desktop|wovenmatter.desktop.dev|wovenmatter.desktop.dev.*) ;;
   *) printf 'Unexpected bundle identifier: %s\n' "$bundle_id" >&2; exit 1 ;;
 esac
 test "$(/usr/libexec/PlistBuddy -c 'Print :LSMultipleInstancesProhibited' "$info_plist")" = true
@@ -24,6 +24,18 @@ test "$(/usr/libexec/PlistBuddy -c 'Print :BundleProgram' "$power_daemon")" = Co
 test "$(/usr/libexec/PlistBuddy -c 'Print :UserName' "$power_daemon")" = root
 test "$(/usr/libexec/PlistBuddy -c 'Print :KeepAlive' "$power_daemon")" = true
 
+frameworks="$app/Contents/Frameworks"
+cef="$frameworks/Chromium Embedded Framework.framework"
+test -f "$cef/Resources/Info.plist"
+test -x "$cef/Chromium Embedded Framework"
+codesign --verify --strict "$cef"
+for suffix in '' ' (GPU)' ' (Renderer)' ' (Plugin)' ' (Alerts)'; do
+  helper="$frameworks/$executable_name Helper$suffix.app"
+  test -x "$helper/Contents/MacOS/$executable_name Helper$suffix"
+  codesign --verify --strict "$helper"
+done
+test -f "$app/Contents/Resources/BrowserLicenses/LICENSE.txt"
+test -f "$app/Contents/Resources/BrowserLicenses/CREDITS.html"
 resources="${app}/Contents/Resources"
 test -x "${resources}/default-agent/bin/node"
 test -f "${resources}/default-agent/src/main.mjs"
