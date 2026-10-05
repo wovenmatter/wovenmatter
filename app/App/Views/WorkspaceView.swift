@@ -294,7 +294,28 @@ struct WorkspaceView: View {
         .foregroundStyle(DashboardPalette.foreground)
     }
 
-    private var workspaceSurface: some View {
+    private var workspaceConversationIDs: [String] {
+        model.workspaceOverview?.conversations.map(\.id) ?? []
+    }
+
+    private var workspaceNoteIDs: [String] {
+        model.workspaceOverview?.notes.map(\.id) ?? []
+    }
+
+    private func reconcileConversations(oldIDs: [String], ids: [String]) {
+        let removed: Set<String> = Set(oldIDs).subtracting(ids)
+        for panel in chatPanels.panels where panel.conversationID.map(removed.contains) == true {
+            _ = chatPanels.setConversation(nil, in: panel.id)
+        }
+        selectDefaults()
+    }
+
+    private func reconcileNotes(oldIDs: [String], ids: [String]) {
+        let removed: Set<String> = Set(oldIDs).subtracting(ids)
+        for id in removed { assets.close(.note(id)) }
+    }
+
+    private var workspaceNavigation: some View {
         workspaceLayout
         .onAppear {
             selectDefaults()
@@ -304,21 +325,21 @@ struct WorkspaceView: View {
             if value != .workspace { DictationModel.shared.leaveWorkspace() }
         }
         .onChange(of: allAgents.map(\.id)) { _, _ in selectDefaults() }
-        .onChange(of: model.workspaceOverview?.conversations.map(\.id) ?? []) { oldIDs, ids in
-            let removed = Set(oldIDs).subtracting(ids)
-            for panel in chatPanels.panels where panel.conversationID.map(removed.contains) == true {
-                _ = chatPanels.setConversation(nil, in: panel.id)
-            }
-            selectDefaults()
+        .onChange(of: workspaceConversationIDs) { oldIDs, ids in
+            reconcileConversations(oldIDs: oldIDs, ids: ids)
         }
-        .onChange(of: model.workspaceOverview?.notes.map(\.id) ?? []) { oldIDs, ids in
-            for id in Set(oldIDs).subtracting(ids) { assets.close(.note(id)) }
+        .onChange(of: workspaceNoteIDs) { oldIDs, ids in
+            reconcileNotes(oldIDs: oldIDs, ids: ids)
         }
         .onChange(of: selectedConversationID) { _, conversationID in
             if let conversationID {
                 model.markConversationRead(id: conversationID)
             }
         }
+    }
+
+    private var workspaceSurface: some View {
+        workspaceNavigation
         .onChange(of: assets.tabs.isPresented) { _, presented in
             if !presented {
                 compactWorkspacePane = .chat
