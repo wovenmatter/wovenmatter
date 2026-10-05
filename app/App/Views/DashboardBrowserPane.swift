@@ -73,7 +73,8 @@ struct DashboardBrowserPane: View {
             Rectangle().fill(theme.palette.border).frame(height: 1)
             ZStack {
                 DashboardChromiumView(page: page)
-                if page.url == "about:blank" && !page.loading {
+                // Opener-written popup content can keep an about:blank URL.
+                if !page.popup && page.url == "about:blank" && !page.loading {
                     VStack(spacing: 9) {
                         Image(systemName: "globe").font(.system(size: 30, weight: .light))
                         Text("Browse alongside your work").font(.system(size: 15, weight: .medium))
@@ -87,7 +88,7 @@ struct DashboardBrowserPane: View {
             }
         }
         .background(theme.palette.workspace)
-        .onAppear { updateAddress(); if page.url == "about:blank" { addressFocused = true } }
+        .onAppear { updateAddress(); if !page.popup && page.url == "about:blank" { addressFocused = true } }
         .onChange(of: revision) { _, _ in if !addressFocused { updateAddress() } }
         .onChange(of: addressFocused) { _, focused in if !focused { updateAddress() } }
         .background {

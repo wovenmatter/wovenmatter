@@ -35,6 +35,10 @@ CEF references before releasing the page. CEF creation, navigation and close
 run on its UI/main thread. CEF's external message pump is integrated with common
 AppKit run-loop modes, including modal loops. The app's existing asynchronous
 quit barrier waits for browser cleanup before allowing process exit.
+Updates and execution-mode changes resolve browser unload prompts before stopping
+the backend or scheduling a relaunch. This preparation blocks new tabs but keeps
+CEF initialized, so failed updates can restore browsing without reinitializing
+Chromium. Final process termination performs CEF shutdown.
 
 CEF is loaded dynamically. Each Chromium helper initializes the CEF macOS
 sandbox before loading the framework. No remote debugging port, sandbox bypass,
@@ -71,9 +75,13 @@ described accordingly without claiming Chrome-equivalent licensed components.
 
 Core tests cover independent limits, selection/close behavior, hidden-pane
 retention, address handling and snapshot preservation through Codable and file
-staging. The final implementation receives a compile-only build and source
-review. Runtime and UI acceptance is reserved for Trey's testing; no browser
-runtime probe is added to the normal test gate.
+staging. Build-phase fixtures cover fresh output directories, both architecture
+selections, helper bundles and signing arguments using fake tools. Adapter
+lifecycle tests compile the production bridge with CEF entry points substituted:
+they exercise retained owners, cancellation, failed-restart recovery and deferred
+shutdown without loading Chromium, opening windows or accessing Keychain.
+The normal gate builds and validates the unsigned app without launching it.
+Actual Chromium runtime and UI acceptance remain human testing.
 
 Future browser automation must use Chromium's fake Keychain and disposable
 profiles, separately from the shipping adapter and user data. Ad-hoc test apps

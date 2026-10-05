@@ -44,6 +44,7 @@ class BrowserClient;
 @property(nonatomic, readwrite) BOOL canGoBack;
 @property(nonatomic, readwrite) BOOL canGoForward;
 @property(nonatomic, readwrite) BOOL closed;
+@property(nonatomic, readwrite) BOOL popup;
 @property(nonatomic) BOOL started;
 @property(nonatomic) BOOL closing;
 @property(nonatomic) NSAlert *activeDialog;
@@ -57,6 +58,7 @@ class BrowserClient;
 @property(nonatomic) NSTimer *pumpTimer;
 @property(nonatomic) BOOL running;
 @property(nonatomic) BOOL stopping;
+@property(nonatomic) BOOL shutdownRequested;
 @property(nonatomic) BOOL pumping;
 @property(nonatomic, copy) void (^shutdownCompletion)(BOOL);
 - (void)schedulePump:(int64_t)delay;
@@ -135,6 +137,7 @@ class BrowserClient final : public CefClient,
     if (!page || page.closing || (!url.empty() && !AllowedURL(String(url)))) return true;
     WMBrowserPage *popup = [page.delegate browserPage:page createPopup:String(url)];
     if (!popup) return true;
+    popup.popup = YES;
     popup.started = YES;
     std::erase_if(pendingPopups_, [](const auto &entry) {
       WMBrowserPage *pending = entry.second;
@@ -222,6 +225,7 @@ class BrowserClient final : public CefClient,
     CEF_REQUIRE_UI_THREAD(); WMBrowserPage *page = page_;
     if (AllowedURL(String(url))) {
       WMBrowserPage *tab = [page.delegate browserPage:page createPopup:String(url)];
+      tab.popup = YES;
       [tab loadURL:String(url)];
     }
     return true;
@@ -378,16 +382,29 @@ class BrowserClient final : public CefClient,
   [self finishShutdownIfReady];
 }
 - (void)shutdownWithCompletion:(void (^)(BOOL))completion {
+  if (_shutdownCompletion) { completion(NO); return; }
+  _shutdownRequested = YES;
+  [self prepareForTerminationWithCompletion:completion];
+}
+- (void)prepareForTerminationWithCompletion:(void (^)(BOOL))completion {
+  NSAssert(NSThread.isMainThread, @"Browser operations require the main thread");
+  // A second request must not replace an in-flight continuation.
+  if (_shutdownCompletion) { completion(NO); return; }
+  _stopping = YES;
   if (!_running) { completion(YES); return; }
-  _stopping = YES; _shutdownCompletion = [completion copy];
+  _shutdownCompletion = [completion copy];
   for (WMBrowserPage *page in _pages.allObjects) {
     [page close];
   }
   [self finishShutdownIfReady];
 }
+- (void)cancelPreparedTermination {
+  if (!_shutdownRequested) [self cancelShutdown];
+}
 - (void)cancelShutdown {
   if (!_stopping) return;
   _stopping = NO;
+  _shutdownRequested = NO;
   void (^completion)(BOOL) = _shutdownCompletion;
   _shutdownCompletion = nil;
   if (completion) completion(NO);
@@ -403,11 +420,13 @@ class BrowserClient final : public CefClient,
       }];
       return;
     }
-    [self.pumpTimer invalidate]; self.pumpTimer = nil;
-    self.running = NO;
-    CefShutdown();
-    self->app_ = nullptr;
-    self->loader_.reset();
+    if (self.shutdownRequested) {
+      [self.pumpTimer invalidate]; self.pumpTimer = nil;
+      self.running = NO;
+      CefShutdown();
+      self->app_ = nullptr;
+      self->loader_.reset();
+    }
     void (^completion)(BOOL) = self.shutdownCompletion;
     self.shutdownCompletion = nil;
     if (completion) completion(YES);

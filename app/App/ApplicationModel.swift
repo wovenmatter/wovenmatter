@@ -5571,8 +5571,14 @@ extension ApplicationModel {
         }
         let wasSuspended = noteEditingSuspended
         suspendNoteEditing()
-        defer { if !isPreparedForExecutionRestart && !wasSuspended { resumeNoteEditing() } }
+        defer {
+            if !isPreparedForExecutionRestart {
+                WorkspaceAssetSession.cancelPreparedRestart()
+                if !wasSuspended { resumeNoteEditing() }
+            }
+        }
         guard await flushNotesBeforeBackendClientQuit() else { throw ApplicationModelError.noteDraftSaveFailed }
+        guard await WorkspaceAssetSession.prepareForRestart() else { throw CancellationError() }
         let previous = LocalBackgroundExecution.shared.isEnabled
         try await LocalExecutionTransition.perform(prepare: {
             if self.isBackendFrontend { try await self.prepareBackendForUpdate() }

@@ -20,6 +20,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, readonly) BOOL canGoBack;
 @property(nonatomic, readonly) BOOL canGoForward;
 @property(nonatomic, readonly) BOOL closed;
+@property(nonatomic, readonly) BOOL popup;
 - (void)loadURL:(NSString *)url;
 - (void)goBack;
 - (void)goForward;
@@ -36,6 +37,10 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, readonly) NSUInteger livePageCount;
 - (BOOL)startWithProfilePath:(NSString *)profilePath error:(NSError **)error;
 - (nullable WMBrowserPage *)createPage;
+// Resolve unload prompts before committing an update/restart. Keep CEF alive
+// and block new tabs until shutdown, or cancel the preparation after a failure.
+- (void)prepareForTerminationWithCompletion:(void (^)(BOOL completed))completion;
+- (void)cancelPreparedTermination;
 // Close and release all browsers before shutdown. Completion runs outside CEF.
 - (void)shutdownWithCompletion:(void (^)(BOOL completed))completion;
 @end

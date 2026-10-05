@@ -104,4 +104,14 @@ final class WorkspaceAssetSession: NSObject, @preconcurrency WMBrowserPageDelega
             WMBrowserRuntime.shared().shutdown { continuation.resume(returning: $0) }
         }
     }
+
+    static func prepareForRestart() async -> Bool {
+        await withCheckedContinuation { continuation in
+            WMBrowserRuntime.shared().prepareForTermination { continuation.resume(returning: $0) }
+        }
+    }
+
+    static func cancelPreparedRestart() {
+        WMBrowserRuntime.shared().cancelPreparedTermination()
+    }
 }

@@ -315,10 +315,15 @@ struct SettingsGeneralView: View {
         releaseUpdateState = .installing(release)
         Task {
             do {
+                guard await WorkspaceAssetSession.prepareForRestart() else {
+                    releaseUpdateState = .ready(release)
+                    return
+                }
                 try await model.prepareBackendForUpdate()
                 try await releaseUpdateInstaller.beginInstallation(of: release)
                 WovenMatterLifecycleDelegate.requestTerminationAfterUpdate()
             } catch {
+                WorkspaceAssetSession.cancelPreparedRestart()
                 var message = error.localizedDescription
                 do { try await model.recoverBackendAfterFailedUpdate() }
                 catch { message += " " + error.localizedDescription }

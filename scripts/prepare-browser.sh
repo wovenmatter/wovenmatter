@@ -41,6 +41,7 @@ fi
 sdk="$cache/$name"
 build="${DERIVED_FILE_DIR:?}/cef-$architecture"
 products="${BUILT_PRODUCTS_DIR:?}"
+mkdir -p "$DERIVED_FILE_DIR" "$products"
 "$cmake" -S "$repo_root/app/Browser" -B "$build" -G 'Unix Makefiles' \
   -DCEF_ROOT="$sdk" -DPROJECT_ARCH="$architecture" -DCMAKE_OSX_ARCHITECTURES="$architecture" \
   -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_DEPLOYMENT_TARGET=26.0 -DUSE_SANDBOX=ON > "$build-config.log"
