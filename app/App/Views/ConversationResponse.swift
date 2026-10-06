@@ -17,7 +17,8 @@ struct ConversationResponse: View {
             .frame(maxWidth: 680, alignment: .leading)
 
             Button {
-                copied = Self.copy(content, to: .general)
+                NSPasteboard.general.clearContents()
+                copied = NSPasteboard.general.setString(content, forType: .string)
             } label: {
                 Label(copied ? "Copied" : "Copy", systemImage: copied ? "checkmark" : "doc.on.doc")
             }
@@ -41,12 +42,6 @@ struct ConversationResponse: View {
         } message: { url in
             Text(url.absoluteString)
         }
-    }
-
-    @discardableResult
-    static func copy(_ content: String, to pasteboard: NSPasteboard) -> Bool {
-        pasteboard.clearContents()
-        return pasteboard.setString(content, forType: .string)
     }
 }
 
@@ -184,7 +179,6 @@ final class ConversationResponseNativeTextView: NSTextView, NSTextViewDelegate {
         setSelectedRange(NSRange(location: location, length: min(selection.length, rendered.length - location)))
         appliedContent = content
         appliedStreaming = isStreaming
-        invalidateIntrinsicContentSize()
         return true
     }
 
@@ -207,15 +201,13 @@ final class ConversationResponseNativeTextView: NSTextView, NSTextViewDelegate {
     override func draw(_ dirtyRect: NSRect) {
         if !decorations.isEmpty, let layoutManager, let textContainer {
             // Include code-box padding and the full line width for partial redraws.
-            let visibleRect = NSRect(x: 0, y: dirtyRect.minY - textContainerOrigin.y - 6,
+            let visibleRect = NSRect(x: 0, y: dirtyRect.minY - 6,
                                      width: textContainer.size.width, height: dirtyRect.height + 12)
             let visibleGlyphs = layoutManager.glyphRange(forBoundingRect: visibleRect, in: textContainer)
             let visibleCharacters = layoutManager.characterRange(forGlyphRange: visibleGlyphs, actualGlyphRange: nil)
             for decoration in decorations where NSIntersectionRange(decoration.range, visibleCharacters).length > 0 {
                 let glyphs = layoutManager.glyphRange(forCharacterRange: decoration.range, actualCharacterRange: nil)
                 var rect = layoutManager.boundingRect(forGlyphRange: glyphs, in: textContainer)
-                rect.origin.x += textContainerOrigin.x
-                rect.origin.y += textContainerOrigin.y
                 if decoration.key == .responseCode {
                     rect = NSRect(x: 0, y: rect.minY - 6, width: bounds.width, height: rect.height + 12)
                     NSColor(DashboardPalette.primary).withAlphaComponent(0.05).setFill()

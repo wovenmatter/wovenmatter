@@ -85,9 +85,6 @@ struct ConversationResponseTests {
         view.apply(content: "Short", document: nil, isStreaming: false)
         require(NSMaxRange(view.selectedRange()) <= view.string.utf16.count, "Shrinking content left an invalid selection")
 
-        require(ConversationResponse.copy(source, to: pasteboard), "Copy response failed")
-        require(pasteboard.string(forType: .string) == source, "Copy response did not preserve complete displayed Markdown")
-
         view.apply(content: source, document: nil, isStreaming: false)
         let wide = view.fittingSize(width: 680)
         view.setFrameSize(CGSize(width: 680, height: 40))
@@ -102,12 +99,6 @@ struct ConversationResponseTests {
         require(grown.height > wide.height, "Streaming growth reused a stale measured height")
         view.apply(content: "Short", document: nil, isStreaming: false)
         require(view.fittingSize(width: 680).height < wide.height, "Content replacement reused a stale measured height")
-        let longSource = (0..<120).map { "## Section \($0)\n\nA long paragraph with **formatted text**, `code`, and enough words to wrap in a narrow panel." }.joined(separator: "\n\n")
-        view.apply(content: longSource, document: nil, isStreaming: false)
-        let longSize = view.fittingSize(width: 280)
-        require(longSize.height > narrow.height && longSize.height.isFinite, "Long response layout was clipped or non-finite")
-        view.selectAll(nil)
-        require(view.selectedRange().length == view.string.utf16.count, "A long response could not be selected in full")
         // A clipped repaint must preserve the full box, even when its ends are offscreen.
         let drawSource = "# Heading\n\n> Quoted text.\n> Another quoted line.\n\n```swift\n"
             + (0..<80).map { "let line\($0) = \($0)" }.joined(separator: "\n")

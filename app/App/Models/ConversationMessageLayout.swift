@@ -21,20 +21,6 @@ struct ConversationMessageLayout {
             }
         }
 
-        var isFirstMessagePart: Bool {
-            switch content {
-            case .message: true
-            default: false
-            }
-        }
-
-        var isLastMessagePart: Bool {
-            switch content {
-            case .message: true
-            case .fileChanges, .media: false
-            }
-        }
-
         var spacingBefore: Double {
             // The card adds its own gap only when it has visible changes.
             if case .fileChanges = content { return 0 }

@@ -1,49 +1,25 @@
 # Long-reply scrolling investigation
 
-## Current response selection
+## Current response selection (PR #107)
 
-Assistant responses now use one read-only, selectable AppKit text view per
-message. Paragraphs, headings, lists, quotes, code and native table cells share
-one text storage, so dragging or Select All can cover the entire response. A
-compact Copy button below each response copies its complete displayed Markdown;
-assistant commentary in the work transcript uses the same component. Selection
-is preserved when streamed text grows. Link filtering and confirmation remain.
+Responses and assistant commentary use one read-only AppKit text view for
+continuous selection across Markdown blocks, plus a bottom Copy button for the
+complete displayed Markdown. Streaming preserves selection; links still require
+confirmation. The outer lazy stack keeps stable message, file and media anchors.
 
-The outer conversation stack remains lazy, with stable message, changed-file
-and media anchors. The four-block SwiftUI grouping described below is historical:
-it broke continuous response selection. The native response has one text view
-instead of the large SwiftUI layout/focus tree measured in that investigation.
-The historical timings do not measure the current native renderer.
+A 256-point buffer bounds the native backing to the outer viewport plus 512
+points, clipped to the response. Small scrolls reuse it; width changes and content
+shrinking update it. Text storage and selection retain full document coordinates
+without a nested scroll view. Measurements and decoration ranges are cached.
 
-## Native response scroll audit (PR #107)
+### Recorded scroll audit
 
-The first viewport fix (`fa2d1ef`, macOS 26B5091g) improved replay cadence but
-measured 9–20% more main-thread CPU than the four-block renderer. Its native
-frame and bounds followed every clip movement, invalidating text drawing on each
-scroll step even when the same laid-out text remained visible.
-
-The response now retains a 256-point backing buffer around the viewport and
-moves it only when the viewport leaves that buffer. Its height stays bounded by
-the outer viewport plus 512 points, clipped to the response bounds. Width changes
-and content shrinking still update the backing frame. There is one text view and
-one text storage; layout and selection stay in full document coordinates, with
-no nested scroll view. The outer lazy rows and message/file/media anchors remain.
-Decoration ranges and width/height measurements remain cached.
-
-The follow-up used the same provider-free production `DashboardCloudConversation`
-fixture: eight messages, 31,296 characters, prepared rich Markdown, 768-point
-window height, 64-point steps with 16 ms waits, reversing at endpoints for 12
-seconds. Timing excludes the first two seconds, and the fixture sets user scroll
-ownership before replay. All three renderers were rebuilt with the same Debug
-configuration on macOS 27.2 (26B5101f), Xcode 27.0. Two runs per renderer/width
-used opposite renderer order; the table reports median p95/p99/CPU and maximum
-observed interval. Sampled runs are excluded from these timing results.
-
-The OS build changed since the initial audit, so the table includes the unchanged
-PR renderer as well as the historical baseline. Do not attribute the entire
-change from the earlier audit's numbers to buffering. These are **main-actor
-replay intervals, not frame times or FPS**; small differences and universal
-performance guarantees are not established by these samples.
+Provider-free Debug replay: eight messages, 31,296 characters, 768-point window
+height, 64-point steps/16 ms waits, reversing at endpoints for 12 seconds; first
+two seconds excluded and user scroll ownership set before replay. All renderers
+were rebuilt on macOS 27.2 (26B5101f), Xcode 27.0. Two runs per renderer/width used
+opposite order; values below are median p95/p99/CPU and maximum observed interval.
+Sampled runs were excluded. These are scheduling intervals, not frame times or FPS.
 
 | Window width | Renderer | p95 interval | p99 interval | Maximum observed | Main CPU per step |
 | --- | --- | ---: | ---: | ---: | ---: |
@@ -54,25 +30,14 @@ performance guarantees are not established by these samples.
 | 480 | PR before buffer (`fa2d1ef`) | 18.49 ms | 19.02 ms | 30.70 ms | 5.34 ms |
 | 480 | Selectable native buffer | 18.49 ms | 18.68 ms | 30.48 ms | 4.68 ms |
 
-The buffer reduced main CPU per step by approximately 6% at desktop width and
-12% at narrow width versus the unchanged PR renderer. It used approximately
-19% and 22% less than the four-block baseline on this OS, while p99 intervals
-remained around 18–19 ms. Native CPU samples showed less time in text drawing.
-No comparison replay interval exceeded 50 ms. A single 31,180-character reply
-had a maximum interval of 18.16 ms.
-
-Lazy offscreen height estimates still change during realization. The buffered
-replays recorded up to 64-point clip corrections alongside those changes; the
-four-block desktop baseline recorded a 56-point bottom clamp. This does not
-establish visible content jumps or prove all wheel/momentum behavior. Real
-trackpad scrolling, initial positioning, retained/prepended history, selection
-while streaming and direction changes remain manual acceptance checks.
-
-Native regression checks cover width round-trips, streamed height invalidation,
-SwiftUI frame ownership, clipped code-box painting, bounded native backing size,
-reuse during small scrolls, coverage after crossing the buffer, resize/shrink
-handling, logical coordinates, visible glyph coverage and copying offscreen
-text. Temporary fixture and profiling hooks are excluded from shipped sources.
+The earlier audit on 26B5091g measured 9–20% higher CPU for `fa2d1ef`; the OS
+changed, so only the matched comparison above isolates buffering. Small differences
+and universal performance gains are not established. Buffered replays recorded
+up to 64-point lazy-height clip corrections (four-block desktop: 56 points).
+Trackpad/momentum scrolling, initial positioning, retained/prepended history and
+selection while streaming remain manual acceptance. Native tests cover selection,
+link safety, sizing, clipped painting and viewport coordinates; benchmark hooks
+are excluded from shipped sources. The four-block investigation below is historical.
 
 ## Historical four-block investigation
 

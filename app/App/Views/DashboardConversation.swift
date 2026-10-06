@@ -1105,7 +1105,6 @@ struct DashboardMessageRow: View {
     var layout: ConversationMessageLayout.Row? = nil
     var displayedBody: String? = nil
 
-    private var isFirstMessagePart: Bool { layout?.isFirstMessagePart ?? true }
     private var assistantBody: String { displayedBody ?? transcript.body }
 
     private var transcript: AssistantTranscriptProjection {
@@ -1140,7 +1139,7 @@ struct DashboardMessageRow: View {
             HStack {
                 if isUser { Spacer(minLength: 72) }
                 VStack(alignment: isUser ? .trailing : .leading, spacing: 18) {
-                    if !isUser, isFirstMessagePart, let run {
+                    if !isUser, let run {
                         ConversationWorkTranscript(
                             run: run,
                             presentation: runPresentation,
