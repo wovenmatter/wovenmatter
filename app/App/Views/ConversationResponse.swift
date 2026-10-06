@@ -56,27 +56,82 @@ private struct ConversationResponseText: NSViewRepresentable {
     let isStreaming: Bool
     let onOpenLink: (URL) -> Void
 
-    func makeNSView(context: Context) -> ConversationResponseNativeTextView {
-        ConversationResponseNativeTextView()
+    func makeNSView(context: Context) -> ConversationResponseViewport {
+        ConversationResponseViewport()
     }
 
-    func updateNSView(_ textView: ConversationResponseNativeTextView, context: Context) {
+    func updateNSView(_ viewport: ConversationResponseViewport, context: Context) {
+        let textView = viewport.textView
         textView.onOpenLink = onOpenLink
-        textView.apply(content: content, document: document, isStreaming: isStreaming)
+        if textView.apply(content: content, document: document, isStreaming: isStreaming) {
+            viewport.invalidateIntrinsicContentSize()
+        }
     }
 
-    func sizeThatFits(_ proposal: ProposedViewSize, nsView: ConversationResponseNativeTextView,
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: ConversationResponseViewport,
                       context: Context) -> CGSize? {
-        nsView.fittingSize(width: proposal.width ?? 680)
+        nsView.textView.fittingSize(width: proposal.width ?? 680)
+    }
+}
+
+/// Keep the native backing surface bounded while text storage and layout cover
+/// the entire reply. There is still one text view and no nested scroll view.
+final class ConversationResponseViewport: NSView {
+    let textView = ConversationResponseNativeTextView()
+    override var isFlipped: Bool { true }
+
+    init() {
+        super.init(frame: .zero)
+        addSubview(textView)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        NotificationCenter.default.removeObserver(self, name: NSView.boundsDidChangeNotification, object: nil)
+        if let clip = enclosingScrollView?.contentView {
+            clip.postsBoundsChangedNotifications = true
+            NotificationCenter.default.addObserver(self, selector: #selector(scrollBoundsChanged),
+                name: NSView.boundsDidChangeNotification, object: clip)
+        }
+        updateVisibleFrame()
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        updateVisibleFrame()
+    }
+
+    override func layout() {
+        super.layout()
+        updateVisibleFrame()
+    }
+
+    @objc private func scrollBoundsChanged(_ notification: Notification) { updateVisibleFrame() }
+
+    func updateVisibleFrame() {
+        let visible = window == nil ? bounds : visibleRect.intersection(bounds)
+        let y = visible.isEmpty ? 0 : visible.minY
+        let height = visible.isEmpty ? 1 : visible.height
+        let frame = NSRect(x: 0, y: y, width: bounds.width, height: height)
+        if textView.frame.size != frame.size { textView.setFrameSize(frame.size) }
+        if textView.frame.origin != frame.origin { textView.setFrameOrigin(frame.origin) }
+        let origin = NSPoint(x: 0, y: y)
+        if textView.bounds.origin != origin { textView.setBoundsOrigin(origin) }
     }
 }
 
 /// TextKit owns selection across paragraphs, list items, code and table cells.
 /// It has no inner scroll view; wheel events continue through the transcript.
 final class ConversationResponseNativeTextView: NSTextView, NSTextViewDelegate {
+    // Bounds follow the viewport; text and selection retain document coordinates.
+    override var textContainerOrigin: NSPoint { .zero }
     var onOpenLink: ((URL) -> Void)?
     private var appliedContent: String?
     private var appliedStreaming: Bool?
+    private var measuredSize: CGSize?
+    private var decorations: [(key: NSAttributedString.Key, range: NSRange)] = []
 
     init() {
         let storage = NSTextStorage()
@@ -92,8 +147,9 @@ final class ConversationResponseNativeTextView: NSTextView, NSTextViewDelegate {
         textContainerInset = .zero
         textContainer?.lineFragmentPadding = 0
         isHorizontallyResizable = false
-        isVerticallyResizable = true
-        textContainer?.widthTracksTextView = true
+        // SwiftUI owns the frame; layout uses the explicit proposed width below.
+        isVerticallyResizable = false
+        textContainer?.widthTracksTextView = false
         delegate = self
         linkTextAttributes = [.foregroundColor: NSColor(DashboardPalette.success), .underlineStyle: 0]
         setAccessibilityLabel("Agent response")
@@ -101,52 +157,67 @@ final class ConversationResponseNativeTextView: NSTextView, NSTextViewDelegate {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    func apply(content: String, document: ConversationMarkdownDocument?, isStreaming: Bool) {
-        guard appliedContent != content || appliedStreaming != isStreaming else { return }
+    @discardableResult
+    func apply(content: String, document: ConversationMarkdownDocument?, isStreaming: Bool) -> Bool {
+        guard appliedContent != content || appliedStreaming != isStreaming else { return false }
         let selection = selectedRange()
         let rendered = ConversationResponseAttributedText.render(
             document ?? ConversationMarkdownDocument(content), isStreaming: isStreaming
         )
         textStorage?.setAttributedString(rendered)
+        measuredSize = nil
+        decorations.removeAll(keepingCapacity: true)
+        for key in [NSAttributedString.Key.responseCode, .responseQuote, .responseDivider] {
+            rendered.enumerateAttribute(key, in: NSRange(location: 0, length: rendered.length)) { value, range, _ in
+                if value != nil { decorations.append((key, range)) }
+            }
+        }
         let location = min(selection.location, rendered.length)
         setSelectedRange(NSRange(location: location, length: min(selection.length, rendered.length - location)))
         appliedContent = content
         appliedStreaming = isStreaming
         invalidateIntrinsicContentSize()
+        return true
     }
 
     func fittingSize(width: CGFloat) -> CGSize {
         let width = max(1, width)
         guard let textContainer, let layoutManager else { return CGSize(width: width, height: 1) }
-        textContainer.size = CGSize(width: width, height: .greatestFiniteMagnitude)
+        if let measuredSize, measuredSize.width == width { return measuredSize }
+        if textContainer.size.width != width {
+            textContainer.size = CGSize(width: width, height: .greatestFiniteMagnitude)
+        }
         layoutManager.ensureLayout(for: textContainer)
         var height = max(layoutManager.usedRect(for: textContainer).maxY, layoutManager.extraLineFragmentRect.maxY)
         if let textStorage, textStorage.length > 0,
            textStorage.attribute(.responseCode, at: textStorage.length - 1, effectiveRange: nil) != nil { height += 6 }
-        return CGSize(width: width, height: max(1, ceil(height)))
+        let size = CGSize(width: width, height: max(1, ceil(height)))
+        measuredSize = size
+        return size
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        if let textStorage, let layoutManager, let textContainer {
-            let range = NSRange(location: 0, length: textStorage.length)
-            for key in [NSAttributedString.Key.responseCode, .responseQuote, .responseDivider] {
-                textStorage.enumerateAttribute(key, in: range) { value, range, _ in
-                    guard value != nil else { return }
-                    let glyphs = layoutManager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
-                    var rect = layoutManager.boundingRect(forGlyphRange: glyphs, in: textContainer)
-                    rect.origin.x += textContainerOrigin.x
-                    rect.origin.y += textContainerOrigin.y
-                    if key == .responseCode {
-                        rect = NSRect(x: 0, y: rect.minY - 6, width: bounds.width, height: rect.height + 12)
-                        NSColor(DashboardPalette.primary).withAlphaComponent(0.05).setFill()
-                        NSBezierPath(roundedRect: rect, xRadius: 12, yRadius: 12).fill()
+        if !decorations.isEmpty, let layoutManager, let textContainer {
+            // Include code-box padding and the full line width for partial redraws.
+            let visibleRect = NSRect(x: 0, y: dirtyRect.minY - textContainerOrigin.y - 6,
+                                     width: textContainer.size.width, height: dirtyRect.height + 12)
+            let visibleGlyphs = layoutManager.glyphRange(forBoundingRect: visibleRect, in: textContainer)
+            let visibleCharacters = layoutManager.characterRange(forGlyphRange: visibleGlyphs, actualGlyphRange: nil)
+            for decoration in decorations where NSIntersectionRange(decoration.range, visibleCharacters).length > 0 {
+                let glyphs = layoutManager.glyphRange(forCharacterRange: decoration.range, actualCharacterRange: nil)
+                var rect = layoutManager.boundingRect(forGlyphRange: glyphs, in: textContainer)
+                rect.origin.x += textContainerOrigin.x
+                rect.origin.y += textContainerOrigin.y
+                if decoration.key == .responseCode {
+                    rect = NSRect(x: 0, y: rect.minY - 6, width: bounds.width, height: rect.height + 12)
+                    NSColor(DashboardPalette.primary).withAlphaComponent(0.05).setFill()
+                    NSBezierPath(roundedRect: rect, xRadius: 12, yRadius: 12).fill()
+                } else {
+                    NSColor(DashboardPalette.foreground).withAlphaComponent(0.16).setFill()
+                    if decoration.key == .responseQuote {
+                        NSRect(x: max(0, rect.minX - 14), y: rect.minY, width: 2, height: rect.height).fill()
                     } else {
-                        NSColor(DashboardPalette.foreground).withAlphaComponent(0.16).setFill()
-                        if key == .responseQuote {
-                            NSRect(x: max(0, rect.minX - 14), y: rect.minY, width: 2, height: rect.height).fill()
-                        } else {
-                            NSRect(x: 0, y: rect.midY, width: bounds.width, height: 1).fill()
-                        }
+                        NSRect(x: 0, y: rect.midY, width: bounds.width, height: 1).fill()
                     }
                 }
             }
