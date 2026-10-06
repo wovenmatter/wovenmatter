@@ -1,5 +1,5 @@
 import { readFile, mkdir } from 'node:fs/promises'
-import { installOpenCode } from '../../harnesses/cli/install.mjs'
+import { harnessResource } from './harness-resources.mjs'
 import { spawn, execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { request as httpRequest } from 'node:http'
@@ -7,6 +7,7 @@ import { resolve } from 'node:path'
 import { acquireHostLock } from './runtime-maintenance.mjs'
 import { supportsOpenCodeVersion, normalizeOpenCodeVersion, openCodeCommands } from './opencode-compatibility.mjs'
 
+const { installOpenCode } = await import(harnessResource('cli/install.mjs'))
 const prefix = '/v1/workspace-instances/opencode'
 const fail = (statusCode, message) => Object.assign(new Error(message), { statusCode })
 const executeFile = promisify(execFile)

@@ -127,12 +127,12 @@ struct SettingsLocalWorkspaceView: View {
                     SettingsValueRow(
                         label: "Repositories",
                         value: model.localACPWorkspaceAvailability
-                            .repositoriesPath ?? "~/.woven-matter/Repos"
+                            .repositoriesPath ?? "~/.woven-matter/repos"
                     )
                     SettingsValueRow(
                         label: "Databases",
                         value: model.localACPWorkspaceAvailability
-                            .databasesPath ?? "~/.woven-matter/Databases"
+                            .databasesPath ?? "~/.woven-matter/databases"
                     )
                     Text(model.localACPWorkspaceAvailability.detail)
                         .font(.system(size: 11.5))
@@ -148,7 +148,7 @@ struct SettingsLocalWorkspaceView: View {
 
                             if model.localACPWorkspaceAvailability
                                 .usesExternalRepositories {
-                                Button("Use default Repos") {
+                                Button("Use default repos") {
                                     model.configureLocalACPRepositories(nil)
                                 }
                                 .buttonStyle(SettingsQuietButtonStyle())
@@ -163,7 +163,7 @@ struct SettingsLocalWorkspaceView: View {
 
                             if model.localACPWorkspaceAvailability
                                 .usesExternalDatabases {
-                                Button("Use default Databases") {
+                                Button("Use default databases") {
                                     model.configureLocalACPDatabases(nil)
                                 }
                                 .buttonStyle(SettingsQuietButtonStyle())

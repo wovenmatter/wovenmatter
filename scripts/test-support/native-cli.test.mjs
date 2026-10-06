@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { cpSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { binding, connect, consume, enqueue, shellInput } from '../../harnesses/cli/binding.mjs';
@@ -12,7 +13,7 @@ import { registerCLI } from '../../remote/src/openclaw-results/cli.mjs';
 
 const context = captureID => ({ executablePath: '/app/bin/wovenmatter', socketPath: '/tmp/session.sock', captureID });
 function fixture(t) {
-  const directory = mkdtempSync(join(tmpdir(), 'wovenmatter-binding-test-'));
+  const directory = realpathSync(mkdtempSync(join(tmpdir(), 'wovenmatter-binding-test-')));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   return directory;
 }
@@ -45,9 +46,11 @@ test('native hook outputs update only shell arguments and never permissions or m
       : runtime === 'cursor' ? { conversation_id: 'native', generation_id: 'turn' }
       : { sessionId: 'native', promptId: 'turn' };
     assert.deepEqual(handleHook(runtime, directory, { ...identity, hook_event_name: 'UserPromptSubmit', prompt: 'hello' }), {});
-    const output = handleHook(runtime, directory, { ...identity, hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'wovenmatter help' } });
+    const tool = runtime === 'grok_build' ? 'run_terminal_cmd' : runtime === 'codex' ? 'exec_command' : 'Bash';
+    const field = runtime === 'codex' ? 'cmd' : 'command';
+    const output = handleHook(runtime, directory, { ...identity, hook_event_name: 'PreToolUse', tool_name: tool, tool_input: { [field]: 'wovenmatter help' } });
     const updated = runtime === 'cursor' ? output.updated_input : output.hookSpecificOutput.updatedInput;
-    assert.match(updated.command, new RegExp(`WOVENMATTER_CONTEXT_ID='${runtime}'`));
+    assert.match(updated[field], new RegExp(`WOVENMATTER_CONTEXT_ID='${runtime}'`));
     assert.equal(JSON.stringify(output).includes('permissionDecision'), false);
     assert.equal(JSON.stringify(output).includes('additionalContext'), false);
   }
@@ -55,6 +58,25 @@ test('native hook outputs update only shell arguments and never permissions or m
   assert.ok(promptCandidates('codex', { prompt }).includes('unchanged text'));
   assert.deepEqual(prompt[0], { type: 'text', text: 'unchanged text' });
   assert.deepEqual(promptCandidates('grok_build', { text: 'steer' }), ['steer']);
+});
+
+test('bundled hooks run from application paths containing spaces', t => {
+  const directory = fixture(t);
+  const bundled = join(directory, 'Woven Matter Dev.app', 'cli');
+  cpSync(new URL('../../harnesses/cli/', import.meta.url), bundled, { recursive: true });
+  enqueue(directory, context('captured'), ['hello']);
+  const identity = { session_id: 'native', turn_id: 'turn' };
+  const invoke = event => {
+    const result = spawnSync(process.execPath, [join(bundled, 'hook.mjs'), 'codex'], {
+      env: { ...process.env, WOVENMATTER_BINDING_DIRECTORY: directory },
+      input: JSON.stringify({ ...identity, ...event }), encoding: 'utf8', timeout: 5000,
+    });
+    assert.equal(result.status, 0, result.stderr);
+    return JSON.parse(result.stdout);
+  };
+  assert.deepEqual(invoke({ hook_event_name: 'UserPromptSubmit', prompt: 'hello' }), {});
+  const result = invoke({ hook_event_name: 'PreToolUse', tool_name: 'exec_command', tool_input: { cmd: 'wovenmatter context' } });
+  assert.match(result.hookSpecificOutput.updatedInput.cmd, /WOVENMATTER_CONTEXT_ID='captured'/);
 });
 
 test('OpenCode resolves the user before the executing assistant, not a later admitted input', async () => {
@@ -84,13 +106,13 @@ test('OpenCode resolves the user before the executing assistant, not a later adm
 test('OpenClaw observes input admission without changing its prompt and binds each tool', t => {
   const hooks = new Map(), methods = new Map();
   registerCLI({ on: (name, fn) => hooks.set(name, fn), registerGatewayMethod: (name, fn) => methods.set(name, fn) }, fixture(t));
-  const stage = (id, text) => methods.get('wovenmatter.cli.bind')({
+  const stage = id => methods.get('wovenmatter.cli.bind')({
     params: { sessionKey: 'native-session', context: context(id), inputID: id }, respond: ok => assert.equal(ok, true),
   });
   const native = { sessionKey: 'native-session', runId: 'native-run' };
-  stage('a', 'first');
+  stage('a');
   assert.equal(hooks.get('before_prompt_build')({ currentUserMessageId: 'a:user', currentUserMessage: 'first' }, native), undefined);
-  stage('b', 'second');
+  stage('b');
   const first = hooks.get('before_tool_call')({ toolName: 'exec', params: { command: 'wovenmatter context' } }, native);
   hooks.get('before_prompt_build')({ currentUserMessageId: 'b:user', currentUserMessage: 'second' }, native);
   const second = hooks.get('before_tool_call')({ toolName: 'exec', params: { command: 'wovenmatter context' } }, native);

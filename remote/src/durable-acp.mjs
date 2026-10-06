@@ -1,4 +1,6 @@
 import { spawn } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
+import { harnessResource } from './harness-resources.mjs'
 import { mkdir, open, readFile, realpath } from 'node:fs/promises'
 import { resolve, sep } from 'node:path'
 import { createInterface } from 'node:readline'
@@ -285,7 +287,7 @@ export function createDurableACP({ catalog, workspaceRoot, environment, isEnable
     }
     const wrapped = ['codex', 'claude_code', 'cursor', 'grok_build', 'pi'].includes(selected);
     const child = spawnProcess(wrapped ? process.execPath : harness.command, wrapped
-      ? [new URL('../../harnesses/cli/adapter.mjs', import.meta.url).pathname, selected, harness.command, ...args] : args, {
+      ? [fileURLToPath(harnessResource('cli/adapter.mjs')), selected, harness.command, ...args] : args, {
       cwd: workingDirectory, env: { ...environment(harness), ...(selected === 'pi' ? { WOVENMATTER_LOCAL_PI: '1' } : {}) }, stdio: ['pipe', 'pipe', 'pipe'],
     })
     channel.process = child

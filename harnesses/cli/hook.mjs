@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { binding, consume, shellInput } from './binding.mjs';
 
 export function handleHook(runtime, directory, event) {
@@ -13,7 +14,7 @@ export function handleHook(runtime, directory, event) {
   }
   if (!['PreToolUse', 'pre_tool_use', 'preToolUse'].includes(name)) return {};
   const tool = event.tool_name ?? event.toolName;
-  if (!['Bash', 'Shell', 'bash', 'shell', 'shell_command', 'exec_command', 'run_terminal_command'].includes(tool)) return {};
+  if (!['Bash', 'Shell', 'bash', 'shell', 'shell_command', 'exec_command', 'run_terminal_cmd'].includes(tool)) return {};
   const input = event.tool_input ?? event.toolInput;
   if (!input || typeof input !== 'object') return {};
   const updated = shellInput(input, binding(directory, generation));
@@ -22,7 +23,7 @@ export function handleHook(runtime, directory, event) {
     : { hookSpecificOutput: { hookEventName: 'PreToolUse', updatedInput: updated } };
 }
 
-if (process.argv[1] === new URL(import.meta.url).pathname) {
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
   try {
     const result = handleHook(process.argv[2], process.env.WOVENMATTER_BINDING_DIRECTORY,
       JSON.parse(readFileSync(0, 'utf8')));
