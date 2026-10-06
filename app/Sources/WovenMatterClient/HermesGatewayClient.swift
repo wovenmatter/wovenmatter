@@ -136,7 +136,9 @@ public actor HermesGatewayClient {
         }
         try bind(snapshot, requestedStoredID: previous?.storedID)
         try await prepareCLI(launch.cliConnection)
-        if previous != nil { try await archiveNativeSession() }
+        // Establish the native message boundary before the first turn as well
+        // as on resume, so its final export is attributed to the correct run.
+        try await archiveNativeSession()
         guard !snapshot["running"].bool else { throw HermesGatewayError.message("This Hermes conversation is already running. Wait for its current turn before continuing it here.") }
         let replay = try await client.call("session.events.since", ["session_id": .string(sessionID), "last_seen": .number(0)])
         if launch.historyRecorder != nil {

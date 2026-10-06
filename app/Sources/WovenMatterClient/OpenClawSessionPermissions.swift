@@ -5,8 +5,6 @@ import WovenMatterCore
 /// Never emulate a permission mode by answering pending approval requests.
 public enum OpenClawSessionPermissions {
     public static let options = ["default", "read-only", "guarded", "workspace", "full"]
-    // These are the gateway's native policies, including inheritance and read-only.
-    private static let supportedPolicies = options
     public static let metadata: [String: SessionOptionMetadata] = [
         "default": .init(name: "Default", description: "Use the gateway's inherited permission policy."),
         "read-only": .init(name: "Read only", description: "Read session files; block edits and command execution."),
@@ -20,7 +18,7 @@ public enum OpenClawSessionPermissions {
         if let model = preferences.model { params["model"] = .string(model) }
         if let thinking = preferences.thinkingLevel { params["thinkingLevel"] = .string(thinking) }
         if let permission = preferences.permissionMode {
-            guard supportedPolicies.contains(permission) else {
+            guard options.contains(permission) else {
                 throw OpenClawGatewayClientError.rejected("This OpenClaw permission mode is not supported.")
             }
             params["permissionMode"] = permission == "default" ? .null : .string(permission)

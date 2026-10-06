@@ -3,7 +3,7 @@ import WovenMatterClient
 import WovenMatterCore
 
 struct LocalACPSessionDriver: Sendable {
-    var initializeSession: @Sendable (
+    let initializeSession: @Sendable (
         _ workingDirectory: URL,
         _ existingSessionID: String?,
         _ title: String?,
@@ -15,14 +15,14 @@ struct LocalACPSessionDriver: Sendable {
         _ onPermission: LocalACPClient.PermissionHandler?,
         _ onInteraction: LocalACPClient.InteractionHandler?
     ) async throws -> LocalACPStopReason
-    var configuration: @Sendable () async -> LocalACPSessionConfiguration
-    var observeConfiguration: (@Sendable (@escaping @Sendable (LocalACPSessionConfiguration) async -> Void) async -> Void)?
-    var setConfiguration: @Sendable (
+    let configuration: @Sendable () async -> LocalACPSessionConfiguration
+    let observeConfiguration: (@Sendable (@escaping @Sendable (LocalACPSessionConfiguration) async -> Void) async -> Void)?
+    let setConfiguration: @Sendable (
         _ model: String?,
         _ thinking: String?
     ) async throws -> LocalACPSessionConfiguration
-    var setPermission: (@Sendable (String) async throws -> LocalACPSessionConfiguration)?
-    var setSubagentConcurrency: (@Sendable (Int) async throws -> LocalACPSessionConfiguration)?
+    let setPermission: (@Sendable (String) async throws -> LocalACPSessionConfiguration)?
+    let setSubagentConcurrency: (@Sendable (Int) async throws -> LocalACPSessionConfiguration)?
     let activeInput: (@Sendable (
         _ input: AgentMessageInput
     ) async throws -> LocalACPActiveInputReceipt)?

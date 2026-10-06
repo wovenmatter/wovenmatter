@@ -22,6 +22,19 @@ reconstruct interrupted UI runs or redispatch saved prompts. Existing files stay
 untouched. Remote transport retains fingerprint-only acceptance tombstones and
 fails closed when a prior process's delivery outcome is uncertain.
 
+## Attached subagents
+
+Built-in can spawn native child conversations, send follow-ups and wait for their
+results. The active-child limit defaults to eight and can be set from two through
+24. Children use the parent's exact connection unless the user or workspace
+instructions explicitly authorize another route; ambiguous routing fails before
+dispatch. Child conversations cannot spawn nested subagents.
+
+Children stay attached to the parent run through report delivery and the parent's
+response, including children spawned by that response. Stop cancels the group and
+withdraws queued reports. The transcript shows each child's route, status and
+recent activity, with paged access to its native archive.
+
 ## Native compaction
 
 Foreground threshold/overflow compaction and `/compact [instructions]` prefer

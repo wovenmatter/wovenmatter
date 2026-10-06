@@ -500,6 +500,9 @@ public actor OpenCodeSessionCoordinator {
             snapshot.mergeMessages(Array(probe.value["data"].array.reversed()), older: true)
             snapshot.olderCursor = probe.value["data"].array.isEmpty ? nil : probe.value["cursor"]["next"].string
         }
+        try Task.checkCancellation()
+        guard generation == generations[link.conversationID], token == connectionTokens[link.connectionID],
+              snapshots[link.conversationID]?.olderCursor == cursor else { throw CancellationError() }
         try await database.saveOpenCodeSnapshot(snapshot, conversationID: link.conversationID)
         try Task.checkCancellation()
         guard generation == generations[link.conversationID], token == connectionTokens[link.connectionID] else { throw CancellationError() }

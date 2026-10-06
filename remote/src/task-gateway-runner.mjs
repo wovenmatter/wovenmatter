@@ -8,8 +8,8 @@ const before = message => Object.assign(new Error(message), { beforePrompt:true 
 const values = options => (options ?? []).flatMap(o => o.value == null ? values(o.options) : [o.value])
 const delay = ms => new Promise(done => setTimeout(done,ms))
 
-// Only apply options actually advertised by the native agent. Unsupported
-// saved selections fail before submission rather than silently widening policy.
+// Apply advertised native options. An unavailable product permission default
+// inherits native policy; explicit saved choices still fail before submission.
 export async function applyTaskConfiguration(rpc, sessionID, initial, configuration) {
   let current = initial
   for (const [category,wanted] of [['model',configuration.runtimeKind==='cursor' && configuration.model ? configuration.model.trim().split('[')[0] : configuration.model],['thinking',configuration.thinking],['permission',configuration.permission]]) {
@@ -22,6 +22,8 @@ export async function applyTaskConfiguration(rpc, sessionID, initial, configurat
     const option = (current.configOptions ?? []).find(o => category === 'model' ? o.id === 'model' || o.category === 'model'
       : category === 'thinking' ? ['effort','reasoning_effort','thinking'].includes(o.id) || o.category === 'thought_level'
         : ['permission_mode','approval_mode'].includes(o.id) || (o.id === 'mode' && ['codex','claude_code'].includes(configuration.runtimeKind)))
+    if (category === 'permission' && configuration.usesProductPermissionDefault === true
+      && !(option ? values(option.options).includes(wanted) : current.modes?.availableModes?.some(mode => mode.id === wanted))) continue
     if (option) {
       if (!values(option.options).includes(wanted)) throw before(`The saved ${category} is no longer available.`)
       if (option.currentValue !== wanted) {

@@ -155,43 +155,48 @@ export class DefaultAgentEngine {
       return record;
     }
     const record = await openDurableSession(this, id, requested);
-    const options = record.options;
-    record.subagentConcurrency = options.subagentConcurrency ?? this.config.subagentConcurrency;
-    const native = await record.harness.inspect(record.nativeContext);
-    if (native.tasks.length || native.submissions.length) {
-      // Reinstall the host around committed native work without replacing the
-      // agent/route it was already executing. A new user run is admitted only
-      // after that attached group settles or is stopped.
-      const agent = await record.conversation.agent(record.nativeContext);
-      record.selected = agent.model ? `${agent.model.provider}/${agent.model.modelId}` : options.selected;
-      record.session.thinkingLevel = agent.thinkingLevel;
-      record.accountID = options.accountID;
-      record.accountOwned = options.accountOwned;
-      record.credentialIdentity = options.credentialIdentity ?? undefined;
-      record.runID = record.subagents.currentRunID();
-      record.resuming = true;
+    try {
+      const options = record.options;
+      record.subagentConcurrency = options.subagentConcurrency ?? this.config.subagentConcurrency;
+      const native = await record.harness.inspect(record.nativeContext);
+      if (native.tasks.length || native.submissions.length) {
+        // Reinstall the host around committed native work without replacing the
+        // agent/route it was already executing. A new user run is admitted only
+        // after that attached group settles or is stopped.
+        const agent = await record.conversation.agent(record.nativeContext);
+        record.selected = agent.model ? `${agent.model.provider}/${agent.model.modelId}` : options.selected;
+        record.session.thinkingLevel = agent.thinkingLevel;
+        record.accountID = options.accountID;
+        record.accountOwned = options.accountOwned;
+        record.credentialIdentity = options.credentialIdentity ?? undefined;
+        record.runID = record.subagents.currentRunID();
+        record.resuming = true;
+        this.sessions.set(record.session.sessionId, record);
+        record.resumeNative();
+        return record;
+      }
+      const connected = new Set((await this.credentials.list()).map(c => c.providerId));
+      const hasDefault = this.catalog().some(m => m.id === this.config.defaultModel);
+      if (!options.selected && !hasDefault && this.config.providers.includes('claude-subscription') && !this.catalog().some(m => connected.has(m.provider))) {
+        if ((await this.claude.status()).connected) connected.add('claude-subscription');
+      }
+      if (!hasDefault) this.implicitDefaultModel = this.catalog().find(m => connected.has(m.provider))?.id ?? this.catalog()[0]?.id;
+      const visible = this.modelOptions();
+      const selected = [options.selected, this.config.defaultModel].find(id => visible.some(m => m.id === id)) ?? visible[0]?.id;
+      const model = this.resolveModel(selected);
+      record.selected = model ? modelRef(model) : selected;
+      if (model) await record.session.setModel(model);
+      this.normalizeSelection(record);
+      this.persistOptions(record);
       this.sessions.set(record.session.sessionId, record);
+      await record.configurationQueue;
+      await record.archiveQueue;
       record.resumeNative();
       return record;
+    } catch (error) {
+      await record.session.dispose().catch(() => {});
+      throw error;
     }
-    const connected = new Set((await this.credentials.list()).map(c => c.providerId));
-    const hasDefault = this.catalog().some(m => m.id === this.config.defaultModel);
-    if (!options.selected && !hasDefault && this.config.providers.includes('claude-subscription') && !this.catalog().some(m => connected.has(m.provider))) {
-      if ((await this.claude.status()).connected) connected.add('claude-subscription');
-    }
-    if (!hasDefault) this.implicitDefaultModel = this.catalog().find(m => connected.has(m.provider))?.id ?? this.catalog()[0]?.id;
-    const visible = this.modelOptions();
-    const selected = [options.selected, this.config.defaultModel].find(id => visible.some(m => m.id === id)) ?? visible[0]?.id;
-    const model = this.resolveModel(selected);
-    record.selected = model ? modelRef(model) : selected;
-    if (model) await record.session.setModel(model);
-    this.normalizeSelection(record);
-    this.persistOptions(record);
-    this.sessions.set(record.session.sessionId, record);
-    await record.configurationQueue;
-    await record.archiveQueue;
-    record.resumeNative();
-    return record;
   }
   resolveModel(reference) { const slash = reference?.indexOf('/') ?? -1; return slash < 0 ? undefined : this.runtime.getModel(reference.slice(0, slash), reference.slice(slash + 1)); }
   async select(record, reference, option = 'model') {

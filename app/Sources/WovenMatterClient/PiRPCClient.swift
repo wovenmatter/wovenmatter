@@ -953,18 +953,16 @@ public actor PiRPCClient {
                   let nativeID = string(state["sessionId"]) ?? string(state["session_id"]), !nativeID.isEmpty else {
                 throw PiRPCClientError.archiveFailed("Pi returned native state without a stable session identity.")
             }
-            do {
-                let store = string(state["sessionFile"])
-                if nativeID != sessionID || store != nil && store != nativeStoreIdentity {
-                    nativeEntryCursor = nil
-                    fullReconciliation = true
-                }
-                if nativeID != sessionID {
-                    sessionID = nativeID
-                    try await promptEvents?(.sessionIdentity(nativeID))
-                }
-                nativeStoreIdentity = store ?? nativeStoreIdentity
+            let store = string(state["sessionFile"])
+            if nativeID != sessionID || store != nil && store != nativeStoreIdentity {
+                nativeEntryCursor = nil
+                fullReconciliation = true
             }
+            if nativeID != sessionID {
+                sessionID = nativeID
+                try await promptEvents?(.sessionIdentity(nativeID))
+            }
+            nativeStoreIdentity = store ?? nativeStoreIdentity
         }
         guard let sessionID else { return }
         var command: [String: Any] = ["type": "get_entries"]

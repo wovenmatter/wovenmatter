@@ -141,18 +141,23 @@ export function createDefaultAgentService({ cwd, directory, engineFactory, write
   async function prepareRetirement() {
     if (inFlight || admissions.size || admissionQueues.size || [...operations.values()].some(operation => !operation.done)) return false;
     retiring = true;
-    if (enginePromise) {
-      const current = await enginePromise;
-      for (const record of current.sessions?.values() ?? []) {
-        await record.configurationQueue;
-        if (record.harness) {
-          const native = await record.harness.inspect((await import('@earendil-works/chord/context')).BACKGROUND_CONTEXT);
-          if (native.tasks.length || native.submissions.length) { retiring = false; return false; }
+    try {
+      if (enginePromise) {
+        const current = await enginePromise;
+        for (const record of current.sessions?.values() ?? []) {
+          await record.configurationQueue;
+          if (record.harness) {
+            const native = await record.harness.inspect((await import('@earendil-works/chord/context')).BACKGROUND_CONTEXT);
+            if (native.tasks.length || native.submissions.length) { retiring = false; return false; }
+          }
         }
+        for (const record of [...(current.sessions?.values() ?? [])]) await record.session.dispose?.();
       }
-      for (const record of [...(current.sessions?.values() ?? [])]) await record.session.dispose?.();
+      return { attachmentState: { tokens: [...attachmentTokens], cancellations: [...cancellationRevisions] } };
+    } catch (error) {
+      retiring = false;
+      throw error;
     }
-    return { attachmentState: { tokens: [...attachmentTokens], cancellations: [...cancellationRevisions] } };
   }
   return { engine, configure: tracked(configure), invoke: tracked(invoke), poll: tracked(poll), status: tracked(status), cancelActive: tracked(cancelActive), cancelSession: tracked(cancelSession), prepareRetirement };
 }

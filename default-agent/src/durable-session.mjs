@@ -34,7 +34,7 @@ export async function openDurableSession(engine, id, requested) {
   if (!/^[0-9a-f-]{36}$/i.test(sessionID)) throw new DefaultAgentError('Invalid Built-in session.');
   const root = join(engine.directory, 'durable', sessionID);
   await mkdir(root, { recursive: true, mode: 0o700 });
-  let release, record, ownerError;
+  let release, record, ownerError, eventStream;
   try { release = await ownNativeStore(root, error => { ownerError = error; void record?.session?.abort()?.catch(() => {}); if (record) record.lockError = error; }); }
   catch { throw new DefaultAgentError('This Built-in session is already owned by another runtime. Reconnect to its current execution owner.'); }
   try {
@@ -288,7 +288,7 @@ export async function openDurableSession(engine, id, requested) {
       for (const write of invocation.pendingStoreWrites) await api.commit(tx => tx.appendEntry(conversation.id, { kind: 'woven.codemode-store', data: write.data }), ctx);
       return result;
     } };
-    record.subagents = createSubagents({ record, engine, context, scopeFor, allTools: () => [...adapted, codeTool], send,
+    record.subagents = createSubagents({ record, engine, context, allTools: () => [...adapted, codeTool], send,
       getTrustedInstructions: () => [...(record.userInstructions ?? []), ...loader.getAgentsFiles().agentsFiles.map(file => file.content)],
       onSpawn: (metadata, conversationID) => { childBindings.set(conversationID, record.cli.fork()); childMetadata.set(conversationID, metadata); scopes.delete(conversationID); },
     });
@@ -322,7 +322,24 @@ export async function openDurableSession(engine, id, requested) {
       setThinkingLevel: level => { session.thinkingLevel = level; record.configurationQueue = (record.configurationQueue ?? Promise.resolve()).then(() => conversation.configure({ thinkingLevel: level }, context)); },
       setActiveToolsByName: names => { record.configurationQueue = (record.configurationQueue ?? Promise.resolve()).then(() => conversation.configure({ tools: names.map(n => [...adapted, codeTool, record.subagents.tool].find(t => t.name === n)).filter(Boolean) }, context)); },
       abort: async () => { await record.subagents.stopGroup(); await conversation.abort(context, { background: true }); }, refreshContext: async () => { session.messages = [...(await conversation.context(context)).messages]; },
-      dispose: async () => { await record.configurationQueue; await record.subagents.dispose(); await eventStream.stop(); await harness.close(context); record.unsubscribeCommits(); await record.archiveQueue; await release(); engine.sessions.delete(sessionID); },
+      dispose: async () => {
+        let failure;
+        // A failed configuration/archive write must not strand the native owner
+        // lock or prevent the remaining resources from shutting down.
+        for (const close of [
+          () => record.configurationQueue,
+          () => record.subagents.dispose(),
+          () => eventStream?.stop(),
+          () => harness.close(context),
+          () => record.unsubscribeCommits(),
+          () => record.archiveQueue,
+          () => release(),
+        ]) {
+          try { await close(); } catch (error) { failure ??= error; }
+        }
+        engine.sessions.delete(sessionID);
+        if (failure) throw failure;
+      },
       prompt: async (content, opts = {}) => {
         if (record.lockError) throw new DefaultAgentError('The native session owner lock was lost. Reconnect before continuing.');
         await record.configurationQueue;
@@ -377,7 +394,7 @@ export async function openDurableSession(engine, id, requested) {
     };
     record.session = session;
     await session.refreshContext();
-    const eventStream = await watchEvents(harness, conversation.id, context);
+    eventStream = await watchEvents(harness, conversation.id, context);
     void eventStream.closed.then(() => { record.eventClosed = true; });
     const knownEntries = new Set(eventStream.snapshot.entries.map(e => e.id));
     let blockText = new Map(), messageOpen = false, messageSequence = 0;
@@ -443,5 +460,9 @@ export async function openDurableSession(engine, id, requested) {
     await record.archiveQueue;
     if (record.lockError) throw new DefaultAgentError('The native session owner lock was lost. Reconnect before continuing.');
     return record;
-  } catch (error) { await record?.harness?.close(context).catch(() => {}); await release(); throw error; }
+  } catch (error) {
+    if (record?.session) await record.session.dispose().catch(() => {});
+    else { await record?.harness?.close(context).catch(() => {}); await release(); }
+    throw error;
+  }
 }

@@ -469,7 +469,12 @@ export function createSubagents({ record, engine, context, allTools, getTrustedI
         await record.conversation.waitForIdle(context);
         const settled = await record.harness.commit(async tx => {
           const current = await tx.doc(Subagents, rootID);
-          for (const child of Object.values(current.children)) if (await activeChild(tx, child)) return false;
+          for (const child of Object.values(current.children)) {
+            if (await activeChild(tx, child)) return false;
+            // A parent follow-up can spawn another child after our snapshot.
+            // Its report must settle even after it releases its concurrency slot.
+            for (const id of child.reporterIDs) if (!terminal(await tx.task(id))) return false;
+          }
           const live = await tx.doc(LiveDoc, rootID), inbox = await tx.doc(InboxDoc, rootID);
           return !live.run && !live.compactions?.length && !inbox.items.some(item => item.mode !== 'write');
         }, context);
