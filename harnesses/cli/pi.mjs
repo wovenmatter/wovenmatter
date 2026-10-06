@@ -1,7 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { Socket } from 'node:net';
 import { createInterface } from 'node:readline';
+import { Writable } from 'node:stream';
 import { binding, shellInput } from './binding.mjs';
+
+// Pi redirects stdout.write before loading extensions. Use the underlying stream
+// writer for adapter control frames, preserving stdout ordering and backpressure.
+const writeProtocol = Writable.prototype.write.bind(process.stdout);
 
 export default function (pi) {
   const directory = process.env.WOVENMATTER_BINDING_DIRECTORY;
@@ -14,7 +19,7 @@ export default function (pi) {
     waiting.get(generation)?.();
     waiting.delete(generation);
   });
-  const notify = payload => process.stdout.write(JSON.stringify({ type: 'wovenmatter_cli', ...payload }) + '\n');
+  const notify = payload => writeProtocol(JSON.stringify({ type: 'wovenmatter_cli', ...payload }) + '\n');
   let generation;
   pi.on('input', event => { notify({ event: 'input', source: event.source }); });
   pi.on('before_agent_start', () => { notify({ event: 'start' }); });
