@@ -14,18 +14,20 @@ export default function (pi) {
     waiting.get(generation)?.();
     waiting.delete(generation);
   });
-  const notify = payload => process.stdout.write(JSON.stringify({ type: 'wovenmatter_cli', ...payload }) + '\n');
+  // Pi owns RPC stdout. Its notification path keeps control frames ordered with
+  // native queue events; direct stdout writes are redirected or can overtake them.
+  const notify = (ctx, payload) => ctx.ui.notify('wovenmatter_cli:' + JSON.stringify({ type: 'wovenmatter_cli', ...payload }));
   let generation;
-  pi.on('input', event => { notify({ event: 'input', source: event.source }); });
-  pi.on('before_agent_start', () => { notify({ event: 'start' }); });
-  pi.on('message_start', async event => {
+  pi.on('input', (event, ctx) => { notify(ctx, { event: 'input', source: event.source }); });
+  pi.on('before_agent_start', (_, ctx) => { notify(ctx, { event: 'start' }); });
+  pi.on('message_start', async (event, ctx) => {
     if (event.message.role !== 'user') return;
     generation = randomUUID();
     const content = event.message.content;
     const text = typeof content === 'string' ? content : content.filter(p => p.type === 'text').map(p => p.text).join('');
     await new Promise(resolve => {
       waiting.set(generation, resolve);
-      notify({ event: 'consume', generation, text });
+      notify(ctx, { event: 'consume', generation, text });
     });
   });
   pi.on('tool_call', event => {

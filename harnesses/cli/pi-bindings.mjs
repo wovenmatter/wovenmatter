@@ -12,6 +12,10 @@ export class PiBindings {
   }
   submit(context) { this.submitted = context?.captureID ?? ''; }
   observe(message) {
+    if (message.type === 'extension_ui_request' && message.method === 'notify'
+        && typeof message.message === 'string' && message.message.startsWith('wovenmatter_cli:')) {
+      message = JSON.parse(message.message.slice('wovenmatter_cli:'.length));
+    }
     if (message.type === 'wovenmatter_cli') {
       if (message.event === 'input') {
         this.input = message.source === 'rpc' ? this.submitted : '';
