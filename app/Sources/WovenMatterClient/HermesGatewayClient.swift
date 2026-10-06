@@ -8,6 +8,7 @@ public actor HermesGatewayClient {
     private var remoteConnection: HermesGatewayConnection?
     private var rpc: (any HermesGatewayTransport)?
     private let connectTransport: @Sendable (LocalACPRuntimeLaunchConfiguration) async throws -> (String, any HermesGatewayTransport)
+    private var cliPluginReady = false
     private var sessionID = ""
     private var storedID = ""
     private var home = ""
@@ -125,6 +126,7 @@ public actor HermesGatewayClient {
             initialContext = systemPrompt
         }
         try bind(snapshot, requestedStoredID: previous?.storedID)
+        try await prepareCLI(launch.cliConnection)
         guard !snapshot["running"].bool else { throw HermesGatewayError.message("This Hermes conversation is already running. Wait for its current turn before continuing it here.") }
         let replay = try await client.call("session.events.since", ["session_id": .string(sessionID), "last_seen": .number(0)])
         sequence = replay["latest_seq"].number ?? 0
@@ -334,6 +336,47 @@ public actor HermesGatewayClient {
         )
     }
 
+    private func prepareCLI(_ context: AgentCLIContext?, text: String? = nil, resetPending: Bool = false, removePending: Bool = false) async throws {
+        guard let context, let rpc else { return }
+        let pluginDirectory = URL(fileURLWithPath: home).appending(path: "plugins/wovenmatter-cli").path
+        func quote(_ value: String) -> String { "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'" }
+        if !cliPluginReady {
+            guard let resource = Bundle.main.resourceURL?.appending(path: "harnesses/cli/hermes.py") else {
+                throw HermesGatewayError.message("The bundled Hermes CLI integration is missing.")
+            }
+            let source = try Data(contentsOf: resource).base64EncodedString()
+            let install = #"""
+            import base64,pathlib,sys
+            root=pathlib.Path(sys.argv[1]);root.mkdir(parents=True,exist_ok=True,mode=0o700)
+            source=base64.b64decode(sys.argv[2])
+            file=root/'__init__.py'
+            changed=not file.exists() or file.read_bytes()!=source
+            if changed: file.write_bytes(source)
+            (root/'plugin.yaml').write_text('name: wovenmatter-cli\nversion: 1.0.0\ndescription: Woven Matter session CLI integration\n')
+            print('changed' if changed else 'ready')
+            """#
+            let result = try await rpc.call("shell.exec", ["command": .string(
+                ["python3", "-c", install, pluginDirectory, source].map(quote).joined(separator: " "))])
+            guard result["code"].number == 0 else { throw HermesGatewayError.message("Could not install the Hermes CLI integration.") }
+            if result["stdout"].text.contains("changed") {
+                _ = try await rpc.call("plugins.manage", ["action": "toggle", "name": "wovenmatter-cli", "enable": .bool(false)])
+            }
+            let activation = try await rpc.call("plugins.manage", ["action": "toggle", "name": "wovenmatter-cli", "enable": .bool(true)])
+            let live = activation["activation"]["activated_now"]["hooks"].array.compactMap(\.string)
+            guard activation["unchanged"].bool || live.contains("pre_tool_call") else {
+                throw HermesGatewayError.message("Hermes could not activate its Woven Matter CLI integration.")
+            }
+            cliPluginReady = true
+        }
+        let payload: HermesValue = ["context": try JSONDecoder().decode(HermesValue.self, from: JSONEncoder().encode(context)),
+            "text": text.map(HermesValue.string) ?? .null, "resetPending": .bool(resetPending), "removePending": .bool(removePending)]
+        let encoded = try JSONEncoder().encode(payload).base64EncodedString()
+        let result = try await rpc.call("shell.exec", ["command": .string(["python3", pluginDirectory + "/__init__.py", home, storedID, encoded].map(quote).joined(separator: " "))])
+        guard result["code"].number == 0, result["stdout"].text.contains("ready") else {
+            throw HermesGatewayError.message("Could not bind the Woven Matter CLI to this Hermes input.")
+        }
+    }
+
     public func prompt(_ input: AgentMessageInput, onEvent: LocalACPClient.EventHandler?,
                        onPermission: LocalACPClient.PermissionHandler?, onInteraction: LocalACPClient.InteractionHandler?,
                        dispatchFence: AgentDispatchFence? = nil) async throws -> LocalACPStopReason {
@@ -420,6 +463,8 @@ public actor HermesGatewayClient {
             // draft. Pin its identity before submission, including an uncertain ack.
             try fence.check()
             try await onEvent?(.sessionIdentity(Self.identity(home: home, storedID: storedID, imported: imported)))
+            try await prepareCLI(input.cliContext, text: content, resetPending: true)
+            try fence.check()
             _ = try await rpc.call("prompt.submit", ["session_id": .string(sessionID), "text": .string(content)], dispatchFence: fence)
             initialContext = nil
             if let terminal { return try terminal.get() }
@@ -427,6 +472,8 @@ public actor HermesGatewayClient {
                 try await withCheckedThrowingContinuation { completion = $0 }
             } onCancel: { Task { try? await self.cancel() } }
         } catch {
+            if !fence.hasDispatched { try? await prepareCLI(input.cliContext, removePending: true) }
+            else if case HermesGatewayError.rpc = error { try? await prepareCLI(input.cliContext, removePending: true) }
             // The worker may still be running after a lost submit acknowledgement.
             // A subsequent explicit send must resume and check running state first.
             recoveryInvalidated = true
@@ -455,8 +502,19 @@ public actor HermesGatewayClient {
         defer { pendingDispatches[ObjectIdentifier(fence)] = nil }
         guard busy, let rpc else { throw HermesGatewayError.message("Hermes has no active turn to steer.") }
         guard input.files.isEmpty else { throw AgentMessageAttachmentError.unsupportedForAgent("Hermes steering accepts text and references. Send files with the next turn.") }
-        let receipt = try await rpc.call("session.steer", ["session_id": .string(sessionID), "text": .string(input.transportText())], dispatchFence: fence)
-        guard receipt["status"].text == "queued" else { throw HermesGatewayError.message("Hermes did not accept this steering input.") }
+        try await prepareCLI(input.cliContext, text: input.transportText())
+        do {
+            try fence.check()
+            let receipt = try await rpc.call("session.steer", ["session_id": .string(sessionID), "text": .string(input.transportText())], dispatchFence: fence)
+            guard receipt["status"].text == "queued" else {
+                try await prepareCLI(input.cliContext, removePending: true)
+                throw HermesGatewayError.message("Hermes did not accept this steering input.")
+            }
+        } catch {
+            if !fence.hasDispatched { try? await prepareCLI(input.cliContext, removePending: true) }
+            else if case HermesGatewayError.rpc = error { try? await prepareCLI(input.cliContext, removePending: true) }
+            throw error
+        }
     }
 
     public func cancel() async throws {

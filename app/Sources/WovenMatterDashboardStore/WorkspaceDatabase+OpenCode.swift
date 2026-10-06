@@ -193,7 +193,7 @@ extension WorkspaceDatabaseConnection {
     }
   }
   /// Native snapshots remain verbatim in storage; only the presentation copy
-  /// replaces our injected discovery text with the user's original input.
+  /// retains the original input, including for older messages with app prefixes.
   public func openCodeDisplaySnapshot(_ snapshot: OpenCodeSessionSnapshot, conversationID: String) throws -> OpenCodeSessionSnapshot {
     try withLock {
       var result = snapshot

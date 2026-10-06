@@ -114,7 +114,7 @@ test('ACP executor confirms settings, binds recurring session before one prompt,
  const config={...task().task.configuration,model:'b'}
  await assert.rejects(()=>execute({run:{id:'run',title:'Fixture',task:{...task().task,configuration:config}},nativeSessionID:'native-1',signal:new AbortController().signal,publish:()=>{},bindSession:id=>bound.push(id)}),error=>error.needsApproval===true)
  assert.equal(messages.filter(m=>m.method==='session/prompt').length,1)
- assert.ok(messages.find(m=>m.method==='session/prompt').params.prompt[0].text.includes('require the Mac app'))
+ assert.equal(messages.find(m=>m.method==='session/prompt').params.prompt[0].text,task().task.prompt)
 })
 
 test('re-enabling cannot run stale schedules until a fresh publication fences local edits',async t=>{

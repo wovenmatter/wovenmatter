@@ -29,6 +29,8 @@ run_static_checks() {
   scripts/test-note-socket.sh
   python3 scripts/test-support/test_executor_deployment.py
   python3 scripts/test-support/test_wovenmatter_remote_tools.py
+  node --test scripts/test-support/native-cli.test.mjs
+  PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-support/test_hermes_cli.py
   scripts/test-remote-workspace.sh
   for file in remote/src/*.mjs remote/test/*.test.mjs; do
     node --check "$file"

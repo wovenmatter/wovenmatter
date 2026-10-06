@@ -230,6 +230,7 @@ final class OpenCodeModel {
             else {
                 connection = try OpenCodeConnection.discover(file: registration)
                 _ = try await OpenCodeHTTPClient(connection: connection).health()
+                try await NativeCLIAdapter.installOpenCode()
             }
             try Task.checkCancellation()
             guard generation == connectionGeneration, !quitting else { throw CancellationError() }
@@ -645,7 +646,7 @@ final class OpenCodeModel {
 
     func cancelPendingInput(_ id: String) { pendingDispatches[id]?.cancel() }
 
-    func send(_ id: String, input: AgentMessageInput, discovery: String? = nil,
+    func send(_ id: String, input: AgentMessageInput,
               dispatchFence: AgentDispatchFence? = nil) async throws {
         let fence = dispatchFence ?? AgentDispatchFence()
         try fence.check()
@@ -656,7 +657,7 @@ final class OpenCodeModel {
             if let selection = selectionTasks[id] { try await selection.value }
             // IPC dispatch may reach the execution owner even if its reply is lost.
             try fence.claimDispatch()
-            _ = try await backendCommand(.send(id, input, discovery)); return
+            _ = try await backendCommand(.send(id, input)); return
         }
         guard let link = links[id], isLocalSession(id) else { throw OpenCodeError.message("This saved transcript is read-only. Create a new OpenCode chat.") }
         guard isEnabled else { throw OpenCodeError.message("Enable OpenCode for this workspace before sending.") }
@@ -683,9 +684,11 @@ final class OpenCodeModel {
         try fence.check()
         if let command = OpenCodeComposerMetadata.invocation(input.text, commands: commands[id] ?? []) {
             try await coordinator.command(link, name: command.name,
-                input: AgentMessageInput(text: command.arguments, attachments: input.attachments, historyDeliveryID: input.historyDeliveryID, visibleWorkspace: input.visibleWorkspace), discovery: discovery, dispatchFence: fence)
+                input: AgentMessageInput(text: command.arguments, attachments: input.attachments,
+                    historyDeliveryID: input.historyDeliveryID, visibleWorkspace: input.visibleWorkspace,
+                    cliContext: input.cliContext), dispatchFence: fence)
         } else {
-            try await coordinator.prompt(link, input: input, discovery: discovery, dispatchFence: fence)
+            try await coordinator.prompt(link, input: input, dispatchFence: fence)
         }
     }
 

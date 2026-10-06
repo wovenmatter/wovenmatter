@@ -1,6 +1,6 @@
 import { mkdir, readdir, realpath, stat, writeFile } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
-import { createAgentSession, createCodingTools, createCodemodeExtension, DefaultResourceLoader, ModelRuntime, SessionManager, SettingsManager } from '@earendil-works/pi-coding-agent';
+import { createAgentSession, createBashTool, createCodingTools, createCodemodeExtension, DefaultResourceLoader, ModelRuntime, SessionManager, SettingsManager } from '@earendil-works/pi-coding-agent';
 import { Credentials } from './credentials.mjs';
 import { accessFailure, DefaultAgentError, emptyConfig, modelRef, providerNames, providers, validateConfig } from './config.mjs';
 import { searchTools } from './search.mjs';
@@ -9,8 +9,7 @@ import { registerLocalServers } from './local-servers.mjs';
 import { ClaudeRuntime, isClaude } from './claude-runtime.mjs';
 import { registerClaudeProviders } from './claude-provider.mjs';
 import { modelOption } from './model-presentation.mjs';
-
-const builtInInstructions = 'You are Built-in in Woven Matter. Work in the supplied agent workspace. Use the wovenmatter CLI and workspace instructions for notes and databases. Use web_search and web_read for current information and cite source URLs. If search is not configured, direct the user to Settings → Connections. Never claim a tool succeeded when it failed.';
+import { SessionCLIContext } from './cli-context.mjs';
 
 export class DefaultAgentEngine {
   constructor({ cwd, directory, config = {}, credentials = {}, credentialAccounts = {}, vault, requestCredentials, claude, requestPermission }) {
@@ -208,14 +207,23 @@ export class DefaultAgentEngine {
             if (codeModeState.value === 'off') throw new Error('Code mode is disabled.');
             return tool.execute(...args);
           } }) : key === 'getSettings' ? () => ({ ...pi.getSettings(), codemode: { mode: codeModeState.value === 'only' ? 'only' : 'on' } }) : Reflect.get(target, key) }));
-      }],
-      appendSystemPrompt: [builtInInstructions] });
+      }] });
     await loader.reload();
-    const record = { codeModeState, manager, cwd, selected, busy: false, permission: options.permission ?? 'normal', ordinaryTools: ['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls', 'web_search', 'web_read'] };
+    const record = { cli: new SessionCLIContext(), codeModeState, manager, cwd, selected, busy: false, permission: options.permission ?? 'normal', ordinaryTools: ['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls', 'web_search', 'web_read'] };
     const guardedTools = createCodingTools(cwd).map(tool => ({ ...tool, label: tool.label ?? tool.name,
       execute: async (id, input, signal, onUpdate) => {
+        // Snapshot before permission waits; an already-created shell call keeps
+        // its originating input even if another input is consumed later.
+        const env = record.cli.environment(process.env);
+        const boundTool = tool.name === 'bash' ? createBashTool(cwd, {
+          spawnHook: context => {
+            const nativeEnv = { ...context.env };
+            for (const key of ['WOVENMATTER_CONTEXT_ID', 'WOVENMATTER_NOTE_ID', 'WOVENMATTER_SOCKET', 'WOVENMATTER_CLI']) delete nativeEnv[key];
+            return { ...context, env: { ...nativeEnv, ...env } };
+          },
+        }) : tool;
         if (['bash', 'write', 'edit'].includes(tool.name) && !await this.approve(record, tool.name, input, signal, id)) throw new Error('The user declined this tool.');
-        return tool.execute(id, input, signal, onUpdate);
+        return boundTool.execute(id, input, signal, onUpdate);
       } }));
     const { session } = await createAgentSession({ cwd, agentDir: this.directory, modelRuntime: this.runtime, model, thinkingLevel: options.thinking, sessionManager: manager, settingsManager, resourceLoader: loader,
       tools: [...record.ordinaryTools, ...(this.config.codeMode === 'off' ? [] : ['codemode'])], customTools: [...guardedTools, ...searchTools(async () => (await this.credentials.read('exa'))?.key)] });
@@ -257,10 +265,11 @@ export class DefaultAgentEngine {
     this.persistOptions(record);
     return this.configuration(record);
   }
-  async prompt(record, text, emit, requestPermission) {
+  async prompt(record, text, emit, requestPermission, cliContext) {
     if (record.busy) throw new DefaultAgentError('This Built-in session already has an active turn.');
     this.normalizeSelection(record);
     record.busy = true;
+    record.cli ??= new SessionCLIContext();
     let ready;
     record.steeringReady = new Promise(resolve => { ready = resolve; });
     let finished;
@@ -274,6 +283,7 @@ export class DefaultAgentEngine {
     const usage = { inputTokens: 0, outputTokens: 0, cachedReadTokens: 0, cachedWriteTokens: 0 };
     let messageSequence = 0;
     const unsubscribe = record.session.subscribe(event => {
+      if (event.type === 'message_start' && event.message?.role === 'user') record.cli.consumed();
       if (event.type === 'message_start') messageSequence += 1;
       if (event.type === 'message_end' && event.message?.role === 'assistant' && event.message.usage) {
         const value = event.message.usage;
@@ -353,12 +363,14 @@ export class DefaultAgentEngine {
           });
           try {
             let initialError;
+            const removeInputBinding = record.cli.enqueue(cliContext);
             try {
               await record.session.prompt(text, { preflightResult: disposition => {
                 if (disposition === 'started' || disposition === 'queued') { controller.signal.throwIfAborted(); record.acceptSteer = acceptSteer; ready(); }
                 else { throw new DefaultAgentError('The input was handled without entering the model conversation.'); }
               } });
             } catch (error) { initialError = error; }
+            finally { removeInputBinding(); }
             let continuationError;
             while (continuations.length) {
               const errors = await Promise.all(continuations.splice(0));
@@ -387,6 +399,7 @@ export class DefaultAgentEngine {
       throw error;
     } finally {
       unsubscribe();
+      record.cli.finish();
       record.busy = false;
       ready();
       record.steeringReady = undefined;
@@ -396,19 +409,22 @@ export class DefaultAgentEngine {
       record.requestPermission = undefined;
     }
   }
-  async steer(record, text) {
+  async steer(record, text, cliContext) {
     if (!text.trim()) throw new DefaultAgentError('A message is required.');
     if (!record.busy) return { outcome: 'promptRequired' };
     await record.steeringReady;
     if (record.promptController?.signal.aborted) throw new DefaultAgentError('The run is stopping. Send this message after it stops.');
     if (!record.acceptSteer) { await record.promptFinished; return { outcome: 'promptRequired' }; }
-    return record.acceptSteer(text);
+    const removeBinding = record.cli.enqueue(cliContext);
+    try { return await record.acceptSteer(text); }
+    catch (error) { removeBinding(); throw error; }
   }
   async handle(method, params = {}, emit = () => {}, requestPermission) {
     if (method === 'initialize') return { protocolVersion: 1, agentInfo: { name: 'wovenmatter-default-agent', version: '0.1.0' }, agentCapabilities: { loadSession: true, promptCapabilities: { image: false } }, authMethods: [], _meta: { steering: { supported: true } } };
     if (method === 'woven/status') return this.status();
     if (method === 'session/new' || method === 'session/load') {
       const record = await this.create(method === 'session/load' ? params.sessionId : undefined, params.cwd);
+      if (params._meta?.wovenToolsConnection) record.cli.reconnect(params._meta.wovenToolsConnection);
       return { sessionId: record.session.sessionId, ...this.configuration(record) };
     }
     const record = this.sessions.get(params.sessionId) ?? await this.create(params.sessionId);
@@ -419,8 +435,8 @@ export class DefaultAgentEngine {
       await record.session.abort();
       return {};
     }
-    if (method === '_session/steering') return this.steer(record, (params.prompt ?? []).filter(p => p.type === 'text').map(p => p.text).join('\n'));
-    if (method === 'session/prompt') return this.prompt(record, (params.prompt ?? []).filter(p => p.type === 'text').map(p => p.text).join('\n'), emit, requestPermission);
+    if (method === '_session/steering') return this.steer(record, (params.prompt ?? []).filter(p => p.type === 'text').map(p => p.text).join('\n'), params._meta?.wovenTools);
+    if (method === 'session/prompt') return this.prompt(record, (params.prompt ?? []).filter(p => p.type === 'text').map(p => p.text).join('\n'), emit, requestPermission, params._meta?.wovenTools);
     throw new Error('Unsupported Built-in operation.');
   }
 }

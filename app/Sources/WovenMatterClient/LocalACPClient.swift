@@ -604,6 +604,7 @@ public actor LocalACPClient {
     // separates reasoning phases so distinct commentary is not merged.
     private var reasoningPhaseSequence = 0
     private var activeReasoningPhaseID: String?
+    private let cliConnection: AgentCLIContext?
     private var closed = false
     private var shutdownTask: Task<Void, Never>?
 
@@ -615,8 +616,10 @@ public actor LocalACPClient {
         workingDirectory: URL,
         requestedPermission: String?,
         historyRecorder: WorkspaceWireRecorder? = nil,
+        cliConnection: AgentCLIContext? = nil,
         accountCoordinator: ProviderAccountCoordinator?
     ) {
+        self.cliConnection = cliConnection
         self.accountCoordinator = accountCoordinator
         self.historyRecorder = historyRecorder
         self.requestedPermission = requestedPermission
@@ -651,8 +654,7 @@ public actor LocalACPClient {
             "-c",
             #"ulimit -c 0; set -m; exec "$@""#,
             "wovenmatter-local-acp",
-            launch.executableURL.path,
-        ] + preparedLaunch.arguments
+        ] + NativeCLIAdapter.command(launch: launch, arguments: preparedLaunch.arguments)
         process.currentDirectoryURL = launch.processWorkingDirectoryURL
             ?? workingDirectory
         var environment = ProcessInfo.processInfo.environment
@@ -687,6 +689,7 @@ public actor LocalACPClient {
             workingDirectory: workingDirectory,
             requestedPermission: preparedLaunch.explicitPermission,
             historyRecorder: launch.historyRecorder,
+            cliConnection: launch.cliConnection,
             accountCoordinator: accountCoordinator
         )
     }
@@ -751,6 +754,7 @@ public actor LocalACPClient {
                         "sessionId": .string(existingSessionID),
                         "cwd": .string(workingDirectory.path),
                         "mcpServers": .array([]),
+                        "_meta": .object(try nativeConnectionMetadata()),
                     ])
                 )
                 if runtimeKind == .hermes,
@@ -846,6 +850,11 @@ public actor LocalACPClient {
         return initializeResult
     }
 
+    private func nativeConnectionMetadata() throws -> [String: ACPJSONValue] {
+        guard let cliConnection else { return [:] }
+        return ["wovenToolsConnection": try JSONDecoder().decode(ACPJSONValue.self, from: JSONEncoder().encode(cliConnection))]
+    }
+
     private func createSession(
         workingDirectory: URL,
         title: String?,
@@ -855,7 +864,7 @@ public actor LocalACPClient {
             "cwd": .string(workingDirectory.path),
             "mcpServers": .array([]),
         ]
-        var metadata: [String: ACPJSONValue] = [:]
+        var metadata = try nativeConnectionMetadata()
         if let systemPrompt, !systemPrompt.isEmpty {
             if agentName == "@agentclientprotocol/claude-agent-acp" {
                 metadata["systemPrompt"] = .object([
@@ -1214,6 +1223,9 @@ public actor LocalACPClient {
             var steeringMetadata: [String: ACPJSONValue] = [
                 "steering": .object(["idleBehavior": .string("promptRequired")]),
             ]
+            if let context = input.cliContext {
+                steeringMetadata["wovenTools"] = try JSONDecoder().decode(ACPJSONValue.self, from: JSONEncoder().encode(context))
+            }
             let promptBlocks = try Self.promptBlocks(input)
             let commandOnly = runtimeKind == .codex && Self.codexCommandCompletesWithoutTurn(
                 promptBlocks.arrayValue?.first?["text"]?.stringValue ?? ""
@@ -1288,12 +1300,18 @@ public actor LocalACPClient {
                 )
             }
             do {
+                var params: [String: ACPJSONValue] = [
+                    "sessionId": .string(sessionID),
+                    "text": .string(input.transportText()),
+                ]
+                if let context = input.cliContext {
+                    params["_meta"] = .object([
+                        "wovenTools": try JSONDecoder().decode(ACPJSONValue.self, from: JSONEncoder().encode(context)),
+                    ])
+                }
                 _ = try await request(
                     method: "_x.ai/interject",
-                    params: .object([
-                        "sessionId": .string(sessionID),
-                        "text": .string(input.transportText()),
-                    ]),
+                    params: .object(params),
                     waitsForNotifications: false,
                     dispatchFence: dispatchFence
                 )
@@ -1391,15 +1409,20 @@ public actor LocalACPClient {
             onPermission: onPermission, onInteraction: onInteraction))
         let response: Task<ACPRequestResponse, any Error>
         do {
+            var metadata: [String: ACPJSONValue] = [:]
+            if runtimeKind == .defaultAgent || durableRemoteACP {
+                metadata["wovenRunID"] = .string(defaultAgentRunID ?? UUID().uuidString.lowercased())
+                metadata["wovenInputID"] = .string(UUID().uuidString.lowercased())
+            }
+            if let context = input.cliContext {
+                metadata["wovenTools"] = try JSONDecoder().decode(ACPJSONValue.self, from: JSONEncoder().encode(context))
+            }
             response = try await beginRequest(
                 method: "session/prompt",
                 params: .object([
                     "sessionId": .string(sessionID),
                     "prompt": blocks,
-                    "_meta": (runtimeKind == .defaultAgent || durableRemoteACP) ? .object([
-                        "wovenRunID": .string(defaultAgentRunID ?? UUID().uuidString.lowercased()),
-                        "wovenInputID": .string(UUID().uuidString.lowercased()),
-                    ]) : .object([:]),
+                    "_meta": .object(metadata),
                 ]),
                 dispatchFence: dispatchFence
             )

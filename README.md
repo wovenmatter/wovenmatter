@@ -132,17 +132,18 @@ Both use this initial layout:
 .woven-matter/
   AGENTS.md
   CLAUDE.md -> AGENTS.md
-  Repos/
-  Databases/
-  GUIDES/
-  PLANS/
-  RESEARCH/
-  WORK_LOGS/
-  OUTBOX/
-  .scratch/
+  repos/
+  databases/
+  guides/
+  plans/
+  research/
+  work_logs/
+  outbox/
+  scratch/
+  skills/
 ```
 
-Adapt the contents to your work. On your Mac, `Repos` and `Databases` can link
+Adapt the contents to your work. On your Mac, `repos` and `databases` can link
 to folders you already use. Initialization preserves an existing `CLAUDE.md`
 instead of replacing it. See [Workspaces and storage](docs/guide/workspaces.md)
 for folder setup and the distinction between workspace files and app records.

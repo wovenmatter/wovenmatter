@@ -800,7 +800,7 @@ test('database routes require authentication and ignore client-supplied workspac
   const root = await temporaryFixture(context, 'wovenmatter-database-api-')
   const home = resolve(root, 'home')
   await mkdir(home)
-  await mkdir(resolve(root, 'Databases'))
+  await mkdir(resolve(root, 'databases'))
   const service = await startService({ workspace: root, home, catalog: catalogPath, token: 'database-token' })
   context.after(() => service.child.kill('SIGTERM'))
   const request = (path, method = 'GET', body, token = 'database-token') => fetch(service.url + path, {
@@ -812,7 +812,7 @@ test('database routes require authentication and ignore client-supplied workspac
   const created = await request('/v1/databases', 'POST', { databaseID: 'Sales', preference: 'json', root: '/tmp/ignored', action: 'list' })
   assert.equal(created.status, 200)
   assert.equal((await created.json()).id, 'Sales')
-  await writeFile(resolve(root, 'Databases/Sales/data.json'), '[1,2,3]')
+  await writeFile(resolve(root, 'databases/Sales/data.json'), '[1,2,3]')
   const read = await request('/v1/databases/data', 'POST', { databaseID: 'Sales', relativePath: 'data.json' })
   assert.equal(Buffer.from((await read.json()).jsonBase64, 'base64').toString(), '[1,2,3]')
   assert.equal((await request('/v1/databases/preference', 'PATCH', { databaseID: 'Sales', preference: 'sqlite' })).status, 200)

@@ -74,18 +74,13 @@ def build_request(arguments, environment):
         if len(data) > limit:
             raise ValueError("Input file exceeds the command size limit.")
         args[index:index + 2] = ["--code" if args[0] == "executor" else "--html" if args[1] == "set-html" else "--json", data.decode("utf-8")]
-    if (len(args) > 1 and args[0] == "notes"
-            and args[1] not in ("list", "folders", "create", "versions", "version", "restore", "help")
-            and not (args[1] == "read" and positional)):
-        if "note-id" not in options and environment.get("WOVENMATTER_NOTE_ID"):
-            args += ["--note-id", environment["WOVENMATTER_NOTE_ID"]]
     request_id = str(uuid.uuid4())
     if "request-id" in options:
         index = options["request-id"]
         if index + 1 >= len(args):
             raise ValueError("--request-id requires a UUID.")
         request_id = str(uuid.UUID(args[index + 1]))
-    data = json.dumps({"schemaVersion": 1, "requestID": request_id, "arguments": args}).encode("utf-8")
+    data = json.dumps({"schemaVersion": 1, "requestID": request_id, "arguments": args, "contextID": environment.get("WOVENMATTER_CONTEXT_ID")}).encode("utf-8")
     if len(data) > REQUEST_LIMIT:
         raise ValueError("Tool request exceeds 4 MiB.")
     return data

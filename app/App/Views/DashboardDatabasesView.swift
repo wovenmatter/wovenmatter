@@ -280,7 +280,7 @@ struct DashboardDatabasesView: View {
                     Text("Linked data: JSON or read-only SQLite")
                         .font(.system(size: 10.5))
                         .foregroundStyle(DashboardPalette.mutedForeground)
-                        .help("Only folders inside this workspace’s Databases folder are available. Linked folders are not supported.")
+                        .help("Only folders inside this workspace’s databases folder are available. Linked folders are not supported.")
                 }
             }
             Spacer()
@@ -341,7 +341,7 @@ struct DashboardDatabasesView: View {
         HStack(spacing: 14) {
             VStack(alignment: .leading, spacing: 3) {
                 Text(database.name).font(.system(size: 13, weight: .semibold))
-                Text(database.localURL?.path ?? "Databases/\(database.name) · Remote workspace")
+                Text(database.localURL?.path ?? "databases/\(database.name) · Remote workspace")
                     .font(.system(size: 10.5))
                     .foregroundStyle(DashboardPalette.mutedForeground)
                     .lineLimit(1)
@@ -431,7 +431,7 @@ struct DashboardDatabasesView: View {
     private func chooseExternalDatabase() {
         let panel = NSOpenPanel()
         panel.title = "Link a database folder"
-        panel.message = "The folder stays in place. Woven Matter adds an alias in the local Databases folder."
+        panel.message = "The folder stays in place. Woven Matter adds an alias in the local databases folder."
         panel.prompt = "Link folder"
         panel.canChooseFiles = false
         panel.canChooseDirectories = true

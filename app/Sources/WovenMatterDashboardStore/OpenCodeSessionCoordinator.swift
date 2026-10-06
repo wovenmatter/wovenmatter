@@ -39,6 +39,12 @@ public actor OpenCodeSessionCoordinator {
         let stream = AsyncStream<OpenCodeSessionUpdate>.makeStream(bufferingPolicy: .bufferingNewest(256))
         updates = stream.stream; continuation = stream.continuation
     }
+    private var cliConnectionProvider: (@Sendable (String) async throws -> AgentCLIContext?)?
+    private var cliConnectionTokens: [String: UUID] = [:]
+    public func setCLIConnectionProvider(_ provider: @escaping @Sendable (String) async throws -> AgentCLIContext?) {
+        cliConnectionProvider = provider
+    }
+
     public func connect(_ connection: OpenCodeConnection) async throws {
         let token = UUID(); connectionTokens[connection.identity] = token
         let links = (try? await database.openCodeLinks()) ?? []
@@ -484,6 +490,11 @@ public actor OpenCodeSessionCoordinator {
         snapshot.forms = pendingForms
         snapshot.inbox = responses.4["data"].array
         snapshot.active = !responses.5["data"][link.sessionID].isNull
+        if snapshot.active, cliConnectionTokens[link.conversationID] != token,
+           let context = try await cliConnectionProvider?(link.conversationID) {
+            try await configureCLI(link, context: context, client: client)
+            cliConnectionTokens[link.conversationID] = token
+        }
         if let acknowledged { snapshot.cursor = max(snapshot.cursor ?? -1, acknowledged) }
         try Task.checkCancellation()
         guard capturedGeneration == generations[link.conversationID], token == connectionTokens[link.connectionID] else { throw CancellationError() }
@@ -525,15 +536,26 @@ public actor OpenCodeSessionCoordinator {
         pendingDispatches[conversationID]?.fence.cancel()
         stopAutomaticApprovals(conversationID)
     }
-    public func prompt(_ link: OpenCodeSessionLink, input: AgentMessageInput, discovery: String? = nil,
+    @discardableResult
+    private func configureCLI(_ link: OpenCodeSessionLink, context: AgentCLIContext?, client: OpenCodeHTTPClient) async throws -> [String: String] {
+        guard let context else { return [:] }
+        let info = try await client.call("GET", "/api/session/" + OpenCodeHTTPClient.segment(link.sessionID))
+        let query = ["location[directory]": info["data"]["location"]["directory"].text]
+        _ = try await client.call("POST", "/api/rpc/wovenmatter-cli/connect", query: query, body: ["input": [
+            "sessionID": .string(link.sessionID),
+            "context": try JSONDecoder().decode(OpenCodeValue.self, from: JSONEncoder().encode(context))]])
+        return query
+    }
+
+    public func prompt(_ link: OpenCodeSessionLink, input: AgentMessageInput,
                        dispatchFence: AgentDispatchFence? = nil) async throws {
-        try await submit(link, input: input, command: nil, discovery: discovery, dispatchFence: dispatchFence)
+        try await submit(link, input: input, command: nil, dispatchFence: dispatchFence)
     }
-    public func command(_ link: OpenCodeSessionLink, name: String, input: AgentMessageInput, discovery: String? = nil,
+    public func command(_ link: OpenCodeSessionLink, name: String, input: AgentMessageInput,
                         dispatchFence: AgentDispatchFence? = nil) async throws {
-        try await submit(link, input: input, command: name, discovery: discovery, dispatchFence: dispatchFence)
+        try await submit(link, input: input, command: name, dispatchFence: dispatchFence)
     }
-    private func submit(_ link: OpenCodeSessionLink, input: AgentMessageInput, command: String?, discovery: String?,
+    private func submit(_ link: OpenCodeSessionLink, input: AgentMessageInput, command: String?,
                         dispatchFence: AgentDispatchFence?) async throws {
         let fence = dispatchFence ?? AgentDispatchFence()
         try fence.check()
@@ -548,7 +570,7 @@ public actor OpenCodeSessionCoordinator {
         if interactionFences[link.conversationID]?.isCancelled == true {
             interactionFences[link.conversationID] = AgentDispatchFence()
         }
-        let deliveryText = (discovery.map { $0 + "\n\n" } ?? "") + input.textWithReferenceContext
+        let deliveryText = input.textWithReferenceContext
         let id = "msg_" + UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
         var files: [OpenCodeValue] = []
         for file in input.files {
@@ -565,19 +587,28 @@ public actor OpenCodeSessionCoordinator {
             guard bytes.count <= AgentMessageAttachmentLimits.maximumFileBytes else { throw OpenCodeError.message("Attachment exceeds Woven Matter's size limit.") }
             files.append(["uri": .string("data:\(file.mimeType);base64," + bytes.base64EncodedString()), "name": .string(file.fileName)])
         }
+        let cliQuery = try await configureCLI(link, context: input.cliContext, client: client)
         if let command {
             // Native commands return 204 and do not accept a caller message ID.
             // Never journal or retry them as idempotent prompt submissions.
-            var commandPayload: [String: OpenCodeValue] = ["command": .string(command),
+            var commandPayload: [String: OpenCodeValue] = ["name": .string(command),
                 "text": .string(deliveryText), "files": .array(files)]
             commandPayload["delivery"] = .string("steer")
-            let payload = OpenCodeValue.object(commandPayload)
+            var commandPath = "/api/session/\(OpenCodeHTTPClient.segment(link.sessionID))/command"
+            var query: [String: String] = [:]
+            if let context = input.cliContext {
+                commandPayload["sessionID"] = .string(link.sessionID)
+                commandPayload["context"] = try JSONDecoder().decode(OpenCodeValue.self, from: JSONEncoder().encode(context))
+                commandPath = "/api/rpc/wovenmatter-cli/command"
+                query = cliQuery
+            }
+            let payload = input.cliContext == nil ? OpenCodeValue.object(commandPayload) : ["input": .object(commandPayload)]
             try fence.check()
             if let deliveryID = input.historyDeliveryID {
                 try await database.markToolDeliveryTransportStarted(id: deliveryID, targetID: link.conversationID, nativeCommand: command)
             }
             do {
-                _ = try await client.call("POST", "/api/session/\(OpenCodeHTTPClient.segment(link.sessionID))/command", body: payload, dispatchFence: fence)
+                _ = try await client.call("POST", commandPath, query: query, body: payload, dispatchFence: fence)
             } catch {
                 if !fence.hasDispatched {
                     if let deliveryID = input.historyDeliveryID { try await database.setToolDeliveryStatus(id: deliveryID, status: "failed") }
@@ -598,6 +629,9 @@ public actor OpenCodeSessionCoordinator {
         // Let native state choose live injection or an idle start. A cached
         // activity snapshot can lag a rapid second composer submission.
         promptPayload["delivery"] = .string("steer")
+        if let context = input.cliContext {
+            promptPayload["metadata"] = ["wovenTools": try JSONDecoder().decode(OpenCodeValue.self, from: JSONEncoder().encode(context))]
+        }
         let payload = OpenCodeValue.object(promptPayload)
         try fence.check()
         try await database.saveOpenCodeSubmission(conversationID: link.conversationID, id: id, payload: payload, status: "sending", visibleText: input.text, deliveryID: input.historyDeliveryID, input: input)

@@ -75,8 +75,8 @@ public enum LocalACPWorkspaceFolder: Codable, Sendable {
 
     public var directoryName: String {
         switch self {
-        case .repositories: "Repos"
-        case .databases: "Databases"
+        case .repositories: "repos"
+        case .databases: "databases"
         }
     }
 
@@ -106,18 +106,20 @@ public struct LocalACPWorkspaceFolderChangeResult: Codable, Sendable {
 
 public enum LocalACPWorkspaceProvisioner {
     public static let rootDirectoryName = ".woven-matter"
-    public static let repositoriesDirectoryName = "Repos"
-    public static let databasesDirectoryName = "Databases"
+    public static let repositoriesDirectoryName = "repos"
+    public static let databasesDirectoryName = "databases"
     public static let knowledgeDirectories = [
-        "GUIDES", "PLANS", "RESEARCH", "WORK_LOGS", "OUTBOX", ".scratch",
+        "guides", "plans", "research", "work_logs", "outbox", "scratch", "skills",
     ]
 
     /// Finds the legacy spelling before the initializer has migrated it.
     public static func directoryURL(for folder: LocalACPWorkspaceFolder, at root: URL) -> URL {
         let preferred = root.appending(path: folder.directoryName, directoryHint: .isDirectory)
-        if folder == .repositories, !itemExists(preferred) {
-            let legacy = root.appending(path: "REPOS", directoryHint: .isDirectory)
-            if itemExists(legacy) { return legacy }
+        if !itemExists(preferred) {
+            for name in folder == .repositories ? ["Repos", "REPOS"] : ["Databases", "DATABASES"] {
+                let legacy = root.appending(path: name, directoryHint: .isDirectory)
+                if itemExists(legacy) { return legacy }
+            }
         }
         return preferred
     }
@@ -511,15 +513,15 @@ public enum LocalACPWorkspaceError: LocalizedError, Equatable, Sendable {
         case .repositoriesDirectoryUnavailable:
             "The selected repositories folder is not an accessible directory."
         case .repositoriesDirectoryContainsWorkspace:
-            "The repositories folder cannot contain the workspace or be inside the Repos folder it would replace."
+            "The repositories folder cannot contain the workspace or be inside the repos folder it would replace."
         case .defaultRepositoriesNotEmpty:
-            "The default Repos folder contains files. Back them up before changing the folder."
+            "The default repos folder contains files. Back them up before changing the folder."
         case .databasesDirectoryUnavailable:
             "The selected databases folder is not an accessible directory."
         case .databasesDirectoryContainsWorkspace:
-            "The databases folder cannot contain the workspace or be inside the Databases folder it would replace."
+            "The databases folder cannot contain the workspace or be inside the databases folder it would replace."
         case .defaultDatabasesNotEmpty:
-            "The default Databases folder contains files. Back them up before changing the folder."
+            "The default databases folder contains files. Back them up before changing the folder."
         case .copyFailed(let detail):
             "Could not finish copying files. Your original folder is still in use and its contents are preserved. Some files may already have been copied to the selected folder. \(detail)"
         case .initializerUnavailable:

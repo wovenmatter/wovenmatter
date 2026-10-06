@@ -72,6 +72,10 @@ test -x "$claude_binary"
 codesign --verify --strict "$claude_binary"
 test -f "${resources}/harnesses/catalog.json"
 test -x "${resources}/harnesses/initialize-workspace.sh"
+for integration in adapter.mjs hook.mjs binding.mjs pi.mjs pi-bindings.mjs opencode.mjs install.mjs hermes.py; do
+  test -f "${resources}/harnesses/cli/$integration"
+done
+test -f "${resources}/remote/src/openclaw-results/binding.mjs"
 test -f "${resources}/remote/Dockerfile"
 test -f "${resources}/remote/Executor.Dockerfile"
 test -f "${resources}/remote/executor-deploy.sh"

@@ -52,19 +52,23 @@ struct WorkspaceAssetTabsTests {
     #expect(context.notes[0].title.count == 160)
     #expect(context.pages[0].url == "https://example.com/page")
     #expect(WorkspaceVisibleContext.Page(title: "Local", url: "file:///private/document", active: true) == nil)
-    let input = AgentMessageInput(text: "hello", visibleWorkspace: context)
+    let cliContext = AgentCLIContext(executablePath: "/tmp/wovenmatter", socketPath: "/tmp/session.sock", captureID: "captured-input")
+    let input = AgentMessageInput(text: "hello", visibleWorkspace: context, cliContext: cliContext)
     let transported = try JSONDecoder().decode(AgentMessageInput.self, from: JSONEncoder().encode(input))
     let staged = await transported.mappingFiles { $0 }
     #expect(staged.visibleWorkspace == context)
+    #expect(staged.cliContext == cliContext)
     #expect(staged.text == "hello") // Workspace metadata is not user-visible message text.
     let prompt = staged.transportText(deliveryText: "discovery\nhello")
     #expect(prompt.contains("discovery\nhello"))
     #expect(prompt.contains("\"id\":\"n0\""))
     #expect(!prompt.contains("password"))
+    #expect(!prompt.contains("captured-input")) // CLI transport metadata stays out of the prompt.
     #expect(prompt.components(separatedBy: "Workspace snapshot at send time").count == 2)
     let oldInput = try JSONDecoder().decode(AgentMessageInput.self,
       from: Data(#"{"text":"old","attachments":[]}"#.utf8))
     #expect(oldInput.visibleWorkspace == nil)
+    #expect(oldInput.cliContext == nil)
     #expect(oldInput.transportText() == "old")
   }
 }
