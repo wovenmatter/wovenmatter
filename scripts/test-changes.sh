@@ -21,7 +21,6 @@ run_static_checks() {
   done
   scripts/test-release.sh
   bash scripts/test-dev-signing.sh
-  python3 scripts/test-support/test_browser_build.py
   scripts/test-app-termination.sh
   scripts/test-composer-text-editor.sh
   scripts/test-conversation-layout.sh

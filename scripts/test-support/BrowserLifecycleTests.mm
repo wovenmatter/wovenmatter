@@ -77,7 +77,7 @@ int main() {
       [runtime shutdownWithCompletion:^(BOOL allowed) { duplicateRejected = !allowed; }];
       Check(duplicateRejected && !runtime.shutdownRequested);
       page = nil;
-      Check(retainedPage != nil && runtime.livePageCount == 1);
+      Check(retainedPage != nil && runtime.pages.count == 1);
       [runtime pageClosed:retainedPage];
       Check(answers == 0); // Completion leaves the CEF callback first.
       DrainUntil(^BOOL { return answers == 1; });
@@ -110,7 +110,7 @@ int main() {
     Check(shutdowns == 0 && finalAnswers == 0);
     runtime.pumping = NO;
     DrainUntil(^BOOL { return finalAnswers == 1; });
-    Check(shutdowns == 1 && !runtime.running && runtime.livePageCount == 0);
+    Check(shutdowns == 1 && !runtime.running && runtime.pages.count == 0);
     [runtime shutdownWithCompletion:^(BOOL allowed) { Check(allowed); ++finalAnswers; }];
     Check(shutdowns == 1 && finalAnswers == 2);
 

@@ -43,7 +43,6 @@ NS_ASSUME_NONNULL_BEGIN
 @interface WMBrowserRuntime : NSObject
 + (void)prepareApplication;
 + (instancetype)sharedRuntime;
-@property(nonatomic, readonly) NSUInteger livePageCount;
 - (BOOL)startWithProfilePath:(NSString *)profilePath error:(NSError **)error;
 - (nullable WMBrowserPage *)createPage;
 // Resolve unload prompts before committing an update/restart. Keep CEF alive

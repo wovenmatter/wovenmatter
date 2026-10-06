@@ -445,7 +445,6 @@ class BrowserClient final : public CefClient,
   dispatch_once(&once, ^{ runtime = [WMBrowserRuntime new]; runtime.pages = [NSMutableSet new]; });
   return runtime;
 }
-- (NSUInteger)livePageCount { return _pages.count; }
 - (BOOL)startWithProfilePath:(NSString *)path error:(NSError **)error {
   NSAssert(NSThread.isMainThread, @"CEF initialization requires the main thread");
   // Swift installs a process-wide policy before entering CEF. Refuse an

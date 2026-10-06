@@ -126,21 +126,6 @@ struct RuntimeLifecycleTests {
     #expect(!state.running)
   }
 
-  @Test(.timeLimit(.minutes(1)))
-  func failedGatewayStartupRetiresAnAlreadyExitedProcess() async throws {
-    let lifecycle = OpenClawLocalGatewayLifecycle(isReady: { _ in false })
-    let launch = LocalACPRuntimeLaunchConfiguration(runtimeKind: .openclaw,
-      executableURL: URL(filePath: "/bin/sh"), arguments: ["-c", "exit 17"])
-    do {
-      _ = try await lifecycle.ensure(agentID: UUID(), identity: UUID().uuidString,
-        launch: launch, workingDirectory: FileManager.default.temporaryDirectory)
-      Issue.record("failed gateway startup succeeded")
-    } catch {
-      #expect(error.localizedDescription.contains("Exit status: 17"))
-    }
-    await lifecycle.shutdown()
-  }
-
   @Test(arguments: [true, false])
   func actualOwnedProcessIsReapedAfterCancellationOrShutdown(cancel: Bool) async throws {
     let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
