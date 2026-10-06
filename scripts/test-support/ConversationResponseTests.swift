@@ -141,11 +141,17 @@ struct ConversationResponseTests {
         window.contentView = scroll
         scroll.documentView = viewport
         viewport.updateVisibleFrame()
-        require(viewport.textView.frame.height <= 160 && viewport.textView.enclosingScrollView === scroll,
+        require(viewport.textView.frame.height <= 160 + 512 && viewport.textView.enclosingScrollView === scroll,
             "The response added an inner scroll view or retained an oversized native backing surface")
         scroll.contentView.scroll(to: NSPoint(x: 0, y: 600))
-        require(viewport.textView.bounds.minY == scroll.contentView.bounds.minY,
-            "Native text did not follow the outer scroll viewport")
+        require(viewport.textView.frame.contains(scroll.contentView.bounds),
+            "Native text backing does not cover the outer scroll viewport")
+        let bufferedFrame = viewport.textView.frame
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: 610))
+        require(viewport.textView.frame == bufferedFrame, "Small scrolls needlessly moved the native backing")
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: 1000))
+        require(viewport.textView.frame.contains(scroll.contentView.bounds), "Scrolling beyond the buffer lost visible text")
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: 600))
         require(viewport.textView.textContainerOrigin == .zero, "Viewport movement shifted text layout coordinates")
         let scrolled = viewport.textView.bitmapImageRepForCachingDisplay(in: viewport.textView.bounds)!
         viewport.textView.cacheDisplay(in: viewport.textView.bounds, to: scrolled)
@@ -173,6 +179,14 @@ struct ConversationResponseTests {
         let savedSelection = viewport.textView.selectedRange()
         scroll.contentView.scroll(to: NSPoint(x: 0, y: 200))
         require(viewport.textView.selectedRange() == savedSelection, "Scrolling the native viewport discarded selection")
+        viewport.setFrameSize(viewport.textView.fittingSize(width: 280))
+        require(viewport.textView.frame.width == 280, "Width changes left a stale native backing width")
+        viewport.textView.apply(content: "Short", document: nil, isStreaming: false)
+        viewport.setFrameSize(viewport.textView.fittingSize(width: 280))
+        scroll.contentView.scroll(to: .zero)
+        require(viewport.bounds.contains(viewport.textView.frame), "Shrinking a response left native drawing outside its bounds")
+        require(viewport.textView.bounds.origin == viewport.textView.frame.origin,
+            "Resizing changed logical text coordinates")
         window.contentView = nil
         print("PASS: native whole-response selection/copy, rich styling, streaming/width sizing, clipped painting and viewport selection/coordinates")
     }

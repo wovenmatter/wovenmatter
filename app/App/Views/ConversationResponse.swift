@@ -112,8 +112,16 @@ final class ConversationResponseViewport: NSView {
 
     func updateVisibleFrame() {
         let visible = window == nil ? bounds : visibleRect.intersection(bounds)
-        let y = visible.isEmpty ? 0 : visible.minY
-        let height = visible.isEmpty ? 1 : visible.height
+        // Leave a small backing buffer around the viewport. Repositioning on
+        // every scroll tick invalidates AppKit text drawing even when the same
+        // laid-out content is still visible.
+        let padding: CGFloat = 256
+        let viewportHeight = enclosingScrollView?.contentView.bounds.height ?? visible.height
+        let heightLimit = min(bounds.height, viewportHeight + 2 * padding)
+        if !visible.isEmpty, textView.frame.width == bounds.width, textView.frame.height <= heightLimit,
+           bounds.contains(textView.frame), textView.frame.contains(visible) { return }
+        let y = visible.isEmpty ? 0 : max(0, visible.minY - padding)
+        let height = visible.isEmpty ? 1 : min(bounds.maxY - y, heightLimit)
         let frame = NSRect(x: 0, y: y, width: bounds.width, height: height)
         if textView.frame.size != frame.size { textView.setFrameSize(frame.size) }
         if textView.frame.origin != frame.origin { textView.setFrameOrigin(frame.origin) }
