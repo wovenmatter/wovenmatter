@@ -1,0 +1,306 @@
+import AppKit
+import SwiftUI
+
+/// One selectable text surface and one copy action for the complete response.
+struct ConversationResponse: View {
+    let content: String
+    var document: ConversationMarkdownDocument? = nil
+    let isStreaming: Bool
+    @State private var copied = false
+    @State private var pendingExternalURL: URL?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ConversationResponseText(content: content, document: document, isStreaming: isStreaming) {
+                pendingExternalURL = $0
+            }
+            .frame(maxWidth: 680, alignment: .leading)
+
+            Button {
+                copied = Self.copy(content, to: .general)
+            } label: {
+                Label(copied ? "Copied" : "Copy", systemImage: copied ? "checkmark" : "doc.on.doc")
+            }
+            .buttonStyle(.plain)
+            .font(.system(size: 11.5, weight: .medium))
+            .foregroundStyle(DashboardPalette.mutedForeground)
+            .help("Copy complete response")
+            .accessibilityLabel(copied ? "Response copied" : "Copy response")
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .onChange(of: content) { copied = false }
+        .alert("Open external link?", isPresented: Binding(
+            get: { pendingExternalURL != nil },
+            set: { if !$0 { pendingExternalURL = nil } }
+        ), presenting: pendingExternalURL) { url in
+            Button("Cancel", role: .cancel) { pendingExternalURL = nil }
+            Button("Open") {
+                pendingExternalURL = nil
+                NSWorkspace.shared.open(url)
+            }
+        } message: { url in
+            Text(url.absoluteString)
+        }
+    }
+
+    @discardableResult
+    static func copy(_ content: String, to pasteboard: NSPasteboard) -> Bool {
+        pasteboard.clearContents()
+        return pasteboard.setString(content, forType: .string)
+    }
+}
+
+private struct ConversationResponseText: NSViewRepresentable {
+    let content: String
+    let document: ConversationMarkdownDocument?
+    let isStreaming: Bool
+    let onOpenLink: (URL) -> Void
+
+    func makeNSView(context: Context) -> ConversationResponseNativeTextView {
+        ConversationResponseNativeTextView()
+    }
+
+    func updateNSView(_ textView: ConversationResponseNativeTextView, context: Context) {
+        textView.onOpenLink = onOpenLink
+        textView.apply(content: content, document: document, isStreaming: isStreaming)
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: ConversationResponseNativeTextView,
+                      context: Context) -> CGSize? {
+        nsView.fittingSize(width: proposal.width ?? 680)
+    }
+}
+
+/// TextKit owns selection across paragraphs, list items, code and table cells.
+/// It has no inner scroll view; wheel events continue through the transcript.
+final class ConversationResponseNativeTextView: NSTextView, NSTextViewDelegate {
+    var onOpenLink: ((URL) -> Void)?
+    private var appliedContent: String?
+    private var appliedStreaming: Bool?
+
+    init() {
+        let storage = NSTextStorage()
+        let layoutManager = NSLayoutManager()
+        let container = NSTextContainer(size: CGSize(width: 680, height: CGFloat.greatestFiniteMagnitude))
+        storage.addLayoutManager(layoutManager)
+        layoutManager.addTextContainer(container)
+        super.init(frame: .zero, textContainer: container)
+        isEditable = false
+        isSelectable = true
+        isRichText = true
+        drawsBackground = false
+        textContainerInset = .zero
+        textContainer?.lineFragmentPadding = 0
+        isHorizontallyResizable = false
+        isVerticallyResizable = true
+        textContainer?.widthTracksTextView = true
+        delegate = self
+        linkTextAttributes = [.foregroundColor: NSColor(DashboardPalette.success), .underlineStyle: 0]
+        setAccessibilityLabel("Agent response")
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    func apply(content: String, document: ConversationMarkdownDocument?, isStreaming: Bool) {
+        guard appliedContent != content || appliedStreaming != isStreaming else { return }
+        let selection = selectedRange()
+        let rendered = ConversationResponseAttributedText.render(
+            document ?? ConversationMarkdownDocument(content), isStreaming: isStreaming
+        )
+        textStorage?.setAttributedString(rendered)
+        let location = min(selection.location, rendered.length)
+        setSelectedRange(NSRange(location: location, length: min(selection.length, rendered.length - location)))
+        appliedContent = content
+        appliedStreaming = isStreaming
+        invalidateIntrinsicContentSize()
+    }
+
+    func fittingSize(width: CGFloat) -> CGSize {
+        let width = max(1, width)
+        guard let textContainer, let layoutManager else { return CGSize(width: width, height: 1) }
+        textContainer.size = CGSize(width: width, height: .greatestFiniteMagnitude)
+        layoutManager.ensureLayout(for: textContainer)
+        var height = max(layoutManager.usedRect(for: textContainer).maxY, layoutManager.extraLineFragmentRect.maxY)
+        if let textStorage, textStorage.length > 0,
+           textStorage.attribute(.responseCode, at: textStorage.length - 1, effectiveRange: nil) != nil { height += 6 }
+        return CGSize(width: width, height: max(1, ceil(height)))
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        if let textStorage, let layoutManager, let textContainer {
+            let range = NSRange(location: 0, length: textStorage.length)
+            for key in [NSAttributedString.Key.responseCode, .responseQuote, .responseDivider] {
+                textStorage.enumerateAttribute(key, in: range) { value, range, _ in
+                    guard value != nil else { return }
+                    let glyphs = layoutManager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+                    var rect = layoutManager.boundingRect(forGlyphRange: glyphs, in: textContainer)
+                    rect.origin.x += textContainerOrigin.x
+                    rect.origin.y += textContainerOrigin.y
+                    if key == .responseCode {
+                        rect = NSRect(x: 0, y: rect.minY - 6, width: bounds.width, height: rect.height + 12)
+                        NSColor(DashboardPalette.primary).withAlphaComponent(0.05).setFill()
+                        NSBezierPath(roundedRect: rect, xRadius: 12, yRadius: 12).fill()
+                    } else {
+                        NSColor(DashboardPalette.foreground).withAlphaComponent(0.16).setFill()
+                        if key == .responseQuote {
+                            NSRect(x: max(0, rect.minX - 14), y: rect.minY, width: 2, height: rect.height).fill()
+                        } else {
+                            NSRect(x: 0, y: rect.midY, width: bounds.width, height: 1).fill()
+                        }
+                    }
+                }
+            }
+        }
+        super.draw(dirtyRect)
+    }
+
+    func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
+        let url = (link as? URL) ?? (link as? String).flatMap(URL.init(string:))
+        if let url, ConversationMarkdownDocument.isSafeExternalLink(url) { onOpenLink?(url) }
+        // Always consume the click; opening still requires the existing confirmation.
+        return true
+    }
+}
+
+private extension NSAttributedString.Key {
+    static let responseCode = Self("WovenMatterResponseCode")
+    static let responseQuote = Self("WovenMatterResponseQuote")
+    static let responseDivider = Self("WovenMatterResponseDivider")
+}
+
+/// Reuses the prepared Markdown parser; only the response's presentation changes.
+@MainActor
+private enum ConversationResponseAttributedText {
+    static func render(_ document: ConversationMarkdownDocument, isStreaming: Bool) -> NSAttributedString {
+        let output = NSMutableAttributedString()
+        let foreground = NSColor(DashboardPalette.foreground).withAlphaComponent(isStreaming ? 0.76 : 1)
+
+        func paragraphStyle(indent: CGFloat = 0) -> NSMutableParagraphStyle {
+            let style = NSMutableParagraphStyle()
+            style.lineSpacing = 5
+            style.paragraphSpacing = 14
+            style.firstLineHeadIndent = indent
+            style.headIndent = indent
+            return style
+        }
+
+        func inline(_ text: ConversationMarkdownDocument.InlineText, font: NSFont) -> NSMutableAttributedString {
+            let result = NSMutableAttributedString()
+            for run in text.rendered.runs {
+                let intent = run.inlinePresentationIntent ?? []
+                var runFont = intent.contains(.code) ? NSFont.monospacedSystemFont(ofSize: 13.5, weight: .regular) : font
+                if intent.contains(.stronglyEmphasized) { runFont = NSFontManager.shared.convert(runFont, toHaveTrait: .boldFontMask) }
+                if intent.contains(.emphasized) { runFont = NSFontManager.shared.convert(runFont, toHaveTrait: .italicFontMask) }
+                var attributes: [NSAttributedString.Key: Any] = [.font: runFont, .foregroundColor: foreground]
+                if intent.contains(.code) { attributes[.backgroundColor] = NSColor(DashboardPalette.primary).withAlphaComponent(0.075) }
+                if intent.contains(.strikethrough) { attributes[.strikethroughStyle] = NSUnderlineStyle.single.rawValue }
+                if let link = run.link, ConversationMarkdownDocument.isSafeExternalLink(link) { attributes[.link] = link }
+                result.append(NSAttributedString(string: String(text.rendered[run.range].characters), attributes: attributes))
+            }
+            return result
+        }
+
+        func append(_ text: NSAttributedString, style: NSParagraphStyle) {
+            let paragraph = NSMutableAttributedString(attributedString: text)
+            paragraph.append(NSAttributedString(string: "\n", attributes: [.font: NSFont.systemFont(ofSize: 15), .foregroundColor: foreground]))
+            let range = NSRange(location: 0, length: paragraph.length)
+            paragraph.addAttribute(.paragraphStyle, value: style, range: range)
+            if text.string.contains("\n"), style.paragraphSpacing > 0 {
+                let interiorStyle = style.mutableCopy() as! NSMutableParagraphStyle
+                interiorStyle.paragraphSpacing = 0
+                paragraph.addAttribute(.paragraphStyle, value: interiorStyle, range: range)
+                let lastLine = (paragraph.string as NSString).paragraphRange(for: NSRange(location: paragraph.length - 1, length: 0))
+                paragraph.addAttribute(.paragraphStyle, value: style, range: lastLine)
+            }
+            output.append(paragraph)
+        }
+
+        func blocks(_ values: [ConversationMarkdownDocument.Block], indent: CGFloat = 0, marker: String = "") {
+            for (index, block) in values.enumerated() {
+                let style = paragraphStyle(indent: indent)
+                let prefix = index == 0 ? marker : ""
+                if !prefix.isEmpty {
+                    style.headIndent = indent + 31
+                    style.tabStops = [NSTextTab(textAlignment: .left, location: indent + 31)]
+                }
+                func appendInline(_ content: ConversationMarkdownDocument.InlineText, font: NSFont) {
+                    let text = NSMutableAttributedString(string: prefix, attributes: [.font: font, .foregroundColor: foreground])
+                    text.append(inline(content, font: font))
+                    append(text, style: style)
+                }
+                switch block {
+                case .paragraph(let content):
+                    appendInline(content, font: .systemFont(ofSize: 15))
+                case .heading(let level, let content):
+                    let size: CGFloat = switch level { case 1: 22; case 2: 19; case 3: 17; default: 15.5 }
+                    style.paragraphSpacingBefore = level <= 2 ? 6 : 1
+                    appendInline(content, font: .systemFont(ofSize: size, weight: .semibold))
+                case .list(let items):
+                    for item in items {
+                        let marker = item.checked.map { $0 ? "☑" : "☐" } ?? item.marker
+                        blocks(item.blocks, indent: indent + CGFloat(min(item.depth, 6)) * 17, marker: marker + "\t")
+                    }
+                case .quote(let quoted):
+                    let start = output.length
+                    blocks(quoted, indent: indent + 14)
+                    output.addAttribute(.responseQuote, value: UUID().uuidString,
+                        range: NSRange(location: start, length: output.length - start))
+                case .code(let language, let content):
+                    let start = output.length
+                    style.firstLineHeadIndent = indent + 14
+                    style.headIndent = indent + 14
+                    style.tailIndent = -14
+                    style.paragraphSpacingBefore = 6
+                    if let language, !language.isEmpty {
+                        style.paragraphSpacing = 6
+                        append(NSAttributedString(string: language, attributes: [.font: NSFont.systemFont(ofSize: 11.5), .foregroundColor: foreground]), style: style)
+                    }
+                    style.paragraphSpacingBefore = language?.isEmpty == false ? 0 : 6
+                    style.paragraphSpacing = 0
+                    style.lineSpacing = 3
+                    append(NSAttributedString(string: content, attributes: [.font: NSFont.monospacedSystemFont(ofSize: 13, weight: .regular), .foregroundColor: foreground]), style: style)
+                    let lastParagraph = (output.string as NSString).paragraphRange(for: NSRange(location: max(start, output.length - 1), length: 0))
+                    let lastStyle = style.mutableCopy() as! NSMutableParagraphStyle
+                    lastStyle.paragraphSpacing = 20
+                    output.addAttribute(.paragraphStyle, value: lastStyle, range: lastParagraph)
+                    output.addAttribute(.responseCode, value: UUID().uuidString,
+                        range: NSRange(location: start, length: output.length - start))
+                case .table(let table):
+                    guard !table.header.isEmpty else { continue }
+                    let nativeTable = NSTextTable()
+                    nativeTable.numberOfColumns = table.header.count
+                    nativeTable.collapsesBorders = true
+                    nativeTable.setWidth(14, type: .absoluteValueType, for: .margin, edge: .maxY)
+                    nativeTable.setValue(100, type: .percentageValueType, for: .width)
+                    for (rowIndex, cells) in ([table.header] + table.rows).enumerated() {
+                        for column in table.header.indices {
+                            let cell = NSTextTableBlock(table: nativeTable, startingRow: rowIndex, rowSpan: 1, startingColumn: column, columnSpan: 1)
+                            cell.setValue(100 / CGFloat(table.header.count), type: .percentageValueType, for: .width)
+                            cell.setWidth(9, type: .absoluteValueType, for: .padding)
+                            cell.setWidth(0.5, type: .absoluteValueType, for: .border)
+                            cell.setBorderColor(foreground.withAlphaComponent(0.09))
+                            cell.backgroundColor = NSColor(DashboardPalette.primary).withAlphaComponent(0.032)
+                            let cellStyle = paragraphStyle()
+                            cellStyle.paragraphSpacing = 0
+                            cellStyle.textBlocks = [cell]
+                            if table.alignments.indices.contains(column) {
+                                cellStyle.alignment = switch table.alignments[column] { case .leading: .left; case .center: .center; case .trailing: .right }
+                            }
+                            append(inline(cells.indices.contains(column) ? cells[column] : .init(""), font: .systemFont(ofSize: 13, weight: rowIndex == 0 ? .semibold : .regular)), style: cellStyle)
+                        }
+                    }
+                case .divider:
+                    append(NSAttributedString(string: " ", attributes: [.font: NSFont.systemFont(ofSize: 15), .responseDivider: true]), style: style)
+                }
+            }
+        }
+        blocks(document.blocks)
+        // A terminal newline creates an extra empty line between text and Copy.
+        // Native tables retain their cell-ending paragraph delimiter.
+        if output.length > 0, case .table = document.blocks.last {
+            return output
+        }
+        if output.length > 0 { output.deleteCharacters(in: NSRange(location: output.length - 1, length: 1)) }
+        return output
+    }
+}

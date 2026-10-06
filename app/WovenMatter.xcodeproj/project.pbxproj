@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		D49400000000000000000001 /* ConversationResponse.swift in Sources */ = {isa = PBXBuildFile; fileRef = D49400000000000000000003 /* ConversationResponse.swift */; };
 		E7E000000000000000000005 /* ExecutorRuntime.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7E000000000000000000006; };
 		E7E000000000000000000003 /* ExecutorControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7E000000000000000000004; };
 		E7E000000000000000000001 /* ApplicationModel+Executor.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7E000000000000000000002; };
@@ -111,6 +112,7 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		D49400000000000000000003 /* ConversationResponse.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationResponse.swift; sourceTree = "<group>"; };
 		E7E000000000000000000006 /* ExecutorRuntime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ExecutorRuntime.swift"; sourceTree = "<group>"; };
 		E7E000000000000000000004 /* ExecutorControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ExecutorControls.swift"; sourceTree = "<group>"; };
 		E7E000000000000000000002 /* ApplicationModel+Executor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ApplicationModel+Executor.swift"; sourceTree = "<group>"; };
@@ -336,6 +338,7 @@
 				F10200000000000000000002 /* DashboardDatabasesView.swift */,
 				E10000000000000000000002 /* NoteEditor.swift */,
 				D49000000000000000000003 /* ConversationMarkdown.swift */,
+				D49400000000000000000003 /* ConversationResponse.swift */,
 				D49200000000000000000003 /* ConversationWorkTranscript.swift */,
 				D45300000000000000000002 /* DashboardCalendarView.swift */,
 				D6DCB1F7BFAF35416DF437EE /* DashboardCalendarTaskFields.swift */,
@@ -563,6 +566,7 @@
 				E10000000000000000000001 /* NoteEditor.swift in Sources */,
 				49BB9C77C988D34AA1B69E70 /* ApplicationModel.swift in Sources */,
 				D49000000000000000000001 /* ConversationMarkdown.swift in Sources */,
+				D49400000000000000000001 /* ConversationResponse.swift in Sources */,
 				D49100000000000000000001 /* ConversationMarkdownDocument.swift in Sources */,
 				D49300000000000000000001 /* ConversationMessageLayout.swift in Sources */,
 				D49200000000000000000001 /* ConversationWorkTranscript.swift in Sources */,

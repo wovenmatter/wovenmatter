@@ -1,5 +1,20 @@
 # Long-reply scrolling investigation
 
+## Current response selection
+
+Assistant responses now use one read-only, selectable AppKit text view per
+message. Paragraphs, headings, lists, quotes, code and native table cells share
+one text storage, so dragging or Select All can cover the entire response. A
+compact Copy button below each response copies its complete displayed Markdown;
+assistant commentary in the work transcript uses the same component. Selection
+is preserved when streamed text grows. Link filtering and confirmation remain.
+
+The outer conversation stack remains lazy, with stable message, changed-file
+and media anchors. The four-block SwiftUI grouping described below is historical:
+it broke continuous response selection. The native response has one text view
+instead of the large SwiftUI layout/focus tree measured in that investigation.
+The historical timings do not measure the current native renderer.
+
 Rapid scrolling through a retained eight-message conversation (approximately 27,000 characters) repeatedly paused at the same content boundaries. History pagination was inactive: the app already had all eight messages. Prepared Markdown parsing was off the main thread and did not appear in the long stalls.
 
 ## Cause and change
