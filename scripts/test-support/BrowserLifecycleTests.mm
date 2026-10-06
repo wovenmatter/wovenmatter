@@ -34,6 +34,17 @@ static void DrainUntil(BOOL (^finished)()) {
 - (void)close { self.closing = YES; ++_closeRequests; }
 @end
 
+@interface QuitProbe : NSObject <NSApplicationDelegate>
+@property(nonatomic) NSUInteger requests;
+@end
+@implementation QuitProbe
+- (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication *)sender {
+  Check(![WMBrowserRuntime sharedRuntime].pumping);
+  ++_requests;
+  return NSTerminateCancel; // Keep the fixture process alive after inspecting quit.
+}
+@end
+
 static WMBrowserRuntime *Runtime(BOOL running) {
   WMBrowserRuntime *runtime = [WMBrowserRuntime new];
   runtime.pages = [NSMutableSet new];
@@ -102,6 +113,26 @@ int main() {
     Check(shutdowns == 1 && !runtime.running && runtime.livePageCount == 0);
     [runtime shutdownWithCompletion:^(BOOL allowed) { Check(allowed); ++finalAnswers; }];
     Check(shutdowns == 1 && finalAnswers == 2);
-    std::puts("Browser lifecycle passed: retained owners, unload cancellation, restart recovery, duplicate requests, deferred shutdown. No Chromium or Keychain access.");
+
+    // A Cmd-Q delivered from inside CEF must return before AppKit begins its
+    // asynchronous termination barrier. Repeated requests coalesce, and a
+    // cancelled quit does not leave a queued request that quits again later.
+    WMBrowserApplication *application = [WMBrowserApplication sharedApplication];
+    [application setActivationPolicy:NSApplicationActivationPolicyProhibited];
+    QuitProbe *probe = [QuitProbe new];
+    application.delegate = probe;
+    WMBrowserRuntime *shared = [WMBrowserRuntime sharedRuntime];
+    shared.pumping = YES;
+    [application terminate:nil];
+    [application terminate:nil];
+    CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.03, false);
+    Check(probe.requests == 0 && application.terminationScheduled);
+    shared.pumping = NO;
+    DrainUntil(^BOOL { return probe.requests == 1; });
+    CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.03, false);
+    Check(probe.requests == 1 && !application.terminationScheduled);
+    [application terminate:nil];
+    Check(probe.requests == 2);
+    std::puts("Browser lifecycle passed: retained owners, unload cancellation, restart recovery, duplicate requests, deferred shutdown and Cmd-Q outside the CEF pump. No Chromium or Keychain access.");
   }
 }

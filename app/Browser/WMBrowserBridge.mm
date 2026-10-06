@@ -12,13 +12,7 @@
 // SwiftUI owns the application UI; Chromium needs these two AppKit hooks.
 @interface WMBrowserApplication : NSApplication <CefAppProtocol>
 @property(nonatomic) BOOL handlingSendEvent;
-@end
-@implementation WMBrowserApplication
-- (BOOL)isHandlingSendEvent { return _handlingSendEvent; }
-- (void)sendEvent:(NSEvent *)event {
-  CefScopedSendingEvent scopedEvent;
-  [super sendEvent:event];
-}
+@property(nonatomic) BOOL terminationScheduled;
 @end
 
 static NSString *String(const CefString &value) {
@@ -65,6 +59,30 @@ class BrowserClient;
 - (void)pageClosed:(WMBrowserPage *)page;
 - (void)finishShutdownIfReady;
 - (void)cancelShutdown;
+@end
+
+@implementation WMBrowserApplication
+- (BOOL)isHandlingSendEvent { return _handlingSendEvent; }
+- (void)sendEvent:(NSEvent *)event {
+  CefScopedSendingEvent scopedEvent;
+  [super sendEvent:event];
+}
+- (void)terminate:(id)sender {
+  if (_terminationScheduled) return;
+  // Chromium can dispatch Cmd-Q while CefDoMessageLoopWork is on the stack.
+  // AppKit's deferred-quit loop would then prevent that pump from returning,
+  // while browser cleanup waits for it. Leave the pump before starting quit.
+  if ([WMBrowserRuntime sharedRuntime].pumping) {
+    _terminationScheduled = YES;
+    NSTimer *timer = [NSTimer timerWithTimeInterval:0.01 repeats:NO block:^(NSTimer *) {
+      self.terminationScheduled = NO;
+      [self terminate:nil];
+    }];
+    [NSRunLoop.mainRunLoop addTimer:timer forMode:NSRunLoopCommonModes];
+    return;
+  }
+  [super terminate:sender];
+}
 @end
 
 class BrowserApp final : public CefApp, public CefBrowserProcessHandler {
