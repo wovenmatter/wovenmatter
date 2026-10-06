@@ -757,7 +757,9 @@ struct WorkspaceView: View {
 
             HStack {
                 if showLeftRailButton {
-                    DashboardRevealRailButton(side: .left, action: onLeftRail)
+                    DashboardRevealRailButton(side: .left,
+                        height: destination == .workspace && assets.tabs.isPresented ? DashboardMetrics.assetTabBarHeight : 36,
+                        action: onLeftRail)
                 }
                 Spacer()
                 if destination == .workspace && !assets.tabs.isPresented {
@@ -781,7 +783,9 @@ struct WorkspaceView: View {
                     .accessibilityLabel("Open browser")
                 }
                 if showRightRailButton {
-                    DashboardRevealRailButton(side: .right, action: onRightRail)
+                    DashboardRevealRailButton(side: .right,
+                        height: destination == .workspace && assets.tabs.isPresented ? DashboardMetrics.assetTabBarHeight : 36,
+                        action: onRightRail)
                 }
             }
             .padding(.horizontal, 12)

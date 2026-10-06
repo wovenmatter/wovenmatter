@@ -859,6 +859,7 @@ enum DashboardMetrics {
     static let companionMinimumWidth: CGFloat = 360
     static let separatorWidth: CGFloat = 12
     static let shellInset: CGFloat = 8
+    static let assetTabBarHeight: CGFloat = 24
     static let shellGap: CGFloat = 8
     static let windowAlignedSurfaceMinimumRadius: CGFloat = 12
     static let cardRadius: CGFloat = 14

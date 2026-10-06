@@ -11,6 +11,7 @@ struct DashboardBrowserPane: View {
     @State private var showsFind = false
     @State private var showsClearData = false
     @State private var addressError: String?
+    @State private var menuHovered = false
     @FocusState private var addressFocused: Bool
     @FocusState private var findFocused: Bool
 
@@ -53,12 +54,16 @@ struct DashboardBrowserPane: View {
                 } label: { Image(systemName: "ellipsis").frame(width: 28, height: 30) }
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)
-                .fixedSize()
+                .frame(width: 28, height: 30)
+                .foregroundStyle(DashboardPalette.mutedForeground)
+                .background(menuHovered ? theme.palette.themeWhisper : .clear,
+                            in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .onHover { menuHovered = $0 }
                 .help("Browser menu")
                 .accessibilityLabel("Browser menu")
             }
             .padding(.horizontal, 10)
-            .frame(height: 44)
+            .padding(.vertical, 2)
             if let title = page.passwordOfferTitle {
                 HStack(spacing: 10) {
                     VStack(alignment: .leading, spacing: 3) {
