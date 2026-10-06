@@ -145,11 +145,10 @@ struct ConversationWorkTranscript: View {
                                         )
                                     } else if let activity = item.activities.first {
                                         if activity.kind == .assistant {
-                                            ConversationMarkdown(
-                                                document: ConversationMarkdownDocument(RemoteNoteEditEnvelope.redactingEnvelopes(in: activity.content ?? "")),
+                                            ConversationResponse(
+                                                content: RemoteNoteEditEnvelope.redactingEnvelopes(in: activity.content ?? ""),
                                                 isStreaming: false
                                             )
-                                            .textSelection(.enabled)
                                         } else {
                                             ConversationActivityRow(activity: activity, runStatus: run.status)
                                         }

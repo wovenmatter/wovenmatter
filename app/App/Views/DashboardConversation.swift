@@ -147,8 +147,6 @@ struct DashboardCloudConversation: View {
             case .incomingCommand(let receipt): return [.incomingCommand(receipt)]
             case .message(let value): message = value
             }
-            let presentation = messagePresentations[message.id]
-            let run = runsByAssistantMessageID[message.id]
             let mediaCount: Int
             if let openCode = workspaceOpenCode, openCode.links[message.conversationID] != nil,
                let nativeMessage = openCode.snapshots[message.conversationID]?.messages.first(where: { $0["id"].text == message.clientMessageID }) {
@@ -157,10 +155,6 @@ struct DashboardCloudConversation: View {
             return ConversationMessageLayout.rows(
                 messageID: message.id,
                 role: message.role,
-                content: message.content,
-                displayedBody: presentation?.displayedBody ?? message.content,
-                failedRunError: run?.status == "failed" ? run?.error : nil,
-                document: presentation?.document,
                 mediaCount: mediaCount
             ).map { .message(DashboardConversationMessageRow(message: message, layout: $0)) }
         }
@@ -1111,8 +1105,6 @@ struct DashboardMessageRow: View {
     var layout: ConversationMessageLayout.Row? = nil
     var displayedBody: String? = nil
 
-    private var isFirstMessagePart: Bool { layout?.isFirstMessagePart ?? true }
-    private var isLastMessagePart: Bool { layout?.isLastMessagePart ?? true }
     private var assistantBody: String { displayedBody ?? transcript.body }
 
     private var transcript: AssistantTranscriptProjection {
@@ -1147,7 +1139,7 @@ struct DashboardMessageRow: View {
             HStack {
                 if isUser { Spacer(minLength: 72) }
                 VStack(alignment: isUser ? .trailing : .leading, spacing: 18) {
-                    if !isUser, isFirstMessagePart, let run {
+                    if !isUser, let run {
                         ConversationWorkTranscript(
                             run: run,
                             presentation: runPresentation,
@@ -1165,27 +1157,13 @@ struct DashboardMessageRow: View {
                             onOpenAttachment: onOpenAttachment
                         )
                     } else if showsAssistantBody {
-                        if let renderedDocument {
-                            markdown(renderedDocument)
-                            .padding(.horizontal, 4)
-                            .padding(.top, isFirstMessagePart ? 2 : 0)
-                            .padding(.bottom, isLastMessagePart ? 2 : 0)
-                            .textSelection(.enabled)
-                        } else {
-                            Text(RemoteNoteEditEnvelope.redactingEnvelopes(
-                                in: assistantBody
-                            ))
-                                .font(.system(size: 15))
-                                .lineSpacing(4)
-                                .foregroundStyle(
-                                    message.status == "streaming"
-                                        ? DashboardPalette.mutedForeground
-                                        : DashboardPalette.foreground
-                                )
-                                .padding(.horizontal, 4)
-                                .padding(.vertical, 2)
-                                .textSelection(.enabled)
-                        }
+                        ConversationResponse(
+                            content: RemoteNoteEditEnvelope.redactingEnvelopes(in: assistantBody),
+                            document: renderedDocument,
+                            isStreaming: message.status == "streaming"
+                        )
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 2)
                     }
                     if !isUser, layout == nil {
                         ConversationChangedFilesCard(records: activities)
@@ -1195,16 +1173,6 @@ struct DashboardMessageRow: View {
                 if !isUser { Spacer(minLength: 0) }
             }
             .fixedSize(horizontal: false, vertical: true)
-        }
-    }
-
-    @ViewBuilder
-    private func markdown(_ document: ConversationMarkdownDocument) -> some View {
-        if let layout, case .markdownBlocks(let range, _) = layout.content,
-           document.blocks.indices.contains(range.lowerBound), range.upperBound <= document.blocks.count {
-            ConversationMarkdown(blocks: Array(document.blocks[range]), isStreaming: message.status == "streaming")
-        } else {
-            ConversationMarkdown(document: document, isStreaming: message.status == "streaming")
         }
     }
 
