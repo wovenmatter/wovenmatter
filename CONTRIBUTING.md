@@ -77,12 +77,14 @@ out security, privacy, persistence, or third-party provenance impacts. Every
 pull request targeting `main` requires approval from the repository code owner
 before it can be merged.
 
-Pull requests are automatically assigned a `vouch:*` trust label and a `size:*`
-change-size label. External contributors begin as `vouch:unvouched`. A
-maintainer can add `github:username` to `.github/VOUCHED.td` after establishing
-trust; repository collaborators with write access are trusted automatically.
-These labels help prioritize review. They do not grant repository access or
-guarantee that a pull request will be merged.
+New and reopened pull requests receive an author label. Verified members of the
+WovenMatter GitHub organization, including owners and agent accounts, receive
+`author:organization`. Outside contributors and authors whose membership cannot
+be verified receive `author:external-or-unverified` for heavier review.
+Repository collaborator access or bot status alone does not establish membership.
+Comment `/recheck-author` on a pull request to refresh its label after a membership
+change. These labels do not bypass code-owner approval, branch protections, or
+required checks. Pull requests are no longer assigned size labels.
 
 By submitting a contribution, you agree that it is licensed under this
 project's MIT License.
