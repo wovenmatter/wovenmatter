@@ -562,6 +562,11 @@ struct DashboardConversationHoverCard: View {
                 if let workspace = meta.buzzWorkspaceLabel {
                     hoverRow(icon: .panelTop, text: workspace)
                 }
+                if presentation.conversation.isScheduledTask {
+                    Text("Scheduled Task")
+                        .font(.system(size: 12))
+                        .foregroundStyle(DashboardPalette.mutedForeground)
+                }
             }
 
             WorkspaceSessionProvenance(sessionID: presentation.id)

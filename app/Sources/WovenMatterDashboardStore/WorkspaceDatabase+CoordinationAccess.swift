@@ -81,7 +81,7 @@ extension WorkspaceDatabaseConnection {
     try transaction {
       try executeUnlocked("""
         UPDATE workspace_coordination_access_requests SET state='cancelled',
-          error='Woven Matter closed before access was approved. Use a new request ID to ask again.' WHERE state='pending'
+          error='The access request was cancelled before approval. Use a new UUID with --request-id to ask again.' WHERE state='pending'
         """)
     }
   }

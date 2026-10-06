@@ -81,14 +81,22 @@ extension ApplicationModel {
                     requestID: request.id.uuidString, requiresUserApproval: true) { notifications.append(delivery) }
             }
             for request in pendingLocalACPInteractions {
+                let requiresUserApproval: Bool = switch request.request {
+                case .plan: true
+                case .questions, .secret: false
+                }
                 if let delivery = try await database.recordCoordinationNeedsInput(sessionID: request.conversationID,
-                    requestID: request.id.uuidString, requiresUserApproval: true) { notifications.append(delivery) }
+                    requestID: request.id.uuidString, requiresUserApproval: requiresUserApproval) { notifications.append(delivery) }
             }
             for instance in openCodeInstances {
                 for (sessionID, snapshot) in instance.snapshots {
-                    for request in snapshot.permissions + snapshot.forms where !request["id"].text.isEmpty {
+                    for request in snapshot.permissions where !request["id"].text.isEmpty {
                         if let delivery = try await database.recordCoordinationNeedsInput(sessionID: sessionID,
                             requestID: "opencode:" + request["id"].text, requiresUserApproval: true) { notifications.append(delivery) }
+                    }
+                    for request in snapshot.forms where !request["id"].text.isEmpty {
+                        if let delivery = try await database.recordCoordinationNeedsInput(sessionID: sessionID,
+                            requestID: "opencode:" + request["id"].text, requiresUserApproval: false) { notifications.append(delivery) }
                     }
                 }
             }
@@ -164,7 +172,11 @@ extension ApplicationModel {
         let samples = try await recordedUsageSamples(from: start, to: end,
             limit: command.integer("limit", default: 100, range: 1...200),
             offset: command.integer("offset", default: 0, range: 0...(Int.max - 1)))
-        return try .value(samples)
+        struct UsageResult: Encodable {
+            let samples: [UsageSample]
+            let limits: [UsageLimitAccount]
+        }
+        return try .value(UsageResult(samples: samples, limits: localUsage?.limits ?? []))
     }
 
     private func toolConversation(_ id: String) async throws -> WorkspaceConversationRecord {

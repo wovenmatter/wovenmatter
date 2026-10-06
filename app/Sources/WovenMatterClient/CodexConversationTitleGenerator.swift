@@ -52,7 +52,7 @@ public actor CodexConversationTitleGenerator {
             workingDirectory: workspace.rootURL,
             existingSessionID: nil,
             title: "Woven Matter title settings",
-            systemPrompt: Self.systemPrompt
+            systemPrompt: nil
         )
         return CodexTitleGenerationCapabilities(
             configuration: initialized.configuration
@@ -75,7 +75,7 @@ public actor CodexConversationTitleGenerator {
             workingDirectory: workspace.rootURL,
             existingSessionID: nil,
             title: "Generate Woven Matter conversation title",
-            systemPrompt: Self.systemPrompt
+            systemPrompt: nil
         )
         let configuration = initialized.configuration
         let selectedModel = model.flatMap {
@@ -93,7 +93,7 @@ public actor CodexConversationTitleGenerator {
 
         let response = CodexTitleResponseAccumulator()
         _ = try await client.prompt(
-            "User's first prompt:\n\(firstPrompt)",
+            "\(Self.titleInstructions)\n\nFirst message:\n\(firstPrompt)",
             onEvent: { event in
                 if case .assistantChunk(let fragment) = event {
                     await response.append(fragment)
@@ -133,12 +133,12 @@ public actor CodexConversationTitleGenerator {
         return String(normalized.prefix(47)).trimmingCharacters(in: .whitespaces) + "…"
     }
 
-    private static let systemPrompt = """
+    private static let titleInstructions = """
     Generate a short title that helps the user recognize this conversation later.
-    Return JSON with exactly one key: title.
-    Use 3 to 8 words and fewer than 40 characters.
-    Name the durable subject and desired outcome, not the workflow, tools, model, or agent.
-    Do not claim completion. Do not use quotes or trailing punctuation.
+    Return only JSON in this form: {"title":"..."}.
+    Aim for 3 to 8 words and fewer than 40 characters.
+    Name the main topic and requested outcome. Avoid workflow, tool, model or agent names unless they are the subject of the conversation.
+    Do not claim completion. Do not include quotation marks within the title or end it with punctuation.
     Do not call tools or modify files.
     """
 }

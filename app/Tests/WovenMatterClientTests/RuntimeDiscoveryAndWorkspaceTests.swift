@@ -64,7 +64,7 @@ struct RuntimeDiscoveryAndWorkspaceTests {
         databases ? .databases : .repositories, at: root, externalURL: external
       )
     }
-    let link = root.appending(path: databases ? "Databases" : "Repos")
+    let link = root.appending(path: databases ? "databases" : "repos")
     try configure(nil)
     let marker = link.appending(path: "keep")
     try Data("keep".utf8).write(to: marker)

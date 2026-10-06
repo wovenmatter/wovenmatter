@@ -4,6 +4,13 @@ import WovenMatterCore
 @testable import WovenMatterClient
 
 struct WovenMatterToolProtocolTests {
+  @Test func contextIsAReadWithoutCallerSelectedMessageOrNote() throws {
+    let command = try WovenMatterToolCommand(["context"])
+    #expect(command.action == "context" && !command.isMutation && !command.wantsHelp)
+    #expect(WovenMatterToolCommand.help(for: try .init(["context", "--help"])) == WovenMatterToolCommand.contextHelp)
+    #expect(throws: (any Error).self) { try WovenMatterToolCommand(["context", "--note-id", "other"]) }
+  }
+
   @Test func oversizedArgumentArraysAreRejectedBeforeParsing() {
     #expect(throws: WorkspaceToolError.invalid("A tool command must contain at most 1,024 arguments.")) {
       try WovenMatterToolCommand(["notes", "list"] + Array(repeating: "", count: 1_023))

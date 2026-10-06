@@ -379,6 +379,7 @@ public actor OpenClawGatewayCoordinator {
         agentID: descriptor.agentID,
         sessionKey: descriptor.sessionKey,
         content: transportContent ?? input.textWithReferenceContext,
+        cliContext: input.cliContext,
         attachments: attachments
       )
     }
@@ -391,6 +392,7 @@ public actor OpenClawGatewayCoordinator {
     agentID: UUID,
     sessionKey: String,
     content: String,
+    cliContext: AgentCLIContext?,
     attachments: [GatewayJSONValue]
   ) async throws {
     defer { finishTracking(runID: run.runID) }
@@ -411,6 +413,7 @@ public actor OpenClawGatewayCoordinator {
         return
       }
       guard let client else { throw OpenClawGatewayClientError.connectionClosed }
+      try await bindCLI(client: client, sessionKey: sessionKey, context: cliContext, inputID: run.runID)
       let receipt = try await client.request("chat.send", params: .object(
         Self.chatSendParameters(
           sessionKey: sessionKey,
@@ -742,6 +745,7 @@ public actor OpenClawGatewayCoordinator {
         agentID: active.agentID,
         sessionKey: active.sessionKey,
         content: transportContent,
+        cliContext: input.cliContext,
         attachments: attachments
       )
     }
@@ -824,6 +828,32 @@ public actor OpenClawGatewayCoordinator {
     }
   }
 
+  private var cliConnectionProvider: (@Sendable (String) async throws -> AgentCLIContext?)?
+  public func setCLIConnectionProvider(_ provider: @escaping @Sendable (String) async throws -> AgentCLIContext?) {
+    cliConnectionProvider = provider
+  }
+
+  private var cliReadyClients: Set<ObjectIdentifier> = []
+
+  private func bindCLI(client: OpenClawGatewayClient, sessionKey: String, context: AgentCLIContext?, inputID: String? = nil) async throws {
+    guard let context else { return }
+    let capabilities = try await client.connect()
+    if !cliReadyClients.contains(ObjectIdentifier(client)), !capabilities.methods.contains("wovenmatter.cli.bind") {
+      let reloaded = try await client.request("plugins.reload", params: .object([
+        "plugins": .array([.object(["pluginId": .string("wovenmatter-scheduled-results")])]),
+      ]))
+      guard reloaded.objectValue?["restartRequired"]?.boolValue != true else {
+        throw OpenClawGatewayClientError.rejected("OpenClaw needs a Gateway restart to load its Woven Matter CLI integration.")
+      }
+    }
+    let result = try await client.request("wovenmatter.cli.bind", params: .object([
+      "sessionKey": .string(sessionKey), "inputID": inputID.map(GatewayJSONValue.string) ?? .null,
+      "context": try JSONDecoder().decode(GatewayJSONValue.self, from: JSONEncoder().encode(context)),
+    ]))
+    guard result.objectValue?["ready"]?.boolValue == true else { throw OpenClawGatewayClientError.malformedFrame }
+    cliReadyClients.insert(ObjectIdentifier(client))
+  }
+
   private func admitActiveInput(
     localRunID: String,
     expectedStopEpoch: UUID?,
@@ -832,6 +862,7 @@ public actor OpenClawGatewayCoordinator {
     agentID: UUID,
     sessionKey: String,
     content: String,
+    cliContext: AgentCLIContext?,
     attachments: [GatewayJSONValue]
   ) async throws {
     let gatewayClient = try await client(agentID: agentID)
@@ -842,6 +873,8 @@ public actor OpenClawGatewayCoordinator {
           activeRuns[localRunID]?.cancelRequested == false else {
       throw LocalACPSessionDatabaseError.steeringUnsupported
     }
+    try await bindCLI(client: gatewayClient, sessionKey: sessionKey, context: cliContext, inputID: provisionalRemoteRunID)
+    try dispatchFence.check()
     let receipt = try await gatewayClient.request(
       "chat.send",
       params: .object(Self.chatSendParameters(
@@ -2451,6 +2484,9 @@ public actor OpenClawGatewayCoordinator {
           try await database.replaceLocalACPAssistantMessage(runID: run.runID, assistantMessageID: assistantID, content: text)
         }
         let descriptor = try await database.openClawGatewaySession(conversationID: conversationID)
+        if let context = try await cliConnectionProvider?(conversationID) {
+          try await bindCLI(client: client(agentID: descriptor.agentID), sessionKey: descriptor.sessionKey, context: context)
+        }
         // An unrelated client may own inFlightRun. Never bind its output to our input.
         var active = ActiveRun(
           runID: run.runID, conversationID: conversationID, agentID: descriptor.agentID,

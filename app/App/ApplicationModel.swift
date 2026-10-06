@@ -109,6 +109,9 @@ final class ApplicationModel {
                     guard let apply = self?.applyInitialSessionToolIDs else { throw ApplicationModelError.unavailableSessionTools }
                     try await apply(id, tools)
                 }
+                await instance.coordinator.setCLIConnectionProvider { [weak self] id in
+                    try await self?.sessionCLIConnection(id)
+                }
                 remoteOpenCodes[configuration.id] = instance
                 instance.onChange = { [weak self, weak instance] id in
                     guard let self, let instance, self.remoteOpenCodes[configuration.id] === instance else { return }
@@ -503,6 +506,9 @@ final class ApplicationModel {
                 guard let apply = self?.applyInitialSessionToolIDs else { throw ApplicationModelError.unavailableSessionTools }
                 try await apply(id, tools)
             }
+            await openCode.coordinator.setCLIConnectionProvider { [weak self] id in
+                try await self?.sessionCLIConnection(id)
+            }
             self.openCode = openCode
             openCode.onChange = { [weak self, weak openCode] id in
                 guard let self, let openCode else { return }
@@ -578,6 +584,9 @@ final class ApplicationModel {
                     guard let self else { throw CancellationError() }
                     return try await self.executeExecutorControl(control)
                 }, onMutation: { [weak self] in await self?.refreshWorkspace() })
+            try await dashboardStore.setCLIConnectionProvider { [weak self] id in
+                try await self?.sessionCLIConnection(id)
+            }
             try await recoverExecutorSetup()
             configureSessionToolSelectionAdapter()
             try await dashboardStore.database.recoverToolDeliveries()
@@ -2252,7 +2261,7 @@ final class ApplicationModel {
         guard !usesLocallyInstalledRuntime(conversation) || installingLocalACPRuntimeKinds.isEmpty else {
             throw WorkspaceToolError.invalid("Wait for runtime installation or update to finish before sending a message.")
         }
-        let normalized = AgentMessageInput(text: input.text.trimmingCharacters(in: .whitespacesAndNewlines),
+        var normalized = AgentMessageInput(text: input.text.trimmingCharacters(in: .whitespacesAndNewlines),
             attachments: input.attachments, historyDeliveryID: input.historyDeliveryID)
         guard normalized.hasContent else { throw WorkspaceToolError.invalid("A message is required.") }
         for reference in normalized.references where reference.kind == .conversation {
@@ -2270,8 +2279,10 @@ final class ApplicationModel {
         }
         let remote = conversation.remoteWorkspaceID.flatMap { remoteWorkspaces.configuration(id: $0) }
         if conversation.remoteWorkspaceID != nil, remote == nil { throw ApplicationModelError.remoteHarnessUnavailable }
-        let discovery = try await agentTools.discovery(sessionID: conversation.id, remote: remote, noteID: context?.noteID)
-        let deliveryContent = discovery + "\n\n" + normalized.text
+        let capturedInputID = try await dashboardStore.database.captureInputContext(conversationID: conversation.id,
+            noteID: normalized.historyDeliveryID == nil ? context?.noteID : nil)
+        normalized.cliContext = try await agentTools.cliContext(sessionID: conversation.id, remote: remote, captureID: capturedInputID)
+        let deliveryContent = normalized.text
         try dispatchFence.check()
         if let deliveryID = normalized.historyDeliveryID {
             try await dashboardStore.database.validateClaimedToolDelivery(id: deliveryID)
@@ -2285,7 +2296,7 @@ final class ApplicationModel {
                 // while this dispatcher still owns the shared send/Trash reservation.
                 _ = try await dashboardStore.database.localACPSession(conversationID: conversation.id)
                 try dispatchFence.check()
-                try await openCode.send(conversation.id, input: normalized, discovery: discovery, dispatchFence: dispatchFence)
+                try await openCode.send(conversation.id, input: normalized, dispatchFence: dispatchFence)
             } else if steering {
                 if isOpenClawGatewayConversation(conversation.id) {
                     _ = try await dashboardStore.sendActiveOpenClawGatewayPrompt(conversationID: conversation.id, input: normalized, deliveryContent: deliveryContent, dispatchFence: dispatchFence)
@@ -2865,6 +2876,14 @@ final class ApplicationModel {
         }
     }
 
+    private func sessionCLIConnection(_ conversationID: String) async throws -> AgentCLIContext? {
+        guard let agentTools, let database = dashboardStore?.database else { return nil }
+        let session = try await database.localACPSession(conversationID: conversationID)
+        let remote = session.remoteWorkspaceID.flatMap { remoteWorkspaces.configuration(id: $0) }
+        guard session.remoteWorkspaceID == nil || remote != nil else { throw ApplicationModelError.remoteHarnessUnavailable }
+        return try await agentTools.cliContext(sessionID: conversationID, remote: remote, captureID: "")
+    }
+
     func directACPLaunchContext(
         conversation: WorkspaceConversationRecord,
         runtimeKind: AgentRuntimeKind,
@@ -2890,7 +2909,7 @@ final class ApplicationModel {
                 let root = inheritedRoot ?? workspaceRoot
                 return RemoteHarnessLaunchContext(launch: LocalACPRuntimeLaunchConfiguration(runtimeKind: .hermes,
                     executableURL: URL(fileURLWithPath: "/usr/bin/ssh"), arguments: [], environment: ["WOVENMATTER_HERMES_CONNECTION": encoded],
-                    processWorkingDirectoryURL: processDirectory), workspace: LocalACPWorkspaceLaunchConfiguration(rootURL: root, repositoriesURL: workspaceRoot.appending(path: "Repos"), databasesURL: workspaceRoot.appending(path: "Databases")))
+                    processWorkingDirectoryURL: processDirectory), workspace: LocalACPWorkspaceLaunchConfiguration(rootURL: root, repositoriesURL: workspaceRoot.appending(path: "repos"), databasesURL: workspaceRoot.appending(path: "databases")))
             }
             return try RemoteHarnessLaunchResolver.resolve(
                 configuration: configuration,

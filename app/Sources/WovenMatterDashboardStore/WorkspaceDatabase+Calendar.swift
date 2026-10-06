@@ -440,8 +440,12 @@ extension WorkspaceDatabaseConnection {
     } else {
       try validateFolderUnlocked(id: folderID, operatorID: operatorID)
     }
-    try toolsExecuteUnlocked("UPDATE dashboard_conversations SET title=?,folder_id=? WHERE id=?", [configuration.title, folderID, id])
-    try toolsExecuteUnlocked("UPDATE desktop_local_acp_sessions SET title=? WHERE conversation_id=?", [configuration.title, id])
+    let title = "Scheduled: " + configuration.title
+    // Adoption only runs when the chat is inserted. Keep the initial title as
+    // an app title so later native snapshots and recurring runs cannot reset it.
+    try toolsExecuteUnlocked("INSERT OR IGNORE INTO desktop_conversation_titles(conversation_id,title) VALUES(?,?)", [id, title])
+    try toolsExecuteUnlocked("UPDATE dashboard_conversations SET title=(SELECT title FROM desktop_conversation_titles WHERE conversation_id=?),folder_id=? WHERE id=?", [id, folderID, id])
+    try toolsExecuteUnlocked("UPDATE desktop_local_acp_sessions SET title=? WHERE conversation_id=?", [title, id])
     try toolsExecuteUnlocked("UPDATE workspace_session_tools SET enabled_json=?,defaults_applied=1 WHERE session_id=?", [try toolsJSON(configuration.tools.enabled), id])
     try toolsExecuteUnlocked("UPDATE workspace_executor_sessions SET profiles_json=? WHERE session_id=?", [try toolsJSON(configuration.tools.executorProfiles ?? []), id])
   }

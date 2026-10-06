@@ -257,7 +257,7 @@ public actor PiRPCClient {
                        dispatchFence: AgentDispatchFence? = nil) async throws -> LocalACPStopReason {
         try dispatchFence?.check()
         let payload = try Self.attachmentPayload(input)
-        return try await prompt(payload.text, images: payload.images, onEvent: onEvent,
+        return try await prompt(payload.text, images: payload.images, cliContext: input.cliContext, onEvent: onEvent,
             onPermission: onPermission, dispatchFence: dispatchFence)
     }
 
@@ -268,7 +268,7 @@ public actor PiRPCClient {
     public func beginActiveInput(_ input: AgentMessageInput, dispatchFence: AgentDispatchFence? = nil) async throws -> LocalACPActiveInputReceipt {
         try dispatchFence?.check()
         let payload = try Self.attachmentPayload(input)
-        return try await beginActiveInput(payload.text, images: payload.images, dispatchFence: dispatchFence)
+        return try await beginActiveInput(payload.text, images: payload.images, cliContext: input.cliContext, dispatchFence: dispatchFence)
     }
 
     static func attachmentPayload(_ input: AgentMessageInput) throws -> (text: String, images: [[String: String]]) {
@@ -290,6 +290,7 @@ public actor PiRPCClient {
     public func prompt(
         _ text: String,
         images: [[String: String]] = [],
+        cliContext: AgentCLIContext? = nil,
         onEvent: LocalACPClient.EventHandler? = nil,
         onPermission: LocalACPClient.PermissionHandler? = nil,
         dispatchFence: AgentDispatchFence? = nil
@@ -326,6 +327,11 @@ public actor PiRPCClient {
                 if launch.environment["WOVEN_DURABLE_REMOTE_ACP"] == "1" {
                     command["_meta"] = ["wovenRunID": runID ?? UUID().uuidString.lowercased()]
                 }
+                if let cliContext {
+                    var metadata = command["_meta"] as? [String: Any] ?? [:]
+                    metadata["wovenTools"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(cliContext))
+                    command["_meta"] = metadata
+                }
                 let response = try await sendCommand(command, dispatchFence: fence)
                 if response["success"] as? Bool != true {
                     if dictionary(response["_meta"])?["deliveryUncertain"] as? Bool == true {
@@ -357,7 +363,7 @@ public actor PiRPCClient {
         _ = try await beginActiveInput(text, images: images, dispatchFence: dispatchFence)
     }
 
-    private func beginActiveInput(_ text: String, images: [[String: String]], dispatchFence: AgentDispatchFence? = nil) async throws -> LocalACPActiveInputReceipt {
+    private func beginActiveInput(_ text: String, images: [[String: String]], cliContext: AgentCLIContext? = nil, dispatchFence: AgentDispatchFence? = nil) async throws -> LocalACPActiveInputReceipt {
         let fence = dispatchFence ?? AgentDispatchFence()
         try fence.check()
         guard !cancelled else { throw CancellationError() }
@@ -370,6 +376,11 @@ public actor PiRPCClient {
         var command: [String: Any] = ["type": "prompt", "streamingBehavior": "steer", "message": text, "images": images]
         if launch.environment["WOVEN_DURABLE_REMOTE_ACP"] == "1" {
             command["_meta"] = ["wovenRunID": runID ?? UUID().uuidString.lowercased()]
+        }
+        if let cliContext {
+            var metadata = command["_meta"] as? [String: Any] ?? [:]
+            metadata["wovenTools"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(cliContext))
+            command["_meta"] = metadata
         }
         do {
             // Native prompt preflight atomically steers a running loop or starts
@@ -519,8 +530,7 @@ public actor PiRPCClient {
             "-c",
             #"set -m; exec "$@""#,
             "wovenmatter-local-pi",
-            launch.executableURL.path,
-        ] + Self.sessionLaunchArguments(launch, sessionID: sessionID)
+        ] + NativeCLIAdapter.command(launch: launch, arguments: Self.sessionLaunchArguments(launch, sessionID: sessionID))
         process.arguments = arguments
         process.currentDirectoryURL = launch.processWorkingDirectoryURL
             ?? workingDirectory
@@ -640,7 +650,11 @@ public actor PiRPCClient {
     }
 
     private func refreshConfiguration() async throws {
-        let state = try await sendCommand(["type": "get_state"])
+        var stateCommand: [String: Any] = ["type": "get_state"]
+        if let connection = launch.cliConnection {
+            stateCommand["_meta"] = ["wovenToolsConnection": try JSONSerialization.jsonObject(with: JSONEncoder().encode(connection))]
+        }
+        let state = try await sendCommand(stateCommand)
         let models = try await sendCommand(["type": "get_available_models"])
         let thinking = try await sendCommand(["type": "get_available_thinking_levels"])
         let commands = try await sendCommand(["type": "get_commands"])

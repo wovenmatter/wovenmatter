@@ -41,6 +41,9 @@ extension WorkspaceDatabaseConnection {
   func migrateAgentTools() throws {
     try transaction {
       try executeUnlocked("""
+        CREATE TABLE IF NOT EXISTS workspace_input_contexts(
+          id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL REFERENCES dashboard_conversations(id),
+          note_id TEXT, created_at TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS workspace_tool_mutations(
           source_id TEXT NOT NULL REFERENCES dashboard_conversations(id), request_id TEXT NOT NULL,
           operation TEXT NOT NULL, input_digest TEXT NOT NULL, result_json TEXT NOT NULL,

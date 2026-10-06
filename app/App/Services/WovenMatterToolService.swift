@@ -41,18 +41,13 @@ enum WovenMatterCommandLine {
                 }
                 args.replaceSubrange(index...index + 1, with: [command.group == .executor ? "--code" : command.action == "set-html" ? "--html" : "--json", value])
             }
-            if command.group == .notes, command.options["note-id"] == nil, let noteID = environment["WOVENMATTER_NOTE_ID"],
-               !(command.action == "read" && !command.positional.isEmpty),
-               !["list", "folders", "create", "versions", "version", "restore"].contains(command.action) {
-                args += ["--note-id", noteID]
-            }
             let rawRequestID = command.options["request-id"] ?? UUID().uuidString.lowercased()
             guard let requestUUID = UUID(uuidString: rawRequestID) else { throw WorkspaceToolError.invalid("--request-id must be a UUID.") }
             let requestID = requestUUID.uuidString.lowercased()
             guard let socketPath = environment["WOVENMATTER_SOCKET"], !socketPath.isEmpty else {
                 throw WorkspaceToolError.invalid("WOVENMATTER_SOCKET is missing. Use the invocation supplied by this Woven Matter session.")
             }
-            let request = WovenMatterToolRequest(arguments: args, requestID: requestID)
+            let request = WovenMatterToolRequest(arguments: args, requestID: requestID, contextID: environment["WOVENMATTER_CONTEXT_ID"])
             dispatchedRequestID = requestID
             let data = try forward(try JSONEncoder().encode(request), to: socketPath)
             let response = try JSONDecoder().decode(WovenMatterToolResponse.self, from: data)

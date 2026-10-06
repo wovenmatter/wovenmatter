@@ -534,6 +534,7 @@ extension WorkspaceDatabaseConnection {
             'openclaw_session_key', COALESCE(openclaw_session_key,
               (SELECT session_key FROM desktop_openclaw_gateway_sessions
                WHERE conversation_id = dashboard_conversations.id)),
+            'is_scheduled_task', EXISTS(SELECT 1 FROM workspace_calendar_sessions WHERE id=dashboard_conversations.id),
             'imported_at', COALESCE(
               (SELECT imported_at FROM desktop_session_imports WHERE conversation_id = dashboard_conversations.id),
               (SELECT imported_at FROM desktop_openclaw_import_activity WHERE conversation_id = dashboard_conversations.id

@@ -63,7 +63,7 @@ data files are not versioned.
 
 Use **Databases** to browse **All**, **Local**, or **Remote** locations. Select
 a workspace to create a named database folder and choose its data preference.
-Each database is a folder under `Databases/<name>/` where agents can keep data.
+Each database is a folder under `databases/<name>/` where agents can keep data.
 These folders are separate from the app's central SQLite database.
 
 Choose no format preference, JSON, or SQLite to guide how agents store the data.

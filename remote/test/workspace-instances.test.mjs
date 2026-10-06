@@ -11,7 +11,7 @@ function fixture(overrides = {}) {
   return createWorkspaceInstances({
     workspaceRoot: '/remote/project', environment: () => ({ PATH: '/host/bin', HOME: '/host/home' }), acquireLock: async () => () => {},
     gateway: { status: () => ({ state: 'stopped', lastError: 'token=secret' }), start: async () => {}, stop: async () => {} },
-    readFile: async () => JSON.stringify(info), signal: () => {},
+    readFile: async () => JSON.stringify(info), signal: () => {}, installCLI: () => {},
     fetch: async (_url, options) => {
       assert.equal(_url.pathname, '/api/info')
       assert.equal(options.headers.authorization, 'Basic ' + Buffer.from('opencode:host-secret').toString('base64'))

@@ -325,6 +325,10 @@ public actor LocalACPSessionCoordinator {
     private let onChange: ChangeHandler?
     private let onUsage: (@Sendable (UsageRunRecorder.Observation) async -> Void)?
     private var resumePermissionHandler: ResumePermissionHandler?
+    private var cliConnectionProvider: (@Sendable (String) async throws -> AgentCLIContext?)?
+    public func setCLIConnectionProvider(_ provider: @escaping @Sendable (String) async throws -> AgentCLIContext?) {
+        cliConnectionProvider = provider
+    }
     private var activeSessions: [String: ActiveSession] = [:]
     // Losing a client after an unsuccessful Stop is not evidence that native
     // work ended. Only that client's successful cancellation can clear this.
@@ -524,7 +528,7 @@ public actor LocalACPSessionCoordinator {
             }
             let deliveryInput = AgentMessageInput(
                 text: deliveryContent ?? input.text,
-                attachments: input.attachments
+                attachments: input.attachments, cliContext: input.cliContext
             )
             publishChange(
                 conversationID: conversationID,
@@ -1103,7 +1107,7 @@ public actor LocalACPSessionCoordinator {
             try checkActiveInputAdmission(conversationID: conversationID, runID: runID,
                 sessionID: active.configurationObservationID, dispatchFence: operationFence)
             dispatchStarted = true
-            let deliveryInput = AgentMessageInput(text: deliveryContent ?? input.text, attachments: input.attachments)
+            let deliveryInput = AgentMessageInput(text: deliveryContent ?? input.text, attachments: input.attachments, cliContext: input.cliContext)
             let receipt: LocalACPActiveInputReceipt
             if let fencedInput = active.client.fencedActiveInput {
                 receipt = try await fencedInput(deliveryInput, operationFence)
@@ -1726,6 +1730,9 @@ public actor LocalACPSessionCoordinator {
         workspace: LocalACPWorkspaceLaunchConfiguration,
         systemPrompt: String?
     ) async throws -> (LocalACPSessionDriver, LocalACPInitializedSession) {
+        let cliConnection: AgentCLIContext?
+        if let provider = cliConnectionProvider { cliConnection = try await provider(descriptor.conversationID) }
+        else { cliConnection = launch.cliConnection }
         // The launch descriptor is shared across conversations; permission is not.
         var launch = LocalACPRuntimeLaunchConfiguration(
             runtimeKind: launch.runtimeKind, executableURL: launch.executableURL,
@@ -1736,6 +1743,7 @@ public actor LocalACPSessionCoordinator {
             requestedPermission: descriptor.permission,
             wrappedCommand: launch.wrappedCommand
         )
+        launch.cliConnection = cliConnection
         launch.historyRecorder = database.historyWireRecorder(
             conversationID: descriptor.conversationID, harness: descriptor.runtimeKind.rawValue
         )

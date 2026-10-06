@@ -22,9 +22,10 @@ provided for their conversation, rather than editing the app's SQLite store dire
 ## Shared folder layout
 
 The [workspace tree](../../README.md#workspace-layout) shows the initial layout.
-`Repos` holds repository checkouts and `Databases` holds named data folders.
-Use `GUIDES`, `PLANS`, `RESEARCH`, and `WORK_LOGS` for work you want to keep,
-`OUTBOX` for deliverables, and `.scratch` for temporary work.
+`repos` holds repository checkouts and `databases` holds named data folders.
+Use `guides`, `plans`, `research`, and `work_logs` for work you want to keep,
+`outbox` for deliverables, and `scratch` for temporary work, experiments, and reusable scripts.
+Use `skills` for skills shared across harnesses in this workspace.
 
 `AGENTS.md` contains a managed instruction block. Initialization updates that
 block and preserves the text outside it. New workspaces get a `CLAUDE.md` link
@@ -46,9 +47,9 @@ If a copy fails, the original folder stays in use. Completed copies may remain
 in the destination, but an incomplete repository is not left under its final name;
 you can fix the reported error and retry.
 
-The repositories folder is named `Repos`. Older `REPOS` folders are renamed while
-preserving their contents or link destination; on case-sensitive filesystems the
-old path remains as a compatibility link for existing sessions.
+Workspace folders use lowercase names. Updates migrate older spellings and
+`.scratch` while preserving files and links. If files conflict, both copies are
+kept; the migrated copy receives a `.migrated-N` suffix.
 
 ## Remote storage
 
