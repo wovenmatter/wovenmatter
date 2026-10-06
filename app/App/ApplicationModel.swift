@@ -962,9 +962,7 @@ final class ApplicationModel {
                 permission: configuration.permission,
                 permissionOptions: configuration.permissionOptions,
                 permissionOptionMetadata: configuration.permissionOptionMetadata,
-                workingDirectory: configuration.workingDirectory,
-                subagentConcurrency: configuration.subagentConcurrency,
-                subagentConcurrencyOptions: configuration.subagentConcurrencyOptions
+                workingDirectory: configuration.workingDirectory
             )
             return
         }
@@ -2582,9 +2580,7 @@ final class ApplicationModel {
                 permission: configuration.permission,
                 permissionOptions: configuration.permissionOptions,
                 permissionOptionMetadata: configuration.permissionOptionMetadata,
-                workingDirectory: configuration.workingDirectory,
-                subagentConcurrency: configuration.subagentConcurrency,
-                subagentConcurrencyOptions: configuration.subagentConcurrencyOptions
+                workingDirectory: configuration.workingDirectory
             )
             if let metadata = localACPSessionMetadata[conversation.id] {
                 await recordConfirmedSessionSelections(conversationID: conversation.id, metadata: metadata)
@@ -2621,31 +2617,24 @@ final class ApplicationModel {
         conversation: WorkspaceConversationRecord,
         model: String? = nil,
         thinking: String? = nil,
-        permission: String? = nil,
-        subagentConcurrency: Int? = nil
+        permission: String? = nil
     ) async {
         if isBackendFrontend {
             guard updatingLocalACPSessionIDs.insert(conversation.id).inserted else { return }
             Task {
                 defer { updatingLocalACPSessionIDs.remove(conversation.id) }
                 do {
-                    if let subagentConcurrency {
-                        _ = try await sendBackendCommand(.configureSubagents(conversationID: conversation.id,
-                            concurrency: subagentConcurrency))
-                    } else {
-                        _ = try await sendBackendCommand(.configureSession(conversationID: conversation.id,
-                            model: model, thinking: thinking, permission: permission))
-                    }
+                    _ = try await sendBackendCommand(.configureSession(conversationID: conversation.id,
+                        model: model, thinking: thinking, permission: permission))
                 } catch { ensureConversationState(id: conversation.id).setError(error.localizedDescription) }
             }
             return
         }
 
         guard let runtimeKind = conversation.localRuntimeKind,
-              model != nil || thinking != nil || permission != nil || subagentConcurrency != nil else { return }
-        guard subagentConcurrency == nil || runtimeKind == .defaultAgent else { return }
+              model != nil || thinking != nil || permission != nil else { return }
         let permission = runtimeKind == .pi ? nil : permission
-        if subagentConcurrency == nil && retryPendingSessionSelections(conversationID: conversation.id,
+        if retryPendingSessionSelections(conversationID: conversation.id,
             selections: SessionSelections(model: model, thinking: thinking, permission: permission)) { return }
         guard !localRunningConversationIDs.contains(conversation.id),
               updatingLocalACPSessionIDs.insert(conversation.id).inserted else {
@@ -2679,7 +2668,6 @@ final class ApplicationModel {
                         model: model,
                         thinking: thinking,
                         permission: permission,
-                        subagentConcurrency: subagentConcurrency,
                         launch: launch,
                         workspace: workspace
                     )
@@ -2696,9 +2684,7 @@ final class ApplicationModel {
                         permission: configuration.permission,
                         permissionOptions: configuration.permissionOptions,
                         permissionOptionMetadata: configuration.permissionOptionMetadata,
-                        workingDirectory: configuration.workingDirectory,
-                        subagentConcurrency: configuration.subagentConcurrency,
-                        subagentConcurrencyOptions: configuration.subagentConcurrencyOptions
+                        workingDirectory: configuration.workingDirectory
                     )
                 if let metadata = localACPSessionMetadata[conversation.id] {
                     await recordConfirmedSessionSelections(conversationID: conversation.id, metadata: metadata)

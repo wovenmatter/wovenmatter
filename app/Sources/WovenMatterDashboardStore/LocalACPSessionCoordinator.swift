@@ -22,7 +22,6 @@ struct LocalACPSessionDriver: Sendable {
         _ thinking: String?
     ) async throws -> LocalACPSessionConfiguration
     let setPermission: (@Sendable (String) async throws -> LocalACPSessionConfiguration)?
-    let setSubagentConcurrency: (@Sendable (Int) async throws -> LocalACPSessionConfiguration)?
     let activeInput: (@Sendable (
         _ input: AgentMessageInput
     ) async throws -> LocalACPActiveInputReceipt)?
@@ -55,7 +54,6 @@ struct LocalACPSessionDriver: Sendable {
             _ thinking: String?
         ) async throws -> LocalACPSessionConfiguration,
         setPermission: (@Sendable (String) async throws -> LocalACPSessionConfiguration)? = nil,
-        setSubagentConcurrency: (@Sendable (Int) async throws -> LocalACPSessionConfiguration)? = nil,
         activeInput: (@Sendable (
             _ input: AgentMessageInput
         ) async throws -> LocalACPActiveInputReceipt)? = nil,
@@ -74,7 +72,6 @@ struct LocalACPSessionDriver: Sendable {
         self.observeConfiguration = observeConfiguration
         self.setConfiguration = setConfiguration
         self.setPermission = setPermission
-        self.setSubagentConcurrency = setSubagentConcurrency
         self.activeInput = activeInput
         self.cancel = cancel
         self.setRunID = setRunID
@@ -232,7 +229,6 @@ struct LocalACPSessionDriver: Sendable {
                 )
             },
             setPermission: { try await client.setSessionPermission($0) },
-            setSubagentConcurrency: { try await client.setSubagentConcurrency($0) },
             activeInput: { input in
                 do {
                     return try await client.beginActiveInput(input)
@@ -872,12 +868,11 @@ public actor LocalACPSessionCoordinator {
         model: String? = nil,
         thinking: String? = nil,
         permission: String? = nil,
-        subagentConcurrency: Int? = nil,
         launch: LocalACPRuntimeLaunchConfiguration,
         workspace: LocalACPWorkspaceLaunchConfiguration,
         systemPrompt: String? = nil
     ) async throws -> LocalACPSessionConfiguration {
-        guard model != nil || thinking != nil || permission != nil || subagentConcurrency != nil else {
+        guard model != nil || thinking != nil || permission != nil else {
             return try await configuration(
                 conversationID: conversationID,
                 launch: launch,
@@ -885,12 +880,8 @@ public actor LocalACPSessionCoordinator {
                 systemPrompt: systemPrompt
             )
         }
-        guard subagentConcurrency == nil || launch.runtimeKind == .defaultAgent else {
-            throw LocalACPClientError.unsupportedConfiguration("subagent concurrency")
-        }
         try ensureNoPermissionMutation(conversationID: conversationID)
-        let mutatesConversationPolicy = permission != nil || subagentConcurrency != nil
-        if mutatesConversationPolicy {
+        if permission != nil {
             guard runIDsByConversation[conversationID] == nil, !admittingConversations.contains(conversationID) else {
                 throw LocalACPSessionDatabaseError.runAlreadyActive
             }
@@ -901,7 +892,7 @@ public actor LocalACPSessionCoordinator {
             permissionMutationConversationIDs.insert(conversationID)
         }
         defer {
-            if mutatesConversationPolicy { permissionMutationConversationIDs.remove(conversationID) }
+            if permission != nil { permissionMutationConversationIDs.remove(conversationID) }
         }
         let leaseAcquisition = try await acquireOperationLease()
         defer {
@@ -927,7 +918,7 @@ public actor LocalACPSessionCoordinator {
             launch: launch,
             workspace: workspace,
             systemPrompt: systemPrompt,
-            requiredSessionID: mutatesConversationPolicy ? stored.acpSessionID : nil
+            requiredSessionID: permission != nil ? stored.acpSessionID : nil
         )
         do {
             var configuration = await client.configuration()
@@ -940,15 +931,6 @@ public actor LocalACPSessionCoordinator {
             }
             if let thinking, configuration.thinking != thinking {
                 throw LocalACPClientError.configurationNotConfirmed("thinking")
-            }
-            if let subagentConcurrency {
-                guard let setter = client.setSubagentConcurrency else {
-                    throw LocalACPClientError.unsupportedConfiguration("subagent concurrency")
-                }
-                configuration = try await setter(subagentConcurrency)
-                guard configuration.subagentConcurrency == subagentConcurrency else {
-                    throw LocalACPClientError.configurationNotConfirmed("subagent concurrency")
-                }
             }
             if let permission {
                 guard let setPermission = client.setPermission else {

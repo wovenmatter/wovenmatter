@@ -35,7 +35,7 @@
 		D46000000000000000000002 /* WovenMatterDashboardStore in Frameworks */ = {isa = PBXBuildFile; productRef = D46000000000000000000001 /* WovenMatterDashboardStore */; };
 		A11C00000000000000000001 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A11C00000000000000000002 /* Assets.xcassets */; };
 		073565BA0B01598641B11348 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C49C2130B0B0B01A795C7504 /* SettingsView.swift */; };
-		A10500000000000000000002 /* SettingsAgentDefaultsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10500000000000000000001 /* SettingsAgentDefaultsView.swift */; };
+		A10500000000000000000002 /* SettingsAgentDefaultsSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10500000000000000000001 /* SettingsAgentDefaultsSection.swift */; };
 		0C1A00000000000000000001 /* OpenClawGatewaySettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C1A00000000000000000002 /* OpenClawGatewaySettingsView.swift */; };
 		0C1A00000000000000000003 /* OpenClawSessionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C1A00000000000000000004 /* OpenClawSessionView.swift */; };
 		5E7A00000000000000000001 /* SettingsComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E7A00000000000000000002 /* SettingsComponents.swift */; };
@@ -149,7 +149,7 @@
 		5A0B27571F91CCF38534BB90 /* ApplicationModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApplicationModel.swift; sourceTree = "<group>"; };
 		624CEC46A7441DADEBBCE79E /* WovenMatterApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WovenMatterApp.swift; sourceTree = "<group>"; };
 		C49C2130B0B0B01A795C7504 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
-		A10500000000000000000001 /* SettingsAgentDefaultsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsAgentDefaultsView.swift; sourceTree = "<group>"; };
+		A10500000000000000000001 /* SettingsAgentDefaultsSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsAgentDefaultsSection.swift; sourceTree = "<group>"; };
 		0C1A00000000000000000002 /* OpenClawGatewaySettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenClawGatewaySettingsView.swift; sourceTree = "<group>"; };
 		0C1A00000000000000000004 /* OpenClawSessionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenClawSessionView.swift; sourceTree = "<group>"; };
 		5E7A00000000000000000002 /* SettingsComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsComponents.swift; sourceTree = "<group>"; };
@@ -367,7 +367,7 @@
 				0C1A00000000000000000002 /* OpenClawGatewaySettingsView.swift */,
 				0C1A00000000000000000004 /* OpenClawSessionView.swift */,
 				C49C2130B0B0B01A795C7504 /* SettingsView.swift */,
-				A10500000000000000000001 /* SettingsAgentDefaultsView.swift */,
+				A10500000000000000000001 /* SettingsAgentDefaultsSection.swift */,
 				5E7A00000000000000000002 /* SettingsComponents.swift */,
 				D472AB9160464F1FAB826C31 /* WorkspaceSessionActivity.swift */,
 				D472AB9160464F1FAB826C41 /* WorkspaceSessionManagement.swift */,
@@ -613,7 +613,7 @@
 				A11C00000000000000000003 /* WorkspaceView.swift in Sources */,
 				5E64711B441F5A188A2862AC /* RootView.swift in Sources */,
 				073565BA0B01598641B11348 /* SettingsView.swift in Sources */,
-				A10500000000000000000002 /* SettingsAgentDefaultsView.swift in Sources */,
+				A10500000000000000000002 /* SettingsAgentDefaultsSection.swift in Sources */,
 				0C1A00000000000000000001 /* OpenClawGatewaySettingsView.swift in Sources */,
 				0C1A00000000000000000003 /* OpenClawSessionView.swift in Sources */,
 				5E7A00000000000000000001 /* SettingsComponents.swift in Sources */,

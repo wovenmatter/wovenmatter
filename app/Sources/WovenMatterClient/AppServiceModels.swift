@@ -77,8 +77,6 @@ public struct LocalACPSessionMetadata: Codable, Equatable, Sendable {
     public let modelOptionMetadata: [String: SessionOptionMetadata]?
     public let thinkingOptionMetadata: [String: SessionOptionMetadata]?
     public let slashCommands: [LocalACPSlashCommand]
-    public let subagentConcurrency: Int?
-    public let subagentConcurrencyOptions: [Int]?
 
     public init(
         sessionKey: String,
@@ -94,9 +92,7 @@ public struct LocalACPSessionMetadata: Codable, Equatable, Sendable {
         permission: String? = nil,
         permissionOptions: [String]? = nil,
         permissionOptionMetadata: [String: SessionOptionMetadata]? = nil,
-        workingDirectory: String? = nil,
-        subagentConcurrency: Int? = nil,
-        subagentConcurrencyOptions: [Int]? = nil
+        workingDirectory: String? = nil
     ) {
         self.sessionKey = sessionKey
         self.model = model
@@ -112,8 +108,6 @@ public struct LocalACPSessionMetadata: Codable, Equatable, Sendable {
         self.modelOptionMetadata = modelOptionMetadata
         self.thinkingOptionMetadata = thinkingOptionMetadata
         self.workingDirectory = workingDirectory
-        self.subagentConcurrency = subagentConcurrency
-        self.subagentConcurrencyOptions = subagentConcurrencyOptions
     }
 
     public var selectableModels: [String] {

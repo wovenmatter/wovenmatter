@@ -154,8 +154,6 @@ public struct LocalACPSessionConfiguration: Equatable, Sendable {
     public let permission: String?
     public let permissionOptions: [String]
     public let permissionOptionMetadata: [String: SessionOptionMetadata]
-    public var subagentConcurrency: Int?
-    public var subagentConcurrencyOptions: [Int]
 
     public static let empty = LocalACPSessionConfiguration()
 
@@ -171,9 +169,7 @@ public struct LocalACPSessionConfiguration: Equatable, Sendable {
         permission: String? = nil,
         permissionOptions: [String] = [],
         permissionOptionMetadata: [String: SessionOptionMetadata] = [:],
-        workingDirectory: String? = nil,
-        subagentConcurrency: Int? = nil,
-        subagentConcurrencyOptions: [Int] = []
+        workingDirectory: String? = nil
     ) {
         self.model = model
         self.thinking = thinking
@@ -187,8 +183,6 @@ public struct LocalACPSessionConfiguration: Equatable, Sendable {
         self.permission = permission
         self.permissionOptions = Self.unique(permissionOptions)
         self.permissionOptionMetadata = permissionOptionMetadata
-        self.subagentConcurrency = subagentConcurrency
-        self.subagentConcurrencyOptions = subagentConcurrencyOptions
     }
 
     public func selecting(
@@ -207,9 +201,7 @@ public struct LocalACPSessionConfiguration: Equatable, Sendable {
             permission: permission ?? self.permission,
             permissionOptions: permissionOptions,
             permissionOptionMetadata: permissionOptionMetadata,
-            workingDirectory: workingDirectory,
-            subagentConcurrency: subagentConcurrency,
-            subagentConcurrencyOptions: subagentConcurrencyOptions
+            workingDirectory: workingDirectory
         )
     }
 
@@ -651,7 +643,6 @@ public actor LocalACPClient {
     private var modelUsesSessionModelMethod = false
     private var thinkingConfigurationID: String?
     private var permissionConfigurationID: String?
-    private var subagentConcurrencyConfigurationID: String?
     private var permissionUsesSessionModeMethod = false
     private var permissionStateRevision: UInt64 = 0
     private let cursorPermission: String
@@ -1049,27 +1040,6 @@ public actor LocalACPClient {
 
     public func sessionConfiguration() -> LocalACPSessionConfiguration {
         configuration
-    }
-
-    public func setSubagentConcurrency(_ limit: Int) async throws -> LocalACPSessionConfiguration {
-        guard runtimeKind == .defaultAgent, let configID = subagentConcurrencyConfigurationID else {
-            throw LocalACPClientError.unsupportedConfiguration("subagent concurrency")
-        }
-        guard let sessionID else { throw LocalACPClientError.sessionNotInitialized }
-        guard configuration.subagentConcurrencyOptions.contains(limit) else {
-            throw LocalACPClientError.invalidConfigurationValue(field: "subagent concurrency", value: String(limit))
-        }
-        if configuration.subagentConcurrency == limit { return configuration }
-        let response = try await request(method: "session/set_config_option", params: .object([
-            "sessionId": .string(sessionID), "configId": .string(configID), "value": .string(String(limit)),
-        ]))
-        let previous = configuration
-        captureSessionConfiguration(from: response)
-        if configuration != previous { await configurationHandler?(configuration) }
-        guard configuration.subagentConcurrency == limit else {
-            throw LocalACPClientError.configurationNotConfirmed("subagent concurrency")
-        }
-        return configuration
     }
 
     public func setResumePermissionHandler(_ handler: @escaping PermissionHandler) {
@@ -2016,8 +1986,6 @@ public actor LocalACPClient {
 
     private func captureSessionConfiguration(from value: ACPJSONValue?) {
         guard let value else { return }
-        let previousSubagentConcurrency = configuration.subagentConcurrency
-        let previousSubagentConcurrencyOptions = configuration.subagentConcurrencyOptions
         // Codex/Claude modes govern approval policy. Cursor's agent/plan/ask
         // modes govern execution and must not appear as permission choices.
         if runtimeKind == .codex || runtimeKind == .claudeCode,
@@ -2098,18 +2066,6 @@ public actor LocalACPClient {
                 permissionOptions: parsed.permission?.options ?? (hadPermissionOption ? [] : configuration.permissionOptions),
                 permissionOptionMetadata: parsed.permission?.metadata ?? (hadPermissionOption ? [:] : configuration.permissionOptionMetadata)
             )
-            if runtimeKind == .defaultAgent {
-                subagentConcurrencyConfigurationID = parsed.subagentConcurrency?.id
-                configuration.subagentConcurrency = parsed.subagentConcurrency?.currentValue.flatMap { Int($0) }
-                var seen = Set<Int>()
-                configuration.subagentConcurrencyOptions = (parsed.subagentConcurrency?.options ?? [])
-                    .compactMap { Int($0) }
-                    .filter { DefaultAgentSettings.subagentConcurrencyRange.contains($0) && seen.insert($0).inserted }
-                if let current = configuration.subagentConcurrency,
-                   !configuration.subagentConcurrencyOptions.contains(current) {
-                    configuration.subagentConcurrency = nil
-                }
-            }
         }
 
         // Some adapters publish both the writable `configOptions` contract and
@@ -2193,10 +2149,6 @@ public actor LocalACPClient {
                 permissionOptionMetadata: LocalACPSessionPermissions.cursorMetadata
             )
         }
-        if runtimeKind == .defaultAgent, value["configOptions"] == nil {
-            configuration.subagentConcurrency = previousSubagentConcurrency
-            configuration.subagentConcurrencyOptions = previousSubagentConcurrencyOptions
-        }
     }
 
     private struct ParsedConfigurationOption {
@@ -2211,13 +2163,11 @@ public actor LocalACPClient {
     ) -> (
         model: ParsedConfigurationOption?,
         thinking: ParsedConfigurationOption?,
-        permission: ParsedConfigurationOption?,
-        subagentConcurrency: ParsedConfigurationOption?
+        permission: ParsedConfigurationOption?
     ) {
         var model: ParsedConfigurationOption?
         var thinking: ParsedConfigurationOption?
         var permission: ParsedConfigurationOption?
-        var subagentConcurrency: ParsedConfigurationOption?
         for option in options {
             guard let id = option["id"]?.stringValue else { continue }
             let category = option["category"]?.stringValue
@@ -2229,9 +2179,7 @@ public actor LocalACPClient {
                 ),
                 metadata: Self.configurationOptionMetadata(option["options"]?.arrayValue ?? [])
             )
-            if id == "subagent_concurrency", runtimeKind == .defaultAgent {
-                subagentConcurrency = parsed
-            } else if id == "model" || category == "model" {
+            if id == "model" || category == "model" {
                 model = parsed
             } else if category == "thought_level"
                         || ["effort", "reasoning_effort", "thinking"].contains(id) {
@@ -2246,7 +2194,7 @@ public actor LocalACPClient {
                 )
             }
         }
-        return (model, thinking, permission, subagentConcurrency)
+        return (model, thinking, permission)
     }
 
     private static func configurationOptionValues(

@@ -580,10 +580,6 @@ struct DashboardCloudConversation: View {
                                 Task { await model.updateLocalACPSession(conversation: conversation, permission: selection) }
                             }
                         },
-                        onSelectSubagentConcurrency: { limit in
-                            guard let conversation, conversation.localRuntimeKind == .defaultAgent else { return }
-                            Task { await model.updateLocalACPSession(conversation: conversation, subagentConcurrency: limit) }
-                        },
                         onAttachmentAction: onAttachmentAction,
                         onRemoveAttachment: onRemoveAttachment,
                         onOpenAttachment: { file in

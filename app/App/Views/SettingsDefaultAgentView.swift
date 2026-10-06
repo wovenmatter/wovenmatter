@@ -19,6 +19,7 @@ struct SettingsDefaultAgentView: View {
         SettingsPage(title: "Built-in Agent", detail: "A built-in agent for every workspace.", reservesRailControlSpace: reservesRailControlSpace, onBack: onBack) {
             scopeSection
             SettingsDefaultAgentSDKView(connections: agent, remoteWorkspaces: model.remoteWorkspaces)
+            SettingsAgentDefaultsSection(model: model, runtime: .defaultAgent, fixedScope: agent.scope)
             connectionsSection
             SettingsCard(title: "Pi code mode", detail: "Run JavaScript that calls the agent’s tools. Each call keeps its normal permissions.") {
                 Picker("Code mode", selection: Binding(get: { agent.configuration.resolvedCodeMode }, set: {
@@ -40,7 +41,7 @@ struct SettingsDefaultAgentView: View {
                             .monospacedDigit()
                     }
                 }.disabled(!editable)
-                Text("Choose 2–24. This default applies to new conversations; each conversation can use its own limit. The parent agent does not count toward the limit.")
+                Text("Choose 2–24. This setting applies to new conversations. The parent agent does not count toward the limit.")
                     .font(.callout).foregroundStyle(.secondary)
             }
             searchSection

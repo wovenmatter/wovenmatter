@@ -23,9 +23,7 @@ public enum CalendarSessionOptions {
           modelOptions: configuration.modelOptions, thinkingLevels: configuration.thinkingOptions,
           modelOptionMetadata: configuration.modelOptionMetadata, thinkingOptionMetadata: configuration.thinkingOptionMetadata,
           permission: configuration.permission, permissionOptions: configuration.permissionOptions,
-          permissionOptionMetadata: configuration.permissionOptionMetadata, workingDirectory: directory.path,
-          subagentConcurrency: configuration.subagentConcurrency,
-          subagentConcurrencyOptions: configuration.subagentConcurrencyOptions)
+          permissionOptionMetadata: configuration.permissionOptionMetadata, workingDirectory: directory.path)
       } catch { await client.shutdown(); throw error }
     } onCancel: { Task { await client.shutdown() } }
   }

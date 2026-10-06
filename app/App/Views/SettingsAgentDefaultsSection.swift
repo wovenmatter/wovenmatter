@@ -5,12 +5,11 @@ import WovenMatterDashboardStore
 
 /// Defaults are edited in Settings and captured once when a conversation is
 /// created. Options come from the selected harness and execution workspace.
-struct SettingsAgentDefaultsView: View {
+struct SettingsAgentDefaultsSection: View {
     @Bindable var model: ApplicationModel
-    var reservesRailControlSpace = false
-    let onBack: () -> Void
-    @State private var runtime = AgentRuntimeKind.defaultAgent
-    @State private var scope = "global"
+    let runtime: AgentRuntimeKind
+    var fixedScope: String? = nil
+    @State private var selectedScope = "global"
     @State private var stored = SessionSelections()
     @State private var resolved = SessionSelections()
     @State private var metadata: LocalACPSessionMetadata?
@@ -19,6 +18,7 @@ struct SettingsAgentDefaultsView: View {
     @State private var error: String?
     @State private var requestID = UUID()
 
+    private var scope: String { fixedScope ?? selectedScope }
     private var workspaceID: UUID? { UUID(uuidString: scope) }
     private var workspaceScope: String? {
         if scope == "global" { return nil }
@@ -33,24 +33,21 @@ struct SettingsAgentDefaultsView: View {
     }
 
     var body: some View {
-        SettingsPage(title: "Agent defaults",
-            detail: "Each new conversation uses these settings. Conversation changes stay in that conversation.",
-            reservesRailControlSpace: reservesRailControlSpace, onBack: onBack) {
-            VStack(alignment: .leading, spacing: 12) {
-                Picker("Agent", selection: $runtime) {
-                    ForEach(AgentRuntimeKind.presentationOrder, id: \.self) { Text($0.displayName).tag($0) }
-                }
-                Picker("Settings for", selection: $scope) {
+        VStack(alignment: .leading, spacing: 16) {
+            if fixedScope == nil {
+                Picker("Defaults for", selection: $selectedScope) {
                     Text("All workspaces").tag("global")
                     Text("Local agent workspace").tag("local")
                     ForEach(model.remoteWorkspaces.workspaces) { Text($0.name).tag($0.id.uuidString.lowercased()) }
                 }
-                SettingsNote(scope == "global"
-                    ? "Native options are read from the local agent workspace. Workspace overrides can use the options available on that host."
-                    : "These choices override this agent’s All workspaces defaults.")
-            }.frame(maxWidth: 440, alignment: .leading)
-            SettingsCard(title: "Conversation defaults") {
+                .frame(maxWidth: 440, alignment: .leading)
+            }
+            SettingsCard(title: "Conversation defaults",
+                detail: "New conversations with \(runtime.displayName) start with these settings. Changes within a conversation apply only to that conversation.") {
                 VStack(alignment: .leading, spacing: 14) {
+                    SettingsNote(scope == "global"
+                        ? "Native options are read from the local agent workspace. Workspace overrides can use the options available on that host."
+                        : "These choices override this agent’s All workspaces defaults.")
                     selectionRow("Permissions", field: .permission, value: stored.permission,
                         effective: resolved.permission, options: metadata?.permissionOptions ?? [],
                         labels: metadata?.permissionOptionMetadata ?? [:])

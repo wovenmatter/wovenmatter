@@ -135,6 +135,8 @@ struct SettingsOpenCodeView: View {
     var body: some View {
         SettingsPage(title: "OpenCode",
             reservesRailControlSpace: reservesRailControlSpace, onBack: onBack) {
+            SettingsAgentDefaultsSection(model: model, runtime: .opencode,
+                fixedScope: isWorkspaceScoped ? workspaceID?.uuidString.lowercased() ?? "local" : nil)
             if !isWorkspaceScoped || workspaceID == nil {
                 SettingsCard(title: "Local agent workspace") {
                     if let instance = model.openCode, instance.isInstalled {
