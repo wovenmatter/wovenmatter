@@ -149,12 +149,18 @@ extension WorkspaceDatabaseConnection {
       let identity = try encoder.encode([harness, sourceID, batch.nativeSessionID, record.id,
         record.revision ?? "", record.kind, record.contentMode, payload, projection ?? "", text ?? ""])
       let eventID = "native:" + SHA256.hash(data: identity).map { String(format: "%02x", $0) }.joined()
-      if let existing = try historyRowsUnlocked("SELECT conversation_id,run_id,agent_id FROM workspace_history_events WHERE id=?", values: [eventID]).first?.objectValue {
+      if let existing = try historyRowsUnlocked("SELECT conversation_id,run_id,agent_id,source_connection_id FROM workspace_history_events WHERE id=?", values: [eventID]).first?.objectValue {
         if let previous = existing["conversation_id"]?.stringValue, let conversationID, previous != conversationID {
           throw WorkspaceDatabaseError.open("Native archive source belongs to another conversation")
         }
         if let previous = existing["run_id"]?.stringValue, let mappedRunID, previous != mappedRunID {
           throw WorkspaceDatabaseError.open("Native archive record belongs to another run")
+        }
+        if let previous = existing["agent_id"]?.stringValue, let agentID, previous != agentID {
+          throw WorkspaceDatabaseError.open("Native archive source belongs to another agent")
+        }
+        if let previous = existing["source_connection_id"]?.stringValue, let sourceConnectionID, previous != sourceConnectionID {
+          throw WorkspaceDatabaseError.open("Native archive source belongs to another connection")
         }
         try toolsExecuteUnlocked("UPDATE workspace_history_events SET conversation_id=coalesce(conversation_id,?),run_id=coalesce(run_id,?),agent_id=coalesce(agent_id,?),source_connection_id=coalesce(source_connection_id,?) WHERE id=?",
           [conversationID, mappedRunID, agentID, sourceConnectionID, eventID])

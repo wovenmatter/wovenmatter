@@ -361,6 +361,13 @@ extension WorkspaceDatabaseConnection {
   }
 
   func queryHistoryUnlocked(_ query: WorkspaceHistoryQuery) throws -> GatewayJSONValue {
+    if let nativeConversationID = query.nativeConversationID {
+      guard ["events", "search", "trace"].contains(query.command),
+        !nativeConversationID.isEmpty, nativeConversationID.utf8.count <= 256,
+        query.sourceID?.isEmpty == false, query.nativeSessionID?.isEmpty == false else {
+        throw WorkspaceToolError.invalid("A native conversation filter requires its source ID and native session ID.")
+      }
+    }
     if let since = query.since, let until = query.until {
       guard let start = Self.date(since), let end = Self.date(until), end >= start else {
         throw WorkspaceToolError.invalid("--until must be at or after --since.")
@@ -391,6 +398,10 @@ extension WorkspaceDatabaseConnection {
           filters.append("e.\(column) = ?")
           values.append(value)
         }
+      }
+      if let nativeConversationID = query.nativeConversationID {
+        filters.append("CASE WHEN json_valid(e.projection_json) THEN CAST(json_extract(e.projection_json,'$.nativeConversationID') AS TEXT) END = ?")
+        values.append(nativeConversationID)
       }
       if let since = query.since {
         filters.append("e.recorded_at >= ?")

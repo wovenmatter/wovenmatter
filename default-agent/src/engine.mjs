@@ -2,6 +2,7 @@ import { mkdir, realpath, stat } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
 import { ModelRuntime } from '@earendil-works/pi-coding-agent';
 import { openDurableSession } from './durable-session.mjs';
+import { credentialRouteIdentity } from './native-context.mjs';
 import { Credentials } from './credentials.mjs';
 import { accessFailure, DefaultAgentError, emptyConfig, modelRef, providerNames, providers, validateConfig } from './config.mjs';
 import { registerLocalServers } from './local-servers.mjs';
@@ -71,7 +72,7 @@ export class DefaultAgentEngine {
       registerLocalServers(this.runtime, config.customServers);
     }
     if (payload.credentials) { this.supplied = payload.credentials; await this.credentials.replace(payload.credentials, payload.credentialAccounts); }
-    for (const record of this.sessions.values()) if (!record.busy) this.normalizeSelection(record);
+    for (const record of this.sessions.values()) if (!record.busy && !record.resuming) this.normalizeSelection(record);
   }
   catalog() {
     return this.runtime.getModels().filter(m => this.config.providers.includes(m.provider)).map(m => ({ id: modelRef(m), name: m.name, provider: m.provider, providerName: this.providerName(m.provider) }));
@@ -124,10 +125,12 @@ export class DefaultAgentEngine {
       options: this.modelOptions().map(modelOption) },
       ...(levels.length > 1 ? [{ id: 'thinking', name: 'Thinking Level', category: 'thought_level', type: 'select', currentValue: thinking,
         options: levels.map(value => ({ value, name: value[0].toUpperCase() + value.slice(1) })) }] : []),
-      { id: 'permission_mode', name: 'Permissions', type: 'select', currentValue: 'full', options: [{ value: 'full', name: 'Full Access', description: 'Native Durable workspace tools run without approval prompts.' }] }], _meta: { engine: isClaude(record.selected) ? 'claude' : 'pi', ...(reason ? { fallbackReason: reason, fallbackID: crypto.randomUUID() } : {}) } };
+      { id: 'permission_mode', name: 'Permissions', type: 'select', currentValue: 'full', options: [{ value: 'full', name: 'Full Access', description: 'Native Durable workspace tools run without approval prompts.' }] },
+      { id: 'subagent_concurrency', name: 'Active Subagents', type: 'select', currentValue: String(record.subagentConcurrency), options: Array.from({ length: 23 }, (_, index) => ({ value: String(index + 2), name: String(index + 2) })) }], _meta: { engine: isClaude(record.selected) ? 'claude' : 'pi', ...(reason ? { fallbackReason: reason, fallbackID: crypto.randomUUID() } : {}) } };
   }
   persistOptions(record) {
-    record.saveOptions({ selected: record.selected, permission: record.permission, thinking: record.session.thinkingLevel });
+    record.saveOptions({ selected: record.selected, permission: record.permission, thinking: record.session.thinkingLevel, subagentConcurrency: record.subagentConcurrency,
+      ...(record.accountID ? { accountID: record.accountID, accountOwned: record.accountOwned === true, credentialIdentity: record.credentialIdentity ?? null } : {}) });
   }
   async sessionDirectory(value) {
     if (typeof value !== 'string' || !isAbsolute(value) || value.includes('\0') || Buffer.byteLength(value) > 4096) {
@@ -153,6 +156,24 @@ export class DefaultAgentEngine {
     }
     const record = await openDurableSession(this, id, requested);
     const options = record.options;
+    record.subagentConcurrency = options.subagentConcurrency ?? this.config.subagentConcurrency;
+    const native = await record.harness.inspect(record.nativeContext);
+    if (native.tasks.length || native.submissions.length) {
+      // Reinstall the host around committed native work without replacing the
+      // agent/route it was already executing. A new user run is admitted only
+      // after that attached group settles or is stopped.
+      const agent = await record.conversation.agent(record.nativeContext);
+      record.selected = agent.model ? `${agent.model.provider}/${agent.model.modelId}` : options.selected;
+      record.session.thinkingLevel = agent.thinkingLevel;
+      record.accountID = options.accountID;
+      record.accountOwned = options.accountOwned;
+      record.credentialIdentity = options.credentialIdentity ?? undefined;
+      record.runID = record.subagents.currentRunID();
+      record.resuming = true;
+      this.sessions.set(record.session.sessionId, record);
+      record.resumeNative();
+      return record;
+    }
     const connected = new Set((await this.credentials.list()).map(c => c.providerId));
     const hasDefault = this.catalog().some(m => m.id === this.config.defaultModel);
     if (!options.selected && !hasDefault && this.config.providers.includes('claude-subscription') && !this.catalog().some(m => connected.has(m.provider))) {
@@ -169,11 +190,18 @@ export class DefaultAgentEngine {
     this.sessions.set(record.session.sessionId, record);
     await record.configurationQueue;
     await record.archiveQueue;
+    record.resumeNative();
     return record;
   }
   resolveModel(reference) { const slash = reference?.indexOf('/') ?? -1; return slash < 0 ? undefined : this.runtime.getModel(reference.slice(0, slash), reference.slice(slash + 1)); }
   async select(record, reference, option = 'model') {
     if (record.busy) throw new Error('Wait for the current response before changing models.');
+    const native = await record.harness.inspect(record.nativeContext);
+    if (record.busy || native.tasks.length || native.submissions.length) throw new DefaultAgentError('Wait for the native run and its attached subagents before changing session options.');
+    if (option === 'subagent_concurrency') {
+      if (!/^(?:[2-9]|1[0-9]|2[0-4])$/.test(reference)) throw new DefaultAgentError('Choose a subagent limit from 2 through 24.');
+      record.subagentConcurrency = Number(reference); this.persistOptions(record); await record.configurationQueue; return this.configuration(record);
+    }
     if (option === 'thinking') {
       if (!this.thinkingLevels(record).includes(reference)) throw new DefaultAgentError('This thinking level is unavailable for the selected model.');
       await record.session.setThinkingLevel(reference);
@@ -200,13 +228,9 @@ export class DefaultAgentEngine {
     await record.configurationQueue;
     return this.configuration(record);
   }
-  async prompt(record, text, emit, cliContext) {
-    record.emit = emit;
-    record.allowFallback = false;
-    record.lastError = undefined; record.lastCommandOutcome = undefined; record.nativeContextFailure = undefined;
-    record.nativeVisible = false;
+  async prompt(record, text, emit, cliContext, identity) {
     if (record.busy) throw new DefaultAgentError('This Built-in session already has an active turn.');
-    this.normalizeSelection(record);
+    const nextRunID = identity === undefined ? record.runID : identity.runID;
     record.busy = true;
     record.cli ??= new SessionCLIContext();
     let ready;
@@ -219,17 +243,28 @@ export class DefaultAgentEngine {
     let visible = false;
     let steered = false;
     const usage = { inputTokens: 0, outputTokens: 0, cachedReadTokens: 0, cachedWriteTokens: 0 };
-    const unsubscribe = record.subscribe(({ update, usage: value }) => {
-      if (value) {
-        usage.inputTokens += value.input ?? 0; usage.outputTokens += value.output ?? 0;
-        usage.cachedReadTokens += value.cacheRead ?? 0; usage.cachedWriteTokens += value.cacheWrite ?? 0;
-      }
-      if (update) {
-        if (['agent_message_chunk', 'agent_thought_chunk', 'tool_call'].includes(update.sessionUpdate)) visible = true;
-        emit(update);
-      }
-    });
+    let unsubscribe = () => {};
     try {
+      controller.signal.throwIfAborted();
+      await record.subagents.beginGroup(nextRunID);
+      record.runID = nextRunID;
+      if (identity !== undefined) record.inputID = identity.inputID;
+      record.emit = emit;
+      record.allowFallback = false;
+      record.lastError = undefined; record.lastCommandOutcome = undefined; record.nativeContextFailure = undefined;
+      record.nativeVisible = false;
+      record.resuming = false;
+      unsubscribe = record.subscribe(({ update, usage: value }) => {
+        if (value) {
+          usage.inputTokens += value.input ?? 0; usage.outputTokens += value.output ?? 0;
+          usage.cachedReadTokens += value.cacheRead ?? 0; usage.cachedWriteTokens += value.cacheWrite ?? 0;
+        }
+        if (update) {
+          if (['agent_message_chunk', 'agent_thought_chunk', 'tool_call'].includes(update.sessionUpdate)) visible = true;
+          emit(update);
+        }
+      });
+      this.normalizeSelection(record);
       beforeLeaf = await record.contextLeaf();
       controller.signal.throwIfAborted();
       const enabled = new Set(this.modelOptions().map(model => model.id));
@@ -244,6 +279,8 @@ export class DefaultAgentEngine {
         controller.signal.throwIfAborted();
         const { reference, account, provider } = attempts[index];
         record.accountID = account.id;
+        record.accountOwned = account.owned === true;
+        record.credentialIdentity = credentialRouteIdentity(record, account);
         if (!this.config.providers.includes(reference.split('/')[0])) { reason = 'The previous connection is disabled in Settings → Built-in Agent.'; continue; }
         record.httpAccessFailure = undefined;
         try {
@@ -364,7 +401,7 @@ export class DefaultAgentEngine {
     if (method === 'session/new' || method === 'session/load') {
       const record = await this.create(method === 'session/load' ? params.sessionId : undefined, params.cwd);
       if (params._meta?.wovenToolsConnection) record.cli.reconnect(params._meta.wovenToolsConnection);
-      record.emit = emit;
+      if (!record.busy) record.emit = emit;
       return { sessionId: record.session.sessionId, ...this.configuration(record) };
     }
     const record = this.sessions.get(params.sessionId) ?? await this.create(params.sessionId);
@@ -380,8 +417,7 @@ export class DefaultAgentEngine {
     if (method === 'session/prompt') {
       if (record.busy) throw new DefaultAgentError('This Built-in session is still responding. Wait or stop it first.');
       const runID = params._meta?.wovenRunID;
-      record.inputID = params._meta?.wovenInputID ?? runID; record.runID = runID; record.emit = emit;
-      const result = await this.prompt(record, (params.prompt ?? []).filter(p => p.type === 'text').map(p => p.text).join('\n'), emit, params._meta?.wovenTools);
+      const result = await this.prompt(record, (params.prompt ?? []).filter(p => p.type === 'text').map(p => p.text).join('\n'), emit, params._meta?.wovenTools, { runID, inputID: params._meta?.wovenInputID ?? runID });
       return result;
     }
     throw new Error('Unsupported Built-in operation.');

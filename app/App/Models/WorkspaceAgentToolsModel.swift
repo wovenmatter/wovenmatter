@@ -507,6 +507,7 @@ final class WorkspaceAgentToolsModel {
         query.sourceID = command.options["source-id"]
         query.nativeSessionID = command.options["native-session-id"]
         query.nativeRecordID = command.options["native-record-id"]
+        query.nativeConversationID = command.options["native-conversation-id"]
         query.folderID = command.options["folder"]
         query.kind = command.options["kind"]
         query.since = command.options["since"]

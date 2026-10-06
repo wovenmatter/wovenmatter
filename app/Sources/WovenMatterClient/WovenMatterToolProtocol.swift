@@ -131,7 +131,7 @@ public struct WovenMatterToolCommand: Sendable {
     ]
     guard allowedActions[group]?.contains(action) == true else { throw WorkspaceToolError.invalid("Unknown \(domain) command '\(action)'.") }
     let booleanFlags: Set<String> = ["all-workspace", "independent", "no-notify", "paused", "all-day", "timed", "no-repeat", "regular-event", "json", "header"]
-    let valueFlags: Set<String> = ["id", "session", "conversation", "note-id", "folder", "workspace", "directory", "harness", "model", "thinking", "title", "text", "purpose", "request-id", "search", "run", "kind", "sender", "since", "until", "after", "before", "limit", "offset", "characters", "sort", "epoch", "at", "every", "starts-at", "ends-at", "description", "prompt", "time-zone", "repeat-unit", "repeat-interval", "session-mode", "occurrence", "enabled", "revision", "version", "file", "html", "style", "block-id", "table-id", "row", "column", "rows", "columns", "source-id", "native-session-id", "native-record-id", "database-id", "path", "query", "code"]
+    let valueFlags: Set<String> = ["id", "session", "conversation", "note-id", "folder", "workspace", "directory", "harness", "model", "thinking", "title", "text", "purpose", "request-id", "search", "run", "kind", "sender", "since", "until", "after", "before", "limit", "offset", "characters", "sort", "epoch", "at", "every", "starts-at", "ends-at", "description", "prompt", "time-zone", "repeat-unit", "repeat-interval", "session-mode", "occurrence", "enabled", "revision", "version", "file", "html", "style", "block-id", "table-id", "row", "column", "rows", "columns", "source-id", "native-session-id", "native-record-id", "native-conversation-id", "database-id", "path", "query", "code"]
     var positional: [String] = [], options: [String: String] = [:]
     var indices: [String: Int] = [:], operationArguments = Array(arguments.prefix(2))
     var wantsHelp = false
@@ -214,8 +214,8 @@ public struct WovenMatterToolCommand: Sendable {
       default: allowed = ["note-id", "table-id", "column"] + revision + request
       }
       maximumPositionals = 1
-    case (.history, "search"): allowed = ["search", "all-workspace", "conversation", "run", "harness", "folder", "kind", "since", "until", "source-id", "native-session-id", "native-record-id"] + pagination; maximumPositionals = 1
-    case (.history, "events"): allowed = ["conversation", "run", "harness", "folder", "kind", "search", "since", "until", "source-id", "native-session-id", "native-record-id"] + pagination; maximumPositionals = 0
+    case (.history, "search"): allowed = ["search", "all-workspace", "conversation", "run", "harness", "folder", "kind", "since", "until", "source-id", "native-session-id", "native-record-id", "native-conversation-id"] + pagination; maximumPositionals = 1
+    case (.history, "events"): allowed = ["conversation", "run", "harness", "folder", "kind", "search", "since", "until", "source-id", "native-session-id", "native-record-id", "native-conversation-id"] + pagination; maximumPositionals = 0
     case (.history, "trace"): allowed = ["id", "run", "kind", "since", "until"] + pagination; maximumPositionals = 1
     case (.history, "event"): allowed = ["id"] + bodyChunk; maximumPositionals = 1
     case (.history, "conversations"): allowed = ["search", "folder", "all-workspace", "sort"] + pagination; maximumPositionals = 0
@@ -363,6 +363,7 @@ public struct WovenMatterToolCommand: Sendable {
       Pagination: --after CURSOR --limit 1...200; body chunks: --offset N --characters 1...65536
       Filters: --harness NAME --kind TYPE --since ISO8601 --until ISO8601
       Native identity: --source-id SOURCE --native-session-id SESSION --native-record-id RECORD
+      Child history: --source-id SOURCE --native-session-id SESSION --native-conversation-id CONVERSATION
       Search starts in this folder and broadens if nothing matches. Results are references;
       read only relevant records. Old transcripts can be partial. Attached/managed sessions
       remain readable when general history is off; an arbitrary ID does not grant access.

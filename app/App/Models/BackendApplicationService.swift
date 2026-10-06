@@ -10,6 +10,16 @@ struct BackendAttachmentSource: Codable, Sendable {
     let mimeType: String
 }
 
+struct BuiltInSubagentArchiveRequest: Codable, Sendable {
+    let conversationID: String
+    let sourceID: String
+    let nativeSessionID: String
+    let nativeConversationID: String
+    var after: Int64 = 0
+    var eventID: String?
+    var offset: Int = 0
+}
+
 enum BackendApplicationCommand: Codable, Sendable {
     case setIdleSleepPolicy(WorkPowerPolicy)
     case setClosedLidPolicy(WorkPowerPolicy)
@@ -33,6 +43,8 @@ enum BackendApplicationCommand: Codable, Sendable {
     case sendMessageFenced(conversationID: String, input: AgentMessageInput, noteID: String?, admission: AgentDispatchAdmission)
     case cancelSessionFenced(conversationID: String, admission: AgentDispatchAdmission)
     case configureSession(conversationID: String, model: String?, thinking: String?, permission: String?)
+    case configureSubagents(conversationID: String, concurrency: Int)
+    case subagentHistory(BuiltInSubagentArchiveRequest)
     case setSessionTools(conversationID: String, tools: WorkspaceSessionTools, confirmedPausingTimers: Bool)
     case cancelSession(conversationID: String)
     case resolveSessionAccess(id: String, allowed: Bool)
@@ -58,6 +70,7 @@ struct BackendApplicationResult: Codable, Sendable {
     var resolvedSelections: SessionSelections?
     var attachments: [AgentMessageAttachmentDraft]?
     var requiresTimerPauseConfirmation: Bool = false
+    var history: GatewayJSONValue?
 }
 
 struct BackendApplicationReadiness: Codable, Sendable {
@@ -245,6 +258,11 @@ final class BackendApplicationService {
         case let .configureSession(id, selectedModel, thinking, permission):
             await model.updateLocalACPSession(conversation: try conversation(id), model: selectedModel,
                 thinking: thinking, permission: permission)
+        case let .configureSubagents(id, concurrency):
+            await model.updateLocalACPSession(conversation: try conversation(id), subagentConcurrency: concurrency)
+        case let .subagentHistory(request):
+            _ = try await conversation(request.conversationID)
+            return .init(history: try await model.builtInSubagentHistory(request))
         case let .setSessionTools(id, tools, confirmed):
             _ = try await conversation(id)
             guard let database = model.dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }

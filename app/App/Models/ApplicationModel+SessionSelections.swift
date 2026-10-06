@@ -164,7 +164,9 @@ extension ApplicationModel {
                     permission: native.runtimeKind == .pi ? nil : configuration.permission,
                     permissionOptions: configuration.permissionOptions,
                     permissionOptionMetadata: configuration.permissionOptionMetadata,
-                    workingDirectory: configuration.workingDirectory)
+                    workingDirectory: configuration.workingDirectory,
+                    subagentConcurrency: configuration.subagentConcurrency,
+                    subagentConcurrencyOptions: configuration.subagentConcurrencyOptions)
                 publishSessionSelectionMetadata(metadata, conversationID: conversationID, gateway: false)
                 confirmedMetadata = metadata
             }

@@ -44,6 +44,7 @@ struct DashboardComposer: View {
     let onSelectModel: ((String) -> Void)?
     let onSelectThinking: ((String) -> Void)?
     let onSelectPermission: ((String) -> Void)?
+    let onSelectSubagentConcurrency: ((Int) -> Void)?
     let onAttachmentAction: (DashboardComposerAttachmentAction) -> Void
     let onRemoveAttachment: (String) -> Void
     let onOpenAttachment: (AgentFileAttachmentDraft) -> Void
@@ -439,6 +440,7 @@ struct DashboardComposer: View {
                 if showsPermissionControl {
                     permissionMenu(label: permissionLabel)
                 }
+                subagentConcurrencyMenu(compact: false)
             }
             toolsControl
 
@@ -485,6 +487,7 @@ struct DashboardComposer: View {
                     if showsPermissionControl {
                         permissionMenu(label: .icon)
                     }
+                    subagentConcurrencyMenu(compact: true)
                 }
                 toolsControl
             }
@@ -567,6 +570,29 @@ struct DashboardComposer: View {
         .disabled(!canSend)
         .opacity(canSend ? 1 : 0.4)
         .accessibilityLabel("Send")
+    }
+
+    @ViewBuilder
+    private func subagentConcurrencyMenu(compact: Bool) -> some View {
+        if let limit = sessionMetadata?.subagentConcurrency,
+           let limits = sessionMetadata?.subagentConcurrencyOptions, !limits.isEmpty {
+            let options = Array(Set(limits)).sorted().map { String($0) }
+            let metadata = Dictionary(uniqueKeysWithValues: options.map {
+                ($0, SessionOptionMetadata(name: "\($0) active subagents"))
+            })
+            let action: (String) -> Void = { value in
+                if let selected = Int(value) { onSelectSubagentConcurrency?(selected) }
+            }
+            if compact {
+                compactSessionMenu(kind: .subagents, icon: .bot, title: "Subagents: \(limit)",
+                    menuTitle: "Subagent Limit", accessibilityLabel: "Choose the subagent limit for this conversation",
+                    options: options, selection: String(limit), optionMetadata: metadata, action: action)
+            } else {
+                sessionMenu(kind: .subagents, icon: .bot, title: "Subagents: \(limit)",
+                    menuTitle: "Subagent Limit", accessibilityLabel: "Choose the subagent limit for this conversation",
+                    options: options, selection: String(limit), optionMetadata: metadata, action: action)
+            }
+        }
     }
 
     private var permissionTitle: String {
@@ -809,6 +835,7 @@ enum DashboardComposerMenuKind {
     case model
     case thinking
     case permission
+    case subagents
 }
 
 enum DashboardComposerAttachmentAction {

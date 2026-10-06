@@ -962,7 +962,9 @@ final class ApplicationModel {
                 permission: configuration.permission,
                 permissionOptions: configuration.permissionOptions,
                 permissionOptionMetadata: configuration.permissionOptionMetadata,
-                workingDirectory: configuration.workingDirectory
+                workingDirectory: configuration.workingDirectory,
+                subagentConcurrency: configuration.subagentConcurrency,
+                subagentConcurrencyOptions: configuration.subagentConcurrencyOptions
             )
             return
         }
@@ -2580,7 +2582,9 @@ final class ApplicationModel {
                 permission: configuration.permission,
                 permissionOptions: configuration.permissionOptions,
                 permissionOptionMetadata: configuration.permissionOptionMetadata,
-                workingDirectory: configuration.workingDirectory
+                workingDirectory: configuration.workingDirectory,
+                subagentConcurrency: configuration.subagentConcurrency,
+                subagentConcurrencyOptions: configuration.subagentConcurrencyOptions
             )
             if let metadata = localACPSessionMetadata[conversation.id] {
                 await recordConfirmedSessionSelections(conversationID: conversation.id, metadata: metadata)
@@ -2617,24 +2621,31 @@ final class ApplicationModel {
         conversation: WorkspaceConversationRecord,
         model: String? = nil,
         thinking: String? = nil,
-        permission: String? = nil
+        permission: String? = nil,
+        subagentConcurrency: Int? = nil
     ) async {
         if isBackendFrontend {
             guard updatingLocalACPSessionIDs.insert(conversation.id).inserted else { return }
             Task {
                 defer { updatingLocalACPSessionIDs.remove(conversation.id) }
                 do {
-                    _ = try await sendBackendCommand(.configureSession(conversationID: conversation.id,
-                        model: model, thinking: thinking, permission: permission))
+                    if let subagentConcurrency {
+                        _ = try await sendBackendCommand(.configureSubagents(conversationID: conversation.id,
+                            concurrency: subagentConcurrency))
+                    } else {
+                        _ = try await sendBackendCommand(.configureSession(conversationID: conversation.id,
+                            model: model, thinking: thinking, permission: permission))
+                    }
                 } catch { ensureConversationState(id: conversation.id).setError(error.localizedDescription) }
             }
             return
         }
 
         guard let runtimeKind = conversation.localRuntimeKind,
-              model != nil || thinking != nil || permission != nil else { return }
+              model != nil || thinking != nil || permission != nil || subagentConcurrency != nil else { return }
+        guard subagentConcurrency == nil || runtimeKind == .defaultAgent else { return }
         let permission = runtimeKind == .pi ? nil : permission
-        if retryPendingSessionSelections(conversationID: conversation.id,
+        if subagentConcurrency == nil && retryPendingSessionSelections(conversationID: conversation.id,
             selections: SessionSelections(model: model, thinking: thinking, permission: permission)) { return }
         guard !localRunningConversationIDs.contains(conversation.id),
               updatingLocalACPSessionIDs.insert(conversation.id).inserted else {
@@ -2668,6 +2679,7 @@ final class ApplicationModel {
                         model: model,
                         thinking: thinking,
                         permission: permission,
+                        subagentConcurrency: subagentConcurrency,
                         launch: launch,
                         workspace: workspace
                     )
@@ -2684,7 +2696,9 @@ final class ApplicationModel {
                         permission: configuration.permission,
                         permissionOptions: configuration.permissionOptions,
                         permissionOptionMetadata: configuration.permissionOptionMetadata,
-                        workingDirectory: configuration.workingDirectory
+                        workingDirectory: configuration.workingDirectory,
+                        subagentConcurrency: configuration.subagentConcurrency,
+                        subagentConcurrencyOptions: configuration.subagentConcurrencyOptions
                     )
                 if let metadata = localACPSessionMetadata[conversation.id] {
                     await recordConfirmedSessionSelections(conversationID: conversation.id, metadata: metadata)
@@ -2695,6 +2709,52 @@ final class ApplicationModel {
                 )
             }
         }
+    }
+
+    /// Read one child's existing archive without contacting its execution host.
+    func builtInSubagentHistory(_ request: BuiltInSubagentArchiveRequest) async throws -> GatewayJSONValue {
+        if isBackendFrontend {
+            guard let history = try await sendBackendCommand(.subagentHistory(request)).history else {
+                throw BackendRPCError.remote("Subagent history is unavailable.")
+            }
+            return history
+        }
+        guard let database = dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
+        let descriptor = try await database.localACPSession(conversationID: request.conversationID)
+        let sourcePrefix = "builtin-pi-durable:"
+        guard descriptor.runtimeKind == .defaultAgent,
+              request.after >= 0, request.offset >= 0, request.offset <= Int.max - 65536,
+              request.sourceID.hasPrefix(sourcePrefix),
+              UUID(uuidString: String(request.sourceID.dropFirst(sourcePrefix.count))) != nil,
+              UUID(uuidString: request.nativeSessionID) != nil,
+              let childID = Int(request.nativeConversationID), childID > 0 else {
+            throw BackendRPCError.remote("Invalid subagent archive identity.")
+        }
+        let hostPrefix = descriptor.remoteWorkspaceID.map { "remote:" + $0.uuidString.lowercased() + ":" } ?? "local:"
+        let sourceID = hostPrefix + request.sourceID
+        var query = WorkspaceHistoryQuery(command: "events", conversationID: request.conversationID,
+            after: request.after, limit: 30, sourceID: sourceID,
+            nativeSessionID: request.nativeSessionID, nativeConversationID: request.nativeConversationID)
+        if let eventID = request.eventID {
+            var eventQuery = WorkspaceHistoryQuery(command: "event", id: eventID, limit: 1)
+            eventQuery.offset = request.offset
+            let page = try await database.queryHistory(eventQuery)
+            guard let row = page.objectValue?["rows"]?.arrayValue?.first?.objectValue,
+                  row["conversation_id"]?.stringValue == request.conversationID,
+                  row["source_id"]?.stringValue == sourceID,
+                  row["native_session_id"]?.stringValue == request.nativeSessionID,
+                  let sequence = row["sequence"]?.intValue, sequence > 0 else {
+                throw BackendRPCError.remote("The archive event belongs to a different conversation.")
+            }
+            query.after = Int64(sequence - 1)
+            query.limit = 1
+            let membership = try await database.queryHistory(query)
+            guard membership.objectValue?["rows"]?.arrayValue?.first?.objectValue?["id"]?.stringValue == eventID else {
+                throw BackendRPCError.remote("The archive event belongs to a different subagent.")
+            }
+            return page
+        }
+        return try await database.queryHistory(query)
     }
 
     /// Reads the retained usage index without refreshing providers or credentials.

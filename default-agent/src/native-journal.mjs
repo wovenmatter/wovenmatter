@@ -11,6 +11,28 @@ const MANIFEST_PARTS = 1024;
 const METADATA_KEYS = new Set(['id', 'revision', 'runID', 'kind', 'contentMode']);
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
 
+// Group identities precede content in the public projection. Read only its
+// bounded scalar prefix: child message/history projections may themselves be
+// large, and copying or decoding them would defeat disk chunking.
+function nativeGrouping(projectionJSON) {
+  if (typeof projectionJSON !== 'string') return {};
+  const prefix = projectionJSON.slice(0, 4096), beginning = /^\s*\{/.exec(prefix);
+  if (!beginning) return {};
+  const fields = /\s*"(nativeConversationID|parentNativeConversationID|childID)"\s*:\s*("(?:\\.|[^"\\])*"|[0-9]+)\s*(,|\})/gy;
+  fields.lastIndex = beginning[0].length;
+  const result = {};
+  for (let count = 0; count < 3; count++) {
+    const field = fields.exec(prefix);
+    if (!field) break;
+    let value;
+    try { value = JSON.parse(field[2]); } catch { break; }
+    if ((typeof value === 'string' && value.length > 0 && value.length <= 256)
+      || (typeof value === 'number' && Number.isSafeInteger(value) && value > 0)) result[field[1]] = value;
+    if (field[3] === '}') break;
+  }
+  return result;
+}
+
 const slash = { slash: true };
 const literal = text => [...text].map(char => ({ char }));
 const hex = () => Array.from({ length: 32 }, () => ({ hex: true }));
@@ -227,7 +249,7 @@ function boundedUTF8(bytes) {
 
 function chunkID(entry, part) { return `native-record:${entry.sha256}:native-file.chunk:${part.sha256}`; }
 function originalMetadata(entry, ordinal) {
-  return { id: entry.id, ...(entry.revision !== undefined ? { revision: entry.revision } : {}), ...(entry.runID ? { runID: entry.runID } : {}), kind: entry.kind ?? 'native.raw.record', ...(entry.syntheticID ? { ordinal } : {}) };
+  return { ...entry.nativeGrouping, id: entry.id, ...(entry.revision !== undefined ? { revision: entry.revision } : {}), ...(entry.runID ? { runID: entry.runID } : {}), kind: entry.kind ?? 'native.raw.record', ...(entry.syntheticID ? { ordinal } : {}) };
 }
 function manifestRecord(entry, ordinal, page) {
   const manifestPages = Math.ceil(entry.parts.length / MANIFEST_PARTS);
@@ -237,7 +259,7 @@ function manifestRecord(entry, ordinal, page) {
       sha256: entry.archivedSHA256, byteFidelity: entry.redacted ? 'tool-endpoint-redacted' : 'exact-native-bytes', totalBytes: entry.archivedLength,
       manifestPage: page, manifestPages, chunkBytes: CHUNK_BYTES,
       parts: entry.parts.slice(page * MANIFEST_PARTS, (page + 1) * MANIFEST_PARTS).map(part => ({ byteOffset: part.byteOffset, byteCount: part.byteCount, chunkID: chunkID(entry, part) })) }),
-    projectionJSON: JSON.stringify({ originalRecord: originalMetadata(entry, ordinal) }),
+    projectionJSON: JSON.stringify({ ...entry.nativeGrouping, originalRecord: originalMetadata(entry, ordinal) }),
   };
 }
 
@@ -270,7 +292,7 @@ async function createIndexedJournal(path, chunkOversized = false) {
           const hash = createHash('sha256'); let length = 0;
           for (const piece of jsonPieces(record)) { const bytes = Buffer.from(piece); await writeAll(file, bytes); hash.update(bytes); length += bytes.length; }
           await writeAll(file, Buffer.from('\n'));
-          let entry = { offset: position, length, sha256: hash.digest('hex'), syntheticID: record.id === undefined, ...Object.fromEntries([...METADATA_KEYS].filter(key => record[key] !== undefined).map(key => [key, record[key]])) };
+          let entry = { offset: position, length, sha256: hash.digest('hex'), syntheticID: record.id === undefined, nativeGrouping: nativeGrouping(record.projectionJSON), ...Object.fromEntries([...METADATA_KEYS].filter(key => record[key] !== undefined).map(key => [key, record[key]])) };
           if (chunkOversized && length > MAX_INLINE_RECORD) entry = await prepareOversized(path, entry);
           added.push(entry); position += length + 1;
         }
@@ -308,7 +330,7 @@ export async function openNativeArchive(path) {
             if (digest(content) !== part.sha256) throw new Error('An archived native chunk failed its content checksum.');
             record = { id: chunkID(entry, part), ...(entry.runID ? { runID: entry.runID } : {}), kind: 'native-file.chunk', contentMode: 'event', completeness: 'native-record-chunk',
               payload: JSON.stringify({ format: 'woven-native-file-chunk/v1', encoding: 'base64', sha256: part.sha256, dataBase64: content.toString('base64') }),
-              text: projection, projectionJSON: JSON.stringify({ originalRecord: originalMetadata(entry, ordinal), byteOffset: part.byteOffset, byteCount: part.byteCount }) };
+              text: projection, projectionJSON: JSON.stringify({ ...entry.nativeGrouping, originalRecord: originalMetadata(entry, ordinal), byteOffset: part.byteOffset, byteCount: part.byteCount }) };
             nextOffset = byteOffset + part.byteCount; complete = false;
           } else {
             const page = byteOffset - entry.archivedLength; record = manifestRecord(entry, ordinal, page);
@@ -372,6 +394,7 @@ export async function openNativeJournal(path) {
 // Text deltas split losslessly; tool/activity bodies are previews. An oversized
 // inline image/audio payload is omitted rather than producing invalid base64.
 export function* nativePresentationUpdates(update) {
+  if (update?.sessionUpdate === 'woven_subagents') { yield subagentPresentation(update); return; }
   const text = ['agent_message_chunk', 'agent_thought_chunk', 'user_message_chunk'].includes(update?.sessionUpdate)
     && update.content?.type === 'text' && typeof update.content.text === 'string' ? update.content.text : undefined;
   const preview = nativePreview(text === undefined ? update : { ...update, content: { ...update.content, text: undefined } });
@@ -381,6 +404,68 @@ export function* nativePresentationUpdates(update) {
     if (end < text.length && text.charCodeAt(end - 1) >= 0xd800 && text.charCodeAt(end - 1) <= 0xdbff) end--;
     yield { ...preview, content: { ...preview.content, text: text.slice(start, end) } }; start = end;
   }
+}
+
+// A single child's history must never consume the identities or route/state
+// fields of later children. This public projection uses explicit scalar fields
+// and a separate, fair content budget; native records retain the full content.
+function subagentPresentation(update) {
+  const scalar = (value, limit) => {
+    if (typeof value === 'string') {
+      let end = Math.min(value.length, limit);
+      if (end < value.length && value.charCodeAt(end - 1) >= 0xd800 && value.charCodeAt(end - 1) <= 0xdbff && value.charCodeAt(end) >= 0xdc00 && value.charCodeAt(end) <= 0xdfff) end--;
+      return value.slice(0, end).replace(/[\u0000-\u001f\u007f]/g, ' ');
+    }
+    return value === null || typeof value === 'boolean' || typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+  };
+  const fields = (value, limits) => {
+    const result = {};
+    for (const [key, limit] of Object.entries(limits)) {
+      const item = scalar(value?.[key], limit);
+      if (item !== undefined) result[key] = item;
+    }
+    return result;
+  };
+  const identities = { id: 128, name: 512, provider: 512, modelID: 512, modelId: 512,
+    accountID: 128, accountLabel: 512, connectionID: 512, connectionLabel: 512,
+    accessKind: 128, billing: 128, thinking: 128, state: 128,
+    sourceID: 512, archiveSourceID: 512, nativeStoreID: 128, nativeSessionID: 128,
+    parentNativeSessionID: 128, nativeConversationID: 128, parentNativeConversationID: 128, childID: 128 };
+  const rowIdentities = { id: 128, kind: 128, title: 128, status: 128 };
+  const result = fields(update, { sessionUpdate: 128, concurrency: 128, activeCount: 128, totalCount: 128,
+    sourceID: 512, archiveSourceID: 512, nativeStoreID: 128, nativeSessionID: 128,
+    parentNativeSessionID: 128, nativeConversationID: 128, parentNativeConversationID: 128 });
+  const children = Array.isArray(update.subagents) ? update.subagents.slice(0, 24) : [];
+  const childBudget = Math.min(2048, Math.floor(16384 / Math.max(1, children.length)));
+  result.subagents = children.map(child => {
+    const projected = fields(child, identities);
+    const textFields = ['task', 'result', 'detail'].filter(key => typeof child?.[key] === 'string' && child[key].length);
+    const categories = [textFields.length ? textFields : undefined];
+    for (const key of ['activity', 'history']) {
+      const rows = Array.isArray(child?.[key]) ? child[key].slice(-24) : [];
+      if (Array.isArray(child?.[key])) projected[key] = rows.map(row => fields(row, rowIdentities));
+      categories.push(rows.some(row => typeof row?.content === 'string' && row.content.length) ? rows : undefined);
+    }
+    const categoryBudget = Math.floor(childBudget / Math.max(1, categories.filter(Boolean).length));
+    const content = (value, limit) => {
+      if (typeof value !== 'string') return undefined;
+      let end = Math.min(value.length, limit);
+      if (end < value.length && value.charCodeAt(end - 1) >= 0xd800 && value.charCodeAt(end - 1) <= 0xdbff && value.charCodeAt(end) >= 0xdc00 && value.charCodeAt(end) <= 0xdfff) end--;
+      return value.slice(0, end);
+    };
+    for (const key of textFields) projected[key] = content(child[key], Math.floor(categoryBudget / textFields.length));
+    for (const [index, key] of ['activity', 'history'].entries()) {
+      const rows = categories[index + 1];
+      if (!rows) continue;
+      const count = rows.filter(row => typeof row?.content === 'string' && row.content.length).length;
+      rows.forEach((row, ordinal) => {
+        const preview = content(row?.content, Math.floor(categoryBudget / count));
+        if (preview !== undefined) projected[key][ordinal].content = preview;
+      });
+    }
+    return projected;
+  });
+  return result;
 }
 
 function nativePreview(value, budget = { characters: 32768, nodes: 2048 }, depth = 0) {

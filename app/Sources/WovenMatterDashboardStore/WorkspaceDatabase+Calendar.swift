@@ -649,7 +649,9 @@ extension WorkspaceDatabaseConnection {
             appending = true
           } else {
             activeThought = nil
-            if ["tool_call", "tool_call_update"].contains(kind), let id = object["toolCallId"]?.stringValue {
+            if kind == "woven_subagents", configuration.runtimeKind == .defaultAgent {
+              activity = AgentRunActivity.builtInSubagentSnapshot(rawPayloadJSON: raw)
+            } else if ["tool_call", "tool_call_update"].contains(kind), let id = object["toolCallId"]?.stringValue {
               activity = .init(id: id, kind: .tool, title: object["title"]?.stringValue,
                 status: object["status"]?.stringValue, toolName: object["kind"]?.stringValue,
                 rawInputJSON: try object["rawInput"].map(toolsJSON),

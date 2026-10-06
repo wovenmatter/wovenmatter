@@ -261,6 +261,9 @@ struct DashboardCloudConversation: View {
                     await scrollToLibraryMessage(using: proxy)
                 }
                 .onDisappear { model.agentTools?.observeSessionFromUI(nil, token: toolObservationToken) }
+                .environment(\.conversationSubagentHistory) { request in
+                    try await model.builtInSubagentHistory(request)
+                }
                 .environment(\.conversationTranscriptInteraction) {
                     transcriptOwnsScroll = true
                     scrollInteractionRevision += 1
@@ -576,6 +579,10 @@ struct DashboardCloudConversation: View {
                             if let runtimeKind = conversation.localRuntimeKind, runtimeKind != .pi {
                                 Task { await model.updateLocalACPSession(conversation: conversation, permission: selection) }
                             }
+                        },
+                        onSelectSubagentConcurrency: { limit in
+                            guard let conversation, conversation.localRuntimeKind == .defaultAgent else { return }
+                            Task { await model.updateLocalACPSession(conversation: conversation, subagentConcurrency: limit) }
                         },
                         onAttachmentAction: onAttachmentAction,
                         onRemoveAttachment: onRemoveAttachment,

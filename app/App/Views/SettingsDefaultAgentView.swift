@@ -29,6 +29,20 @@ struct SettingsDefaultAgentView: View {
                 Text("On adds code mode as a tool alongside the agent’s other tools. Only routes all tool calls through code mode. Off disables code mode and uses standard tool calls. Changes apply between turns.")
                     .font(.callout).foregroundStyle(.secondary)
             }
+            SettingsCard(title: "Subagents", detail: "The Built-in agent can delegate tasks when useful.") {
+                Stepper(value: Binding(get: { agent.configuration.resolvedSubagentConcurrency }, set: {
+                    var config = agent.configuration; config.subagentConcurrency = $0; agent.configuration = config
+                }), in: DefaultAgentSettings.subagentConcurrencyRange) {
+                    HStack {
+                        Text("Maximum active subagents per conversation")
+                        Spacer()
+                        Text(agent.configuration.resolvedSubagentConcurrency, format: .number)
+                            .monospacedDigit()
+                    }
+                }.disabled(!editable)
+                Text("Choose 2–24. This default applies to new conversations; each conversation can use its own limit. The parent agent does not count toward the limit.")
+                    .font(.callout).foregroundStyle(.secondary)
+            }
             searchSection
             if let notice = agent.notice { Text(notice).font(.callout).foregroundStyle(.secondary) }
             if let error = agent.error ?? syncError { Text(error).font(.callout).foregroundStyle(.red).textSelection(.enabled) }

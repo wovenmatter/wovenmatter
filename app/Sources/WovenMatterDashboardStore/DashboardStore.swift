@@ -1099,6 +1099,7 @@ public actor DashboardStore {
     model: String? = nil,
     thinking: String? = nil,
     permission: String? = nil,
+    subagentConcurrency: Int? = nil,
     launch: LocalACPRuntimeLaunchConfiguration?,
     workspace: LocalACPWorkspaceLaunchConfiguration?
   ) async throws -> LocalACPSessionConfiguration {
@@ -1112,6 +1113,7 @@ public actor DashboardStore {
       model: model,
       thinking: thinking,
       permission: permission,
+      subagentConcurrency: subagentConcurrency,
       launch: context.launch,
       workspace: context.workspace,
       systemPrompt: context.systemPrompt

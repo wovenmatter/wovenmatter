@@ -9,6 +9,7 @@ import { createClaudeAdmission } from './claude-admission.mjs';
 import { accessFailure, DefaultAgentError, operationErrorMessage } from './config.mjs';
 import { claudeModelName } from './model-presentation.mjs';
 import { canUseClaudeNativeCompaction, openClaudeSession } from './claude-session.mjs';
+import { contextOverflowDiagnostic } from './native-context.mjs';
 export { canUseClaudeNativeCompaction } from './claude-session.mjs';
 
 // Pi owns the agent loop and tools. Claude's official SDK owns its native
@@ -137,7 +138,8 @@ function modelDefinitions(claude, provider) {
   return claude.models.map(model => ({
     id: model.value, name: claudeModelName(model), provider, api, baseUrl: 'process://claude-native',
     reasoning: Boolean(model.supportedEffortLevels?.length), input: ['text', 'image'],
-    thinkingLevelMap: { off: null, ...Object.fromEntries((model.supportedEffortLevels ?? []).map(level => [level, level])) },
+    thinkingLevelMap: Object.fromEntries(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'].map(level => [level,
+      level === 'off' || model.supportedEffortLevels?.includes(level) ? level : null])),
     // Discovery does not currently report context length. Use a conservative
     // host compaction budget instead of inventing a 1M entitlement for aliases.
     contextWindow: 200000, maxTokens: 32000, cost: zeroCost(),
@@ -179,7 +181,7 @@ export function createClaudeStream(claude, credentials, dependencies = {}) {
       stream.end(message);
     }).catch(error => {
       message.stopReason = options.signal?.aborted ? 'aborted' : 'error';
-      message.errorMessage = options.signal?.aborted ? 'Cancelled.' : (accessFailure(error) ?? operationErrorMessage(error));
+      message.errorMessage = options.signal?.aborted ? 'Cancelled.' : (accessFailure(error) ?? contextOverflowDiagnostic(error, model.provider) ?? operationErrorMessage(error));
       stream.push({ type: 'error', reason: message.stopReason, error: message });
       stream.end(message);
     });
@@ -376,7 +378,7 @@ export function createClaudeStream(claude, credentials, dependencies = {}) {
         }
         if (!gate.state.complete || gate.state.status !== 200 || gate.state.error) {
           if (timedOut) throw new DefaultAgentError('The Claude request timed out. Retry or check Settings → Connections.');
-          throw gate.state.error ?? new DefaultAgentError(nativeFailure ? (accessFailure(nativeFailure) ?? operationErrorMessage(nativeFailure)) : 'The Claude runtime stopped before completing its response.');
+          throw gate.state.error ?? new DefaultAgentError(nativeFailure ? (accessFailure(nativeFailure) ?? contextOverflowDiagnostic(nativeFailure, model.provider) ?? operationErrorMessage(nativeFailure)) : 'The Claude runtime stopped before completing its response.');
         }
         const response = gate.state.message;
         const calls = response.content.filter(block => block.type === 'tool_use');

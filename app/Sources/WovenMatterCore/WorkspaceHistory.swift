@@ -139,6 +139,8 @@ public struct WorkspaceHistoryQuery: Codable, Sendable {
   public var sourceID: String?
   public var nativeSessionID: String?
   public var nativeRecordID: String?
+  /// Durable conversation IDs are store-local; use with sourceID and nativeSessionID.
+  public var nativeConversationID: String?
   public var folderID: String?
   public var kind: String?
   public var since: String?
@@ -153,7 +155,7 @@ public struct WorkspaceHistoryQuery: Codable, Sendable {
   public var requestID: String?
   enum CodingKeys: String, CodingKey {
     case schemaVersion, command, id, search, conversationID, runID, harness, folderID, kind, since, until
-    case sourceID, nativeSessionID, nativeRecordID
+    case sourceID, nativeSessionID, nativeRecordID, nativeConversationID
     case after, limit, offset, characters, sort, callerConversationID, message, requestID
   }
   public init(from decoder: any Decoder) throws {
@@ -168,6 +170,7 @@ public struct WorkspaceHistoryQuery: Codable, Sendable {
     sourceID = try c.decodeIfPresent(String.self, forKey: .sourceID)
     nativeSessionID = try c.decodeIfPresent(String.self, forKey: .nativeSessionID)
     nativeRecordID = try c.decodeIfPresent(String.self, forKey: .nativeRecordID)
+    nativeConversationID = try c.decodeIfPresent(String.self, forKey: .nativeConversationID)
     folderID = try c.decodeIfPresent(String.self, forKey: .folderID)
     kind = try c.decodeIfPresent(String.self, forKey: .kind)
     since = try c.decodeIfPresent(String.self, forKey: .since)
@@ -185,7 +188,8 @@ public struct WorkspaceHistoryQuery: Codable, Sendable {
     command: String, id: String? = nil, search: String? = nil,
     conversationID: String? = nil, runID: String? = nil,
     harness: String? = nil, kind: String? = nil, after: Int64 = 0, limit: Int = 50,
-    sourceID: String? = nil, nativeSessionID: String? = nil, nativeRecordID: String? = nil
+    sourceID: String? = nil, nativeSessionID: String? = nil, nativeRecordID: String? = nil,
+    nativeConversationID: String? = nil
   ) {
     self.command = command
     self.id = id
@@ -196,6 +200,7 @@ public struct WorkspaceHistoryQuery: Codable, Sendable {
     self.sourceID = sourceID
     self.nativeSessionID = nativeSessionID
     self.nativeRecordID = nativeRecordID
+    self.nativeConversationID = nativeConversationID
     self.kind = kind
     self.after = after
     self.limit = limit

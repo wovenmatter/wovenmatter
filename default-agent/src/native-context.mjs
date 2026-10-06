@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto';
+import { mkdir } from 'node:fs/promises';
 import { estimateMessageTokens } from '@earendil-works/pi-ai/utils/estimate';
 import { calculateCost } from '@earendil-works/pi-ai/models';
+import { isContextOverflow } from '@earendil-works/pi-ai/utils/overflow';
 import { defineDoc, UsageDoc } from '@earendil-works/pi-durable';
 import { getCurrentSystemMessage } from '@earendil-works/pi-ai/utils/transcript';
 import { DefaultAgentError, accessFailure, operationErrorMessage } from './config.mjs';
@@ -16,7 +18,16 @@ const usable = message => message.role !== 'assistant' || !['aborted', 'error', 
 // diagnostic before it can become a native task/transcript/archive record.
 export function safeAssistantDiagnostic(message) {
   return message && ['error', 'aborted'].includes(message.stopReason) && typeof message.errorMessage === 'string'
-    ? { ...message, errorMessage: accessFailure(message.errorMessage) ?? operationErrorMessage(undefined) } : message;
+    ? { ...message, errorMessage: accessFailure(message.errorMessage)
+      ?? contextOverflowDiagnostic(message.errorMessage, message.provider) ?? operationErrorMessage(undefined) } : message;
+}
+
+// Keep the SDK's overflow classification without retaining an exception body,
+// request URL or any provider credential in native state or the app archive.
+export function contextOverflowDiagnostic(error, provider) {
+  const text = typeof error === 'string' ? error : error?.message;
+  return typeof text === 'string' && isContextOverflow({ stopReason: 'error', errorMessage: text, provider })
+    ? 'Input exceeds the context window.' : null;
 }
 
 // A salted credential identity fences an in-place credential replacement without
@@ -50,11 +61,26 @@ export function compatibleCanonicalMessages(messages, route) {
 // entries, so switching routes can rebuild the visible context.
 export function nativeContextBridge(record, engine, background) {
   const filterTools = messages => record.codeModeState.value === 'only' ? messages.map(message => message.role === 'system' ? { ...message, ...(message.toolsAdded ? { toolsAdded: message.toolsAdded.filter(tool => tool.name === 'codemode') } : {}), ...(message.toolsRemoved ? { toolsRemoved: message.toolsRemoved.filter(tool => tool.name === 'codemode') } : {}) } : message) : messages;
+  const selectedAccount = async route => {
+    const account = (await engine.credentials.candidates(route.provider)).find(candidate => candidate.id === route.accountID);
+    if (!account) throw new DefaultAgentError('The selected account is unavailable. Check Settings → Connections.');
+    const pin = record.connectionPin;
+    if (pin && (pin.provider !== route.provider || pin.accountID !== route.accountID || pin.modelId !== route.modelID
+        || (account.owned === true) !== pin.accountOwned || credentialRouteIdentity(record, account) !== pin.credentialIdentity)) {
+      throw new DefaultAgentError('The child connection changed or became unavailable. No account fallback was attempted.');
+    }
+    return account;
+  };
+  const withRouteAccount = async (route, operation) => {
+    const account = await selectedAccount(route);
+    return engine.credentials.runWithAccount(route.provider, account, () => route.provider === 'claude-subscription' && engine.claude.withProfile
+      ? engine.claude.withProfile(account.credential?.accountId, operation) : operation());
+  };
   const scope = (route, taskID, canonicalMessages, continuation) => ({
     directory: record.nativeRoot, sessionID: record.session.sessionId,
     provider: route.provider, accountID: route.accountID, modelID: route.modelID,
     authIdentity: route.authIdentity, ...(route.credentialIdentity ? { credentialIdentity: route.credentialIdentity } : {}), ...(route.nativePrincipalIdentity ? { nativePrincipalIdentity: route.nativePrincipalIdentity } : {}), taskID,
-    ...(record.busy && record.runID ? { runID: record.runID } : {}),
+    ...((record.busy || record.resuming) && record.runID ? { runID: record.runID } : {}),
     canonicalMessages: filterTools(canonicalMessages), ...(continuation ? { continuation } : {}),
     archive: async records => { record.appendArchive(records); await record.archiveQueue; if (record.archiveError) throw record.archiveError; },
   });
@@ -85,7 +111,7 @@ export function nativeContextBridge(record, engine, background) {
   const archiveAttempt = async (kind, response, taskID, model, charge = false) => {
     if (!response) return;
     const identity = hash(response);
-    record.appendArchive([{ id: `native-compaction-${kind}:${taskID}:${identity}`, kind: `provider.compaction.${kind}`, payload: JSON.stringify(response), contentMode: 'event', ...(record.busy && record.runID ? { runID: record.runID } : {}) }]);
+    record.appendArchive([{ id: `native-compaction-${kind}:${taskID}:${identity}`, kind: `provider.compaction.${kind}`, payload: JSON.stringify(response), contentMode: 'event', ...((record.busy || record.resuming) && record.runID ? { runID: record.runID } : {}) }]);
     await record.archiveQueue;
     if (record.archiveError) throw record.archiveError;
     let parsed; try { parsed = JSON.parse(response.responseJSON ?? response.completedResponseJSON ?? '{}'); } catch { /* Retain malformed native bytes without inventing a result. */ }
@@ -137,16 +163,22 @@ export function nativeContextBridge(record, engine, background) {
       for (const usage of usages) { combined.input_tokens += usage.input_tokens ?? 0; combined.output_tokens += usage.output_tokens ?? 0; combined.total_tokens += usage.total_tokens ?? 0; combined.input_tokens_details.cached_tokens += usage.input_tokens_details?.cached_tokens ?? 0; combined.input_tokens_details.cache_write_tokens += usage.input_tokens_details?.cache_write_tokens ?? 0; combined.output_tokens_details.reasoning_tokens += usage.output_tokens_details?.reasoning_tokens ?? 0; }
       return { ...last, usage: combined };
     };
-    const account = (await engine.credentials.candidates(route.provider)).find(candidate => candidate.id === route.accountID);
-    return route.provider === 'claude-subscription' && engine.claude.withProfile ? engine.claude.withProfile(account?.credential?.accountId, operation) : operation();
+    return withRouteAccount(route, operation);
   };
-  const portable = async (model, full, signal, taskID, instructions) => {
+  const portable = async (model, full, route, signal, taskID, instructions) => {
     const readable = full.map(message => message.role === 'toolResult' ? { role: message.role, toolCallId: message.toolCallId, toolName: message.toolName, content: message.content, isError: message.isError } : message.role === 'assistant' ? { role: message.role, content: message.content.map(block => { const { thinkingSignature, textSignature, thoughtSignature, ...content } = block; return content; }) } : message);
-    const result = safeAssistantDiagnostic(await engine.runtime.completeSimple(model, { messages: [
+    const messages = [
       { role: 'system', content: 'Summarize the supplied conversation for continuing its work. Preserve goals, decisions, tool outcomes, exact identifiers, unresolved work and relevant constraints. Do not invent unavailable content.', timestamp: Date.now() },
       { role: 'user', content: [{ type: 'text', text: JSON.stringify(readable) + (instructions ? `\nAdditional compaction focus: ${instructions}` : '') }], timestamp: Date.now() },
-    ] }, { signal, transport: 'sse', maxRetries: 0, fetch: providerFetch(record) }));
-    record.appendArchive([{ id: `portable-result:${taskID}:${hash(result)}`, kind: 'pi.compaction.response', payload: JSON.stringify(result), contentMode: 'event', text: result.content.flatMap(block => block.type === 'text' ? [block.text] : block.type === 'thinking' ? [block.thinking] : []).join('\n'), projectionJSON: JSON.stringify([result]), ...(record.busy && record.runID ? { runID: record.runID } : {}) }]);
+    ];
+    const thinkingLevel = record.session.thinkingLevel;
+    const result = safeAssistantDiagnostic(await withRouteAccount(route, () => engine.runtime.completeSimple(model, { messages }, {
+      signal, transport: 'sse', maxRetries: 0, fetch: providerFetch(record),
+      sessionId: record.providerSessionID ?? record.session.sessionId,
+      ...(thinkingLevel && thinkingLevel !== 'off' ? { reasoning: thinkingLevel } : {}),
+      wovenNativeContext: scope(route, taskID, messages),
+    })));
+    record.appendArchive([{ id: `portable-result:${taskID}:${hash(result)}`, kind: 'pi.compaction.response', payload: JSON.stringify(result), contentMode: 'event', text: result.content.flatMap(block => block.type === 'text' ? [block.text] : block.type === 'thinking' ? [block.thinking] : []).join('\n'), projectionJSON: JSON.stringify([result]), ...((record.busy || record.resuming) && record.runID ? { runID: record.runID } : {}) }]);
     await record.archiveQueue; if (record.archiveError) throw record.archiveError;
     if (result.stopReason !== 'stop' || result.content.some(block => block.type === 'toolCall')) throw new DefaultAgentError(result.errorMessage ?? 'Context summarization did not complete.');
     const text = result.content.filter(b => b.type === 'text').map(b => b.text).join('\n');
@@ -154,25 +186,33 @@ export function nativeContextBridge(record, engine, background) {
     return { portableMessage: { role: 'user', content: [{ type: 'text', text }], timestamp: Date.now() }, usage: result.usage, portableResponse: result };
   };
   const resolveRoute = async (route, model, signal) => {
-    const account = (await engine.credentials.candidates(route.provider)).find(candidate => candidate.id === route.accountID);
-    if (!account) throw new DefaultAgentError('The selected account is unavailable. Check Settings → Connections.');
+    const account = await selectedAccount(route);
     const authIdentity = credentialRouteIdentity(record, account), next = { ...route };
     if (authIdentity) next.authIdentity = authIdentity; else delete next.authIdentity;
     if (model.api === 'woven-claude-native') {
       next.endpoint = 'claude-agent-sdk';
       if (route.provider === 'claude-subscription') {
+        await mkdir(record.nativeRoot, { recursive: true, mode: 0o700 });
         const provider = await import('./claude-provider.mjs');
-        const identity = async () => provider.claudePrincipalIdentity(await provider.getClaudeNativePrincipal(engine.claude, { signal, cwd: record.nativeRoot }), { sessionID: record.session.sessionId, accountID: route.accountID, authIdentity });
+        const identity = async () => {
+          const principal = await provider.getClaudeNativePrincipal(engine.claude, { signal, cwd: record.nativeRoot });
+          const expected = record.connectionPin?.parentNativePrincipalIdentity;
+          if (expected && provider.claudePrincipalIdentity(principal, { sessionID: record.parentSessionID, accountID: route.accountID, authIdentity }) !== expected) {
+            throw new DefaultAgentError('The child subscription account changed from its parent connection. No account fallback was attempted.');
+          }
+          return provider.claudePrincipalIdentity(principal, { sessionID: record.session.sessionId, accountID: route.accountID, authIdentity });
+        };
         const principal = engine.claude.withProfile ? await engine.claude.withProfile(account.credential?.accountId, identity) : await identity();
         if (authIdentity) next.credentialIdentity = authIdentity; next.authIdentity = principal; next.nativePrincipalIdentity = principal;
       }
     }
     else {
-      const resolved = await engine.runtime.getAuth(model, { signal, allowWait: false });
+      const resolved = await engine.credentials.runWithAccount(route.provider, account, () => engine.runtime.getAuth(model, { signal, allowWait: false }));
       // ModelRuntime owns endpoint routing; the native provider helper performs
       // the additional supported endpoint/native account validation.
       next.endpoint = resolved?.auth?.baseUrl ?? model.baseUrl;
-      const identity = await (await import('./provider-compaction.mjs')).resolveProviderCompactionRoute({ model, route: next, runtime: engine.runtime, signal });
+      const provider = await import('./provider-compaction.mjs');
+      const identity = await engine.credentials.runWithAccount(route.provider, account, () => provider.resolveProviderCompactionRoute({ model, route: next, runtime: engine.runtime, signal }));
       if (identity) Object.assign(next, identity);
     }
     return next;
@@ -190,23 +230,28 @@ export function nativeContextBridge(record, engine, background) {
   return {
     resolveRoute, filterTools,
     async beforeCompact(compaction, originalRoute, api, ctx) {
+      const saved = await snapshot();
+      // The native output and its receipt commit together. A retained task
+      // invocation can complete from that output without repeating compaction.
+      if (saved.nativeCompaction?.taskID === api.taskId) return { decline: true };
       const model = engine.resolveModel(`${originalRoute.provider}/${originalRoute.modelID}`);
-      const route = await resolveRoute(originalRoute, model, ctx.abortSignal), saved = await snapshot();
+      const route = await resolveRoute(originalRoute, model, ctx.abortSignal);
       const full = await canonical(saved, compaction.messages, route);
       const prior = sameRoute(saved.active?.route, route) ? saved.active.continuation : undefined;
       const delta = prior ? compatibleCanonicalMessages(withoutSummaries(saved, compaction.messages), route) : full;
       let result = await compact(model, delta, full, route, api.taskId, ctx.abortSignal, prior, compaction.instructions);
-      if (result.unsupported) result = await portable(model, full, ctx.abortSignal, api.taskId, compaction.instructions);
+      if (result.unsupported) result = await portable(model, full, route, ctx.abortSignal, api.taskId, compaction.instructions);
       const state = { covered: [...new Set([...saved.covered, ...compaction.entries.map(entry => entry.id)])],
         active: { route, ...(result.continuation ? { continuation: result.continuation } : {}), ...(result.portableMessage ? { portableMessage: result.portableMessage } : {}) },
         ...(result.portableMessage ? { summaryHash: hash(result.portableMessage) } : {}) };
       await record.conversation.commit(async tx => {
-        await tx.appendEntry(record.conversation.id, { kind: 'woven.native-compaction', head: compaction.firstKept,
+        const entry = await tx.appendEntry(record.conversation.id, { kind: 'woven.native-compaction', head: compaction.firstKept,
           model: [...(getCurrentSystemMessage(compaction.messages) ? [getCurrentSystemMessage(compaction.messages)] : []), ...(result.portableMessage ? [result.portableMessage] : [])],
-          data: { ...(record.busy && record.runID ? { wovenRunID: record.runID } : {}), ...(result.usage ? { usage: result.usage } : {}), ...(result.portableResponse ? { portableResponse: result.portableResponse } : {}) } });
+          data: { ...((record.busy || record.resuming) && record.runID ? { wovenRunID: record.runID } : {}), ...(result.usage ? { usage: result.usage } : {}), ...(result.portableResponse ? { portableResponse: result.portableResponse } : {}) } });
         const current = await tx.doc(NativeContext, record.conversation.id);
         delete current.summaryHash;
         Object.assign(current, state);
+        current.nativeCompaction = { taskID: api.taskId, entryID: entry.id };
         await recordUsage(tx, model, result.usage);
       }, ctx);
       return { decline: true };
@@ -225,7 +270,7 @@ export function nativeContextBridge(record, engine, background) {
         const prefix = await originalPrefix(state), system = getCurrentSystemMessage(messages);
         const full = compatibleCanonicalMessages([...(system ? [system] : []), ...prefix.filter(m => m.role !== 'system')], route);
         let result = await compact(model, full, full, route, taskID, ctx.abortSignal);
-        if (result.unsupported) result = await portable(model, full, ctx.abortSignal, taskID);
+        if (result.unsupported) result = await portable(model, full, route, ctx.abortSignal, taskID);
         continuation = result.continuation; portableMessage = result.portableMessage;
         await record.conversation.commit(async tx => {
           const current = await tx.doc(NativeContext, record.conversation.id);
