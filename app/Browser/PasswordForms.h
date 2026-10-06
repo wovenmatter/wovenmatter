@@ -48,7 +48,7 @@ static constexpr char kWovenPasswordForms[] = R"JS(
     let password = fresh[0] || fields[0];
     if (fresh.some(i => i.value !== password.value)) return;
     if (!fresh.length && fields.length > 1) {
-      if (fields.length < 2 || fields.at(-1).value !== fields.at(-2).value) return;
+      if (fields.at(-1).value !== fields.at(-2).value) return;
       password = fields.at(-1);
     }
     const username = usernameInput(form, fields[0]);

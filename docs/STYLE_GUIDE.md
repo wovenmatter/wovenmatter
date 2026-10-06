@@ -43,6 +43,10 @@ when an intentional design change is accepted.
   inside the nested credential groups.
 - **Icons:** use the existing `DashboardLucideIcon` glyphs and bundled harness
   logos, matching nearby icon sizes and stroke weights.
+- **Asset and browser toolbars:** keep the tab strip and address row the same
+  height, with matching button frames and minimal space between hover fills and
+  dividers. Use the shared asset-toolbar metrics, including for tab-close and
+  sidebar reveal buttons. Keep a single ellipsis menu without a second chevron.
 - **Calendar:** keep the four-item legend below the selected-day list. Use the
   saved category colors for event markers and recurrence labels. Default to
   British Racing Green events, royal blue scheduled tasks, purple recurring

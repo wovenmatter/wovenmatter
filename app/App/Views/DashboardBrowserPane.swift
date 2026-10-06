@@ -160,7 +160,7 @@ struct DashboardBrowserPane: View {
                 .frame(width: DashboardMetrics.assetToolbarControlWidth,
                        height: DashboardMetrics.assetToolbarControlHeight)
         }
-            .buttonStyle(DashboardIconButtonStyle()).disabled(disabled).help(title).accessibilityLabel(title)
+        .buttonStyle(DashboardIconButtonStyle()).disabled(disabled).help(title).accessibilityLabel(title)
     }
 }
 

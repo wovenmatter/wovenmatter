@@ -683,7 +683,8 @@ struct WorkspaceView: View {
         onLeftRail: @escaping () -> Void,
         onRightRail: @escaping () -> Void
     ) -> some View {
-        ZStack(alignment: .top) {
+        let presentsAssets = destination == .workspace && assets.tabs.isPresented
+        return ZStack(alignment: .top) {
             Group {
                 switch destination {
                 case .workspace:
@@ -758,8 +759,8 @@ struct WorkspaceView: View {
             HStack {
                 if showLeftRailButton {
                     DashboardRevealRailButton(side: .left,
-                        width: destination == .workspace && assets.tabs.isPresented ? DashboardMetrics.assetToolbarControlWidth : 36,
-                        height: destination == .workspace && assets.tabs.isPresented ? DashboardMetrics.assetToolbarControlHeight : 36,
+                        width: presentsAssets ? DashboardMetrics.assetToolbarControlWidth : 36,
+                        height: presentsAssets ? DashboardMetrics.assetToolbarControlHeight : 36,
                         action: onLeftRail)
                 }
                 Spacer()
@@ -785,13 +786,13 @@ struct WorkspaceView: View {
                 }
                 if showRightRailButton {
                     DashboardRevealRailButton(side: .right,
-                        width: destination == .workspace && assets.tabs.isPresented ? DashboardMetrics.assetToolbarControlWidth : 36,
-                        height: destination == .workspace && assets.tabs.isPresented ? DashboardMetrics.assetToolbarControlHeight : 36,
+                        width: presentsAssets ? DashboardMetrics.assetToolbarControlWidth : 36,
+                        height: presentsAssets ? DashboardMetrics.assetToolbarControlHeight : 36,
                         action: onRightRail)
                 }
             }
             .padding(.horizontal, 12)
-            .padding(.vertical, destination == .workspace && assets.tabs.isPresented ? DashboardMetrics.assetToolbarVerticalPadding : 12)
+            .padding(.vertical, presentsAssets ? DashboardMetrics.assetToolbarVerticalPadding : 12)
 
             if let notice {
                 Text(notice)

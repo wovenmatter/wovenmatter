@@ -11,6 +11,10 @@
   an asset selects it; capacity shows a close-first message, without eviction.
 - Use native, minimal browser chrome: globe entry point, mixed tab strip,
   address/search, back, forward, reload/stop, find, and a browser menu.
+  The globe appears only while the asset pane is hidden and reselects an existing
+  browser tab when possible. The tab-strip plus creates additional browser tabs.
+  Tab and address rows share control dimensions and divider spacing through
+  `DashboardMetrics`; tab-close and menu controls use the same hover treatment.
 - Tabs are ephemeral and disappear on exit. Browser tabs never become notes,
   sidebar entries or database assets. Hiding the pane retains its tabs.
 - Use a dedicated persistent Chromium profile for cookies/site sessions.
@@ -29,6 +33,9 @@
 ## Ownership and integration
 
 Swift owns workspace tab membership, selection, limits and native toolbar UI.
+`DashboardAssetPane` owns back, move, focus, hide and close actions for both notes
+and browser pages. `DashboardNotePane` only supplies the selected asset's editor
+and editing controls; it has no separate pane-navigation toolbar.
 Each browser page retains its AppKit container and CEF browser reference across
 SwiftUI redraws and view reparenting. CEF clients hold weak references back to
 pages. The runtime retains every page until `OnBeforeClose`; that callback drops
@@ -65,7 +72,8 @@ CEF downloads are cached under `~/Library/Caches/WovenMatter/CEF`; override with
 Browser data lives under Application Support/Woven Matter/Browser/<bundle ID>.
 Development variants have separate profiles. Clear Browser Data marks that
 profile for deletion before its first use after the next restart, when Chromium
-has no open database handles. It does not touch Connections, app credentials or saved website passwords.
+has no open database handles. It does not touch Connections, app credentials or
+saved website passwords.
 
 CEF security updates require a new pinned version/checksum, rebuilding both
 architectures and rerunning native lifecycle, profile and UI checks. CEF includes

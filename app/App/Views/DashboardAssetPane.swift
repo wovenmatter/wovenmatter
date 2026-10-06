@@ -73,12 +73,9 @@ struct DashboardAssetPane: View {
                 case .note(let id):
                     if let note = notes.first(where: { $0.id == id }) {
                         DashboardNotePane(
-                            model: model, note: note, embeddedInTabs: true,
-                            showBack: false, noteOnLeft: noteOnLeft, isFocused: focused,
-                            reservesLeadingRailControlSpace: false, reservesTrailingRailControlSpace: false,
+                            model: model, note: note,
                             focusesTitleOnAppear: note.id == newlyCreatedNoteID,
-                            onInitialFocusHandled: { onNewNoteFocusHandled(note.id) },
-                            onBack: {}, onMove: {}, onToggleFocus: {}, onClose: { close(.note(id)) }
+                            onInitialFocusHandled: { onNewNoteFocusHandled(note.id) }
                         ).id(id)
                     } else {
                         ContentUnavailableView("Asset unavailable", systemImage: "doc")
@@ -116,6 +113,6 @@ struct DashboardAssetPane: View {
                 .frame(width: DashboardMetrics.assetToolbarControlWidth,
                        height: DashboardMetrics.assetToolbarControlHeight)
         }
-            .buttonStyle(DashboardIconButtonStyle()).help(title).accessibilityLabel(title)
+        .buttonStyle(DashboardIconButtonStyle()).help(title).accessibilityLabel(title)
     }
 }

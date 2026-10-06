@@ -2411,11 +2411,6 @@ final class ApplicationModel {
         try? await store.database.dismissTerminalRemoteNoteEdits()
     }
 
-    func canAgentEditOpenNote(_ conversation: WorkspaceConversationRecord?) -> Bool {
-        guard let conversation else { return false }
-        return conversation.localRuntimeKind != nil && agentTools?.policy(for: conversation.id).enabled.contains(.notes) == true
-    }
-
     private func acceptOpenClawGatewayMessage(
         conversation: WorkspaceConversationRecord,
         input: AgentMessageInput,
