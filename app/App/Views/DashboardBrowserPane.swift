@@ -39,6 +39,15 @@ struct DashboardBrowserPane: View {
                         NSPasteboard.general.clearContents()
                         NSPasteboard.general.setString(page.url, forType: .string)
                     }.disabled(page.url == "about:blank")
+                    if !page.passwordUsernames.isEmpty {
+                        Menu("Fill Saved Password") {
+                            ForEach(page.passwordUsernames, id: \.self) { username in
+                                Button(username.isEmpty ? "Saved password" : username) {
+                                    page.fillPassword(forUsername: username)
+                                }
+                            }
+                        }
+                    }
                     Divider()
                     Button("Clear Browser Data…") { showsClearData = true }
                 } label: { Image(systemName: "ellipsis").frame(width: 28, height: 30) }
@@ -50,6 +59,20 @@ struct DashboardBrowserPane: View {
             }
             .padding(.horizontal, 10)
             .frame(height: 44)
+            if let title = page.passwordOfferTitle {
+                HStack(spacing: 10) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(title).font(.system(size: 12, weight: .medium)).lineLimit(1)
+                        Text(page.passwordOfferOrigin ?? "").font(.system(size: 11))
+                            .foregroundStyle(DashboardPalette.mutedForeground)
+                    }
+                    Spacer(minLength: 8)
+                    Button("Not Now") { page.dismissPasswordOffer() }.buttonStyle(SettingsQuietButtonStyle())
+                    Button(title.hasPrefix("Update") ? "Update Password" : "Save Password") {
+                        page.acceptPasswordOffer()
+                    }.buttonStyle(DashboardPrimaryButtonStyle())
+                }.padding(10)
+            }
             if showsFind {
                 HStack(spacing: 6) {
                     TextField("Find in page", text: $findText)
@@ -106,7 +129,7 @@ struct DashboardBrowserPane: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Saved web sessions, cookies, and site storage will be cleared the next time you open the browser after restarting Woven Matter. This signs you out of websites.")
+            Text("Saved web sessions, cookies, and site storage will be cleared the next time you open the browser after restarting Woven Matter. This signs you out of websites. Saved passwords are kept in Keychain.")
         }
     }
 

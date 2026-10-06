@@ -1876,26 +1876,17 @@ final class ApplicationModel {
         }
         acknowledgeCredentialAccessDisclosure()
         do {
-            try await usage.authorizeSavedCredentials()
-            if remoteWorkspaces.isCredentialAccessEnabled {
-                for workspace in remoteWorkspaces.workspaces {
-                    try Task.checkCancellation()
-                    try await remoteWorkspaces.authorizeCredentialAccess(for: workspace)
+            try await KeychainAccess.$isCredentialAuthorizationActive.withValue(true) {
+                guard KeychainAccess.enforceCentralAuthorization() == 0 else {
+                    throw BrowserCredentialStore.AccessError.unavailable(-25308)
                 }
-            }
-            let links = openClawGatewayLinks.filter {
-                $0.location != .remoteWorkspace || remoteWorkspaces.isCredentialAccessEnabled
-            }
-            if !links.isEmpty {
-                guard let dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
-                for link in links {
-                    try Task.checkCancellation()
-                    guard openClawGatewayOperationAgentIDs.insert(link.agentID).inserted else {
-                        throw CancellationError()
+                try await Task.detached(priority: .userInitiated) {
+                    try KeychainAccess.$isCredentialAuthorizationActive.withValue(true) {
+                        try BrowserCredentialStore.shared.prepare(consented: true, authorize: true)
                     }
-                    defer { openClawGatewayOperationAgentIDs.remove(link.agentID) }
-                    try await dashboardStore.authorizeOpenClawGatewayCredentials(link)
-                }
+                }.value
+                try await usage.authorizeSavedCredentials()
+                try await authorizeSavedConnections()
             }
             try Task.checkCancellation()
             await refreshLocalUsage(
@@ -1910,6 +1901,35 @@ final class ApplicationModel {
             credentialAccessStatus = "Credential recovery stopped. Automatic refreshes will stay silent."
         } catch {
             credentialAccessStatus = "Credential recovery stopped: \(error.localizedDescription)"
+        }
+    }
+
+    // Keep authorization in the process that owns connection caches. The
+    // frontend does not own a DashboardStore when background execution is on.
+    private func authorizeSavedConnections() async throws {
+        if isBackendFrontend {
+            _ = try await sendBackendWorkspaceService(.authorizeSavedConnections)
+            return
+        }
+        if remoteWorkspaces.isCredentialAccessEnabled {
+            for workspace in remoteWorkspaces.workspaces {
+                try Task.checkCancellation()
+                try await remoteWorkspaces.authorizeCredentialAccess(for: workspace)
+            }
+        }
+        let links = openClawGatewayLinks.filter {
+            $0.location != .remoteWorkspace || remoteWorkspaces.isCredentialAccessEnabled
+        }
+        if !links.isEmpty {
+            guard let dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
+            for link in links {
+                try Task.checkCancellation()
+                guard openClawGatewayOperationAgentIDs.insert(link.agentID).inserted else {
+                    throw CancellationError()
+                }
+                defer { openClawGatewayOperationAgentIDs.remove(link.agentID) }
+                try await dashboardStore.authorizeOpenClawGatewayCredentials(link)
+            }
         }
     }
 
@@ -6116,6 +6136,10 @@ extension ApplicationModel {
             guard let agent = openClawAgent(agentID: id) else { throw BackendRPCError.remote("This agent is no longer available.") }
             linkOpenClawGateway(agent: agent)
         case let .unlinkOpenClaw(id): unlinkOpenClawGateway(agentID: id)
+        case .authorizeSavedConnections:
+            try await KeychainAccess.$isCredentialAuthorizationActive.withValue(true) {
+                try await authorizeSavedConnections()
+            }
         case let .reconnectOpenClaw(id): reconnectOpenClawGateway(agentID: id)
         case let .restartOpenClaw(id): restartOpenClawGateway(agentID: id)
         case let .refreshOpenClaw(id): await refreshOpenClawGatewayStatus(agentID: id)

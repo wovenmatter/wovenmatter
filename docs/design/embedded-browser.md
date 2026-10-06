@@ -15,13 +15,14 @@
   sidebar entries or database assets. Hiding the pane retains its tabs.
 - Use a dedicated persistent Chromium profile for cookies/site sessions.
   Provider credentials and workspace database storage remain separate.
-  Password saving is disabled. The browser menu offers an explicit data reset.
+  Website password saving and autofill are enabled. General Credential access
+  owns Keychain authorization; the browser menu offers an explicit site-data reset.
 - Capture one small immutable snapshot when Send is pressed: bounded note IDs,
   titles/revisions and browser URLs/titles, with the selected tab marked active.
   This travels through the normal local/backend/remote message transport.
   No page contents, screenshots, cookies, passwords or browser automation tools.
   URL awareness does not give an agent access to the signed-in browser session.
-- Page sharing, browser/computer use, password management, saved tabs and
+- Page sharing, browser/computer use, saved tabs and
   bookmarks are outside this pass. Normal browser use is not restricted to a
   preselected set of websites.
 
@@ -64,7 +65,7 @@ CEF downloads are cached under `~/Library/Caches/WovenMatter/CEF`; override with
 Browser data lives under Application Support/Woven Matter/Browser/<bundle ID>.
 Development variants have separate profiles. Clear Browser Data marks that
 profile for deletion before its first use after the next restart, when Chromium
-has no open database handles. It does not touch Connections or app credentials.
+has no open database handles. It does not touch Connections, app credentials or saved website passwords.
 
 CEF security updates require a new pinned version/checksum, rebuilding both
 architectures and rerunning native lifecycle, profile and UI checks. CEF includes
@@ -81,7 +82,8 @@ lifecycle tests compile the production bridge with CEF entry points substituted:
 they exercise retained owners, cancellation, failed-restart recovery and deferred
 shutdown without loading Chromium, opening windows or accessing Keychain.
 The normal gate builds and validates the unsigned app without launching it.
-Actual Chromium runtime and UI acceptance remain human testing.
+The isolated password fixture additionally exercises real Chromium against a
+synthetic loopback form. Live website and UI acceptance remain human testing.
 
 Future browser automation must use Chromium's fake Keychain and disposable
 profiles, separately from the shipping adapter and user data. Ad-hoc test apps
@@ -92,6 +94,37 @@ encryption. The browser profile itself is dedicated to Woven Matter; no browser
 credential import occurs. Custom Keychain service naming is an upstream CEF
 addition not present in this stable SDK. Do not patch the binary ABI or turn off
 encryption to work around it.
+
+### Website passwords
+
+The pinned macOS CEF child-view integration does not provide Chrome's password
+save bubble. Woven supplies native Save/Update and Not Now controls, with the
+actual website origin visible, plus Fill Saved Password in the browser menu.
+CEF password preferences are explicitly enabled. Passwords are stored in the
+app-scoped Keychain vault, with no import from Chrome or Safari.
+
+The renderer observes standard top-level HTML form submissions. Native code
+validates the actual frame origin independently; lookup/fill is restricted to
+exact HTTPS scheme/host/port (HTTP loopback is allowed). Cross-origin actions,
+iframes, opaque URLs and insecure remote origins cannot receive passwords.
+Autofill avoids new-password/confirmation fields and user-entered values;
+manual account selection can replace the current form's values. Dynamic forms
+are observed. Successful login is not inferred: saving requires the user's
+explicit confirmation. Nonstandard scripted logins without a form submission,
+iframe forms and multi-step passwordless flows are outside this implementation.
+Passwords are never included in workspace snapshots or agent-visible metadata.
+
+To run the opt-in live fixture after the normal app build:
+
+```sh
+cmake --build "$CEF_CMAKE_BUILD" --target WovenBrowserPasswordTests WovenBrowserHelper
+python3 scripts/test-browser-passwords.py "$CEF_CMAKE_BUILD" "$BUILT_APP"
+```
+
+`CEF_CMAKE_BUILD` is the build's `DerivedSources/cef-<architecture>` directory.
+The test-only target compiles the mock-Keychain switch into its bridge; the
+shipping runtime cannot select that switch. No real credentials or provider
+services are used, and the copied framework and profile are temporary.
 
 Human review should cover mixed-tab layout, switching chats with pages open,
 keyboard/focus behavior, limits, downloads and uploads, full-pane/compact

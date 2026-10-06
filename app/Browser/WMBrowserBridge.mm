@@ -5,6 +5,8 @@
 #include "include/cef_client.h"
 #include "include/cef_parser.h"
 #include "include/wrapper/cef_helpers.h"
+#include "include/wrapper/cef_message_router.h"
+#import <Security/Security.h>
 #include "include/wrapper/cef_library_loader.h"
 #include <memory>
 #include <map>
@@ -22,6 +24,19 @@ static CefString Cef(NSString *value) { return CefString(value.UTF8String ?: "")
 static BOOL AllowedURL(NSString *url) {
   NSString *scheme = [NSURLComponents componentsWithString:url].scheme.lowercaseString;
   return [@[@"http", @"https", @"about", @"blob", @"data"] containsObject:scheme];
+}
+
+static NSString *PasswordOrigin(NSString *address) {
+  CefURLParts parts;
+  if (!CefParseURL(Cef(address), parts) || parts.username.length || parts.password.length) return nil;
+  NSString *scheme = String(CefString(&parts.scheme));
+  NSString *host = String(CefString(&parts.host));
+  if (![scheme isEqualToString:@"https"] &&
+      !([scheme isEqualToString:@"http"] && [@[@"localhost", @"127.0.0.1", @"[::1]", @"::1"] containsObject:host])) return nil;
+  // CEF's origin includes a trailing slash; DOM location.origin and the Swift
+  // vault use the web-origin serialization without that slash.
+  NSString *origin = String(CefString(&parts.origin));
+  return [origin hasSuffix:@"/"] ? [origin substringToIndex:origin.length - 1] : origin;
 }
 
 class BrowserClient;
@@ -42,6 +57,10 @@ class BrowserClient;
 @property(nonatomic) BOOL started;
 @property(nonatomic) BOOL closing;
 @property(nonatomic) NSAlert *activeDialog;
+@property(nonatomic, readwrite) NSString *passwordOfferTitle;
+@property(nonatomic, readwrite) NSString *passwordOfferOrigin;
+@property(nonatomic) NSString *offeredUsername;
+@property(nonatomic) NSString *offeredPassword;
 - (void)changed;
 @end
 @interface WMBrowserRuntime () {
@@ -106,9 +125,62 @@ class BrowserClient final : public CefClient,
                             public CefLoadHandler,
                             public CefRequestHandler,
                             public CefDownloadHandler,
-                            public CefJSDialogHandler {
+                            public CefJSDialogHandler,
+                            public CefMessageRouterBrowserSide::Handler {
  public:
   explicit BrowserClient(WMBrowserPage *page) : page_(page) {}
+  ~BrowserClient() override { if (passwords_) passwords_->RemoveHandler(this); }
+  bool OnProcessMessageReceived(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame,
+      CefProcessId source, CefRefPtr<CefProcessMessage> message) override {
+    return passwords_ && source == PID_RENDERER && passwords_->OnProcessMessageReceived(browser, frame, source, message);
+  }
+  bool OnQuery(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame> frame, int64_t,
+      const CefString &request, bool persistent, CefRefPtr<Callback> callback) override {
+    CEF_REQUIRE_UI_THREAD();
+    WMBrowserPage *page = page_;
+    NSString *origin = frame->IsMain() ? PasswordOrigin(String(frame->GetURL())) : nil;
+    if (!page || page.closed || page.closing || !origin || persistent || request.length() > 16384) {
+      callback->Failure(1, "Password access is unavailable for this frame."); return true;
+    }
+    auto value = CefParseJSON(request, JSON_PARSER_RFC);
+    auto data = value ? value->GetDictionary() : nullptr;
+    if (!data) { callback->Failure(1, "Invalid password request."); return true; }
+    NSArray<NSDictionary *> *saved = [page.delegate browserPage:page passwordsForOrigin:origin];
+    NSString *action = String(data->GetString("action"));
+    if ([action isEqualToString:@"lookup"]) {
+      auto result = CefDictionaryValue::Create();
+      if (NSDictionary *credential = saved.firstObject) {
+        result->SetString("origin", Cef(origin));
+        result->SetString("username", Cef(credential[@"username"]));
+        result->SetString("password", Cef(credential[@"password"]));
+      }
+      auto response = CefValue::Create(); response->SetDictionary(result);
+      callback->Success(CefWriteJSON(response, JSON_WRITER_DEFAULT));
+      [page changed];
+      return true;
+    }
+    NSString *username = String(data->GetString("username"));
+    NSString *password = String(data->GetString("password"));
+    NSString *formOrigin = PasswordOrigin(String(data->GetString("formAction")));
+    if (![action isEqualToString:@"offer"] || ![origin isEqualToString:formOrigin] ||
+        username.length > 1024 || !password.length || password.length > 4096) {
+      callback->Failure(1, "Invalid password form."); return true;
+    }
+    BOOL update = NO;
+    for (NSDictionary *credential in saved) {
+      if ([credential[@"username"] isEqualToString:username]) {
+        if ([credential[@"password"] isEqualToString:password]) { callback->Success("{}"); return true; }
+        update = YES;
+      }
+    }
+    page.offeredUsername = username; page.offeredPassword = password;
+    page.passwordOfferOrigin = origin;
+    page.passwordOfferTitle = [NSString stringWithFormat:@"%@ password%@?", update ? @"Update" : @"Save",
+      username.length ? [@" for " stringByAppendingString:username] : @""];
+    [page changed];
+    callback->Success("{}");
+    return true;
+  }
   CefRefPtr<CefLifeSpanHandler> GetLifeSpanHandler() override { return this; }
   CefRefPtr<CefDisplayHandler> GetDisplayHandler() override { return this; }
   CefRefPtr<CefLoadHandler> GetLoadHandler() override { return this; }
@@ -117,6 +189,11 @@ class BrowserClient final : public CefClient,
   CefRefPtr<CefJSDialogHandler> GetJSDialogHandler() override { return this; }
   void OnAfterCreated(CefRefPtr<CefBrowser> browser) override {
     CEF_REQUIRE_UI_THREAD();
+    CefMessageRouterConfig config;
+    config.js_query_function = "wovenPasswordsQuery";
+    config.js_cancel_function = "wovenPasswordsCancel";
+    passwords_ = CefMessageRouterBrowserSide::Create(config);
+    passwords_->AddHandler(this, false);
     WMBrowserPage *page = page_;
     if (!page) { browser->GetHost()->CloseBrowser(true); return; }
     page->browser_ = browser;
@@ -135,7 +212,8 @@ class BrowserClient final : public CefClient,
     [native removeFromSuperview];
     return true;
   }
-  void OnBeforeClose(CefRefPtr<CefBrowser>) override {
+  void OnBeforeClose(CefRefPtr<CefBrowser> browser) override {
+    passwords_->OnBeforeClose(browser);
     CEF_REQUIRE_UI_THREAD();
     WMBrowserPage *page = page_;
     if (!page) return;
@@ -230,9 +308,10 @@ class BrowserClient final : public CefClient,
     CEF_REQUIRE_UI_THREAD(); if (!frame->IsMain() || code == ERR_ABORTED) return;
     WMBrowserPage *page = page_; page.errorMessage = String(text); [page changed];
   }
-  bool OnBeforeBrowse(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame>,
+  bool OnBeforeBrowse(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame,
                        CefRefPtr<CefRequest> request, bool, bool) override {
     CEF_REQUIRE_UI_THREAD();
+    passwords_->OnBeforeBrowse(browser, frame);
     if (AllowedURL(String(request->GetURL()))) return false;
     WMBrowserPage *page = page_;
     [page.delegate browserPage:page showMessage:@"This link requires an external application."];
@@ -248,9 +327,10 @@ class BrowserClient final : public CefClient,
     }
     return true;
   }
-  void OnRenderProcessTerminated(CefRefPtr<CefBrowser>, TerminationStatus,
+  void OnRenderProcessTerminated(CefRefPtr<CefBrowser> browser, TerminationStatus,
                                  int, const CefString &) override {
     CEF_REQUIRE_UI_THREAD(); WMBrowserPage *page = page_;
+    passwords_->OnRenderProcessTerminated(browser);
     page.errorMessage = @"This page stopped responding. Reload to try again.";
     [page changed];
   }
@@ -267,6 +347,7 @@ class BrowserClient final : public CefClient,
     }
   }
  private:
+  CefRefPtr<CefMessageRouterBrowserSide> passwords_;
   std::map<int, __weak WMBrowserPage *> pendingPopups_;
   __weak WMBrowserPage *page_; // No CEF -> ObjC -> CEF ownership cycle.
   IMPLEMENT_REFCOUNTING(BrowserClient);
@@ -309,11 +390,44 @@ class BrowserClient final : public CefClient,
   if (browser_ && !_closing) browser_->GetHost()->Find(Cef(text), forward, false, next);
 }
 - (void)stopFinding { if (browser_ && !_closing) browser_->GetHost()->StopFinding(true); }
+- (NSArray<NSString *> *)passwordUsernames {
+  NSString *origin = PasswordOrigin(_url);
+  if (!origin || !_delegate) return @[];
+  return [[_delegate browserPage:self passwordsForOrigin:origin] valueForKey:@"username"] ?: @[];
+}
+- (void)fillPasswordForUsername:(NSString *)username {
+  if (!browser_ || _closing) return;
+  auto frame = browser_->GetMainFrame();
+  NSString *origin = PasswordOrigin(String(frame->GetURL()));
+  if (!origin) return;
+  for (NSDictionary *credential in [_delegate browserPage:self passwordsForOrigin:origin]) {
+    if (![credential[@"username"] isEqualToString:username]) continue;
+    auto message = CefProcessMessage::Create("WovenPasswordFill");
+    auto args = message->GetArgumentList();
+    args->SetString(0, Cef(origin)); args->SetString(1, Cef(username));
+    args->SetString(2, Cef(credential[@"password"]));
+    frame->SendProcessMessage(PID_RENDERER, message);
+    break;
+  }
+}
+- (void)acceptPasswordOffer {
+  if (!_offeredPassword || !_passwordOfferOrigin || _closing) return;
+  NSString *error = [_delegate browserPage:self saveUsername:_offeredUsername
+    password:_offeredPassword origin:_passwordOfferOrigin];
+  if (error) { _errorMessage = error; [self changed]; return; }
+  [self dismissPasswordOffer];
+}
+- (void)dismissPasswordOffer {
+  _offeredUsername = nil; _offeredPassword = nil;
+  _passwordOfferOrigin = nil; _passwordOfferTitle = nil;
+  [self changed];
+}
 - (void)close {
   NSAssert(NSThread.isMainThread, @"Browser operations require the main thread");
   if (_closed || _closing) return;
   // Retain the owner until OnBeforeClose, including unload confirmation.
   _closing = YES;
+  [self dismissPasswordOffer];
   if (browser_) { browser_->GetHost()->CloseBrowser(false); return; }
   if (!_started) {
     _closed = YES; client_ = nullptr;
@@ -334,6 +448,14 @@ class BrowserClient final : public CefClient,
 - (NSUInteger)livePageCount { return _pages.count; }
 - (BOOL)startWithProfilePath:(NSString *)path error:(NSError **)error {
   NSAssert(NSThread.isMainThread, @"CEF initialization requires the main thread");
+  // Swift installs a process-wide policy before entering CEF. Refuse an
+  // unguarded entry point rather than allowing an asynchronous system prompt.
+  Boolean interactive = true;
+  if (SecKeychainGetUserInteractionAllowed(&interactive) != errSecSuccess || interactive) {
+    if (error) *error = [NSError errorWithDomain:@"WovenBrowser" code:2 userInfo:@{
+      NSLocalizedDescriptionKey: @"Reconnect saved credentials in Settings > General before opening the browser."}];
+    return NO;
+  }
   if (_running) return YES;
   NSString *failure = nil;
   if (_stopping) failure = @"The browser is shutting down.";
@@ -345,7 +467,16 @@ class BrowserClient final : public CefClient,
   }
   if (!failure) {
     const char *executable = NSBundle.mainBundle.executablePath.UTF8String;
+#if defined(WOVEN_BROWSER_TESTING)
+    // Only the standalone synthetic fixture is compiled with this definition.
+    // Shipping code cannot select a mock key or a different browser profile.
+    char mock[] = "--use-mock-keychain";
+    char *argv[] = {const_cast<char *>(executable), mock, nullptr};
+    const int argc = 2;
+#else
     char *argv[] = {const_cast<char *>(executable), nullptr};
+    const int argc = 1;
+#endif
     CefSettings settings;
     settings.external_message_pump = true;
     settings.persist_session_cookies = true;
@@ -354,14 +485,14 @@ class BrowserClient final : public CefClient,
     CefString(&settings.cache_path) = Cef([path stringByAppendingPathComponent:@"Default"]);
     CefString(&settings.log_file) = Cef([path stringByAppendingPathComponent:@"chromium.log"]);
     app_ = new BrowserApp;
-    _running = CefInitialize(CefMainArgs(1, argv), settings, app_, nullptr);
+    _running = CefInitialize(CefMainArgs(argc, argv), settings, app_, nullptr);
     if (!_running) failure = @"Chromium could not initialize its browser profile.";
     else {
       CefString preferenceError;
-      auto disabled = CefValue::Create(); disabled->SetBool(false);
+      auto enabled = CefValue::Create(); enabled->SetBool(true);
       auto context = CefRequestContext::GetGlobalContext();
-      context->SetPreference("credentials_enable_service", disabled, preferenceError);
-      context->SetPreference("profile.password_manager_enabled", disabled, preferenceError);
+      context->SetPreference("credentials_enable_service", enabled, preferenceError);
+      context->SetPreference("profile.password_manager_enabled", enabled, preferenceError);
       [self schedulePump:0];
     }
   }

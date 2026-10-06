@@ -1,6 +1,7 @@
 import AppKit
 import Observation
 import WovenMatterCore
+import WovenMatterClient
 
 /// Lives above the pane's SwiftUI branches, so chat selection, resizing and
 /// temporary utility screens cannot destroy browser sessions.
@@ -81,7 +82,26 @@ final class WorkspaceAssetSession: NSObject, @preconcurrency WMBrowserPageDelega
     }
     func browserPage(_ page: WMBrowserPage, showMessage message: String) { notice = message }
 
+    func browserPage(_ page: WMBrowserPage, passwordsForOrigin origin: String) -> [[String: String]] {
+        (try? BrowserCredentialStore.shared.savedPasswords(for: origin))?.map {
+            ["username": $0.username, "password": $0.password]
+        } ?? []
+    }
+
+    func browserPage(_ page: WMBrowserPage, saveUsername username: String, password: String,
+                     origin: String) -> String? {
+        do {
+            try BrowserCredentialStore.shared.save(origin: origin, username: username, password: password)
+            return nil
+        } catch { return error.localizedDescription }
+    }
+
     private func prepareBrowser() throws {
+        guard KeychainAccess.enforceCentralAuthorization() == 0 else {
+            throw BrowserCredentialStore.AccessError.unavailable(-25308)
+        }
+        try BrowserCredentialStore.shared.prepare(consented:
+            UserDefaults.standard.bool(forKey: BrowserCredentialStore.consentKey))
         let directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appending(path: "Woven Matter/Browser", directoryHint: .isDirectory)
             .appending(path: Bundle.main.bundleIdentifier ?? "wovenmatter.desktop", directoryHint: .isDirectory)

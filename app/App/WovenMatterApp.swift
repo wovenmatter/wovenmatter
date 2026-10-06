@@ -375,6 +375,7 @@ struct WovenMatterApp: App {
         let isRunningUnitTests = environment["XCTestBundlePath"] != nil
             || environment["XCTestSessionIdentifier"] != nil
             || environment.keys.contains("XCTestConfigurationFilePath")
+        if !isRunningUnitTests { KeychainAccess.enforceCentralAuthorization() }
         workspaceProcessLease = isRunningUnitTests
             ? nil
             : WorkspaceProcessLease.acquireOrExit()

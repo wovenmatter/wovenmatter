@@ -8,6 +8,9 @@ NS_ASSUME_NONNULL_BEGIN
 // Called synchronously on the main thread. Returning nil blocks at capacity.
 - (nullable WMBrowserPage *)browserPage:(WMBrowserPage *)page createPopup:(NSString *)url;
 - (void)browserPage:(WMBrowserPage *)page showMessage:(NSString *)message;
+// Native password UI/store remain outside website and agent interfaces.
+- (NSArray<NSDictionary<NSString *, NSString *> *> *)browserPage:(WMBrowserPage *)page passwordsForOrigin:(NSString *)origin;
+- (nullable NSString *)browserPage:(WMBrowserPage *)page saveUsername:(NSString *)username password:(NSString *)password origin:(NSString *)origin;
 @end
 
 @interface WMBrowserPage : NSObject
@@ -28,6 +31,12 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)stop;
 - (void)find:(NSString *)text forward:(BOOL)forward next:(BOOL)next;
 - (void)stopFinding;
+@property(nonatomic, readonly, nullable) NSString *passwordOfferTitle;
+@property(nonatomic, readonly, nullable) NSString *passwordOfferOrigin;
+@property(nonatomic, readonly) NSArray<NSString *> *passwordUsernames;
+- (void)acceptPasswordOffer;
+- (void)dismissPasswordOffer;
+- (void)fillPasswordForUsername:(NSString *)username;
 - (void)close;
 @end
 

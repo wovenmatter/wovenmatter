@@ -178,7 +178,10 @@ final class ApplicationUsageModel {
             case let .saveOpenRouterKey(value, range): await saveOpenRouterAPIKey(value, range: range)
             case let .deleteOpenRouterKey(range): await deleteOpenRouterAPIKey(range: range)
             case .acknowledgeDisclosure: acknowledgeCredentialAccessDisclosure()
-            case .authorizeSavedCredentials: try await authorizeSavedCredentials()
+            case .authorizeSavedCredentials:
+                try await KeychainAccess.$isCredentialAuthorizationActive.withValue(true) {
+                    try await authorizeSavedCredentials()
+                }
             case let .enable(provider, range): await enableUsageProvider(provider, range: range)
             case let .retry(provider, range): await retryUsageProviderCredentialAccess(provider, range: range)
             case let .selectConnection(id, provider, range): await selectUsageConnection(id, provider: provider, range: range)

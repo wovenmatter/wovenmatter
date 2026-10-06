@@ -33,12 +33,12 @@ struct SettingsGeneralView: View {
             onBack: onBack
         ) {
             releaseUpdateCard
-            sidebarLayoutCard
+            credentialAccessCard
             appearanceCard
+            sidebarLayoutCard
             backgroundExecutionCard
             idleSleepProtectionCard
             closedLidProtectionCard
-            credentialAccessCard
             dictationCard
             conversationTitlesCard
             if let tools = model.agentTools { WorkspaceToolDefaultsCard(tools: tools) }
@@ -51,7 +51,7 @@ struct SettingsGeneralView: View {
         }
         .sheet(isPresented: $showsCredentialDisclosure) {
             CredentialAccessDisclosureView(
-                purpose: "Use saved credentials across the Woven Matter features you enable.",
+                purpose: "Use saved credentials across the Woven Matter features you enable, including website sessions and passwords.",
                 onEnable: {
                     showsCredentialDisclosure = false
                     Task { await model.reconnectSavedCredentials() }

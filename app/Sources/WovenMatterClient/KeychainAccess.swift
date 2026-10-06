@@ -47,14 +47,24 @@ public struct KeychainOperations: Sendable {
 /// Noninteractive by default, including the legacy macOS login Keychain.
 /// Interactive calls must come directly from an explicit credential action.
 public struct KeychainAccess: Sendable {
-  // Legacy login-keychain operations ignore LAContext's per-query UI policy.
-  // The legacy setting is process-wide: every app Keychain call shares this
-  // lock, and suppression covers only the synchronous system operation.
-  private static let interactionLock = NSLock()
-  private let operations: KeychainOperations
+  /// Only Settings > General's deliberate recovery action enables this scope.
+  /// Task-local authorization follows actor calls without authorizing other tasks.
+  @TaskLocal public static var isCredentialAuthorizationActive = false
+  private static let systemPolicy = KeychainInteractionPolicy(operations: .init())
+  private let policy: KeychainInteractionPolicy
+  private var operations: KeychainOperations { policy.operations }
 
-  public init(operations: KeychainOperations = KeychainOperations()) {
-    self.operations = operations
+  public init() { policy = Self.systemPolicy }
+  public init(operations: KeychainOperations) {
+    policy = KeychainInteractionPolicy(operations: operations)
+  }
+  init(policy: KeychainInteractionPolicy) { self.policy = policy }
+
+  /// Suppress unwrapped library calls too (notably Chromium's asynchronous
+  /// OSCrypt worker). No Keychain items are read or modified by this operation.
+  @discardableResult
+  public static func enforceCentralAuthorization() -> OSStatus {
+    systemPolicy.enforceCentralAuthorization()
   }
 
   public func copyMatching(
@@ -99,31 +109,67 @@ public struct KeychainAccess: Sendable {
     failure: (OSStatus) -> Result,
     operation: () -> Result
   ) -> Result {
-    Self.interactionLock.withLock {
-      // Never enable a policy disabled by the caller or another subsystem.
-      if allowInteraction { return operation() }
-      let (policyStatus, wasAllowed) = operations.getInteractionAllowed()
-      guard policyStatus == errSecSuccess else { return failure(policyStatus) }
-      let suppressionStatus = operations.setInteractionAllowed(false)
-      guard suppressionStatus == errSecSuccess else { return failure(suppressionStatus) }
-      let result = operation()
-      // The operation is synchronous and nonthrowing. Restore the exact
-      // previous setting even when the Keychain operation itself failed.
-      let restorationStatus = operations.setInteractionAllowed(wasAllowed)
-      guard restorationStatus == errSecSuccess else { return failure(restorationStatus) }
-      return result
-    }
+    policy.perform(allowInteraction: allowInteraction, failure: failure, operation: operation)
   }
 
   private func authenticationQuery(
     _ query: [String: Any],
     allowInteraction: Bool
   ) -> [String: Any] {
-    guard !allowInteraction else { return query }
+    guard !policy.allowsInteraction(allowInteraction) else { return query }
     let context = LAContext()
     context.interactionNotAllowed = true
     var query = query
     query[kSecUseAuthenticationContext as String] = context
     return query
+  }
+}
+
+/// Shared by every system operation; fixtures use an isolated instance.
+final class KeychainInteractionPolicy: @unchecked Sendable {
+  let operations: KeychainOperations
+  private let lock = NSRecursiveLock()
+  private var centralized = false
+  private var originalInteractionAllowed = false
+  private var enforcementFailure: OSStatus?
+
+  init(operations: KeychainOperations) { self.operations = operations }
+
+  func allowsInteraction(_ requested: Bool) -> Bool {
+    lock.withLock { requested && (!centralized || KeychainAccess.isCredentialAuthorizationActive) }
+  }
+
+  func enforceCentralAuthorization() -> OSStatus {
+    lock.withLock {
+      if centralized && enforcementFailure == nil { return errSecSuccess }
+      centralized = true
+      let (status, allowed) = operations.getInteractionAllowed()
+      guard status == errSecSuccess else { enforcementFailure = status; return status }
+      originalInteractionAllowed = allowed
+      let result = operations.setInteractionAllowed(false)
+      enforcementFailure = result == errSecSuccess ? nil : result
+      return result
+    }
+  }
+
+  func perform<Result>(allowInteraction: Bool, failure: (OSStatus) -> Result,
+                       operation: () -> Result) -> Result {
+    lock.withLock {
+      if let status = enforcementFailure { return failure(status) }
+      let interactive = allowsInteraction(allowInteraction)
+      // Preserve the original behavior for clients that do not install the app
+      // policy, including tests and command-line entry points.
+      if interactive && !centralized { return operation() }
+      let (status, prior) = operations.getInteractionAllowed()
+      guard status == errSecSuccess else { return failure(status) }
+      // Never override a policy that was disabled before Woven installed its own.
+      let desired = interactive && originalInteractionAllowed
+      let changed = operations.setInteractionAllowed(desired)
+      guard changed == errSecSuccess else { return failure(changed) }
+      let result = operation()
+      let restored = operations.setInteractionAllowed(prior)
+      guard restored == errSecSuccess else { return failure(restored) }
+      return result
+    }
   }
 }
