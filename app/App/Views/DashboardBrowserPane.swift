@@ -42,7 +42,9 @@ struct DashboardBrowserPane: View {
                     Divider()
                     Button("Clear Browser Data…") { showsClearData = true }
                 } label: { Image(systemName: "ellipsis").frame(width: 28, height: 30) }
-                .menuStyle(.borderlessButton).fixedSize()
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
                 .help("Browser menu")
                 .accessibilityLabel("Browser menu")
             }

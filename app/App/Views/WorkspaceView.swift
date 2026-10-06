@@ -760,30 +760,32 @@ struct WorkspaceView: View {
                     DashboardRevealRailButton(side: .left, action: onLeftRail)
                 }
                 Spacer()
-                Button {
-                    let opened: Bool
-                    if !assets.tabs.isPresented, let existing = assets.tabs.browserIDs.last {
-                        assets.tabs.select(.browser(existing))
-                        opened = true
-                    } else {
-                        opened = assets.openBrowser() != nil
+                if destination == .workspace && !assets.tabs.isPresented {
+                    Button {
+                        let opened: Bool
+                        if let existing = assets.tabs.browserIDs.last {
+                            assets.tabs.select(.browser(existing))
+                            opened = true
+                        } else {
+                            opened = assets.openBrowser() != nil
+                        }
+                        if opened {
+                            compactWorkspacePane = .note
+                            compactDrawer = .none
+                        }
+                    } label: {
+                        Image(systemName: "globe").font(.system(size: 16)).frame(width: 32, height: 32)
                     }
-                    if opened {
-                        destination = .workspace
-                        compactWorkspacePane = .note
-                        compactDrawer = .none
-                    }
-                } label: {
-                    Image(systemName: "globe").font(.system(size: 16)).frame(width: 32, height: 32)
+                    .buttonStyle(DashboardIconButtonStyle())
+                    .help("Open browser")
+                    .accessibilityLabel("Open browser")
                 }
-                .buttonStyle(DashboardIconButtonStyle())
-                .help("Open browser")
-                .accessibilityLabel("Open browser")
                 if showRightRailButton {
                     DashboardRevealRailButton(side: .right, action: onRightRail)
                 }
             }
-            .padding(12)
+            .padding(.horizontal, 12)
+            .padding(.vertical, destination == .workspace && assets.tabs.isPresented ? 0 : 12)
 
             if let notice {
                 Text(notice)

@@ -62,8 +62,8 @@ struct DashboardAssetPane: View {
                 control("Hide assets", symbol: "rectangle.righthalf.inset.filled") { assets.tabs.hide() }
             }
             .padding(.leading, reservesLeadingRailControlSpace ? 56 : 10)
-            .padding(.trailing, reservesTrailingRailControlSpace ? 94 : 52)
-            .frame(height: 56)
+            .padding(.trailing, reservesTrailingRailControlSpace ? 56 : 10)
+            .frame(height: 32)
             Rectangle().fill(theme.palette.border).frame(height: 1)
             Group {
                 switch assets.tabs.selected {
