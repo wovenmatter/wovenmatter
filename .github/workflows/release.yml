@@ -37,6 +37,9 @@ jobs:
           scripts/scan-public-tree.sh
           scripts/test-release.sh
 
+      - name: Ensure CEF build tools
+        run: command -v cmake >/dev/null || brew install cmake
+
       - name: Run deterministic validation
         run: scripts/test-changes.sh --all
 

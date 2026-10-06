@@ -1,24 +1,13 @@
 import AppKit
 import SwiftUI
-import UniformTypeIdentifiers
-import WovenMatterClient
 import WovenMatterCore
 
 struct DashboardNotePane: View {
     @Environment(\.dashboardTheme) private var theme
     @Bindable var model: ApplicationModel
     let note: WorkspaceNoteRecord
-    let showBack: Bool
-    let noteOnLeft: Bool
-    let isFocused: Bool
-    let reservesLeadingRailControlSpace: Bool
-    let reservesTrailingRailControlSpace: Bool
     let focusesTitleOnAppear: Bool
     let onInitialFocusHandled: () -> Void
-    let onBack: () -> Void
-    let onMove: () -> Void
-    let onToggleFocus: () -> Void
-    let onClose: () -> Void
     @FocusState private var titleFocused: Bool
     @State private var editorController = DashboardNoteEditorController()
     @State private var dictationEditor = DictationEditor()
@@ -81,17 +70,6 @@ struct DashboardNotePane: View {
         let currentDocument = self.currentDocument
         VStack(spacing: 0) {
             HStack(spacing: 8) {
-                if showBack {
-                    Button {
-                        Task {
-                            _ = await model.flushNoteDrafts()
-                            onBack()
-                        }
-                    } label: {
-                        DashboardLucideIcon(glyph: .arrowLeft, size: 16).frame(width: 32, height: 32)
-                    }
-                    .buttonStyle(DashboardIconButtonStyle())
-                }
                 TextField(
                     currentDocument.kind == .note
                         ? "Untitled Note"
@@ -140,36 +118,8 @@ struct DashboardNotePane: View {
                     .buttonStyle(DashboardIconButtonStyle())
                     .help("Format note")
                 }
-                if !showBack {
-                    Button(action: onMove) {
-                        DashboardLucideIcon(glyph: noteOnLeft ? .arrowRight : .arrowLeft, size: 16)
-                            .frame(width: 32, height: 32)
-                    }
-                    .buttonStyle(DashboardIconButtonStyle())
-                    .help(noteOnLeft ? "Move note right" : "Move note left")
-                    Button(action: onToggleFocus) {
-                        Image(systemName: isFocused
-                              ? "arrow.down.right.and.arrow.up.left"
-                              : "arrow.up.left.and.arrow.down.right")
-                            .font(.system(size: 14, weight: .medium))
-                            .frame(width: 32, height: 32)
-                    }
-                    .buttonStyle(DashboardIconButtonStyle())
-                    .help(isFocused ? "Restore chat and note" : "Focus note")
-                }
-                Button {
-                    Task {
-                        _ = await model.flushNoteDrafts()
-                        onClose()
-                    }
-                } label: {
-                    DashboardLucideIcon(glyph: noteOnLeft ? .panelLeftClose : .panelRightClose, size: 16)
-                        .frame(width: 32, height: 32)
-                }
-                .buttonStyle(DashboardIconButtonStyle())
             }
-            .padding(.leading, reservesLeadingRailControlSpace ? 56 : 12)
-            .padding(.trailing, reservesTrailingRailControlSpace ? 56 : 12)
+            .padding(.horizontal, 12)
             .frame(height: 56)
 
             if showsFormatting && currentDocument.kind == .note {
@@ -381,7 +331,7 @@ struct DashboardSplitSeparator: View {
             .focusable()
             .focusEffectDisabled()
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel("Resize chat and note panes")
+            .accessibilityLabel("Resize chat and asset panes")
             .accessibilityValue("Chat \(chatWidthPercent, specifier: "%.1f") percent")
             .accessibilityAdjustableAction { direction in
                 switch direction {

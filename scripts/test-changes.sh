@@ -83,6 +83,10 @@ run_app_build() {
     "${derived_data}/Build/Products/Debug/Woven Matter Dev.app"
   python3 scripts/test-support/test_wovenmatter_cli.py \
     "${derived_data}/Build/Products/Debug/Woven Matter Dev.app/Contents/Resources/wovenmatter"
+  # The fixture substitutes CEF entry points; it does not launch Chromium.
+  local browser_build="${derived_data}/Build/Intermediates.noindex/WovenMatter.build/Debug/WovenMatter.build/DerivedSources/cef-${host_arch}"
+  make -C "$browser_build" WovenBrowserLifecycleTests >/dev/null
+  "$browser_build/WovenBrowserLifecycleTests"
 }
 
 run_all() {

@@ -43,10 +43,31 @@ The **New Note** picker offers **Note**, **Spreadsheet**, and **HTML**. Each is
 saved in WovenMatter's SQLite database. You can take and organize notes without
 connecting an agent.
 
+Keep up to four assets open in the shared tab strip. Tabs stay open when you
+switch conversations. Closing a note tab keeps the saved note; hiding the asset
+pane keeps its tabs. Open tabs are not restored after quitting the app.
+
 With **Notes** enabled in the conversation's **Tools** menu, the agent can find,
 read, create, and edit workspace notes. Opening a note beside the conversation
-supplies its context. Ask the agent to add text, update a table, or create an HTML
-artifact; changes appear in the editor. Disable Notes to stop further tool access.
+shares open-note references when you send a message, with the selected tab marked
+active. Ask the agent to add text, update a table, or create an HTML artifact;
+changes appear in the editor. Disable Notes to stop further tool access.
+
+## Browse beside your work
+
+Use the globe beside the chat to open the browser. Notes and browser pages share
+the asset pane; the tab-strip plus opens another browser tab, up to eight. Enter
+an address or search in the URL bar. The ellipsis menu offers Find in Page,
+Copy Page URL, Fill Saved Password when available, and Clear Browser Data.
+
+When the pane is open, sending a message shares its browser titles and web URLs.
+It does not share page contents, cookies, or saved passwords, or give the agent
+access to signed-in pages. Closing the pane stops sharing its context.
+
+Website sessions persist across restarts. Password saving and autofill are
+enabled; confirm Save or Update above the page when offered. Credential access
+is managed in **Settings → General**, directly below Software updates. Clear
+Browser Data clears site sessions on the next restart and keeps saved passwords.
 
 ## Restore a version
 

@@ -939,7 +939,7 @@ struct CredentialAccessDisclosureView: View {
             }
 
             DisclosureGroup("Keychain prompts") {
-                Text("macOS may ask when you explicitly connect or reconnect saved credentials. This app-wide choice stays saved; background refreshes stay silent.")
+                Text("macOS may ask when you use Credential access in General settings. This app-wide choice stays saved; opening the browser and background refreshes stay silent.")
                     .font(.system(size: 11.5))
                     .foregroundStyle(DashboardPalette.mutedForeground)
                     .fixedSize(horizontal: false, vertical: true)

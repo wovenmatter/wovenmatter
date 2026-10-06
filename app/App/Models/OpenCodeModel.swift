@@ -684,7 +684,9 @@ final class OpenCodeModel {
         try fence.check()
         if let command = OpenCodeComposerMetadata.invocation(input.text, commands: commands[id] ?? []) {
             try await coordinator.command(link, name: command.name,
-                input: AgentMessageInput(text: command.arguments, attachments: input.attachments, historyDeliveryID: input.historyDeliveryID, cliContext: input.cliContext), dispatchFence: fence)
+                input: AgentMessageInput(text: command.arguments, attachments: input.attachments,
+                    historyDeliveryID: input.historyDeliveryID, visibleWorkspace: input.visibleWorkspace,
+                    cliContext: input.cliContext), dispatchFence: fence)
         } else {
             try await coordinator.prompt(link, input: input, dispatchFence: fence)
         }
