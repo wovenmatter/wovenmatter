@@ -1025,7 +1025,6 @@ struct DashboardNewChatDrawer: View {
     @Environment(\.dashboardTheme) private var theme
     @Bindable var model: ApplicationModel
     let onClose: () -> Void
-    let onOpenSettings: () -> Void
     let onSelect: (DashboardNewChatTarget) -> Void
     @State private var expandedSources = Set(DashboardNewChatSource.allCases)
 
@@ -1207,8 +1206,6 @@ struct DashboardNewChatDrawer: View {
                 Button("Cancel", action: onClose)
                     .buttonStyle(DashboardQuietButtonStyle())
                 Spacer()
-                Button("Agent settings", action: onOpenSettings)
-                    .buttonStyle(DashboardPrimaryButtonStyle())
             }
             .padding(16)
         }

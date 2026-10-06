@@ -257,10 +257,6 @@ struct WorkspaceView: View {
                     DashboardNewChatDrawer(
                         model: model,
                         onClose: closeNewChatChooser,
-                        onOpenSettings: {
-                            closeNewChatChooser()
-                            openUtility(.settings)
-                        },
                         onSelect: startNewChat
                     )
                     .frame(width: min(440, max(360, geometry.size.width - 32)))
