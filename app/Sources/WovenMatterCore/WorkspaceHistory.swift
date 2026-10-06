@@ -13,11 +13,19 @@ public struct WorkspaceHistoryEvent: Sendable {
   public var completeness: String
   public var nativeSessionID: String?
   public var sourceConnectionID: String?
+  public var sourceID: String?
+  public var nativeRecordID: String?
+  public var nativeRevisionID: String?
+  public var contentMode: String?
+  public var textContent: String?
+  public var projectionJSON: String?
   public init(
     id: String = UUID().uuidString.lowercased(), conversationID: String? = nil,
     runID: String? = nil, agentID: String? = nil, harness: String,
     kind: String, payload: String, completeness: String = "observed",
-    nativeSessionID: String? = nil, sourceConnectionID: String? = nil
+    nativeSessionID: String? = nil, sourceConnectionID: String? = nil,
+    sourceID: String? = nil, nativeRecordID: String? = nil, nativeRevisionID: String? = nil,
+    contentMode: String? = nil, textContent: String? = nil, projectionJSON: String? = nil
   ) {
     self.id = id
     self.conversationID = conversationID
@@ -29,6 +37,12 @@ public struct WorkspaceHistoryEvent: Sendable {
     self.completeness = completeness
     self.nativeSessionID = nativeSessionID
     self.sourceConnectionID = sourceConnectionID
+    self.sourceID = sourceID
+    self.nativeRecordID = nativeRecordID
+    self.nativeRevisionID = nativeRevisionID
+    self.contentMode = contentMode
+    self.textContent = textContent
+    self.projectionJSON = projectionJSON
   }
 }
 
@@ -47,6 +61,58 @@ public struct WorkspaceHTTPObservation: Codable, Sendable {
 }
 
 public enum WorkspaceHistoryPrivacy {
+  /// Remove credential *transport* only. Native message/tool content (including
+  /// ordinary fields named `token`) is retained. Built-in credential RPCs must
+  /// never be recorded as raw run history.
+  public static func redactingTransportSecrets(_ text: String) -> String {
+    let endpoints = redactingToolEndpoints(text)
+    guard let decoded = try? JSONSerialization.jsonObject(with: Data(endpoints.utf8), options: [.fragmentsAllowed]) else {
+      return endpoints
+    }
+    guard var object = decoded as? [String: Any] else { return endpoints }
+    var changed = false
+    let secretHeaders = Set(["authorization", "proxy-authorization", "cookie", "set-cookie", "x-api-key"])
+    let credentialMethods = Set(["woven/credentials", "authenticate", "auth/login", "auth/refresh", "login", "connect"])
+    let credentialKeys = Set(["token", "apikey", "api_key", "accesstoken", "access_token", "refreshtoken", "refresh_token", "password", "clientsecret", "client_secret", "credentials", "auth", "authentication"])
+    func redactCredentials(_ value: Any) -> Any {
+      if let values = value as? [Any] { return values.map(redactCredentials) }
+      guard let values = value as? [String: Any] else { return value }
+      var safe: [String: Any] = [:]
+      for (key, item) in values {
+        if credentialKeys.contains(key.lowercased()) {
+          safe[key] = "[credential transport redacted]"
+          changed = true
+        } else { safe[key] = redactCredentials(item) }
+      }
+      return safe
+    }
+    let method = (object["method"] as? String)?.lowercased()
+    let isRPC = object["jsonrpc"] != nil || object["type"] as? String == "req" || method == "woven/credentials"
+    if isRPC, let method, credentialMethods.contains(method) {
+      for key in ["params", "payload", "result"] {
+        if let value = object[key] { object[key] = redactCredentials(value) }
+      }
+    }
+    let isHTTP = object["path"] is String && object["body"] is String && object["method"] is String
+    if isHTTP {
+      if var headers = object["headers"] as? [String: Any] {
+        for key in headers.keys where secretHeaders.contains(key.lowercased()) {
+          headers[key] = "[credential transport redacted]"
+          changed = true
+        }
+        object["headers"] = headers
+      }
+      if let body = object["body"] as? String {
+        // Recurse only at this explicit transport boundary. A JSON string in
+        // native message/tool content is retained as content.
+        let safe = redactingTransportSecrets(body)
+        if safe != body { object["body"] = safe; changed = true }
+      }
+    }
+    guard changed, let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys, .fragmentsAllowed]) else { return endpoints }
+    return String(decoding: data, as: UTF8.self)
+  }
+
   /// Tool endpoint paths are bearer capabilities. Keep them out of searchable
   /// protocol history, including JSON-escaped prompt strings.
   public static func redactingToolEndpoints(_ text: String) -> String {
@@ -70,6 +136,9 @@ public struct WorkspaceHistoryQuery: Codable, Sendable {
   public var conversationID: String?
   public var runID: String?
   public var harness: String?
+  public var sourceID: String?
+  public var nativeSessionID: String?
+  public var nativeRecordID: String?
   public var folderID: String?
   public var kind: String?
   public var since: String?
@@ -84,6 +153,7 @@ public struct WorkspaceHistoryQuery: Codable, Sendable {
   public var requestID: String?
   enum CodingKeys: String, CodingKey {
     case schemaVersion, command, id, search, conversationID, runID, harness, folderID, kind, since, until
+    case sourceID, nativeSessionID, nativeRecordID
     case after, limit, offset, characters, sort, callerConversationID, message, requestID
   }
   public init(from decoder: any Decoder) throws {
@@ -95,6 +165,9 @@ public struct WorkspaceHistoryQuery: Codable, Sendable {
     conversationID = try c.decodeIfPresent(String.self, forKey: .conversationID)
     runID = try c.decodeIfPresent(String.self, forKey: .runID)
     harness = try c.decodeIfPresent(String.self, forKey: .harness)
+    sourceID = try c.decodeIfPresent(String.self, forKey: .sourceID)
+    nativeSessionID = try c.decodeIfPresent(String.self, forKey: .nativeSessionID)
+    nativeRecordID = try c.decodeIfPresent(String.self, forKey: .nativeRecordID)
     folderID = try c.decodeIfPresent(String.self, forKey: .folderID)
     kind = try c.decodeIfPresent(String.self, forKey: .kind)
     since = try c.decodeIfPresent(String.self, forKey: .since)
@@ -111,7 +184,8 @@ public struct WorkspaceHistoryQuery: Codable, Sendable {
   public init(
     command: String, id: String? = nil, search: String? = nil,
     conversationID: String? = nil, runID: String? = nil,
-    harness: String? = nil, kind: String? = nil, after: Int64 = 0, limit: Int = 50
+    harness: String? = nil, kind: String? = nil, after: Int64 = 0, limit: Int = 50,
+    sourceID: String? = nil, nativeSessionID: String? = nil, nativeRecordID: String? = nil
   ) {
     self.command = command
     self.id = id
@@ -119,6 +193,9 @@ public struct WorkspaceHistoryQuery: Codable, Sendable {
     self.conversationID = conversationID
     self.runID = runID
     self.harness = harness
+    self.sourceID = sourceID
+    self.nativeSessionID = nativeSessionID
+    self.nativeRecordID = nativeRecordID
     self.kind = kind
     self.after = after
     self.limit = limit

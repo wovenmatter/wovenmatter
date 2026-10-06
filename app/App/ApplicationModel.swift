@@ -2766,8 +2766,10 @@ final class ApplicationModel {
             localRunError = ApplicationModelError.localACPRuntimeUnavailable.localizedDescription
             return nil
         }
-        let capturedDefaults = sessionSelectionPreferences.defaults(harness: runtimeKind.rawValue,
-            workspace: "local:" + (nativeWorkingDirectory ?? creationWorkspace.rootURL).standardizedFileURL.path)
+        let selectionWorkspace = "local:" + (nativeWorkingDirectory ?? creationWorkspace.rootURL).standardizedFileURL.path
+        let capturedDefaults = sessionSelectionPreferences.defaults(harness: runtimeKind.rawValue, workspace: selectionWorkspace)
+        let usesProductPermissionDefault = sessionSelectionPreferences.usesProductPermissionDefault(
+            harness: runtimeKind.rawValue, workspace: selectionWorkspace)
         do {
             guard let dashboardStore else {
                 throw ApplicationModelError.dashboardStoreUnavailable
@@ -2795,7 +2797,8 @@ final class ApplicationModel {
                 )
                 openClawGatewayConversationIDs.insert(conversationID)
             }
-            do { try await prepareNewSessionSelections(conversationID: conversationID, capturedDefaults: capturedDefaults) }
+            do { try await prepareNewSessionSelections(conversationID: conversationID, capturedDefaults: capturedDefaults,
+                usesProductPermissionDefault: usesProductPermissionDefault) }
             catch { ensureConversationState(id: conversationID).setError(error.localizedDescription) }
             localRunError = nil
             await refreshWorkspace()
@@ -2835,8 +2838,10 @@ final class ApplicationModel {
             localRunError = "This remote harness is not ready. Refresh it in Settings and try again."
             return nil
         }
-        let capturedDefaults = sessionSelectionPreferences.defaults(harness: target.harness.id.rawValue,
-            workspace: "remote:" + target.configuration.id.uuidString.lowercased())
+        let selectionWorkspace = "remote:" + target.configuration.id.uuidString.lowercased()
+        let capturedDefaults = sessionSelectionPreferences.defaults(harness: target.harness.id.rawValue, workspace: selectionWorkspace)
+        let usesProductPermissionDefault = sessionSelectionPreferences.usesProductPermissionDefault(
+            harness: target.harness.id.rawValue, workspace: selectionWorkspace)
         do {
             if target.harness.id == .opencode {
                 await synchronizeRemoteOpenCodeInstances()
@@ -2879,7 +2884,8 @@ final class ApplicationModel {
                     unlinkedOpenClawAgentID = agentID
                 }
             }
-            do { try await prepareNewSessionSelections(conversationID: conversationID, capturedDefaults: capturedDefaults) }
+            do { try await prepareNewSessionSelections(conversationID: conversationID, capturedDefaults: capturedDefaults,
+                usesProductPermissionDefault: usesProductPermissionDefault) }
             catch { ensureConversationState(id: conversationID).setError(error.localizedDescription) }
             localRunError = nil
             await refreshWorkspace()
@@ -2970,8 +2976,11 @@ final class ApplicationModel {
             localRunError = "The selected Buzz agent is not available from its linked workspace."
             return nil
         }
-        let capturedDefaults = sessionSelectionPreferences.defaults(harness: enrollment.runtimeKind?.rawValue ?? enrollment.harnessIdentifier,
-            workspace: "buzz:" + enrollment.workspaceLinkID.uuidString.lowercased())
+        let selectionHarness = enrollment.runtimeKind?.rawValue ?? enrollment.harnessIdentifier
+        let selectionWorkspace = "buzz:" + enrollment.workspaceLinkID.uuidString.lowercased()
+        let capturedDefaults = sessionSelectionPreferences.defaults(harness: selectionHarness, workspace: selectionWorkspace)
+        let usesProductPermissionDefault = sessionSelectionPreferences.usesProductPermissionDefault(
+            harness: selectionHarness, workspace: selectionWorkspace)
         do {
             guard let dashboardStore else {
                 throw ApplicationModelError.dashboardStoreUnavailable
@@ -2990,7 +2999,8 @@ final class ApplicationModel {
                 )
                 openClawGatewayConversationIDs.insert(conversationID)
             }
-            do { try await prepareNewSessionSelections(conversationID: conversationID, capturedDefaults: capturedDefaults) }
+            do { try await prepareNewSessionSelections(conversationID: conversationID, capturedDefaults: capturedDefaults,
+                usesProductPermissionDefault: usesProductPermissionDefault) }
             catch { ensureConversationState(id: conversationID).setError(error.localizedDescription) }
             localRunError = nil
             await refreshWorkspace()

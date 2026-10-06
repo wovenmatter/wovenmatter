@@ -298,14 +298,16 @@ struct ACPHarnessStreamingReviewTests {
     }
   }
 
-  @Test func claudeUsesSystemPromptMetadataAndAdvertisedAutoMode() async throws {
+  @Test func claudeUsesSystemPromptMetadataAndRetainsAdvertisedNativeModes() async throws {
     try await review(
       .claudeCode,
       initialize: #"{"protocolVersion":2,"agentInfo":{"name":"@agentclientprotocol/claude-agent-acp"},"agentCapabilities":{"loadSession":false}}"#,
       session: #"{"sessionId":"claude-session","configOptions":[{"id":"mode","options":[{"value":"auto"}],"currentValue":"default"}]}"#,
-      extras: ["session/set_config_option": #"{"configOptions":[{"id":"mode","options":[{"value":"auto"}],"currentValue":"auto"}]}"#],
-      expected: ["session/set_config_option", #""systemPrompt":{"append":"System fixture"}"#]
-    ) { _ in }
+      extras: [:], expected: [#""systemPrompt":{"append":"System fixture"}"#]
+    ) { configuration in
+      #expect(configuration.permission == "default")
+      #expect(configuration.permissionOptions == ["auto"])
+    }
   }
 
   @Test func codexLoadsExistingV2SessionAndKeepsIndependentConfiguration() async throws {

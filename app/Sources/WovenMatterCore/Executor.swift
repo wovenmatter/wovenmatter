@@ -43,12 +43,12 @@ public enum ExecutorApprovalPolicy: String, Sendable {
         switch (runtime, mode) {
         case (.defaultAgent, "full"), (.codex, "agent-full-access"),
              (.claudeCode, "bypassPermissions"), (.grokBuild, "bypassPermissions"),
-             (.cursor, "auto"), (.opencode, "full"), (.opencode, "auto"), (.hermes, "full"),
+             (.cursor, "auto"), (.cursor, "force"), (.opencode, "allow"), (.opencode, "full"), (.opencode, "auto"), (.hermes, "full"),
              (.openclaw, "full"): return .full
         case (.claudeCode, "dontAsk"), (.claudeCode, "plan"), (.grokBuild, "dontAsk"),
-             (.openclaw, "read-only"): return .deny
-        // Codex's historical "read-only" wire preset is Woven's Ask for
-        // approval choice. External calls still need the normal explicit review.
+             (.openclaw, "read-only"), (.opencode, "deny"): return .deny
+        // Native sandbox and smart-review policies govern the harness's tools.
+        // External app calls still need review unless Full Access is confirmed.
         default: return .ask
         }
     }

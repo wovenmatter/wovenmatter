@@ -352,9 +352,21 @@ private struct ACPEnvelope: Codable, Sendable {
     }
 }
 
+enum ACPInputFrame: Equatable, Sendable {
+    case inline(Data)
+    /// The receiving client must remove this transient file after ingestion.
+    case spooled(URL, byteCount: Int)
+}
+
 final class ACPLineCursor: @unchecked Sendable {
     static let maximumLineBytes = 10_000_000
+    // A 64 MiB native record plus its small protocol envelope.
+    static let maximumArchiveLineBytes = 65 * 1_024 * 1_024
+    static let maximumSpooledFrameBytes = 1_024 * 1_024 * 1_024
+    static let spoolThresholdBytes = 1_024 * 1_024
     private let handle: FileHandle
+    private let lineByteLimit: Int?
+    private let spoolDirectory: URL
     // FileHandle.AsyncBytes shares a blocking I/O actor across handles on macOS.
     // An idle session must not prevent another session from reading its response.
     // All mutable framing state is confined to this cursor's queue.
@@ -363,9 +375,22 @@ final class ACPLineCursor: @unchecked Sendable {
     private var chunkCount = 0
     private var chunkOffset = 0
     private var buffer = Data()
+    private var frameBytes = 0
+    private var spool: (url: URL, handle: FileHandle)?
+    private var terminalError: (any Error)?
 
-    init(handle: FileHandle) {
+    init(handle: FileHandle, maximumLineBytes: Int? = ACPLineCursor.maximumLineBytes,
+         spoolDirectory: URL = FileManager.default.temporaryDirectory) {
         self.handle = handle
+        self.lineByteLimit = maximumLineBytes
+        self.spoolDirectory = spoolDirectory
+    }
+
+    deinit {
+        if let spool {
+            try? spool.handle.close()
+            try? FileManager.default.removeItem(at: spool.url)
+        }
     }
 
     func next() async throws -> Data? {
@@ -373,8 +398,17 @@ final class ACPLineCursor: @unchecked Sendable {
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 queue.async {
-                    do { continuation.resume(returning: try self.readLine(cancellation: cancellation)) }
-                    catch { continuation.resume(throwing: error) }
+                    do {
+                        let frame = try self.readFrame(cancellation: cancellation, maximumBytes: self.lineByteLimit, spoolThreshold: nil)
+                        switch frame {
+                        case .inline(let data)?: continuation.resume(returning: data)
+                        case nil: continuation.resume(returning: nil)
+                        case .spooled(let url, _)?:
+                            try? FileManager.default.removeItem(at: url)
+                            continuation.resume(throwing: LocalACPClientError.invalidResponse("Unexpected spooled control frame"))
+                        }
+                    }
+                    catch { self.discardPartialFrame(error: error); continuation.resume(throwing: error) }
                 }
             }
         } onCancel: {
@@ -382,21 +416,79 @@ final class ACPLineCursor: @unchecked Sendable {
         }
     }
 
-    private func readLine(cancellation: ReadCancellation) throws -> Data? {
+    /// Large native snapshots are framed on a dispatch worker and spooled to
+    /// disk. Memory is bounded by the threshold plus one 64 KiB read chunk.
+    func nextFrame(maximumBytes: Int = ACPLineCursor.maximumSpooledFrameBytes) async throws -> ACPInputFrame? {
+        guard maximumBytes > 0 else { throw LocalACPClientError.invalidResponse("Invalid native frame limit") }
+        let cancellation = ReadCancellation()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                queue.async {
+                    do {
+                        continuation.resume(returning: try self.readFrame(cancellation: cancellation,
+                            maximumBytes: maximumBytes, spoolThreshold: Self.spoolThresholdBytes))
+                    } catch { self.discardPartialFrame(error: error); continuation.resume(throwing: error) }
+                }
+            }
+        } onCancel: { cancellation.cancel() }
+    }
+
+    private func discardPartialFrame(error: any Error) {
+        if let spool {
+            try? spool.handle.close()
+            try? FileManager.default.removeItem(at: spool.url)
+            self.spool = nil
+        }
+        buffer.removeAll(keepingCapacity: false)
+        frameBytes = 0
+        // Dropping a partial frame loses its delimiter position. Retire this
+        // reader rather than interpreting its remainder as another response.
+        terminalError = terminalError ?? error
+    }
+
+    private func appendFrameBytes(_ bytes: ArraySlice<UInt8>, maximumBytes: Int?, spoolThreshold: Int?) throws {
+        if let maximumBytes, bytes.count > maximumBytes - frameBytes {
+            throw LocalACPClientError.lineTooLarge
+        }
+        frameBytes += bytes.count
+        if spool == nil, let spoolThreshold, frameBytes > spoolThreshold {
+            let url = spoolDirectory.appending(path: "woven-native-frame-" + UUID().uuidString)
+            let descriptor = url.path.withCString { Darwin.open($0, O_CREAT | O_EXCL | O_WRONLY | O_CLOEXEC, S_IRUSR | S_IWUSR) }
+            guard descriptor >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+            let writer = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+            spool = (url, writer)
+            try writer.write(contentsOf: buffer)
+            buffer.removeAll(keepingCapacity: false)
+        }
+        if let spool { try spool.handle.write(contentsOf: Data(bytes)) }
+        else { buffer.append(contentsOf: bytes) }
+    }
+
+    private func finishFrame() throws -> ACPInputFrame? {
+        guard frameBytes > 0 else { return nil }
+        let count = frameBytes
+        frameBytes = 0
+        if let saved = spool {
+            try saved.handle.close()
+            spool = nil
+            return .spooled(saved.url, byteCount: count)
+        }
+        let data = buffer
+        buffer.removeAll(keepingCapacity: false)
+        return .inline(data)
+    }
+
+    private func readFrame(cancellation: ReadCancellation, maximumBytes: Int?, spoolThreshold: Int?) throws -> ACPInputFrame? {
+        if let terminalError { throw terminalError }
         while true {
             try cancellation.check()
             while chunkOffset < chunkCount {
-                let byte = chunk[chunkOffset]
-                chunkOffset += 1
-                if byte == 0x0A {
-                    guard !buffer.isEmpty else { continue }
-                    let line = buffer
-                    buffer.removeAll(keepingCapacity: true)
-                    return line
-                }
-                buffer.append(byte)
-                guard buffer.count <= Self.maximumLineBytes else {
-                    throw LocalACPClientError.lineTooLarge
+                let start = chunkOffset
+                while chunkOffset < chunkCount && chunk[chunkOffset] != 0x0A { chunkOffset += 1 }
+                try appendFrameBytes(chunk[start..<chunkOffset], maximumBytes: maximumBytes, spoolThreshold: spoolThreshold)
+                if chunkOffset < chunkCount {
+                    chunkOffset += 1
+                    if let frame = try finishFrame() { return frame }
                 }
             }
 
@@ -420,10 +512,7 @@ final class ACPLineCursor: @unchecked Sendable {
             chunkCount = count
             chunkOffset = 0
             if count == 0 {
-                guard !buffer.isEmpty else { return nil }
-                let line = buffer
-                buffer.removeAll()
-                return line
+                return try finishFrame()
             }
         }
     }
@@ -521,6 +610,8 @@ public actor LocalACPClient {
     private var durableRemoteACP = false
     private let accountCoordinator: ProviderAccountCoordinator?
     private var defaultAgentScope = "local"
+    private var executionScope = "local"
+    private var historyReplayOrdinal: Int?
     private var defaultAgentCredentialRevision: String?
     public func setDefaultAgentRunID(_ value: String) async throws {
         defaultAgentRunID = value
@@ -553,17 +644,12 @@ public actor LocalACPClient {
     private var thinkingConfigurationID: String?
     private var permissionConfigurationID: String?
     private var permissionUsesSessionModeMethod = false
-    // Native-supported policies include legacy values hidden from the picker.
-    // Keep them available to restore an existing conversation without translation.
-    private var nativePermissionOptions: [String] = []
     private var permissionStateRevision: UInt64 = 0
-    private var cursorPermission: String
+    private let cursorPermission: String
     private let requestedPermission: String?
     private var sessionCancellationRequested = false
     private var pendingPermissionRequestIDs: [ACPJSONValue] = []
     private var interactiveResponses: [UUID: (id: ACPJSONValue, fence: AgentDispatchFence)] = [:]
-    private var builtInPermissionTasks: [String: Task<String?, Never>] = [:]
-    private var cancelledBuiltInPermissions: Set<String> = []
     private struct PendingCursorRequest {
         let id: ACPJSONValue
         let method: String
@@ -623,13 +709,15 @@ public actor LocalACPClient {
         self.accountCoordinator = accountCoordinator
         self.historyRecorder = historyRecorder
         self.requestedPermission = requestedPermission
-        self.cursorPermission = requestedPermission ?? "normal"
+        self.cursorPermission = requestedPermission ?? "native-default"
         self.process = process
         self.input = input
         self.cursor = cursor
         self.runtimeKind = runtimeKind
         self.durableRemoteACP = process.environment?["WOVEN_DURABLE_REMOTE_ACP"] == "1"
-        self.defaultAgentScope = process.environment?["WOVEN_DEFAULT_AGENT_SCOPE"] ?? "local"
+        let scope = process.environment?["WOVEN_DEFAULT_AGENT_SCOPE"] ?? "local"
+        self.defaultAgentScope = scope
+        self.executionScope = process.environment?["WOVEN_EXECUTION_SCOPE"] ?? scope
         self.defaultAgentRemote = process.arguments?.contains("/usr/bin/ssh") == true
         self.workingDirectory = workingDirectory.standardizedFileURL
     }
@@ -684,7 +772,10 @@ public actor LocalACPClient {
         return LocalACPClient(
             process: process,
             input: stdin.fileHandleForWriting,
-            cursor: ACPLineCursor(handle: stdout.fileHandleForReading),
+            // Native history responses can contain an exposed attachment or
+            // unpaged snapshot larger than the normal control-frame limit.
+            cursor: ACPLineCursor(handle: stdout.fileHandleForReading,
+                maximumLineBytes: launch.historyRecorder == nil ? ACPLineCursor.maximumLineBytes : ACPLineCursor.maximumArchiveLineBytes),
             runtimeKind: launch.runtimeKind,
             workingDirectory: workingDirectory,
             requestedPermission: preparedLaunch.explicitPermission,
@@ -748,6 +839,8 @@ public actor LocalACPClient {
             let previousSessionID = sessionID
             sessionID = existingSessionID
             do {
+                historyReplayOrdinal = 0
+                defer { historyReplayOrdinal = nil }
                 let loaded = try await request(
                     method: "session/load",
                     params: .object([
@@ -769,12 +862,13 @@ public actor LocalACPClient {
                 sessionID = existingSessionID
                 captureSessionConfiguration(from: loaded)
                 try await discoverCursorModelsIfNeeded()
+                try await reconcileBuiltInNativeHistory()
                 return LocalACPInitializedSession(
                     sessionID: existingSessionID,
                     loadedExistingSession: true,
                     configuration: configuration,
-                    recoveredDefaultAgentRuns: (runtimeKind == .defaultAgent || durableRemoteACP) ? ((try? JSONDecoder().decode([DefaultAgentRunSnapshot].self, from: JSONEncoder().encode(loaded?["_meta"]?["recoveredRuns"] ?? .array([])))) ?? []) : [],
-                    confirmedRemoteIdleSessionID: loaded?["_meta"]?["recoveryComplete"]?.boolValue == true
+                    recoveredDefaultAgentRuns: (runtimeKind != .defaultAgent && durableRemoteACP) ? ((try? JSONDecoder().decode([DefaultAgentRunSnapshot].self, from: JSONEncoder().encode(loaded?["_meta"]?["recoveredRuns"] ?? .array([])))) ?? []) : [],
+                    confirmedRemoteIdleSessionID: runtimeKind != .defaultAgent && loaded?["_meta"]?["recoveryComplete"]?.boolValue == true
                         ? loaded?["_meta"]?["recoverySessionID"]?.stringValue : nil
                 )
             } catch LocalACPClientError.agent(let code, let message)
@@ -903,10 +997,7 @@ public actor LocalACPClient {
         try await notificationTask?.value
         captureSessionConfiguration(from: response)
         try await discoverCursorModelsIfNeeded()
-        try await selectNativeAutomaticPermissionMode(
-            from: response,
-            sessionID: created
-        )
+        try await reconcileBuiltInNativeHistory()
         return LocalACPInitializedSession(
             sessionID: created,
             loadedExistingSession: false,
@@ -947,50 +1038,6 @@ public actor LocalACPClient {
         }
     }
 
-    /// Claude's ACP adapter advertises its native guarded Auto mode in the
-    /// session result. Match Buzz by selecting that stable ACP configuration
-    /// option when available. Agents that do not advertise Auto continue to
-    /// use Woven Matter's request-permission UI.
-    private func selectNativeAutomaticPermissionMode(
-        from sessionResult: ACPJSONValue?,
-        sessionID: String
-    ) async throws {
-        guard runtimeKind == .claudeCode,
-              requestedPermission == nil,
-              let sessionResult,
-              Self.automaticPermissionModeIsAvailable(in: sessionResult),
-              !Self.automaticPermissionModeIsSelected(in: sessionResult) else {
-            return
-        }
-        _ = try await setSessionPermission("auto")
-    }
-
-    private static func automaticPermissionModeIsAvailable(
-        in sessionResult: ACPJSONValue
-    ) -> Bool {
-        let advertisedByLegacyModes = sessionResult["modes"]?["availableModes"]?
-            .arrayValue?
-            .contains { $0["id"]?.stringValue == "auto" } ?? false
-        let advertisedByConfiguration = sessionResult["configOptions"]?
-            .arrayValue?
-            .first { $0["id"]?.stringValue == "mode" }?["options"]?
-            .arrayValue?
-            .contains { $0["value"]?.stringValue == "auto" } ?? false
-        return advertisedByLegacyModes || advertisedByConfiguration
-    }
-
-    private static func automaticPermissionModeIsSelected(
-        in sessionResult: ACPJSONValue
-    ) -> Bool {
-        if sessionResult["modes"]?["currentModeId"]?.stringValue == "auto" {
-            return true
-        }
-        return sessionResult["configOptions"]?
-            .arrayValue?
-            .first { $0["id"]?.stringValue == "mode" }?["currentValue"]?
-            .stringValue == "auto"
-    }
-
     public func sessionConfiguration() -> LocalACPSessionConfiguration {
         configuration
     }
@@ -1006,8 +1053,7 @@ public actor LocalACPClient {
 
     public func setSessionPermission(_ permission: String) async throws -> LocalACPSessionConfiguration {
         guard let sessionID else { throw LocalACPClientError.sessionNotInitialized }
-        let supportedOptions = runtimeKind == .codex || runtimeKind == .claudeCode
-            ? nativePermissionOptions : configuration.permissionOptions
+        let supportedOptions = configuration.permissionOptions
         guard !supportedOptions.isEmpty else {
             throw LocalACPClientError.unsupportedConfiguration("permission")
         }
@@ -1015,12 +1061,7 @@ public actor LocalACPClient {
             throw LocalACPClientError.invalidConfigurationValue(field: "permission", value: permission)
         }
         if configuration.permission == permission { return configuration }
-        if runtimeKind == .cursor {
-            cursorPermission = permission
-            configuration = configuration.selecting(permission: permission)
-            await configurationHandler?(configuration)
-            return configuration
-        }
+        if runtimeKind == .cursor { throw LocalACPClientError.permissionChangeRequiresRestart }
         if runtimeKind == .grokBuild {
             throw LocalACPClientError.permissionChangeRequiresRestart
         }
@@ -1408,10 +1449,11 @@ public actor LocalACPClient {
         activePrompts.append(ActivePrompt(id: promptID, onEvent: onEvent,
             onPermission: onPermission, onInteraction: onInteraction))
         let response: Task<ACPRequestResponse, any Error>
+        let promptRunID = defaultAgentRunID ?? UUID().uuidString.lowercased()
         do {
             var metadata: [String: ACPJSONValue] = [:]
             if runtimeKind == .defaultAgent || durableRemoteACP {
-                metadata["wovenRunID"] = .string(defaultAgentRunID ?? UUID().uuidString.lowercased())
+                metadata["wovenRunID"] = .string(promptRunID)
                 metadata["wovenInputID"] = .string(UUID().uuidString.lowercased())
             }
             if let context = input.cliContext {
@@ -1569,7 +1611,6 @@ public actor LocalACPClient {
         guard let sessionID else { return }
         sessionCancellationRequested = true
         for response in interactiveResponses.values { response.fence.cancel() }
-        for task in builtInPermissionTasks.values { task.cancel() }
         let pending = pendingPermissionRequestIDs.filter { id in
             !interactiveResponses.values.contains { $0.id == id && $0.fence.hasDispatched }
         }
@@ -1590,6 +1631,19 @@ public actor LocalACPClient {
         ))
     }
 
+    /// Normal retirement must include committed background compaction and its
+    /// archive notifications. Forced shutdown remains an independent abort path.
+    public func awaitIdle() async throws {
+        guard runtimeKind == .defaultAgent, let sessionID else { return }
+        let result = try await request(method: "woven/idle", params: .object(["sessionId": .string(sessionID)]))
+        guard self.sessionID == sessionID, result?["idle"]?.boolValue == true else {
+            throw LocalACPClientError.invalidResponse("Built-in native work did not confirm idle retirement")
+        }
+        // Detached remote execution cannot push commits after the primary
+        // response. Reconcile its completed background work before release.
+        try await reconcileBuiltInNativeHistory()
+    }
+
     public func shutdown() async {
         if let shutdownTask {
             await shutdownTask.value
@@ -1599,7 +1653,6 @@ public actor LocalACPClient {
         closed = true
         finishRun()
         for response in interactiveResponses.values { response.fence.cancel() }
-        dismissBuiltInPermissions()
         readerTask?.cancel()
         readerTask = nil
         notificationTask?.cancel()
@@ -1717,15 +1770,6 @@ public actor LocalACPClient {
     private func receive(_ data: Data) async throws {
         if runtimeKind != .defaultAgent { try await historyRecorder?("in", data) }
         let envelope = try Self.decodeEnvelope(data)
-        if runtimeKind == .defaultAgent, envelope.method == "woven/permission_cancel",
-           let id = envelope.params?["requestID"]?.stringValue {
-            for response in interactiveResponses.values where response.id.stringValue == id { response.fence.cancel() }
-            // This must bypass the notification barrier held by the dialog.
-            // Cancelling its task also removes the app's pending approval UI.
-            if let task = builtInPermissionTasks[id] { task.cancel() }
-            else { cancelledBuiltInPermissions.insert(id) }
-            return
-        }
         if envelope.method == nil,
            let id = envelope.id?.integerValue,
            let pending = pendingRequests.removeValue(forKey: id) {
@@ -1740,6 +1784,17 @@ public actor LocalACPClient {
                 ))
                 pending.continuation.finish()
             }
+            return
+        }
+        if runtimeKind == .defaultAgent, envelope.method == "session/update",
+           pendingNewSessionUpdates == nil, belongsToActiveSession(envelope),
+           let update = envelope.params?["update"],
+           update["sessionUpdate"]?.stringValue == "woven_native_record",
+           let batch = update["recordBatch"], let sessionID {
+            // Native copies have no interactive UI callback. Ingest before the
+            // next frame for bounded backpressure, even when a dialog holds the
+            // ordinary notification queue. Response barriers remain ordered.
+            try await recordBuiltInNativeHistory(batch, sessionID: sessionID)
             return
         }
         if envelope.method == "session/update", pendingNewSessionUpdates != nil {
@@ -1773,7 +1828,9 @@ public actor LocalACPClient {
     private func enqueueNotification(_ envelope: ACPEnvelope) {
         let previous = notificationTask
         let task = Task<Void, any Error> { [weak self] in
-            try await previous?.value
+            try await withTaskCancellationHandler {
+                try await previous?.value
+            } onCancel: { previous?.cancel() }
             guard let self else { return }
             try Task.checkCancellation()
             try await self.handleNotification(envelope)
@@ -1800,6 +1857,25 @@ public actor LocalACPClient {
         } else if envelope.method == "session/update" {
             guard belongsToActiveSession(envelope) else { return }
             let update = envelope.params?["update"]
+            if runtimeKind == .defaultAgent,
+               update?["sessionUpdate"]?.stringValue == "woven_native_record" {
+                // The Built-in control channel carries credentials. Only the
+                // engine's explicit committed-record projection is archived;
+                // recording the whole wire would persist credential exchanges.
+                guard let sessionID, let batch = update?["recordBatch"] else {
+                    throw LocalACPClientError.invalidResponse("Missing Built-in native archive batch")
+                }
+                try await recordBuiltInNativeHistory(batch, sessionID: sessionID)
+                return
+            }
+            if runtimeKind != .defaultAgent, let sessionID, let update {
+                let ordinal = historyReplayOrdinal
+                if let ordinal { historyReplayOrdinal = ordinal + 1 }
+                let record = try ACPNativeHistoryCapture.record(update,
+                    runID: ordinal == nil ? defaultAgentRunID : nil, replayOrdinal: ordinal)
+                try await NativeHarnessArchive.capture(sourceID: "acp:\(runtimeKind.rawValue):\(executionScope)",
+                    sessionID: sessionID, records: [record], recorder: historyRecorder)
+            }
             switch update?["sessionUpdate"]?.stringValue {
             case "config_option_update", "available_commands_update", "current_mode_update":
                 let previousConfiguration = configuration
@@ -1823,7 +1899,7 @@ public actor LocalACPClient {
             }
             try await respondToPermissionRequest(
                 envelope,
-                handler: activePermissionHandler ?? ((runtimeKind == .defaultAgent || durableRemoteACP) ? resumePermissionHandler : nil)
+                handler: activePermissionHandler ?? (durableRemoteACP ? resumePermissionHandler : nil)
             )
         } else if envelope.method == "cursor/ask_question" {
             try await respondToCursorQuestion(
@@ -1859,18 +1935,43 @@ public actor LocalACPClient {
         return incomingSessionID == sessionID
     }
 
-    private func readerFailed(_ error: any Error) {
-        dismissBuiltInPermissions()
-        failPendingRequests(with: error)
+    /// Reconciliation is independent of the activity projection and run status.
+    /// A reconnect copies the native committed records even when a previous run
+    /// already has its final assistant message in the presentation database.
+    private func reconcileBuiltInNativeHistory() async throws {
+        guard runtimeKind == .defaultAgent, historyRecorder != nil, let sessionID else { return }
+        var after = try BuiltInNativeHistoryCursor(.integer(0))
+        while true {
+            try Task.checkCancellation()
+            let page = try await request(method: "woven/history", params: .object([
+                "sessionId": .string(sessionID), "after": after.value, "limit": .integer(200),
+            ]))
+            guard self.sessionID == sessionID,
+                  let batch = page?["recordBatch"],
+                  let nextValue = page?["nextAfter"],
+                  let hasMore = page?["hasMore"]?.boolValue,
+                  let next = try? BuiltInNativeHistoryCursor(nextValue),
+                  next >= after, !hasMore || next > after else {
+                throw LocalACPClientError.invalidResponse("Invalid Built-in native archive page")
+            }
+            try await recordBuiltInNativeHistory(batch, sessionID: sessionID)
+            if !hasMore { return }
+            after = next
+        }
     }
 
-    private func dismissBuiltInPermissions() {
-        for (id, task) in builtInPermissionTasks {
-            pendingPermissionRequestIDs.removeAll { $0.stringValue == id }
-            task.cancel()
-        }
-        builtInPermissionTasks.removeAll()
-        cancelledBuiltInPermissions.removeAll()
+    private func recordBuiltInNativeHistory(_ value: ACPJSONValue, sessionID: String) async throws {
+        guard let historyRecorder else { return }
+        let prefix = defaultAgentRemote ? "remote:\(defaultAgentScope):" : "local:"
+        let data = try BuiltInNativeHistoryCapture.batchData(value, sessionID: sessionID,
+            sourcePrefix: prefix)
+        try await historyRecorder("native", data)
+    }
+
+    private func readerFailed(_ error: any Error) {
+        notificationTask?.cancel()
+        for response in interactiveResponses.values { response.fence.cancel() }
+        failPendingRequests(with: error)
     }
 
     private func failPendingRequests(with error: any Error) {
@@ -1892,7 +1993,6 @@ public actor LocalACPClient {
            let available = modes["availableModes"]?.arrayValue {
             permissionStateRevision &+= 1
             permissionUsesSessionModeMethod = true
-            nativePermissionOptions = available.compactMap { $0["id"]?.stringValue }
             configuration = LocalACPSessionConfiguration(
                 model: configuration.model, thinking: configuration.thinking,
                 modelOptions: configuration.modelOptions, thinkingOptions: configuration.thinkingOptions,
@@ -1900,7 +2000,7 @@ public actor LocalACPClient {
                 modelOptionMetadata: configuration.modelOptionMetadata,
                 thinkingOptionMetadata: configuration.thinkingOptionMetadata,
                 permission: modes["currentModeId"]?.stringValue,
-                permissionOptions: LocalACPSessionPermissions.nativeOptions(runtimeKind: runtimeKind, options: nativePermissionOptions),
+                permissionOptions: available.compactMap { $0["id"]?.stringValue },
                 permissionOptionMetadata: LocalACPSessionPermissions.nativeMetadata(runtimeKind: runtimeKind, options: available, idKeys: ["id"])
             )
         }
@@ -1947,7 +2047,6 @@ public actor LocalACPClient {
             permissionConfigurationID = parsed.permission?.id
             if parsed.permission != nil || hadPermissionOption {
                 permissionStateRevision &+= 1
-                nativePermissionOptions = parsed.permission?.options ?? []
             }
             if hadPermissionOption && parsed.permission == nil {
                 permissionUsesSessionModeMethod = false
@@ -1964,9 +2063,7 @@ public actor LocalACPClient {
                 thinkingOptionMetadata: parsed.thinking?.metadata ?? [:],
                 fallbackNotice: value["_meta"]?["fallbackReason"]?.stringValue,
                 permission: parsed.permission?.currentValue ?? (hadPermissionOption ? nil : configuration.permission),
-                permissionOptions: parsed.permission.map {
-                    LocalACPSessionPermissions.nativeOptions(runtimeKind: runtimeKind, options: $0.options)
-                } ?? (hadPermissionOption ? [] : configuration.permissionOptions),
+                permissionOptions: parsed.permission?.options ?? (hadPermissionOption ? [] : configuration.permissionOptions),
                 permissionOptionMetadata: parsed.permission?.metadata ?? (hadPermissionOption ? [:] : configuration.permissionOptionMetadata)
             )
         }
@@ -2035,14 +2132,12 @@ public actor LocalACPClient {
                 modelOptionMetadata: configuration.modelOptionMetadata,
                 thinkingOptionMetadata: configuration.thinkingOptionMetadata,
                 permission: requestedPermission,
-                permissionOptions: LocalACPSessionPermissions.grokOptions(currentPermission: requestedPermission),
+                permissionOptions: LocalACPSessionPermissions.grokOptions,
                 permissionOptionMetadata: LocalACPSessionPermissions.grokMetadata
             )
         }
         if runtimeKind == .cursor {
-            // Cursor's ACP mode is an execution mode, and --force can persist in
-            // its native session. This picker controls only requests delivered
-            // to this client, without changing either native setting.
+            // ACP agent/plan/ask are execution modes; permissions are native process flags.
             configuration = LocalACPSessionConfiguration(
                 model: configuration.model, thinking: configuration.thinking,
                 modelOptions: configuration.modelOptions, thinkingOptions: configuration.thinkingOptions,
@@ -2215,31 +2310,7 @@ public actor LocalACPClient {
             return
         }
         pendingPermissionRequestIDs.append(id)
-        let selectedID: String?
-        // Cursor's persisted `auto` value means Full access in this client.
-        // It does not invoke the native Smart Auto classifier or set sticky --force.
-        if runtimeKind == .cursor, cursorPermission == "auto",
-           let sessionID, envelope.params?["sessionId"]?.stringValue == sessionID,
-           // Cursor's question fallback uses allow_once for answer choices.
-           // Those are user input, not approval of a tool operation.
-           !options.contains(where: { $0.id == "__ask_question_skip__" }),
-           options.filter({ $0.kind == "allow_once" }).count == 1,
-           let allowOnce = options.first(where: { $0.kind == "allow_once" }) {
-            selectedID = allowOnce.id
-        } else if runtimeKind == .defaultAgent, let requestID = id.stringValue {
-            if cancelledBuiltInPermissions.remove(requestID) != nil {
-                selectedID = nil
-            } else {
-                let task = Task { await handler?(request) }
-                builtInPermissionTasks[requestID] = task
-                selectedID = await withTaskCancellationHandler {
-                    await task.value
-                } onCancel: { task.cancel() }
-                builtInPermissionTasks.removeValue(forKey: requestID)
-            }
-        } else {
-            selectedID = await handler?(request)
-        }
+        let selectedID = await handler?(request)
         guard pendingPermissionRequestIDs.contains(id) else { return }
         let selected = selectedID.flatMap { candidate in
             options.first { $0.id == candidate }
@@ -2377,7 +2448,6 @@ public actor LocalACPClient {
             try await write(envelope, dispatchFence: fence)
         } catch is CancellationError where !fence.hasDispatched {
             // Stop snapshots the IDs before yielding and owns those cancellations.
-            // A remote built-in cancellation still needs its one protocol response.
             if !sessionCancellationRequested, pendingPermissionRequestIDs.contains(id) {
                 try await respondWithCancelledPermission(id: id)
             }
@@ -2759,7 +2829,7 @@ public enum LocalACPClientError: LocalizedError, Sendable {
         case .invalidLaunchConfiguration:
             "The local agent's wrapped launch command is invalid."
         case .lineTooLarge:
-            "The ACP agent emitted a response larger than 10 MB."
+            "The agent response exceeded the configured transport size limit."
         case .processExited:
             "The ACP agent process exited unexpectedly."
         case .missingSessionID:

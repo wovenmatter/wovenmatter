@@ -8,12 +8,31 @@ protocol HermesGatewayTransport: Sendable {
     func connect() async throws
     func disconnect() async
     func call(_ method: String, _ params: HermesValue) async throws -> HermesValue
+    func callConfiguration(_ method: String, _ params: HermesValue) async throws -> HermesValue
     func call(_ method: String, _ params: HermesValue, dispatchFence: AgentDispatchFence?) async throws -> HermesValue
     func respond(id: String, result: HermesValue) async throws
     func respond(id: String, result: HermesValue, dispatchFence: AgentDispatchFence?) async throws
+    func exportSession(storedID: String) async throws -> HermesSessionImport?
+    func archiveSession(storedID: String, recorder: @escaping WorkspaceWireRecorder, afterMessageID: Int64?, runID: String?) async throws -> Int64?
 }
 
 extension HermesGatewayTransport {
+    func callConfiguration(_ method: String, _ params: HermesValue) async throws -> HermesValue {
+        try await call(method, params)
+    }
+    func exportSession(storedID: String) async throws -> HermesSessionImport? { nil }
+    func archiveSession(storedID: String, recorder: @escaping WorkspaceWireRecorder, afterMessageID: Int64?, runID: String?) async throws -> Int64? {
+        guard let snapshot = try await exportSession(storedID: storedID) else { return nil }
+        var batch = try snapshot.nativeArchiveBatch()
+        var maximum: Int64 = 0
+        for index in batch.records.indices where batch.records[index].kind == "message" {
+            guard let id = Int64(batch.records[index].id.dropFirst("message:".count)) else { continue }
+            maximum = max(maximum, id)
+            if let afterMessageID, id > afterMessageID { batch.records[index].runID = runID }
+        }
+        try await recorder("native", NativeHarnessArchive.encode(batch))
+        return maximum
+    }
     // Fixtures and non-journaling transports keep their existing call contract.
     // The native RPC implementation claims only at its final socket write.
     func call(_ method: String, _ params: HermesValue, dispatchFence: AgentDispatchFence?) async throws -> HermesValue {
@@ -43,6 +62,8 @@ public actor HermesGatewayRPC: HermesGatewayTransport {
     public private(set) var epoch: String?
     public var isConnected: Bool { socket != nil }
     private var generation = UUID()
+    private var secretRequestIDs: Set<String> = []
+    private var configurationRequestIDs: Set<String> = []
 
     public init(connection: HermesGatewayConnection, historyRecorder: WorkspaceWireRecorder? = nil) {
         self.connection = connection
@@ -105,6 +126,17 @@ public actor HermesGatewayRPC: HermesGatewayTransport {
         reader?.cancel(); reader = nil
         socket?.cancel(with: .normalClosure, reason: nil); socket = nil
         failPending()
+        secretRequestIDs.removeAll()
+        configurationRequestIDs.removeAll()
+    }
+
+    func exportSession(storedID: String) async throws -> HermesSessionImport? {
+        try await HermesSessionHistory.load(connection: connection, sessionID: storedID)
+    }
+
+    func archiveSession(storedID: String, recorder: @escaping WorkspaceWireRecorder, afterMessageID: Int64?, runID: String?) async throws -> Int64? {
+        try await HermesSessionHistory.archive(connection: connection, sessionID: storedID,
+            recorder: recorder, afterMessageID: afterMessageID, runID: runID)
     }
 
     private var outgoingBusy = false
@@ -126,9 +158,18 @@ public actor HermesGatewayRPC: HermesGatewayTransport {
     }
 
     public func call(_ method: String, _ params: HermesValue, dispatchFence: AgentDispatchFence?) async throws -> HermesValue {
+        try await call(method, params, dispatchFence: dispatchFence, configuration: false)
+    }
+
+    func callConfiguration(_ method: String, _ params: HermesValue) async throws -> HermesValue {
+        try await call(method, params, dispatchFence: nil, configuration: true)
+    }
+
+    private func call(_ method: String, _ params: HermesValue, dispatchFence: AgentDispatchFence?, configuration: Bool) async throws -> HermesValue {
         try dispatchFence?.check()
         guard let socket else { throw HermesGatewayError.message("Hermes Gateway is disconnected.") }
         let id = UUID().uuidString
+        if configuration, historyRecorder != nil { configurationRequestIDs.insert(id) }
         let frame: HermesValue = ["jsonrpc": "2.0", "id": .string(id), "method": .string(method), "params": params]
         let text = String(decoding: try JSONEncoder().encode(frame), as: UTF8.self)
         let current = generation
@@ -189,9 +230,43 @@ public actor HermesGatewayRPC: HermesGatewayTransport {
         try await socket.send(.string(String(decoding: data, as: UTF8.self)))
     }
 
+    /// Secret/sudo replies are credential transport, not native run content.
+    /// Preserve correlation and the decision request without persisting values.
+    static func credentialSafeFrame(_ frame: HermesValue, secretRequestIDs: Set<String>) -> HermesValue {
+        var result = frame
+        let method = frame["method"].text
+        if ["sudo.respond", "secret.respond"].contains(method) {
+            result["params"] = .object(frame["params"].object.filter { !["password", "value", "secret"].contains($0.key) })
+        } else if secretRequestIDs.contains(frame["id"].text), method.isEmpty {
+            result["result"] = .object(frame["result"].object.filter { !["password", "value", "secret"].contains($0.key) })
+        } else if ["sudo", "secret"].contains(method) {
+            result["params"] = .object(frame["params"].object.filter { !["password", "value", "secret"].contains($0.key) })
+        } else if method == "event", ["sudo.request", "secret.request"].contains(frame["params"]["type"].text) {
+            var event = frame["params"]
+            event["payload"] = .object(event["payload"].object.filter { !["password", "value", "secret"].contains($0.key) })
+            result["params"] = event
+        }
+        return result
+    }
+
     // Authentication stays in HTTP headers; it never enters this recorder.
     private func record(_ direction: String, data: Data) async throws {
-        try await historyRecorder?(direction, data)
+        guard let historyRecorder else { return }
+        let frame = try HermesValue.decode(data)
+        if frame["method"].text == "event", frame["params"]["type"].text.hasPrefix("config.") { return }
+        // Session configuration can expose credentials outside the native run.
+        if direction == "out", let id = frame["id"].string,
+           frame["method"].text.hasPrefix("config.") || configurationRequestIDs.contains(id) {
+            configurationRequestIDs.insert(id)
+            return
+        }
+        if direction == "in", configurationRequestIDs.remove(frame["id"].text) != nil { return }
+        if direction == "in", ["sudo", "secret"].contains(frame["method"].text), let id = frame["id"].string {
+            secretRequestIDs.insert(id)
+        }
+        let safe = Self.credentialSafeFrame(frame, secretRequestIDs: secretRequestIDs)
+        try await historyRecorder(direction, safe == frame ? data : NativeHarnessArchive.encode(safe))
+        if direction == "out", frame["method"].isNull { secretRequestIDs.remove(frame["id"].text) }
     }
 
     private func receive(_ frame: HermesValue, generation current: UUID) async {

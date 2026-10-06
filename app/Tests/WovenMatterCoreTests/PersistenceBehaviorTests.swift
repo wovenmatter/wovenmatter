@@ -108,6 +108,62 @@ struct PersistenceBehaviorTests {
     })
   }
 
+  @Test("independent workspace writers preserve archive privacy and NUL deltas after reopen")
+  func independentWriterHistoryFunctions() async throws {
+    let fixture = try PersistenceFixture()
+    defer { fixture.remove() }
+    let database = try await WorkspaceDatabase(url: fixture.databaseURL)
+    let conversationID = try await database.createLocalACPSession(
+      runtimeKind: .codex, title: "Independent writer", ownerDeviceID: UUID()
+    )
+    let run = try await database.beginLocalACPRun(conversationID: conversationID, content: "Prompt")
+    let endpoint = "/private/tmp/wmtools-" + String(repeating: "a", count: 32) + "/" + String(repeating: "b", count: 32) + ".sock"
+    let initial = "first\0🧵", recordID = run.runID + ":activity:raw-thought"
+    func content(_ text: String) throws -> String {
+      let activity = AgentRunActivity(id: "raw-thought", kind: .thought, content: text,
+        contentIsDelta: true, rawPayloadJSON: "{\"endpoint\":\"\(endpoint)\",\"token\":\"ordinary-native-token\"}")
+      return String(decoding: try JSONEncoder().encode(activity), as: UTF8.self)
+        .replacingOccurrences(of: "'", with: "''")
+    }
+    let firstWriter = try PersistenceSQL(url: fixture.databaseURL)
+    #expect(try firstWriter.scalar("SELECT woven_text_length(char(0)||'🧵')") == 2)
+    try firstWriter.execute("""
+      INSERT INTO dashboard_run_events(id,conversation_id,run_id,event_type,content)
+      VALUES('\(recordID)','\(conversationID)','\(run.runID)','thought','\(try content(initial))');
+      """)
+    let reopened = try await WorkspaceDatabase(url: fixture.databaseURL)
+    let secondWriter = try PersistenceSQL(url: fixture.databaseURL)
+    try secondWriter.execute("""
+      UPDATE dashboard_run_events SET content='\(try content(initial + " violet"))'
+      WHERE id='\(recordID)';
+      """)
+    try await reopened.upsertDeviceOwnedRunActivity(runID: run.runID,
+      activity: .init(id: "raw-thought", kind: .thought, content: " harbor", contentIsDelta: true))
+    try await reopened.completeLocalACPRun(runID: run.runID)
+    let snapshots = try await reopened.queryHistory(.init(command: "events", runID: run.runID, kind: "activity.snapshot"))
+      .objectValue?["rows"]?.arrayValue ?? []
+    let deltas = try await reopened.queryHistory(.init(command: "events", runID: run.runID, kind: "activity.delta"))
+      .objectValue?["rows"]?.arrayValue ?? []
+    let finals = try await reopened.queryHistory(.init(command: "events", runID: run.runID, kind: "activity.final"))
+      .objectValue?["rows"]?.arrayValue ?? []
+    #expect(snapshots.count == 1 && deltas.count == 2 && finals.count == 1)
+    #expect(snapshots.first?.objectValue?["text_content"]?.stringValue == initial)
+    #expect(deltas.first?.objectValue?["text_content"]?.stringValue == " violet")
+    #expect(deltas.last?.objectValue?["text_content"]?.stringValue == " harbor")
+    #expect(finals.first?.objectValue?["text_content"]?.stringValue == initial + " violet harbor")
+    #expect((try await reopened.queryHistory(.init(command: "search", search: "violet harbor", runID: run.runID))).objectValue?["rows"]?.arrayValue?.count == 1)
+    for row in snapshots + deltas + finals {
+      let payload = try #require(row.objectValue?["payload"]?.stringValue)
+      #expect(!payload.contains(endpoint) && !payload.contains(String(repeating: "b", count: 32)))
+      #expect(payload.contains("ordinary-native-token"))
+      #expect(payload.contains("[Woven Matter session tool endpoint]"))
+    }
+    let reopenedAgain = try await WorkspaceDatabase(url: fixture.databaseURL)
+    let again = try await reopenedAgain.queryHistory(.init(command: "events", runID: run.runID, kind: "activity.delta"))
+    let previous = try await reopened.queryHistory(.init(command: "events", runID: run.runID, kind: "activity.delta"))
+    #expect(again == previous)
+  }
+
   @Test("attachment staging rejects oversized files and preserves content deduplication")
   func attachmentStaging() throws {
     let fixture = try PersistenceFixture()
@@ -171,6 +227,14 @@ private final class PersistenceSQL {
       throw WorkspaceDatabaseError.open("Synthetic database failed to open")
     }
     connection = pointer
+    do {
+      try WorkspaceSQLiteTextFunctions.register(on: pointer)
+      // Re-registration must remain safe on independently opened writers.
+      try WorkspaceSQLiteTextFunctions.register(on: pointer)
+    } catch {
+      sqlite3_close(pointer)
+      throw error
+    }
   }
 
   deinit { sqlite3_close(connection) }

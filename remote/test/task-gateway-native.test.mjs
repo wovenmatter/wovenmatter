@@ -2,112 +2,294 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import { PassThrough, Writable } from 'node:stream'
+import { createHash } from 'node:crypto'
 import { createNativeTaskExecutor } from '../src/task-gateway-native.mjs'
+import { nativePresentationUpdates } from '../../default-agent/src/native-journal.mjs'
+import { createTaskNativeArchive } from '../src/task-native-archive.mjs'
 const fixtureVersion = '2.0.22'
-
-const base = runtimeKind => ({run:{id:'run-1',title:'Fixture',task:{prompt:'fixture only',configuration:{runtimeKind,tools:{}}}},nativeSessionID:null,signal:new AbortController().signal,publish:()=>{},bindSession:()=>{}})
 const options = {workspaceRoot:'/workspace',environment:()=>({HOME:'/home'})}
+const base = runtimeKind => ({run:{id:'run-1',title:'Fixture',task:{prompt:'fixture only',configuration:{runtimeKind,tools:{}}}},nativeSessionID:null,signal:new AbortController().signal,publish:()=>{},bindSession:()=>{}})
+const nativeRecords = updates => updates.flatMap(update => update.recordBatch?.records ?? [])
+const text = updates => updates.filter(update => update.sessionUpdate === 'agent_message_chunk').map(update => update.content.text).join('')
 
-test('Pi applies and confirms model/thinking before a single prompt, preserving recurring identity',async()=>{
-  const calls=[],updates=[],ids=[]
-  const launch=(_command,args)=>{
-    assert.deepEqual(args,['--mode','rpc','--session','pi-session'])
-    const child=new EventEmitter();child.stdout=new PassThrough();child.stderr=new PassThrough()
-    let model={provider:'lab',id:'model'},thinkingLevel='low'
-    child.stdin=new Writable({write(bytes,_encoding,done){const command=JSON.parse(String(bytes));calls.push(command.type);let data={};if(command.type==='get_state'){data={sessionId:'pi-session',model,thinkingLevel};child.stdout.write(JSON.stringify({type:'message_update',assistantMessageEvent:{type:'text_delta',delta:'old'}})+'\n');child.stdout.write('{"type":"agent_settled"}\n')};if(command.type==='set_model')model={provider:command.provider,id:command.modelId};if(command.type==='set_thinking_level')thinkingLevel=command.level;child.stdout.write(JSON.stringify({type:'response',id:command.id,success:true,data})+'\n');if(command.type==='prompt'){child.stdout.write(JSON.stringify({type:'message_update',assistantMessageEvent:{type:'text_delta',delta:'done'}})+'\n');child.stdout.write('{"type":"agent_settled"}\n')}done()}})
-    child.kill=()=>{child.emit('exit',0);return true};return child
+function piFixture({events = [{type:'message_update',assistantMessageEvent:{type:'text_delta',delta:'done'}},{type:'agent_settled'}], entries = [], historical = []} = {}) {
+  const calls = [], state = {sessionId:'pi-session',sessionFile:'/native/session.jsonl',model:{provider:'lab',id:'model'},thinkingLevel:'low'}
+  let killed = false, submitted = false
+  const launch = (_command, args, launchOptions) => {
+    const child = new EventEmitter();child.stdout=new PassThrough();child.stderr=new PassThrough()
+    const frame = value => child.stdout.write(JSON.stringify(value)+'\n')
+    child.stdin = new Writable({write(bytes,_encoding,done){
+      const command=JSON.parse(String(bytes));calls.push(command)
+      if (command.type === 'get_entries') assert.ok(Object.keys(command).every(key=>['id','type','since'].includes(key)))
+      setImmediate(() => {
+        if(command.type==='set_model')state.model={provider:command.provider,id:command.modelId}
+        if(command.type==='set_thinking_level')state.thinkingLevel=command.level
+        if(command.type==='get_state'){frame({type:'message_update',assistantMessageEvent:{type:'text_delta',delta:'old'}});frame({type:'agent_settled'})}
+        if(command.type==='prompt')submitted=true
+        const exported=submitted?[...historical,...entries]:historical
+        const since=command.since?exported.findIndex(entry=>entry.id===command.since):-1
+        frame({type:'response',id:command.id,success:true,data:command.type==='get_state'?state:command.type==='get_entries'?{entries:exported.slice(since+1)}:{}})
+        if(command.type==='prompt')for(const event of events)frame(event)
+      });done()
+    }})
+    child.kill=()=>{killed=true;queueMicrotask(()=>child.emit('exit',0));return true}
+    calls.push({args,environment:launchOptions.env});return child
   }
-  const context=base('pi');context.nativeSessionID='pi-session';context.run.task.configuration.model='lab/next';context.run.task.configuration.thinking='high';context.publish=x=>updates.push(x);context.bindSession=x=>ids.push(x)
-  const result=await createNativeTaskExecutor({...options,launch})(context)
-  assert.equal(result.stopReason,'end_turn');assert.equal(calls.filter(x=>x==='prompt').length,1)
-  assert.ok(calls.indexOf('set_thinking_level')<calls.indexOf('prompt'));assert.deepEqual(ids,['pi-session']);assert.equal(updates[0].content.text,'done')
+  return {launch,calls,get killed(){return killed}}
+}
+
+function openCodeFixture({permissionRequests=[],forms=[],pages=[{data:[{id:'msg_answer',type:'assistant',content:[{type:'text',text:'result'}]}]}],permissions=[],ignorePolicy=false,healthPID=42}={}) {
+  const calls=[],session={id:'ses_fixture',model:{providerID:'lab',id:'old'},permissions}
+  let submitted=false
+  const fetchRequest=async(url,request)=>{
+    assert.equal(request.headers.authorization,'Basic '+Buffer.from('opencode:fixture').toString('base64'))
+    assert.equal(request.redirect,'error')
+    const body=request.body&&JSON.parse(request.body);calls.push({method:request.method,path:url.pathname,query:url.searchParams.toString(),body})
+    let response
+    if(url.pathname==='/api/info')response={healthy:true,pid:healthPID,version:fixtureVersion}
+    else if(url.pathname==='/api/session/ses_fixture/model'){session.model=body.model;response={}}
+    else if(url.pathname==='/api/session/ses_fixture'){
+      if(request.method==='PATCH'&&!ignorePolicy)session.permissions=body.permissions
+      response={data:structuredClone(session)}
+    } else if(url.pathname.endsWith('/message')) {
+      const index=url.searchParams.has('cursor')?Number(url.searchParams.get('cursor')):0
+      response=submitted?pages[index]:{data:[]}
+      if(!response)assert.fail('unexpected native cursor '+index)
+    } else if(url.pathname.endsWith('/prompt')){submitted=true;response={data:{id:body.id}}}
+    else if(url.pathname==='/api/session/active')response={data:{}}
+    else if(url.pathname.endsWith('/permission'))response={data:submitted?permissionRequests:[]}
+    else if(url.pathname.endsWith('/form'))response={data:submitted?forms:[]}
+    else if(url.pathname.endsWith('/interrupt'))response={}
+    else assert.fail('unexpected OpenCode operation '+request.method+' '+url.pathname)
+    return {ok:true,status:200,json:async()=>structuredClone(response)}
+  }
+  const execute=createNativeTaskExecutor({...options,instances:{action:async()=>{},registrationPath:'fixture'},read:async()=>JSON.stringify({url:'http://127.0.0.1:4000',password:'fixture',pid:42}),fetchRequest})
+  const context=base('opencode');context.nativeSessionID='ses_fixture'
+  return {execute,context,calls,session}
+}
+
+function hermesFixture({events=[{type:'message.complete',payload:{text:'finished',status:'success'}}],snapshot={id:'stored',messages:[]},resolved='stored',historical=[]}={}) {
+  const calls=[],exports=[];let submitted=false
+  class FixtureSocket extends EventTarget {
+    constructor(){super();queueMicrotask(()=>this.dispatchEvent(new Event('open')))}
+    send(bytes){
+      const frame=JSON.parse(bytes);calls.push(frame)
+      const params=frame.params??{}
+      let result={}
+      if(frame.method==='config.get')result=params.key==='profile'?{home:'/home/.hermes'}:{value:'model'}
+      else if(frame.method==='session.resume')result={session_id:'runtime',stored_session_id:resolved,running:false,...(resolved!=='stored'?{resumed:resolved}:{})}
+      else if(frame.method==='session.events.since')result={latest_seq:5,epoch:'native-epoch'}
+      else if(!['ping','session.cwd.set','config.set','prompt.submit','session.interrupt','approval.respond'].includes(frame.method))assert.fail('unexpected Hermes operation '+frame.method)
+      queueMicrotask(()=>{
+        if(frame.method==='config.set')this.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({method:'event',params:{session_id:'runtime',seq:1,type:'message.complete',payload:{text:'old',status:'success'}}})}))
+        this.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({id:frame.id,result})}))
+        if(frame.method==='prompt.submit'){submitted=true;events.forEach((event,index)=>this.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({method:'event',params:{session_id:'runtime',seq:6+index,...event}})})))}
+      })
+    }
+    close(){}
+  }
+  const execute=createNativeTaskExecutor({...options,hermes:{start:async()=>{}},read:async()=>JSON.stringify({port:4000,token:'fixture-secret'}),WebSocketClass:FixtureSocket,fetchRequest:async(url,request)=>{
+    exports.push(url);assert.equal(request.headers.authorization,'Bearer fixture-secret');assert.equal(request.redirect,'error')
+    return {ok:true,json:async()=>submitted?snapshot:{id:snapshot.id,messages:historical}}
+  }})
+  const context=base('hermes');context.nativeSessionID='stored'
+  return {execute,context,calls,exports}
+}
+
+test('Pi confirms model/thinking before one prompt and archives native tools/compaction/nontext with the bound identity',async()=>{
+  const entries=[{id:'native-tool',type:'message',message:{role:'toolResult',content:[{type:'image',data:'exposed-image',mimeType:'image/png'},{type:'text',text:'tool needle'}]}},{id:'native-compact',type:'compaction',summary:'context needle',tokensBefore:12000}]
+  const fixture=piFixture({entries,events:[{type:'tool_execution_start',toolCallId:'call',args:{file:'input'}},{type:'tool_execution_end',toolCallId:'call',result:{content:[{type:'text',text:'tool needle'}]}},{type:'auto_compaction_end',compactionResult:entries[1]},{type:'message_update',assistantMessageEvent:{type:'thinking_delta',delta:'exposed thought'}},{type:'message_update',assistantMessageEvent:{type:'text_delta',delta:'done'}},{type:'agent_settled'}]})
+  const context=base('pi'),updates=[],ids=[];context.nativeSessionID='pi-session';context.run.task.configuration.model='lab/next';context.run.task.configuration.thinking='high';context.publish=x=>updates.push(x);context.bindSession=x=>ids.push(x)
+  assert.equal((await createNativeTaskExecutor({...options,launch:fixture.launch})(context)).stopReason,'end_turn')
+  assert.deepEqual(fixture.calls[0].args,['--mode','rpc','--session','pi-session'])
+  assert.equal(fixture.calls.filter(x=>x.type==='prompt').length,1)
+  assert.ok(fixture.calls.findIndex(x=>x.type==='set_thinking_level')<fixture.calls.findIndex(x=>x.type==='prompt'))
+  assert.deepEqual(ids,['pi-session']);assert.equal(text(updates),'done')
+  assert.ok(updates.filter(x=>x.recordBatch).every(x=>x.recordBatch.nativeSessionID===ids[0]))
+  const records=nativeRecords(updates)
+  assert.ok(records.some(x=>x.kind==='tool_execution_end'));assert.ok(records.some(x=>x.kind==='auto_compaction_end'))
+  assert.deepEqual(JSON.parse(records.find(x=>x.id==='entry:native-tool').payload),entries[0]);assert.equal(records.find(x=>x.id==='entry:native-tool').runID,'run-1')
+  assert.ok(records.some(x=>x.text?.includes('context needle')))
 })
 
-test('native unsupported saved permission fails before spawning or submitting',async()=>{
+test('unsupported native permission selections fail before spawning/submitting',async()=>{
   let launched=false
   const context=base('pi');context.run.task.configuration.permission='full'
   await assert.rejects(createNativeTaskExecutor({...options,launch:()=>{launched=true}})(context),error=>error.beforePrompt===true)
   assert.equal(launched,false)
-})
-
-test('OpenCode preserves existing session, checks selection and projects completed native response',async()=>{
-  const calls=[],updates=[];let selected={providerID:'lab',id:'old'},submitted=false
-  const fetchRequest=async(url,request)=>{
-    calls.push([request.method,url.pathname]);assert.equal(request.headers.authorization,'Basic '+Buffer.from('opencode:fixture').toString('base64'))
-    let data={}
-    if(url.pathname==='/api/info')data={healthy:true,pid:42,version:fixtureVersion}
-    else if(url.pathname==='/api/session/ses_fixture/model'){selected=JSON.parse(request.body).model}
-    else if(url.pathname==='/api/session/ses_fixture')data={data:{id:'ses_fixture',model:selected}}
-    else if(url.pathname.endsWith('/message'))data={data:submitted?[{id:'msg_answer',type:'assistant',content:[{type:'text',text:'result'}]}]:[]}
-    else if(url.pathname.endsWith('/prompt')){submitted=true;data={data:{id:JSON.parse(request.body).id}}}
-    else if(url.pathname==='/api/session/active')data={data:{}}
-    else if(url.pathname.endsWith('/permission')||url.pathname.endsWith('/form'))data={data:[]}
-    else throw Error('unexpected '+url.pathname)
-    return {ok:true,status:200,json:async()=>data}
+  for(const permission of ['normal','acceptEdits','full','auto']){
+    const fixture=openCodeFixture();fixture.context.run.task.configuration.permission=permission
+    await assert.rejects(fixture.execute(fixture.context),error=>error.beforePrompt===true)
+    assert.equal(fixture.calls.length,0)
   }
-  const context=base('opencode');context.nativeSessionID='ses_fixture';context.run.task.configuration.model='lab/new';context.run.task.configuration.thinking='high';context.publish=x=>updates.push(x)
-  await createNativeTaskExecutor({...options,instances:{action:async()=>{},registrationPath:'/private/fixture'},read:async()=>JSON.stringify({url:'http://127.0.0.1:4000',password:'fixture',pid:42}),fetchRequest})(context)
-  assert.equal(calls.filter(x=>x[1].endsWith('/prompt')).length,1);assert.equal(updates[0].content.text,'result');assert.deepEqual(selected,{providerID:'lab',id:'new',variant:'high'})
 })
 
-test('OpenCode rejects identity mismatch before prompt',async()=>{
-  const context=base('opencode');let prompts=0
-  await assert.rejects(createNativeTaskExecutor({...options,instances:{action:async()=>{},registrationPath:'fixture'},read:async()=>JSON.stringify({url:'http://127.0.0.1:4000',password:'fixture',pid:42}),fetchRequest:async(url)=>{if(url.pathname.endsWith('/prompt'))prompts++;return {ok:true,status:200,json:async()=>({healthy:true,pid:99,version:fixtureVersion})}}})(context),error=>error.beforePrompt===true)
-  assert.equal(prompts,0)
-})
-
-test('Hermes reuses durable session, confirms model and settles without interactive approval',async()=>{
-  const calls=[],updates=[],bound=[]
-  class FixtureSocket extends EventTarget {
-    constructor(){super();queueMicrotask(()=>this.dispatchEvent(new Event('open')))}
-    send(bytes){const frame=JSON.parse(bytes);calls.push(frame.method);let result={};if(frame.method==='config.get')result=frame.params.key==='profile'?{home:'/home/.hermes'}:{value:'model'};if(frame.method==='session.resume')result={session_id:'runtime',stored_session_id:'stored',running:false};if(frame.method==='session.events.since')result={latest_seq:5};queueMicrotask(()=>{if(frame.method==='config.set')this.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({method:'event',params:{session_id:'runtime',seq:1,type:'message.complete',payload:{text:'old',status:'success'}}})}));this.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({id:frame.id,result})}));if(frame.method==='prompt.submit')this.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({method:'event',params:{session_id:'runtime',seq:6,type:'message.complete',payload:{text:'finished',status:'success'}}})}))})}
-    close(){}
+test('OpenCode confirms native rules without removing custom rules and projects the completed response',async()=>{
+  for(const permission of ['ask','allow','deny']){
+    const custom={action:'bash',resource:'protected/*',effect:'deny'},fixture=openCodeFixture({permissions:[custom,{action:'*',resource:'*',effect:'ask'}]})
+    const updates=[];fixture.context.run.task.configuration={runtimeKind:'opencode',permission,model:'lab/new',thinking:'high'};fixture.context.publish=x=>updates.push(x)
+    await fixture.execute(fixture.context)
+    assert.deepEqual(fixture.session.permissions,[custom,{action:'*',resource:'*',effect:permission}])
+    assert.deepEqual(fixture.session.model,{providerID:'lab',id:'new',variant:'high'})
+    assert.equal(text(updates),'result');assert.equal(fixture.calls.filter(x=>x.path.endsWith('/prompt')).length,1)
+    const patch=fixture.calls.findIndex(x=>x.method==='PATCH');assert.equal(fixture.calls[patch+1].method,'GET')
+    assert.ok(nativeRecords(updates).some(x=>x.id==='message:msg_answer'&&x.runID==='run-1'))
   }
-  const context=base('hermes');context.nativeSessionID='stored';context.run.task.configuration.model='model';context.publish=x=>updates.push(x);context.bindSession=x=>bound.push(x)
-  await createNativeTaskExecutor({...options,hermes:{start:async()=>{}},read:async()=>JSON.stringify({port:4000,token:'fixture'}),WebSocketClass:FixtureSocket})(context)
-  assert.equal(calls.filter(x=>x==='prompt.submit').length,1);assert.ok(calls.indexOf('config.set')<calls.indexOf('prompt.submit'));assert.equal(updates[0].content.text,'finished');assert.match(bound[0],/^hermes-gateway:/)
 })
 
-test('OpenCode approval policy never auto-approves authentication and interrupts the task',async()=>{
-  const context=base('opencode');context.nativeSessionID='ses_fixture';context.run.task.configuration.permission='full'
-  let interrupted=false,replied=false,submitted=false
-  const fetchRequest=async(url,request)=>{
-    let data={data:[]}
-    if(url.pathname==='/api/info')data={healthy:true,pid:42,version:fixtureVersion}
-    else if(url.pathname==='/api/session/ses_fixture')data={data:{id:'ses_fixture'}}
-    else if(url.pathname==='/api/session/active')data={data:{}}
-    else if(url.pathname.endsWith('/prompt')){submitted=true;data={data:{id:JSON.parse(request.body).id}}}
-    else if(url.pathname.endsWith('/permission'))data={data:[{sessionID:'ses_fixture',id:'per_auth',action:'oauth',resources:[]}]}
-    else if(url.pathname.endsWith('/reply'))replied=true
-    else if(url.pathname.endsWith('/interrupt'))interrupted=true
-    return {ok:true,status:200,json:async()=>data}
+test('OpenCode rejects ignored policy writes and service identity mismatch before prompt',async()=>{
+  for(const config of [{ignorePolicy:true},{healthPID:99}]){
+    const fixture=openCodeFixture(config);fixture.context.run.task.configuration.permission='allow'
+    await assert.rejects(fixture.execute(fixture.context),error=>error.beforePrompt===true)
+    assert.equal(fixture.calls.filter(x=>x.path.endsWith('/prompt')).length,0)
   }
-  await assert.rejects(createNativeTaskExecutor({...options,instances:{action:async()=>{},registrationPath:'fixture'},read:async()=>JSON.stringify({url:'http://127.0.0.1:4000',password:'fixture',pid:42}),fetchRequest})(context),error=>error.needsApproval===true&&!error.beforePrompt)
-  assert.equal(submitted,true);assert.equal(replied,false);assert.equal(interrupted,true)
+})
+
+test('OpenCode keeps pending native approvals and required input interactive, including allow policy',async()=>{
+  for(const pending of [{permissionRequests:[{sessionID:'ses_fixture',id:'per_auth',action:'oauth',resources:[]}]},{forms:[{sessionID:'ses_fixture',id:'form_input',questions:[{question:'Required input'}]}]}]){
+    const fixture=openCodeFixture(pending);fixture.context.run.task.configuration.permission='allow'
+    await assert.rejects(fixture.execute(fixture.context),error=>error.needsApproval===true&&!error.beforePrompt)
+    assert.ok(fixture.calls.some(x=>x.path.endsWith('/interrupt')))
+    assert.equal(fixture.calls.some(x=>x.path.endsWith('/reply')),false)
+  }
+})
+
+test('OpenCode follows short native pages and retains nontext and compaction records beyond the first page',async()=>{
+  const attachment={id:'msg_tool',type:'assistant',content:[{type:'tool',state:{output:'tool output'}},{type:'file',url:'file:///native/image.png'}]},compact={id:'msg_compact',type:'assistant',content:[{type:'compaction',summary:'context changed'}]}
+  const fixture=openCodeFixture({pages:[{data:[attachment],cursor:{next:'1'}},{data:[compact]}]}),updates=[]
+  fixture.context.publish=x=>updates.push(x);await fixture.execute(fixture.context)
+  assert.ok(fixture.calls.some(x=>x.query.includes('cursor=1')))
+  assert.deepEqual(nativeRecords(updates).filter(x=>x.kind==='message').map(x=>JSON.parse(x.payload)),[attachment,compact])
+  assert.ok(updates.filter(x=>x.recordBatch).every(x=>x.recordBatch.nativeSessionID==='ses_fixture'))
+})
+
+test('OpenCode rejects cycling native page cursors and interrupts accepted work',async()=>{
+  const fixture=openCodeFixture({pages:[{data:[{id:'msg_a',type:'assistant'}],cursor:{next:'1'}},{data:[{id:'msg_b',type:'assistant'}],cursor:{next:'1'}}]})
+  await assert.rejects(fixture.execute(fixture.context),/nonadvancing/)
+  assert.ok(fixture.calls.some(x=>x.path.endsWith('/interrupt')))
+})
+
+test('Hermes captures native events/export with exact bound identity while excluding configuration and secret transport',async()=>{
+  const snapshot={id:'stored',compression:{parent_session_id:'earlier'},messages:[{id:1,role:'assistant',content:[{type:'image',path:'/native/image.png'},{type:'text',text:'export needle'}]}]}
+  const fixture=hermesFixture({snapshot,events:[{type:'tool.start',payload:{name:'read',args:{path:'input'}}},{type:'tool.complete',payload:{result_text:'tool needle'}},{type:'compression.complete',payload:{summary:'compressed context'}},{type:'config.changed',payload:{token:'configuration-secret'}},{type:'secret.expire',payload:{value:'transport-secret'}},{type:'message.complete',payload:{text:'finished',status:'success'}}]}),updates=[],bound=[]
+  fixture.context.run.task.configuration.model='model';fixture.context.publish=x=>updates.push(x);fixture.context.bindSession=x=>bound.push(x)
+  await fixture.execute(fixture.context)
+  assert.equal(fixture.calls.filter(x=>x.method==='prompt.submit').length,1);assert.equal(text(updates),'finished')
+  assert.match(bound[0],/^hermes-gateway:/);assert.ok(updates.filter(x=>x.recordBatch).every(x=>x.recordBatch.nativeSessionID===bound[0]))
+  const records=nativeRecords(updates),serialized=JSON.stringify(records)
+  assert.ok(records.some(x=>x.kind==='tool.complete'));assert.ok(records.some(x=>x.kind==='compression.complete'))
+  assert.deepEqual(JSON.parse(records.find(x=>x.id==='session:stored:message:1').payload),snapshot.messages[0])
+  assert.ok(!serialized.includes('configuration-secret'));assert.ok(!serialized.includes('transport-secret'));assert.ok(!serialized.includes('fixture-secret'))
+  assert.equal(fixture.exports.length,2)
+})
+
+test('Hermes rejects a different native export before dispatch',async()=>{
+  const fixture=hermesFixture({snapshot:{id:'other',messages:[]}})
+  await assert.rejects(fixture.execute(fixture.context),/different or incomplete/)
+  assert.equal(fixture.calls.some(x=>x.method==='prompt.submit'),false)
+})
+
+test('Pi output persistence failures stop the child and stay inside the task result',async()=>{
+  const fixture=piFixture({events:[{type:'message_update',assistantMessageEvent:{type:'text_delta',delta:'hello'}}]})
+  const context=base('pi');context.publish=()=>{throw Error('fixture journal failure')}
+  await assert.rejects(createNativeTaskExecutor({...options,launch:fixture.launch})(context),/fixture journal failure/)
+  assert.equal(fixture.killed,true)
+})
+
+test('scheduled archive retains changed revisions, deduplicates identical snapshots and redacts only tool endpoints',async()=>{
+  const updates=[],archive=await createTaskNativeArchive({sourceID:'fixture',nativeSessionID:'bound',runID:'run',publish:x=>updates.push(x)})
+  const endpoint='/private/tmp/wmtools-'+'a'.repeat(32)+'/'+'b'.repeat(32)+'.sock'
+  try {
+    const first={id:'native',text:'ordinary-token=preserved '+endpoint,endpoint,userBase64:Buffer.from(endpoint).toString('base64')}
+    await archive.capture(first,{id:'native',kind:'message',contentMode:'snapshot'})
+    await archive.capture(first,{id:'native',kind:'message',contentMode:'snapshot'})
+    await archive.capture({...first,text:'changed'},{id:'native',kind:'message',contentMode:'snapshot'})
+    const records=nativeRecords(updates);assert.equal(records.length,2);assert.notEqual(records[0].revision,records[1].revision)
+    assert.ok(!records[0].payload.includes('wmtools-'));assert.ok(!records[0].text.includes('wmtools-'));assert.equal(JSON.parse(records[0].payload).userBase64,first.userBase64)
+    assert.ok(records[0].text.includes('ordinary-token=preserved'));assert.equal(records[0].runID,'run')
+  } finally {await archive.close()}
+})
+
+test('scheduled native records over 64 MiB use bounded exact chunks and verified manifests',async()=>{
+  const hash=createHash('sha256'),parts=[],manifests=[];let total=0,pages=0,projected=false
+  const archive=await createTaskNativeArchive({sourceID:'fixture',nativeSessionID:'bound',runID:'run',publish:update=>{
+    assert.equal(update.recordBatch.nativeSessionID,'bound');assert.ok(Buffer.byteLength(JSON.stringify(update))<1048576);pages++
+    for(const record of update.recordBatch.records){
+      const payload=JSON.parse(record.payload)
+      if(record.kind==='native-file.chunk'){
+        const bytes=Buffer.from(payload.dataBase64,'base64');assert.equal(createHash('sha256').update(bytes).digest('hex'),payload.sha256)
+        hash.update(bytes);parts.push({byteOffset:total,byteCount:bytes.length,chunkID:record.id});total+=bytes.length
+        projected ||= record.text?.includes('exposed needle')
+      }else manifests.push(payload)
+    }
+  }})
+  try {
+    const value={type:'tool_execution_end',result:{text:'exposed needle '+ 'x'.repeat(65*1024*1024)}}
+    const payload=JSON.stringify(value), revision=createHash('sha256').update(payload).digest('hex')
+    const expected={id:'large',revision,kind:'tool_execution_end',payload,contentMode:'event',text:value.result.text.slice(0,256*1024),completeness:'observed',runID:'run'}
+    const expectedBytes=JSON.stringify(expected),expectedHash=createHash('sha256').update(expectedBytes).digest('hex')
+    await archive.capture(value,{id:'large',kind:'tool_execution_end'})
+    assert.ok(pages>60);assert.ok(projected);assert.equal(manifests.length,1)
+    const manifest=manifests[0];assert.equal(hash.digest('hex'),manifest.sha256);assert.equal(total,manifest.totalBytes);assert.deepEqual(parts,manifest.parts);assert.equal(manifest.sha256,expectedHash);assert.equal(total,Buffer.byteLength(expectedBytes))
+    assert.equal(manifest.originalRecord.id,'large');assert.equal(manifest.originalRecord.runID,'run');assert.equal(manifest.byteFidelity,'exact-native-bytes')
+  }finally{await archive.close()}
 })
 
 
-test('Pi output persistence failures stop the child and remain inside the task result', async () => {
-  let killed = false
-  const launch = () => {
-    const child = new EventEmitter()
-    child.stdout = new PassThrough(); child.stderr = new PassThrough()
-    child.kill = () => { killed = true; queueMicrotask(() => child.emit('exit', 0)); return true }
-    child.stdin = new Writable({ write(bytes, _encoding, done) {
-      const request = JSON.parse(String(bytes))
-      setImmediate(() => {
-        child.stdout.write(JSON.stringify({ type: 'response', id: request.id, success: true, data: { sessionId: 'native' } }) + '\n')
-        if (request.type === 'prompt') {
-          child.stdout.write('null\n')
-          child.stdout.write(JSON.stringify({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: 'hello' } }) + '\n')
-        }
-      })
-      done()
-    } })
-    return child
+test('recurring Pi and Hermes snapshots preserve native IDs and assign only new messages to each run',async()=>{
+  for(const runtime of ['pi','hermes']){
+    const first=runtime==='pi'?{id:'entry-first',type:'message',message:{role:'assistant',content:[{type:'text',text:'first'}]}}:{id:1,role:'assistant',content:'first'}
+    const second=runtime==='pi'?{...first,id:'entry-second',message:{role:'assistant',content:'second'}}:{id:2,role:'assistant',content:'second'}
+    const updates=[]
+    for(const [index,historical,entries] of [[1,[],[first]],[2,[first],[first,second]]]){
+      const fixture=runtime==='pi'?piFixture({historical,entries:entries.filter(entry=>!historical.some(old=>old.id===entry.id))}):hermesFixture({historical,snapshot:{id:'stored',messages:entries}})
+      const context=runtime==='pi'?base('pi'):fixture.context
+      context.run.id='run-'+index;context.publish=x=>updates.push(x)
+      await (runtime==='pi'?createNativeTaskExecutor({...options,launch:fixture.launch}):fixture.execute)(context)
+    }
+    const records=nativeRecords(updates).filter(record=>record.kind==='message')
+    const id=runtime==='pi'?'entry:entry-first':'session:stored:message:1'
+    assert.ok(records.some(record=>record.id===id&&record.runID==='run-1'))
+    assert.ok(records.some(record=>record.id===id&&record.runID===undefined))
+    assert.equal(records.some(record=>record.id===id&&record.runID==='run-2'),false)
+    assert.ok(records.some(record=>record.id!==id&&record.runID==='run-2'))
   }
-  const context = base('pi')
-  context.publish = () => { throw new Error('fixture journal failure') }
-  await assert.rejects(createNativeTaskExecutor({ ...options, launch })(context), /output could not be retained/)
-  assert.equal(killed, true)
+})
+
+test('Pi scheduled children do not inherit a connected desktop CLI or tool authority',async()=>{
+  const fixture=piFixture(),context=base('pi')
+  const inherited={HOME:'/home',WOVENMATTER_CONTEXT_ID:'context',WOVENMATTER_NOTE_ID:'note',WOVENMATTER_SOCKET:'socket',WOVENMATTER_CLI:'cli',WOVENMATTER_SESSION_TOKEN:'token',WOVENMATTER_TOOL_SOCKET:'tool-socket'}
+  await createNativeTaskExecutor({...options,environment:()=>inherited,launch:fixture.launch})(context)
+  assert.deepEqual(fixture.calls[0].environment,{HOME:'/home',WOVENMATTER_LOCAL_PI:'1'})
+  assert.equal(inherited.WOVENMATTER_CONTEXT_ID,'context')
+})
+
+test('native presentation splits Unicode text without loss and bounds nested tool and inline binary previews',()=>{
+  const source='x'.repeat(32767)+'🙂漢字'+String.raw`\n`+'z'.repeat(130000)
+  for(const sessionUpdate of ['agent_message_chunk','agent_thought_chunk']){
+    const chunks=[...nativePresentationUpdates({sessionUpdate,content:{type:'text',text:source}})]
+    assert.equal(chunks.map(chunk=>chunk.content.text).join(''),source)
+    assert.ok(chunks.every(chunk=>Buffer.byteLength(JSON.stringify(chunk))<1048576))
+    assert.ok(chunks.every(chunk=>!/[\ud800-\udbff]$/.test(chunk.content.text)))
+  }
+  const image={type:'image',mimeType:'image/png',url:'file:///native/image.png',data:'x'.repeat(2*1024*1024)}
+  const nested=Array.from({length:128},()=>Array.from({length:128},()=>({['key'.repeat(100)]:'value'.repeat(1000)})))
+  const [preview]=nativePresentationUpdates({sessionUpdate:'tool_call_update',toolCallId:'native-tool',status:'completed',content:[image,{type:'text',text:'body'.repeat(20000)}],nested})
+  assert.equal(preview.toolCallId,'native-tool');assert.equal(preview.status,'completed')
+  assert.equal(preview.content[0].data,undefined);assert.equal(preview.content[0].mimeType,'image/png');assert.equal(preview.content[0].url,image.url)
+  assert.ok(Buffer.byteLength(JSON.stringify(preview))<1048576)
+})
+
+test('oversized native tool previews never split a Unicode surrogate pair',()=>{
+  for(const field of ['rawOutput','content']){
+    const envelope={sessionUpdate:'tool_call_update',toolCallId:'native-tool',status:'completed'}
+    const wrap=value=>({...envelope,[field]:field==='content'?[{type:'text',text:value}]:value})
+    const read=value=>field==='content'?value.content[0].text:value.rawOutput
+    const limit=read([...nativePresentationUpdates(wrap('x'.repeat(65536)))][0]).length
+    const source='x'.repeat(limit-1)+'🙂漢字'+'z'.repeat(65536)
+    const [preview]=nativePresentationUpdates(wrap(source))
+    assert.equal(read(preview),source.slice(0,limit-1))
+    assert.doesNotMatch(JSON.stringify(preview),/\\u[dD][89aAbB][0-9a-fA-F]{2}/)
+    assert.equal(source.slice(limit-1,limit+1),'🙂')
+  }
 })

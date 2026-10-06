@@ -49,6 +49,7 @@ public enum PiRPCClientError: LocalizedError, Sendable {
     case processExited(String? = nil)
     case invalidResponse(String)
     case commandFailed(String)
+    case archiveFailed(String)
     case sessionNotInitialized
     case timedOut
 
@@ -65,6 +66,8 @@ public enum PiRPCClientError: LocalizedError, Sendable {
             "Pi RPC returned a malformed response: \(detail)"
         case .commandFailed(let detail):
             detail
+        case .archiveFailed(let detail):
+            "Pi native history could not be archived: \(detail) Its native session records remain preserved. Retry history synchronization after resolving this failure."
         case .sessionNotInitialized:
             "The Pi RPC session has not been initialized."
         case .timedOut:
@@ -82,11 +85,17 @@ public actor PiRPCClient {
     private var nextID = 0
     private var closed = false
     private var sessionID: String?
+    private var nativeStoreIdentity: String?
+    private var nativeEntryCursor: String?
+    private let archiveStreamIdentity = UUID().uuidString.lowercased()
+    private var archiveEventOrdinal = 0
     private var runID: String?
     private var recoveredRuns: [DefaultAgentRunSnapshot] = []
     private var confirmedRemoteIdleSessionID: String?
     private var configuration = LocalACPSessionConfiguration.empty
     private var pendingResponses: [String: CheckedContinuation<[String: Any], any Error>] = [:]
+    private var pendingCommandTypes: [String: String] = [:]
+    private var initialArchiveRequestIDs: Set<String> = []
     private var promptEvents: LocalACPClient.EventHandler?
     private var promptPermission: LocalACPClient.PermissionHandler?
     private var resumePermissionHandler: LocalACPClient.PermissionHandler?
@@ -113,6 +122,9 @@ public actor PiRPCClient {
     private var cancelled = false
     private var pendingDispatches: [ObjectIdentifier: AgentDispatchFence] = [:]
     private var abortTask: Task<Void, any Error>?
+    private var nativeArchiveTask: Task<Void, Never>?
+    private var pendingNativeArchives: [UUID: Task<Void, Never>] = [:]
+    private var nativeArchiveFailure: (any Error)?
     private var readerTask: Task<Void, Never>?
     private var eventTask: Task<Void, Never>?
     private struct ExtensionUIRequest: Sendable {
@@ -203,6 +215,7 @@ public actor PiRPCClient {
         guard let sessionID else {
             throw PiRPCClientError.invalidResponse("missing session id")
         }
+        try await archiveNativeHistory(initial: true)
         return LocalACPInitializedSession(
             sessionID: sessionID,
             loadedExistingSession: existingSessionID != nil,
@@ -346,6 +359,8 @@ public actor PiRPCClient {
                 try await settleHandledInputIfIdle()
                 try await waitUntilSettled()
                 try await abortTask?.value
+                try await waitForNativeArchives()
+                try await archiveNativeHistory()
                 if let latestTerminalError {
                     throw PiRPCClientError.commandFailed(latestTerminalError)
                 }
@@ -401,6 +416,8 @@ public actor PiRPCClient {
             try await self.settleHandledInputIfIdle(forceStateCheck: true)
             try await self.waitUntilSettled()
             try await self.abortTask?.value
+            try await self.waitForNativeArchives()
+            try await self.archiveNativeHistory()
             if let error = self.latestTerminalError { throw PiRPCClientError.commandFailed(error) }
             return self.cancelled ? .cancelled : (self.latestStopReason ?? .endTurn)
         })
@@ -409,6 +426,7 @@ public actor PiRPCClient {
     public func finishRun() {
         promptEvents = nil
         promptPermission = nil
+        runID = nil
     }
 
     public func cancel() async {
@@ -478,6 +496,9 @@ public actor PiRPCClient {
         failPending(PiRPCClientError.processExited())
         readerTask?.cancel()
         eventTask?.cancel()
+        let archives = Array(pendingNativeArchives.values)
+        archives.forEach { $0.cancel() }
+        pendingNativeArchives.removeAll()
         let tracked = process
         let inputHandle = input
         let processGroupIdentifier = tracked?.processIdentifier ?? 0
@@ -507,6 +528,8 @@ public actor PiRPCClient {
         }
         shutdownTask = task
         await task.value
+        for archive in archives { await archive.value }
+        nativeArchiveTask = nil
     }
 
     static func sessionLaunchArguments(_ launch: LocalACPRuntimeLaunchConfiguration, sessionID: String?) -> [String] {
@@ -564,11 +587,25 @@ public actor PiRPCClient {
     private func readLoop() async {
         do {
             while let cursor, !closed {
-                guard let line = try await cursor.next() else { break }
-                try await handleLine(line)
+                if launch.historyRecorder != nil {
+                    guard let frame = try await cursor.nextFrame() else { break }
+                    switch frame {
+                    case .inline(let line): try await handleLine(line)
+                    case .spooled(let file, let byteCount): try await handleSpooledFrame(file, byteCount: byteCount)
+                    }
+                } else {
+                    guard let line = try await cursor.next() else { break }
+                    try await handleLine(line)
+                }
             }
         } catch {
-            failPending(error)
+            if case LocalACPClientError.lineTooLarge = error {
+                failPending(PiRPCClientError.archiveFailed("The native RPC frame exceeds the 1 GiB disk-frame limit."))
+            } else { failPending(error) }
+            // A failed reader cannot confirm native Stop. Fence new dispatch
+            // and retire our process/relay rather than orphan unusable work.
+            await shutdown()
+            return
         }
         guard !closed else { return }
         if hasQueuedSettlement { await eventTask?.value }
@@ -603,23 +640,39 @@ public actor PiRPCClient {
     }
 
     private func handleLine(_ line: Data) async throws {
-        try await launch.historyRecorder?("in", line)
         guard let object = try JSONSerialization.jsonObject(with: line) as? [String: Any] else {
             throw PiRPCClientError.invalidResponse("expected JSON object")
         }
         let type = string(object["type"])
+        let responseID = string(object["id"]) ?? ""
+        let command = string(object["command"]) ?? pendingCommandTypes[responseID]
+        let safe = Self.credentialSafeRPCRecord(object, command: command)
+        try await launch.historyRecorder?("in", safe.map { try JSONSerialization.data(withJSONObject: $0, options: [.sortedKeys]) } ?? line)
         if type == "response" {
             let id = string(object["id"]) ?? ""
+            pendingCommandTypes.removeValue(forKey: id)
+            initialArchiveRequestIDs.remove(id)
             if steeringRequestID == id { steeringRequestID = nil }
             if let waiter = pendingResponses.removeValue(forKey: id) {
                 waiter.resume(returning: object)
             }
             return
         }
+        if launch.historyRecorder != nil, let sessionID {
+            archiveEventOrdinal += 1
+            let record = NativeHarnessArchive.record(id: "event:" + archiveStreamIdentity + ":" + String(archiveEventOrdinal),
+                runID: runID, kind: type ?? "event", data: line, contentMode: type == "message_update" ? "delta" : "event")
+            try await NativeHarnessArchive.capture(sourceID: archiveSourceID, sessionID: sessionID,
+                records: [record], recorder: launch.historyRecorder)
+        }
         let events = projectedEvents(from: object)
         let extensionRequest = type == "extension_ui_request"
             ? Self.extensionUIRequest(from: object)
             : nil
+        queueProjection(type: type, events: events, extensionRequest: extensionRequest)
+    }
+
+    private func queueProjection(type: String?, events: [LocalACPEvent], extensionRequest: ExtensionUIRequest? = nil) {
         guard extensionRequest != nil
                 || type == "agent_settled"
                 || !events.isEmpty else { return }
@@ -670,6 +723,7 @@ public actor PiRPCClient {
                 from: JSONSerialization.data(withJSONObject: recovery))
         }
         sessionID = string(data?["sessionId"]) ?? string(data?["session_id"]) ?? sessionID
+        nativeStoreIdentity = string(data?["sessionFile"]) ?? nativeStoreIdentity
         let model = dictionary(data?["model"]).flatMap { model in
             guard let id = string(model["id"]) else { return nil as String? }
             return PiRPCSupport.modelReference(
@@ -739,6 +793,210 @@ public actor PiRPCClient {
         }
     }
 
+    private var archiveSourceID: String { "pi:" + (nativeStoreIdentity ?? workingDirectory.path) }
+
+    private func handleSpooledFrame(_ file: URL, byteCount: Int) async throws {
+        defer { try? FileManager.default.removeItem(at: file) }
+        let metadata: PiNativeHistoryFrame.Metadata
+        do { metadata = try await PiNativeHistoryFrame.inspect(file) }
+        catch PiNativeHistoryFrame.Failure.unsupportedEnvelope {
+            let object = try await PiNativeHistoryFrame.inspectObject(file)
+            if object.scalars["type"] == "response" || object.scalars["type"] == "extension_ui_request" {
+                guard byteCount <= PiNativeHistoryFrame.maximumEntryBytes else {
+                    throw PiRPCClientError.archiveFailed("The native configuration response exceeds the 64 MiB control-record limit.")
+                }
+                try await handleLine(Data(contentsOf: file, options: [.mappedIfSafe]))
+            } else {
+                try await archiveSpooledEvent(file, metadata: object)
+            }
+            return
+        } catch { throw PiRPCClientError.archiveFailed(error.localizedDescription) }
+        guard var response = try JSONSerialization.jsonObject(with: metadata.envelope) as? [String: Any],
+              string(response["type"]) == "response", let id = string(response["id"]),
+              let command = pendingCommandTypes[id], command == "get_entries",
+              metadata.arrayKey == "entries",
+              response["success"] as? Bool == true, let sessionID else {
+            throw PiRPCClientError.archiveFailed("The large history response did not match its pending native command.")
+        }
+        let sourceID = archiveSourceID
+        let initial = initialArchiveRequestIDs.contains(id)
+        do {
+            if let recorder = launch.historyRecorder {
+                try await NativeHarnessArchive.captureFile(file, byteCount: byteCount, expectedSHA256: metadata.sha256,
+                    sourceID: sourceID, sessionID: sessionID, recorder: recorder) { [weak self] safeFile, reference in
+                    guard let self else { throw CancellationError() }
+                    // Offsets/checksums refer to the sanitized stored copy,
+                    // including any length change from endpoint redaction.
+                    let safeMetadata = try await PiNativeHistoryFrame.inspect(safeFile)
+                    try await PiNativeHistoryFrame.records(safeFile, expected: safeMetadata) { record, ordinal in
+                        try await self.archiveStreamedRecord(record, ordinal: ordinal, initial: initial,
+                            sourceID: sourceID, sessionID: sessionID, file: safeFile, reference: reference)
+                    }
+                }
+            }
+        } catch { throw PiRPCClientError.archiveFailed(error.localizedDescription) }
+        var data = dictionary(response["data"]) ?? [:]
+        data["_wovenArchiveLastEntryID"] = nativeEntryCursor
+        response["data"] = data
+        pendingCommandTypes.removeValue(forKey: id)
+        initialArchiveRequestIDs.remove(id)
+        pendingResponses.removeValue(forKey: id)?.resume(returning: response)
+    }
+
+    private func archiveSpooledEvent(_ file: URL, metadata: PiNativeHistoryFrame.ObjectMetadata) async throws {
+        guard let recorder = launch.historyRecorder, let sessionID, let type = metadata.scalars["type"],
+              Self.isNativeRunEvent(type: type, scalars: metadata.scalars, message: metadata.messageScalars) else {
+            throw PiRPCClientError.archiveFailed("The large native frame could not be classified as run content.")
+        }
+        archiveEventOrdinal += 1
+        let id = "event:" + archiveStreamIdentity + ":" + String(archiveEventOrdinal)
+        let sourceID = archiveSourceID, activeRunID = runID
+        // Bound outstanding disk frames while letting ordinary native control
+        // replies drain during SQLite ingestion of a large completed event.
+        if pendingNativeArchives.count >= 2 { await nativeArchiveTask?.value }
+        try Task.checkCancellation()
+        guard !closed else { throw CancellationError() }
+        let owned = FileManager.default.temporaryDirectory.appendingPathComponent("woven-pi-archive-" + UUID().uuidString)
+        try FileManager.default.moveItem(at: file, to: owned)
+        let token = UUID(), previous = nativeArchiveTask
+        let task = Task { [weak self] in
+            defer { try? FileManager.default.removeItem(at: owned) }
+            await previous?.value
+            do {
+                try Task.checkCancellation()
+                try await NativeHarnessArchive.captureFile(owned, byteCount: metadata.byteCount, expectedSHA256: metadata.sha256,
+                    sourceID: sourceID, sessionID: sessionID, recorder: recorder) { safeFile, reference in
+                    try await NativeHarnessArchive.captureRecordReference(file: safeFile, reference: reference,
+                        id: id, kind: type, runID: activeRunID, byteOffset: 0, byteCount: reference.totalBytes, sha256: reference.sha256,
+                        sourceID: sourceID, sessionID: sessionID, recorder: recorder)
+                }
+                await self?.nativeArchiveFinished(token: token, error: nil)
+            } catch { await self?.nativeArchiveFinished(token: token, error: error) }
+        }
+        pendingNativeArchives[token] = task; nativeArchiveTask = task
+        var object: [String: Any] = metadata.scalars
+        object["message"] = metadata.messageScalars
+        if let error = metadata.scalars["isError"] { object["isError"] = error == "true" }
+        if type == "message_end", metadata.messageScalars["role"] == "assistant" {
+            activeReasoningPhaseID = nil; assistantMessageOpen = false
+            captureTerminalStatus(metadata.messageScalars)
+            // Retain already delivered text deltas. A huge authoritative
+            // snapshot is available through the archive, not copied into UI RAM.
+            queueProjection(type: type, events: [.assistantBoundary])
+        } else {
+            queueProjection(type: type, events: projectedEvents(from: object))
+        }
+    }
+
+    private func nativeArchiveFinished(token: UUID, error: (any Error)?) {
+        pendingNativeArchives.removeValue(forKey: token)
+        if let error, nativeArchiveFailure == nil { nativeArchiveFailure = error }
+    }
+
+    private func waitForNativeArchives() async throws {
+        await nativeArchiveTask?.value
+        if let nativeArchiveFailure { throw PiRPCClientError.archiveFailed(nativeArchiveFailure.localizedDescription) }
+    }
+
+    private nonisolated static func isNativeRunEvent(type: String, scalars: [String: String], message: [String: String]) -> Bool {
+        guard type != "response", type != "extension_ui_request",
+              !["auth", "config", "provider", "credential", "secret"].contains(where: { type.hasPrefix($0) }) else { return false }
+        return ["agent_", "message_", "tool_", "turn_", "auto_compaction_", "auto_retry_"].contains(where: type.hasPrefix)
+            || scalars["toolCallId"] != nil || ["user", "assistant", "toolResult"].contains(message["role"] ?? "")
+    }
+
+    private func archiveStreamedRecord(_ record: PiNativeHistoryFrame.Record, ordinal: Int, initial: Bool,
+                                      sourceID: String, sessionID: String, file: URL, reference: NativeHarnessArchive.FileReference) async throws {
+        switch record {
+        case .inline(let bytes):
+            try await archiveStreamedEntry(bytes, ordinal: ordinal, initial: initial,
+                sourceID: sourceID, sessionID: sessionID)
+        case .reference(let offset, let count, let sha, _, let nativeID, let kind):
+            guard let recorder = launch.historyRecorder else { return }
+            let id = nativeID ?? "exposed:" + String(ordinal) + ":" + sha
+            try await NativeHarnessArchive.captureRecordReference(file: file, reference: reference,
+                id: "entry:" + id, kind: kind ?? "entry",
+                runID: initial ? nil : runID, byteOffset: offset, byteCount: count, sha256: sha,
+                sourceID: sourceID, sessionID: sessionID, recorder: recorder)
+            nativeEntryCursor = nativeID ?? nativeEntryCursor
+        }
+    }
+
+    private func archiveStreamedEntry(_ bytes: Data, ordinal: Int, initial: Bool,
+                                     sourceID: String, sessionID: String) async throws {
+        guard let row = try JSONSerialization.jsonObject(with: bytes) as? [String: Any] else { throw PiNativeHistoryFrame.Failure.malformed }
+        try await NativeHarnessArchive.capture(sourceID: sourceID, sessionID: sessionID,
+            records: [nativeHistoryRecord(row, ordinal: ordinal, runID: initial ? nil : runID)],
+            recorder: launch.historyRecorder)
+        nativeEntryCursor = string(row["id"]) ?? nativeEntryCursor
+    }
+
+    private func nativeHistoryRecord(_ value: Any, ordinal: Int, runID: String?) throws -> WorkspaceNativeRunRecord {
+        guard let row = dictionary(value) else { throw PiNativeHistoryFrame.Failure.malformed }
+        let bytes = try JSONSerialization.data(withJSONObject: row, options: [.sortedKeys, .fragmentsAllowed])
+        let id = string(row["id"]) ?? "exposed:" + String(ordinal) + ":" + NativeHarnessArchive.digest(bytes)
+        return NativeHarnessArchive.record(id: "entry:" + id, runID: runID,
+            kind: string(row["type"]) ?? "entry", data: bytes, completeness: "native-export")
+    }
+
+    /// Copy native entries through Pi's public RPC, including compaction and
+    /// context records, without opening execution-host session files.
+    private func archiveNativeHistory(initial: Bool = false) async throws {
+        guard let recorder = launch.historyRecorder else { return }
+        var fullReconciliation = initial
+        if !initial {
+            let response = try await sendCommand(["type": "get_state"])
+            guard response["success"] as? Bool == true else {
+                throw PiRPCClientError.archiveFailed(string(response["error"]) ?? "Pi could not confirm its native session before reconciliation.")
+            }
+            guard let state = dictionary(response["data"]),
+                  let nativeID = string(state["sessionId"]) ?? string(state["session_id"]), !nativeID.isEmpty else {
+                throw PiRPCClientError.archiveFailed("Pi returned native state without a stable session identity.")
+            }
+            do {
+                let store = string(state["sessionFile"])
+                if nativeID != sessionID || store != nil && store != nativeStoreIdentity {
+                    nativeEntryCursor = nil
+                    fullReconciliation = true
+                }
+                if nativeID != sessionID {
+                    sessionID = nativeID
+                    try await promptEvents?(.sessionIdentity(nativeID))
+                }
+                nativeStoreIdentity = store ?? nativeStoreIdentity
+            }
+        }
+        guard let sessionID else { return }
+        var command: [String: Any] = ["type": "get_entries"]
+        if let nativeEntryCursor { command["since"] = nativeEntryCursor }
+        let response = try await sendCommand(command, archiveInitial: fullReconciliation)
+        guard response["success"] as? Bool == true, let entries = array(dictionary(response["data"])?["entries"]) else {
+            throw PiRPCClientError.archiveFailed(string(response["error"]) ?? "Pi returned an incomplete native entry export.")
+        }
+        let records = try entries.enumerated().map {
+            try nativeHistoryRecord($0.element, ordinal: $0.offset, runID: fullReconciliation ? nil : runID)
+        }
+        try await NativeHarnessArchive.capture(sourceID: archiveSourceID, sessionID: sessionID, records: records, recorder: recorder)
+        nativeEntryCursor = string(dictionary(response["data"])?["_wovenArchiveLastEntryID"])
+            ?? entries.last.flatMap(dictionary).flatMap { string($0["id"]) } ?? nativeEntryCursor
+    }
+
+    /// Provider model definitions are configuration; custom HTTP headers can
+    /// contain authorization. Remove those transport fields specifically while
+    /// preserving identically named values in actual messages/tool results.
+    nonisolated static func credentialSafeRPCRecord(_ object: [String: Any], command: String?) -> [String: Any]? {
+        guard object["type"] as? String == "response", ["get_state", "get_available_models", "set_model", "cycle_model"].contains(command ?? ""),
+              var data = object["data"] as? [String: Any] else { return nil }
+        func safeModel(_ model: [String: Any]) -> [String: Any] {
+            model.filter { !["headers", "apiKey", "accessToken", "refreshToken", "token", "baseUrl"].contains($0.key) }
+        }
+        if let model = data["model"] as? [String: Any] { data["model"] = safeModel(model) }
+        if let models = data["models"] as? [[String: Any]] { data["models"] = models.map(safeModel) }
+        if command == "set_model" { data = safeModel(data) }
+        var result = object; result["data"] = data
+        return result
+    }
+
     private var outgoingBusy = false
     private var outgoingWaiters: [CheckedContinuation<Void, Never>] = []
 
@@ -753,7 +1011,7 @@ public actor PiRPCClient {
         else { outgoingWaiters.removeFirst().resume() }
     }
 
-    private func sendCommand(_ payload: [String: Any], dispatchFence: AgentDispatchFence? = nil) async throws -> [String: Any] {
+    private func sendCommand(_ payload: [String: Any], dispatchFence: AgentDispatchFence? = nil, archiveInitial: Bool = false) async throws -> [String: Any] {
         try Task.checkCancellation()
         try dispatchFence?.check()
         if let transportError { throw transportError }
@@ -778,12 +1036,16 @@ public actor PiRPCClient {
         return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<[String: Any], any Error>) in
             defer { releaseOutgoing() }
             pendingResponses[id] = continuation
+            pendingCommandTypes[id] = payload["type"] as? String
+            if archiveInitial { initialArchiveRequestIDs.insert(id) }
             do {
                 // Stop can run while outbound history is being persisted.
                 try dispatchFence?.claimDispatch()
                 try input.write(contentsOf: line)
             } catch {
                 pendingResponses.removeValue(forKey: id)
+                pendingCommandTypes.removeValue(forKey: id)
+                initialArchiveRequestIDs.remove(id)
                 continuation.resume(throwing: error)
             }
         }
@@ -848,6 +1110,8 @@ public actor PiRPCClient {
         transportError = error
         let pending = pendingResponses
         pendingResponses.removeAll()
+        pendingCommandTypes.removeAll()
+        initialArchiveRequestIDs.removeAll()
         for waiter in pending.values {
             waiter.resume(throwing: error)
         }

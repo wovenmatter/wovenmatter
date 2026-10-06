@@ -285,30 +285,32 @@ private actor PiEventCollector {
   func values() -> [LocalACPEvent] { events }
 }
 
-private struct PiPipeFixture: Sendable {
+struct PiPipeFixture: Sendable {
   let commands = Pipe()
   let events = Pipe()
   let client: PiRPCClient
+  private let capturesNativeHistory: Bool
   init(recorder: WorkspaceWireRecorder? = nil, durable: Bool = false) {
     var launch=LocalACPRuntimeLaunchConfiguration(runtimeKind:.pi,
       executableURL:URL(filePath:"/nonexistent-test-pi"),arguments:[],
       environment: durable ? ["WOVEN_DURABLE_REMOTE_ACP":"1"] : [:])
     launch.historyRecorder=recorder
+    capturesNativeHistory = recorder != nil
     client = PiRPCClient(launch: launch,
       workingDirectory: URL(filePath: "/private/tmp"), input: commands.fileHandleForWriting,
       output: events.fileHandleForReading)
+  }
+  func emit(_ object: [String: Any]) throws {
+    var data = try JSONSerialization.data(withJSONObject: object); data.append(10)
+    try events.fileHandleForWriting.write(contentsOf: data)
   }
   func initialize() async throws {
     _ = try await client.initializeSession(workingDirectory: URL(filePath: "/private/tmp"),
       existingSessionID: nil, title: nil, systemPrompt: nil)
   }
-  func serveSteering(ready: AsyncStream<Void>.Continuation, rejected: Bool, pending: PiPromptGate? = nil, uncertain: Bool = false) async throws {
+  fileprivate func serveSteering(ready: AsyncStream<Void>.Continuation, rejected: Bool, pending: PiPromptGate? = nil, uncertain: Bool = false) async throws {
     defer { try? events.fileHandleForWriting.close() }
     let cursor = FixtureCommandReader(handle: commands.fileHandleForReading)
-    func emit(_ object: [String: Any]) throws {
-      var data = try JSONSerialization.data(withJSONObject: object); data.append(10)
-      try events.fileHandleForWriting.write(contentsOf: data)
-    }
     var started = false
     var steered = false
     var pendingPreflight: Task<Void, Never>?
@@ -316,6 +318,7 @@ private struct PiPipeFixture: Sendable {
       let command = try #require(JSONSerialization.jsonObject(with: line) as? [String: Any])
       let type = command["type"] as? String
       var response: [String: Any] = ["type": "response", "id": command["id"]!, "success": true, "data": [:]]
+      if type == "get_entries" { response["data"] = ["entries": []] }
       if type == "abort", let pendingPreflight {
         #expect((command["_meta"] as? [String: Bool])?["wovenStopPreflight"] == true)
         try emit(response)
@@ -358,10 +361,6 @@ private struct PiPipeFixture: Sendable {
   func serveApprovalStop(rejectFirstAbort: Bool = false) async throws {
     defer { try? events.fileHandleForWriting.close() }
     let cursor = FixtureCommandReader(handle: commands.fileHandleForReading)
-    func emit(_ object: [String: Any]) throws {
-      var data = try JSONSerialization.data(withJSONObject: object); data.append(10)
-      try events.fileHandleForWriting.write(contentsOf: data)
-    }
     var started = false
     var receivedCancellation = false
     var rejectedAbort = false
@@ -382,22 +381,26 @@ private struct PiPipeFixture: Sendable {
       }
       let data: [String: Any] = type == "get_state"
         ? ["sessionId": "fixture-session", "isStreaming": started] : [:]
-      try emit(["type": "response", "id": command["id"]!, "success": true, "data": data])
+      var response: [String: Any] = ["type": "response", "id": command["id"]!, "success": true, "data": data]
+      if type == "get_entries" { response["data"] = ["entries": []] }
+      try emit(response)
       if type == "get_state", started {
         try emit(["type": "agent_start"])
         try emit(["type": "extension_ui_request", "id": "approval", "method": "confirm", "title": "Allow tool?"])
       }
       if type == "abort" {
         #expect(receivedCancellation)
+        started = false
         try emit(["type": "agent_settled"])
       }
     }
   }
 
-  func serve(settles: Bool, accepts: Bool = true, hold: PiPromptGate? = nil,
+  fileprivate func serve(settles: Bool, accepts: Bool = true, hold: PiPromptGate? = nil,
              streamLines: [String] = [], advertisesConfiguration: Bool = false, recovery: Bool = false, resumeApproval: Bool? = nil) async throws {
     defer { try? events.fileHandleForWriting.close() }
     let cursor = FixtureCommandReader(handle: commands.fileHandleForReading)
+    var settled = false
     while let line = try await cursor.next() {
       let command = try JSONSerialization.jsonObject(with: line) as! [String: Any]
       let type = command["type"] as! String
@@ -452,6 +455,7 @@ private struct PiPipeFixture: Sendable {
         data["_meta"] = ["recoveredRuns": [["runID":"prior-run","content":"saved result"]]]
       }
       var response: [String: Any] = ["type": "response", "id": command["id"]!, "success": true, "data": data]
+      if type == "get_entries" { response["data"] = ["entries": []] }
       if type == "prompt", !accepts { response["success"] = false; response["error"] = "fixture rejection" }
       var output = try JSONSerialization.data(withJSONObject: response)
       output.append(10)
@@ -465,8 +469,9 @@ private struct PiPipeFixture: Sendable {
       try events.fileHandleForWriting.write(contentsOf: output)
       if type == "prompt" {
         await hold?.pause()
-        return
-      }
+        guard accepts && settles && capturesNativeHistory else { return }
+        settled = true
+      } else if type == "get_entries", settled { return }
     }
   }
 }
@@ -492,7 +497,7 @@ private actor PiPromptGate {
 
 /// Keep the fake server off Foundation's process-wide AsyncBytes I/O actor.
 /// The client under test still uses its production ACPLineCursor.
-private struct FixtureCommandReader: Sendable {
+struct FixtureCommandReader: Sendable {
   let handle: FileHandle
 
   func next() async throws -> Data? {
@@ -659,6 +664,7 @@ struct PiHandledCommandTests {
         data = ["sessionId": "fixture-session", "isStreaming": (normalStartup || stopAfterACK != nil) && prompts > 0,
                 "isCompacting": false, "pendingMessageCount": 0]
       }
+      if type == "get_entries" { data = ["entries": []] }
       try write(["type": "response", "id": command["id"]!, "success": true, "data": data], to: fixture)
       if type == "get_state", prompts == 1, let stopAfterACK {
         Task { await stopAfterACK.pause() }

@@ -15,7 +15,9 @@ enum BackendApplicationCommand: Codable, Sendable {
     case setClosedLidPolicy(WorkPowerPolicy)
     case stageAttachments(files: [BackendAttachmentSource])
     case toolsMutation(BackendToolsMutation)
-    case prepareSelections(conversationID: String, defaults: SessionSelections?)
+    case loadAgentDefaults(runtime: AgentRuntimeKind, workspace: String?)
+    case saveAgentDefault(runtime: AgentRuntimeKind, workspace: String?, field: SessionSelectionField, selections: SessionSelections)
+    case prepareSelections(conversationID: String, defaults: SessionSelections?, usesProductPermissionDefault: Bool?)
     case applySelections(conversationID: String)
     case recordSelections(conversationID: String, metadata: LocalACPSessionMetadata)
     case retrySelections(conversationID: String, selections: SessionSelections)
@@ -52,6 +54,8 @@ struct BackendApplicationResult: Codable, Sendable {
     var noteResponse: NoteEditingResponse?
     var conversationID: String?
     var metadata: LocalACPSessionMetadata?
+    var selections: SessionSelections?
+    var resolvedSelections: SessionSelections?
     var attachments: [AgentMessageAttachmentDraft]?
     var requiresTimerPauseConfirmation: Bool = false
 }
@@ -173,8 +177,16 @@ final class BackendApplicationService {
             return try await .init(attachments: model.stageMessageAttachments(files.map { (url: $0.url, mimeType: $0.mimeType) }))
         case let .toolsMutation(mutation):
             return try await executeToolsMutation(mutation)
-        case let .prepareSelections(id, defaults):
-            try await model.prepareNewSessionSelections(conversationID: id, capturedDefaults: defaults)
+        case let .loadAgentDefaults(runtime, workspace):
+            let values = try await model.agentSelectionDefaults(runtime: runtime, workspace: workspace)
+            return .init(selections: values.stored, resolvedSelections: values.resolved)
+        case let .saveAgentDefault(runtime, workspace, field, selections):
+            let values = try await model.saveAgentSelectionDefault(runtime: runtime, workspace: workspace,
+                field: field, selections: selections)
+            return .init(selections: values.stored, resolvedSelections: values.resolved)
+        case let .prepareSelections(id, defaults, usesProductPermissionDefault):
+            try await model.prepareNewSessionSelections(conversationID: id, capturedDefaults: defaults,
+                usesProductPermissionDefault: usesProductPermissionDefault)
         case let .applySelections(id):
             try await model.applyPendingSessionSelections(conversationID: id)
         case let .recordSelections(id, metadata):

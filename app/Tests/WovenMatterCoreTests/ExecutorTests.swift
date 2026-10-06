@@ -21,7 +21,7 @@ struct ExecutorTests {
         #expect(after.executorProfiles == ["app:profile"])
     }
     @Test func confirmedHarnessModesPreserveTheirMeaning() {
-        let full: [(AgentRuntimeKind, String)] = [(.defaultAgent, "full"), (.codex, "agent-full-access"), (.claudeCode, "bypassPermissions"), (.grokBuild, "bypassPermissions"), (.cursor, "auto"), (.opencode, "full"), (.hermes, "full"), (.openclaw, "full")]
+        let full: [(AgentRuntimeKind, String)] = [(.defaultAgent, "full"), (.codex, "agent-full-access"), (.claudeCode, "bypassPermissions"), (.grokBuild, "bypassPermissions"), (.cursor, "auto"), (.cursor, "force"), (.opencode, "allow"), (.opencode, "full"), (.hermes, "full"), (.openclaw, "full")]
         for (runtime, mode) in full {
             #expect(ExecutorApprovalPolicy.resolve(runtime: runtime, mode: mode) == .full)
             #expect(ExecutorApprovalPolicy.resolve(runtime: runtime, mode: mode, confirmed: false) == .ask)

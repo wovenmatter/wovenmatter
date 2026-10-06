@@ -11,6 +11,9 @@ public actor HermesGatewayClient {
     private var cliPluginReady = false
     private var sessionID = ""
     private var storedID = ""
+    private var resolvedStoredID = ""
+    private var runID: String?
+    private var archivedNativeHighWater: [String: Int64] = [:]
     private var home = ""
     private var sequence: Double = 0
     private var epoch: String?
@@ -46,6 +49,8 @@ public actor HermesGatewayClient {
     private var interactionFences: [String: AgentDispatchFence] = [:]
     private var interactionTasks: [String: Task<Void, Never>] = [:]
     private var heartbeat: Task<Void, Never>?
+    private var nativeArchiveTask: Task<Void, Never>?
+    private var nativeArchiveToken: UUID?
 
     public init(launch: LocalACPRuntimeLaunchConfiguration) {
         self.launch = launch
@@ -81,6 +86,10 @@ public actor HermesGatewayClient {
 
     public func initializeSession(workingDirectory: URL, existingSessionID: String?, title: String?, systemPrompt: String?) async throws -> LocalACPInitializedSession {
         recoveryInvalidated = true
+        let priorArchive = nativeArchiveTask
+        nativeArchiveToken = nil; nativeArchiveTask = nil
+        priorArchive?.cancel()
+        await priorArchive?.value
         permissionInfo = .null
         inheritedPermissionMode = nil
         permissionDowngradeUnavailable = false
@@ -127,8 +136,12 @@ public actor HermesGatewayClient {
         }
         try bind(snapshot, requestedStoredID: previous?.storedID)
         try await prepareCLI(launch.cliConnection)
+        if previous != nil { try await archiveNativeSession() }
         guard !snapshot["running"].bool else { throw HermesGatewayError.message("This Hermes conversation is already running. Wait for its current turn before continuing it here.") }
         let replay = try await client.call("session.events.since", ["session_id": .string(sessionID), "last_seen": .number(0)])
+        if launch.historyRecorder != nil {
+            for event in replay["events"].array { try await archiveEvent(event["params"].isNull ? event : event["params"]) }
+        }
         sequence = replay["latest_seq"].number ?? 0
         // Existing sessions keep their durable history, but Woven sessions follow their selected workspace.
         if !imported {
@@ -165,7 +178,7 @@ public actor HermesGatewayClient {
                 throw HermesGatewayError.message("Hermes resumed an unexpected conversation identity.")
             }
         }
-        sessionID = live; storedID = requestedStoredID ?? stored
+        sessionID = live; storedID = requestedStoredID ?? stored; resolvedStoredID = stored
         let info = snapshot["info"]
         updatePermissionInfo(info)
         if !info["usage"].isNull { latestUsage = info["usage"] }
@@ -180,6 +193,7 @@ public actor HermesGatewayClient {
     }
 
     public func sessionConfiguration() -> LocalACPSessionConfiguration { configuration }
+    public func setRunID(_ value: String) { runID = value }
 
     public func setSessionConfiguration(model: String?, thinking: String?) async throws -> LocalACPSessionConfiguration {
         guard let rpc else { throw HermesGatewayError.message("Hermes is disconnected.") }
@@ -355,13 +369,13 @@ public actor HermesGatewayClient {
             (root/'plugin.yaml').write_text('name: wovenmatter-cli\nversion: 1.0.0\ndescription: Woven Matter session CLI integration\n')
             print('changed' if changed else 'ready')
             """#
-            let result = try await rpc.call("shell.exec", ["command": .string(
+            let result = try await rpc.callConfiguration("shell.exec", ["command": .string(
                 ["python3", "-c", install, pluginDirectory, source].map(quote).joined(separator: " "))])
             guard result["code"].number == 0 else { throw HermesGatewayError.message("Could not install the Hermes CLI integration.") }
             if result["stdout"].text.contains("changed") {
-                _ = try await rpc.call("plugins.manage", ["action": "toggle", "name": "wovenmatter-cli", "enable": .bool(false)])
+                _ = try await rpc.callConfiguration("plugins.manage", ["action": "toggle", "name": "wovenmatter-cli", "enable": .bool(false)])
             }
-            let activation = try await rpc.call("plugins.manage", ["action": "toggle", "name": "wovenmatter-cli", "enable": .bool(true)])
+            let activation = try await rpc.callConfiguration("plugins.manage", ["action": "toggle", "name": "wovenmatter-cli", "enable": .bool(true)])
             let live = activation["activation"]["activated_now"]["hooks"].array.compactMap(\.string)
             guard activation["unchanged"].bool || live.contains("pre_tool_call") else {
                 throw HermesGatewayError.message("Hermes could not activate its Woven Matter CLI integration.")
@@ -371,7 +385,7 @@ public actor HermesGatewayClient {
         let payload: HermesValue = ["context": try JSONDecoder().decode(HermesValue.self, from: JSONEncoder().encode(context)),
             "text": text.map(HermesValue.string) ?? .null, "resetPending": .bool(resetPending), "removePending": .bool(removePending)]
         let encoded = try JSONEncoder().encode(payload).base64EncodedString()
-        let result = try await rpc.call("shell.exec", ["command": .string(["python3", pluginDirectory + "/__init__.py", home, storedID, encoded].map(quote).joined(separator: " "))])
+        let result = try await rpc.callConfiguration("shell.exec", ["command": .string(["python3", pluginDirectory + "/__init__.py", home, storedID, encoded].map(quote).joined(separator: " "))])
         guard result["code"].number == 0, result["stdout"].text.contains("ready") else {
             throw HermesGatewayError.message("Could not bind the Woven Matter CLI to this Hermes input.")
         }
@@ -384,6 +398,7 @@ public actor HermesGatewayClient {
         try fence.check()
         pendingDispatches[ObjectIdentifier(fence)] = fence
         defer { pendingDispatches[ObjectIdentifier(fence)] = nil }
+        if let archive = nativeArchiveTask { await archive.value; nativeArchiveTask = nil }
         guard !closed, !busy, !replaying, !sessionID.isEmpty else { throw HermesGatewayError.message("Hermes is busy or disconnected.") }
         let connected = await rpc?.isConnected == true
         if (recoveryInvalidated || !connected), let workingDirectory {
@@ -396,7 +411,7 @@ public actor HermesGatewayClient {
         busy = true; terminal = nil; text = ""; completedText = ""; stopped = false; activeReasoningID = nil
         lastReasoningID = nil; lastReasoningText = ""
         usageBaseline = latestUsage
-        defer { busy = false; self.onEvent = nil; self.onPermission = nil; self.onInteraction = nil }
+        defer { busy = false; self.onEvent = nil; self.onPermission = nil; self.onInteraction = nil; runID = nil }
         var content = input.transportText()
         if HermesSlashCommands.name(in: input.text).map({ name in
             configuration.slashCommands.contains { $0.name == name }
@@ -530,11 +545,15 @@ public actor HermesGatewayClient {
         pendingDispatches.values.forEach { $0.cancel() }
         closed = true
         heartbeat?.cancel(); heartbeat = nil
+        let archive = nativeArchiveTask
+        nativeArchiveToken = nil; nativeArchiveTask = nil
+        archive?.cancel()
         cancelInteractions()
         if busy { try? await cancel() }
         await rpc?.setHandlers(event: nil, disconnected: nil, request: nil)
         await rpc?.disconnect(); rpc = nil
         finish(.failure(CancellationError()))
+        await archive?.value
     }
 
     private func ping() async {
@@ -552,6 +571,9 @@ public actor HermesGatewayClient {
             try await rpc.connect()
             guard !closed else { await rpc.disconnect(); return }
             let newEpoch = await rpc.epoch
+            // A service restart can interrupt replay while leaving its saved
+            // transcript available through the read-only export interface.
+            try await archiveNativeSession()
             guard newEpoch == epoch else {
                 throw HermesGatewayError.message("Hermes Gateway restarted. Conversation history is preserved; review it before continuing this interrupted turn.")
             }
@@ -559,6 +581,7 @@ public actor HermesGatewayClient {
             let requested = storedID
             let snapshot = try await rpc.call("session.resume", ["session_id": .string(requested), "defer_history": .bool(true)])
             try bind(snapshot, requestedStoredID: requested)
+            try await archiveNativeSession()
             guard sessionID == oldSession else {
                 throw HermesGatewayError.message("Hermes Gateway restarted. Conversation history is preserved; review it before continuing this interrupted turn.")
             }
@@ -596,6 +619,7 @@ public actor HermesGatewayClient {
         }
         let payload = event["payload"]
         do {
+            try await archiveEvent(event)
             switch event["type"].text {
             case "message.delta":
                 guard busy else { return }
@@ -638,8 +662,10 @@ public actor HermesGatewayClient {
                     latestUsage = usage
                 }
                 if payload["status"].text == "error" {
-                    finish(.failure(HermesGatewayError.message(payload["error"].string ?? "Hermes turn failed.")))
-                } else { finish(.success(stopped || payload["status"].text == "interrupted" ? .cancelled : .endTurn)) }
+                    reconcileCompletedTurn(.failure(HermesGatewayError.message(payload["error"].string ?? "Hermes turn failed.")))
+                } else {
+                    reconcileCompletedTurn(.success(stopped || payload["status"].text == "interrupted" ? .cancelled : .endTurn))
+                }
             case "session.info":
                 updatePermissionInfo(payload)
                 if !payload["usage"].isNull { latestUsage = payload["usage"] }
@@ -666,6 +692,56 @@ public actor HermesGatewayClient {
         } catch { finish(.failure(error)) }
     }
 
+    private func archiveNativeSession() async throws {
+        guard let recorder = launch.historyRecorder, let rpc, !storedID.isEmpty else { return }
+        let targets = storedID == resolvedStoredID || resolvedStoredID.isEmpty ? [storedID] : [storedID, resolvedStoredID]
+        for target in targets {
+            if let maximum = try await rpc.archiveSession(storedID: target, recorder: recorder,
+                afterMessageID: archivedNativeHighWater[target], runID: runID) {
+                archivedNativeHighWater[target] = maximum
+            }
+        }
+        // Only the requested durable store and current compression tip matter.
+        archivedNativeHighWater = archivedNativeHighWater.filter { targets.contains($0.key) }
+    }
+
+    /// Final history may be large. Keep the native reader free to process ping,
+    /// interrupt and interaction replies while completion waits on this owned
+    /// archive task. Shutdown cancels and drains it before retiring the client.
+    private func reconcileCompletedTurn(_ result: Result<LocalACPStopReason, any Error>) {
+        guard terminal == nil, nativeArchiveTask == nil else { return }
+        guard !closed, launch.historyRecorder != nil else { finish(result); return }
+        let token = UUID(); nativeArchiveToken = token
+        nativeArchiveTask = Task { [weak self] in await self?.completeArchive(result, token: token) }
+    }
+
+    private func completeArchive(_ result: Result<LocalACPStopReason, any Error>, token: UUID) async {
+        let outcome: Result<LocalACPStopReason, any Error>
+        do {
+            try await archiveNativeSession()
+            if stopped, case .success = result { outcome = .success(.cancelled) }
+            else { outcome = result }
+        }
+        catch { outcome = .failure(error) }
+        guard nativeArchiveToken == token, !closed else { return }
+        nativeArchiveToken = nil; nativeArchiveTask = nil
+        finish(outcome)
+    }
+
+    private func archiveEvent(_ event: HermesValue) async throws {
+        guard launch.historyRecorder != nil, !storedID.isEmpty else { return }
+        guard !event["type"].text.hasPrefix("config.") else { return }
+        let safe = HermesGatewayRPC.credentialSafeFrame(["method": "event", "params": event], secretRequestIDs: [])["params"]
+        let bytes = try NativeHarnessArchive.encode(safe)
+        // Replay sequence numbers are stable within the advertised native epoch.
+        let id = event["seq"].number.map { (epoch ?? "unknown-epoch") + ":" + String($0) }
+            ?? NativeHarnessArchive.digest(bytes)
+        let kind = event["type"].string ?? "event"
+        try await NativeHarnessArchive.capture(sourceID: "hermes:" + home, sessionID: storedID,
+            records: [NativeHarnessArchive.record(id: "event:" + id, runID: runID, kind: kind, data: bytes,
+                contentMode: kind.hasSuffix(".delta") ? "delta" : "event")], recorder: launch.historyRecorder)
+    }
+
     private func reasoningID() -> String {
         if let activeReasoningID { return activeReasoningID }
         reasoningPhase += 1
@@ -679,6 +755,8 @@ public actor HermesGatewayClient {
     private func finish(_ result: Result<LocalACPStopReason, any Error>) {
         guard terminal == nil else { return }
         terminal = result
+        nativeArchiveToken = nil
+        nativeArchiveTask?.cancel()
         cancelInteractions()
         let waiting = completion; completion = nil
         waiting?.resume(with: result)

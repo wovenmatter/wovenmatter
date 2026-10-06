@@ -110,6 +110,7 @@ public struct OpenCodeHTTPClient: Sendable {
     private func record(_ direction: String, method: String, path: String,
                         query: [String: String], data: Data, status: Int? = nil) async throws {
         guard let historyRecorder else { return }
+        guard !["/api/config", "/api/provider", "/api/auth", "/api/credential", "/api/secret"].contains(where: { path == $0 || path.hasPrefix($0 + "/") }) else { return }
         // Headers and endpoint credentials are deliberately absent. The original
         // body and SSE framing are retained verbatim, including unknown fields.
         let frame = WorkspaceHTTPObservation(method: method, path: path, query: query,
@@ -154,7 +155,64 @@ public struct OpenCodeHTTPClient: Sendable {
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         try await record("in", method: method, path: path, query: query, data: data, status: status)
         guard (200...299).contains(status) else { throw OpenCodeError.http(status) }
-        return data.isEmpty ? .null : try OpenCodeValue.decode(data)
+        let value = data.isEmpty ? OpenCodeValue.null : try OpenCodeValue.decode(data)
+        if method == "GET", let batch = try Self.nativeSnapshot(path: path, value: value, sourceID: connection.identity) {
+            try await historyRecorder?("native", NativeHarnessArchive.encode(batch))
+        }
+        return value
+    }
+
+    /// A page containing many large native tool results may exceed the HTTP
+    /// budget. Reduce this read-only page first, then spool a single large
+    /// native record to disk and retain a bounded UI projection.
+    public func historyPage(_ path: String, cursor: String? = nil) async throws -> (value: OpenCodeValue, requestedLimit: Int) {
+        var limit = 100
+        while true {
+            var query = ["limit": String(limit)]
+            if let cursor { query["cursor"] = cursor } else { query["order"] = "desc" }
+            do { return (try await call("GET", path, query: query), limit) }
+            catch OpenCodeError.message(let message) where message.hasPrefix("OpenCode response exceeds the 32 MB limit.") {
+                guard limit > 1 else {
+                    return (try await largeHistoryPage(path, query: query), limit)
+                }
+                limit = max(1, limit / 2)
+            }
+        }
+    }
+
+    private func largeHistoryPage(_ path: String, query: [String: String]) async throws -> OpenCodeValue {
+        guard let historyRecorder, Self.nativeSessionID(path: path) != nil, path.hasSuffix("/message") else {
+            throw OpenCodeError.message("OpenCode native history exceeds the 32 MiB display limit; reconnect with history recording enabled to archive it.")
+        }
+        return try await NativeHarnessArchive.download(request("GET", path, query: query)) { file, byteCount, status in
+            guard (200...299).contains(status) else { throw OpenCodeError.http(status) }
+            return try await OpenCodeNativeArchive.page(file, byteCount: byteCount, path: path,
+                sourceID: "opencode:" + connection.identity, recorder: historyRecorder)
+        }
+    }
+
+    static func nativeSessionID(path: String) -> String? {
+        let pieces = path.split(separator: "/").map(String.init)
+        guard let index = pieces.firstIndex(of: "session"), index + 1 < pieces.count else { return nil }
+        return pieces[index + 1].removingPercentEncoding
+    }
+
+    /// Only native session/history endpoints enter the transcript archive.
+    /// Configuration and provider endpoint responses can contain credentials.
+    static func nativeSnapshot(path: String, value: OpenCodeValue, sourceID: String) throws -> WorkspaceNativeRunRecordBatch? {
+        guard let sessionID = nativeSessionID(path: path) else { return nil }
+        let suffix = path.split(separator: "/").last.map(String.init) ?? ""
+        let records: [WorkspaceNativeRunRecord]
+        if suffix == "message", case .array(let messages) = value["data"] {
+            records = try messages.map { message in
+                let bytes = try NativeHarnessArchive.encode(message)
+                let id = message["id"].string ?? "exposed:" + NativeHarnessArchive.digest(bytes)
+                return NativeHarnessArchive.record(id: "message:" + id, kind: "message", data: bytes, completeness: "imported")
+            }
+        } else if suffix.removingPercentEncoding == sessionID, value["data"]["id"].text == sessionID {
+            records = [NativeHarnessArchive.record(id: "session", kind: "session", data: try NativeHarnessArchive.encode(value["data"]))]
+        } else { return nil }
+        return WorkspaceNativeRunRecordBatch(sourceID: "opencode:" + sourceID, nativeSessionID: sessionID, records: records)
     }
     public func readFile(path: String, query: [String: String]) async throws -> (Data, String) {
         var request = try request("GET", "/api/fs/read/" + Self.segment(path), query: query)
@@ -210,6 +268,8 @@ public struct OpenCodeHTTPClient: Sendable {
         }
         var parser = OpenCodeSSEParser()
         var raw = Data()
+        let streamID = UUID().uuidString.lowercased()
+        var ordinal = 0
         do {
             for try await byte in bytes {
                 try Task.checkCancellation()
@@ -218,7 +278,18 @@ public struct OpenCodeHTTPClient: Sendable {
                     try await record("in", method: "GET", path: path, query: query, data: raw, status: http.statusCode)
                     raw.removeAll(keepingCapacity: true)
                 }
-                for value in try parser.append(byte) { try await receive(value) }
+                for value in try parser.append(byte) {
+                    ordinal += 1
+                    if let sessionID = Self.nativeSessionID(path: path) {
+                        let identity = parser.lastEventID ?? value["seq"].number.map { String($0) }
+                            ?? streamID + ":" + String(ordinal)
+                        let record = NativeHarnessArchive.record(id: "event:" + identity, kind: "event",
+                            data: try NativeHarnessArchive.encode(value), contentMode: "event")
+                        try await NativeHarnessArchive.capture(sourceID: "opencode:" + connection.identity,
+                            sessionID: sessionID, records: [record], recorder: historyRecorder)
+                    }
+                    try await receive(value)
+                }
             }
         } catch {
             if !raw.isEmpty { try await record("in", method: "GET", path: path, query: query, data: raw, status: http.statusCode) }
@@ -235,6 +306,7 @@ public struct OpenCodeSSEParser: Sendable {
     private var data = Data()
     private var carriageReturn = false
     private var failure = false
+    public private(set) var lastEventID: String?
     public init() {}
     public var hasPartialFrame: Bool { !line.isEmpty || !data.isEmpty }
     public mutating func append(_ byte: UInt8) throws -> [OpenCodeValue] {
@@ -256,6 +328,10 @@ public struct OpenCodeSSEParser: Sendable {
             return [value]
         }
         if line.starts(with: Data("event: effect/httpapi/stream/failure".utf8)) { failure = true }
+        if line.starts(with: Data("id:".utf8)) {
+            let offset = line.count > 3 && line[3] == 32 ? 4 : 3
+            lastEventID = String(decoding: line.dropFirst(offset), as: UTF8.self)
+        }
         if line.starts(with: Data("data:".utf8)) {
             let offset = line.count > 5 && line[5] == 32 ? 6 : 5
             data.append(line.dropFirst(offset)); data.append(10)

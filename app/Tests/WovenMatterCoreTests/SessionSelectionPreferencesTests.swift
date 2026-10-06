@@ -8,7 +8,7 @@ struct SessionSelectionPreferencesTests {
   @Test("new conversations capture Full access without writing a user default", arguments: [
     ("codex", "agent-full-access"), ("claude_code", "bypassPermissions"),
     ("grok_build", "bypassPermissions"), ("openclaw", "full"),
-    ("hermes", "full"), ("opencode", "full"), ("cursor", "auto")
+    ("hermes", "full"), ("opencode", "allow"), ("cursor", "force"), ("default_agent", "full")
   ])
   func newConversationFullAccess(harness: String, permission: String) throws {
     try withPreferences { preferences, defaults in
@@ -31,6 +31,65 @@ struct SessionSelectionPreferencesTests {
       #expect(imported.selections.permission == "native-policy")
       #expect(imported.desiredSelections.isEmpty)
       #expect(!imported.requiresApplication)
+    }
+  }
+
+  @Test("product permission defaults respect native capabilities without changing explicit choices")
+  func productPermissionCapabilityFallback() throws {
+    try withPreferences { preferences, defaults in
+      let fresh = preferences.captureConversation(id: "product", harness: "codex", workspace: "project")
+      #expect(fresh.usesProductPermissionDefault)
+      let supported = preferences.reconcileProductPermissionDefault(id: "product", options: ["agent-full-access"], nativePermission: "agent")
+      #expect(supported == fresh)
+      let inherited = preferences.reconcileProductPermissionDefault(id: "product", options: ["read-only", "agent"], nativePermission: "agent")
+      #expect(inherited?.desiredSelections.permission == nil)
+      #expect(inherited?.selections.permission == "agent")
+      preferences.saveDefault(.permission, from: SessionSelections(permission: "agent-full-access"), harness: "codex")
+      let explicit = preferences.captureConversation(id: "explicit", harness: "codex", workspace: "project")
+      #expect(!explicit.usesProductPermissionDefault)
+      #expect(preferences.reconcileProductPermissionDefault(id: "explicit", options: [], nativePermission: nil) == explicit)
+      let existing = preferences.captureExistingConversation(id: "existing", harness: "codex", workspace: "project", selections: SessionSelections(permission: "read-only"))
+      #expect(preferences.reconcileProductPermissionDefault(id: "existing", options: ["agent-full-access"], nativePermission: "agent-full-access") == existing)
+      #expect(SessionSelectionPreferences(defaults: defaults).conversation(id: "existing") == existing)
+    }
+  }
+
+  @Test("frozen permission origin survives settings edits during native creation")
+  func frozenPermissionOrigin() throws {
+    try withPreferences { preferences, defaults in
+      let captured = preferences.defaults(harness: "codex", workspace: "project")
+      let product = preferences.usesProductPermissionDefault(harness: "codex", workspace: "project")
+      preferences.saveDefault(.permission, from: SessionSelections(permission: "read-only"), harness: "codex")
+      let fresh = preferences.captureConversation(id: "product", harness: "codex", workspace: "project",
+        capturedDefaults: captured, usesProductPermissionDefault: product)
+      #expect(fresh.usesProductPermissionDefault)
+      #expect(fresh.desiredSelections.permission == "agent-full-access")
+      #expect(preferences.reconcileProductPermissionDefault(id: "product", options: ["agent"],
+        nativePermission: "agent")?.desiredSelections.permission == nil)
+
+      preferences.saveDefault(.permission, from: SessionSelections(permission: "agent-full-access"), harness: "codex")
+      let explicit = preferences.defaults(harness: "codex", workspace: "project")
+      let explicitProduct = preferences.usesProductPermissionDefault(harness: "codex", workspace: "project")
+      preferences.removeDefault(.permission, harness: "codex")
+      let frozen = preferences.captureConversation(id: "explicit", harness: "codex", workspace: "project",
+        capturedDefaults: explicit, usesProductPermissionDefault: explicitProduct)
+      #expect(!frozen.usesProductPermissionDefault)
+      #expect(preferences.reconcileProductPermissionDefault(id: "explicit", options: [], nativePermission: nil) == frozen)
+      #expect(SessionSelectionPreferences(defaults: defaults).conversation(id: "explicit") == frozen)
+    }
+  }
+
+  @Test("repairing a pending model does not turn a product permission into an explicit choice")
+  func pendingModelRepairKeepsPermissionOrigin() throws {
+    try withPreferences { preferences, _ in
+      let snapshot = preferences.captureConversation(id: "pending", harness: "codex", workspace: "project")
+      let repaired = snapshot.desiredSelections.applyingPendingCorrection(SessionSelections(model: "available"))
+      preferences.updateConversation(id: "pending", selections: repaired, permissionIsExplicit: false)
+      #expect(preferences.conversation(id: "pending")?.usesProductPermissionDefault == true)
+      #expect(preferences.reconcileProductPermissionDefault(id: "pending", options: ["agent"],
+        nativePermission: "agent")?.desiredSelections == SessionSelections(model: "available"))
+      preferences.updateConversation(id: "pending", selections: SessionSelections(permission: "read-only"))
+      #expect(preferences.conversation(id: "pending")?.usesProductPermissionDefault == false)
     }
   }
 

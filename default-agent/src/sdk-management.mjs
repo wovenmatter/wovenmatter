@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 
 const bundledRoot = fileURLToPath(new URL('../', import.meta.url));
 const definitions = [
-  { id: 'pi', name: 'Pi SDK', packages: ['@earendil-works/pi-coding-agent', '@earendil-works/pi-ai'] },
+  { id: 'pi', name: 'Pi Durable SDK', packages: ['@earendil-works/pi-durable', '@earendil-works/pi-ai', '@earendil-works/pi-coding-agent', '@earendil-works/chord'] },
   { id: 'claude', name: 'Claude SDK', packages: ['@anthropic-ai/claude-agent-sdk'] },
 ];
 const stableVersion = value => typeof value === 'string' && /^\d+\.\d+\.\d+$/.test(value);
@@ -185,8 +185,12 @@ async function npmCLI() {
 }
 const verificationSource = `
 const pi = await import('@earendil-works/pi-coding-agent');
-for (const name of ['createAgentSession','createCodingTools','DefaultResourceLoader','ModelRuntime','SessionManager','SettingsManager']) if (typeof pi[name] !== 'function') throw Error('Pi API unavailable');
-if (typeof pi.AgentSession?.prototype.refreshContext !== 'function') throw Error('Pi context API unavailable');
+for (const name of ['createCodingTools','createCodemodeExtension','DefaultResourceLoader','ModelRuntime','SettingsManager']) if (typeof pi[name] !== 'function') throw Error('Pi API unavailable');
+const durable = await import('@earendil-works/pi-durable');
+for (const name of ['createRegistry','watchEvents','defineDoc','defineExtension']) if (typeof durable[name] !== 'function') throw Error('Durable API unavailable');
+if (typeof durable.Harness?.open !== 'function') throw Error('Durable API unavailable');
+const storage = await import('@earendil-works/pi-durable/storage/jsonl/node');
+if (typeof storage.openNodeJsonlStorage !== 'function') throw Error('Durable storage unavailable');
 const ai = await import('@earendil-works/pi-ai');
 for (const name of ['InMemoryCredentialStore','createAssistantMessageEventStream']) if (typeof ai[name] !== 'function') throw Error('Pi API unavailable');
 const transcript = await import('@earendil-works/pi-ai/utils/transcript');

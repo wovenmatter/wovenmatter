@@ -77,26 +77,27 @@ struct OpenCodeIntegrationTests {
         let session = fixtureSession()
         let coordinator = OpenCodeSessionCoordinator(database: database,
             clientFactory: { OpenCodeHTTPClient(connection: $0, session: session) })
-        let workers = DatabaseWorkers.shared(url: url)
         let entered = AsyncStream<Void>.makeStream()
         let release = DispatchSemaphore(value: 0)
-        defer { for _ in workers.readers { release.signal() } }
-        let blockers = workers.readers.map { worker in Task { try await worker.perform { _ in
+        defer { release.signal() }
+        // Connect records outbound health history on the writer before dispatch.
+        let blocked = Task { try await database.write { _ in
             entered.continuation.yield(())
             #expect(release.wait(timeout: .now() + 60) == .success)
-        } } }
+        } }
         var iterator = entered.stream.makeAsyncIterator()
-        for _ in workers.readers { await iterator.next() }
+        await iterator.next()
         let pending = Task { try await coordinator.connect(connection()) }
         let deadline = ContinuousClock.now + .seconds(60)
-        while workers.readers.reduce(0, { $0 + $1.metrics.pending }) < workers.readers.count + 1 {
+        while database.workerMetrics[0].pending < 2 {
             guard ContinuousClock.now < deadline else { throw DatabaseWorkerError.timedOut }
             try await Task.sleep(for: .milliseconds(1))
         }
         await coordinator.shutdown()
-        for _ in workers.readers { release.signal() }
-        for blocker in blockers { try await blocker.value }
+        release.signal()
+        try await blocked.value
         await #expect(throws: CancellationError.self) { try await pending.value }
+        #expect(fixture.healthCount == 0)
         await #expect(throws: OpenCodeError.self) { try await coordinator.call(connectionID: "fixture", path: "/api/session") }
     }
 
@@ -152,6 +153,27 @@ struct OpenCodeIntegrationTests {
         let record = try #require(try await reopened.workspaceOverview().conversations.first { $0.id == id })
         #expect(record.importedAt != nil)
         #expect(record.lastMessageAt == record.importedAt)
+        await coordinator.shutdown()
+    }
+
+    @Test func nativeImportArchivesEveryPageWhileKeepingRecentUIHistoryBounded() async throws {
+        let fixture = OpenCodeFixture(); FixtureProtocol.fixture = fixture
+        fixture.messages = (0..<1_500).map { message("msg_import_\($0)") }
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let database = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
+        let session = fixtureSession()
+        let coordinator = OpenCodeSessionCoordinator(database: database, clientFactory: { OpenCodeHTTPClient(connection: $0, session: session) })
+        try await coordinator.connect(connection())
+        let snapshot = try await coordinator.completeImportSnapshot(connectionID: "fixture", sessionID: "ses_fixture")
+        #expect(snapshot.messages.count == 1_000)
+        #expect(snapshot.messages.first?["id"].text == "msg_import_500")
+        #expect(snapshot.messages.last?["id"].text == "msg_import_1499")
+        #expect(snapshot.olderCursor == "msg_import_500")
+        // Fifteen nonempty pages and the terminal empty page are all fetched
+        // through the native recorder, even beyond the retained UI window.
+        #expect(fixture.historyRequests == 16)
         await coordinator.shutdown()
     }
 
@@ -394,9 +416,11 @@ struct OpenCodeIntegrationTests {
         let baseline = fixture.historyRequests
         fixture.messages = [message("first")]
         for seq in 1...5 { await coordinator.receiveLogEvent(["type": "session.text.delta", "durable": ["seq": .number(Double(seq))]], link: link) }
-        try await fixture.waitForHistoryRequests(baseline + 1)
+        try await fixture.waitForHistoryRequests(baseline + 2)
         try await Task.sleep(for: .milliseconds(125))
-        #expect(fixture.historyRequests == baseline + 1)
+        // Native pages expose a cursor even at the end; the one coalesced
+        // refresh includes its bounded empty-page completeness probe.
+        #expect(fixture.historyRequests == baseline + 2)
 
         fixture.heldPath = "/api/session/ses_fixture/form/form_pending"
         fixture.messages = [message("during-first")]
@@ -406,7 +430,7 @@ struct OpenCodeIntegrationTests {
         await coordinator.receiveLogEvent(["type": "session.execution.failed", "durable": ["seq": .number(7)]], link: link)
         fixture.heldPath = nil
         fixture.gate.release()
-        try await fixture.waitForHistoryRequests(baseline + 3)
+        try await fixture.waitForHistoryRequests(baseline + 6)
         for _ in 0..<400 {
             if try await database.openCodeSnapshot(conversationID: id)?.cursor == 7 { break }
             try await Task.sleep(for: .milliseconds(5))
@@ -968,6 +992,7 @@ private final class OpenCodeFixture: @unchecked Sendable {
     var acceptModelSelection = true
     var modelWriteCount = 0
     var version = "2.0.22"
+    var healthCount = 0
     var messages: [OpenCodeValue] = []
     var sessions: [OpenCodeValue] = []
     var listedCount = 0
@@ -1007,8 +1032,11 @@ private final class OpenCodeFixture: @unchecked Sendable {
             let prefix = "/v1/workspace-instances/opencode"
             if path.hasPrefix(prefix) { path.removeFirst(prefix.count) }
             if path.hasSuffix("/log") { streamTimeout = request.timeoutInterval; return (200, [:]) }
-            if path == "/api/info", version.hasPrefix("0.0.0-beta-") { return (404, [:]) }
-            if path == "/api/info" || path == "/api/health" { return (200, ["healthy": .bool(true), "version": .string(version), "pid": .number(Double(ProcessInfo.processInfo.processIdentifier))]) }
+            if path == "/api/info" || path == "/api/health" {
+                healthCount += 1
+                if path == "/api/info", version.hasPrefix("0.0.0-beta-") { return (404, [:]) }
+                return (200, ["healthy": .bool(true), "version": .string(version), "pid": .number(Double(ProcessInfo.processInfo.processIdentifier))])
+            }
             if path == "/api/session/active" { return (200, ["data": [:]]) }
             if path.hasSuffix("/interrupt") { interruptCount += 1; return (200, [:]) }
             if path.hasSuffix("/prompt") || path.hasSuffix("/command") {

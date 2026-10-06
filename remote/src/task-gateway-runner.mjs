@@ -1,4 +1,5 @@
 import { createNativeTaskExecutor } from './task-gateway-native.mjs'
+import { createTaskNativeArchive, publishNativePresentation, isolateTaskEnvironment } from './task-native-archive.mjs'
 import { spawn } from 'node:child_process'
 import { createInterface } from 'node:readline'
 import { isAbsolute } from 'node:path'
@@ -15,7 +16,7 @@ export async function applyTaskConfiguration(rpc, sessionID, initial, configurat
     if (!wanted) continue
     if (category === 'permission' && configuration.runtimeKind === 'grok_build') continue // explicit CLI policy
     if (category === 'permission' && configuration.runtimeKind === 'cursor') {
-      if (!['normal','auto'].includes(wanted)) throw before('The saved Cursor permission is unavailable.')
+      if (!['native-default','force'].includes(wanted)) throw before('The saved Cursor permission is unavailable.')
       continue
     }
     const option = (current.configOptions ?? []).find(o => category === 'model' ? o.id === 'model' || o.category === 'model'
@@ -64,11 +65,15 @@ export function createTaskExecutor({ catalog,workspaceRoot,environment,defaultAg
       args.unshift('--permission-mode',config.permission)
       const agentIndex=args.indexOf('agent');if(agentIndex>=0)args.splice(agentIndex+1,0,'--no-leader')
     }
-    const env = { ...environment() }
+    if (harness.id === 'cursor' && config.permission) {
+      if (!['native-default', 'force'].includes(config.permission)) throw before('The saved Cursor permission is unavailable.')
+      args = args.filter(argument => !['--force', '--yolo', '-f'].includes(argument))
+      if (config.permission === 'force') args.unshift('--force')
+    }
     // Never lend a connected Mac session's identity/tool authority to a task.
-    for (const key of Object.keys(env)) if (key.startsWith('WOVENMATTER_SESSION_') || key.startsWith('WOVENMATTER_TOOL_')) delete env[key]
+    const env = isolateTaskEnvironment(environment())
     const child = launch(harness.command,args,{cwd:directory,env,stdio:['pipe','pipe','pipe']})
-    let count=0, sessionID, accepted=false, terminal=false, bufferBytes=0, needsApproval=false
+    let count=0, sessionID, accepted=false, terminal=false, needsApproval=false, archive
     const pending = new Map()
     const failAll = error => { for (const entry of pending.values()) { clearTimeout(entry.timer); entry.reject(error) }; pending.clear() }
     const send = message => { if (!child.stdin.writable || terminal) throw new Error('The agent disconnected.'); child.stdin.write(JSON.stringify(message)+'\n') }
@@ -82,17 +87,24 @@ export function createTaskExecutor({ catalog,workspaceRoot,environment,defaultAg
     child.stderr.on('data',()=>{}) // Provider output can contain secrets; don't copy it into result errors.
     const lines=createInterface({input:child.stdout})
     const receiveLine = line => {
-      bufferBytes+=Buffer.byteLength(line)
-      if (line.length>1048576 || bufferBytes>64*1024*1024) { child.kill('SIGTERM');failAll(new Error('The task exceeded its response limit.'));return }
       let message;try { message=JSON.parse(line) } catch { return }
       if (!message || typeof message !== 'object' || Array.isArray(message)) return
       if (message.method && message.id != null) {
         if (message.method==='session/request_permission') {
-          const allow=config.runtimeKind==='cursor' && config.permission==='auto' && message.params?.options?.find(o=>o.kind==='allow_once')
-          send({jsonrpc:'2.0',id:message.id,result:{outcome:allow?{outcome:'selected',optionId:allow.optionId}:{outcome:'cancelled'}}})
-          if (!allow) { needsApproval=true; publish({sessionUpdate:'agent_message_chunk',content:{type:'text',text:'\nThis task needs approval. Open its session to continue.\n'}}) }
+          if (accepted && archive && (!message.params?.sessionId || message.params.sessionId === sessionID)) {
+            void archive.capture(message.params, {id: `permission:${run.id}:${message.id}`, kind: 'permission.request'})
+              .catch(() => { failAll(new Error('The task output could not be retained.')); child.kill('SIGTERM') })
+          }
+          send({jsonrpc:'2.0',id:message.id,result:{outcome:{outcome:'cancelled'}}})
+          needsApproval=true; publish({sessionUpdate:'agent_message_chunk',content:{type:'text',text:'\nThis task needs approval. Open its session to continue.\n'}})
         } else send({jsonrpc:'2.0',id:message.id,error:{code:-32601,message:'Interactive client tools are unavailable for this session.'}})
-      } else if (message.method==='session/update' && message.params?.update) publish(message.params.update)
+      } else if (message.method==='session/update' && message.params?.update && accepted) {
+        if (message.params.sessionId && message.params.sessionId !== sessionID) return
+        const update = message.params.update
+        if (['config_option_update', 'available_commands_update', 'current_mode_update'].includes(update.sessionUpdate)) return
+        void archive.capture(update, {kind: update.sessionUpdate ?? 'session.update', present: safe => publishNativePresentation(safe, publish)})
+          .catch(() => { failAll(new Error('The task output could not be retained.')); child.kill('SIGTERM') })
+      }
       else if (message.id!=null && pending.has(message.id)) {
         const entry=pending.get(message.id);pending.delete(message.id);clearTimeout(entry.timer)
         if (message.error) entry.reject(new Error('The agent could not complete this operation. Check its account and saved task settings.'))
@@ -121,10 +133,14 @@ export function createTaskExecutor({ catalog,workspaceRoot,environment,defaultAg
       sessionID=opened.sessionId ?? nativeSessionID
       if (typeof sessionID!=='string' || !sessionID) throw before('The agent did not create a session.')
       bindSession(sessionID)
+      archive = await createTaskNativeArchive({sourceID: `acp:${harness.id}:${directory}`, nativeSessionID: sessionID, runID: run.id, publish})
       await applyTaskConfiguration(rpc,sessionID,opened,config)
       if (signal.aborted) throw before('Background execution was turned off.')
       accepted=true
       const result = await rpc('session/prompt',{sessionId:sessionID,prompt:[{type:'text',text:backgroundPrompt(run)}],_meta:{wovenRunID:run.id}})
+      await archive.drain()
+      await archive.capture(result, {id: `run:${run.id}:result`, kind: 'run.result', contentMode: 'snapshot'})
+      if (signal.aborted) throw new Error('Background execution was turned off.')
       if (needsApproval) throw Object.assign(new Error('This task needs approval. Open its session to continue.'),{needsApproval:true})
       return result
     } catch(error) { if(!accepted) error.beforePrompt=true;throw error }
@@ -132,6 +148,7 @@ export function createTaskExecutor({ catalog,workspaceRoot,environment,defaultAg
       signal.removeEventListener('abort',abort);lines.close();failAll(new Error('The scheduled agent connection closed.'))
       child.kill('SIGTERM')
       if(!terminal) { await Promise.race([new Promise(done=>child.once('exit',done)),delay(1500)]);if(!terminal)child.kill('SIGKILL') }
+      await archive?.close()
     }
   }
 }
@@ -152,16 +169,13 @@ async function runBuiltIn({run,nativeSessionID,signal,publish,bindSession,defaul
     if(signal.aborted) throw before('Background execution was turned off.')
     accepted=true
     const {operationID}=await defaultAgent.invoke({operationID:run.id,method:'session/prompt',attachmentToken,params:{sessionId:sessionID,prompt:[{type:'text',text:backgroundPrompt(run)}],_meta:{wovenRunID:run.id}}})
-    let cursor=0,cancelled=false,needsApproval=false
+    let cursor=0,cancelled=false
     while(true) {
       if(signal.aborted && !cancelled) { cancelled=true;await defaultAgent.invoke({method:'session/cancel',attachmentToken,params:{sessionId:sessionID}}) }
       const page=await defaultAgent.poll(operationID,cursor)
-      for(const update of page.updates) {
-        if(update.sessionUpdate==='woven_permission') { needsApproval=true;await defaultAgent.invoke({method:'woven/permission',attachmentToken,params:{sessionId:sessionID,id:update.id,result:{outcome:{outcome:'cancelled'}}}}) }
-        else publish(update)
-      }
+      for(const update of page.updates) publish(update)
       cursor=page.cursor
-      if(page.done) { if(needsApproval)throw Object.assign(new Error('This task needs approval. Open its session to continue.'),{needsApproval:true});if(page.error)throw new Error(page.error);if(cancelled)throw new Error('Background execution was turned off.');return page.result }
+      if(page.done) { if(page.error)throw new Error(page.error);if(cancelled)throw new Error('Background execution was turned off.');return page.result }
       await delay(100)
     }
   } catch(error) {

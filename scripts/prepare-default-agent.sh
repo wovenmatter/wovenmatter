@@ -44,9 +44,9 @@ fi
 mkdir -p "$output/node_modules"
 rsync -a --delete "$dependency_root/node_modules/" "$output/node_modules/"
 
-# Pi 1.0's shrinkwrap nests dependencies under pi-coding-agent. Cover that
+# The retained coding tools and Durable runtime may nest dependencies. Cover that
 # layout and hoisted dependencies without changing either SDK's locked tree.
-for modules in "$output/node_modules" "$output/node_modules/@earendil-works/pi-coding-agent/node_modules"; do
+for modules in "$output/node_modules" "$output/node_modules/@earendil-works/pi-coding-agent/node_modules" "$output/node_modules/@earendil-works/pi-durable/node_modules"; do
   # Keep pi-tui's JavaScript, but omit unused terminal clipboard/modifier helpers.
   rm -rf "$modules/@earendil-works/pi-tui/native"
   # Built-in disables extensions and uses only Chord's runtime APIs. Its optional

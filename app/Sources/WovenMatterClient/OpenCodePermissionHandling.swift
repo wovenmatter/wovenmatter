@@ -1,8 +1,7 @@
 import Foundation
 import WovenMatterCore
 
-/// Per-conversation replies to native OpenCode permission requests. These are
-/// client approval choices, not smart evaluation or replacements for server rules.
+/// OpenCode v2 session permission rules use its native allow/ask/deny effects.
 public enum OpenCodePermissionHandling {
     /// Denial and dismissal may still settle native requests after Stop. All
     /// other permission/form answers can authorize work and require a live turn.
@@ -12,45 +11,35 @@ public enum OpenCodePermissionHandling {
         return suffix.hasPrefix("/form/")
     }
 
-    public static let options = ["normal", "acceptEdits", "full"]
+    public static let options = ["ask", "allow", "deny"]
     public static let metadata: [String: SessionOptionMetadata] = [
-        "normal": .init(name: "Ask for approval", description: "Show requests that OpenCode asks you to approve."),
-        "acceptEdits": .init(name: "Auto-accept edits", description: "Allow file edits while connected; ask before other actions that need approval. Native deny rules still apply."),
-        "full": .init(name: "Full access", description: "Allow commands and edits without ordinary approval prompts while connected. Native deny rules still apply.")
+        "ask": .init(name: "Ask for approval", description: "Use OpenCode’s native ask effect for session actions and resources."),
+        "allow": .init(name: "Full access", description: "Use OpenCode’s native allow effect for session actions and resources. Required input forms remain interactive."),
+        "deny": .init(name: "Deny", description: "Use OpenCode’s native deny effect for session actions and resources.")
     ]
 
-    /// Earlier versions called the same blanket request handling `auto`. Keep
-    /// its existing authority without confusing it with native smart approval.
-    public static func normalized(_ value: String?) -> String {
-        if value == "auto" { return "full" }
-        return value.flatMap { options.contains($0) ? $0 : nil } ?? "normal"
-    }
-
     public static func validate(_ value: String) throws -> String {
-        guard options.contains(value) || value == "auto" else {
-            throw OpenCodeError.message("Choose Ask for approval, Auto-accept edits, or Full access for OpenCode.")
+        guard options.contains(value) else {
+            throw OpenCodeError.message("Choose a native OpenCode allow, ask, or deny policy.")
         }
-        return normalized(value)
+        return value
     }
 
-    /// Only requests from the session permission endpoint are candidates. Keep
-    /// malformed records, authentication, and interactive form steps manual.
-    public static func requestID(_ request: OpenCodeValue, sessionID: String, mode: String?) -> String? {
-        let mode = normalized(mode)
-        guard mode != "normal",
-              request["sessionID"].string == sessionID,
-              let id = request["id"].string, id.hasPrefix("per"),
-              let action = request["action"].string, !action.isEmpty,
-              case .array(let resources) = request["resources"],
-              resources.allSatisfy({ $0.string != nil }),
-              request["effect"].string != "deny" else { return nil }
-        let category = action.lowercased().split(whereSeparator: { ".:/_-".contains($0) }).first.map(String.init) ?? ""
-        guard !["auth", "authenticate", "authentication", "login", "oauth", "credential", "credentials", "secret", "secrets", "form", "question", "questions", "ask", "askuser", "userinput"].contains(category),
-              request["type"].isNull || request["type"].string == "permission",
-              request["source"]["type"].isNull || request["source"]["type"].string == "tool" else { return nil }
-        // Native edit tools request action `edit`. Names such as write, patch,
-        // bash, or edit.file are not evidence of that native permission action.
-        guard mode == "full" || action == "edit" else { return nil }
-        return id
+    /// The last wildcard rule defines this projection. Keep arbitrary native
+    /// rules unchanged and unknown rather than claiming an invented mode.
+    public static func nativeMode(session: OpenCodeValue) -> String? {
+        guard let rule = session["permissions"].array.last,
+              rule["action"].string == "*", rule["resource"].string == "*",
+              let effect = rule["effect"].string, options.contains(effect) else { return nil }
+        return effect
+    }
+
+    public static func selectingNativePolicy(_ effect: String, session: OpenCodeValue) throws -> OpenCodeValue {
+        guard options.contains(effect) else { throw OpenCodeError.message("Unsupported native OpenCode permission effect.") }
+        var rules = session["permissions"].array
+        let rule: OpenCodeValue = ["action": "*", "resource": "*", "effect": .string(effect)]
+        if nativeMode(session: session) != nil { rules[rules.count - 1] = rule }
+        else { rules.append(rule) }
+        return ["permissions": .array(rules)]
     }
 }

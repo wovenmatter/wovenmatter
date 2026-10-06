@@ -10,7 +10,6 @@ import { probeServer } from './local-servers.mjs';
 import { createSignInPrompt } from './sign-in-interaction.mjs';
 import { grokAccountProfile } from './account-profile.mjs';
 import { inlineClaudeLogin } from './claude-runtime.mjs';
-import { PermissionRequests, RemotePermissionRequests } from './permissions.mjs';
 
 const send = (value, flushed) => process.stdout.write(JSON.stringify(value) + '\n', flushed);
 const remote = process.argv.includes('--remote');
@@ -18,10 +17,6 @@ const control = process.argv.includes('--control');
 const controlController = control ? new AbortController() : undefined;
 
 const directory = process.env.WOVEN_DEFAULT_AGENT_DIRECTORY ?? join(homedir(), '.wovenmatter', 'default-agent');
-const permissions = new PermissionRequests();
-const requestPermission = (params, signal) => permissions.request(params, signal,
-  (id, value) => send({ jsonrpc: '2.0', id, method: 'session/request_permission', params: value }),
-  id => send({ jsonrpc: '2.0', method: 'woven/permission_cancel', params: { requestID: id } }));
 let payload = {};
 let instance;
 let vault;
@@ -65,8 +60,7 @@ async function attachedRemoteRPC(message) {
   return response;
 }
 async function invoke(message) {
-  if (message.method === 'session/cancel') permissions.cancelSession(message.params?.sessionId);
-  const update = value => send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: message.params?.sessionId, update: value } });
+  const update = value => new Promise(resolve => send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: message.params?.sessionId, update: value } }, resolve));
   if (control) {
     // Passive catalog loading and connection status own cancellable children.
     // Other commands retain their existing shutdown behavior; installing a
@@ -144,15 +138,11 @@ async function invoke(message) {
       const record = [...current.sessions.values()][0];
       return record ? current.configuration(record) : {};
     }
-    return (await engine()).handle(message.method, message.params, update, requestPermission);
+    return (await engine()).handle(message.method, message.params, update);
   }
   const response = await attachedRemoteRPC(message);
   if (!response.operationID) return response.result;
   let cursor = 0;
-  const permissionAttachmentToken = remoteAttachmentTokens.get(message.params?.sessionId);
-  const remotePermissions = new RemotePermissionRequests(requestPermission, (id, allowed) =>
-    remoteRequest('rpc', { method: 'woven/permission', attachmentToken: permissionAttachmentToken,
-      params: { sessionId: message.params?.sessionId, id, result: { outcome: { outcome: 'selected', optionId: allowed ? 'allow' : 'deny' } } } }));
   let terminalOutcomeConfirmed = false;
   try {
     while (true) {
@@ -161,13 +151,9 @@ async function invoke(message) {
         throw error;
       });
       terminalOutcomeConfirmed = page.done === true;
-      remotePermissions.update(page);
-      for (const event of page.updates) {
-        if (event.sessionUpdate !== 'woven_permission') update(event);
-      }
+      for (const event of page.updates) await update(event);
       cursor = page.cursor;
       if (page.done) {
-        if (response.loadingSessionID) return (await attachedRemoteRPC({ method: 'session/load', params: { sessionId: response.loadingSessionID } })).result;
         if (page.error) throw new DefaultAgentError(page.error);
         return page.result;
       }
@@ -176,14 +162,13 @@ async function invoke(message) {
   } catch (error) {
     if (message.method === 'session/prompt' && !terminalOutcomeConfirmed) error.deliveryUncertain = true;
     throw error;
-  } finally { remotePermissions.close(); }
+  }
 }
 const pendingPrompts = new Map();
 const lines = createInterface({ input: process.stdin });
 lines.on('line', line => {
   let message;
   try { message = JSON.parse(line); } catch { return; }
-  if (permissions.pending.has(message.id)) { permissions.resolve(message.id, message.result); return; }
   if (pendingCredentials.has(message.id)) {
     const pending = pendingCredentials.get(message.id); pendingCredentials.delete(message.id);
     if (message.error) pending.reject(new Error('Built-in credentials are unavailable.'));
@@ -201,4 +186,24 @@ lines.on('line', line => {
       ...(error.deliveryUncertain ? { data: { deliveryUncertain: true } } : {}) } });
   });
 });
-lines.on('close', () => { if (!control) process.exit(0); });
+let shutdown;
+async function closeRuntime() {
+  if (control || shutdown) return shutdown;
+  shutdown = (async () => {
+    const timeout = setTimeout(() => process.exit(0), 5000);
+    timeout.unref();
+    if (instance && !remote) {
+      // Normal retirement first waits for woven/idle. An unexpected EOF or a
+      // forced shutdown explicitly withdraws queues and aborts owned native
+      // work before releasing the native store.
+      for (const record of [...instance.sessions.values()]) {
+        if (record.busy) await record.session.abort().catch(() => {});
+        await record.session.dispose().catch(() => {});
+      }
+    }
+    process.exit(0);
+  })();
+  return shutdown;
+}
+lines.on('close', () => { void closeRuntime(); });
+if (!control) process.once('SIGTERM', () => { void closeRuntime(); });

@@ -57,16 +57,4 @@ import WovenMatterCore
         #expect(try await database.conversationContent(id: conversation).runs.first?.status == "failed")
     }
 
-    @Test func legacyRemoteBuiltInWithExactSavedIdentityIsPreserved() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: "legacy-built-in-\(UUID())")
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: root) }
-        let database = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
-        let conversation = try await database.createRemoteACPSession(runtimeKind: .defaultAgent,
-            remoteWorkspaceID: UUID(), remoteWorkspaceName: "Fixture", title: "Built-in", ownerDeviceID: UUID())
-        try await database.updateLocalACPSessionID(conversationID: conversation, sessionID: "saved-native")
-        _ = try await database.beginLocalACPRun(conversationID: conversation, content: "input")
-        try await database.recoverInterruptedLocalACPRuns()
-        #expect(try await database.conversationContent(id: conversation).runs.first?.status == "uncertain")
-    }
 }

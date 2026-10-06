@@ -40,7 +40,14 @@ run_static_checks() {
 
 run_package_tests() {
   local suite
-  local process_suites=(DefaultAgentSDKControlTests RemoteAttachmentStagingTests)
+  local process_suites=(
+    DefaultAgentSDKControlTests
+    RemoteAttachmentStagingTests
+    NativeHarnessArchiveTests
+    NativeFramePrivacyTests
+    NativeJSONSearchProjectionTests
+    WorkspaceNativeRunArchiveTests
+  )
   local isolated_filter
   printf -v isolated_filter '%s|' "${process_suites[@]}"
   isolated_filter="${isolated_filter%|}"
@@ -48,11 +55,13 @@ run_package_tests() {
     "CLANG_MODULE_CACHE_PATH=${cache_root}/ModuleCache"
     "SWIFTPM_MODULECACHE_OVERRIDE=${cache_root}/ModuleCache"
     swift test --package-path app --scratch-path "$swift_scratch")
-  # These fixtures measure OS-process startup, deadlines, and reaping. The SDK
-  # suite also deliberately saturates the shared dispatch pool. Keep them out of
-  # the aggregate runner so unrelated parallel tests cannot consume their timing
-  # budgets. Every excluded suite runs below, with its original bounds and its
-  # explicit concurrency tests intact, using the same compiled test artifacts.
+  # Process fixtures measure startup, deadlines, and reaping; the SDK suite also
+  # deliberately saturates the shared dispatch pool. Large archive fixtures
+  # stream/hash more than 64 MiB and exercise long SQLite exports. Isolate these
+  # resource-heavy suites so they cannot consume unrelated IPC timing budgets on
+  # toolchains that combine every test target in one parallel runner. Every
+  # excluded suite runs below with its original bounds and explicit concurrency
+  # tests intact, using the same compiled test artifacts.
   "${test_command[@]}" --skip "$isolated_filter"
   for suite in "${process_suites[@]}"; do
     "${test_command[@]}" --skip-build --filter "$suite"

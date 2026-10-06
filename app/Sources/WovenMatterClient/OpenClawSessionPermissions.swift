@@ -4,15 +4,14 @@ import WovenMatterCore
 /// The gateway enforces these policies, including active-run downgrade handling.
 /// Never emulate a permission mode by answering pending approval requests.
 public enum OpenClawSessionPermissions {
-    public static let options = ["guarded", "workspace", "full"]
-    // Existing sessions may still inherit a policy or be read-only. Keep those
-    // values readable/restorable without adding unrelated modes to the picker.
-    private static let supportedPolicies = options + ["default", "read-only"]
+    public static let options = ["default", "read-only", "guarded", "workspace", "full"]
+    // These are the gateway's native policies, including inheritance and read-only.
+    private static let supportedPolicies = options
     public static let metadata: [String: SessionOptionMetadata] = [
         "default": .init(name: "Default", description: "Use the gateway's inherited permission policy."),
         "read-only": .init(name: "Read only", description: "Read session files; block edits and command execution."),
         "guarded": .init(name: "Ask for approval", description: "Use the session workspace; ask before commands outside the native allowlist."),
-        "workspace": .init(name: "Auto", description: "OpenClaw reviews commands automatically and asks when approval is needed. File access stays within the session workspace."),
+        "workspace": .init(name: "Workspace access", description: "Use OpenClaw’s native workspace permission policy. File access stays within the session workspace."),
         "full": .init(name: "Full access", description: "Allow unrestricted files and commands within the gateway's host policy.")
     ]
 
