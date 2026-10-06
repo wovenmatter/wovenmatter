@@ -758,7 +758,8 @@ struct WorkspaceView: View {
             HStack {
                 if showLeftRailButton {
                     DashboardRevealRailButton(side: .left,
-                        height: destination == .workspace && assets.tabs.isPresented ? DashboardMetrics.assetTabBarHeight : 36,
+                        width: destination == .workspace && assets.tabs.isPresented ? DashboardMetrics.assetToolbarControlWidth : 36,
+                        height: destination == .workspace && assets.tabs.isPresented ? DashboardMetrics.assetToolbarControlHeight : 36,
                         action: onLeftRail)
                 }
                 Spacer()
@@ -784,12 +785,13 @@ struct WorkspaceView: View {
                 }
                 if showRightRailButton {
                     DashboardRevealRailButton(side: .right,
-                        height: destination == .workspace && assets.tabs.isPresented ? DashboardMetrics.assetTabBarHeight : 36,
+                        width: destination == .workspace && assets.tabs.isPresented ? DashboardMetrics.assetToolbarControlWidth : 36,
+                        height: destination == .workspace && assets.tabs.isPresented ? DashboardMetrics.assetToolbarControlHeight : 36,
                         action: onRightRail)
                 }
             }
             .padding(.horizontal, 12)
-            .padding(.vertical, destination == .workspace && assets.tabs.isPresented ? 0 : 12)
+            .padding(.vertical, destination == .workspace && assets.tabs.isPresented ? DashboardMetrics.assetToolbarVerticalPadding : 12)
 
             if let notice {
                 Text(notice)

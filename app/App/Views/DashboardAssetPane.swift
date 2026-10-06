@@ -32,12 +32,13 @@ struct DashboardAssetPane: View {
                                         Text(assets.title(for: tab, notes: notes)).lineLimit(1)
                                     }
                                     .padding(.leading, 9).frame(maxWidth: 140, alignment: .leading)
-                                    .frame(height: DashboardMetrics.assetTabBarHeight)
+                                    .frame(height: DashboardMetrics.assetToolbarControlHeight)
                                     .contentShape(Rectangle())
                                 }.buttonStyle(.plain)
                                 Button { close(tab) } label: {
-                                    Image(systemName: "xmark").font(.system(size: 9))
-                                        .frame(width: 22, height: DashboardMetrics.assetTabBarHeight)
+                                    Image(systemName: "xmark").font(.system(size: 12))
+                                        .frame(width: DashboardMetrics.assetToolbarControlWidth,
+                                               height: DashboardMetrics.assetToolbarControlHeight)
                                 }
                                 .buttonStyle(DashboardIconButtonStyle())
                                 .help("Close tab")
@@ -64,7 +65,8 @@ struct DashboardAssetPane: View {
             }
             .padding(.leading, reservesLeadingRailControlSpace ? 56 : 10)
             .padding(.trailing, reservesTrailingRailControlSpace ? 56 : 10)
-            .frame(height: DashboardMetrics.assetTabBarHeight)
+            .frame(height: DashboardMetrics.assetToolbarControlHeight)
+            .padding(.vertical, DashboardMetrics.assetToolbarVerticalPadding)
             Rectangle().fill(theme.palette.border).frame(height: 1)
             Group {
                 switch assets.tabs.selected {
@@ -111,7 +113,8 @@ struct DashboardAssetPane: View {
     private func control(_ title: String, symbol: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: symbol).font(.system(size: 12))
-                .frame(width: 26, height: DashboardMetrics.assetTabBarHeight)
+                .frame(width: DashboardMetrics.assetToolbarControlWidth,
+                       height: DashboardMetrics.assetToolbarControlHeight)
         }
             .buttonStyle(DashboardIconButtonStyle()).help(title).accessibilityLabel(title)
     }

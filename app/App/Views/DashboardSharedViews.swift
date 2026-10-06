@@ -105,6 +105,7 @@ struct DashboardInlineError: View {
 struct DashboardRevealRailButton: View {
     enum Side { case left, right }
     let side: Side
+    var width: CGFloat = 36
     var height: CGFloat = 36
     let action: () -> Void
 
@@ -114,7 +115,7 @@ struct DashboardRevealRailButton: View {
                 glyph: side == .left ? .rightCollapse : .leftCollapse,
                 size: 18
             )
-            .frame(width: 36, height: height)
+            .frame(width: width, height: height)
         }
         .buttonStyle(DashboardIconButtonStyle())
         .help(side == .left ? "Show agents" : "Show workspace")

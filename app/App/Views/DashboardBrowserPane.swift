@@ -27,7 +27,7 @@ struct DashboardBrowserPane: View {
                     .textFieldStyle(.plain)
                     .font(.system(size: 12.5))
                     .padding(.horizontal, 10)
-                    .frame(height: 30)
+                    .frame(height: DashboardMetrics.assetToolbarControlHeight)
                     .background(theme.palette.workspace)
                     .clipShape(RoundedRectangle(cornerRadius: 7))
                     .focused($addressFocused)
@@ -51,10 +51,15 @@ struct DashboardBrowserPane: View {
                     }
                     Divider()
                     Button("Clear Browser Data…") { showsClearData = true }
-                } label: { Image(systemName: "ellipsis").frame(width: 28, height: 30) }
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .frame(width: DashboardMetrics.assetToolbarControlWidth,
+                               height: DashboardMetrics.assetToolbarControlHeight)
+                }
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)
-                .frame(width: 28, height: 30)
+                .frame(width: DashboardMetrics.assetToolbarControlWidth,
+                       height: DashboardMetrics.assetToolbarControlHeight)
                 .foregroundStyle(DashboardPalette.mutedForeground)
                 .background(menuHovered ? theme.palette.themeWhisper : .clear,
                             in: RoundedRectangle(cornerRadius: 8, style: .continuous))
@@ -63,7 +68,7 @@ struct DashboardBrowserPane: View {
                 .accessibilityLabel("Browser menu")
             }
             .padding(.horizontal, 10)
-            .padding(.vertical, 2)
+            .padding(.vertical, DashboardMetrics.assetToolbarVerticalPadding)
             if let title = page.passwordOfferTitle {
                 HStack(spacing: 10) {
                     VStack(alignment: .leading, spacing: 3) {
@@ -150,7 +155,11 @@ struct DashboardBrowserPane: View {
     }
     private func control(_ title: String, symbol: String, disabled: Bool = false,
                          action: @escaping () -> Void) -> some View {
-        Button(action: action) { Image(systemName: symbol).font(.system(size: 12)).frame(width: 28, height: 30) }
+        Button(action: action) {
+            Image(systemName: symbol).font(.system(size: 12))
+                .frame(width: DashboardMetrics.assetToolbarControlWidth,
+                       height: DashboardMetrics.assetToolbarControlHeight)
+        }
             .buttonStyle(DashboardIconButtonStyle()).disabled(disabled).help(title).accessibilityLabel(title)
     }
 }
