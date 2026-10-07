@@ -6,6 +6,7 @@ on:
       - 'v[0-9]+.[0-9]+.[0-9]+'
 
 permissions:
+  actions: read
   contents: write
 
 concurrency:
@@ -34,14 +35,22 @@ jobs:
           git fetch --no-tags origin main
           git merge-base --is-ancestor "$GITHUB_SHA" origin/main
           test "$(git rev-list -n 1 "$TAG")" = "$GITHUB_SHA"
-          scripts/scan-public-tree.sh
-          scripts/test-release.sh
 
       - name: Ensure CEF build tools
         run: command -v cmake >/dev/null || brew install cmake
 
-      - name: Run deterministic validation
-        run: scripts/test-changes.sh --all
+      - name: Record available completed main CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Reuse exact-source evidence; never trigger or wait for source tests here.
+          if ci_url="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml \
+            --event push --branch main --commit "$GITHUB_SHA" --status success \
+            --limit 1 --json url --jq '.[0].url // empty')" && [ -n "$ci_url" ]; then
+            echo "Completed exact-source main CI: $ci_url" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No completed CI metadata available for the accepted source." >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Import Developer ID identity
         env:

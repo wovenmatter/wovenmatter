@@ -22,10 +22,7 @@ async function fixture(t) {
     const dependencies = { '@earendil-works/pi-durable': '1.0.3', '@earendil-works/chord': '1.0.3', '@earendil-works/pi-coding-agent': '1.0.3', '@earendil-works/pi-ai': '1.0.3', '@anthropic-ai/claude-agent-sdk': '0.3.284', ...versions };
     await writeFile(join(root, 'package.json'), JSON.stringify({ dependencies }));
     await writeFile(join(root, 'package-lock.json'), JSON.stringify({ lockfileVersion: 3, packages: {} }));
-    for (const [name, version] of Object.entries(dependencies)) {
-      await mkdir(join(root, 'node_modules', name), { recursive: true });
-      await writeFile(join(root, 'node_modules', name, 'package.json'), JSON.stringify({ version }));
-    }
+    await materializeManifest([], { cwd: root });
     return { id, root, activate: () => writeFile(active, JSON.stringify({ base: bundled.base, generation: id })) };
   }
   return { directory, bundled, active, generation };

@@ -38,18 +38,6 @@ test('Execute waits for trusted approval, deduplicates IDs and binds jobs to the
   assert.ok(!JSON.stringify(broker.publicJob(broker.jobs.get(request.id))).includes('secret'));
   assert.equal((await stat(join(directory, 'manager.json'))).mode & 0o777, 0o600);
 });
-test('pending input and approval are distinct and their continuation never reaches CLI results', async t => {
-  const { broker, scope } = await fixture(t, async request => request.name === 'resume' ? { structuredContent: { status: 'completed', execution: { ok: true } } } : { structuredContent: { status: 'input-required', requestId: 'elc_private', elicitation: { requestedSchema: { type: 'object', properties: {} } } } });
-  const id = randomUUID(); await broker.start({ id, session: 'conversation-a', scope, code: 'return tools.ask({});' });
-  const job = broker.owned(id, 'conversation-a');
-  await broker.advance(job, { action: 'accept' });
-  while (job.status === 'running') await wait(10);
-  assert.equal(job.status, 'input-required');
-  assert.ok(!JSON.stringify(broker.publicJob(job)).includes('elc_private'));
-  await broker.advance(job, { action: 'accept', content: {} });
-  while (job.status === 'running') await wait(10);
-  assert.equal(job.status, 'completed');
-});
 test('scope updates group profiles by app, preserve independent scopes, and master off empties authority', async t => {
   const { broker, scopes } = await fixture(t, async () => ({}));
   const a = await broker.scope('conversation-a', [{ app: 'one', profile: 'first' }, { app: 'one', profile: 'second' }], true);
@@ -94,6 +82,8 @@ test('invalid typed input remains pending and a valid response resumes once', as
   const job = broker.owned(id, 'conversation-a');
   await broker.advance(job, { action: 'accept' });
   while (job.status === 'running') await wait(10);
+  assert.equal(job.status, 'input-required');
+  assert.ok(!JSON.stringify(broker.publicJob(job)).includes('input-private'));
   await assert.rejects(broker.advance(job, { action: 'accept', content: { count: 'three' } }), /requested form/);
   assert.equal(job.status, 'input-required'); assert.equal(resumes, 0);
   await broker.advance(job, { action: 'accept', content: { count: 3 } });

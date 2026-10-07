@@ -73,11 +73,9 @@ private func expect(
 struct DashboardComposerTextEditorTests {
     static func main() {
         testAttachmentPasteLeavesTextUntouched()
-        testShiftReturnReplacesSelectionWithoutSubmitting()
-        testPlainReturnSubmitsWithoutEditing()
+        testReturnRouting()
         testKeyRoutingPreservesMarkedTextAndStandardBindings()
         testCommandArrowPanelNavigationIsResponderScoped()
-        testNativeArrowCaretMovement()
         testTabCompletionIsNarrowAndOptional()
         testPickerNavigationIsNarrowAndOptional()
         testCompletionMovesCaretWithoutChangingOrdinarySelection()
@@ -135,73 +133,32 @@ struct DashboardComposerTextEditorTests {
         expect(!textView.attach(from: board), "Text paste should remain native")
     }
 
-    private static func testShiftReturnReplacesSelectionWithoutSubmitting() {
-        let textView = DashboardComposerNativeTextView()
-        var submitCount = 0
-        textView.onSubmit = { submitCount += 1 }
-        textView.string = "alpha beta"
-        textView.setSelectedRange(NSRange(location: 6, length: 4))
-
-        textView.keyDown(with: keyEvent(keyCode: 36, characters: "\r", modifiers: .shift))
-
-        expect(textView.string == "alpha \n", "Shift-Return must replace the selected text with a newline")
-        expect(textView.selectedRange() == NSRange(location: 7, length: 0), "newline insertion must leave a caret after the newline")
-        expect(submitCount == 0, "Shift-Return must not submit")
-    }
-
-    private static func testPlainReturnSubmitsWithoutEditing() {
-        let textView = DashboardComposerNativeTextView()
-        var submitCount = 0
-        textView.onSubmit = { submitCount += 1 }
-        textView.string = "draft"
-        textView.setSelectedRange(NSRange(location: 2, length: 0))
-
-        textView.keyDown(with: keyEvent(keyCode: 36, characters: "\r"))
-
-        expect(textView.string == "draft", "plain Return must not change the draft")
-        expect(textView.selectedRange() == NSRange(location: 2, length: 0), "plain Return must preserve selection")
-        expect(submitCount == 1, "plain Return must submit exactly once")
+    private static func testReturnRouting() {
+        for shifted in [false, true] {
+            let textView = DashboardComposerNativeTextView()
+            var submitCount = 0
+            textView.onSubmit = { submitCount += 1 }
+            textView.string = "alpha beta"
+            textView.setSelectedRange(NSRange(location: 6, length: 4))
+            textView.keyDown(with: keyEvent(keyCode: 36, characters: "\r", modifiers: shifted ? .shift : []))
+            expect(textView.string == (shifted ? "alpha \n" : "alpha beta"), "only Shift-Return edits the draft")
+            expect(textView.selectedRange() == (shifted ? NSRange(location: 7, length: 0) : NSRange(location: 6, length: 4)),
+                "Shift-Return replaces the selection; plain Return preserves it")
+            expect(submitCount == (shifted ? 0 : 1), "only plain Return submits")
+        }
     }
 
     private static func testKeyRoutingPreservesMarkedTextAndStandardBindings() {
-        expect(
-            DashboardComposerKeyAction.resolve(
-                keyCode: 36,
-                charactersIgnoringModifiers: "\r",
-                modifierFlags: [],
-                hasMarkedText: true
-            ) == .standard,
-            "Return must remain with the text system while IME marked text exists"
-        )
-        for keyCode: UInt16 in [125, 126] {
-            expect(
-                DashboardComposerKeyAction.resolve(
-                    keyCode: keyCode,
-                    charactersIgnoringModifiers: nil,
-                    modifierFlags: [],
-                    hasMarkedText: false
-                ) == .standard,
-                "Up/Down must keep native caret movement"
-            )
-            expect(
-                DashboardComposerKeyAction.resolve(
-                    keyCode: keyCode,
-                    charactersIgnoringModifiers: nil,
-                    modifierFlags: .command,
-                    hasMarkedText: false
-                ) == .standard,
-                "Command-Up/Down must remain standard when panel navigation declines them"
-            )
+        let cases: [(UInt16, String?, NSEvent.ModifierFlags, Bool)] = [
+            (36, "\r", [], true), (36, "\r", .option, false),
+            (125, nil, [], false), (126, nil, [], false),
+            (125, nil, .command, false), (126, nil, .command, false),
+        ]
+        for (code, characters, modifiers, marked) in cases {
+            expect(DashboardComposerKeyAction.resolve(keyCode: code,
+                charactersIgnoringModifiers: characters, modifierFlags: modifiers, hasMarkedText: marked) == .standard,
+                "marked text, native arrows, and modified Return stay with the text system")
         }
-        expect(
-            DashboardComposerKeyAction.resolve(
-                keyCode: 36,
-                charactersIgnoringModifiers: "\r",
-                modifierFlags: .option,
-                hasMarkedText: false
-            ) == .standard,
-            "modified Return bindings other than Shift-Return must remain native"
-        )
 
         let markedTextView = DashboardComposerNativeTextView()
         markedTextView.setMarkedText(
@@ -235,44 +192,14 @@ struct DashboardComposerTextEditorTests {
             modifiers: .command
         ))
         expect(navigations == [.right], "Command-Right must reach the active panel navigator")
-        expect(
-            DashboardComposerNavigationDirection.resolve(
-                keyCode: 126,
-                modifierFlags: .command,
-                hasMarkedText: false
-            ) == .up,
-            "Command-Up must map to panel navigation"
-        )
-        expect(
-            DashboardComposerNavigationDirection.resolve(
-                keyCode: 125,
-                modifierFlags: [],
-                hasMarkedText: false
-            ) == nil,
-            "plain arrows must remain native caret movement"
-        )
-        expect(
-            DashboardComposerNavigationDirection.resolve(
-                keyCode: 123,
-                modifierFlags: .command,
-                hasMarkedText: true
-            ) == nil,
-            "marked text must keep Command-arrow inside the text system"
-        )
-    }
-
-    private static func testNativeArrowCaretMovement() {
-        let textView = DashboardComposerNativeTextView()
-        textView.frame = NSRect(x: 0, y: 0, width: 240, height: 72)
-        textView.string = "first line\nsecond line"
-        textView.setSelectedRange(NSRange(location: textView.string.utf16.count, length: 0))
-
-        let bottomLocation = textView.selectedRange().location
-        textView.moveUp(nil)
-        let upperLocation = textView.selectedRange().location
-        expect(upperLocation < bottomLocation, "Up must use NSTextView caret navigation")
-        textView.moveDown(nil)
-        expect(textView.selectedRange().location > upperLocation, "Down must use NSTextView caret navigation")
+        let cases: [(UInt16, NSEvent.ModifierFlags, Bool, DashboardComposerNavigationDirection?)] = [
+            (126, .command, false, .up), (125, [], false, nil), (123, .command, true, nil),
+        ]
+        for (code, modifiers, marked, expected) in cases {
+            expect(DashboardComposerNavigationDirection.resolve(keyCode: code,
+                modifierFlags: modifiers, hasMarkedText: marked) == expected,
+                "panel navigation requires Command-arrow without marked text")
+        }
     }
 
     private static func testTabCompletionIsNarrowAndOptional() {

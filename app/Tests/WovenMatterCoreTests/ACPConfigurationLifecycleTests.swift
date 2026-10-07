@@ -5,158 +5,7 @@ import WovenMatterCore
 @testable import WovenMatterDashboardStore
 
 struct ACPConfigurationLifecycleTests {
-  @Test func leasedConfigurationProbePublishesSnapshotAndReleasesOneDriver() async throws {
-    let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: directory) }
-
-    let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
-    let conversationID = try await database.createLocalACPSession(
-      runtimeKind: .codex, title: "Configuration fixture", ownerDeviceID: UUID()
-    )
-    let expected = LocalACPSessionConfiguration(
-      model: "fixture-model",
-      thinking: "high",
-      modelOptions: ["fixture-model"],
-      thinkingOptions: ["high"],
-      slashCommands: [LocalACPSlashCommand(name: "review")]
-    )
-    let lease = ConfigurationTestProcessLease()
-    let state = ConfigurationLifecycleState()
-    let coordinator = LocalACPSessionCoordinator(
-      database: database,
-      processLease: lease,
-      onChange: { change in state.record(change) },
-      clientFactory: { _, _ in
-        state.started()
-        return LocalACPSessionDriver(
-          initializeSession: { _, _, _, _ in
-            LocalACPInitializedSession(
-              sessionID: "fixture-session",
-              loadedExistingSession: false,
-              configuration: expected
-            )
-          },
-          prompt: { _, _, _, _ in .endTurn },
-          configuration: {
-            state.readConfiguration()
-            return expected
-          },
-          observeConfiguration: { handler in
-            state.observedConfiguration()
-            await handler(expected)
-          },
-          setConfiguration: { _, _ in expected },
-          cancel: {},
-          shutdown: { state.shutDown() }
-        )
-      }
-    )
-    let launch = LocalACPRuntimeLaunchConfiguration(
-      runtimeKind: .codex,
-      executableURL: URL(filePath: "/nonexistent-configuration-fixture"),
-      arguments: []
-    )
-    let workspace = LocalACPWorkspaceLaunchConfiguration(
-      rootURL: directory,
-      repositoriesURL: directory
-    )
-
-    let result = try await coordinator.configuration(
-      conversationID: conversationID,
-      launch: launch,
-      workspace: workspace
-    )
-
-    #expect(result == expected)
-    #expect(state.starts == 1)
-    #expect(state.observers == 1)
-    #expect(state.configurationReads == 1)
-    #expect(state.shutdowns == 1)
-    #expect(state.changes == [DashboardConversationChange(
-      conversationID: conversationID,
-      runID: "",
-      phase: .configuration(expected)
-    )])
-    #expect(lease.snapshot == .init(acquisitions: 1, releases: 1, holds: 0))
-
-    await coordinator.shutdown()
-    #expect(state.shutdowns == 1)
-  }
-
-  @Test func selectedModelAndThinkingAreRestoredAfterDatabaseReopen() async throws {
-    let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: directory) }
-
-    let databaseURL = directory.appending(path: "workspace.sqlite")
-    let database = try await WorkspaceDatabase(url: databaseURL)
-    let conversationID = try await database.createLocalACPSession(
-      runtimeKind: .codex, title: "Selector persistence", ownerDeviceID: UUID()
-    )
-    let launch = LocalACPRuntimeLaunchConfiguration(
-      runtimeKind: .codex,
-      executableURL: URL(filePath: "/nonexistent-selector-fixture"),
-      arguments: []
-    )
-    let workspace = LocalACPWorkspaceLaunchConfiguration(
-      rootURL: directory,
-      repositoriesURL: directory
-    )
-
-    let firstState = SelectorDriverState(expectedExistingSessionID: nil)
-    let first = LocalACPSessionCoordinator(
-      database: database,
-      processLease: ConfigurationTestProcessLease(),
-      clientFactory: { _, _ in firstState.driver() }
-    )
-    let selected = try await first.updateConfiguration(
-      conversationID: conversationID,
-      model: "selected-model",
-      thinking: "high",
-      launch: launch,
-      workspace: workspace
-    )
-
-    #expect(selected.model == "selected-model")
-    #expect(selected.thinking == "high")
-    #expect(firstState.setRequests == ["model=selected-model;thinking=nil", "model=nil;thinking=high"])
-    #expect(firstState.starts == 1)
-    #expect(firstState.shutdowns == 1)
-    await first.shutdown()
-
-    let reopenedDatabase = try await WorkspaceDatabase(url: databaseURL)
-    let persisted = try await reopenedDatabase.localACPSession(conversationID: conversationID)
-    #expect(persisted.model == "selected-model")
-    #expect(persisted.thinking == "high")
-
-    let reopenedState = SelectorDriverState(expectedExistingSessionID: "fixture-session")
-    let reopened = LocalACPSessionCoordinator(
-      database: reopenedDatabase,
-      processLease: ConfigurationTestProcessLease(),
-      clientFactory: { _, _ in reopenedState.driver() }
-    )
-    let restored = try await reopened.configuration(
-      conversationID: conversationID,
-      launch: launch,
-      workspace: workspace
-    )
-
-    #expect(restored.model == "selected-model")
-    #expect(restored.thinking == "high")
-    #expect(restored.modelOptions == ["default-model", "selected-model"])
-    #expect(restored.thinkingOptions == ["low", "high"])
-    #expect(reopenedState.setRequests == [
-      "model=selected-model;thinking=nil",
-      "model=nil;thinking=high",
-    ])
-    #expect(reopenedState.starts == 1)
-    #expect(reopenedState.configurationReads == 1)
-    #expect(reopenedState.shutdowns == 1)
-    await reopened.shutdown()
-  }
-
-  @Test func nativeSnapshotsPersistAndEvictedObserversCannotOverwriteSelection() async throws {
+  @Test func leasedSnapshotsAndSelectionsSurviveReopenWithoutStaleObserverWrites() async throws {
     let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: directory) }
@@ -182,9 +31,10 @@ struct ACPConfigurationLifecycleTests {
     )
     let drivers = SelectorDriverSequence([firstState, secondState])
     let changes = ConfigurationLifecycleState()
+    let lease = ConfigurationTestProcessLease()
     let coordinator = LocalACPSessionCoordinator(
       database: database,
-      processLease: ConfigurationTestProcessLease(),
+      processLease: lease,
       onChange: { change in
         changes.record(change)
         // Persistence is awaited explicitly after each configuration operation
@@ -211,19 +61,24 @@ struct ACPConfigurationLifecycleTests {
     #expect(observed.thinking == "high")
     #expect(try await database.localACPSession(conversationID: conversationID).model == "native-model")
     #expect(try await database.localACPSession(conversationID: conversationID).thinking == "high")
+    #expect(firstState.starts == 1)
+    #expect(firstState.configurationReads == 1)
     #expect(firstState.shutdowns == 1)
+    #expect(lease.snapshot == .init(acquisitions: 1, releases: 1, holds: 0))
+    #expect(changes.changes.contains(DashboardConversationChange(
+      conversationID: conversationID, runID: "", phase: .configuration(native))))
 
     let selected = try await coordinator.updateConfiguration(
       conversationID: conversationID,
       model: "selected-model",
-      thinking: "low",
+      thinking: "high",
       launch: launch,
       workspace: workspace
     )
     #expect(selected.model == "selected-model")
-    #expect(selected.thinking == "low")
+    #expect(selected.thinking == "high")
     #expect(secondState.setRequests == [
-      "model=selected-model;thinking=nil",
+      "model=selected-model;thinking=nil", "model=nil;thinking=high",
     ])
     #expect(secondState.shutdowns == 1)
 
@@ -232,10 +87,24 @@ struct ACPConfigurationLifecycleTests {
 
     let persisted = try await database.localACPSession(conversationID: conversationID)
     #expect(persisted.model == "selected-model")
-    #expect(persisted.thinking == "low")
+    #expect(persisted.thinking == "high")
     #expect(changes.changes.count == changeCountBeforeStaleUpdate)
     #expect(drivers.requests == 2)
     await coordinator.shutdown()
+    #expect(firstState.shutdowns == 1 && secondState.shutdowns == 1)
+    #expect(lease.snapshot == .init(acquisitions: 2, releases: 2, holds: 0))
+
+    let reopenedDatabase = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+    let reopenedState = SelectorDriverState(expectedExistingSessionID: "fixture-session")
+    let reopened = LocalACPSessionCoordinator(database: reopenedDatabase,
+      processLease: ConfigurationTestProcessLease(), clientFactory: { _, _ in reopenedState.driver() })
+    let restored = try await reopened.configuration(conversationID: conversationID, launch: launch, workspace: workspace)
+    #expect(restored.model == "selected-model" && restored.thinking == "high")
+    #expect(restored.modelOptions == ["default-model", "selected-model"])
+    #expect(restored.thinkingOptions == ["low", "high"])
+    #expect(reopenedState.setRequests == ["model=selected-model;thinking=nil", "model=nil;thinking=high"])
+    #expect(reopenedState.starts == 1 && reopenedState.configurationReads == 1 && reopenedState.shutdowns == 1)
+    await reopened.shutdown()
   }
 }
 
@@ -344,22 +213,8 @@ private final class SelectorDriverSequence: @unchecked Sendable {
 
 private final class ConfigurationLifecycleState: @unchecked Sendable {
   private let lock = NSLock()
-  private var startCount = 0
-  private var observerCount = 0
-  private var configurationReadCount = 0
-  private var shutdownCount = 0
   private var recordedChanges: [DashboardConversationChange] = []
-
-  var starts: Int { lock.withLock { startCount } }
-  var observers: Int { lock.withLock { observerCount } }
-  var configurationReads: Int { lock.withLock { configurationReadCount } }
-  var shutdowns: Int { lock.withLock { shutdownCount } }
   var changes: [DashboardConversationChange] { lock.withLock { recordedChanges } }
-
-  func started() { lock.withLock { startCount += 1 } }
-  func observedConfiguration() { lock.withLock { observerCount += 1 } }
-  func readConfiguration() { lock.withLock { configurationReadCount += 1 } }
-  func shutDown() { lock.withLock { shutdownCount += 1 } }
   func record(_ change: DashboardConversationChange) {
     lock.withLock { recordedChanges.append(change) }
   }

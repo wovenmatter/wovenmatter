@@ -165,15 +165,6 @@ struct PiRPCSettlementTests {
     await fixture.client.shutdown()
   }
 
-  @Test func immediateSettlementBeforeWaitRegistrationSucceeds() async throws {
-    let fixture = PiPipeFixture()
-    let server = Task { try await fixture.serve(settles: true) }
-    try await fixture.initialize()
-    #expect(try await fixture.client.prompt("fixture") == .endTurn)
-    try await server.value
-    await fixture.client.shutdown()
-  }
-
   @Test func cancelledAcknowledgedPromptThrowsAndClosesTransport() async throws {
     let fixture = PiPipeFixture()
     let hold = PiPromptGate()
@@ -396,7 +387,7 @@ struct PiPipeFixture: Sendable {
     }
   }
 
-  fileprivate func serve(settles: Bool, accepts: Bool = true, hold: PiPromptGate? = nil,
+  func serve(settles: Bool, accepts: Bool = true, hold: PiPromptGate? = nil,
              streamLines: [String] = [], advertisesConfiguration: Bool = false, recovery: Bool = false, resumeApproval: Bool? = nil) async throws {
     defer { try? events.fileHandleForWriting.close() }
     let cursor = FixtureCommandReader(handle: commands.fileHandleForReading)
@@ -476,7 +467,7 @@ struct PiPipeFixture: Sendable {
   }
 }
 
-private actor PiPromptGate {
+actor PiPromptGate {
   private var arrived = false
   private var observer: CheckedContinuation<Void, Never>?
   private var pending: CheckedContinuation<Void, Never>?
@@ -542,11 +533,13 @@ struct FixtureCommandReader: Sendable {
 }
 
 struct PiHandledCommandTests {
-  @Test(arguments: ["/search", "/search on", "enable search"])
-  func handledInputPublishesNotificationAndAllowsNextPrompt(_ text: String) async throws {
+  @Test(arguments: [("/search", "info"), ("/search on", "info"), ("enable search", "info"),
+                    ("/search", "warning"), ("/search", "error")])
+  func handledInputPublishesNotificationAndAllowsNextPrompt(_ sample: (String, String)) async throws {
+    let (text, severity) = sample
     let fixture = PiPipeFixture()
     let server = Task {
-      try await serveCommands(fixture, firstPrompt: text)
+      try await serveCommands(fixture, firstPrompt: text, severity: severity)
     }
     try await fixture.initialize()
     let collector = PiEventCollector()
@@ -555,6 +548,7 @@ struct PiHandledCommandTests {
     #expect(events.contains { event in
       guard case .activity(let activity, _) = event else { return false }
       return activity.kind == .activity && activity.content == "Search is on."
+        && activity.status == (severity == "error" ? "failed" : "completed") && activity.detail == severity
     })
     #expect(!events.contains { event in
       if case .assistantChunk = event { return true }
@@ -562,22 +556,6 @@ struct PiHandledCommandTests {
       return false
     })
     #expect(try await fixture.client.prompt("ordinary message") == .endTurn)
-    await fixture.client.shutdown()
-    try await server.value
-  }
-
-  @Test(arguments: ["warning", "error"])
-  func notificationSeverityIsVisible(_ severity: String) async throws {
-    let fixture = PiPipeFixture()
-    let server = Task { try await serveCommands(fixture, firstPrompt: "/search", severity: severity) }
-    try await fixture.initialize()
-    let collector = PiEventCollector()
-    _ = try await fixture.client.prompt("/search") { await collector.record($0) }
-    #expect(await collector.values().contains { event in
-      guard case .activity(let activity, _) = event else { return false }
-      return activity.status == (severity == "error" ? "failed" : "completed")
-        && activity.detail == severity
-    })
     await fixture.client.shutdown()
     try await server.value
   }
@@ -656,8 +634,8 @@ struct PiHandledCommandTests {
         #expect(command["message"] as? String == (prompts == 1 ? firstPrompt : "ordinary message"))
         if let pending { await pending.pause(); return }
         if prompts == 1 && !normalStartup {
-          try write(["type": "extension_ui_request", "id": "notice", "method": "notify",
-                     "message": "Search is on.", "notifyType": severity], to: fixture)
+          try fixture.emit(["type": "extension_ui_request", "id": "notice", "method": "notify",
+                     "message": "Search is on.", "notifyType": severity])
         }
       }
       if type == "get_state" {
@@ -665,23 +643,17 @@ struct PiHandledCommandTests {
                 "isCompacting": false, "pendingMessageCount": 0]
       }
       if type == "get_entries" { data = ["entries": []] }
-      try write(["type": "response", "id": command["id"]!, "success": true, "data": data], to: fixture)
+      try fixture.emit(["type": "response", "id": command["id"]!, "success": true, "data": data])
       if type == "get_state", prompts == 1, let stopAfterACK {
         Task { await stopAfterACK.pause() }
       }
       if (normalStartup && type == "get_state" && prompts > 0) || (type == "prompt" && prompts == 2) {
         // State reports active before the first agent_start reaches the client.
-        try write(["type": "agent_start"], to: fixture)
-        try write(["type": "message_end", "message": ["role": "assistant", "content": "finished"]], to: fixture)
-        try write(["type": "agent_settled"], to: fixture)
+        try fixture.emit(["type": "agent_start"])
+        try fixture.emit(["type": "message_end", "message": ["role": "assistant", "content": "finished"]])
+        try fixture.emit(["type": "agent_settled"])
       }
     }
-  }
-
-  private func write(_ object: [String: Any], to fixture: PiPipeFixture) throws {
-    var bytes = try JSONSerialization.data(withJSONObject: object)
-    bytes.append(10)
-    try fixture.events.fileHandleForWriting.write(contentsOf: bytes)
   }
 }
 

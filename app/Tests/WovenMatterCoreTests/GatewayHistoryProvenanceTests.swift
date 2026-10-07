@@ -3,28 +3,16 @@ import Testing
 @testable import WovenMatterDashboardStore
 
 struct GatewayHistoryProvenanceTests {
-  @Test func recoveryRetainsFinalOnlyTranscriptProvenance() async throws {
-    let finalOnly = historyMessage(idempotencyKey: "owned:assistant", text: "final suffix")
+  @Test(arguments: [false, true])
+  func recoveryRetainsTranscriptProvenance(finalOnly: Bool) async throws {
+    let message = historyMessage(idempotencyKey: finalOnly ? "owned:assistant" : "owned", text: "retained text")
     let recovered = await GatewayHistoryRecovery.assistantMessage(
       remoteRunID: "owned", knownInputIDs: ["owned"],
-      fetch: { .object(["messages": .array([finalOnly])]) },
+      fetch: { .object(["messages": .array([message])]) },
       pause: { _ in }
     )
-
-    #expect(recovered?.text == "final suffix")
-    #expect(recovered?.isFinalOnlyAssistantTranscript == true)
-  }
-
-  @Test func recoveryRetainsWholeMessageSnapshotProvenance() async throws {
-    let snapshot = historyMessage(idempotencyKey: "owned", text: "whole message")
-    let recovered = await GatewayHistoryRecovery.assistantMessage(
-      remoteRunID: "owned", knownInputIDs: ["owned"],
-      fetch: { .object(["messages": .array([snapshot])]) },
-      pause: { _ in }
-    )
-
-    #expect(recovered?.text == "whole message")
-    #expect(recovered?.isFinalOnlyAssistantTranscript == false)
+    #expect(recovered?.text == "retained text")
+    #expect(recovered?.isFinalOnlyAssistantTranscript == finalOnly)
   }
 
   private func historyMessage(idempotencyKey: String, text: String) -> GatewayJSONValue {

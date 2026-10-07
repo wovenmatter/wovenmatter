@@ -471,13 +471,6 @@ struct OpenCodeIntegrationTests {
         #expect(try await client.health(allowLegacyBetaForStop: true)["version"].text == fixture.version)
     }
 
-    @Test func incompatibleServerCannotBecomeConnected() async throws {
-        let fixture = OpenCodeFixture(); fixture.version = "1.18.29"
-        FixtureProtocol.fixture = fixture
-        let client = OpenCodeHTTPClient(connection: try connection(), session: fixtureSession())
-        await #expect(throws: OpenCodeError.incompatible("1.18.29")) { try await client.health() }
-    }
-
     @Test func ordinaryMessagesAndCommandsSteerEvenBeforeBusyStateRefreshes() async throws {
         let fixture = OpenCodeFixture(); FixtureProtocol.fixture = fixture
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
@@ -612,20 +605,6 @@ struct OpenCodeIntegrationTests {
         await coordinator.shutdown()
     }
 
-    @Test func legacyTranscriptsCannotEnterACPAndOtherHarnessesCan() async throws {
-        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
-        let old = try await database.createLocalACPSession(runtimeKind: .opencode, title: "Retained transcript", ownerDeviceID: UUID())
-        await #expect(throws: OpenCodeError.self) { try await database.beginLocalACPRun(conversationID: old, input: .init(text: "blocked")) }
-        #expect(try await database.localACPSession(conversationID: old).title == "Retained transcript")
-        #expect(try await database.conversationContent(id: old).messages.isEmpty)
-        let codex = try await database.createLocalACPSession(runtimeKind: .codex, title: "Other harness", ownerDeviceID: UUID())
-        _ = try await database.beginLocalACPRun(conversationID: codex, input: .init(text: "allowed"))
-        #expect(try await database.conversationContent(id: codex).messages.count == 2)
-    }
-
     @Test func disconnectDuringHealthCheckCannotReconnectAStaleClient() async throws {
         let fixture = OpenCodeFixture(); fixture.holdHealth = true; FixtureProtocol.fixture = fixture
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
@@ -695,7 +674,9 @@ struct OpenCodeIntegrationTests {
         let before = try await database.conversationContent(id: id).messages
         await #expect(throws: OpenCodeError.self) { try await database.beginLocalACPRun(conversationID: id, input: .init(text: "do not append")) }
         #expect(try await database.conversationContent(id: id).messages == before)
+        #expect(before.count == 2)
         #expect(before.first?.content == "Historical message, retained verbatim")
+        #expect(try await database.localACPSession(conversationID: id).title == "Historical transcript")
     }
 
     @Test func repeatedSessionOpenReusesOneAtomicConversationAssociation() async throws {

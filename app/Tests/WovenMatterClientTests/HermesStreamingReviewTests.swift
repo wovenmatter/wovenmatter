@@ -7,7 +7,7 @@ struct HermesStreamingReviewTests {
 
   @Test(arguments: ["send", "skill", "prefill", "exec", "plugin"])
   func commandFeedbackIsPreservedWithoutBecomingAnAssistantReply(_ outcome: String) async throws {
-    let transport = HermesStreamingTransport(commandResult: [
+    let transport = HermesTransportFixture(commandResult: [
       "type": .string(outcome), "message": "Command prompt or draft",
       "notice": "Native command notice", "warning": "Native command warning"
     ])
@@ -24,7 +24,7 @@ struct HermesStreamingReviewTests {
     }
     if outcome == "send" || outcome == "skill" {
       try await transport.waitForSubmit()
-      await transport.event("message.complete", ["text": "Actual model response"])
+      await transport.event(type: "message.complete", payload: ["text": "Actual model response"])
     }
     #expect(try await turn.value == .endTurn)
     let events = await output.allEvents()
@@ -40,14 +40,14 @@ struct HermesStreamingReviewTests {
     let next = Task { try await client.prompt(.init(text: "ordinary message"),
       onEvent: nil, onPermission: nil, onInteraction: nil) }
     try await transport.waitForSubmit()
-    await transport.event("message.complete", ["text": "Follow-up"])
+    await transport.event(type: "message.complete", payload: ["text": "Follow-up"])
     #expect(try await next.value == .endTurn)
     await client.shutdown()
   }
 
   @Test(arguments: [false, true], ["send", "skill", "prefill", "exec", "plugin"])
   func cancelledCommandCannotSubmitItsReturnedPrompt(duringFeedback: Bool, outcome: String) async throws {
-    let transport = HermesStreamingTransport(
+    let transport = HermesTransportFixture(
       commandResult: ["type": .string(outcome), "message": "Must not be submitted", "notice": "Command notice"],
       holdCommand: !duringFeedback)
     let client = HermesGatewayClient(
@@ -71,7 +71,7 @@ struct HermesStreamingReviewTests {
   }
 
   @Test func streamedReasoningPhasesDoNotDuplicateCanonicalCompletion() async throws {
-    let transport = HermesStreamingTransport()
+    let transport = HermesTransportFixture()
     let client = HermesGatewayClient(
       launch: .init(runtimeKind: .hermes, executableURL: URL(filePath: "/fixture/hermes"), arguments: []),
       transport: transport, home: "/tmp/hermes-stream-review"
@@ -86,11 +86,11 @@ struct HermesStreamingReviewTests {
                               onPermission: nil, onInteraction: nil)
     }
     try await transport.waitForSubmit()
-    await transport.event("reasoning.delta", ["text": "phase one"])
-    await transport.event("message.delta", ["text": " interim "])
-    await transport.event("message.interim", ["text": " interim "])
-    await transport.event("reasoning.delta", ["text": "phase two"])
-    await transport.event("message.complete", ["text": " final ", "reasoning": "phase two"])
+    await transport.event(type: "reasoning.delta", payload: ["text": "phase one"])
+    await transport.event(type: "message.delta", payload: ["text": " interim "])
+    await transport.event(type: "message.interim", payload: ["text": " interim "])
+    await transport.event(type: "reasoning.delta", payload: ["text": "phase two"])
+    await transport.event(type: "message.complete", payload: ["text": " final ", "reasoning": "phase two"])
     #expect(try await turn.value == .endTurn)
 
     let thoughts = await output.thoughts()
@@ -104,7 +104,7 @@ struct HermesStreamingReviewTests {
   }
 
   @Test func divergentCanonicalReasoningIsPreservedAfterStreamedPhase() async throws {
-    let transport = HermesStreamingTransport()
+    let transport = HermesTransportFixture()
     let client = HermesGatewayClient(
       launch: .init(runtimeKind: .hermes, executableURL: URL(filePath: "/fixture/hermes"), arguments: []),
       transport: transport, home: "/tmp/hermes-stream-review"
@@ -117,8 +117,8 @@ struct HermesStreamingReviewTests {
                               onPermission: nil, onInteraction: nil)
     }
     try await transport.waitForSubmit()
-    await transport.event("reasoning.delta", ["text": "streamed fragment"])
-    await transport.event("message.complete", ["text": "answer", "reasoning": "canonical replacement"])
+    await transport.event(type: "reasoning.delta", payload: ["text": "streamed fragment"])
+    await transport.event(type: "message.complete", payload: ["text": "answer", "reasoning": "canonical replacement"])
     #expect(try await turn.value == .endTurn)
     let thoughts = await output.thoughts()
     #expect(thoughts.count == 2)
@@ -143,65 +143,5 @@ private actor HermesStreamingEvents {
     values.filter {
       switch $0 { case .assistantChunk, .assistantSnapshot, .assistantBoundary: true; default: false }
     }
-  }
-}
-
-private actor HermesStreamingTransport: HermesGatewayTransport {
-  var epoch: String? = "fixture-epoch"
-  var isConnected = false
-  private var handler: HermesGatewayRPC.EventHandler?
-  private var submitted = false
-  private var sequence = 0
-  private let commandResult: HermesValue?
-  private let holdCommand: Bool
-  private var commandWaiter: CheckedContinuation<Void, Never>?
-  private var commandRequested = false
-
-  init(commandResult: HermesValue? = nil, holdCommand: Bool = false) {
-    self.commandResult = commandResult
-    self.holdCommand = holdCommand
-  }
-  func didSubmit() -> Bool { submitted }
-  func resetSubmission() { submitted = false }
-  func releaseCommand() { commandWaiter?.resume(); commandWaiter = nil }
-  func waitForCommand() async throws {
-    for _ in 0..<200 {
-      if commandRequested { return }
-      try await Task.sleep(for: .milliseconds(5))
-    }
-    throw HermesGatewayError.message("fixture command timeout")
-  }
-
-  func setHandlers(event: HermesGatewayRPC.EventHandler?,
-                   disconnected: (@Sendable () async -> Void)?,
-                   request: HermesGatewayRPC.EventHandler?) { handler = event }
-  func connect() { isConnected = true }
-  func disconnect() { isConnected = false }
-  func respond(id: String, result: HermesValue) {}
-  func call(_ method: String, _ params: HermesValue) async -> HermesValue {
-    switch method {
-    case "session.create": return ["session_id": "live", "stored_session_id": "stored", "running": .bool(false)]
-    case "session.events.since": return ["latest_seq": .number(Double(sequence)), "epoch": "fixture-epoch"]
-    case "commands.catalog":
-      return commandResult == nil ? [:] : ["pairs": .array([.array(["/review", "Review"])])]
-    case "command.dispatch":
-      commandRequested = true
-      if holdCommand { await withCheckedContinuation { commandWaiter = $0 } }
-      return commandResult ?? [:]
-    case "prompt.submit": submitted = true; return [:]
-    default: return [:]
-    }
-  }
-  func event(_ type: String, _ payload: HermesValue) async {
-    sequence += 1
-    await handler?(["session_id": "live", "seq": .number(Double(sequence)),
-                    "type": .string(type), "payload": payload])
-  }
-  func waitForSubmit() async throws {
-    for _ in 0..<200 {
-      if submitted { return }
-      try await Task.sleep(for: .milliseconds(5))
-    }
-    throw HermesGatewayError.message("fixture submit timeout")
   }
 }

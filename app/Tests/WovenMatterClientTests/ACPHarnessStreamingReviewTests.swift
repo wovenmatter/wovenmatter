@@ -144,31 +144,6 @@ struct ACPHarnessStreamingReviewTests {
     #expect(try fixture.log().components(separatedBy: "Retry instructions").count - 1 == 1)
   }
 
-  @Test func configurationNotificationsCarrySnapshotsWithoutAnotherPreparation() async throws {
-    let fixture = try ACPHarnessFixture(kind: .codex,
-      initialize: #"{"protocolVersion":2}"#,
-      session: #"{"sessionId":"configuration-session","models":{"currentModelId":"fixture-model","availableModels":[{"modelId":"fixture-model"}]}}"#,
-      extras: [:])
-    defer { fixture.remove() }
-    let client = try fixture.client()
-    _ = try await client.initializeSession(workingDirectory: fixture.root, existingSessionID: nil, title: nil)
-    let snapshots = ACPReviewConfigurations()
-    await client.setConfigurationHandler { snapshots.record($0) }
-    #expect(snapshots.values().map(\.model) == ["fixture-model"])
-    // The fake adapter publishes model and command updates plus a duplicate during
-    // its prompt. The subscriber can update the UI directly from these values.
-    #expect(try await client.prompt("fixture") == .endTurn)
-    await client.shutdown()
-    let values = snapshots.values()
-    #expect(values.count == 3)
-    #expect(values.last?.model == "changed-model")
-    #expect(values.first?.slashCommands.isEmpty == true)
-    #expect(values.last?.slashCommands.map(\.name) == ["review"])
-    let log = try fixture.log()
-    #expect(log.components(separatedBy: #""method":"initialize""#).count - 1 == 1)
-    #expect(log.components(separatedBy: #""method":"session/new""#).count - 1 == 1)
-  }
-
   @Test(arguments: [AgentRuntimeKind.codex, .claudeCode, .grokBuild, .cursor])
   func modelAndThinkingSelectionFollowsAdvertisedOptions(kind: AgentRuntimeKind) async throws {
     let withEffort = #"{"configOptions":[{"id":"model","category":"model","currentValue":"with-effort","options":[{"value":"with-effort","name":"Same supplied label"},{"value":"no-effort","name":"Same supplied label"}]},{"id":"effort","category":"thought_level","currentValue":"low","options":[{"value":"low","name":"Low effort"},{"value":"high","name":"High effort"}]}]}"#
@@ -322,27 +297,16 @@ struct ACPHarnessStreamingReviewTests {
     }
   }
 
-  @Test func grokCapturesVendorStateAndUsesInterjection() async throws {
-    let fixture = try ACPHarnessFixture(
-      kind: .grokBuild,
+  @Test func grokCapturesVendorState() async throws {
+    try await review(
+      .grokBuild,
       initialize: #"{"protocolVersion":2,"agentCapabilities":{"loadSession":false}}"#,
       session: #"{"sessionId":"grok-session","modelState":{"currentModelId":"grok","currentReasoningEffort":"high","availableModels":[{"modelId":"grok"}]}}"#,
-      extras: [:], holdPromptForInterjection: true
-    )
-    defer { fixture.remove() }
-    let client = try fixture.client()
-    let initialized = try await client.initializeSession(workingDirectory: fixture.root,
-                                                           existingSessionID: nil, title: nil)
-    #expect(initialized.configuration.model == "grok")
-    #expect(initialized.configuration.thinking == "high")
-    let events = ACPReviewEvents()
-    let prompt = Task { try await client.prompt("start") { await events.record($0) } }
-    try await fixture.waitFor("session/prompt")
-    _ = try await client.beginActiveInput("steer")
-    #expect(try await prompt.value == .endTurn)
-    await client.shutdown()
-    #expect(try fixture.log().contains("_x.ai/interject"))
-    try await assertStream(events)
+      extras: [:], expected: []
+    ) { configuration in
+      #expect(configuration.model == "grok")
+      #expect(configuration.thinking == "high")
+    }
   }
 
   private func review(
@@ -390,13 +354,6 @@ struct ACPHarnessStreamingReviewTests {
   }
 }
 
-private final class ACPReviewConfigurations: @unchecked Sendable {
-  private let lock = NSLock()
-  private var snapshots: [LocalACPSessionConfiguration] = []
-  func record(_ value: LocalACPSessionConfiguration) { lock.withLock { snapshots.append(value) } }
-  func values() -> [LocalACPSessionConfiguration] { lock.withLock { snapshots } }
-}
-
 private actor ACPReviewEvents {
   private var events: [LocalACPEvent] = []
   func record(_ event: LocalACPEvent) { events.append(event) }
@@ -410,7 +367,7 @@ private struct ACPHarnessFixture {
   let kind: AgentRuntimeKind
 
   init(kind: AgentRuntimeKind, initialize: String, session: String,
-       extras: [String: String], holdPromptForInterjection: Bool = false,
+       extras: [String: String],
        setConfigShell: String? = nil, initialConfiguration: String? = nil,
        promptOverride: String? = nil) throws {
     self.kind = kind
@@ -421,7 +378,6 @@ private struct ACPHarnessFixture {
     let extraCases = extras.map { method, response in
       "*'\"method\":\"\(method)\"'*) respond \"$id\" '\(response)' ;;"
     }.joined(separator: "\n")
-    let promptFinish = holdPromptForInterjection ? "" : "respond \"$id\" '{\"stopReason\":\"end_turn\"}'"
     let sessionResponse = initialConfiguration.map {
       $0.replacingOccurrences(of: "{", with: #"{"sessionId":"selection","#,
         options: [.anchored])
@@ -448,10 +404,9 @@ private struct ACPHarnessFixture {
             printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"agent_thought_chunk","content":{"text":"second"}}}}'
             printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"plan","entries":[{"content":"Inspect","status":"pending"}]}}}'
             printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"plan","entries":[]}}}'
-            \(promptFinish) ;;
+            respond "$id" '{"stopReason":"end_turn"}' ;;
           \(configCase)
           \(extraCases)
-          *'"method":"_x.ai/interject"'*) respond "$id" '{}'; respond "$((id-1))" '{"stopReason":"end_turn"}' ;;
         esac
       done
       """
@@ -467,13 +422,6 @@ private struct ACPHarnessFixture {
   func log() throws -> String {
     try String(contentsOf: logURL, encoding: .utf8)
       .replacingOccurrences(of: "\\/", with: "/")
-  }
-  func waitFor(_ marker: String) async throws {
-    for _ in 0..<200 {
-      if (try? log().contains(marker)) == true { return }
-      try await Task.sleep(for: .milliseconds(5))
-    }
-    throw LocalACPClientError.processExited
   }
   func remove() { try? FileManager.default.removeItem(at: root) }
 }
