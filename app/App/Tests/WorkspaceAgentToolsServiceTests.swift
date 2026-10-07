@@ -312,10 +312,11 @@ extension WorkspaceAgentToolsServiceTests {
         // Await that lifecycle boundary, not an unrelated wall-clock deadline.
         await forwarder.waitUntilIdle()
         #expect(output.errors.count == 1)
+        #expect(throws: CancellationError.self) { try forwarder.submit(id: UUID().uuidString, request: replacement) }
     }
 
     @Test(.timeLimit(.minutes(1)))
-    func relayTimeoutRetainsRequestIdentityAndWriterFailureRetiresForwarder() async throws {
+    func relayTimeoutRetainsRequestIdentity() async throws {
         let fixture = try RelayForwardingFixture()
         defer { fixture.stop() }
         let output = RelayOutputCapture()
@@ -330,12 +331,7 @@ extension WorkspaceAgentToolsServiceTests {
         #expect(!response.success && response.requestID == requestID.lowercased())
         forwarder.stop()
         await fixture.gate.release()
-        let broken = WovenMatterRelayForwarder(localSocket: fixture.endpoint.path,
-            write: { _ in throw CancellationError() }, onFailure: { output.fail($0) })
-        try broken.submit(id: UUID().uuidString, request: fixture.request(slow: false))
-        await broken.waitUntilIdle()
-        #expect(output.errors.count == 1)
-        #expect(throws: (any Error).self) { try broken.submit(id: UUID().uuidString, request: fixture.request(slow: false)) }
+
     }
 }
 

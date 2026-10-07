@@ -63,6 +63,13 @@ still fails, stop and report it. Never initiate login, device authorization,
 browser authentication, account switching, or credential recovery. Publication
 authorization does not authorize those actions.
 
+Release from clean, current `origin/main`. Development/main CI validates source;
+release preparation never runs local suites, an unsigned Debug build, or another
+CI cycle. The release workflow records already-completed exact-source main CI
+when available, then builds and verifies a fresh production Release app. Missing
+CI metadata does not trigger tests. Immutable tags, signing, notarization,
+artifact verification, and exact approved release-copy gates still apply.
+
 A supplied or confirmed version authorizes building and verifying a private
 draft. Publication requires Trey's explicit manual approval of the exact release
 description for that release. A tag push only stages a draft. For version `X.Y.Z`, the identities are:

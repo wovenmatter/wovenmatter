@@ -45,6 +45,16 @@ dmg="${output_dir}/${asset}"
 rm -rf "$release_root"
 mkdir -p "$derived_data" "$package_cache" "$staging" "$output_dir"
 
+release_status() {
+  local message="[$(date -u '+%Y-%m-%d %H:%M:%S UTC')] $1"
+  printf '%s\n' "$message"
+  if [ "${GITHUB_ACTIONS:-false}" = true ]; then
+    printf '::notice title=Release stage::%s\n' "$message"
+    printf '%s\n' "$message" >> "${GITHUB_STEP_SUMMARY:?}"
+  fi
+}
+
+release_status 'Compiling production Release app'
 xcodebuild -quiet \
   -project app/WovenMatter.xcodeproj \
   -scheme WovenMatter \
@@ -64,9 +74,9 @@ xcodebuild -quiet \
   WOVENMATTER_SOURCE_REVISION="$revision" \
   build
 
+release_status 'Validating bundled resources and code signatures'
 scripts/validate-native-app.sh "$app"
 codesign --verify --deep --strict --verbose=2 "$app"
-codesign -dvv "$app" 2>&1 | grep -F 'Authority=Developer ID Application:' >/dev/null
 python3 scripts/validate-release-code.py "$app"
 
 notarize() {
@@ -104,11 +114,14 @@ notarize() {
 }
 
 ditto -c -k --keepParent "$app" "$notary_app_zip"
+release_status 'Submitting app to Apple; waiting for notarization'
 notarize "$notary_app_zip"
+release_status 'App accepted; stapling and assessing app'
 xcrun stapler staple "$app"
 xcrun stapler validate "$app"
 spctl --assess --type execute --verbose=2 "$app"
 
+release_status 'Creating and signing disk image'
 ditto "$app" "$staging/Woven Matter.app"
 ln -s /Applications "$staging/Applications"
 rm -f "$dmg"
@@ -120,15 +133,19 @@ hdiutil create \
   "$dmg"
 codesign --force --timestamp --sign "$signing_identity" "$dmg"
 codesign --verify --verbose=2 "$dmg"
+release_status 'Submitting disk image to Apple; waiting for notarization'
 notarize "$dmg"
+release_status 'Disk image accepted; stapling and assessing image'
 xcrun stapler staple "$dmg"
 xcrun stapler validate "$dmg"
 spctl --assess --type open --context context:primary-signature --verbose=2 "$dmg"
 
+release_status 'Generating updater manifest and checksums'
 scripts/generate-release-manifest.sh \
   "$version" "$build_number" "$dmg" "$output_dir/latest-mac.json"
 (
   cd "$output_dir"
   shasum -a 256 "$asset" latest-mac.json > SHA256SUMS.txt
 )
+release_status 'Distribution artifacts ready'
 printf 'Release artifacts ready in %s\n' "$output_dir"

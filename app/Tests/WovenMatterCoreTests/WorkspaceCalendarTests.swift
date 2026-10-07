@@ -172,7 +172,8 @@ struct WorkspaceCalendarTests {
     #expect(try await db.dashboardRecordCounts().calendarItems == 0)
   }
 
-  @Test func pendingNativeAcceptanceIsNeverAutomaticallySubmittedAgain() async throws {
+  @Test(arguments: [false, true])
+  func restartNeverResubmitsAcceptedOrUncertainOccurrence(uncertain: Bool) async throws {
     let (db, directory) = try await fixture(); defer { try? FileManager.default.removeItem(at: directory) }
     let start = date("2026-09-01T13:00:00Z")
     _ = try await insert(db, start: start, repeatRule: .init(unit: .day))
@@ -180,16 +181,24 @@ struct WorkspaceCalendarTests {
     _ = try await db.createLocalACPSession(runtimeKind: .codex, title: "Task", ownerDeviceID: UUID(), requestedConversationID: UUID(uuidString: run.sessionID))
     _ = try await db.prepareCalendarDelivery(runID: run.id, now: start)
     _ = try await db.claimToolDelivery(id: run.id, now: start)
-    try await db.markToolDeliveryTransportStarted(id: run.id)
+    if uncertain {
+      try await db.markToolDeliveryTransportStarted(id: run.id)
+    } else {
+      try await db.setToolDeliveryStatus(id: run.id, status: "accepted")
+    }
     let reopened = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
-    try await reopened.recoverToolDeliveries()
-    #expect(try await reopened.calendarRuns().first?.status == "uncertain")
+    if uncertain {
+      try await reopened.recoverToolDeliveries()
+      #expect(try await reopened.calendarRuns().first?.status == "uncertain")
+    }
     try await reopened.settleCalendarRuns()
     #expect(try await reopened.dueCalendarRuns(now: start).isEmpty)
     let next = try await #require(reopened.dueCalendarRuns(now: start.addingTimeInterval(5 * 86_400)).first)
     #expect(next.id != run.id)
     #expect(next.scheduledAt == start.addingTimeInterval(5 * 86_400))
     #expect(try await reopened.claimToolDelivery(id: run.id) == nil)
+    try await accept(next, in: reopened, now: next.scheduledAt)
+    #expect(try await reopened.dueCalendarRuns(now: next.scheduledAt).isEmpty)
   }
 }
 
@@ -209,24 +218,6 @@ extension WorkspaceCalendarTests {
     let saved = try await #require(db.calendarRuns().first)
     #expect(saved.eventID == detachedID && saved.sessionID == run.sessionID)
     #expect(try await db.dueCalendarRuns(now: start).isEmpty)
-  }
-
-  @Test func restartAfterAcceptanceStillCatchesUpTheNextMissedOccurrence() async throws {
-    let (db, directory) = try await fixture(); defer { try? FileManager.default.removeItem(at: directory) }
-    let start = date("2026-09-01T13:00:00Z")
-    _ = try await insert(db, start: start, repeatRule: .init(unit: .day))
-    let run = try await #require(db.dueCalendarRuns(now: start).first)
-    _ = try await db.createLocalACPSession(runtimeKind: .codex, title: "Task", ownerDeviceID: UUID(), requestedConversationID: UUID(uuidString: run.sessionID))
-    _ = try await db.prepareCalendarDelivery(runID: run.id, now: start)
-    _ = try await db.claimToolDelivery(id: run.id, now: start)
-    try await db.setToolDeliveryStatus(id: run.id, status: "accepted")
-    let reopened = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
-    let now = start.addingTimeInterval(5 * 86_400)
-    try await reopened.settleCalendarRuns()
-    let next = try await #require(reopened.dueCalendarRuns(now: now).first)
-    #expect(next.scheduledAt == now && next.id != run.id)
-    try await accept(next, in: reopened, now: now)
-    #expect(try await reopened.dueCalendarRuns(now: now).isEmpty)
   }
 
   @Test @MainActor func runtimeWaitsForCapacityAndBusySessionsAndRechecksAfterPreparation() async throws {
@@ -707,6 +698,9 @@ extension WorkspaceCalendarTests {
     var remoteTask = task(); remoteTask.configuration.workspaceID = workspace
     remoteTask.configuration.folderID = folder
     let eventID = try await db.saveCalendarEvent(draft: .init(title: "Remote", startsAt: start, task: remoteTask), creating: true, now: start)
+    // Replace a reservation cancelled during ownership transfer.
+    _ = try await db.dueCalendarRuns(now: start)
+    try await db.setRemoteCalendarExecutionOwnership(workspaceID: workspace, state: .pending)
     let run = WorkspaceCalendarRun(id: UUID().uuidString.lowercased(), eventID: eventID, occurrenceIndex: 0, scheduledAt: start,
       sessionID: UUID().uuidString.lowercased(), task: remoteTask, status: "accepted", title: "Remote")
     try await db.importRemoteCalendarRun(run, workspaceID: workspace, eventRevision: 0)
@@ -717,14 +711,18 @@ extension WorkspaceCalendarTests {
         remoteWorkspaceName: "Fixture", title: "Remote", ownerDeviceID: owner,
         requestedConversationID: UUID(uuidString: run.sessionID))
     }
+    let updates = try JSONDecoder().decode([GatewayJSONValue].self, from: Data(#"[{"sessionUpdate":"agent_thought_chunk","content":{"text":"Check it."}},{"sessionUpdate":"tool_call","toolCallId":"tool-1","title":"Read file","status":"completed"},{"sessionUpdate":"agent_message_chunk","content":{"text":"Done."}}]"#.utf8))
     func importTranscript(_ database: WorkspaceDatabase) async throws {
       try await database.importRemoteCalendarTranscript(receiptID: "deleted-folder-receipt", run: run,
         workspaceID: workspace, workspaceName: "Fixture", ownerDeviceID: owner,
-        nativeSessionID: "native-deleted-folder", updates: [], error: nil, completedAt: start.addingTimeInterval(5))
+        nativeSessionID: "native-deleted-folder", updates: updates, error: nil, completedAt: start.addingTimeInterval(5))
     }
     try await importTranscript(db)
     let reopened = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+    try await reopened.importRemoteCalendarRun(run, workspaceID: workspace, eventRevision: 0)
     try await importTranscript(reopened)
+    let runs = try await reopened.calendarRuns()
+    #expect(runs.count == 1 && runs.first?.id == run.id && runs.first?.status == "accepted")
     let session = try await #require(reopened.workspaceOverview().conversations.first { $0.id == run.sessionID })
     #expect(session.folderID == nil)
     #expect(session.title == "Scheduled: " + remoteTask.configuration.title)
@@ -741,35 +739,11 @@ extension WorkspaceCalendarTests {
     }
     #expect(counts?["messages"]?.intValue == 2)
     #expect(counts?["receipts"]?.intValue == 1)
-  }
-
-  @Test func remoteReceiptImportsOnceAndRetainsNativeSession() async throws {
-    let (db,directory) = try await fixture(); defer { try? FileManager.default.removeItem(at:directory) }
-    let workspace = UUID(),start = date("2026-09-22T12:00:00Z")
-    var remoteTask = task();remoteTask.configuration.workspaceID = workspace
-    let id = try await db.saveCalendarEvent(draft:.init(title:"Remote",startsAt:start,task:remoteTask),creating:true,now:start)
-    // Exercise replacement of a reservation cancelled during ownership transfer.
-    _ = try await db.dueCalendarRuns(now:start)
-    try await db.setRemoteCalendarExecutionOwnership(workspaceID:workspace,state:.pending)
-    let run = WorkspaceCalendarRun(id:UUID().uuidString.lowercased(),eventID:id,occurrenceIndex:0,scheduledAt:start,
-      sessionID:UUID().uuidString.lowercased(),task:remoteTask,status:"accepted",title:"Remote")
-    let owner = UUID()
-    let updates = try JSONDecoder().decode([GatewayJSONValue].self, from: Data(#"[{"sessionUpdate":"agent_thought_chunk","content":{"text":"Check it."}},{"sessionUpdate":"tool_call","toolCallId":"tool-1","title":"Read file","status":"completed"},{"sessionUpdate":"agent_message_chunk","content":{"text":"Done."}}]"#.utf8))
-    for _ in 0..<2 {
-      try await db.importRemoteCalendarRun(run,workspaceID:workspace,eventRevision:0)
-      try await db.importRemoteCalendarTranscript(receiptID:"receipt-1",run:run,workspaceID:workspace,workspaceName:"Fixture",
-        ownerDeviceID:owner,nativeSessionID:"native-1",updates:updates,error:nil,completedAt:start.addingTimeInterval(5))
+    let activities = try await reopened.read { connection in
+      try connection.historyRowsUnlocked("SELECT id FROM dashboard_run_events WHERE conversation_id=?", values: [run.sessionID])
     }
-    #expect(try await db.calendarRuns().count == 1)
-    #expect(try await db.calendarRuns().first?.id == run.id)
-    #expect(try await db.calendarRuns().first?.status == "accepted")
-    let messages = try await db.read { connection in try connection.historyRowsUnlocked("SELECT id FROM dashboard_messages WHERE conversation_id=?",values:[run.sessionID]) }
-    #expect(messages.count == 2)
-    let activities = try await db.read { connection in try connection.historyRowsUnlocked("SELECT id FROM dashboard_run_events WHERE conversation_id=?",values:[run.sessionID]) }
     #expect(activities.count == 2)
-    let native = try await db.read { connection in try connection.historyRowsUnlocked("SELECT acp_session_id FROM desktop_local_acp_sessions WHERE conversation_id=?",values:[run.sessionID]).first?.objectValue?["acp_session_id"]?.stringValue }
-    #expect(native == "native-1")
-    #expect(try await db.dueCalendarRuns(now:start.addingTimeInterval(100)).isEmpty)
+    #expect(try await reopened.dueCalendarRuns(now: start.addingTimeInterval(100)).isEmpty)
   }
 }
 

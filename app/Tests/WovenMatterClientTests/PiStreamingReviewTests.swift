@@ -5,7 +5,7 @@ import WovenMatterCore
 
 struct PiStreamingReviewTests {
   @Test func arbitraryExtensionTodoToolsRemainToolsWithoutAStandardChecklistContract() async throws {
-    let fixture = PiStreamingReviewFixture()
+    let fixture = PiPipeFixture()
     let names = ["todo", "todo_list", "todowrite", "update_plan", "update_checklist", "subagent"]
     let lines = try names.map { name in
       String(decoding: try JSONSerialization.data(withJSONObject: [
@@ -13,7 +13,7 @@ struct PiStreamingReviewTests {
         "result": ["content": [["type": "text", "text": "{\"todos\":[]}"]]]
       ]), as: UTF8.self)
     }
-    let server = Task { try await fixture.serve(lines: lines) }
+    let server = Task { try await fixture.serve(settles: true, streamLines: lines) }
     try await fixture.initialize()
     let collector = PiStreamingReviewCollector()
     _ = try await fixture.client.prompt("fixture") { await collector.record($0) }
@@ -27,7 +27,7 @@ struct PiStreamingReviewTests {
   }
 
   @Test func authoritativeFinalRepairsDeltasAcrossToolBoundary() async throws {
-    let fixture = PiStreamingReviewFixture()
+    let fixture = PiPipeFixture()
     let lines = [
       #"{"type":"message_start","message":{"role":"assistant","content":[]}}"#,
       #"{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"partial"}}"#,
@@ -39,7 +39,7 @@ struct PiStreamingReviewTests {
       #"{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":" stale"}}"#,
       #"{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":" final"}],"stopReason":"stop"}}"#,
     ]
-    let server = Task { try await fixture.serve(lines: lines) }
+    let server = Task { try await fixture.serve(settles: true, streamLines: lines) }
     try await fixture.initialize()
     let collector = PiStreamingReviewCollector()
     let reason = try await fixture.client.prompt("fixture") { await collector.record($0) }
@@ -60,7 +60,7 @@ struct PiStreamingReviewTests {
   }
 
   @Test func thinkingIndicesStayDistinctAndRetryErrorIsSuperseded() async throws {
-    let fixture = PiStreamingReviewFixture()
+    let fixture = PiPipeFixture()
     let lines = [
       #"{"type":"message_start","message":{"role":"assistant","content":[]}}"#,
       #"{"type":"message_end","message":{"role":"assistant","content":[],"stopReason":"error","errorMessage":"retry me"}}"#,
@@ -74,7 +74,7 @@ struct PiStreamingReviewTests {
       #"{"type":"message_update","assistantMessageEvent":{"type":"thinking_end","contentIndex":1,"content":"two"}}"#,
       #"{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"recovered"}],"stopReason":"stop"}}"#,
     ]
-    let server = Task { try await fixture.serve(lines: lines) }
+    let server = Task { try await fixture.serve(settles: true, streamLines: lines) }
     try await fixture.initialize()
     let collector = PiStreamingReviewCollector()
     let reason = try await fixture.client.prompt("fixture") { await collector.record($0) }
@@ -91,13 +91,13 @@ struct PiStreamingReviewTests {
   }
 
   @Test func finalErrorPublishesTailBeforeSettledFailure() async throws {
-    let fixture = PiStreamingReviewFixture()
+    let fixture = PiPipeFixture()
     let lines = [
       #"{"type":"message_start","message":{"role":"assistant","content":[]}}"#,
       #"{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"useful tail"}}"#,
       #"{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"useful tail"}],"stopReason":"error","errorMessage":"provider failed"}}"#,
     ]
-    let server = Task { try await fixture.serve(lines: lines) }
+    let server = Task { try await fixture.serve(settles: true, streamLines: lines) }
     try await fixture.initialize()
     let collector = PiStreamingReviewCollector()
     do {
@@ -117,67 +117,4 @@ struct PiStreamingReviewTests {
 private actor PiStreamingReviewCollector {
   private(set) var values: [LocalACPEvent] = []
   func record(_ event: LocalACPEvent) { values.append(event) }
-}
-
-private struct PiStreamingReviewFixture: Sendable {
-  let commands = Pipe()
-  let events = Pipe()
-  let client: PiRPCClient
-
-  init() {
-    client = PiRPCClient(
-      launch: LocalACPRuntimeLaunchConfiguration(runtimeKind: .pi,
-        executableURL: URL(filePath: "/nonexistent-review-pi"), arguments: []),
-      workingDirectory: URL(filePath: "/private/tmp"),
-      input: commands.fileHandleForWriting, output: events.fileHandleForReading
-    )
-  }
-
-  func initialize() async throws {
-    _ = try await client.initializeSession(workingDirectory: URL(filePath: "/private/tmp"),
-      existingSessionID: nil, title: nil, systemPrompt: nil)
-  }
-
-  func serve(lines: [String]) async throws {
-    defer { try? events.fileHandleForWriting.close() }
-    let reader = PiStreamingReviewCommandReader(handle: commands.fileHandleForReading)
-    while let line = try await reader.next() {
-      let command = try JSONSerialization.jsonObject(with: line) as! [String: Any]
-      let type = command["type"] as? String
-      let data: [String: Any] = type == "get_state"
-        ? ["sessionId": "review-session"] : [:]
-      var bytes = try JSONSerialization.data(withJSONObject: [
-        "type": "response", "id": command["id"]!, "success": true, "data": data,
-      ])
-      bytes.append(0x0A)
-      try events.fileHandleForWriting.write(contentsOf: bytes)
-      if type == "prompt" {
-        for event in lines {
-          try events.fileHandleForWriting.write(contentsOf: Data("\(event)\n".utf8))
-        }
-        try events.fileHandleForWriting.write(contentsOf: Data("{\"type\":\"agent_settled\"}\n".utf8))
-        return
-      }
-    }
-  }
-}
-
-private struct PiStreamingReviewCommandReader: Sendable {
-  let handle: FileHandle
-  func next() async throws -> Data? {
-    try await withCheckedThrowingContinuation { continuation in
-      DispatchQueue.global(qos: .userInitiated).async {
-        do {
-          var data = Data()
-          while true {
-            guard let byte = try handle.read(upToCount: 1), !byte.isEmpty else {
-              continuation.resume(returning: data.isEmpty ? nil : data); return
-            }
-            if byte[0] == 0x0A { continuation.resume(returning: data); return }
-            data.append(byte)
-          }
-        } catch { continuation.resume(throwing: error) }
-      }
-    }
-  }
 }

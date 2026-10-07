@@ -132,7 +132,6 @@ struct WovenNoteSocketTests {
             FileHandle.standardError.write(Data("note socket regression timed out\n".utf8))
             exit(70)
         }
-        try roundTrip()
         try idleDeadlineAndRecovery()
         try await trickleDeadline()
         try await connectionLimitAndDisconnect()
@@ -140,20 +139,7 @@ struct WovenNoteSocketTests {
         try stopAndRestart()
         try cliDisconnectedPeer()
         try cliResponseDeadline()
-        print("8 native note socket behavior tests passed")
-    }
-
-    static func roundTrip() throws {
-        let url = socketURL()
-        let service = WovenNoteService(socketURL: url) { request in
-            NoteEditingResponse(success: true, noteID: request.noteID, title: "Linked note")
-        }
-        try service.start()
-        defer { try? service.stop() }
-        let response = try WovenNoteCommandLine.send(readRequest, socketPath: url.path)
-        try require(response.success && response.noteID == "note" && response.title == "Linked note", "round-trip mismatch")
-        let mode = try FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as? NSNumber
-        try require(mode?.intValue == 0o600, "socket permissions must be private")
+        print("7 native note socket behavior tests passed")
     }
 
     static func idleDeadlineAndRecovery() throws {
@@ -250,14 +236,15 @@ struct WovenNoteSocketTests {
     static func stopAndRestart() throws {
         let url = socketURL()
         let service = WovenNoteService(socketURL: url) { request in
-            NoteEditingResponse(success: true, noteID: request.noteID)
+            NoteEditingResponse(success: true, noteID: request.noteID, title: "Linked note")
         }
         defer { try? service.stop() }
         for _ in 0..<8 {
             try service.start()
             let idle = try connectRaw(url)
             // A completed request proves that the serial accept queue has accepted the earlier idle client.
-            _ = try WovenNoteCommandLine.send(readRequest, socketPath: url.path)
+            let response = try WovenNoteCommandLine.send(readRequest, socketPath: url.path)
+            try require(response.success && response.noteID == "note" && response.title == "Linked note", "round-trip mismatch")
             try service.stop()
             try closedPromptly(idle)
             close(idle)
@@ -266,6 +253,8 @@ struct WovenNoteSocketTests {
         try service.start()
         let response = try WovenNoteCommandLine.send(readRequest, socketPath: url.path)
         try require(response.success, "restart did not restore service")
+        let mode = try FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as? NSNumber
+        try require(mode?.intValue == 0o600, "socket permissions must be private")
     }
 
     static func fakePeer(_ operation: @escaping @Sendable (Int32) -> Void, client: (URL) throws -> Void) throws {

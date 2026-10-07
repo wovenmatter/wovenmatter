@@ -98,12 +98,13 @@ struct ACPSessionRoutingTests {
             modelUpdate("parent-model"),
             modelUpdate("child-model", session: "child-two"),
             update("available_commands_update", fields: ["availableCommands": [["name": "parent-command"]]]),
+            update("available_commands_update", fields: ["availableCommands": [["name": "parent-command"]]]),
             update("available_commands_update", session: "child-three", fields: ["availableCommands": [["name": "child-command"]]]),
             update("agent_message_chunk", session: nil, text: " legacy adapter"),
             update("agent_message_chunk", session: "", text: "empty session"),
             ["jsonrpc": "2.0", "method": "session/update", "params": ["sessionId": 7, "update": ["sessionUpdate": "agent_message_chunk", "content": ["text": "invalid session"]]]],
         ]
-        let fixture = try SessionRoutingFixture(promptFrames: frames)
+        let fixture = try SessionRoutingFixture(bootstrapFrames: [modelUpdate("fixture-model")], promptFrames: frames)
         defer { fixture.remove() }
         let client = try fixture.client()
         defer { Task { await client.shutdown() } }
@@ -111,6 +112,7 @@ struct ACPSessionRoutingTests {
         let configurations = RoutingConfigurations()
         _ = try await client.initializeSession(workingDirectory: fixture.root, existingSessionID: nil, title: nil)
         await client.setConfigurationHandler { await configurations.record($0) }
+        #expect(await configurations.values().map(\.model) == ["fixture-model"])
         #expect(try await client.prompt("fixture", onEvent: { await events.record($0) }) == .endTurn)
         await client.shutdown()
 
@@ -153,8 +155,12 @@ struct ACPSessionRoutingTests {
         ])
         let snapshots = await configurations.values()
         #expect(snapshots.count == 3)
+        #expect(snapshots.first?.slashCommands.isEmpty == true)
         #expect(snapshots.last?.model == "parent-model")
         #expect(snapshots.last?.slashCommands.map(\.name) == ["parent-command"])
+        let log = try String(contentsOf: fixture.logURL, encoding: .utf8).replacingOccurrences(of: "\\/", with: "/")
+        #expect(log.components(separatedBy: #""method":"initialize""#).count - 1 == 1)
+        #expect(log.components(separatedBy: #""method":"session/new""#).count - 1 == 1)
     }
 
     @Test(arguments: [false, true])
