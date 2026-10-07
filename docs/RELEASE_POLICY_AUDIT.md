@@ -49,7 +49,8 @@ The platform requirements and repository choices below are different things.
 | DMG submission, accepted-status gate, staple/validate and Gatekeeper assessment | Production DMG | Retained | Final deliverable distribution/security checks |
 | `latest-mac.json` and SHA256SUMS | Production output | Retained | Updater functionality and exact download identity |
 | Exact private asset set, refuse replacement of published assets | Same build job stages draft | Separate staging job, tag commit rechecked before mutation | Preserve private-draft protections; retry upload without build/notary repetition |
-| Downloaded draft verification before approval/publication | Publication script | Retained unchanged | Remote tag/main/workflow/assets/manifest/checksums/signing/notarization/Gatekeeper checks are on downloaded artifacts |
+| Downloaded draft verification before approval/publication | Publication script | All verification gates retained; exact-byte download reuse added | Remote tag/main/workflow/assets/manifest/checksums/signing/notarization/Gatekeeper checks are on downloaded artifacts |
+| Repeated verify-only then approved-notes download | Downloads the roughly 458 MB DMG twice | Reuse local exact-identity bytes when fresh GitHub asset IDs/digests/size/update identity match | Local bytes rehashed; missing digest or changed/tampered bytes force download; signatures/stapling/Gatekeeper still rechecked |
 | Full user-facing description, exact approved notes, default verify-only, explicit publication approval | Skill / publication script | Retained unchanged | Repository consent/publication protection |
 | Signing environment, keychain/key cleanup, existing credentials and token permissions | Release job | Retained | No branch-protection, credential, environment or permission changes |
 | Compiler inputs / dependency trees / signed products in Actions cache | No Actions cache | Not cached | Avoid toolchain staleness, signed product reuse and secret caching |
@@ -85,7 +86,7 @@ unique behavioral fixtures based on a guessed allowance.
 | Existing remote test files | 11 | Same 11, byte-identical |
 | Existing script fixture files | 22 | Same 22; 21 byte-identical, approval fixture uses real manifest generator |
 | General main CI and source-test dispatcher | Existing path-selected checks | Byte-identical; no suite/filter/bounds removed |
-| Approval fixture scenarios | Default private; explicit verify; empty/whitespace/placeholder/missing notes rejected; failed verification blocks publication; approved exact text published | Same scenarios, focused fixture passes |
+| Approval fixture scenarios | Default private; explicit verify; empty/whitespace/placeholder/missing notes rejected; failed verification blocks publication; approved exact text published | Same scenarios plus cache identity/tamper/replacement/missing-digest/corrupt-download/API-error/drift cases; focused fixture passes |
 | Manifest/access/notarization/signing fixtures | Existing contract cases | Retained; focused baseline and candidate checks pass |
 | New CEF archive cache boundary | No cross-run archive cache | Offline cold download, archive restore without redownload, corrupt checksum rejection |
 | Duplicate root signing identity assertion | Root grep plus every-Mach-O identity assertion | Every-Mach-O assertion retains main executable identity; deep resource sealing remains |
@@ -113,13 +114,23 @@ not a promised total release duration:
 | Six isolated heavy suites | About 77s | Removed from release repeat |
 | Unsigned app/CEF build and bundle interval | 6m47s | Removed from release; signed Release build remains |
 | Local pre-tag validation | 4m44s failed CMake PATH attempt + 5m26s warm success = 10m10s | Entire prerequisite removed |
-| Repeated release validation on the same source | About 8m failed attempt + 15m01s successful retry = about 23m | Removed entirely |
+| Repeated release validation on the same source | Failed pre-signing job 8m13s + successful validation retry 15m01s, about 23m (first includes job setup) | Removed from release |
 | CEF Actions archive cache | No before/after timing | No claimed savings; still compiles wrapper/adapter and bundles/signs fresh outputs |
-| Signed build / Apple wait / packaging / queue time | Separate variable costs | Retained; no total-duration promise |
+| Completed production step | 20m12s | Retained distribution work; no total-duration promise |
+| Signed Release build/native validation within that step | About 10m05s | Retained |
+| Deep signing / all 13 Mach-O checks | About 11s | Retained preflight; remove only duplicate root identity grep |
+| App ZIP/upload/Apple wait | About 3m42s | Retained; upload/processing split unavailable |
+| App staple/Gatekeeper | About 8s | Retained |
+| DMG creation | About 1m58s | Retained |
+| DMG upload/Apple wait | About 4m01s | Retained |
+| Final staple/manifest/checksums | Seconds | Retained |
+| Independent draft verification DMG download | About 458 MB; duration not supplied | Avoid its second transfer for unchanged exact asset identity; no time claim |
 
 Do not add component durations to the CI/validation durations: they overlap.
 The supplied duplicate local/release attempt history totals about 33 minutes of
-avoidable validation work for this candidate, not a guaranteed future saving.
+aggregate repeated attempt work for this candidate, including some failed-job
+setup. Local and main CI overlap; this is not sequential elapsed release delay
+or a guaranteed future saving.
 Future stage notices identify actual progress in the running Actions log; the
 step summary retains the timestamped timeline when the step completes. This does
 not add a separate downloadable live-log service or estimate Apple's ETA.
@@ -140,3 +151,26 @@ The published release remains gated by `publish-release.sh` and explicit approve
 notes. Branch protection, general CI, credentials, token permissions and v0.2.5
 remain untouched. This cleanup does not itself tag, build, publish, install, merge
 or dispatch any workflow.
+
+
+## Local publication download reuse
+
+`publish-release.sh --verify-only` retains successfully verified downloaded assets
+under the user's temporary directory. `--approved-notes` uses fresh GitHub
+metadata to select exactly the same repository release/tag/source SHA, release
+ID and sorted asset IDs/names/sizes/SHA256 digests/update timestamps/states.
+The content address includes that identity. Every local file is rehashed against
+the fresh remote SHA256 digests before use. Missing digests, absent/corrupt files
+or replacement assets cause a fresh download. Missing/invalid API identity stops
+verification. A second metadata read rejects assets changed during verification.
+Notes edits do not invalidate binary identity.
+
+This removes a repeated roughly 458 MB network transfer without a verification
+receipt or skipped security checks. Source/workflow/private-state/asset-set gates,
+SHA256SUMS, manifest, Developer ID signature, staple ticket and current Gatekeeper
+assessment run again before publication, even on reuse. Signature or acceptance
+failure still blocks publication. Only complete successful payloads are retained;
+the owner-private local temporary cache is disposable and contains downloaded
+signed distribution files, not signing secrets. It is distinct from the Actions
+CEF download cache and can be redirected with `WOVENMATTER_PUBLISH_CACHE_DIR`.
+No total download-time saving was measured.

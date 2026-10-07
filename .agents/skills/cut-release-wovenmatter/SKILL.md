@@ -51,7 +51,12 @@ The tag-triggered `.github/workflows/release.yml` builds a signed, notarized
 Apple Silicon app and stages a private draft. After its successful run, verify
 through `scripts/publish-release.sh --verify-only vX.Y.Z EXPECTED_COMMIT_SHA`.
 The script checks source, workflow, assets, checksums, signing, notarization,
-and Gatekeeper. GitHub CLI authentication must match the repository's SSH account.
+and Gatekeeper. It retains successful downloads in an owner-private temporary
+cache. Publication reuses bytes only after fresh remote asset identity/digest
+matching and local hashing; replacement/tampering or missing digests force a
+new download. All artifact security checks still run, and metadata errors or
+mid-verification changes stop publication. No prior verification authorizes
+publication. GitHub CLI authentication must match the repository's SSH account.
 
 Then write the release description from the material changes since the previous
 public release. Inspect the complete commit/PR range and underlying changes;

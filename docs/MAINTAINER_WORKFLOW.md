@@ -77,11 +77,11 @@ Signed distribution and draft staging are separate jobs. Retry failed jobs
 rather than the entire workflow. Draft staging reuses the successful build job's
 signed artifact set in the same run and checks transferred checksums; its
 transfer artifact lasts seven days. Build/sign/notarize/package still retry as
-one job when they fail. The release cache contains only the pinned CEF download
+one job when they fail. The Actions release cache contains only the pinned CEF download
 archive, keyed by runner OS/architecture and the pin/download-script hashes with
 no fallback keys. Fresh extraction verifies the pinned checksum after restore.
 No signed products, DerivedData, npm dependency trees, keychains, or credentials
-are cached. See [the removed/retained release policy audit](RELEASE_POLICY_AUDIT.md).
+are cached in Actions. See [the removed/retained release policy audit](RELEASE_POLICY_AUDIT.md).
 
 A supplied or confirmed version authorizes building and verifying a private
 draft. Publication requires Trey's explicit manual approval of the exact release
@@ -95,6 +95,14 @@ The draft contains the disk image, its checksum file, and `latest-mac.json`.
 `scripts/publish-release.sh` independently verifies the exact commit, workflow,
 asset set, checksums, manifest, signature, notarization, and Gatekeeper before
 publishing. The default invocation and `--verify-only` both leave the draft private.
+Successfully verified downloads are retained in an owner-private temporary cache.
+A later `--approved-notes` reuses those bytes only when fresh remote asset identity
+and SHA256 digests match. Replacement/tampering or missing digests force download;
+metadata failures or mid-verification changes stop publication. All checksum,
+manifest, signature, staple and current Gatekeeper checks still run. This avoids
+downloading the same large DMG twice without treating a prior verification as
+publication consent. The disposable local download cache is separate from Actions
+and signing secrets; override its location with `WOVENMATTER_PUBLISH_CACHE_DIR`.
 
 After the build and verification, the release agent writes a user-facing
 description of the material changes since the previous public release. Use this
