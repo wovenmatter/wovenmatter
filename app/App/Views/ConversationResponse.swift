@@ -17,18 +17,19 @@ struct ConversationResponse: View {
             }
             .frame(maxWidth: 680, alignment: .leading)
 
-            if showsCopyButton { Button {
-                NSPasteboard.general.clearContents()
-                copied = NSPasteboard.general.setString(content, forType: .string)
-            } label: {
-                Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                    .font(.system(size: 11.5, weight: .medium))
-                    .frame(width: 28, height: 28)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(DashboardIconButtonStyle())
-            .help("Copy complete response")
-            .accessibilityLabel(copied ? "Response copied" : "Copy response")
+            if showsCopyButton {
+                Button {
+                    NSPasteboard.general.clearContents()
+                    copied = NSPasteboard.general.setString(content, forType: .string)
+                } label: {
+                    Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                        .font(.system(size: 11.5, weight: .medium))
+                        .frame(width: 28, height: 28)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(DashboardIconButtonStyle())
+                .help("Copy complete response")
+                .accessibilityLabel(copied ? "Response copied" : "Copy response")
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

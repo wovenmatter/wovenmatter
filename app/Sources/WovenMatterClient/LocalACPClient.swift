@@ -2683,10 +2683,9 @@ public actor LocalACPClient {
             )
         case "tool_call_update":
             activeReasoningPhaseID = nil
+            let activity = Self.toolActivity(update, phase: "update", workingDirectory: workingDirectory)
             return .activity(
-                Self.toolActivity(update, phase: "update", workingDirectory: workingDirectory),
-                appendsContent: update["content"]?.arrayValue?.isEmpty != false
-                    && update["_meta"]?["terminal_output_delta"]?["data"]?.stringValue != nil
+                activity, appendsContent: activity.contentIsDelta == true
             )
         case "plan":
             activeReasoningPhaseID = nil
