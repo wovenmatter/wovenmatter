@@ -31,16 +31,22 @@ struct SettingsDefaultAgentView: View {
                     .font(.callout).foregroundStyle(.secondary)
             }
             SettingsCard(title: "Subagents", detail: "The Built-in agent can delegate tasks when useful.") {
-                Stepper(value: Binding(get: { agent.configuration.resolvedSubagentConcurrency }, set: {
-                    var config = agent.configuration; config.subagentConcurrency = $0; agent.configuration = config
-                }), in: DefaultAgentSettings.subagentConcurrencyRange) {
-                    HStack {
-                        Text("Maximum active subagents per conversation")
-                        Spacer()
-                        Text(agent.configuration.resolvedSubagentConcurrency, format: .number)
-                            .monospacedDigit()
-                    }
-                }.disabled(!editable)
+                HStack {
+                    Text("Maximum active subagents per conversation")
+                    Spacer(minLength: 12)
+                    Picker("Maximum active subagents per conversation", selection: Binding(
+                        get: { agent.configuration.resolvedSubagentConcurrency },
+                        set: {
+                            var config = agent.configuration
+                            config.subagentConcurrency = $0
+                            agent.configuration = config
+                        }
+                    )) {
+                        ForEach(DefaultAgentSettings.subagentConcurrencyRange, id: \.self) {
+                            Text(String($0)).tag($0)
+                        }
+                    }.labelsHidden().frame(width: 78).disabled(!editable)
+                }.font(.system(size: 13)).foregroundStyle(DashboardPalette.foreground)
                 Text("Choose 2–24. This setting applies to new conversations. The parent agent does not count toward the limit.")
                     .font(.callout).foregroundStyle(.secondary)
             }
