@@ -208,6 +208,8 @@ struct OpenClawTranscriptRepairTests {
       id: run.runID + ":preamble-1", kind: .thought, title: "Preamble", content: "Checking.\n", rawPayloadJSON: preambleRaw))
     try await db.upsertDeviceOwnedRunActivity(runID: run.runID, activity: AgentRunActivity(
       id: run.runID + ":unrelated-thought", kind: .thought, title: "Preamble", content: "Checking.\n", rawPayloadJSON: preambleRaw))
+    try await db.completeLocalACPRun(runID: run.runID)
+    let beforeRepair = try await db.conversationHistoryPage(id: conversation, limit: 100, compactActivities: true)
     var commentary = try #require(record("commentary", run: run.runID, kind: "commentary", text: "Checking.\n", seq: 1).objectValue)
     commentary["openclawStreamFallback"] = .object(["itemId": .string("preamble-1"), "source": .string("segment")])
     var result = try #require(record("result", run: run.runID, kind: "result", seq: 3).objectValue)
@@ -217,9 +219,17 @@ struct OpenClawTranscriptRepairTests {
       record("final", run: run.runID, kind: "assistant", text: "Done.", seq: 4)
     ])]))
     try await db.synchronizeOpenClawHistory(conversationID: conversation, history: history)
+    let repaired = try await db.conversationHistoryPage(id: conversation, limit: 100, compactActivities: true,
+      activityCursor: beforeRepair.activityRevision, knownActivityRunIDs: [run.runID])
+    #expect(Set(repaired.removedActivityIDs) == ["\(run.runID):activity:\(hashID)", "\(run.runID):activity:\(run.runID):preamble-1"])
+    #expect(repaired.activities.first { $0.activity.id == nativeID }?.activity.status == "failed")
+    #expect(repaired.activities.contains { $0.activity.kind == .assistant && $0.activity.content == "Checking.\n" })
+    #expect(repaired.activities.allSatisfy { $0.activity.rawPayloadJSON == nil && $0.activity.rawOutputJSON == nil })
     let reopened = try await WorkspaceDatabase(url: url)
     try await reopened.synchronizeOpenClawHistory(conversationID: conversation, history: history)
     let page = try await reopened.conversationHistoryPage(id: conversation, limit: 100)
+    let compact = try await reopened.conversationHistoryPage(id: conversation, limit: 100, compactActivities: true)
+    assertSummaryParity(compact, page)
     let tools = page.activities.filter { $0.activity.kind == .tool }
     #expect(Set(tools.map { $0.activity.id }) == [nativeID, unmatched])
     let native = try #require(tools.first { $0.activity.id == nativeID })

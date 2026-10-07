@@ -5,6 +5,84 @@ import WovenMatterCore
 
 struct ACPHarnessStreamingReviewTests {
 
+  @Test("built-in replacement chunks are assembled before admission and preserve boundaries")
+  func builtInSnapshotWireReplay() async throws {
+    let fixture = try ACPHarnessFixture(kind: .defaultAgent,
+      initialize: #"{"protocolVersion":2}"#, session: #"{"sessionId":"snapshots"}"#, extras: [:], promptOverride: """
+        printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"text":"abc"}}}}'
+        printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"text":"x"},"_meta":{"wovenAssistantSnapshot":true,"wovenSnapshotStart":true,"wovenSnapshotEnd":false}}}}'
+        printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"text":"yz"},"_meta":{"wovenAssistantSnapshot":true,"wovenSnapshotStart":false,"wovenSnapshotEnd":true}}}}'
+        printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"agent_thought_chunk","content":{"text":"old thought"},"_meta":{"wovenThoughtID":"thought"}}}}'
+        printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"agent_thought_chunk","content":{"text":""},"_meta":{"wovenThoughtID":"thought","wovenThoughtSnapshot":true,"wovenSnapshotStart":true,"wovenSnapshotEnd":true}}}}'
+        printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"woven_assistant_boundary"}}}'
+        respond "$id" '{"stopReason":"end_turn"}'; continue
+        """)
+    defer { fixture.remove() }
+    let client = try fixture.client()
+    _ = try await client.initializeSession(workingDirectory: fixture.root, existingSessionID: nil,
+      title: nil, systemPrompt: nil)
+    let events = ACPReviewEvents()
+    #expect(try await client.prompt("Replay") { await events.record($0) } == .endTurn)
+    await client.shutdown()
+    let values = await events.values()
+    let snapshots = values.compactMap { event -> String? in
+      if case .assistantSnapshot(let text) = event { return text }; return nil
+    }
+    #expect(snapshots == ["xyz"])
+    #expect(values.contains { if case .assistantBoundary = $0 { return true }; return false })
+    let thoughts = values.compactMap { event -> AgentRunActivity? in
+      if case .activity(let activity, _) = event, activity.kind == .thought { return activity }; return nil
+    }
+    #expect(thoughts.count == 2)
+    #expect(thoughts.last?.content == "")
+    #expect(thoughts.last?.contentIsDelta == false)
+    #expect(thoughts.first?.merging(try #require(thoughts.last)).content == "")
+  }
+
+  @Test("wire plans replace, clear, and do not reappear on a later prompt", arguments: [false, true])
+  func planWireReplay(existingSession: Bool) async throws {
+    let fixture = try ACPHarnessFixture(kind: .codex,
+      initialize: #"{"protocolVersion":2,"agentCapabilities":{"loadSession":true}}"#,
+      session: #"{"sessionId":"plan-replay"}"#, extras: [:], promptOverride: """
+        case "$request" in
+          *'without-plan'*) respond "$id" '{"stopReason":"end_turn"}'; continue ;;
+        esac
+        printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"child-session","update":{"sessionUpdate":"plan","entries":[{"content":"Child only","status":"pending"}]}}}'
+        printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"plan-replay","update":{"sessionUpdate":"plan","entries":[{"content":"Inspect café 🧵","priority":"high","status":"completed"},{"content":"Verify","status":"in_progress"}]}}}'
+        printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"plan-replay","update":{"sessionUpdate":"plan","entries":[{"content":"Verify","status":"completed"}]}}}'
+        printf '%s\\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"plan-replay","update":{"sessionUpdate":"plan","entries":[]}}}'
+        respond "$id" '{"stopReason":"end_turn"}'
+        continue
+        """)
+    defer { fixture.remove() }
+    let client = try fixture.client()
+    _ = try await client.initializeSession(workingDirectory: fixture.root,
+      existingSessionID: existingSession ? "plan-replay" : nil, title: nil)
+    let events = ACPReviewEvents()
+    #expect(try await client.prompt("with-plan") { await events.record($0) } == .endTurn)
+    let laterEvents = ACPReviewEvents()
+    #expect(try await client.prompt("without-plan") { await laterEvents.record($0) } == .endTurn)
+    await client.shutdown()
+    let plans = await events.values().compactMap { event -> AgentRunActivity? in
+      guard case .activity(let activity, let appends) = event, activity.kind == .plan else { return nil }
+      #expect(!appends)
+      return activity
+    }
+    #expect(plans.count == 3)
+    #expect(Set(plans.map(\.id)) == ["plan"])
+    #expect(plans.first?.planEntries.map(\.content) == ["Inspect café 🧵", "Verify"])
+    #expect(plans.first?.planEntries.first?.priority == "high")
+    #expect(plans.first?.status == "running")
+    let initial = try #require(plans.first)
+    let replaced = initial.merging(try #require(plans.dropFirst().first))
+    #expect(replaced.planEntries == [.init(content: "Verify", status: "completed")])
+    #expect(replaced.status == "completed")
+    #expect(replaced.merging(try #require(plans.last)).planEntries.isEmpty)
+    #expect(await laterEvents.values().isEmpty)
+    let log = try fixture.log()
+    #expect(log.contains(existingSession ? "session/load" : "session/new"))
+  }
+
   @Test(arguments: [AgentRuntimeKind.codex, .claudeCode, .grokBuild, .cursor], [1, 2])
   func slashCommandsPreserveArgumentsAndReuseSessionAfterEmptyOrRejectedResults(kind: AgentRuntimeKind, protocolVersion: Int) async throws {
     let fixture = try ACPHarnessFixture(kind: kind, initialize: "{\"protocolVersion\":\(protocolVersion)}",

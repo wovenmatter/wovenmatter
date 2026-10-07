@@ -9,6 +9,10 @@ struct DashboardMessagePresentation: Sendable {
     let status: String?
     let createdAt: String
     let document: ConversationMarkdownDocument?
+    let activities: [WorkspaceRunActivityRecord]
+    let commentaryIDs: Set<String>
+    let workTimeline: ConversationWorkTimeline
+    let textDeliveredAt: Date
 }
 
 struct DashboardRunPresentation: Sendable {
@@ -268,10 +272,12 @@ struct DashboardConversationPresentation: Sendable {
 @Observable
 final class DashboardConversationState {
     let conversationID: String
+    let transcriptState = ConversationTranscriptState()
     private(set) var content: WorkspaceConversationContent?
     private(set) var messagePresentations: [String: DashboardMessagePresentation] = [:]
     private(set) var runPresentations: [String: DashboardRunPresentation] = [:]
     private(set) var runActivities: [WorkspaceRunActivityRecord] = []
+    private(set) var taskProgress: ConversationTaskProgress?
     private(set) var hasOlderMessages = false
     private(set) var isLoadingOlderMessages = false
     private(set) var error: String?
@@ -290,6 +296,11 @@ final class DashboardConversationState {
         messagePresentations = presentation.messagesByID
         runPresentations = presentation.runsByID
         runActivities = presentation.window.activities
+        let activeRun = presentation.window.runs.last { $0.status == "running" }
+        taskProgress = activeRun.flatMap {
+            ConversationTaskProgress.latest(in: presentation.window.activities, activeRunID: $0.id)
+        }
+        if taskProgress == nil { transcriptState.tasksExpanded = false }
         hasOlderMessages = presentation.window.hasOlderMessages
     }
 

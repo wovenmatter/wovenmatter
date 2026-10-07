@@ -9,7 +9,8 @@ import { createAssistantMessageEventStream } from '@earendil-works/pi-ai';
 import { defineExtension } from '@earendil-works/pi-durable';
 import { Type } from 'typebox';
 import { DefaultAgentEngine } from '../src/engine.mjs';
-import { Subagents } from '../src/subagents.mjs';
+import { ChildContext, Subagents } from '../src/subagents.mjs';
+import { checklistTool } from '../src/checklist.mjs';
 
 function stream(model, content, overrides = {}) {
   const result = { role: 'assistant', content, api: model.api, provider: model.provider, model: model.id, timestamp: Date.now(), stopReason: content.some(c => c.type === 'toolCall') ? 'toolUse' : 'stop', usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, ...overrides };
@@ -181,6 +182,166 @@ test('Stop cancels native bash children before uncertain effects can run', async
   assert.equal((await run).stopReason, 'cancelled');
   assert.ok(Date.now() - time < 2000);
   await assert.rejects(readFile(join(root, 'cancelled-marker')), { code: 'ENOENT' });
+});
+
+test('native final snapshots replace nonprefix streamed text instead of appending it', { timeout: 10000 }, async t => {
+  const { engine } = await fixture(t), record = await engine.create();
+  const updates = [];
+  let releasePartial;
+  const partialSeen = new Promise(resolve => { releasePartial = resolve; });
+  record.streamFunction = model => {
+    const events = createAssistantMessageEventStream();
+    void (async () => {
+      const partial = await stream(model, [{ type: 'text', text: 'abc' }]).result();
+      events.push({ type: 'start', partial });
+      await partialSeen; // Proves that Durable published the partial before the correction.
+      const message = { ...partial, content: [{ type: 'text', text: 'xyz 🧵' }] };
+      events.push({ type: 'done', reason: 'stop', message }); events.end(message);
+    })();
+    return events;
+  };
+  await engine.prompt(record, 'Fixture correction', update => {
+    updates.push(update);
+    if (update.sessionUpdate === 'agent_message_chunk' && update.content.text === 'abc') releasePartial();
+  });
+  let displayed = '';
+  for (const update of updates) if (update.sessionUpdate === 'agent_message_chunk') {
+    displayed = update._meta?.wovenAssistantSnapshot ? update.content.text : displayed + update.content.text;
+  }
+  assert.equal(displayed, 'xyz 🧵');
+  const snapshot = updates.find(update => update._meta?.wovenAssistantSnapshot);
+  assert.equal(snapshot._meta.wovenSnapshotStart, true);
+  assert.equal(snapshot._meta.wovenSnapshotEnd, true);
+  assert.equal(updates.filter(update => update.sessionUpdate === 'woven_assistant_boundary').length, 1);
+  assert.equal(record.session.messages.at(-1).content[0].text, displayed);
+  assert.ok((await record.history()).recordBatch.records.some(item => item.text?.includes('xyz 🧵')));
+});
+
+test('native snapshots preserve Unicode, block removal, thoughts and prior assistant boundaries', { timeout: 10000 }, async t => {
+  const { engine } = await fixture(t), record = await engine.create();
+  const updates = [], replacement = '🧵'.repeat(20000), prefix = 'Before tool.'.repeat(4000);
+  let calls = 0, releasePartial;
+  const partialSeen = new Promise(resolve => { releasePartial = resolve; });
+  record.streamFunction = model => {
+    if (++calls === 1) return stream(model, [{ type: 'text', text: prefix }, { type: 'toolCall', id: 'list', name: 'ls', arguments: {} }]);
+    const events = createAssistantMessageEventStream();
+    void (async () => {
+      const partial = await stream(model, [{ type: 'thinking', thinking: 'old thought' }, { type: 'text', text: 'old ' }, { type: 'text', text: 'removed' }]).result();
+      events.push({ type: 'start', partial });
+      await partialSeen;
+      const message = { ...partial, content: [{ type: 'thinking', thinking: replacement }, { type: 'text', text: replacement }] };
+      events.push({ type: 'done', reason: 'stop', message }); events.end(message);
+    })();
+    return events;
+  };
+  await engine.prompt(record, 'Fixture block replacement', update => {
+    updates.push(update);
+    if (update.sessionUpdate === 'agent_message_chunk' && update.content.text === 'old removed') releasePartial();
+  });
+  let displayed = '';
+  const thoughts = new Map(), boundaries = [];
+  const pending = new Map();
+  for (const update of updates) {
+    let content = update.content?.text;
+    if (update._meta?.wovenAssistantSnapshot || update._meta?.wovenThoughtSnapshot) {
+      const id = update._meta.wovenThoughtID ?? 'assistant';
+      if (update._meta.wovenSnapshotStart) pending.set(id, '');
+      assert.ok(pending.has(id));
+      pending.set(id, pending.get(id) + content);
+      if (!update._meta.wovenSnapshotEnd) continue;
+      content = pending.get(id); pending.delete(id);
+    }
+    if (update.sessionUpdate === 'agent_message_chunk') {
+      if (update._meta?.wovenAssistantSnapshot) {
+        assert.ok(content.startsWith(prefix)); // The full steering prefix survives chunking.
+        displayed = content;
+      } else displayed += content;
+    }
+    if (update.sessionUpdate === 'agent_thought_chunk') {
+      const id = update._meta.wovenThoughtID;
+      thoughts.set(id, update._meta.wovenThoughtSnapshot ? content : (thoughts.get(id) ?? '') + content);
+    }
+    if (update.sessionUpdate === 'woven_assistant_boundary') boundaries.push(displayed);
+  }
+  assert.equal(pending.size, 0);
+  assert.deepEqual(boundaries, [prefix, prefix + replacement]);
+  assert.deepEqual([...thoughts.values()], [replacement]);
+  assert.equal(updates.filter(update => update._meta?.wovenAssistantSnapshot && update._meta.wovenSnapshotEnd).length, 1);
+  assert.equal(updates.filter(update => update._meta?.wovenThoughtSnapshot && update._meta.wovenSnapshotEnd).length, 1);
+  record.streamFunction = model => stream(model, [{ type: 'text', text: '' }]);
+  const next = [];
+  await engine.prompt(record, 'New prompt', update => next.push(update));
+  assert.equal(next.filter(update => update.sessionUpdate === 'agent_message_chunk').length, 0);
+});
+
+for (const codeMode of ['off', 'only']) test(`native checklist is registered and successful (${codeMode})`, { timeout: 15000 }, async t => {
+  const { engine } = await fixture(t, { config: { providers: ['claude-subscription'], defaultModel: 'claude-subscription/sonnet', codeMode } });
+  const record = await engine.create(), updates = [];
+  const todos = [{ id: 'a', content: 'Same label', status: 'in_progress' }, { id: 'b', content: 'Same label', status: 'cancelled' }];
+  const writes = [todos, [todos[0], todos[0]], [{ ...todos[0], status: 'completed' }], []];
+  let calls = 0;
+  record.streamFunction = model => {
+    const index = calls++;
+    if (index === writes.length) return stream(model, [{ type: 'text', text: 'Done' }]);
+    const args = { todos: writes[index] };
+    return stream(model, [{ type: 'toolCall', id: `write-${index}`,
+      name: codeMode === 'only' ? 'codemode' : checklistTool.name,
+      arguments: codeMode === 'only' ? { code: `return await tools.update_checklist(${JSON.stringify(args)});` } : args }]);
+  };
+  await engine.prompt(record, 'Track work', update => updates.push(update));
+  const plans = updates.filter(update => update.sessionUpdate === 'plan');
+  assert.equal(plans.length, 3); // The failed duplicate-ID tool cannot mutate progress.
+  assert.deepEqual(plans[0].entries, todos);
+  assert.deepEqual(plans[1].entries, [{ ...todos[0], status: 'completed' }]);
+  assert.deepEqual(plans[2].entries, []);
+  assert.equal(plans[2]._meta.wovenPlanOperation, 'clear');
+  const results = updates.filter(update => update.sessionUpdate === 'tool_call_update' && ['completed', 'failed'].includes(update.status));
+  assert.ok(results.some(update => update.status === 'failed'));
+  assert.ok(results.length >= 4);
+  for (const plan of plans) assert.ok(updates.slice(0, updates.indexOf(plan)).some(update => update.sessionUpdate === 'tool_call_update'));
+  let cursor = 0, archived = [];
+  while (true) { const page = await record.history(cursor); archived.push(...page.recordBatch.records); if (!page.hasMore) break; cursor = page.nextAfter; }
+  // Codemode hides nested entries from model context; their complete native
+  // tool results must still be retained in the archive.
+  const messages = archived.map(item => JSON.parse(item.payload)).filter(item => item.type === 'entry')
+    .flatMap(item => item.value.model ?? []).filter(message => message.role === 'toolResult' && message.toolName === checklistTool.name);
+  assert.equal(messages.filter(message => !message.isError).length, 3);
+  const next = [];
+  record.streamFunction = model => stream(model, [{ type: 'text', text: 'New task' }]);
+  await engine.prompt(record, 'Fresh task', update => next.push(update));
+  assert.equal(next.filter(update => update.sessionUpdate === 'plan').length, 0);
+});
+
+test('native child checklist records stay in native capture without becoming root progress', async t => {
+  const { engine } = await fixture(t), record = await engine.create(), updates = [];
+  const unsubscribe = record.subscribe(value => { if (value.update) updates.push(value.update); });
+  t.after(unsubscribe);
+  // An inert native child transcript, with no input, worker or provider call.
+  const child = await record.harness.createConversation({ ownership: { kind: 'ownerless' }, init: async (tx, id) => {
+    Object.assign(await tx.doc(ChildContext, id), { parentConversationID: record.conversation.id, sessionID: randomUUID(), runID: randomUUID() });
+  } }, BACKGROUND_CONTEXT);
+  await child.commit(tx => tx.appendEntry(child.id, { kind: 'pi.tool', model: [{
+    role: 'toolResult', toolCallId: 'child-checklist', toolName: checklistTool.name, isError: false,
+    content: [{ type: 'text', text: 'child-only-checklist' }], details: { wovenChecklist: [{ id: 'child', content: 'Child work', status: 'completed' }] }, timestamp: Date.now(),
+  }], edits: [] }), BACKGROUND_CONTEXT);
+  await record.archiveQueue;
+  assert.equal(updates.filter(update => update.sessionUpdate === 'plan').length, 0);
+  const archived = (await record.history()).recordBatch.records.find(item => item.text === 'child-only-checklist');
+  assert.ok(archived);
+  assert.equal(JSON.parse(archived.projectionJSON).parentNativeConversationID, record.conversation.id);
+  assert.equal(JSON.parse(archived.projectionJSON).childID, String(child.id));
+});
+
+test('maximum native checklist fits presentation without losing IDs or statuses', async () => {
+  const { validateToolArguments } = await import('@earendil-works/pi-ai/utils/validation');
+  const { nativePresentationUpdates } = await import('../src/native-journal.mjs');
+  const todos = Array.from({ length: 32 }, (_, index) => ({ id: String(index) + '🧵'.repeat(128 - String(index).length), content: '🧵'.repeat(256), status: 'in_progress' }));
+  const input = validateToolArguments(checklistTool, { id: 'max', name: checklistTool.name, arguments: { todos } });
+  const result = await checklistTool.execute('max', input);
+  const update = { sessionUpdate: 'plan', entries: result.details.wovenChecklist,
+    _meta: { wovenPlanKind: 'checklist', wovenPlanOperation: 'replace' } };
+  assert.deepEqual([...nativePresentationUpdates(update)], [update]);
+  assert.throws(() => validateToolArguments(checklistTool, { id: 'oversized', name: checklistTool.name, arguments: { todos: [...todos, { ...todos[0], id: 'too-many' }] } }));
 });
 
 test('native CLI bindings advance when steering is consumed and preserve running shell snapshots', async t => {

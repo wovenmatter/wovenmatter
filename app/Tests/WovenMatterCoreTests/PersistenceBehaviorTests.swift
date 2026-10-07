@@ -204,7 +204,7 @@ struct PersistenceBehaviorTests {
   }
 }
 
-private struct PersistenceFixture {
+struct PersistenceFixture {
   let directory: URL
   var databaseURL: URL { directory.appending(path: "workspace.sqlite") }
 
@@ -216,7 +216,7 @@ private struct PersistenceFixture {
   func remove() { try? FileManager.default.removeItem(at: directory) }
 }
 
-private final class PersistenceSQL {
+final class PersistenceSQL {
   private let connection: OpaquePointer
 
   init(url: URL) throws {

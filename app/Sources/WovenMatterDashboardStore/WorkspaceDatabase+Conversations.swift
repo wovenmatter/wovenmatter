@@ -149,6 +149,7 @@ extension WorkspaceDatabaseConnection {
         AND conversation.id = ?
         AND conversation.deleted_at IS NULL
         AND conversation.is_archived = 0
+        AND NOT EXISTS (SELECT 1 FROM desktop_opencode_hidden_messages hidden WHERE hidden.message_id=message.id)
         AND conversation.governing_plane = 'wovenmatter_macos'
       ORDER BY message.created_at, message.id
       """,
@@ -234,6 +235,7 @@ extension WorkspaceDatabaseConnection {
             AND (conversation.user_id=? OR conversation.desktop_owned=1)
             AND conversation.deleted_at IS NULL AND conversation.is_archived=0
             AND conversation.governing_plane='wovenmatter_macos'
+            AND NOT EXISTS (SELECT 1 FROM desktop_opencode_hidden_messages hidden WHERE hidden.message_id=message.id)
           """)
         defer { sqlite3_finalize(metadata) }
         for (i, value) in [id, knownJSON, operatorID].enumerated() { try bind(value, at: Int32(i+1), to: metadata) }
@@ -288,6 +290,8 @@ extension WorkspaceDatabaseConnection {
           AND conversation.id = ?
           AND conversation.deleted_at IS NULL
           AND conversation.is_archived = 0
+          AND conversation.governing_plane='wovenmatter_macos'
+          AND NOT EXISTS (SELECT 1 FROM desktop_opencode_hidden_messages hidden WHERE hidden.message_id=message.id)
           \(cursorPredicate)
         ORDER BY message.created_at DESC, message.id DESC
         LIMIT \(boundedLimit + 1)
@@ -310,7 +314,14 @@ extension WorkspaceDatabaseConnection {
       var activityReadMetrics = ConversationActivityReadMetrics()
       if messageIDs.isEmpty {
         runs = []
-        activities = []
+        if compactActivities {
+          let page = try compactRunActivitiesUnlocked(conversationID: id,
+            runIDs: [], after: activityCursor, knownRunIDs: knownActivityRunIDs)
+          activities = page.records
+          activityRevision = page.revision
+          removedActivityIDs = page.removed
+          activityReadMetrics = page.metrics
+        } else { activities = [] }
         attachments = []
         references = []
       } else {

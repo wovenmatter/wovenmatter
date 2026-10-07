@@ -5,6 +5,56 @@ import WovenMatterCore
 
 struct HermesStreamingReviewTests {
 
+  @Test func successfulRootChecklistWritesKeepToolsAndDoNotLeakIntoNextRun() async throws {
+    let transport = HermesStreamingTransport()
+    let client = HermesGatewayClient(
+      launch: .init(runtimeKind: .hermes, executableURL: URL(filePath: "/fixture/hermes"), arguments: []),
+      transport: transport, home: "/tmp/hermes-checklist-review")
+    _ = try await client.initializeSession(workingDirectory: URL(filePath: "/tmp"),
+      existingSessionID: nil, title: nil, systemPrompt: nil)
+    let output = HermesStreamingEvents()
+    let turn = Task { try await client.prompt(.init(text: "fixture"), onEvent: { await output.record($0) },
+      onPermission: nil, onInteraction: nil) }
+    try await transport.waitForSubmit()
+    let todos: HermesValue = .array([["id": "a", "content": "Root work", "status": "in_progress"]])
+    var tool: HermesValue = ["tool_id": "write", "name": "todo_list", "args": ["todos": todos],
+      "result": ["todos": todos, "revision": .number(1)]]
+    await transport.event("tool.start", tool)
+    await transport.event("tool.complete", tool, sessionID: "child")
+    await transport.event("subagent.tool", tool)
+    await transport.event("tool.complete", tool)
+    var read = tool; read["tool_id"] = "read"; read["args"] = [:]
+    await transport.event("tool.complete", read)
+    var failed = tool; failed["tool_id"] = "failed"; failed["result"] = ["error": "Rejected"]
+    await transport.event("tool.complete", failed)
+    tool["tool_id"] = "clear"; tool["args"]["todos"] = .array([])
+    tool["result"] = ["todos": .array([]), "revision": .number(2)]
+    await transport.event("tool.complete", tool)
+    await transport.event("todo.updated", tool["result"])
+    var stale = read; stale["args"] = ["todos": todos]; stale["tool_id"] = "stale"
+    await transport.event("tool.complete", stale)
+    await transport.event("message.complete", ["text": "Done"])
+    #expect(try await turn.value == .endTurn)
+    let activities = await output.allEvents().compactMap { event -> AgentRunActivity? in
+      guard case .activity(let activity, _) = event else { return nil }; return activity
+    }
+    #expect(activities.map(\.kind) == [.tool, .tool, .plan, .tool, .tool, .tool, .plan, .tool])
+    #expect(activities.filter { $0.kind == .plan }.map(\.planOperation) == ["replace", "clear"])
+    #expect(activities.first { $0.id == "failed" }?.status == "failed")
+    #expect(activities.first { $0.id == "write" && $0.status == "completed" }?.rawOutputJSON != nil)
+    await transport.resetSubmission()
+    let nextOutput = HermesStreamingEvents()
+    let next = Task { try await client.prompt(.init(text: "another task"), onEvent: { await nextOutput.record($0) },
+      onPermission: nil, onInteraction: nil) }
+    try await transport.waitForSubmit()
+    await transport.event("tool.complete", read)
+    await transport.event("todo.updated", read["result"])
+    await transport.event("message.complete", ["text": "No new checklist"])
+    #expect(try await next.value == .endTurn)
+    #expect(await !nextOutput.allEvents().contains { if case .activity(let activity, _) = $0 { return activity.kind == .plan }; return false })
+    await client.shutdown()
+  }
+
   @Test(arguments: ["send", "skill", "prefill", "exec", "plugin"])
   func commandFeedbackIsPreservedWithoutBecomingAnAssistantReply(_ outcome: String) async throws {
     let transport = HermesStreamingTransport(commandResult: [
@@ -192,9 +242,9 @@ private actor HermesStreamingTransport: HermesGatewayTransport {
     default: return [:]
     }
   }
-  func event(_ type: String, _ payload: HermesValue) async {
+  func event(_ type: String, _ payload: HermesValue, sessionID: String = "live") async {
     sequence += 1
-    await handler?(["session_id": "live", "seq": .number(Double(sequence)),
+    await handler?(["session_id": .string(sessionID), "seq": .number(Double(sequence)),
                     "type": .string(type), "payload": payload])
   }
   func waitForSubmit() async throws {

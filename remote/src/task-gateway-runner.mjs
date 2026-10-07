@@ -73,7 +73,7 @@ export function createTaskExecutor({ catalog,workspaceRoot,environment,defaultAg
       if (config.permission === 'force') args.unshift('--force')
     }
     // Never lend a connected Mac session's identity/tool authority to a task.
-    const env = isolateTaskEnvironment(environment())
+    const env = isolateTaskEnvironment(environment(harness))
     const child = launch(harness.command,args,{cwd:directory,env,stdio:['pipe','pipe','pipe']})
     let count=0, sessionID, accepted=false, terminal=false, needsApproval=false, archive
     const pending = new Map()

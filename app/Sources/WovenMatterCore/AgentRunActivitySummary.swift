@@ -17,7 +17,9 @@ extension AgentRunActivity {
       position: position, locations: locations, changes: changes, planEntries: planEntries,
       subagents: nil,
       detailsAvailable: detailsAvailable == true || rawInputJSON != nil || rawOutputJSON != nil
-        || rawPayloadJSON != nil || subagents?.isEmpty == false || preview != content,
+        || rawPayloadJSON != nil || subagents?.isEmpty == false || preview != content
+        || title.map { String($0.prefix(280)) } != title
+        || detail.map { String($0.prefix(280)) } != detail,
       detailVersion: version ?? detailVersion,
       planKind: planKind, planOperation: planOperation)
   }

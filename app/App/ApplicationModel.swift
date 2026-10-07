@@ -1370,30 +1370,41 @@ final class ApplicationModel {
         result.reserveCapacity(messages.count)
         for message in messages {
             guard !Task.isCancelled else { return result }
-            // Older steering replies have no work disclosure of their own;
-            // retain their complete canonical text instead of hiding commentary.
-            let displayedBody = workRunsByReply[message.id].map { runID in
-                AssistantTranscriptProjection(messageID: message.id,
-                    content: message.content, activities: (activitiesByRun[runID] ?? []).map(\.activity)).body
-            } ?? message.content
-            if let existing = previous[message.id],
-               existing.source == message.content,
-               existing.displayedBody == displayedBody,
-               existing.status == message.status,
-               existing.createdAt == message.createdAt {
+            let work = workRunsByReply[message.id].map { activitiesByRun[$0] ?? [] } ?? []
+            if let existing = previous[message.id], existing.source == message.content,
+               existing.status == message.status, existing.createdAt == message.createdAt,
+               existing.activities == work {
                 result[message.id] = existing
                 continue
             }
+            // Earlier steering replies retain canonical text. Only the owning
+            // reply partitions commentary from the final/live response.
+            let transcript = AssistantTranscriptProjection(messageID: message.id,
+                content: message.content, activities: work.map(\.activity))
+            let now = Date()
+            let candidateBody = message.status == "streaming"
+                ? AssistantStreamingText.readyPrefix(of: transcript.body) : transcript.body
+            let existing = previous[message.id]
+            let coalescesAppend = message.status == "streaming"
+                && existing.map { candidateBody.hasPrefix($0.displayedBody)
+                    && !$0.displayedBody.isEmpty
+                    && now.timeIntervalSince($0.textDeliveredAt) < 0.4 } == true
+            let displayedBody = coalescesAppend ? existing!.displayedBody : candidateBody
+            let commentaryIDs = Set(transcript.commentary.map(\.id))
             result[message.id] = DashboardMessagePresentation(
                 source: message.content,
                 displayedBody: displayedBody,
                 status: message.status,
                 createdAt: message.createdAt,
-                document: message.role == "assistant"
+                document: displayedBody == existing?.displayedBody ? existing?.document : message.role == "assistant"
                     ? ConversationMarkdownDocument(
                         RemoteNoteEditEnvelope.redactingEnvelopes(in: displayedBody)
                     )
-                    : nil
+                    : nil,
+                activities: work,
+                commentaryIDs: commentaryIDs,
+                workTimeline: ConversationWorkTimeline(records: work, commentaryIDs: commentaryIDs),
+                textDeliveredAt: displayedBody == existing?.displayedBody ? existing!.textDeliveredAt : now
             )
         }
         return result

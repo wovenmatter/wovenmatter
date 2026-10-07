@@ -31,6 +31,8 @@ extension WorkspaceDatabaseConnection {
         CREATE TABLE IF NOT EXISTS desktop_activity_index_schema(version INTEGER PRIMARY KEY);
         CREATE TABLE IF NOT EXISTS desktop_message_revisions (
           id TEXT PRIMARY KEY, revision INTEGER NOT NULL);
+        CREATE TABLE IF NOT EXISTS desktop_opencode_hidden_messages (
+          message_id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL);
         """)
       // Reconciliation may replace a completed message or remove an earlier
       // steering reply. Track mutations without copying its potentially large text.
@@ -58,8 +60,8 @@ extension WorkspaceDatabaseConnection {
         for operation in ["INSERT", "UPDATE"] {
           let condition = operation == "UPDATE"
             ? (kind == "event"
-              ? "WHEN old.content IS NOT new.content OR old.event_type IS NOT new.event_type OR old.run_id IS NOT new.run_id OR old.conversation_id IS NOT new.conversation_id"
-              : "WHEN old.raw_event_json IS NOT new.raw_event_json OR old.content IS NOT new.content OR old.is_visible IS NOT new.is_visible OR old.event_type IS NOT new.event_type OR old.event_name IS NOT new.event_name OR old.event_phase IS NOT new.event_phase OR old.tool_name IS NOT new.tool_name OR old.run_id IS NOT new.run_id OR old.conversation_id IS NOT new.conversation_id")
+              ? "WHEN old.content IS NOT new.content OR old.event_type IS NOT new.event_type OR old.run_id IS NOT new.run_id OR old.conversation_id IS NOT new.conversation_id OR old.created_at IS NOT new.created_at"
+              : "WHEN old.raw_event_json IS NOT new.raw_event_json OR old.content IS NOT new.content OR old.is_visible IS NOT new.is_visible OR old.event_type IS NOT new.event_type OR old.event_name IS NOT new.event_name OR old.event_phase IS NOT new.event_phase OR old.tool_name IS NOT new.tool_name OR old.run_id IS NOT new.run_id OR old.conversation_id IS NOT new.conversation_id OR old.created_at IS NOT new.created_at")
             : ""
           try executeUnlocked("""
             CREATE TRIGGER IF NOT EXISTS activity_index_\(kind)_\(operation.lowercased()) AFTER \(operation) ON \(table) \(condition) BEGIN

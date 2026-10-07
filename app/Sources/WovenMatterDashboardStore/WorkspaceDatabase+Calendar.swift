@@ -608,9 +608,16 @@ extension WorkspaceDatabaseConnection {
       // session above makes the existing synchronization path fetch its history.
       if configuration.runtimeKind != .opencode {
         var response = ""
+        var responseAssembly = NativeTextSnapshotAssembler()
         try forEachRemoteCalendarUpdateUnlocked(receiptID: receiptID, workspaceID: workspaceID, conversationID: run.sessionID) { update in
           guard update.objectValue?["sessionUpdate"]?.stringValue == "agent_message_chunk" else { return }
-          response += update.objectValue?["content"]?.objectValue?["text"]?.stringValue ?? ""
+          let text = update.objectValue?["content"]?.objectValue?["text"]?.stringValue ?? ""
+          let meta = update.objectValue?["_meta"]?.objectValue
+          if configuration.runtimeKind == .defaultAgent, meta?["wovenAssistantSnapshot"]?.boolValue == true {
+            if let complete = responseAssembly.receive(text,
+                starts: meta?["wovenSnapshotStart"]?.boolValue == true,
+                ends: meta?["wovenSnapshotEnd"]?.boolValue == true) { response = complete }
+          } else { response += text }
         }
         // The execution host already assigned the stable Woven run identity.
         let runID = run.id
@@ -636,17 +643,55 @@ extension WorkspaceDatabaseConnection {
         try toolsExecuteUnlocked("UPDATE dashboard_runs SET status='running' WHERE id=?", [runID])
         var thoughtSequence = 0
         var activeThought: String?
+        var thoughtAssemblies: [String: NativeTextSnapshotAssembler] = [:]
+        var assistantAssembly = NativeTextSnapshotAssembler()
+        var assistantPrefix = "", frozenPrefix = ""
+        var boundarySequence = 0
         try forEachRemoteCalendarUpdateUnlocked(receiptID: receiptID, workspaceID: workspaceID, conversationID: run.sessionID) { value in
           guard let object = value.objectValue, let kind = object["sessionUpdate"]?.stringValue else { return }
           let raw = try toolsJSON(value)
           var activity: AgentRunActivity?
           var appending = false
+          let meta = object["_meta"]?.objectValue
+          if kind == "agent_message_chunk" {
+            let text = object["content"]?.objectValue?["text"]?.stringValue ?? ""
+            if configuration.runtimeKind == .defaultAgent, meta?["wovenAssistantSnapshot"]?.boolValue == true {
+              if let complete = assistantAssembly.receive(text,
+                  starts: meta?["wovenSnapshotStart"]?.boolValue == true,
+                  ends: meta?["wovenSnapshotEnd"]?.boolValue == true) { assistantPrefix = complete }
+            } else { assistantPrefix += text }
+            activeThought = nil
+            return
+          }
+          if assistantPrefix != frozenPrefix, !assistantPrefix.isEmpty,
+             ["agent_thought_chunk", "tool_call", "plan", "woven_assistant_boundary"].contains(kind) {
+            let segment = assistantPrefix.hasPrefix(frozenPrefix)
+              ? String(assistantPrefix.dropFirst(frozenPrefix.count)) : assistantPrefix
+            boundarySequence += 1
+            try upsertDeviceOwnedRunActivityUnlocked(runID: runID,
+              activity: .init(id: "calendar-assistant-\(boundarySequence)", kind: .assistant,
+                phase: "commentary", content: segment, assistantMessageID: assistantID,
+                assistantCheckpoint: AssistantTextCheckpoint(assistantPrefix)), appendingContent: false, updatedAt: completedAt)
+            frozenPrefix = assistantPrefix
+          }
           if kind == "agent_thought_chunk" {
             if activeThought == nil { thoughtSequence += 1; activeThought = "thought-\(thoughtSequence)" }
             let id = object["_meta"]?.objectValue?["wovenThoughtID"]?.stringValue ?? activeThought!
-            activity = .init(id: id, kind: .thought, title: "Thinking", status: "completed",
-              content: object["content"]?.objectValue?["text"]?.stringValue, contentIsDelta: true, rawPayloadJSON: raw)
-            appending = true
+            let text = object["content"]?.objectValue?["text"]?.stringValue ?? ""
+            if configuration.runtimeKind == .defaultAgent, meta?["wovenThoughtSnapshot"]?.boolValue == true {
+              var assembly = thoughtAssemblies[id] ?? NativeTextSnapshotAssembler()
+              let complete = assembly.receive(text, starts: meta?["wovenSnapshotStart"]?.boolValue == true,
+                ends: meta?["wovenSnapshotEnd"]?.boolValue == true)
+              thoughtAssemblies[id] = assembly
+              guard let complete else { return }
+              thoughtAssemblies.removeValue(forKey: id)
+              activity = .init(id: id, kind: .thought, title: "Thinking", status: "completed",
+                content: complete, contentIsDelta: false, rawPayloadJSON: raw)
+            } else {
+              activity = .init(id: id, kind: .thought, title: "Thinking", status: "completed",
+                content: text, contentIsDelta: true, rawPayloadJSON: raw)
+              appending = true
+            }
           } else {
             activeThought = nil
             if kind == "woven_subagents", configuration.runtimeKind == .defaultAgent {

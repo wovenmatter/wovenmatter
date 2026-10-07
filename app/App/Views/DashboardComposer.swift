@@ -53,6 +53,9 @@ struct DashboardComposer: View {
     let onSend: () -> Void
     @Environment(\.dashboardTheme) private var theme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.conversationTaskProgress) private var taskProgress
+    @Environment(\.conversationTranscriptState) private var transcriptState
+    @State private var localTasksExpanded = false
     @State private var selectedSlashCommandID: String?
     @State private var slashCommandsDismissed = false
     @State private var slashNavigationRequest = 0
@@ -177,6 +180,13 @@ struct DashboardComposer: View {
                     focused = true
                 }
         }
+        .conversationTasksBadge(taskProgress, isExpanded: Binding(
+            get: { transcriptState?.tasksExpanded ?? localTasksExpanded },
+            set: { if let transcriptState { transcriptState.tasksExpanded = $0 } else { localTasksExpanded = $0 } }
+        ), onInteraction: {
+            onActivate()
+            focused = true
+        })
         .background {
             DashboardComposerClickAwayMonitor(isActive: focused || openMenu != nil) {
                 focused = false

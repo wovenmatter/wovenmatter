@@ -113,7 +113,9 @@ public enum LocalACPRuntimeCatalog {
     ) -> [String: String] {
         switch runtimeKind {
         case .codex:
-            ["CODEX_CONFIG": #"{"approvals_reviewer":"auto_review"}"#]
+            // codex-acp passes these overrides through createSessionConfig on
+            // thread/start and thread/resume (including ACP session/load).
+            ["CODEX_CONFIG": #"{"approvals_reviewer":"auto_review","tools.update_plan.enabled":true}"#]
         default:
             [:]
         }

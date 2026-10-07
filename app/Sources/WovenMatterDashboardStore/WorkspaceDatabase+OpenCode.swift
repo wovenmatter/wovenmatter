@@ -53,6 +53,38 @@ extension WorkspaceDatabaseConnection {
   }
 
   func saveOpenCodeSnapshotUnlocked(_ snapshot: OpenCodeSessionSnapshot, conversationID: String, fallbackTitle: String) throws {
+      let previous = try openCodeSnapshot(conversationID: conversationID)
+      let nativeIDs = Set(snapshot.messages.map { $0["id"].text })
+      // A paged tail cannot hide unloaded history. Reconcile only the old
+      // suffix covered by the new tail, or all previously visible messages
+      // when the service reports that history starts here. Captured rows and
+      // native archives remain intact; a later snapshot can restore visibility.
+      let covered: [OpenCodeValue]
+      if snapshot.olderCursor == nil { covered = previous?.messages ?? [] }
+      else if let old = previous?.messages,
+              let anchor = old.firstIndex(where: { nativeIDs.contains($0["id"].text) }) {
+        covered = Array(old[anchor...])
+      } else { covered = [] }
+      for removed in covered where !nativeIDs.contains(removed["id"].text) {
+        let messageID = "opencode:\(conversationID):\(removed["id"].text)"
+        let hide = try prepareUnlocked("INSERT OR IGNORE INTO desktop_opencode_hidden_messages VALUES(?,?)")
+        defer { sqlite3_finalize(hide) }
+        try bind(messageID, at: 1, to: hide); try bind(conversationID, at: 2, to: hide); try stepDone(hide)
+        try executeUnlocked("UPDATE desktop_activity_revision SET revision=revision+1 WHERE singleton=1")
+        let invalidate = try prepareUnlocked("""
+          UPDATE desktop_activity_index SET deleted=1,revision=(SELECT revision FROM desktop_activity_revision WHERE singleton=1)
+          WHERE run_id=? AND conversation_id=?
+          """)
+        defer { sqlite3_finalize(invalidate) }
+        try bind(messageID + ":run", at: 1, to: invalidate)
+        try bind(conversationID, at: 2, to: invalidate); try stepDone(invalidate)
+      }
+      for nativeID in nativeIDs {
+        let show = try prepareUnlocked("DELETE FROM desktop_opencode_hidden_messages WHERE message_id=? AND conversation_id=?")
+        defer { sqlite3_finalize(show) }
+        try bind("opencode:\(conversationID):\(nativeID)", at: 1, to: show)
+        try bind(conversationID, at: 2, to: show); try stepDone(show)
+      }
       let now = Self.timestamp(Date())
       let json = String(decoding: try JSONEncoder().encode(snapshot), as: UTF8.self)
       let state = try prepareUnlocked("UPDATE desktop_opencode_sessions SET snapshot_json = ? WHERE conversation_id = ?")

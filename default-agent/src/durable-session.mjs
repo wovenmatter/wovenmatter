@@ -14,6 +14,7 @@ import { DefaultAgentError, accessFailure, operationErrorMessage, readJSON, writ
 import { ProviderCompactionError } from './provider-compaction.mjs';
 import { providerFetch } from './transport.mjs';
 import { searchTools } from './search.mjs';
+import { checklistTool } from './checklist.mjs';
 import { openNativeArchive, nativePresentationUpdates } from './native-journal.mjs';
 import { NativeContext, contextOverflowDiagnostic, credentialRouteIdentity, nativeContextBridge, safeAssistantDiagnostic } from './native-context.mjs';
 import { createNativeCompactionRegistry } from './native-compaction-registry.mjs';
@@ -50,7 +51,7 @@ export async function openDurableSession(engine, id, requested) {
     const archiveStore = await openNativeArchive(archivePath);
     const archiveIDs = archiveStore.identities;
     const pendingArchiveIDs = new Set();
-    record = { cli: new SessionCLIContext(), cwd, busy: false, permission: 'full', ordinaryTools: ['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls', 'web_search', 'web_read'], codeModeState: { value: engine.config.codeMode }, archivePath, manifest, lockError: ownerError, archiveQueue: Promise.resolve(), emit: undefined };
+    record = { cli: new SessionCLIContext(), cwd, busy: false, permission: 'full', ordinaryTools: ['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls', 'web_search', 'web_read', checklistTool.name], codeModeState: { value: engine.config.codeMode }, archivePath, manifest, lockError: ownerError, archiveQueue: Promise.resolve(), emit: undefined };
     const batch = records => ({ schemaVersion: 1, sourceID: `builtin-pi-durable:${manifest.storeID}`, nativeSessionID: sessionID, records });
     record.nativeRoot = root;
     record.nativeContext = context;
@@ -199,14 +200,26 @@ export async function openDurableSession(engine, id, requested) {
     const options = await harness.snapshot(Options, conversation.id, context) ?? {};
     record.selected = options.selected; record.options = options; record.subagentConcurrency = options.subagentConcurrency ?? engine.config.subagentConcurrency;
     const listeners = new Set();
-    const send = update => { for (const presentation of nativePresentationUpdates(update)) for (const listener of listeners) listener({ update: presentation }); };
+    const send = update => {
+      let offset = 0;
+      for (const presentation of nativePresentationUpdates(update)) {
+        // Reassemble a snapshot before projecting it. A partial replacement
+        // cannot pass the coordinator's cumulative steering-prefix fence.
+        if (update._meta?.wovenAssistantSnapshot || update._meta?.wovenThoughtSnapshot) {
+          const start = offset === 0;
+          offset += presentation.content.text.length;
+          presentation._meta = { ...presentation._meta, wovenSnapshotStart: start, wovenSnapshotEnd: offset === update.content.text.length };
+        }
+        for (const listener of listeners) listener({ update: presentation });
+      }
+    };
     const settingsManager = SettingsManager.inMemory({ retry: { enabled: false }, compaction: { enabled: true } });
     const loader = new DefaultResourceLoader({ cwd, agentDir: engine.directory, settingsManager, noExtensions: true, noThemes: true });
     await loader.reload();
     let codemode;
-    const tools = [...createCodingTools(cwd), createGrepTool(cwd), createFindTool(cwd), createLsTool(cwd), ...searchTools(async () => (await engine.credentials.read('exa'))?.key)];
+    const tools = [...createCodingTools(cwd), createGrepTool(cwd), createFindTool(cwd), createLsTool(cwd), ...searchTools(async () => (await engine.credentials.read('exa'))?.key), checklistTool];
     createCodemodeExtension({ models: false })( { registerTool: tool => { codemode = tool; }, getSettings: () => ({ codemode: { mode: (toolScopes.getStore() ?? record).codeModeState.value } }), getAllTools: () => tools, appendEntry: (customType, data) => { toolScopes.getStore().pendingStoreWrites.push({ customType, data }); } });
-    const adapted = tools.map(tool => ({ ...tool, replay: ['read', 'grep', 'find', 'ls', 'web_search', 'web_read'].includes(tool.name) ? 'safe' : 'unsafe', execute: async (args, api, ctx) => {
+    const adapted = tools.map(tool => ({ ...tool, replay: ['read', 'grep', 'find', 'ls', 'web_search', 'web_read', checklistTool.name].includes(tool.name) ? 'safe' : 'unsafe', execute: async (args, api, ctx) => {
       const scope = await scopeFor(api.conversationId);
       const env = scope.cli.environment(process.env);
       for (const key of ['PI_SESSION_FILE', 'PI_SESSION_ID', 'PI_PROVIDER', 'PI_MODEL', 'PI_REASONING_LEVEL']) delete env[key];
@@ -345,6 +358,9 @@ export async function openDurableSession(engine, id, requested) {
         await record.configurationQueue;
         if (!record.accountID) record.accountID = engine.credentials.context.getStore()?.id ?? (await engine.credentials.candidates(record.selected?.split('/')[0]))[0]?.id;
         engine.sessions.get(sessionID)?.promptController?.signal.throwIfAborted();
+        // Steering stays in the same cumulative stream. The coordinator's
+        // existing admission fence owns which reply receives its suffix.
+        if (opts.streamingBehavior !== 'steer') { completedAssistantText = ''; blocks = new Map(); messageOpen = false; }
         const logicalID = opts.requestId ?? record.inputID ?? randomUUID();
         record.userInstructions = [typeof content === 'string' ? content : textOf([{ content }])];
         if (opts.streamingBehavior !== 'steer') await record.subagents.beginGroup(record.runID);
@@ -397,25 +413,49 @@ export async function openDurableSession(engine, id, requested) {
     eventStream = await watchEvents(harness, conversation.id, context);
     void eventStream.closed.then(() => { record.eventClosed = true; });
     const knownEntries = new Set(eventStream.snapshot.entries.map(e => e.id));
-    let blockText = new Map(), messageOpen = false, messageSequence = 0;
-    const reconcileBlock = (block, index) => {
-      if (block.type !== 'text' && block.type !== 'thinking') return;
-      const value = block.text ?? block.thinking ?? '';
-      const previous = blockText.get(index) ?? '';
-      if (value === previous) return;
-      blockText.set(index, value);
-      const delta = value.startsWith(previous) ? value.slice(previous.length) : value;
-      send({ sessionUpdate: block.type === 'text' ? 'agent_message_chunk' : 'agent_thought_chunk', content: { type: 'text', text: delta }, ...(block.type === 'thinking' ? { _meta: { wovenThoughtID: `built-in-${messageSequence}-${index}` } } : {}) });
+    let blocks = new Map(), completedAssistantText = '', messageOpen = false, messageSequence = 0;
+    const visibleText = value => [...value].sort(([a], [b]) => a - b).map(([, block]) => block.type === 'text' ? block.text : '').join('');
+    const reconcileBlocks = next => {
+      const previousText = visibleText(blocks), text = visibleText(next);
+      for (const index of new Set([...blocks.keys(), ...next.keys()])) {
+        const previous = blocks.get(index)?.type === 'thinking' ? blocks.get(index).thinking : '';
+        const value = next.get(index)?.type === 'thinking' ? next.get(index).thinking : '';
+        if (value === previous) continue;
+        const replaces = !value.startsWith(previous);
+        send({ sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: replaces ? value : value.slice(previous.length) },
+          _meta: { wovenThoughtID: `built-in-${messageSequence}-${index}`, ...(replaces ? { wovenThoughtSnapshot: true } : {}) } });
+      }
+      blocks = next;
+      if (text === previousText) return;
+      const replaces = !text.startsWith(previousText);
+      send({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: replaces ? completedAssistantText + text : text.slice(previousText.length) },
+        ...(replaces ? { _meta: { wovenAssistantSnapshot: true } } : {}) });
     };
-    const beginMessage = () => { blockText = new Map(); messageOpen = true; messageSequence++; };
-    const reconcileMessage = message => { if (message.role !== 'assistant') return; if (!messageOpen) beginMessage(); for (const [index, block] of message.content.entries()) reconcileBlock(block, index); };
+    const reconcileBlock = (block, index) => { const next = new Map(blocks); next.set(index, block); reconcileBlocks(next); };
+    const beginMessage = () => { blocks = new Map(); messageOpen = true; messageSequence++; };
+    const reconcileMessage = message => {
+      if (message.role !== 'assistant') return;
+      if (!messageOpen) beginMessage();
+      reconcileBlocks(new Map(message.content.map((block, index) => [index, block])));
+    };
     const endEntry = entry => {
       knownEntries.add(entry.id);
       for (const message of entry.model ?? []) {
         reconcileMessage(message);
-        if (message.role === 'assistant') { if (message.stopReason === 'error') record.lastError = message.errorMessage; if (message.usage) for (const listener of listeners) listener({ usage: message.usage }); }
+        if (message.role === 'assistant') {
+          if (message.stopReason === 'error') record.lastError = message.errorMessage;
+          if (message.usage) for (const listener of listeners) listener({ usage: message.usage });
+          completedAssistantText += visibleText(blocks);
+          send({ sessionUpdate: 'woven_assistant_boundary' });
+          messageOpen = false;
+        }
+        // watchEvents is scoped to the root conversation. Child results remain
+        // in their native archive/subagent activity and cannot update this plan.
+        if (message.role === 'toolResult' && message.toolName === checklistTool.name && message.isError === false && Array.isArray(message.details?.wovenChecklist)) {
+          const entries = message.details.wovenChecklist;
+          send({ sessionUpdate: 'plan', entries, _meta: { wovenPlanKind: 'checklist', wovenPlanOperation: entries.length ? 'replace' : 'clear' } });
+        }
       }
-      messageOpen = false;
     };
     eventStream.start(async events => {
       for (const event of events) {
@@ -423,13 +463,16 @@ export async function openDurableSession(engine, id, requested) {
         else if (event.type === 'message_update') for (const change of event.changes) {
           if (change.type === 'message') reconcileMessage(change.message);
           else if (change.block) reconcileBlock(change.block, change.contentIndex);
-          else if (change.type === 'text_delta' || change.type === 'thinking_delta') reconcileBlock({ type: change.type === 'text_delta' ? 'text' : 'thinking', [change.type === 'text_delta' ? 'text' : 'thinking']: (blockText.get(change.contentIndex) ?? '') + change.delta }, change.contentIndex);
+          else if (change.type === 'text_delta' || change.type === 'thinking_delta') {
+            const type = change.type === 'text_delta' ? 'text' : 'thinking';
+            reconcileBlock({ type, [type]: (blocks.get(change.contentIndex)?.[type] ?? '') + change.delta }, change.contentIndex);
+          }
         }
         else if (event.type === 'message_end') endEntry(event.entry);
         else if (event.type === 'snapshot') { for (const entry of event.entries) if (!knownEntries.has(entry.id)) endEntry(entry); if (event.generation?.message) reconcileMessage(event.generation.message); }
         else if (event.type === 'tool_execution_start') send({ sessionUpdate: 'tool_call', toolCallId: event.toolCallId, title: event.toolName, kind: event.toolName === 'bash' ? 'execute' : 'other', status: 'in_progress', rawInput: event.args });
         else if (event.type === 'tool_execution_update') send({ sessionUpdate: 'tool_call_update', toolCallId: event.toolCallId, status: 'in_progress', rawOutput: event });
-        else if (event.type === 'tool_execution_end') { const message = event.entry?.model?.[0]; send({ sessionUpdate: 'tool_call_update', toolCallId: event.toolCallId, status: message?.isError ? 'failed' : 'completed', content: (message?.content ?? []).map(content => ({ type: 'content', content })) }); }
+        else if (event.type === 'tool_execution_end') { const message = event.entry?.model?.[0]; send({ sessionUpdate: 'tool_call_update', toolCallId: event.toolCallId, status: !message || message.isError ? 'failed' : 'completed', content: (message?.content ?? []).map(content => ({ type: 'content', content })) }); }
       }
     });
     record.contextLeaf = async () => (await conversation.context(context)).entries.at(-1)?.id;

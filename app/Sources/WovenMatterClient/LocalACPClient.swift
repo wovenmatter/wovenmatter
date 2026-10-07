@@ -690,6 +690,8 @@ public actor LocalACPClient {
     // separates reasoning phases so distinct commentary is not merged.
     private var reasoningPhaseSequence = 0
     private var activeReasoningPhaseID: String?
+    private var assistantSnapshotAssembly = NativeTextSnapshotAssembler()
+    private var thoughtSnapshotAssemblies: [String: NativeTextSnapshotAssembler] = [:]
     private let cliConnection: AgentCLIContext?
     private var closed = false
     private var shutdownTask: Task<Void, Never>?
@@ -1502,6 +1504,8 @@ public actor LocalACPClient {
     public func finishRun() {
         retainedRunHandlers = nil
         activePrompts.removeAll()
+        assistantSnapshotAssembly.reset()
+        thoughtSnapshotAssemblies.removeAll()
     }
 
     private func promptRequestFinished(_ id: UUID) {
@@ -2576,6 +2580,13 @@ public actor LocalACPClient {
             return .activity(activity, appendsContent: false)
         case "agent_message_chunk":
             activeReasoningPhaseID = nil
+            if runtimeKind == .defaultAgent, update["_meta"]?["wovenAssistantSnapshot"]?.boolValue == true {
+                guard let text = update["content"]?["text"]?.stringValue,
+                      let complete = assistantSnapshotAssembly.receive(text,
+                        starts: update["_meta"]?["wovenSnapshotStart"]?.boolValue == true,
+                        ends: update["_meta"]?["wovenSnapshotEnd"]?.boolValue == true) else { return nil }
+                return .assistantSnapshot(complete)
+            }
             if let text = update["content"]?["text"]?.stringValue { return .assistantChunk(text) }
             guard let block = update["content"] else { return nil }
             let resource = block["resource"] ?? block
@@ -2590,6 +2601,10 @@ public actor LocalACPClient {
                 ?? (source.isEmpty ? (mime?.hasPrefix("image/") == true ? "Image" : "Attachment") : URL(string: source)?.lastPathComponent ?? "Attachment")
             return .assistantAsset(LibraryAsset(source: source, title: name,
                 kind: LibraryLinkDiscovery.kind(source: source, mimeType: mime), mimeType: mime, data: data))
+        case "woven_assistant_boundary":
+            guard runtimeKind == .defaultAgent else { return nil }
+            activeReasoningPhaseID = nil
+            return .assistantBoundary
         case "agent_thought_chunk":
             guard let text = update["content"]?["text"]?.stringValue else { return nil }
             let reasoningID: String
@@ -2602,6 +2617,18 @@ public actor LocalACPClient {
                 reasoningPhaseSequence += 1
                 reasoningID = "thought-\(reasoningPhaseSequence)"
                 activeReasoningPhaseID = reasoningID
+            }
+            if runtimeKind == .defaultAgent, update["_meta"]?["wovenThoughtSnapshot"]?.boolValue == true {
+                var assembly = thoughtSnapshotAssemblies[reasoningID] ?? NativeTextSnapshotAssembler()
+                let complete = assembly.receive(text,
+                    starts: update["_meta"]?["wovenSnapshotStart"]?.boolValue == true,
+                    ends: update["_meta"]?["wovenSnapshotEnd"]?.boolValue == true)
+                thoughtSnapshotAssemblies[reasoningID] = assembly
+                guard let complete else { return nil }
+                thoughtSnapshotAssemblies.removeValue(forKey: reasoningID)
+                return .activity(AgentRunActivity(id: reasoningID, kind: .thought, phase: "update",
+                    title: "Thinking", status: "running", content: complete, contentIsDelta: false,
+                    rawPayloadJSON: Self.jsonString(update)), appendsContent: false)
             }
             return .activity(
                 AgentRunActivity(
@@ -2660,7 +2687,7 @@ public actor LocalACPClient {
 
     private static func cursorTodoEvent(from envelope: ACPEnvelope) -> LocalACPEvent? {
         guard let params = envelope.params,
-              let toolCallID = params["toolCallId"]?.stringValue,
+              params["toolCallId"]?.stringValue != nil,
               let merge = params["merge"]?.boolValue,
               let rawTodos = params["todos"]?.arrayValue else { return nil }
         let entries = rawTodos.compactMap(cursorPlanEntry)

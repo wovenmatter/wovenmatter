@@ -235,7 +235,9 @@ struct DashboardCloudConversation: View {
                                                         fileName: attachment.fileName, mimeType: attachment.mimeType)
                                                 },
                                                 layout: fragment.layout,
-                                                displayedBody: presentation?.displayedBody
+                                                displayedBody: presentation?.displayedBody,
+                                                commentaryIDs: presentation?.commentaryIDs,
+                                                workTimeline: presentation?.workTimeline
                                             )
                                         }
                                     }
@@ -271,6 +273,11 @@ struct DashboardCloudConversation: View {
                     pendingBottomConversationID = nil
                     scrollPositionID = nil
                     scrollState.setNearBottom(false)
+                }
+                .environment(\.conversationActivityDetails) { runID, activityID in
+                    guard let conversationID = conversation?.id, let store = model.dashboardStore else { return nil }
+                    return try await store.database.conversationActivityDetails(
+                        conversationID: conversationID, runID: runID, activityID: activityID)
                 }
                 .defaultScrollAnchor(.bottom, for: .initialOffset)
                 .defaultScrollAnchor(.top, for: .sizeChanges)
@@ -325,6 +332,7 @@ struct DashboardCloudConversation: View {
                     draft = draft.isEmpty ? text : draft + "\n" + text
                 }
                 .onChange(of: conversation?.id, initial: true) { _, conversationID in
+                    conversationState?.transcriptState.tasksExpanded = false
                     model.agentTools?.observeSessionFromUI(conversationID, token: toolObservationToken)
                     isUserScrolling = false
                     transcriptOwnsScroll = model.libraryMessageTarget?.conversationID == conversationID
@@ -623,6 +631,11 @@ struct DashboardCloudConversation: View {
             .padding(.bottom, ConversationBottomOverlayLayout.bottomOffset)
         }
         .background(theme.palette.workspace)
+        .environment(\.conversationTranscriptState, conversationState?.transcriptState)
+        .environment(\.conversationTaskProgress, localPermission == nil && localInteraction == nil
+            ? conversationState?.taskProgress : nil)
+        .onChange(of: localPermission?.id) { _, _ in conversationState?.transcriptState.tasksExpanded = false }
+        .onChange(of: localInteraction?.id) { _, _ in conversationState?.transcriptState.tasksExpanded = false }
         .alert("Could not open attachment", isPresented: Binding(
             get: { attachmentOpenError != nil },
             set: { if !$0 { attachmentOpenError = nil } }
@@ -1107,6 +1120,8 @@ struct DashboardMessageRow: View {
     let onOpenAttachment: (WorkspaceMessageAttachmentRecord) -> Void
     var layout: ConversationMessageLayout.Row? = nil
     var displayedBody: String? = nil
+    var commentaryIDs: Set<String>? = nil
+    var workTimeline: ConversationWorkTimeline? = nil
 
     private var assistantBody: String { displayedBody ?? transcript.body }
 
@@ -1129,9 +1144,7 @@ struct DashboardMessageRow: View {
                 ConversationChangedFilesCard(records: activities, topSpacing: {
                     if showsAssistantBody { return 18 }
                     guard let run else { return 0 }
-                    return ConversationWorkTranscript.hasVisibleContent(
-                        run: run, in: activities, commentaryIDs: Set(transcript.commentary.map(\.id))
-                    ) ? 18 : 0
+                    return ConversationWorkTranscript.hasVisibleContent(run: run, timeline: projectedTimeline) ? 18 : 0
                 })
                 .frame(maxWidth: .infinity, alignment: .leading)
                 Spacer(minLength: 0)
@@ -1147,8 +1160,9 @@ struct DashboardMessageRow: View {
                             run: run,
                             presentation: runPresentation,
                             records: activities,
-                            commentaryIDs: Set(transcript.commentary.map(\.id)),
-                            hasFinalReply: !assistantBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                            commentaryIDs: commentaryIDs ?? Set(transcript.commentary.map(\.id)),
+                            hasFinalReply: !assistantBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                            timeline: projectedTimeline
                         )
                     }
                     if isUser {
@@ -1185,6 +1199,11 @@ struct DashboardMessageRow: View {
             displayedBody: assistantBody,
             failedRunError: run?.status == "failed" ? run?.error : nil
         )
+    }
+
+    private var projectedTimeline: ConversationWorkTimeline {
+        workTimeline ?? ConversationWorkTimeline(records: activities,
+            commentaryIDs: commentaryIDs ?? Set(transcript.commentary.map(\.id)))
     }
 }
 
