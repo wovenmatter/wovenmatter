@@ -533,11 +533,13 @@ struct FixtureCommandReader: Sendable {
 }
 
 struct PiHandledCommandTests {
-  @Test(arguments: ["/search", "/search on", "enable search"])
-  func handledInputPublishesNotificationAndAllowsNextPrompt(_ text: String) async throws {
+  @Test(arguments: [("/search", "info"), ("/search on", "info"), ("enable search", "info"),
+                    ("/search", "warning"), ("/search", "error")])
+  func handledInputPublishesNotificationAndAllowsNextPrompt(_ sample: (String, String)) async throws {
+    let (text, severity) = sample
     let fixture = PiPipeFixture()
     let server = Task {
-      try await serveCommands(fixture, firstPrompt: text)
+      try await serveCommands(fixture, firstPrompt: text, severity: severity)
     }
     try await fixture.initialize()
     let collector = PiEventCollector()
@@ -546,6 +548,7 @@ struct PiHandledCommandTests {
     #expect(events.contains { event in
       guard case .activity(let activity, _) = event else { return false }
       return activity.kind == .activity && activity.content == "Search is on."
+        && activity.status == (severity == "error" ? "failed" : "completed") && activity.detail == severity
     })
     #expect(!events.contains { event in
       if case .assistantChunk = event { return true }
@@ -553,22 +556,6 @@ struct PiHandledCommandTests {
       return false
     })
     #expect(try await fixture.client.prompt("ordinary message") == .endTurn)
-    await fixture.client.shutdown()
-    try await server.value
-  }
-
-  @Test(arguments: ["warning", "error"])
-  func notificationSeverityIsVisible(_ severity: String) async throws {
-    let fixture = PiPipeFixture()
-    let server = Task { try await serveCommands(fixture, firstPrompt: "/search", severity: severity) }
-    try await fixture.initialize()
-    let collector = PiEventCollector()
-    _ = try await fixture.client.prompt("/search") { await collector.record($0) }
-    #expect(await collector.values().contains { event in
-      guard case .activity(let activity, _) = event else { return false }
-      return activity.status == (severity == "error" ? "failed" : "completed")
-        && activity.detail == severity
-    })
     await fixture.client.shutdown()
     try await server.value
   }
@@ -668,8 +655,6 @@ struct PiHandledCommandTests {
       }
     }
   }
-
-
 }
 
 private final class PiWireCapture: @unchecked Sendable {

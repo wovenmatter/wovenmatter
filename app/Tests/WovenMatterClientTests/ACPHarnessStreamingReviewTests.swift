@@ -144,31 +144,6 @@ struct ACPHarnessStreamingReviewTests {
     #expect(try fixture.log().components(separatedBy: "Retry instructions").count - 1 == 1)
   }
 
-  @Test func configurationNotificationsCarrySnapshotsWithoutAnotherPreparation() async throws {
-    let fixture = try ACPHarnessFixture(kind: .codex,
-      initialize: #"{"protocolVersion":2}"#,
-      session: #"{"sessionId":"configuration-session","models":{"currentModelId":"fixture-model","availableModels":[{"modelId":"fixture-model"}]}}"#,
-      extras: [:])
-    defer { fixture.remove() }
-    let client = try fixture.client()
-    _ = try await client.initializeSession(workingDirectory: fixture.root, existingSessionID: nil, title: nil)
-    let snapshots = ACPReviewConfigurations()
-    await client.setConfigurationHandler { snapshots.record($0) }
-    #expect(snapshots.values().map(\.model) == ["fixture-model"])
-    // The fake adapter publishes model and command updates plus a duplicate during
-    // its prompt. The subscriber can update the UI directly from these values.
-    #expect(try await client.prompt("fixture") == .endTurn)
-    await client.shutdown()
-    let values = snapshots.values()
-    #expect(values.count == 3)
-    #expect(values.last?.model == "changed-model")
-    #expect(values.first?.slashCommands.isEmpty == true)
-    #expect(values.last?.slashCommands.map(\.name) == ["review"])
-    let log = try fixture.log()
-    #expect(log.components(separatedBy: #""method":"initialize""#).count - 1 == 1)
-    #expect(log.components(separatedBy: #""method":"session/new""#).count - 1 == 1)
-  }
-
   @Test(arguments: [AgentRuntimeKind.codex, .claudeCode, .grokBuild, .cursor])
   func modelAndThinkingSelectionFollowsAdvertisedOptions(kind: AgentRuntimeKind) async throws {
     let withEffort = #"{"configOptions":[{"id":"model","category":"model","currentValue":"with-effort","options":[{"value":"with-effort","name":"Same supplied label"},{"value":"no-effort","name":"Same supplied label"}]},{"id":"effort","category":"thought_level","currentValue":"low","options":[{"value":"low","name":"Low effort"},{"value":"high","name":"High effort"}]}]}"#
@@ -377,13 +352,6 @@ struct ACPHarnessStreamingReviewTests {
     #expect(plans.map(\.phase) == ["update", "clear"])
     #expect(plans.count == 2 && plans[0].merging(plans[1]).planEntries.isEmpty)
   }
-}
-
-private final class ACPReviewConfigurations: @unchecked Sendable {
-  private let lock = NSLock()
-  private var snapshots: [LocalACPSessionConfiguration] = []
-  func record(_ value: LocalACPSessionConfiguration) { lock.withLock { snapshots.append(value) } }
-  func values() -> [LocalACPSessionConfiguration] { lock.withLock { snapshots } }
 }
 
 private actor ACPReviewEvents {

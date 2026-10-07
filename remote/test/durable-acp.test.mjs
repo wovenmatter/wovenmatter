@@ -96,14 +96,6 @@ test('disabled mode and unknown commands cannot launch a process', async t => {
   assert.equal(f.launches(), 0)
 })
 
-test('stopAll terminates the service-owned process', async t => {
-  const f = await fixture(t)
-  await f.call('attach')
-  assert.equal(f.relay.hasActiveRuntime('test'), true)
-  await f.relay.stopAll()
-  assert.equal(f.relay.hasActiveRuntime('test'), false)
-})
-
 test('stdio reconnect serves cached initialization and terminal recovery without old responses', async () => {
   const { runStdioRelay } = await import('../src/durable-acp-stdio.mjs')
   const input = new PassThrough(), output = new PassThrough()
@@ -264,7 +256,9 @@ test('session shutdown releases waiting polls',async t=>{
   await f.call('attach')
   const waiting=f.call('poll',{after:0,waitMs:10000})
   await new Promise(resolve=>setImmediate(resolve))
+  assert.equal(f.relay.hasActiveRuntime('test'), true)
   await f.relay.stopAll()
+  assert.equal(f.relay.hasActiveRuntime('test'), false)
   assert.equal((await waiting).state,'stopped')
 })
 

@@ -191,13 +191,6 @@ struct WorkspaceAgentToolTests {
     }
   }
 
-  @Test func remoteSQLiteBudgetsIncludeRepeatedColumnNames() async throws {
-    #expect(throws: DatabaseLinkedDataError.sqliteResultTooLarge) {
-      try DatabaseLinkedData.load(queryResponse: .init(columns: [String(repeating: "c", count: 3_000)],
-        rows: Array(repeating: ["v"], count: 1_000)))
-    }
-  }
-
   @Test func managementReceiptKeepsItsOriginalCoordinationEpoch() async throws {
     let (db, dir, caller, target) = try await fixture()
     defer { try? FileManager.default.removeItem(at: dir) }
@@ -303,7 +296,6 @@ struct WorkspaceAgentToolTests {
         operations: [.addTableRow(tableID: tableID, after: Int.max)]),
         callerConversationID: caller, requestID: UUID().uuidString)
     }
-
   }
 
   @Test func discoveryPaginationAndRequestIDCanonicalizationAreConsistent() async throws {

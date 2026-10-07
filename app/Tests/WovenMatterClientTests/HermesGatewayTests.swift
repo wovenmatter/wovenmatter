@@ -296,7 +296,24 @@ actor HermesTransportFixture: HermesGatewayTransport {
     private var replay: HermesValue?
 
     private let archiveGate: NativeArchiveGate?
-    init(archiveGate: NativeArchiveGate? = nil) { self.archiveGate = archiveGate }
+    private let commandResult: HermesValue?
+    private let holdCommand: Bool
+    private var commandWaiter: CheckedContinuation<Void, Never>?
+    init(archiveGate: NativeArchiveGate? = nil, commandResult: HermesValue? = nil, holdCommand: Bool = false) {
+        self.archiveGate = archiveGate
+        self.commandResult = commandResult
+        self.holdCommand = holdCommand
+    }
+    func didSubmit() -> Bool { running }
+    func resetSubmission() { running = false }
+    func releaseCommand() { commandWaiter?.resume(); commandWaiter = nil }
+    func waitForCommand() async throws {
+        for _ in 0..<200 {
+            if commandWaiter != nil { return }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        throw HermesGatewayError.message("Fixture did not receive a command")
+    }
     func archiveSession(storedID: String, recorder: @escaping WorkspaceWireRecorder,
                         afterMessageID: Int64?, runID: String?) async throws -> Int64? {
         // Initial reconciliation establishes the high-water mark before submit.
@@ -310,7 +327,7 @@ actor HermesTransportFixture: HermesGatewayTransport {
     }
     func connect() { isConnected = true }
     func disconnect() { isConnected = false }
-    func call(_ method: String, _ params: HermesValue) throws -> HermesValue {
+    func call(_ method: String, _ params: HermesValue) async throws -> HermesValue {
         calls.append((method, params))
         // Allowed keys from installed Hermes d4063e62's strict Pydantic contracts.
         // Unlike the old permissive fixture, reject fields the real Gateway rejects.
@@ -332,6 +349,11 @@ actor HermesTransportFixture: HermesGatewayTransport {
         case "session.create", "session.resume":
             return ["session_id": "live", "stored_session_id": "stored", "running": .bool(running), "info": ["cwd": "/native/imported project"]]
         case "session.events.since": return replay ?? ["latest_seq": .number(Double(sequence)), "epoch": .string(epoch ?? "")]
+        case "commands.catalog":
+            return commandResult == nil ? [:] : ["pairs": .array([.array(["/review", "Review"])])]
+        case "command.dispatch":
+            if holdCommand { await withCheckedContinuation { commandWaiter = $0 } }
+            return commandResult ?? [:]
         case "prompt.submit":
             running = true
             if loseSubmit { throw HermesGatewayError.message("Acknowledgement lost") }

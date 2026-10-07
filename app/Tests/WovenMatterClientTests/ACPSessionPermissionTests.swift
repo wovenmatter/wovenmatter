@@ -182,8 +182,13 @@ struct ACPSessionPermissionTests {
         try await withClient(state: legacyModes(), handlers: [
             "session/set_mode": notification(["sessionUpdate": "current_mode_update", "currentModeId": "default"], session: "child-session")
                 + "\n" + respond([:]),
-        ]) { client, _, _ async throws in
-            #expect(try await client.setSessionPermission("full").permission == "full")
+        ]) { client, fixture, _ async throws in
+            let result = try await client.setSessionPermission("full")
+            #expect(result.permission == "full")
+            #expect(result.permissionOptionMetadata["full"]?.name == "Native full label")
+            #expect(try fixture.requests(method: "session/set_config_option").isEmpty)
+            let params = try fixture.requests(method: "session/set_mode").first?["params"] as? [String: Any]
+            #expect(params?["modeId"] as? String == "full")
         }
     }
 
@@ -243,17 +248,6 @@ struct ACPSessionPermissionTests {
                 _ = try await client.setSessionPermission("full")
                 Issue.record("Removed permission options remained selectable")
             } catch LocalACPClientError.unsupportedConfiguration { }
-        }
-    }
-
-    @Test func legacyAdvertisedModesUseStandardMethod() async throws {
-        try await withClient(state: legacyModes(), handlers: ["session/set_mode": respond([:])]) { client, fixture, _ async throws in
-            let result = try await client.setSessionPermission("full")
-            #expect(result.permission == "full")
-            #expect(result.permissionOptionMetadata["full"]?.name == "Native full label")
-            #expect(try fixture.requests(method: "session/set_config_option").isEmpty)
-            let params = try fixture.requests(method: "session/set_mode").first?["params"] as? [String: Any]
-            #expect(params?["modeId"] as? String == "full")
         }
     }
 
